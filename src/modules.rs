@@ -31,7 +31,7 @@ impl SourceMap {
 /// Result of module resolution before flattening.
 pub struct ModuleGraph {
     pub root: Program,
-    pub imports: Vec<(String, Program)>, // (module_name, parsed program)
+    pub imports: Vec<(String, Program)>, // (binding_name, parsed program)
     pub source_map: SourceMap,
 }
 
@@ -52,6 +52,7 @@ fn load_directory_module(dir: &Path, source_map: &mut SourceMap) -> Result<Progr
     let mut merged = Program {
         imports: Vec::new(),
         functions: Vec::new(),
+        extern_fns: Vec::new(),
         classes: Vec::new(),
         traits: Vec::new(),
         enums: Vec::new(),
@@ -71,6 +72,7 @@ fn load_directory_module(dir: &Path, source_map: &mut SourceMap) -> Result<Progr
     for file_path in pluto_files {
         let (program, _file_id) = load_and_parse(&file_path, source_map)?;
         merged.functions.extend(program.functions);
+        merged.extern_fns.extend(program.extern_fns);
         merged.classes.extend(program.classes);
         merged.traits.extend(program.traits);
         merged.enums.extend(program.enums);
@@ -104,9 +106,11 @@ pub fn resolve_modules(entry_file: &Path) -> Result<ModuleGraph, CompileError> {
     // First, parse the entry file to discover imports
     let (entry_prog, _entry_file_id) = load_and_parse(&entry_file, &mut source_map)?;
 
-    // Collect import names to know which sibling .pluto files are imported modules
-    let import_names: HashSet<String> = entry_prog.imports.iter()
-        .map(|i| i.node.module_name.node.clone())
+    // Collect import binding names to know which sibling .pluto files are imported modules
+    // For single-segment imports like `import math`, the binding name is "math"
+    // For multi-segment imports like `import std.io`, the first path component is used for sibling check
+    let import_first_segments: HashSet<String> = entry_prog.imports.iter()
+        .map(|i| i.node.path[0].node.clone())
         .collect();
 
     // Start root with the entry file's contents
@@ -131,14 +135,15 @@ pub fn resolve_modules(entry_file: &Path) -> Result<ModuleGraph, CompileError> {
         let stem = file_path.file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("");
-        // Skip files that match an import name (they'll be loaded as modules)
-        if import_names.contains(stem) {
+        // Skip files that match an import first segment (they'll be loaded as modules)
+        if import_first_segments.contains(stem) {
             continue;
         }
         let (program, _file_id) = load_and_parse(file_path, &mut source_map)?;
         // Merge sibling's imports into root (they might also have imports)
         root.imports.extend(program.imports);
         root.functions.extend(program.functions);
+        root.extern_fns.extend(program.extern_fns);
         root.classes.extend(program.classes);
         root.traits.extend(program.traits);
         root.enums.extend(program.enums);
@@ -149,31 +154,46 @@ pub fn resolve_modules(entry_file: &Path) -> Result<ModuleGraph, CompileError> {
     let mut imported_names = HashSet::new();
 
     for import in &root.imports {
-        let module_name = &import.node.module_name.node;
-        if !imported_names.insert(module_name.clone()) {
+        let binding_name = import.node.binding_name().to_string();
+        let full_path = import.node.full_path();
+        if !imported_names.insert(binding_name.clone()) {
             continue; // skip duplicate imports
         }
 
-        // Try directory first: <entry_dir>/<name>/
-        let dir_path = entry_dir.join(module_name);
-        let file_path = entry_dir.join(format!("{}.pluto", module_name));
+        // For single-segment imports, resolve from entry_dir as before
+        // For multi-segment imports, navigate directory hierarchy
+        let first_segment = &import.node.path[0].node;
 
-        if dir_path.is_dir() {
-            let module_prog = load_directory_module(&dir_path, &mut source_map)?;
-            imports.push((module_name.clone(), module_prog));
-        } else if file_path.is_file() {
-            let (module_prog, _) = load_and_parse(&file_path, &mut source_map)?;
-            if !module_prog.imports.is_empty() {
-                return Err(CompileError::codegen(format!(
-                    "transitive imports not supported: '{}' contains imports",
-                    file_path.display()
-                )));
+        // Try directory first: <entry_dir>/<name>/
+        let dir_path = entry_dir.join(first_segment);
+        let file_path_candidate = entry_dir.join(format!("{}.pluto", first_segment));
+
+        if import.node.path.len() == 1 {
+            // Single-segment import (e.g., `import math`)
+            if dir_path.is_dir() {
+                let module_prog = load_directory_module(&dir_path, &mut source_map)?;
+                imports.push((binding_name, module_prog));
+            } else if file_path_candidate.is_file() {
+                let (module_prog, _) = load_and_parse(&file_path_candidate, &mut source_map)?;
+                if !module_prog.imports.is_empty() {
+                    return Err(CompileError::codegen(format!(
+                        "transitive imports not supported: '{}' contains imports",
+                        file_path_candidate.display()
+                    )));
+                }
+                imports.push((binding_name, module_prog));
+            } else {
+                return Err(CompileError::syntax(
+                    format!("cannot find module '{}': no directory or file found", full_path),
+                    import.node.path[0].span,
+                ));
             }
-            imports.push((module_name.clone(), module_prog));
         } else {
+            // Multi-segment import — resolve in Increment 2
+            // For now, error on multi-segment imports
             return Err(CompileError::syntax(
-                format!("cannot find module '{}': no directory or file found", module_name),
-                import.node.module_name.span,
+                format!("hierarchical imports not yet supported: '{}'", full_path),
+                import.span,
             ));
         }
     }
