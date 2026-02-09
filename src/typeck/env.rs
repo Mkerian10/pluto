@@ -30,6 +30,40 @@ pub struct ErrorInfo {
     pub fields: Vec<(String, PlutoType)>,
 }
 
+#[derive(Debug, Clone)]
+pub struct GenericFuncSig {
+    pub type_params: Vec<String>,
+    pub params: Vec<PlutoType>,      // contains TypeParam
+    pub return_type: PlutoType,       // may contain TypeParam
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericClassInfo {
+    pub type_params: Vec<String>,
+    pub fields: Vec<(String, PlutoType, bool)>,  // may contain TypeParam
+    pub methods: Vec<String>,
+    pub impl_traits: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericEnumInfo {
+    pub type_params: Vec<String>,
+    pub variants: Vec<(String, Vec<(String, PlutoType)>)>,  // may contain TypeParam
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Instantiation {
+    pub kind: InstKind,
+    pub type_args: Vec<PlutoType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum InstKind {
+    Function(String),
+    Class(String),
+    Enum(String),
+}
+
 #[derive(Debug)]
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, PlutoType>>,
@@ -49,6 +83,12 @@ pub struct TypeEnv {
     /// Per-function error sets: maps function name to set of error type names it can raise.
     /// Populated by the error inference pass.
     pub fn_errors: HashMap<String, HashSet<String>>,
+    // Generics
+    pub generic_functions: HashMap<String, GenericFuncSig>,
+    pub generic_classes: HashMap<String, GenericClassInfo>,
+    pub generic_enums: HashMap<String, GenericEnumInfo>,
+    pub instantiations: HashSet<Instantiation>,
+    pub generic_rewrites: HashMap<(usize, usize), String>,
 }
 
 impl TypeEnv {
@@ -69,6 +109,11 @@ impl TypeEnv {
             app: None,
             di_order: Vec::new(),
             fn_errors: HashMap::new(),
+            generic_functions: HashMap::new(),
+            generic_classes: HashMap::new(),
+            generic_enums: HashMap::new(),
+            instantiations: HashSet::new(),
+            generic_rewrites: HashMap::new(),
         }
     }
 
@@ -137,6 +182,7 @@ fn mangle_type(ty: &PlutoType) -> String {
             format!("fn_{}_ret_{}", ps.join("_"), mangle_type(r))
         }
         PlutoType::Trait(n) => n.clone(),
+        PlutoType::TypeParam(n) => n.clone(),
         PlutoType::Error => "error".into(),
     }
 }

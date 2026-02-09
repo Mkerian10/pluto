@@ -341,5 +341,6 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
             }
         }
         PlutoType::Error => TypeExpr::Named("error".to_string()),
+        PlutoType::TypeParam(name) => TypeExpr::Named(name.clone()),
     }
 }

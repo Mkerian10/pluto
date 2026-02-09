@@ -1131,7 +1131,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I32, arg_val);
                 self.builder.ins().call(func_ref, &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Error => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Error | PlutoType::TypeParam(_) => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -1358,6 +1358,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Enum(_) => types::I64,      // pointer to heap-allocated enum
         PlutoType::Fn(_, _) => types::I64,     // pointer to closure object
         PlutoType::Error => types::I64,        // pointer to error object
+        PlutoType::TypeParam(_) => panic!("TypeParam should not reach codegen"),
     }
 }
 
