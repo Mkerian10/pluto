@@ -380,6 +380,8 @@ fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
                     PlutoType::Class(name.clone())
                 } else if env.traits.contains_key(name) {
                     PlutoType::Trait(name.clone())
+                } else if env.enums.contains_key(name) {
+                    PlutoType::Enum(name.clone())
                 } else {
                     PlutoType::Void
                 }
@@ -395,6 +397,8 @@ fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
                 PlutoType::Class(prefixed)
             } else if env.traits.contains_key(&prefixed) {
                 PlutoType::Trait(prefixed)
+            } else if env.enums.contains_key(&prefixed) {
+                PlutoType::Enum(prefixed)
             } else {
                 PlutoType::Void
             }
