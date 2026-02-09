@@ -1,0 +1,24 @@
+class Database {
+    fn query(self, sql: string) string {
+        return "result for: " + sql
+    }
+}
+
+class UserService[db: Database] {
+    fn get_user(self, id: string) string {
+        return self.db.query("SELECT * FROM users WHERE id = " + id)
+    }
+}
+
+class OrderService[db: Database] {
+    fn get_orders(self, user_id: string) string {
+        return self.db.query("SELECT * FROM orders WHERE user_id = " + user_id)
+    }
+}
+
+app MyApp[users: UserService, orders: OrderService] {
+    fn main(self) {
+        print(self.users.get_user("42"))
+        print(self.orders.get_orders("42"))
+    }
+}

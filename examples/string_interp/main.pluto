@@ -1,0 +1,15 @@
+fn main() {
+    let name = "Pluto"
+    let version = 1
+    print("Welcome to {name} v{version}!")
+
+    let x = 10
+    let y = 20
+    print("{x} + {y} = {x + y}")
+
+    let pi = 3.14
+    print("pi is approximately {pi}")
+
+    let is_ready = true
+    print("system ready: {is_ready}")
+}
