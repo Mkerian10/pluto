@@ -8,9 +8,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cargo build                        # Build the compiler
 cargo test                         # Run all tests (unit + integration)
 cargo test --lib                   # Run unit tests only
-cargo test --test integration      # Run integration tests only
+cargo test --tests                 # Run all integration tests only
 cargo test --lib <test_name>       # Run a single unit test
-cargo test --test integration <test_name>  # Run a single integration test
+cargo test --test errors           # Run one integration test file
+cargo test --test errors <name>    # Run a single test in a file
 cargo run -- compile <file.pluto> -o <output>  # Compile a .pluto file
 cargo run -- run <file.pluto>      # Compile and immediately run
 ```
@@ -62,10 +63,13 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 
 **Unit tests** — inline `#[cfg(test)]` modules in `src/lexer/mod.rs`, `src/parser/mod.rs`, and `src/typeck/mod.rs`.
 
-**Integration tests** — `tests/integration/basic.rs` (registered via `[[test]]` in Cargo.toml). Three helper functions:
+**Integration tests** — Split by feature in `tests/integration/`. Shared helpers in `tests/integration/common/mod.rs`:
 - `compile_and_run(source) -> i32` — compiles source string and returns exit code
 - `compile_and_run_stdout(source) -> String` — compiles and captures stdout
 - `compile_should_fail(source)` — asserts compilation produces an error
+- `compile_should_fail_with(source, msg)` — asserts compilation fails with specific message
+
+Test files: `basics`, `operators`, `control_flow`, `strings`, `arrays`, `classes`, `traits`, `enums`, `closures`, `di`, `errors`.
 
 **Module tests** — `tests/integration/modules.rs`. Multi-file test helpers:
 - `run_project(files) -> String` — writes multiple files to temp dir, compiles entry, returns stdout
