@@ -429,6 +429,13 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
                 rewrite_expr_for_module(&mut val.node, module_name, module_prog);
             }
         }
+        Expr::StringInterp { parts } => {
+            for part in parts {
+                if let StringInterpPart::Expr(e) = part {
+                    rewrite_expr_for_module(&mut e.node, module_name, module_prog);
+                }
+            }
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
     }
 }
@@ -603,6 +610,13 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
             // enum_name is already qualified from parser (e.g., "math.Status")
             for (_, val) in fields {
                 rewrite_expr(&mut val.node, val.span, import_names);
+            }
+        }
+        Expr::StringInterp { parts } => {
+            for part in parts {
+                if let StringInterpPart::Expr(e) = part {
+                    rewrite_expr(&mut e.node, e.span, import_names);
+                }
             }
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
