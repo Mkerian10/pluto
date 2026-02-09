@@ -445,6 +445,13 @@ fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
                 PlutoType::Void
             }
         }
+        TypeExpr::Fn { params, return_type } => {
+            let param_types = params.iter()
+                .map(|p| resolve_type_expr_to_pluto(&p.node, env))
+                .collect();
+            let ret = resolve_type_expr_to_pluto(&return_type.node, env);
+            PlutoType::Fn(param_types, Box::new(ret))
+        }
     }
 }
 

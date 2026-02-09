@@ -514,6 +514,33 @@ impl<'a> Parser<'a> {
             let close = self.expect(&Token::RBracket)?;
             let end = close.span.end;
             Ok(Spanned::new(TypeExpr::Array(Box::new(inner)), Span::new(start, end)))
+        } else if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Fn) {
+            // Function type: fn(int, float) string
+            let fn_tok = self.advance().unwrap();
+            let start = fn_tok.span.start;
+            self.expect(&Token::LParen)?;
+            let mut params = Vec::new();
+            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
+                if !params.is_empty() {
+                    self.expect(&Token::Comma)?;
+                }
+                let ty = self.parse_type()?;
+                params.push(Box::new(ty));
+            }
+            let close_paren = self.expect(&Token::RParen)?;
+            let mut end = close_paren.span.end;
+            // Optional return type — if next token looks like a type, parse it; otherwise void
+            let return_type = if !self.at_statement_boundary()
+                && self.peek().is_some()
+                && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Comma | Token::RParen | Token::FatArrow | Token::RBracket | Token::Eq)
+            {
+                let ty = self.parse_type()?;
+                end = ty.span.end;
+                Box::new(ty)
+            } else {
+                Box::new(Spanned::new(TypeExpr::Named("void".to_string()), Span::new(end, end)))
+            };
+            Ok(Spanned::new(TypeExpr::Fn { params, return_type }, Span::new(start, end)))
         } else {
             let ident = self.expect_ident()?;
             // Check for qualified type: module.Type
@@ -1121,13 +1148,17 @@ impl<'a> Parser<'a> {
                 Ok(Spanned::new(Expr::Ident("self".to_string()), tok.span))
             }
             Token::LParen => {
-                self.advance(); // consume '('
-                let old_restrict = self.restrict_struct_lit;
-                self.restrict_struct_lit = false;
-                let expr = self.parse_expr(0)?;
-                self.restrict_struct_lit = old_restrict;
-                self.expect(&Token::RParen)?;
-                Ok(expr)
+                if self.is_closure_ahead() {
+                    self.parse_closure()
+                } else {
+                    self.advance(); // consume '('
+                    let old_restrict = self.restrict_struct_lit;
+                    self.restrict_struct_lit = false;
+                    let expr = self.parse_expr(0)?;
+                    self.restrict_struct_lit = old_restrict;
+                    self.expect(&Token::RParen)?;
+                    Ok(expr)
+                }
             }
             Token::Minus => {
                 let tok = self.advance().unwrap();
@@ -1325,6 +1356,93 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Spanned::new(Expr::StringInterp { parts }, span))
+    }
+
+    /// Lookahead to determine if `(` starts a closure expression.
+    /// A closure starts with `(` followed by either:
+    /// - `)` then `=>` (zero-param closure)
+    /// - `ident` then `:` (typed params — closure)
+    fn is_closure_ahead(&self) -> bool {
+        // We're positioned such that peek() returns LParen.
+        // Find the position of the LParen in the raw token stream.
+        let mut i = self.pos;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::LParen) {
+            return false;
+        }
+        i += 1; // skip past '('
+        // Skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() {
+            return false;
+        }
+        // Case 1: `() =>` — zero-param closure
+        if matches!(self.tokens[i].node, Token::RParen) {
+            i += 1;
+            while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+                i += 1;
+            }
+            return i < self.tokens.len() && matches!(self.tokens[i].node, Token::FatArrow);
+        }
+        // Case 2: `(ident :` — closure with typed params
+        if matches!(self.tokens[i].node, Token::Ident) {
+            i += 1;
+            while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+                i += 1;
+            }
+            return i < self.tokens.len() && matches!(self.tokens[i].node, Token::Colon);
+        }
+        false
+    }
+
+    /// Parse a closure expression: `(params) => body` or `(params) return_type => body`
+    fn parse_closure(&mut self) -> Result<Spanned<Expr>, CompileError> {
+        let open = self.expect(&Token::LParen)?;
+        let start = open.span.start;
+
+        // Parse params
+        let mut params = Vec::new();
+        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
+            if !params.is_empty() {
+                self.expect(&Token::Comma)?;
+            }
+            let pname = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let pty = self.parse_type()?;
+            params.push(Param { name: pname, ty: pty });
+        }
+        self.expect(&Token::RParen)?;
+
+        // Optional return type: if next non-newline token is NOT `=>`, parse a type first
+        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::FatArrow) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        self.expect(&Token::FatArrow)?;
+
+        // Body: either a block `{ ... }` or a single expression (desugared to return stmt)
+        let body = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
+            self.parse_block()?
+        } else {
+            let expr = self.parse_expr(0)?;
+            let span = expr.span;
+            Spanned::new(
+                Block { stmts: vec![Spanned::new(Stmt::Return(Some(expr)), span)] },
+                span,
+            )
+        };
+
+        let end = body.span.end;
+        Ok(Spanned::new(
+            Expr::Closure { params, return_type, body },
+            Span::new(start, end),
+        ))
     }
 
     /// Lookahead to determine if `{ ... }` is a struct literal (contains `ident :`)
@@ -1783,6 +1901,130 @@ mod tests {
                 }
             }
             _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_closure_no_params() {
+        let prog = parse("fn main() {\n    let f = () => 42\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::Closure { params, return_type, body } => {
+                        assert!(params.is_empty());
+                        assert!(return_type.is_none());
+                        assert_eq!(body.node.stmts.len(), 1);
+                        assert!(matches!(&body.node.stmts[0].node, Stmt::Return(Some(_))));
+                    }
+                    _ => panic!("expected closure, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_closure_single_param() {
+        let prog = parse("fn main() {\n    let f = (x: int) => x + 1\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::Closure { params, return_type, .. } => {
+                        assert_eq!(params.len(), 1);
+                        assert_eq!(params[0].name.node, "x");
+                        assert!(return_type.is_none());
+                    }
+                    _ => panic!("expected closure, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_closure_multi_params() {
+        let prog = parse("fn main() {\n    let f = (x: int, y: int) => x + y\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::Closure { params, .. } => {
+                        assert_eq!(params.len(), 2);
+                        assert_eq!(params[0].name.node, "x");
+                        assert_eq!(params[1].name.node, "y");
+                    }
+                    _ => panic!("expected closure, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_closure_block_body() {
+        let prog = parse("fn main() {\n    let f = (x: int) => {\n        return x + 1\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::Closure { params, body, .. } => {
+                        assert_eq!(params.len(), 1);
+                        assert_eq!(body.node.stmts.len(), 1);
+                        assert!(matches!(&body.node.stmts[0].node, Stmt::Return(Some(_))));
+                    }
+                    _ => panic!("expected closure, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_closure_with_return_type() {
+        let prog = parse("fn main() {\n    let f = (x: int) int => x + 1\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::Closure { params, return_type, .. } => {
+                        assert_eq!(params.len(), 1);
+                        assert!(return_type.is_some());
+                        assert!(matches!(&return_type.as_ref().unwrap().node, TypeExpr::Named(n) if n == "int"));
+                    }
+                    _ => panic!("expected closure, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_type() {
+        let prog = parse("fn apply(f: fn(int, int) int, x: int) int {\n    return f(x, x)\n}");
+        let f = &prog.functions[0].node;
+        match &f.params[0].ty.node {
+            TypeExpr::Fn { params, return_type } => {
+                assert_eq!(params.len(), 2);
+                assert!(matches!(&params[0].node, TypeExpr::Named(n) if n == "int"));
+                assert!(matches!(&params[1].node, TypeExpr::Named(n) if n == "int"));
+                assert!(matches!(&return_type.node, TypeExpr::Named(n) if n == "int"));
+            }
+            _ => panic!("expected fn type, got {:?}", f.params[0].ty.node),
+        }
+    }
+
+    #[test]
+    fn parse_fn_type_void() {
+        let prog = parse("fn apply(f: fn(int)) {\n}");
+        let f = &prog.functions[0].node;
+        match &f.params[0].ty.node {
+            TypeExpr::Fn { params, return_type } => {
+                assert_eq!(params.len(), 1);
+                assert!(matches!(&return_type.node, TypeExpr::Named(n) if n == "void"));
+            }
+            _ => panic!("expected fn type, got {:?}", f.params[0].ty.node),
         }
     }
 }

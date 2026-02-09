@@ -407,6 +407,12 @@ fn prefix_type_expr(ty: &mut TypeExpr, module_name: &str, module_prog: &Program)
         TypeExpr::Qualified { .. } => {
             // Already qualified, leave alone
         }
+        TypeExpr::Fn { params, return_type } => {
+            for p in params {
+                prefix_type_expr(&mut p.node, module_name, module_prog);
+            }
+            prefix_type_expr(&mut return_type.node, module_name, module_prog);
+        }
     }
 }
 
@@ -549,6 +555,15 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
                 }
             }
         }
+        Expr::Closure { params, body, .. } => {
+            for p in params {
+                prefix_type_expr(&mut p.ty.node, module_name, module_prog);
+            }
+            for stmt in &mut body.node.stmts {
+                rewrite_stmt_for_module(&mut stmt.node, module_name, module_prog);
+            }
+        }
+        Expr::ClosureCreate { .. } => {}
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
     }
 }
@@ -596,6 +611,12 @@ fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, import_names: &HashSet<String>)
             rewrite_type_expr(inner, import_names);
         }
         TypeExpr::Named(_) => {}
+        TypeExpr::Fn { params, return_type } => {
+            for p in params {
+                rewrite_type_expr(p, import_names);
+            }
+            rewrite_type_expr(return_type, import_names);
+        }
     }
 }
 
@@ -732,6 +753,10 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
                 }
             }
         }
+        Expr::Closure { body, .. } => {
+            rewrite_block(&mut body.node, import_names);
+        }
+        Expr::ClosureCreate { .. } => {}
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
     }
     let _ = span;
