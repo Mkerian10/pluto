@@ -455,6 +455,9 @@ impl<'a> LowerContext<'a> {
                     self.builder.seal_block(merge_bb);
                 }
             }
+            Stmt::Raise { .. } => {
+                return Err(CompileError::codegen("raise not yet implemented in codegen".to_string()));
+            }
             Stmt::Expr(expr) => {
                 self.lower_expr(&expr.node)?;
             }
@@ -753,6 +756,12 @@ impl<'a> LowerContext<'a> {
                     Err(CompileError::codegen(format!("field access on non-class type {obj_type}")))
                 }
             }
+            Expr::Propagate { .. } => {
+                return Err(CompileError::codegen("error propagation (!) not yet implemented in codegen".to_string()));
+            }
+            Expr::Catch { .. } => {
+                return Err(CompileError::codegen("catch not yet implemented in codegen".to_string()));
+            }
             Expr::MethodCall { object, method, args } => {
                 let obj_ptr = self.lower_expr(&object.node)?;
                 let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
@@ -900,7 +909,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I32, arg_val);
                 self.builder.ins().call(func_ref, &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Error => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -1094,6 +1103,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Array(_) => types::I64,     // pointer to handle
         PlutoType::Trait(_) => types::I64,     // pointer to trait handle
         PlutoType::Enum(_) => types::I64,      // pointer to heap-allocated enum
+        PlutoType::Error => types::I64,        // pointer to error object
     }
 }
 
@@ -1151,6 +1161,14 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
         }
         Expr::EnumUnit { enum_name, .. } | Expr::EnumData { enum_name, .. } => {
             PlutoType::Enum(enum_name.node.clone())
+        }
+        Expr::Propagate { expr } => {
+            // Propagation returns the success type of the inner call
+            infer_type_for_expr(&expr.node, env, var_types)
+        }
+        Expr::Catch { expr, .. } => {
+            // Catch returns the success type (same as the inner call)
+            infer_type_for_expr(&expr.node, env, var_types)
         }
         Expr::MethodCall { object, method, .. } => {
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
