@@ -63,12 +63,25 @@ Defined in `src/lib.rs::compile()`. Six stages:
 
 **Commit regularly** — Commit after completing each logical unit of work (a feature, a fix, a refactor). Do not accumulate large uncommitted changes.
 
-**Use worktrees for parallel work** — When multiple agents or tasks are running concurrently, use git worktrees to avoid conflicts:
+**Use worktrees for parallel work** — When multiple agents or tasks are running concurrently, use git worktrees to avoid conflicts. Use a naming convention that identifies **you** (your session) so other agents know whose worktree is whose:
 ```bash
-git worktree add ../pluto-<feature-name> -b <feature-name>  # Create worktree + branch
-# ... do work in ../pluto-<feature-name> ...
-git worktree remove ../pluto-<feature-name>                  # Clean up when done
+# Include your feature name in both the directory and branch name
+git worktree add ../pluto-<feature-name> -b <feature-name>
+# Example: git worktree add ../pluto-for-loops -b for-loops
+# Example: git worktree add ../pluto-trait-handle -b trait-handle
+
+# Do your work in the worktree directory
+# ... work in ../pluto-<feature-name> ...
+
+# When done: merge to master, then clean up YOUR worktree and branch
+git worktree remove ../pluto-<feature-name>
+git branch -d <feature-name>
 ```
+
+**Worktree rules:**
+- **Only clean up your own worktrees.** Run `git worktree list` to see all active worktrees. If a worktree/branch isn't yours, leave it alone — another agent may be actively using it.
+- **Never force-delete worktrees with uncommitted changes** unless you created them. Use `git worktree list` and check before removing.
+- **Don't delete branches that are checked out in other worktrees.** Git will error if you try — respect that error and leave the branch alone.
 
 **Branch per feature** — Each feature or task should be on its own branch. Merge to `master` when complete and tests pass.
 
@@ -76,7 +89,7 @@ git worktree remove ../pluto-<feature-name>                  # Clean up when don
 ```bash
 git checkout master
 git pull                          # Get latest from other agents
-git merge <feature-name>         # Merge your branch
+git merge <feature-name>          # Merge your branch
 # Resolve any conflicts, run cargo test, then commit
 ```
 
@@ -85,4 +98,4 @@ git merge <feature-name>         # Merge your branch
 git pull                          # On master, before creating a worktree/branch
 ```
 
-**Before starting work** — Check `git status` to ensure a clean working tree. If there are uncommitted changes from another agent, coordinate or use a worktree.
+**Before starting work** — Check `git status` and `git worktree list` to understand the current state. If there are uncommitted changes from another agent, coordinate or use a worktree. Do not touch other agents' worktrees or branches.
