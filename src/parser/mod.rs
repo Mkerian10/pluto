@@ -41,6 +41,24 @@ impl<'a> Parser<'a> {
         None
     }
 
+    /// Peek at the nth token ahead (0-indexed, skipping newlines).
+    fn peek_nth(&self, n: usize) -> Option<&Spanned<Token>> {
+        let mut i = self.pos;
+        let mut count = 0;
+        while i < self.tokens.len() {
+            if matches!(self.tokens[i].node, Token::Newline) {
+                i += 1;
+                continue;
+            }
+            if count == n {
+                return Some(&self.tokens[i]);
+            }
+            count += 1;
+            i += 1;
+        }
+        None
+    }
+
     fn peek_raw(&self) -> Option<&Spanned<Token>> {
         self.tokens.get(self.pos)
     }
@@ -148,6 +166,7 @@ impl<'a> Parser<'a> {
         let mut imports = Vec::new();
         let mut functions = Vec::new();
         let mut extern_fns = Vec::new();
+        let mut extern_rust_crates = Vec::new();
         let mut classes = Vec::new();
         let mut traits = Vec::new();
         let mut enums = Vec::new();
@@ -219,7 +238,28 @@ impl<'a> Parser<'a> {
                     errors.push(err_decl);
                 }
                 Token::Extern => {
-                    extern_fns.push(self.parse_extern_fn(is_pub)?);
+                    // Peek at next token to decide: extern fn vs extern rust
+                    let next = self.peek_nth(1);
+                    match next {
+                        Some(t) if matches!(t.node, Token::Fn) => {
+                            extern_fns.push(self.parse_extern_fn(is_pub)?);
+                        }
+                        Some(t) if matches!(t.node, Token::Ident) && self.source[t.span.start..t.span.end] == *"rust" => {
+                            if is_pub {
+                                return Err(CompileError::syntax(
+                                    "extern rust declarations cannot be pub",
+                                    tok.span,
+                                ));
+                            }
+                            extern_rust_crates.push(self.parse_extern_rust()?);
+                        }
+                        _ => {
+                            return Err(CompileError::syntax(
+                                "expected 'fn' or 'rust' after 'extern'",
+                                tok.span,
+                            ));
+                        }
+                    }
                 }
                 Token::Test => {
                     if is_pub {
@@ -264,7 +304,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     return Err(CompileError::syntax(
-                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'test', or 'extern', found {}", tok.node),
+                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'test', 'extern fn', or 'extern rust', found {}", tok.node),
                         tok.span,
                     ));
                 }
@@ -272,7 +312,7 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        Ok(Program { imports, functions, extern_fns, classes, traits, enums, app, errors, test_info })
+        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, errors, test_info })
     }
 
     fn parse_import(&mut self) -> Result<Spanned<ImportDecl>, CompileError> {
@@ -339,6 +379,35 @@ impl<'a> Parser<'a> {
 
         self.consume_statement_end();
         Ok(Spanned::new(ExternFnDecl { name, params, return_type, is_pub }, Span::new(start, end)))
+    }
+
+    fn parse_extern_rust(&mut self) -> Result<Spanned<ExternRustDecl>, CompileError> {
+        let extern_tok = self.expect(&Token::Extern)?;
+        let start = extern_tok.span.start;
+
+        // Consume contextual keyword "rust"
+        let rust_tok = self.expect_ident()?;
+        if rust_tok.node != "rust" {
+            return Err(CompileError::syntax(
+                format!("expected 'rust' after 'extern', found '{}'", rust_tok.node),
+                rust_tok.span,
+            ));
+        }
+
+        // Expect string literal for crate path
+        let path_tok = self.expect(&Token::StringLit(String::new()))?;
+        let crate_path = match &path_tok.node {
+            Token::StringLit(s) => Spanned::new(s.clone(), path_tok.span),
+            _ => unreachable!(),
+        };
+
+        // Expect `as alias`
+        self.expect(&Token::As)?;
+        let alias = self.expect_ident()?;
+        let end = alias.span.end;
+
+        self.consume_statement_end();
+        Ok(Spanned::new(ExternRustDecl { crate_path, alias }, Span::new(start, end)))
     }
 
     fn parse_bracket_deps(&mut self) -> Result<Vec<Field>, CompileError> {
