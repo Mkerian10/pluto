@@ -48,7 +48,7 @@ For infinite loops, use `while true`:
 
 ```
 while true {
-    // runs forever until the process is killed
+    // runs forever until break
 }
 ```
 
@@ -65,21 +65,48 @@ fn main() {
 }
 ```
 
-The loop variable's type is inferred from the array element type. You can nest loops:
+### Ranges
+
+You can also iterate over integer ranges:
 
 ```
 fn main() {
-    let rows = [1, 2]
-    let cols = [10, 20]
-    for r in rows {
-        for c in cols {
-            print(r + c)
-        }
+    // exclusive: 0, 1, 2, 3, 4
+    for i in 0..5 {
+        print(i)
+    }
+
+    // inclusive: 0, 1, 2, 3, 4, 5
+    for i in 0..=5 {
+        print(i)
     }
 }
 ```
 
-The loop variable doesn't leak into the outer scope:
+Range endpoints can be any integer expression:
+
+```
+fn main() {
+    let n = 10
+    for i in 0..(n * 2) {
+        print(i)
+    }
+}
+```
+
+If the start is greater than or equal to the end (for exclusive ranges) or greater than the end (for inclusive ranges), the loop body doesn't execute:
+
+```
+fn main() {
+    for i in 5..3 {
+        print(i)  // never runs
+    }
+}
+```
+
+### Nesting and scoping
+
+You can nest loops. The loop variable's type is inferred from the array element type (or `int` for ranges). The loop variable doesn't leak into the outer scope:
 
 ```
 fn main() {
@@ -88,6 +115,69 @@ fn main() {
         print(x)        // 1, 2, 3
     }
     print(x)            // 999
+}
+```
+
+## break and continue
+
+Use `break` to exit a loop early, and `continue` to skip to the next iteration:
+
+```
+fn main() {
+    // break exits the loop
+    for i in 0..100 {
+        if i == 5 {
+            break
+        }
+        print(i)  // 0, 1, 2, 3, 4
+    }
+
+    // continue skips the rest of the body
+    for i in 0..6 {
+        if i % 2 == 0 {
+            continue
+        }
+        print(i)  // 1, 3, 5
+    }
+}
+```
+
+Both work in `while` loops too:
+
+```
+fn main() {
+    let i = 0
+    while true {
+        if i == 3 {
+            break
+        }
+        print(i)
+        i = i + 1
+    }
+}
+```
+
+In nested loops, `break` and `continue` affect only the innermost loop:
+
+```
+fn main() {
+    for i in 0..3 {
+        for j in 0..10 {
+            if j == 2 {
+                break  // only breaks inner loop
+            }
+            print(i * 10 + j)
+        }
+    }
+    // prints: 0, 1, 10, 11, 20, 21
+}
+```
+
+`break` and `continue` cannot be used inside closures to affect an enclosing loop — this is a compile error:
+
+```
+while true {
+    let f = () => { break }  // ERROR: break can only be used inside a loop
 }
 ```
 
@@ -112,8 +202,7 @@ Putting it all together:
 
 ```
 fn main() {
-    let i = 1
-    while i <= 15 {
+    for i in 1..=15 {
         if i % 15 == 0 {
             print("FizzBuzz")
         } else if i % 3 == 0 {
@@ -123,7 +212,6 @@ fn main() {
         } else {
             print(i)
         }
-        i = i + 1
     }
 }
 ```

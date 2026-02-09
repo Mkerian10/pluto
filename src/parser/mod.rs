@@ -763,6 +763,16 @@ impl<'a> Parser<'a> {
             Token::For => self.parse_for_stmt(),
             Token::Match => self.parse_match_stmt(),
             Token::Raise => self.parse_raise_stmt(),
+            Token::Break => {
+                let span = self.advance().unwrap().span;
+                self.consume_statement_end();
+                Ok(Spanned::new(Stmt::Break, span))
+            }
+            Token::Continue => {
+                let span = self.advance().unwrap().span;
+                self.consume_statement_end();
+                Ok(Spanned::new(Stmt::Continue, span))
+            }
             _ => {
                 // Parse a full expression, then check for `=` to determine
                 // if this is an assignment, field assignment, or expression statement.
@@ -1437,6 +1447,23 @@ impl<'a> Parser<'a> {
                     );
                 }
                 continue;
+            }
+
+            // Range: `..` (exclusive) or `..=` (inclusive)
+            if matches!(tok.node, Token::DotDot | Token::DotDotEq) {
+                let inclusive = matches!(tok.node, Token::DotDotEq);
+                self.advance(); // consume `..` or `..=`
+                let rhs = self.parse_expr(0)?;
+                let span = Span::new(lhs.span.start, rhs.span.end);
+                lhs = Spanned::new(
+                    Expr::Range {
+                        start: Box::new(lhs),
+                        end: Box::new(rhs),
+                        inclusive,
+                    },
+                    span,
+                );
+                break; // ranges don't chain
             }
 
             // Right shift: detect adjacent `>` `>` as `>>` without adding a lexer token.

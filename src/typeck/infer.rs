@@ -210,6 +210,23 @@ pub(crate) fn infer_expr(
             }
             Ok(PlutoType::Map(Box::new(kt), Box::new(vt)))
         }
+        Expr::Range { start, end, .. } => {
+            let start_type = infer_expr(&start.node, start.span, env)?;
+            let end_type = infer_expr(&end.node, end.span, env)?;
+            if start_type != PlutoType::Int {
+                return Err(CompileError::type_err(
+                    format!("range start must be int, found {start_type}"),
+                    start.span,
+                ));
+            }
+            if end_type != PlutoType::Int {
+                return Err(CompileError::type_err(
+                    format!("range end must be int, found {end_type}"),
+                    end.span,
+                ));
+            }
+            Ok(PlutoType::Range)
+        }
         Expr::SetLit { elem_type, elements } => {
             let et = resolve_type(elem_type, env)?;
             validate_hashable_key(&et, elem_type.span)?;

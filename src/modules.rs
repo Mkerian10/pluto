@@ -775,6 +775,7 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
         Stmt::Expr(expr) => {
             rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
         }
+        Stmt::Break | Stmt::Continue => {}
     }
 }
 
@@ -888,6 +889,10 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
                     rewrite_expr_for_module(&mut fallback.node, module_name, module_prog);
                 }
             }
+        }
+        Expr::Range { start, end, .. } => {
+            rewrite_expr_for_module(&mut start.node, module_name, module_prog);
+            rewrite_expr_for_module(&mut end.node, module_name, module_prog);
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
     }
@@ -1055,6 +1060,7 @@ fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
         Stmt::Expr(expr) => {
             rewrite_expr(&mut expr.node, expr.span, import_names);
         }
+        Stmt::Break | Stmt::Continue => {}
     }
 }
 
@@ -1171,6 +1177,10 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
                     rewrite_expr(&mut fallback.node, fallback.span, import_names);
                 }
             }
+        }
+        Expr::Range { start, end, .. } => {
+            rewrite_expr(&mut start.node, start.span, import_names);
+            rewrite_expr(&mut end.node, end.span, import_names);
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
     }

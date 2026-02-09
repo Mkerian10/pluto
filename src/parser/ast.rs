@@ -147,6 +147,8 @@ pub enum Stmt {
         error_name: Spanned<String>,
         fields: Vec<(Spanned<String>, Spanned<Expr>)>,
     },
+    Break,
+    Continue,
     Expr(Spanned<Expr>),
 }
 
@@ -233,6 +235,11 @@ pub enum Expr {
     Cast {
         expr: Box<Spanned<Expr>>,
         target_type: Spanned<TypeExpr>,
+    },
+    Range {
+        start: Box<Spanned<Expr>>,
+        end: Box<Spanned<Expr>>,
+        inclusive: bool,
     },
 }
 

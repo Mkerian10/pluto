@@ -5,9 +5,6 @@ Areas that need further design work before implementation.
 ## Language Features
 
 - [ ] **Null / optional** — how are absent values represented? Option type? nullable types?
-- [ ] **Range syntax** — `0..n`, `0..=n` for loops and slices
-- [ ] **`loop` keyword** — infinite loop construct (currently use `while true`)
-- [ ] **`break` / `continue`** — loop control flow (currently use early `return`)
 
 ## Communication
 
@@ -86,3 +83,6 @@ Previously open questions that have been designed and implemented.
 - [x] **Spawn semantics** — `spawn` returns `Task<T>`, `.get()` is fallible (preserves error types + TaskCancelled)
 - [x] **Structured concurrency** — tasks must be consumed (`.get()` or `.detach()`), structured by default
 - [x] **Contract system** — 5-type contract stack: invariants, pre/post conditions, protocol contracts, failure semantics, interface guarantees. Compile-time first with runtime checks at boundaries.
+- [x] **`break` / `continue`** — loop control flow with `break` to exit and `continue` to skip to next iteration. Validated at compile time (must be inside loop, cannot escape closures)
+- [x] **Range syntax** — `0..n` (exclusive) and `0..=n` (inclusive) for integer iteration in `for` loops
+- [x] **`loop` keyword** — rejected; use `while true` instead. No dedicated infinite loop construct needed

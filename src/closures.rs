@@ -104,6 +104,7 @@ fn lift_in_stmt(
                 lift_in_expr(&mut val.node, val.span, env, counter, new_fns)?;
             }
         }
+        Stmt::Break | Stmt::Continue => {}
     }
     Ok(())
 }
@@ -275,6 +276,10 @@ fn lift_in_expr(
                 lift_in_expr(&mut elem.node, elem.span, env, counter, new_fns)?;
             }
         }
+        Expr::Range { start, end, .. } => {
+            lift_in_expr(&mut start.node, start.span, env, counter, new_fns)?;
+            lift_in_expr(&mut end.node, end.span, env, counter, new_fns)?;
+        }
         // Non-capturing expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => {}
@@ -345,6 +350,7 @@ fn infer_type_from_expr(expr: &Expr) -> PlutoType {
             UnaryOp::BitNot => PlutoType::Int,
             UnaryOp::Neg => infer_type_from_expr(&operand.node),
         },
+        Expr::Range { .. } => PlutoType::Range,
         _ => PlutoType::Int, // fallback — typeck has already validated
     }
 }
@@ -383,6 +389,7 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
             type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
         },
         PlutoType::Error => TypeExpr::Named("error".to_string()),
+        PlutoType::Range => TypeExpr::Named("range".to_string()),
         PlutoType::TypeParam(name) => TypeExpr::Named(name.clone()),
     }
 }

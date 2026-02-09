@@ -243,6 +243,7 @@ fn rewrite_stmt(stmt: &mut Spanned<Stmt>, active: &HashSet<String>) {
         Stmt::Expr(expr) => {
             rewrite_expr(&mut expr.node, expr.span, active);
         }
+        Stmt::Break | Stmt::Continue => {}
     }
 }
 
@@ -340,6 +341,10 @@ fn rewrite_expr(expr: &mut Expr, span: Span, active: &HashSet<String>) {
         }
         Expr::Cast { expr: inner, .. } => {
             rewrite_expr(&mut inner.node, inner.span, active);
+        }
+        Expr::Range { start, end, .. } => {
+            rewrite_expr(&mut start.node, start.span, active);
+            rewrite_expr(&mut end.node, end.span, active);
         }
         // Literals and non-rewritable expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)

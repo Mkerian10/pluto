@@ -144,23 +144,28 @@ fn check_stmt(
                 ));
             }
             env.push_scope();
+            env.loop_depth += 1;
             check_block(&body.node, env, return_type)?;
+            env.loop_depth -= 1;
             env.pop_scope();
         }
         Stmt::For { var, iterable, body } => {
             let iter_type = infer_expr(&iterable.node, iterable.span, env)?;
             let elem_type = match iter_type {
                 PlutoType::Array(elem) => *elem,
+                PlutoType::Range => PlutoType::Int,
                 _ => {
                     return Err(CompileError::type_err(
-                        format!("for loop requires array, found {iter_type}"),
+                        format!("for loop requires array or range, found {iter_type}"),
                         iterable.span,
                     ));
                 }
             };
             env.push_scope();
             env.define(var.node.clone(), elem_type);
+            env.loop_depth += 1;
             check_block(&body.node, env, return_type)?;
+            env.loop_depth -= 1;
             env.pop_scope();
         }
         Stmt::IndexAssign { object, index, value } => {
@@ -171,6 +176,22 @@ fn check_stmt(
         }
         Stmt::Raise { error_name, fields } => {
             check_raise(error_name, fields, span, env)?;
+        }
+        Stmt::Break => {
+            if env.loop_depth == 0 {
+                return Err(CompileError::type_err(
+                    "'break' can only be used inside a loop",
+                    span,
+                ));
+            }
+        }
+        Stmt::Continue => {
+            if env.loop_depth == 0 {
+                return Err(CompileError::type_err(
+                    "'continue' can only be used inside a loop",
+                    span,
+                ));
+            }
         }
         Stmt::Expr(expr) => {
             infer_expr(&expr.node, expr.span, env)?;

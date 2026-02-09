@@ -169,6 +169,7 @@ fn collect_stmt_effects(
                 }
             }
         }
+        Stmt::Break | Stmt::Continue => {}
     }
 }
 
@@ -310,6 +311,10 @@ fn collect_expr_effects(
                 collect_expr_effects(&e.node, direct_errors, edges, current_fn, env);
             }
         }
+        Expr::Range { start, end, .. } => {
+            collect_expr_effects(&start.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&end.node, direct_errors, edges, current_fn, env);
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => {}
     }
@@ -416,6 +421,7 @@ fn enforce_stmt(
             }
             Ok(())
         }
+        Stmt::Break | Stmt::Continue => Ok(()),
     }
 }
 
@@ -592,6 +598,10 @@ fn enforce_expr(
                 enforce_expr(&e.node, e.span, current_fn, env)?;
             }
             Ok(())
+        }
+        Expr::Range { start, end, .. } => {
+            enforce_expr(&start.node, start.span, current_fn, env)?;
+            enforce_expr(&end.node, end.span, current_fn, env)
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => Ok(()),

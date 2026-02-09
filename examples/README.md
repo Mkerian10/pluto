@@ -33,7 +33,7 @@ cargo run --release -- compile examples/add/main.pluto -o my_program
 | [strings](strings/) | string ops, `.len()`, equality | String concatenation, length, comparison |
 | [string_interp](string_interp/) | string interpolation | Embed expressions in strings with `{expr}` |
 | [arrays](arrays/) | arrays, `.len()`, `.push()`, indexing | Array creation, mutation, and iteration |
-| [control_flow](control_flow/) | if/else, while, for, string interp | FizzBuzz with loops and for-each |
+| [control_flow](control_flow/) | if/else, while, for, ranges, break, continue | FizzBuzz with ranges, break, continue |
 | [enums](enums/) | enums, match, data variants | Sum types with pattern matching |
 | [closures](closures/) | closures, `fn` types, capture | Lambdas, higher-order functions, closures |
 | [traits](traits/) | traits, default methods, polymorphism | Interfaces with dynamic dispatch |
@@ -108,6 +108,8 @@ print(s.contains(2))
 if x > 0 { print("positive") }
 while x > 0 { x = x - 1 }
 for item in nums { print(item) }
+for i in 0..10 { print(i) }       // exclusive range
+for i in 0..=10 { print(i) }      // inclusive range
 
 // String interpolation
 let msg = "x is {x} and name is {name}"
