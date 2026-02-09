@@ -1,0 +1,140 @@
+// SciMark 2.0: LU Decomposition with Partial Pivoting
+// 1D array simulating 2D (row-major), N×N matrix
+
+fn lu_factor(a: [float], pivot: [int], n: int) {
+    // Initialize pivot array
+    let i = 0
+    while i < n {
+        pivot[i] = i
+        i = i + 1
+    }
+
+    let col = 0
+    while col < n {
+        // Find pivot: max |a[row][col]| for row >= col
+        let max_val = 0.0
+        let max_row = col
+        let row = col
+        while row < n {
+            let v = a[row * n + col]
+            if v < 0.0 {
+                v = 0.0 - v
+            }
+            if v > max_val {
+                max_val = v
+                max_row = row
+            }
+            row = row + 1
+        }
+
+        // Swap rows if needed
+        if max_row != col {
+            // Swap pivot entries
+            let tmp_p = pivot[col]
+            pivot[col] = pivot[max_row]
+            pivot[max_row] = tmp_p
+
+            // Swap row data
+            let k = 0
+            while k < n {
+                let tmp = a[col * n + k]
+                a[col * n + k] = a[max_row * n + k]
+                a[max_row * n + k] = tmp
+                k = k + 1
+            }
+        }
+
+        let diag = a[col * n + col]
+        if diag == 0.0 {
+            col = col + 1
+            continue
+        }
+
+        // Compute multipliers and eliminate
+        row = col + 1
+        while row < n {
+            let factor = a[row * n + col] / diag
+            a[row * n + col] = factor
+            let k = col + 1
+            while k < n {
+                a[row * n + k] = a[row * n + k] - factor * a[col * n + k]
+                k = k + 1
+            }
+            row = row + 1
+        }
+
+        col = col + 1
+    }
+}
+
+fn main() {
+    let n = 500
+    let iterations = 10
+    let seed = 42
+    let lcg_a = 16807
+    let lcg_m = 2147483647
+
+    // Allocate matrix (n×n as 1D)
+    let size = n * n
+    let a = [0.0]
+    let i = 1
+    while i < size {
+        a.push(0.0)
+        i = i + 1
+    }
+    // Working copy
+    let work = [0.0]
+    i = 1
+    while i < size {
+        work.push(0.0)
+        i = i + 1
+    }
+    // Pivot array
+    let pivot = [0]
+    i = 1
+    while i < n {
+        pivot.push(0)
+        i = i + 1
+    }
+
+    // Initialize matrix with pseudo-random values
+    i = 0
+    while i < size {
+        seed = (seed * lcg_a) % lcg_m
+        a[i] = (seed as float) / (lcg_m as float) * 2.0 - 1.0
+        i = i + 1
+    }
+    // Make diagonally dominant to ensure stability
+    i = 0
+    while i < n {
+        a[i * n + i] = a[i * n + i] + (n as float)
+        i = i + 1
+    }
+
+    let start = time_ns()
+
+    let iter = 0
+    while iter < iterations {
+        // Copy a -> work
+        i = 0
+        while i < size {
+            work[i] = a[i]
+            i = i + 1
+        }
+        lu_factor(work, pivot, n)
+        iter = iter + 1
+    }
+
+    // Checksum: sum of diagonal of factored matrix
+    let checksum = 0.0
+    i = 0
+    while i < n {
+        checksum = checksum + work[i * n + i]
+        i = i + 1
+    }
+
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("checksum: {checksum}")
+    print("elapsed: {ms} ms")
+}

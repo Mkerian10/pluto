@@ -43,6 +43,8 @@ BENCHMARKS=(
     list
     fft
     sor
+    sparse_matmul
+    lu
 )
 
 PASS=0

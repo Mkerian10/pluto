@@ -1,0 +1,122 @@
+// SciMark 2.0: Sparse Matrix Multiply
+// Sparse matrix in CSR format × dense vector, repeated iterations
+
+fn init_sparse(n: int, nnz: int, val: [float], col: [int], row: [int]) {
+    // Fill with pseudo-random sparse structure
+    // Distribute nnz entries roughly evenly across rows
+    let seed = 42
+    let a = 16807
+    let m = 2147483647
+    let entries_per_row = nnz / n
+
+    let idx = 0
+    let r = 0
+    while r < n {
+        row[r] = idx
+        let j = 0
+        while j < entries_per_row {
+            if idx >= nnz {
+                break
+            }
+            seed = (seed * a) % m
+            let c = seed % n
+            if c < 0 {
+                c = 0 - c
+            }
+            col[idx] = c
+            seed = (seed * a) % m
+            val[idx] = (seed as float) / (m as float)
+            idx = idx + 1
+            j = j + 1
+        }
+        r = r + 1
+    }
+    row[n] = idx
+}
+
+fn sparse_matmul(val: [float], col: [int], row: [int], x: [float], y: [float], n: int) {
+    let r = 0
+    while r < n {
+        let sum = 0.0
+        let start = row[r]
+        let end = row[r + 1]
+        let k = start
+        while k < end {
+            sum = sum + val[k] * x[col[k]]
+            k = k + 1
+        }
+        y[r] = sum
+        r = r + 1
+    }
+}
+
+fn main() {
+    let n = 5000
+    let nnz = 50000
+    let iterations = 1000
+
+    // Allocate CSR arrays
+    let val = [0.0]
+    let i = 1
+    while i < nnz {
+        val.push(0.0)
+        i = i + 1
+    }
+    let col = [0]
+    i = 1
+    while i < nnz {
+        col.push(0)
+        i = i + 1
+    }
+    let row = [0]
+    i = 1
+    while i <= n {
+        row.push(0)
+        i = i + 1
+    }
+
+    // Dense vectors
+    let x = [0.0]
+    i = 1
+    while i < n {
+        x.push(0.0)
+        i = i + 1
+    }
+    let y = [0.0]
+    i = 1
+    while i < n {
+        y.push(0.0)
+        i = i + 1
+    }
+
+    // Initialize sparse matrix
+    init_sparse(n, nnz, val, col, row)
+
+    // Initialize x vector
+    i = 0
+    while i < n {
+        x[i] = 1.0 / ((i + 1) as float)
+        i = i + 1
+    }
+
+    let start = time_ns()
+
+    let iter = 0
+    while iter < iterations {
+        sparse_matmul(val, col, row, x, y, n)
+        iter = iter + 1
+    }
+
+    // Checksum
+    let checksum = 0.0
+    i = 0
+    while i < n {
+        checksum = checksum + y[i]
+        i = i + 1
+    }
+
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("checksum: {checksum}")
+    print("elapsed: {ms} ms")
+}
