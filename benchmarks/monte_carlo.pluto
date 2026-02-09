@@ -1,0 +1,29 @@
+fn main() {
+    let n = 100000000
+    let start = time_ns()
+
+    // Lehmer LCG PRNG: seed = seed * 16807 % 2147483647
+    let seed = 42
+    let a = 16807
+    let m = 2147483647
+
+    let inside = 0
+    let i = 0
+    while i < n {
+        seed = (seed * a) % m
+        let x = (seed as float) / (m as float)
+        seed = (seed * a) % m
+        let y = (seed as float) / (m as float)
+        if x * x + y * y <= 1.0 {
+            inside = inside + 1
+        }
+        i = i + 1
+    }
+
+    let pi_est = 4.0 * (inside as float) / (n as float)
+
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("pi estimate: {pi_est}")
+    print("elapsed: {ms} ms")
+}

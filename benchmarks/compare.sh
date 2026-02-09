@@ -9,7 +9,7 @@ RESULTS="$TMP_DIR/results.txt"
 
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-BENCHMARKS=(fib loop_sum sieve bounce towers permute queens)
+BENCHMARKS=(fib loop_sum sieve bounce towers permute queens fannkuch_redux spectral_norm nbody mandelbrot)
 
 extract_ms() {
     echo "$1" | grep "^elapsed:" | sed 's/elapsed: \([0-9]*\) ms/\1/' || echo "-"
@@ -40,7 +40,7 @@ echo ""
 # --- Compile C benchmarks ---
 echo "Compiling C benchmarks (-O2)..."
 for bench in "${BENCHMARKS[@]}"; do
-    cc -O2 -o "$TMP_DIR/c_${bench}" "$REF_DIR/c/${bench}.c" 2>/dev/null || echo "  FAIL: c/$bench"
+    cc -O2 -lm -o "$TMP_DIR/c_${bench}" "$REF_DIR/c/${bench}.c" 2>/dev/null || echo "  FAIL: c/$bench"
 done
 echo ""
 
@@ -104,8 +104,8 @@ done
 # --- Print comparison table ---
 echo ""
 echo ""
-printf "%-12s %10s %10s %10s %10s\n" "Benchmark" "Pluto" "C -O2" "Go" "Python"
-printf "%-12s %10s %10s %10s %10s\n" "---------" "-----" "-----" "--" "------"
+printf "%-18s %10s %10s %10s %10s\n" "Benchmark" "Pluto" "C -O2" "Go" "Python"
+printf "%-18s %10s %10s %10s %10s\n" "---------" "-----" "-----" "--" "------"
 
 for bench in "${BENCHMARKS[@]}"; do
     pluto=$(lookup pluto "$bench")
@@ -119,15 +119,15 @@ for bench in "${BENCHMARKS[@]}"; do
     [ "$go_val" != "-" ] && go_val="${go_val} ms"
     [ "$py" != "-" ] && py="${py} ms"
 
-    printf "%-12s %10s %10s %10s %10s\n" "$bench" "$pluto" "$c" "$go_val" "$py"
+    printf "%-18s %10s %10s %10s %10s\n" "$bench" "$pluto" "$c" "$go_val" "$py"
 done
 
 echo ""
 
 # --- Print ratios (Pluto / other) ---
 echo "Ratios (Pluto / Language — lower is better for Pluto):"
-printf "%-12s %10s %10s %10s\n" "Benchmark" "vs C" "vs Go" "vs Python"
-printf "%-12s %10s %10s %10s\n" "---------" "----" "-----" "---------"
+printf "%-18s %10s %10s %10s\n" "Benchmark" "vs C" "vs Go" "vs Python"
+printf "%-18s %10s %10s %10s\n" "---------" "----" "-----" "---------"
 
 for bench in "${BENCHMARKS[@]}"; do
     pluto=$(lookup pluto "$bench")
@@ -153,7 +153,7 @@ for bench in "${BENCHMARKS[@]}"; do
         ratio_py="-"
     fi
 
-    printf "%-12s %10s %10s %10s\n" "$bench" "$ratio_c" "$ratio_go" "$ratio_py"
+    printf "%-18s %10s %10s %10s\n" "$bench" "$ratio_c" "$ratio_go" "$ratio_py"
 done
 
 echo ""

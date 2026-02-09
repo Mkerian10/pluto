@@ -34,6 +34,15 @@ BENCHMARKS=(
     towers
     permute
     queens
+    fannkuch_redux
+    spectral_norm
+    nbody
+    mandelbrot
+    monte_carlo
+    storage
+    list
+    fft
+    sor
 )
 
 PASS=0
