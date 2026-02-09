@@ -61,5 +61,9 @@ name = "errors"
 path = "tests/integration/errors.rs"
 
 [[test]]
+name = "generics"
+path = "tests/integration/generics.rs"
+
+[[test]]
 name = "modules"
 path = "tests/integration/modules.rs"
