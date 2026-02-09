@@ -20,11 +20,9 @@ Most code (~90%) uses synchronous calls. Channels are the tool for when you genu
 Cross-service communication looks like regular method calls:
 
 ```
-class OrderService {
-    inject accounts: AccountsService
-
+class OrderService[accounts: AccountsService] {
     fn process(mut self, order: Order) {
-        let user = self.accounts.get_user(order.user_id)?
+        let user = self.accounts.get_user(order.user_id)!
         // This might be a local call or a cross-pod RPC.
         // The programmer doesn't know or care.
         // The compiler generates the right code.
@@ -74,14 +72,14 @@ Channel operations are **fallible** and must be handled:
 
 ```
 // Send — can fail (full, disconnected, network error)
-tx <- msg ? "sending order"
-tx <- msg catch |err| { log(err) }
+tx <- msg ! "sending order"
+tx <- msg catch err { log(err) }
 
 // Receive — can fail (empty, disconnected, timeout)
-let val = <-rx ? "waiting for response"
-let val = <-rx catch {
-    ChannelEmpty => default_value,
-    Disconnected => return,
+let val = <-rx ! "waiting for response"
+let val = <-rx catch err {
+    // handle error
+    default_value
 }
 ```
 

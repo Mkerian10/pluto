@@ -2,9 +2,17 @@
 
 ## Current Implementation
 
-The current compiler links a small C runtime (`runtime/builtins.c`) that provides
-printing, allocation, and basic string/array operations. For the concrete ABI
-and data layouts, see `docs/design/compiler-runtime-abi.md`.
+The current compiler links a small C runtime (`runtime/builtins.c`) that provides printing, allocation, string/array/map/set operations, error handling, and garbage collection. For the concrete ABI and data layouts, see `docs/design/compiler-runtime-abi.md`.
+
+### Garbage Collection
+
+The runtime includes a mark-and-sweep garbage collector:
+
+- **Tag-based tracing:** Every GC-managed allocation has a tag byte identifying its type (string, array, class, map, set), enabling the collector to trace references correctly.
+- **Root scanning:** The collector walks a shadow stack of GC roots maintained by compiler-generated code.
+- **Trigger:** Collection runs when total heap usage exceeds a threshold (currently 1 MB, grows dynamically).
+- **Built-in:** `gc_heap_size()` returns current heap usage in bytes.
+- **Scope:** Collects strings, arrays, class instances, maps, and sets.
 
 ## The Pluto Runtime ("VM")
 
@@ -14,7 +22,7 @@ Every Pluto program runs inside the Pluto runtime. Despite compiling to native c
 
 The runtime handles concerns that don't belong in application code:
 
-- **Dependency resolution:** Satisfying `inject` declarations based on environment configuration
+- **Dependency resolution:** Satisfying bracket dep and ambient dep declarations based on environment configuration
 - **Process lifecycle:** Starting, monitoring, and restarting processes
 - **Unrecoverable error handling:** OOM, stack overflow, assertion failures — caught by the runtime, not user code
 - **Channel routing:** Managing channel endpoints across pod boundaries

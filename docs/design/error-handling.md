@@ -54,29 +54,20 @@ Note: `?` is reserved for null/Option handling (see [Type System](type-system.md
 
 ## Handling Errors with `catch`
 
-The `catch` keyword handles errors at the call site. Three forms:
+The `catch` keyword handles errors at the call site. Two forms:
 
 ### Wildcard catch
 
-Catches any error without pattern matching:
+Catches any error, binding it to a variable:
 
 ```
-let x = bar() catch |err| {
+let x = bar() catch err {
     log(err)
     fallback_value
 }
 ```
 
-### Pattern match catch
-
-Catches specific error types:
-
-```
-let x = bar() catch {
-    NetworkError(e) => retry(e.addr),
-    TimeoutError(_) => default_value,
-}
-```
+The variable `err` is bound to the error value. The block must evaluate to a value of the same type as the non-error return.
 
 ### Shorthand catch
 
@@ -92,7 +83,7 @@ There are no `try { } catch { }` blocks. Each fallible call is handled individua
 
 ## Non-Exhaustive Matching
 
-The wildcard form (`catch |err|`) means exhaustive matching of every error type is **not required**. The compiler enforces that you handle *something*, not that you enumerate every possible error type. This keeps error handling clean even when a function can produce many error types.
+The wildcard form (`catch err`) means exhaustive matching of every error type is **not required**. The compiler enforces that you handle *something*, not that you enumerate every possible error type. This keeps error handling clean even when a function can produce many error types.
 
 ## Raising Errors
 

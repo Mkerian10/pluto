@@ -24,7 +24,7 @@ The orchestration layer would handle:
 ## Relationship to the Language
 
 The Pluto language provides:
-- `inject` declarations that the orchestration layer must satisfy
+- Bracket deps and ambient deps that the orchestration layer must satisfy
 - Type contracts that the orchestration layer must respect
 - The app as the deployable unit
 

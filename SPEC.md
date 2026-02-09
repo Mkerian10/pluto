@@ -37,13 +37,14 @@ Detailed design for each area of the language:
 | Document | Area |
 | --- | --- |
 | [Program Structure](docs/design/program-structure.md) | Apps, modules, entry points |
-| [Type System](docs/design/type-system.md) | Classes, traits, nominal + structural typing |
+| [Type System](docs/design/type-system.md) | Classes, traits, generics, nominal + structural typing |
 | [Error Handling](docs/design/error-handling.md) | Typed errors, inference, `!` and `catch` |
-| [Dependency Injection](docs/design/dependency-injection.md) | `inject`, auto-wiring, environment opacity |
+| [Dependency Injection](docs/design/dependency-injection.md) | Bracket deps, ambient DI, auto-wiring, environment opacity |
 | [Communication](docs/design/communication.md) | Synchronous calls, channels, serialization |
 | [Mutability](docs/design/mutability.md) | Explicit mutation, compiler optimizations |
-| [Runtime](docs/design/runtime.md) | The Pluto "VM", process lifecycle, crash recovery |
+| [Runtime](docs/design/runtime.md) | The Pluto "VM", GC, process lifecycle, crash recovery |
 | [Compilation](docs/design/compilation.md) | Whole-program model, incremental builds, link-time analysis |
+| [Compiler Runtime ABI](docs/design/compiler-runtime-abi.md) | C runtime surface, data layouts, calling conventions |
 | [Orchestration](docs/design/orchestration.md) | The separate layer built on top of Pluto |
 | [Open Questions](docs/design/open-questions.md) | Unresolved design areas |
 
@@ -57,10 +58,10 @@ trait Validator {
     fn validate(self) bool
 }
 
-class Order impl Validator, Serializable {
+class Order impl Validator {
     id: string
     user_id: string
-    items: List<Item>
+    items: [Item]
     total: float
 
     fn validate(self) bool {
@@ -68,11 +69,8 @@ class Order impl Validator, Serializable {
     }
 }
 
-class OrderService {
-    inject db: APIDatabase
-    inject accounts: AccountsService
-    inject logger: Logger
-
+// Bracket deps for explicit DI
+class OrderService[db: APIDatabase, accounts: AccountsService] uses Logger {
     fn create(mut self, order: Order) Order {
         if !order.validate() {
             raise ValidationError { field: "order", message: "invalid order" }
@@ -80,16 +78,29 @@ class OrderService {
 
         let user = self.accounts.get_user(order.user_id)!
         self.db.insert(order)!
-        self.logger.info("created order {order.id} for {user.name}")
+        logger.info("created order {order.id} for {user.name}")
         return order
     }
 }
 
-app OrderApp {
-    inject order_service: OrderService
+app OrderApp[order_service: OrderService] {
+    ambient Logger
 
-    fn main() {
-        // Application entry point
+    fn main(self) {
+        self.order_service.create(some_order)!
     }
 }
+
+// Generics
+fn first<T>(items: [T]) T {
+    return items[0]
+}
+
+class Box<T> {
+    value: T
+}
+
+// Maps and Sets
+let m = Map<string, int> { "a": 1, "b": 2 }
+let s = Set<int> { 1, 2, 3 }
 ```

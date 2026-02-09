@@ -31,9 +31,15 @@ Exhaustive pattern matching on enums:
 
 ```
 match status {
-    Status.Active => process(),
-    Status.Suspended { reason } => log(reason),
-    Status.Deleted { at } => archive(at),
+    Status.Active {
+        process()
+    }
+    Status.Suspended { reason } {
+        log(reason)
+    }
+    Status.Deleted { at } {
+        archive(at)
+    }
 }
 ```
 
