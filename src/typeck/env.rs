@@ -33,6 +33,10 @@ pub struct TypeEnv {
     pub traits: HashMap<String, TraitInfo>,
     pub enums: HashMap<String, EnumInfo>,
     pub extern_fns: HashSet<String>,
+    /// Captures for each closure, keyed by (start, end) byte offset of the Expr::Closure node
+    pub closure_captures: HashMap<(usize, usize), Vec<(String, PlutoType)>>,
+    /// Lifted closure function name → captured variable names and types
+    pub closure_fns: HashMap<String, Vec<(String, PlutoType)>>,
 }
 
 impl TypeEnv {
@@ -47,6 +51,8 @@ impl TypeEnv {
             traits: HashMap::new(),
             enums: HashMap::new(),
             extern_fns: HashSet::new(),
+            closure_captures: HashMap::new(),
+            closure_fns: HashMap::new(),
         }
     }
 
@@ -66,6 +72,20 @@ impl TypeEnv {
         for scope in self.scopes.iter().rev() {
             if let Some(ty) = scope.get(name) {
                 return Some(ty);
+            }
+        }
+        None
+    }
+
+    pub fn scope_depth(&self) -> usize {
+        self.scopes.len()
+    }
+
+    /// Look up a variable and return its type along with the scope depth it was found at (0-indexed from bottom)
+    pub fn lookup_with_depth(&self, name: &str) -> Option<(&PlutoType, usize)> {
+        for (i, scope) in self.scopes.iter().enumerate().rev() {
+            if let Some(ty) = scope.get(name) {
+                return Some((ty, i));
             }
         }
         None
