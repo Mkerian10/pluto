@@ -70,6 +70,7 @@ fn load_directory_module(
         imports: Vec::new(),
         functions: Vec::new(),
         extern_fns: Vec::new(),
+        extern_rust_crates: Vec::new(),
         classes: Vec::new(),
         traits: Vec::new(),
         enums: Vec::new(),
@@ -93,6 +94,7 @@ fn load_directory_module(
         let (program, _file_id) = load_and_parse(&file_path, source_map)?;
         merged.functions.extend(program.functions);
         merged.extern_fns.extend(program.extern_fns);
+        merged.extern_rust_crates.extend(program.extern_rust_crates);
         merged.classes.extend(program.classes);
         merged.traits.extend(program.traits);
         merged.enums.extend(program.enums);
@@ -269,6 +271,12 @@ fn flatten_into_program(
         if module_prog.app.is_some() {
             return Err(CompileError::codegen(format!(
                 "app declarations are not allowed in imported modules (found in '{}')",
+                module_name
+            )));
+        }
+        if !module_prog.extern_rust_crates.is_empty() {
+            return Err(CompileError::codegen(format!(
+                "extern rust declarations are only allowed in the root program (found in '{}')",
                 module_name
             )));
         }
@@ -451,6 +459,7 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
         root.imports.extend(program.imports);
         root.functions.extend(program.functions);
         root.extern_fns.extend(program.extern_fns);
+        root.extern_rust_crates.extend(program.extern_rust_crates);
         root.classes.extend(program.classes);
         root.traits.extend(program.traits);
         root.enums.extend(program.enums);
@@ -541,13 +550,24 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
 /// - Add ALL items with prefixed names (visibility deferred)
 /// - Rewrite qualified references in the root program's AST
 pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), CompileError> {
-    let import_names: HashSet<String> = graph.imports.iter().map(|(n, _)| n.clone()).collect();
+    let mut import_names: HashSet<String> = graph.imports.iter().map(|(n, _)| n.clone()).collect();
 
-    // Reject app declarations in imported modules
+    // Add extern rust aliases so the rewrite pass converts alias.fn() → Call { name: "alias.fn" }
+    for ext_rust in &graph.root.extern_rust_crates {
+        import_names.insert(ext_rust.node.alias.node.clone());
+    }
+
+    // Reject app declarations and extern rust in imported modules
     for (module_name, module_prog) in &graph.imports {
         if module_prog.app.is_some() {
             return Err(CompileError::codegen(format!(
                 "app declarations are not allowed in imported modules (found in '{}')",
+                module_name
+            )));
+        }
+        if !module_prog.extern_rust_crates.is_empty() {
+            return Err(CompileError::codegen(format!(
+                "extern rust declarations are only allowed in the root program (found in '{}')",
                 module_name
             )));
         }
