@@ -137,10 +137,12 @@ fn qualified_type_in_param() {
 
 #[test]
 fn private_function_not_visible() {
-    compile_project_should_fail(&[
+    // Visibility is deferred (Python-style) — private items are flattened and accessible
+    let out = run_project(&[
         ("main.pluto", "import math\n\nfn main() {\n    print(math.secret(1))\n}"),
         ("math.pluto", "fn secret(x: int) int {\n    return x\n}\n\npub fn add(a: int, b: int) int {\n    return a + b\n}"),
     ]);
+    assert_eq!(out, "1\n");
 }
 
 // ============================================================
@@ -149,10 +151,12 @@ fn private_function_not_visible() {
 
 #[test]
 fn private_class_not_visible() {
-    compile_project_should_fail(&[
-        ("main.pluto", "import geo\n\nfn main() {\n    let p = geo.Internal { x: 1 }\n}"),
+    // Visibility is deferred (Python-style) — private items are flattened and accessible
+    let out = run_project(&[
+        ("main.pluto", "import geo\n\nfn main() {\n    let p = geo.Internal { x: 1 }\n    print(p.x)\n}"),
         ("geo.pluto", "class Internal {\n    x: int\n}\n\npub class Point {\n    x: int\n    y: int\n}"),
     ]);
+    assert_eq!(out, "1\n");
 }
 
 // ============================================================
@@ -362,11 +366,20 @@ pub fn make_circle(r: int) Kind {
 
 #[test]
 fn private_enum_not_visible() {
-    compile_project_should_fail(&[
+    // Visibility is deferred (Python-style) — private items are flattened and accessible
+    let out = run_project(&[
         ("main.pluto", r#"import inner
 
 fn main() {
     let x = inner.Secret.A
+    match x {
+        inner.Secret.A {
+            print("a")
+        }
+        inner.Secret.B {
+            print("b")
+        }
+    }
 }
 "#),
         ("inner.pluto", r#"enum Secret {
@@ -375,6 +388,7 @@ fn main() {
 }
 "#),
     ]);
+    assert_eq!(out, "a\n");
 }
 
 // ============================================================
@@ -563,4 +577,244 @@ app MyApp {
 }
 "#),
     ]);
+}
+
+// ============================================================
+// Transitive imports
+// ============================================================
+
+#[test]
+fn transitive_import_basic() {
+    // A imports B, B imports C
+    let out = run_project(&[
+        ("main.pluto", r#"import b
+
+fn main() {
+    print(b.greet())
+}
+"#),
+        ("b.pluto", r#"import c
+
+pub fn greet() string {
+    return c.hello()
+}
+"#),
+        ("c.pluto", r#"pub fn hello() string {
+    return "hello from c"
+}
+"#),
+    ]);
+    assert_eq!(out, "hello from c\n");
+}
+
+#[test]
+fn transitive_import_chain() {
+    // A→B→C→D, three levels deep
+    let out = run_project(&[
+        ("main.pluto", r#"import b
+
+fn main() {
+    print(b.get_b())
+}
+"#),
+        ("b.pluto", r#"import c
+
+pub fn get_b() int {
+    return c.get_c()
+}
+"#),
+        ("c.pluto", r#"import d
+
+pub fn get_c() int {
+    return d.get_d()
+}
+"#),
+        ("d.pluto", r#"pub fn get_d() int {
+    return 42
+}
+"#),
+    ]);
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn transitive_import_shared() {
+    // Diamond: B and C both import shared
+    let out = run_project(&[
+        ("main.pluto", r#"import b
+import c
+
+fn main() {
+    print(b.get_value())
+    print(c.get_value())
+}
+"#),
+        ("b.pluto", r#"import shared
+
+pub fn get_value() int {
+    return shared.base() + 1
+}
+"#),
+        ("c.pluto", r#"import shared
+
+pub fn get_value() int {
+    return shared.base() + 2
+}
+"#),
+        ("shared.pluto", r#"pub fn base() int {
+    return 10
+}
+"#),
+    ]);
+    assert_eq!(out, "11\n12\n");
+}
+
+#[test]
+fn circular_import_rejected() {
+    // A→B→A cycle should produce an error
+    compile_project_should_fail(&[
+        ("main.pluto", r#"import a
+
+fn main() {
+    print(a.value())
+}
+"#),
+        ("a.pluto", r#"import b
+
+pub fn value() int {
+    return b.other()
+}
+"#),
+        ("b.pluto", r#"import a
+
+pub fn other() int {
+    return a.value()
+}
+"#),
+    ]);
+}
+
+#[test]
+fn transitive_import_with_classes() {
+    // Module imports another and uses its classes
+    let out = run_project(&[
+        ("main.pluto", r#"import shapes
+
+fn main() {
+    let c = shapes.make_circle(5)
+    print(c.radius)
+}
+"#),
+        ("shapes.pluto", r#"import geo
+
+pub fn make_circle(r: int) geo.Circle {
+    return geo.Circle { radius: r }
+}
+"#),
+        ("geo.pluto", r#"pub class Circle {
+    radius: int
+}
+"#),
+    ]);
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn transitive_import_mod_pluto() {
+    // mod.pluto file that imports another module (relative to its own directory)
+    let out = run_project(&[
+        ("main.pluto", r#"import lib
+
+fn main() {
+    print(lib.combined())
+}
+"#),
+        ("lib/mod.pluto", r#"import helper
+
+pub fn combined() int {
+    return helper.base() * 2
+}
+"#),
+        ("lib/helper.pluto", r#"pub fn base() int {
+    return 21
+}
+"#),
+    ]);
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn private_helper_in_pub_function() {
+    // Pub fn calls private helper within same module — works since all items are flattened
+    let out = run_project(&[
+        ("main.pluto", r#"import math
+
+fn main() {
+    print(math.double(21))
+}
+"#),
+        ("math.pluto", r#"fn helper(x: int) int {
+    return x * 2
+}
+
+pub fn double(x: int) int {
+    return helper(x)
+}
+"#),
+    ]);
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn transitive_import_stdlib() {
+    // Module imports from stdlib internally
+    let out = run_project(&[
+        ("main.pluto", r#"import mylib
+
+fn main() {
+    mylib.say_hello()
+}
+"#),
+        ("mylib.pluto", r#"import std.io
+
+pub fn say_hello() {
+    io.println("hello from lib")
+}
+"#),
+        ("stdlib/io/mod.pluto", r#"extern fn __pluto_print_string(s: string)
+
+pub fn println(s: string) {
+    __pluto_print_string(s)
+}
+"#),
+    ]);
+    assert_eq!(out, "hello from lib\n");
+}
+
+#[test]
+fn transitive_import_shared_extern_fn() {
+    // Two modules both declare the same extern fn — should deduplicate cleanly
+    let out = run_project(&[
+        ("main.pluto", r#"import a
+import b
+
+fn main() {
+    a.say(1)
+    b.say(2)
+}
+"#),
+        ("a.pluto", r#"extern fn __pluto_print_int(value: int)
+
+pub fn say(x: int) {
+    __pluto_print_int(x)
+}
+"#),
+        ("b.pluto", r#"extern fn __pluto_print_int(value: int)
+
+pub fn say(x: int) {
+    __pluto_print_int(x)
+}
+"#),
+    ]);
+    assert_eq!(out, "1\n2\n");
 }
