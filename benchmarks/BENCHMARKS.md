@@ -46,10 +46,10 @@ Results are publicly visible and frequently cited in language comparisons.
 | Benchmark | Status | What it tests |
 |-----------|--------|---------------|
 | **binary-trees** | ✅ | Allocate/traverse/discard binary trees of depth 4–16. Classic GC stress test (based on Boehm's GCBench). |
-| **fannkuch-redux** | 🟢 | Pancake-flip counting over all permutations of N elements. Tight array reversal loops. |
-| **n-body** | 🟢 | Jovian planet gravitational simulation, 50M steps. Float-heavy with sqrt. |
-| **spectral-norm** | 🟢 | Power method on an infinite matrix. Nested-loop float multiply-accumulate. |
-| **mandelbrot** | 🟢 | Mandelbrot set fractal computation. Float iteration with early exit. (We compute iteration counts only — no bitmap output.) |
+| **fannkuch-redux** | ✅ | Pancake-flip counting over all permutations of N=10 elements. Tight array reversal loops. |
+| **n-body** | ✅ | Jovian planet gravitational simulation, 50M steps. Float-heavy with sqrt. |
+| **spectral-norm** | ✅ | Power method on an infinite matrix (N=500, 10 iterations). Nested-loop float multiply-accumulate. |
+| **mandelbrot** | ✅ | Mandelbrot set fractal computation (2000×2000, max 50 iterations). Float iteration with early exit. |
 | **k-nucleotide** | 🔴 | DNA k-mer frequency counting. Needs file I/O, string slicing, sort. |
 | **fasta** | 🔴 | DNA sequence generation with LCG PRNG. Needs formatted stdout output. |
 | **reverse-complement** | 🔴 | Reverse-complement a FASTA sequence. Needs stdin/stdout. |
@@ -75,10 +75,10 @@ Java, JavaScript, Smalltalk, Ruby, and others.
 | **permute** | ✅ | Heap's algorithm, all 10! permutations. Recursion + array swaps. |
 | **queens** | ✅ | 12-Queens backtracking solver. Recursion + constraint arrays. |
 | **towers** | ✅ | Towers of Hanoi, 20 discs × 100 iters. Recursion + array mutation. |
-| **storage** | 🟢 | Tree of arrays (depth 6), count leaves. GC stress with nested allocations. |
-| **list** | 🟢 | Linked-list create/traverse/compare using class nodes. Pointer-chasing + recursion. |
-| **n-body** | 🟢 | N-body simulation with Body class + methods. (AWFY version uses OOP patterns.) |
-| **mandelbrot** | 🟢 | Mandelbrot computation. (AWFY version — compute only, no I/O.) |
+| **storage** | ✅ | Tree of arrays (depth 8, 4 children), count leaves. GC stress with nested allocations. |
+| **list** | ✅ | Array-backed linked-list create/traverse/reverse (5000 nodes × 500 iters). Pointer-chasing simulation. |
+| **n-body** | ✅ | N-body simulation with Body class + methods. (Same as CLBG version — uses OOP patterns.) |
+| **mandelbrot** | ✅ | Mandelbrot computation. (Same as CLBG version — compute only, no I/O.) |
 | **richards** | 🟡 | OS task scheduler simulation (12 classes). Tests polymorphic dispatch + state machines. |
 | **CD** | 🟡 | Collision detection via kd-tree (16 classes). Complex spatial OOP. |
 | **json** | 🟡 | Recursive-descent JSON parser. Character-by-character string processing. Needs string indexing. |
@@ -98,9 +98,9 @@ math only, no objects, no strings, no I/O.
 
 | Benchmark | Status | What it tests |
 |-----------|--------|---------------|
-| **FFT** | 🟢 | Fast Fourier Transform on 2^16 complex numbers. Bit-reversal + butterfly operations. Uses sin/cos. |
-| **SOR** | 🟢 | Jacobi successive over-relaxation on 500×500 grid. Stencil access pattern (1D array simulating 2D). |
-| **monte-carlo** | 🟢 | Estimate pi via random sampling, 100M points. LCG PRNG + float comparison. |
+| **FFT** | ✅ | Fast Fourier Transform on 2^16 complex numbers (100 iterations). Bit-reversal + butterfly operations. Uses sin/cos. |
+| **SOR** | ✅ | Jacobi successive over-relaxation on 500×500 grid (100 iterations). Stencil access pattern (1D array simulating 2D). |
+| **monte-carlo** | ✅ | Estimate pi via random sampling, 100M points. LCG PRNG + float comparison. |
 | **sparse-matrix-multiply** | 🟢 | Sparse matrix (CSR format) × dense vector. Indirect array indexing. |
 | **LU-decomposition** | 🟢 | LU factorization with partial pivoting, 500×500 matrix. Row swapping + float arithmetic. |
 
@@ -130,23 +130,24 @@ comparison.
 
 | Status | Count | Description |
 |--------|-------|-------------|
-| ✅ Implemented | 15 | In the suite today |
-| 🟢 Ready | 14 | Can implement with current Pluto features |
+| ✅ Implemented | 24 | In the suite today |
+| 🟢 Ready | 2 | Can implement with current Pluto features |
 | 🟡 Stretch | 3 | Needs workarounds (string indexing, complex trait mapping) |
 | 🔴 Blocked | 7 | Needs language features not yet available |
-| **Total** | **39** | |
+| **Total** | **36** | |
 
-**From published suites:** 29 (CLBG: 10, AWFY: 14, SciMark: 5)
+**From published suites:** 26 (CLBG: 10, AWFY: 14, SciMark: 5) — note: n-body and mandelbrot appear in both CLBG and AWFY but are counted once
 **Custom/Pluto-specific:** 10
 
 ---
 
 ## Cross-Language Comparison (compare.sh)
 
-The `compare.sh` script and GitHub Actions workflow run 7 algorithm benchmarks
+The `compare.sh` script and GitHub Actions workflow run 11 algorithm benchmarks
 (the ones with reference implementations in C, Go, and Python) head-to-head:
 
-    fib, loop_sum, sieve, bounce, towers, permute, queens
+    fib, loop_sum, sieve, bounce, towers, permute, queens,
+    fannkuch_redux, spectral_norm, nbody, mandelbrot
 
 Reference implementations live in `reference/{c,go,python}/`. Each does the same
 work with the same parameters and prints `elapsed: {ms} ms`.
@@ -160,10 +161,7 @@ they're valid **relative comparisons on the same machine in the same run**.
 
 ## Implementation Priorities
 
-**Next up (pure compute, no new features needed):**
-fannkuch-redux, spectral-norm, n-body, mandelbrot, monte-carlo, storage, list, FFT, SOR
-
-**After that (need 2D array simulation, more complex setup):**
+**Next up (need 2D array simulation, more complex setup):**
 sparse-matrix-multiply, LU-decomposition
 
 **Needs language work first:**

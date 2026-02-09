@@ -1,0 +1,99 @@
+// Array-backed linked list (no null pointers in Pluto)
+// values[i] = value of node i, nexts[i] = index of next node (-1 = end)
+
+fn make_list(values: [int], nexts: [int], n: int) int {
+    // Clear and rebuild
+    let i = 0
+    while i < n {
+        if i >= values.len() {
+            values.push(i)
+            nexts.push(i + 1)
+        } else {
+            values[i] = i
+            nexts[i] = i + 1
+        }
+        i = i + 1
+    }
+    nexts[n - 1] = -1
+    return 0
+}
+
+fn list_length(nexts: [int], head: int) int {
+    let count = 0
+    let curr = head
+    while curr != -1 {
+        count = count + 1
+        curr = nexts[curr]
+    }
+    return count
+}
+
+fn list_sum(values: [int], nexts: [int], head: int) int {
+    let sum = 0
+    let curr = head
+    while curr != -1 {
+        sum = sum + values[curr]
+        curr = nexts[curr]
+    }
+    return sum
+}
+
+fn list_reverse(nexts: [int], head: int) int {
+    let prev = -1
+    let curr = head
+    while curr != -1 {
+        let next = nexts[curr]
+        nexts[curr] = prev
+        prev = curr
+        curr = next
+    }
+    return prev
+}
+
+fn list_nth(nexts: [int], head: int, n: int) int {
+    let curr = head
+    let i = 0
+    while i < n {
+        if curr == -1 {
+            return -1
+        }
+        curr = nexts[curr]
+        i = i + 1
+    }
+    return curr
+}
+
+fn main() {
+    let n = 5000
+    let iters = 500
+    let start = time_ns()
+
+    let values = [0]
+    let nexts = [0]
+
+    let total = 0
+    let i = 0
+    while i < iters {
+        let head = make_list(values, nexts, n)
+
+        // Traverse: compute length and sum
+        let len = list_length(nexts, head)
+        let sum = list_sum(values, nexts, head)
+
+        // Reverse
+        let new_head = list_reverse(nexts, head)
+        let rev_sum = list_sum(values, nexts, new_head)
+
+        // Reverse back
+        let orig_head = list_reverse(nexts, new_head)
+        let mid = list_nth(nexts, orig_head, n / 2)
+
+        total = total + len + (sum - rev_sum) + mid
+        i = i + 1
+    }
+
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("total: {total}")
+    print("elapsed: {ms} ms")
+}

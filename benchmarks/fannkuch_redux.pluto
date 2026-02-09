@@ -1,0 +1,145 @@
+fn fannkuch(n: int) int {
+    // Initialize permutation
+    let perm = [0]
+    let i = 1
+    while i < n {
+        perm.push(i)
+        i = i + 1
+    }
+    let perm1 = [0]
+    i = 1
+    while i < n {
+        perm1.push(i)
+        i = i + 1
+    }
+    let count = [0]
+    i = 1
+    while i < n {
+        count.push(0)
+        i = i + 1
+    }
+
+    let max_flips = 0
+    let checksum = 0
+    let perm_count = 0
+
+    // Initialize perm1 to identity
+    i = 0
+    while i < n {
+        perm1[i] = i
+        i = i + 1
+    }
+
+    // Initialize count
+    i = 0
+    while i < n {
+        count[i] = i + 1
+        i = i + 1
+    }
+
+    // Process first permutation
+    let first = perm1[0]
+    if first != 0 {
+        i = 0
+        while i < n {
+            perm[i] = perm1[i]
+            i = i + 1
+        }
+        let flips = 0
+        while perm[0] != 0 {
+            let k = perm[0]
+            // Reverse first k+1 elements
+            let lo = 0
+            let hi = k
+            while lo < hi {
+                let tmp = perm[lo]
+                perm[lo] = perm[hi]
+                perm[hi] = tmp
+                lo = lo + 1
+                hi = hi - 1
+            }
+            flips = flips + 1
+        }
+        if flips > max_flips {
+            max_flips = flips
+        }
+        if perm_count % 2 == 0 {
+            checksum = checksum + flips
+        } else {
+            checksum = checksum - flips
+        }
+    }
+    perm_count = perm_count + 1
+
+    // Generate permutations
+    let done = false
+    while !done {
+        // Rotate: perm1[0] <- perm1[1] <- ... <- perm1[r] <- perm1[0]
+        let r = 1
+        while r < n {
+            let perm0 = perm1[0]
+            i = 0
+            while i < r {
+                perm1[i] = perm1[i + 1]
+                i = i + 1
+            }
+            perm1[r] = perm0
+
+            count[r] = count[r] - 1
+            if count[r] > 0 {
+                break
+            }
+            count[r] = r + 1
+            r = r + 1
+        }
+
+        if r >= n {
+            done = true
+        } else {
+            first = perm1[0]
+            if first != 0 {
+                i = 0
+                while i < n {
+                    perm[i] = perm1[i]
+                    i = i + 1
+                }
+                let flips = 0
+                while perm[0] != 0 {
+                    let k = perm[0]
+                    let lo = 0
+                    let hi = k
+                    while lo < hi {
+                        let tmp = perm[lo]
+                        perm[lo] = perm[hi]
+                        perm[hi] = tmp
+                        lo = lo + 1
+                        hi = hi - 1
+                    }
+                    flips = flips + 1
+                }
+                if flips > max_flips {
+                    max_flips = flips
+                }
+                if perm_count % 2 == 0 {
+                    checksum = checksum + flips
+                } else {
+                    checksum = checksum - flips
+                }
+            }
+            perm_count = perm_count + 1
+        }
+    }
+
+    print("checksum: {checksum}")
+    return max_flips
+}
+
+fn main() {
+    let n = 10
+    let start = time_ns()
+    let result = fannkuch(n)
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("max flips: {result}")
+    print("elapsed: {ms} ms")
+}

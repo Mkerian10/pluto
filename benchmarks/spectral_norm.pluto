@@ -1,0 +1,89 @@
+fn eval_a(i: int, j: int) float {
+    let ij = i + j
+    let div = ij * (ij + 1) / 2 + i + 1
+    return 1.0 / (div as float)
+}
+
+fn eval_a_times_u(u: [float], au: [float], n: int) {
+    let i = 0
+    while i < n {
+        let sum = 0.0
+        let j = 0
+        while j < n {
+            sum = sum + eval_a(i, j) * u[j]
+            j = j + 1
+        }
+        au[i] = sum
+        i = i + 1
+    }
+}
+
+fn eval_at_times_u(u: [float], atu: [float], n: int) {
+    let i = 0
+    while i < n {
+        let sum = 0.0
+        let j = 0
+        while j < n {
+            sum = sum + eval_a(j, i) * u[j]
+            j = j + 1
+        }
+        atu[i] = sum
+        i = i + 1
+    }
+}
+
+fn eval_ata_times_u(u: [float], atau: [float], tmp: [float], n: int) {
+    eval_a_times_u(u, tmp, n)
+    eval_at_times_u(tmp, atau, n)
+}
+
+fn main() {
+    let n = 500
+    let start = time_ns()
+
+    // Initialize u to all 1.0
+    let u = [1.0]
+    let i = 1
+    while i < n {
+        u.push(1.0)
+        i = i + 1
+    }
+
+    // Initialize v and tmp
+    let v = [0.0]
+    i = 1
+    while i < n {
+        v.push(0.0)
+        i = i + 1
+    }
+    let tmp = [0.0]
+    i = 1
+    while i < n {
+        tmp.push(0.0)
+        i = i + 1
+    }
+
+    // 10 iterations of power method
+    i = 0
+    while i < 10 {
+        eval_ata_times_u(u, v, tmp, n)
+        eval_ata_times_u(v, u, tmp, n)
+        i = i + 1
+    }
+
+    // Compute spectral norm
+    let vbv = 0.0
+    let vv = 0.0
+    i = 0
+    while i < n {
+        vbv = vbv + u[i] * v[i]
+        vv = vv + v[i] * v[i]
+        i = i + 1
+    }
+
+    let result = sqrt(vbv / vv)
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("spectral norm: {result}")
+    print("elapsed: {ms} ms")
+}

@@ -1,0 +1,40 @@
+fn main() {
+    let n = 2000
+    let max_iter = 50
+    let start = time_ns()
+
+    let total_iters = 0
+
+    let y = 0
+    while y < n {
+        let ci = 2.0 * (y as float) / (n as float) - 1.0
+        let x = 0
+        while x < n {
+            let cr = 2.0 * (x as float) / (n as float) - 1.5
+
+            let zr = 0.0
+            let zi = 0.0
+            let iter = 0
+
+            while iter < max_iter {
+                let zr2 = zr * zr
+                let zi2 = zi * zi
+                if zr2 + zi2 > 4.0 {
+                    break
+                }
+                zi = 2.0 * zr * zi + ci
+                zr = zr2 - zi2 + cr
+                iter = iter + 1
+            }
+
+            total_iters = total_iters + iter
+            x = x + 1
+        }
+        y = y + 1
+    }
+
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("total iterations: {total_iters}")
+    print("elapsed: {ms} ms")
+}
