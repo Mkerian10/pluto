@@ -3,6 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <signal.h>
 
 void __pluto_print_int(long value) {
     printf("%ld\n", value);
@@ -396,4 +401,84 @@ void *__pluto_get_error() {
 
 void __pluto_clear_error() {
     __pluto_current_error = NULL;
+}
+
+// Socket runtime — POSIX sockets for networking
+
+__attribute__((constructor))
+static void __pluto_ignore_sigpipe(void) {
+    signal(SIGPIPE, SIG_IGN);
+}
+
+long __pluto_socket_create(long domain, long type, long protocol) {
+    return (long)socket((int)domain, (int)type, (int)protocol);
+}
+
+long __pluto_socket_bind(long fd, void *host_str, long port) {
+    const char *host = (const char *)host_str + 8;
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) return -1;
+    return bind((int)fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 ? 0 : -1;
+}
+
+long __pluto_socket_listen(long fd, long backlog) {
+    return listen((int)fd, (int)backlog) == 0 ? 0 : -1;
+}
+
+long __pluto_socket_accept(long fd) {
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    return (long)accept((int)fd, (struct sockaddr *)&client_addr, &client_len);
+}
+
+long __pluto_socket_connect(long fd, void *host_str, long port) {
+    const char *host = (const char *)host_str + 8;
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) return -1;
+    return connect((int)fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 ? 0 : -1;
+}
+
+void *__pluto_socket_read(long fd, long max_bytes) {
+    if (max_bytes <= 0) {
+        return __pluto_string_new("", 0);
+    }
+    if (max_bytes > 1048576) max_bytes = 1048576;
+    char *buf = (char *)malloc(max_bytes);
+    if (!buf) return __pluto_string_new("", 0);
+    ssize_t n = read((int)fd, buf, (size_t)max_bytes);
+    if (n <= 0) {
+        free(buf);
+        return __pluto_string_new("", 0);
+    }
+    void *result = __pluto_string_new(buf, n);
+    free(buf);
+    return result;
+}
+
+long __pluto_socket_write(long fd, void *data_str) {
+    long len = *(long *)data_str;
+    const char *data = (const char *)data_str + 8;
+    return (long)write((int)fd, data, (size_t)len);
+}
+
+long __pluto_socket_close(long fd) {
+    return close((int)fd) == 0 ? 0 : -1;
+}
+
+long __pluto_socket_set_reuseaddr(long fd) {
+    int opt = 1;
+    return setsockopt((int)fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == 0 ? 0 : -1;
+}
+
+long __pluto_socket_get_port(long fd) {
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+    if (getsockname((int)fd, (struct sockaddr *)&addr, &len) != 0) return -1;
+    return (long)ntohs(addr.sin_port);
 }
