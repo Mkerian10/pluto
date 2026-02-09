@@ -10,6 +10,7 @@ pub enum PlutoType {
     Trait(std::string::String),
     Enum(std::string::String),
     Fn(Vec<PlutoType>, Box<PlutoType>),
+    Error,
 }
 
 impl std::fmt::Display for PlutoType {
@@ -32,6 +33,7 @@ impl std::fmt::Display for PlutoType {
                 }
                 write!(f, ") {}", ret)
             }
+            PlutoType::Error => write!(f, "error"),
         }
     }
 }

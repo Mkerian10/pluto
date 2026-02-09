@@ -144,6 +144,36 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
         .map_err(|e| CompileError::codegen(format!("declare bool_to_string error: {e}")))?;
     string_ids.insert("bool_to_str", id);
 
+    // Declare error handling runtime functions
+    let mut error_ids = HashMap::new();
+
+    // __pluto_raise_error(I64)
+    let mut sig_raise_err = module.make_signature();
+    sig_raise_err.params.push(AbiParam::new(types::I64));
+    let id = module.declare_function("__pluto_raise_error", Linkage::Import, &sig_raise_err)
+        .map_err(|e| CompileError::codegen(format!("declare raise_error error: {e}")))?;
+    error_ids.insert("raise", id);
+
+    // __pluto_has_error() -> I64
+    let mut sig_has_err = module.make_signature();
+    sig_has_err.returns.push(AbiParam::new(types::I64));
+    let id = module.declare_function("__pluto_has_error", Linkage::Import, &sig_has_err)
+        .map_err(|e| CompileError::codegen(format!("declare has_error error: {e}")))?;
+    error_ids.insert("has_error", id);
+
+    // __pluto_get_error() -> I64
+    let mut sig_get_err = module.make_signature();
+    sig_get_err.returns.push(AbiParam::new(types::I64));
+    let id = module.declare_function("__pluto_get_error", Linkage::Import, &sig_get_err)
+        .map_err(|e| CompileError::codegen(format!("declare get_error error: {e}")))?;
+    error_ids.insert("get_error", id);
+
+    // __pluto_clear_error()
+    let sig_clear_err = module.make_signature();
+    let id = module.declare_function("__pluto_clear_error", Linkage::Import, &sig_clear_err)
+        .map_err(|e| CompileError::codegen(format!("declare clear_error error: {e}")))?;
+    error_ids.insert("clear", id);
+
     // Declare array runtime functions
     let mut array_ids = HashMap::new();
 
@@ -319,7 +349,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_function(f, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, None, &vtable_ids, trait_wrap_id)?;
+            lower_function(f, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, None, &vtable_ids, trait_wrap_id, &error_ids)?;
         }
 
         module
@@ -342,7 +372,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(&c.name.node), &vtable_ids, trait_wrap_id)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(&c.name.node), &vtable_ids, trait_wrap_id, &error_ids)?;
             }
 
             module
@@ -392,7 +422,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(class_name), &vtable_ids, trait_wrap_id)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(class_name), &vtable_ids, trait_wrap_id, &error_ids)?;
                             }
 
                             module
@@ -436,7 +466,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(app_name), &vtable_ids, trait_wrap_id)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(app_name), &vtable_ids, trait_wrap_id, &error_ids)?;
             }
 
             module
