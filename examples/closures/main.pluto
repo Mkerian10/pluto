@@ -1,0 +1,20 @@
+fn apply(f: fn(int) int, x: int) int {
+    return f(x)
+}
+
+fn make_adder(n: int) fn(int) int {
+    return (x: int) => x + n
+}
+
+fn main() {
+    let double = (x: int) => x * 2
+    print(double(5))
+    print(apply(double, 10))
+
+    let add3 = make_adder(3)
+    print(add3(7))
+    print(add3(100))
+
+    let greet = (name: string) => "hello " + name
+    print(greet("pluto"))
+}

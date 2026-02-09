@@ -1,0 +1,52 @@
+enum Color {
+    Red
+    Green
+    Blue
+}
+
+enum Result {
+    Ok { value: int }
+    Error { message: string }
+}
+
+fn color_name(c: Color) string {
+    let name = "unknown"
+    match c {
+        Color.Red {
+            name = "red"
+        }
+        Color.Green {
+            name = "green"
+        }
+        Color.Blue {
+            name = "blue"
+        }
+    }
+    return name
+}
+
+fn main() {
+    let c = Color.Green
+    print(color_name(c))
+
+    let ok = Result.Ok { value: 42 }
+    let err = Result.Error { message: "not found" }
+
+    match ok {
+        Result.Ok { value: v } {
+            print(v)
+        }
+        Result.Error { message: m } {
+            print(m)
+        }
+    }
+
+    match err {
+        Result.Ok { value: v } {
+            print(v)
+        }
+        Result.Error { message: m } {
+            print(m)
+        }
+    }
+}
