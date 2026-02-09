@@ -189,7 +189,7 @@ fn lower_stmt(
                 if let Some(class_info) = env.classes.get(class_name) {
                     let offset = class_info.fields.iter()
                         .position(|(n, _)| *n == field.node)
-                        .unwrap_or(0) as i32 * 8;
+                        .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", field.node, class_name)))? as i32 * 8;
                     builder.ins().store(MemFlags::new(), val, ptr, cranelift_codegen::ir::immediates::Offset32::new(offset));
                 }
             }
@@ -275,6 +275,96 @@ fn lower_stmt(
                 lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut body_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
             }
             if !body_terminated {
+                builder.ins().jump(header_bb, &[]);
+            }
+
+            builder.seal_block(header_bb);
+            builder.switch_to_block(exit_bb);
+            builder.seal_block(exit_bb);
+        }
+        Stmt::For { var, iterable, body } => {
+            // Lower iterable to get array handle
+            let handle = lower_expr(&iterable.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+
+            // Get element type from iterable
+            let iter_type = infer_type_for_expr(&iterable.node, env, var_types);
+            let elem_type = match &iter_type {
+                PlutoType::Array(elem) => *elem.clone(),
+                _ => return Err(CompileError::codegen("for loop requires array".to_string())),
+            };
+
+            // Call len() on the array
+            let len_ref = module.declare_func_in_func(array_ids["len"], builder.func);
+            let len_call = builder.ins().call(len_ref, &[handle]);
+            let len_val = builder.inst_results(len_call)[0];
+
+            // Create counter variable, init to 0
+            let counter_var = Variable::from_u32(*next_var);
+            *next_var += 1;
+            builder.declare_var(counter_var, types::I64);
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder.def_var(counter_var, zero);
+
+            // Create blocks
+            let header_bb = builder.create_block();
+            let body_bb = builder.create_block();
+            let exit_bb = builder.create_block();
+
+            builder.ins().jump(header_bb, &[]);
+
+            // Header: check counter < len
+            builder.switch_to_block(header_bb);
+            let counter = builder.use_var(counter_var);
+            let cond = builder.ins().icmp(IntCC::SignedLessThan, counter, len_val);
+            builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
+
+            // Body
+            builder.switch_to_block(body_bb);
+            builder.seal_block(body_bb);
+
+            // Get element: array_get(handle, counter)
+            let counter_for_get = builder.use_var(counter_var);
+            let get_ref = module.declare_func_in_func(array_ids["get"], builder.func);
+            let get_call = builder.ins().call(get_ref, &[handle, counter_for_get]);
+            let raw_slot = builder.inst_results(get_call)[0];
+            let elem_val = from_array_slot(raw_slot, &elem_type, builder);
+
+            // Create loop variable, saving any prior binding for restoration
+            let prev_var = variables.get(&var.node).cloned();
+            let prev_type = var_types.get(&var.node).cloned();
+
+            let loop_var = Variable::from_u32(*next_var);
+            *next_var += 1;
+            let cl_elem_type = pluto_to_cranelift(&elem_type);
+            builder.declare_var(loop_var, cl_elem_type);
+            builder.def_var(loop_var, elem_val);
+            variables.insert(var.node.clone(), loop_var);
+            var_types.insert(var.node.clone(), elem_type);
+
+            // Lower body statements
+            let mut body_terminated = false;
+            for s in &body.node.stmts {
+                lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut body_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            }
+
+            // Restore prior variable binding if shadowed
+            if let Some(pv) = prev_var {
+                variables.insert(var.node.clone(), pv);
+            } else {
+                variables.remove(&var.node);
+            }
+            if let Some(pt) = prev_type {
+                var_types.insert(var.node.clone(), pt);
+            } else {
+                var_types.remove(&var.node);
+            }
+
+            // Increment counter
+            if !body_terminated {
+                let counter_inc = builder.use_var(counter_var);
+                let one = builder.ins().iconst(types::I64, 1);
+                let new_counter = builder.ins().iadd(counter_inc, one);
+                builder.def_var(counter_var, new_counter);
                 builder.ins().jump(header_bb, &[]);
             }
 
@@ -467,7 +557,7 @@ fn lower_expr(
                 let val = lower_expr(&lit_val.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
                 let offset = class_info.fields.iter()
                     .position(|(n, _)| *n == lit_name.node)
-                    .unwrap_or(0) as i32 * 8;
+                    .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", lit_name.node, name.node)))? as i32 * 8;
                 builder.ins().store(MemFlags::new(), val, ptr, cranelift_codegen::ir::immediates::Offset32::new(offset));
             }
 

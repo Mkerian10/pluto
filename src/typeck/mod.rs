@@ -354,8 +354,10 @@ fn check_stmt(
                         value.span,
                     ));
                 }
+                env.define(name.node.clone(), expected);
+            } else {
+                env.define(name.node.clone(), val_type);
             }
-            env.define(name.node.clone(), val_type);
         }
         Stmt::Return(value) => {
             let actual = match value {
@@ -445,6 +447,22 @@ fn check_stmt(
                 ));
             }
             env.push_scope();
+            check_block(&body.node, env, return_type)?;
+            env.pop_scope();
+        }
+        Stmt::For { var, iterable, body } => {
+            let iter_type = infer_expr(&iterable.node, iterable.span, env)?;
+            let elem_type = match iter_type {
+                PlutoType::Array(elem) => *elem,
+                _ => {
+                    return Err(CompileError::type_err(
+                        format!("for loop requires array, found {iter_type}"),
+                        iterable.span,
+                    ));
+                }
+            };
+            env.push_scope();
+            env.define(var.node.clone(), elem_type);
             check_block(&body.node, env, return_type)?;
             env.pop_scope();
         }

@@ -329,6 +329,10 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
             rewrite_expr_for_module(&mut condition.node, module_name, module_prog);
             rewrite_block_for_module(&mut body.node, module_name, module_prog);
         }
+        Stmt::For { iterable, body, .. } => {
+            rewrite_expr_for_module(&mut iterable.node, module_name, module_prog);
+            rewrite_block_for_module(&mut body.node, module_name, module_prog);
+        }
         Stmt::IndexAssign { object, index, value } => {
             rewrite_expr_for_module(&mut object.node, module_name, module_prog);
             rewrite_expr_for_module(&mut index.node, module_name, module_prog);
@@ -468,6 +472,10 @@ fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
         }
         Stmt::While { condition, body } => {
             rewrite_expr(&mut condition.node, condition.span, import_names);
+            rewrite_block(&mut body.node, import_names);
+        }
+        Stmt::For { iterable, body, .. } => {
+            rewrite_expr(&mut iterable.node, iterable.span, import_names);
             rewrite_block(&mut body.node, import_names);
         }
         Stmt::IndexAssign { object, index, value } => {
