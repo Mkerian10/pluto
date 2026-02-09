@@ -659,9 +659,24 @@ impl<'a> Parser<'a> {
 
         let mut arms = Vec::new();
         while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-            let enum_name = self.expect_ident()?;
+            let first_name = self.expect_ident()?;
             self.expect(&Token::Dot)?;
-            let variant_name = self.expect_ident()?;
+            let second_name = self.expect_ident()?;
+
+            // Check if this is module.Enum.Variant (qualified) or Enum.Variant (local)
+            let (enum_name, variant_name) = if self.peek().is_some()
+                && matches!(self.peek().unwrap().node, Token::Dot)
+            {
+                // module.Enum.Variant — consume the extra dot and variant
+                self.advance(); // consume '.'
+                let variant = self.expect_ident()?;
+                let qualified = format!("{}.{}", first_name.node, second_name.node);
+                let span = Span::new(first_name.span.start, second_name.span.end);
+                (Spanned::new(qualified, span), variant)
+            } else {
+                // Enum.Variant (local)
+                (first_name, second_name)
+            };
 
             let (bindings, body) = if self.is_match_bindings_ahead() {
                 // Parse bindings: { field_name, field_name: rename }
@@ -869,6 +884,67 @@ impl<'a> Parser<'a> {
                         },
                         span,
                     );
+                } else if matches!(&lhs.node, Expr::FieldAccess { object, .. } if matches!(&object.node, Expr::Ident(_))) {
+                    // Possible qualified enum: module.Enum.Variant or module.Enum.Variant { fields }
+                    let (module_name, enum_local) = match &lhs.node {
+                        Expr::FieldAccess { object, field } => {
+                            match &object.node {
+                                Expr::Ident(n) => (n.clone(), field.node.clone()),
+                                _ => unreachable!(),
+                            }
+                        }
+                        _ => unreachable!(),
+                    };
+                    let qualified_enum_name = format!("{}.{}", module_name, enum_local);
+                    let enum_name_span = Span::new(lhs.span.start, field_name.span.end);
+
+                    if !self.restrict_struct_lit
+                        && self.peek().is_some()
+                        && matches!(self.peek().unwrap().node, Token::LBrace)
+                        && self.is_struct_lit_ahead()
+                    {
+                        // module.Enum.Variant { field: value }
+                        self.advance(); // consume '{'
+                        self.skip_newlines();
+                        let mut fields = Vec::new();
+                        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+                            if !fields.is_empty() {
+                                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                                    self.advance();
+                                }
+                                self.skip_newlines();
+                                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                                    break;
+                                }
+                            }
+                            let fname = self.expect_ident()?;
+                            self.expect(&Token::Colon)?;
+                            let fval = self.parse_expr(0)?;
+                            fields.push((fname, fval));
+                            self.skip_newlines();
+                        }
+                        let close = self.expect(&Token::RBrace)?;
+                        let span = Span::new(lhs.span.start, close.span.end);
+                        lhs = Spanned::new(
+                            Expr::EnumData {
+                                enum_name: Spanned::new(qualified_enum_name, enum_name_span),
+                                variant: field_name,
+                                fields,
+                            },
+                            span,
+                        );
+                    } else {
+                        // module.Enum.Variant (unit) — speculatively treat as enum
+                        // Typeck will reject if it's not actually an enum
+                        let span = Span::new(lhs.span.start, field_name.span.end);
+                        lhs = Spanned::new(
+                            Expr::EnumUnit {
+                                enum_name: Spanned::new(qualified_enum_name, enum_name_span),
+                                variant: field_name,
+                            },
+                            span,
+                        );
+                    }
                 } else {
                     let span = Span::new(lhs.span.start, field_name.span.end);
                     lhs = Spanned::new(

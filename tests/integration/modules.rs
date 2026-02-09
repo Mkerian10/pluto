@@ -246,3 +246,135 @@ fn import_function_returning_class() {
     ]);
     assert_eq!(out, "10\n20\n");
 }
+
+// ============================================================
+// Cross-module enum support
+// ============================================================
+
+#[test]
+fn import_enum_unit_variant() {
+    let out = run_project(&[
+        ("main.pluto", r#"import status
+
+fn main() {
+    let s = status.State.Active
+    match s {
+        status.State.Active {
+            print("active")
+        }
+        status.State.Inactive {
+            print("inactive")
+        }
+    }
+}
+"#),
+        ("status.pluto", r#"pub enum State {
+    Active
+    Inactive
+}
+"#),
+    ]);
+    assert_eq!(out, "active\n");
+}
+
+#[test]
+fn import_enum_data_variant() {
+    let out = run_project(&[
+        ("main.pluto", r#"import types
+
+fn main() {
+    let r = types.Result.Error { msg: "oops" }
+    match r {
+        types.Result.Ok { value } {
+            print(value)
+        }
+        types.Result.Error { msg } {
+            print(msg)
+        }
+    }
+}
+"#),
+        ("types.pluto", r#"pub enum Result {
+    Ok { value: int }
+    Error { msg: string }
+}
+"#),
+    ]);
+    assert_eq!(out, "oops\n");
+}
+
+#[test]
+fn import_enum_as_function_param() {
+    let out = run_project(&[
+        ("main.pluto", r#"import color
+
+fn describe(c: color.Light) {
+    match c {
+        color.Light.Red {
+            print("stop")
+        }
+        color.Light.Green {
+            print("go")
+        }
+    }
+}
+
+fn main() {
+    describe(color.Light.Green)
+}
+"#),
+        ("color.pluto", r#"pub enum Light {
+    Red
+    Green
+}
+"#),
+    ]);
+    assert_eq!(out, "go\n");
+}
+
+#[test]
+fn import_enum_return_from_function() {
+    let out = run_project(&[
+        ("main.pluto", r#"import shape
+
+fn main() {
+    let s = shape.make_circle(5)
+    match s {
+        shape.Kind.Circle { radius } {
+            print(radius)
+        }
+        shape.Kind.Square { side } {
+            print(side)
+        }
+    }
+}
+"#),
+        ("shape.pluto", r#"pub enum Kind {
+    Circle { radius: int }
+    Square { side: int }
+}
+
+pub fn make_circle(r: int) Kind {
+    return Kind.Circle { radius: r }
+}
+"#),
+    ]);
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn private_enum_not_visible() {
+    compile_project_should_fail(&[
+        ("main.pluto", r#"import inner
+
+fn main() {
+    let x = inner.Secret.A
+}
+"#),
+        ("inner.pluto", r#"enum Secret {
+    A
+    B
+}
+"#),
+    ]);
+}
