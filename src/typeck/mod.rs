@@ -148,18 +148,33 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     for class in &program.classes {
         let c = &class.node;
         let class_name = &c.name.node;
-        let class_info = env.classes.get(class_name).unwrap().clone();
+        let class_info = env.classes.get(class_name).ok_or_else(|| {
+            CompileError::type_err(
+                format!("unknown class '{}'", class_name),
+                class.span,
+            )
+        })?.clone();
 
         for trait_name_spanned in &c.impl_traits {
             let trait_name = &trait_name_spanned.node;
-            let trait_info = env.traits.get(trait_name).unwrap().clone();
+            let trait_info = env.traits.get(trait_name).ok_or_else(|| {
+                CompileError::type_err(
+                    format!("unknown trait '{}'", trait_name),
+                    trait_name_spanned.span,
+                )
+            })?.clone();
 
             for (method_name, trait_sig) in &trait_info.methods {
                 let mangled = format!("{}_{}", class_name, method_name);
 
                 if class_info.methods.contains(method_name) {
                     // Class has this method — verify signature matches
-                    let class_sig = env.functions.get(&mangled).unwrap();
+                    let class_sig = env.functions.get(&mangled).ok_or_else(|| {
+                        CompileError::type_err(
+                            format!("missing method signature for '{}.{}'", class_name, method_name),
+                            trait_name_spanned.span,
+                        )
+                    })?;
                     // Compare non-self params
                     let trait_non_self = &trait_sig.params[1..];
                     let class_non_self = &class_sig.params[1..];
@@ -340,7 +355,12 @@ fn check_function(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) 
     } else {
         func.name.node.clone()
     };
-    let expected_return = env.functions.get(&lookup_name).unwrap().return_type.clone();
+    let expected_return = env.functions.get(&lookup_name).ok_or_else(|| {
+        CompileError::type_err(
+            format!("unknown function '{}'", lookup_name),
+            func.name.span,
+        )
+    })?.return_type.clone();
 
     // Check body
     check_block(&func.body.node, env, &expected_return)?;
