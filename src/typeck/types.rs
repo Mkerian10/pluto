@@ -5,6 +5,9 @@ pub enum PlutoType {
     Bool,
     String,
     Void,
+    Class(std::string::String),
+    Array(Box<PlutoType>),
+    Trait(std::string::String),
 }
 
 impl std::fmt::Display for PlutoType {
@@ -15,6 +18,9 @@ impl std::fmt::Display for PlutoType {
             PlutoType::Bool => write!(f, "bool"),
             PlutoType::String => write!(f, "string"),
             PlutoType::Void => write!(f, "void"),
+            PlutoType::Class(name) => write!(f, "{name}"),
+            PlutoType::Array(inner) => write!(f, "[{inner}]"),
+            PlutoType::Trait(name) => write!(f, "trait {name}"),
         }
     }
 }

@@ -30,34 +30,19 @@ fn main() {
 
     match cli.command {
         Commands::Compile { file, output } => {
-            let source = match std::fs::read_to_string(&file) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("error: could not read '{}': {e}", file.display());
-                    std::process::exit(1);
-                }
-            };
-
-            let filename = file.to_string_lossy().to_string();
-            if let Err(err) = plutoc::compile(&source, &output) {
-                plutoc::diagnostics::render_error(&source, &filename, &err);
+            if let Err(err) = plutoc::compile_file(&file, &output) {
+                let filename = file.to_string_lossy().to_string();
+                // For file-based compilation, we don't have a single source string for rendering.
+                // Fall back to basic error display.
+                eprintln!("error [{}]: {err}", filename);
                 std::process::exit(1);
             }
         }
         Commands::Run { file } => {
-            let source = match std::fs::read_to_string(&file) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("error: could not read '{}': {e}", file.display());
-                    std::process::exit(1);
-                }
-            };
-
-            let filename = file.to_string_lossy().to_string();
-
             let tmp = std::env::temp_dir().join("pluto_run");
-            if let Err(err) = plutoc::compile(&source, &tmp) {
-                plutoc::diagnostics::render_error(&source, &filename, &err);
+            if let Err(err) = plutoc::compile_file(&file, &tmp) {
+                let filename = file.to_string_lossy().to_string();
+                eprintln!("error [{}]: {err}", filename);
                 std::process::exit(1);
             }
 

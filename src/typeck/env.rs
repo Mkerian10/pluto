@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use super::types::PlutoType;
 
 #[derive(Debug, Clone)]
@@ -7,16 +7,37 @@ pub struct FuncSig {
     pub return_type: PlutoType,
 }
 
+#[derive(Debug, Clone)]
+pub struct ClassInfo {
+    pub fields: Vec<(String, PlutoType)>,
+    pub methods: Vec<String>,
+    pub impl_traits: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TraitInfo {
+    pub methods: Vec<(String, FuncSig)>,
+    pub default_methods: Vec<String>,
+}
+
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, PlutoType>>,
     pub functions: HashMap<String, FuncSig>,
+    pub builtins: HashSet<String>,
+    pub classes: HashMap<String, ClassInfo>,
+    pub traits: HashMap<String, TraitInfo>,
 }
 
 impl TypeEnv {
     pub fn new() -> Self {
+        let mut builtins = HashSet::new();
+        builtins.insert("print".to_string());
         Self {
             scopes: vec![HashMap::new()],
             functions: HashMap::new(),
+            builtins,
+            classes: HashMap::new(),
+            traits: HashMap::new(),
         }
     }
 
@@ -39,5 +60,11 @@ impl TypeEnv {
             }
         }
         None
+    }
+
+    pub fn class_implements_trait(&self, class_name: &str, trait_name: &str) -> bool {
+        self.classes.get(class_name)
+            .map(|c| c.impl_traits.iter().any(|t| t == trait_name))
+            .unwrap_or(false)
     }
 }

@@ -1,0 +1,18 @@
+fn sum_array(a: [int]) int {
+    let total = 0
+    let i = 0
+    while i < a.len() {
+        total = total + a[i]
+        i = i + 1
+    }
+    return total
+}
+
+fn main() {
+    let numbers = [10, 20, 30, 40, 50]
+    print(numbers.len())
+    print(sum_array(numbers))
+    numbers.push(60)
+    print(numbers.len())
+    print(numbers[5])
+}
