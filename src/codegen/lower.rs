@@ -425,6 +425,10 @@ fn lower_stmt(
             builder.switch_to_block(exit_bb);
             builder.seal_block(exit_bb);
         }
+        Stmt::Match { .. } => {
+            // Will be implemented in the codegen step
+            todo!("match codegen")
+        }
         Stmt::Expr(expr) => {
             lower_expr(&expr.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
         }
@@ -641,6 +645,10 @@ fn lower_expr(
                 Err(CompileError::codegen(format!("index on non-array type {obj_type}")))
             }
         }
+        Expr::EnumUnit { .. } | Expr::EnumData { .. } => {
+            // Will be implemented in the codegen step
+            todo!("enum codegen")
+        }
         Expr::FieldAccess { object, field } => {
             let ptr = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
@@ -817,7 +825,7 @@ fn lower_print(
             let widened = builder.ins().uextend(types::I32, arg_val);
             builder.ins().call(func_ref, &[widened]);
         }
-        PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) => {
+        PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) => {
             return Err(CompileError::codegen(format!("cannot print {arg_type}")));
         }
     }
@@ -892,6 +900,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Class(_) => types::I64,     // pointer
         PlutoType::Array(_) => types::I64,     // pointer to handle
         PlutoType::Trait(_) => types::I64,     // pointer to trait handle
+        PlutoType::Enum(_) => types::I64,      // pointer to heap-allocated enum
     }
 }
 
@@ -945,6 +954,9 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             } else {
                 PlutoType::Void
             }
+        }
+        Expr::EnumUnit { enum_name, .. } | Expr::EnumData { enum_name, .. } => {
+            PlutoType::Enum(enum_name.node.clone())
         }
         Expr::MethodCall { object, method, .. } => {
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
