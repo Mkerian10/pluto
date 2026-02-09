@@ -2,8 +2,3 @@ enum Option<T> {
     Some { value: T }
     None
 }
-
-enum Result<T, E> {
-    Ok { value: T }
-    Err { err: E }
-}

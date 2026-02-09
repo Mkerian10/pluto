@@ -27,24 +27,6 @@ fn prelude_option_string() {
     assert_eq!(out, "hello\n");
 }
 
-// ── Result<T, E> Usage ──────────────────────────────────────────
-
-#[test]
-fn prelude_result_ok() {
-    let out = compile_and_run_stdout(
-        "fn main() {\n    let r = Result<int, string>.Ok { value: 42 }\n    match r {\n        Result.Ok { value: v } {\n            print(v)\n        }\n        Result.Err { err: e } {\n            print(e)\n        }\n    }\n}",
-    );
-    assert_eq!(out, "42\n");
-}
-
-#[test]
-fn prelude_result_err() {
-    let out = compile_and_run_stdout(
-        "fn main() {\n    let r = Result<int, string>.Err { err: \"bad\" }\n    match r {\n        Result.Ok { value: v } {\n            print(v)\n        }\n        Result.Err { err: e } {\n            print(e)\n        }\n    }\n}",
-    );
-    assert_eq!(out, "bad\n");
-}
-
 // ── Prelude types as function params/returns ─────────────────────
 
 #[test]
@@ -82,14 +64,6 @@ fn prelude_cannot_redefine_option() {
 }
 
 #[test]
-fn prelude_cannot_redefine_result() {
-    compile_should_fail_with(
-        "enum Result<T, E> {\n    Ok { value: T }\n    Err { err: E }\n}\n\nfn main() {\n}",
-        "conflicts with built-in prelude type",
-    );
-}
-
-#[test]
 fn prelude_cannot_shadow_with_class() {
     compile_should_fail_with(
         "class Option {\n    value: int\n}\n\nfn main() {\n}",
@@ -98,25 +72,9 @@ fn prelude_cannot_shadow_with_class() {
 }
 
 #[test]
-fn prelude_cannot_shadow_with_trait() {
-    compile_should_fail_with(
-        "trait Result {\n    fn get(self) int\n}\n\nfn main() {\n}",
-        "conflicts with built-in prelude type",
-    );
-}
-
-#[test]
 fn prelude_cannot_shadow_with_error() {
     compile_should_fail_with(
         "error Option {\n    msg: string\n}\n\nfn main() {\n}",
-        "conflicts with built-in prelude type",
-    );
-}
-
-#[test]
-fn prelude_cannot_shadow_result_with_error() {
-    compile_should_fail_with(
-        "error Result {\n    msg: string\n}\n\nfn main() {\n}",
         "conflicts with built-in prelude type",
     );
 }
