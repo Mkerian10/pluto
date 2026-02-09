@@ -10,6 +10,10 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <signal.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <fcntl.h>
 
 // ── GC Infrastructure ─────────────────────────────────────────────────────────
 
@@ -1221,3 +1225,214 @@ static void set_grow(long *h, long key_type) {
     free(old_keys); free(old_meta);
     h[1] = new_cap; h[2] = (long)new_keys; h[3] = (long)new_meta;
 }
+// ── File I/O runtime ──────────────────────────────────────────────────────────
+
+void *__pluto_fs_strerror(void) {
+    const char *msg = strerror(errno);
+    long len = (long)strlen(msg);
+    return __pluto_string_new(msg, len);
+}
+
+long __pluto_fs_open_read(void *path_str) {
+    const char *path = (const char *)path_str + 8;
+    return (long)open(path, O_RDONLY);
+}
+
+long __pluto_fs_open_write(void *path_str) {
+    const char *path = (const char *)path_str + 8;
+    return (long)open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+}
+
+long __pluto_fs_open_append(void *path_str) {
+    const char *path = (const char *)path_str + 8;
+    return (long)open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+}
+
+long __pluto_fs_close(long fd) {
+    return close((int)fd) == 0 ? 0 : -1;
+}
+
+void *__pluto_fs_read(long fd, long max_bytes) {
+    if (max_bytes <= 0) return __pluto_string_new("", 0);
+    if (max_bytes > 104857600) max_bytes = 104857600; // 100MB cap
+    char *buf = (char *)malloc((size_t)max_bytes);
+    if (!buf) return __pluto_string_new("", 0);
+    ssize_t n = read((int)fd, buf, (size_t)max_bytes);
+    if (n <= 0) {
+        free(buf);
+        return __pluto_string_new("", 0);
+    }
+    void *result = __pluto_string_new(buf, n);
+    free(buf);
+    return result;
+}
+
+long __pluto_fs_write(long fd, void *data_str) {
+    long len = *(long *)data_str;
+    const char *data = (const char *)data_str + 8;
+    ssize_t written = write((int)fd, data, (size_t)len);
+    return (long)written;
+}
+
+long __pluto_fs_seek(long fd, long offset, long whence) {
+    off_t result = lseek((int)fd, (off_t)offset, (int)whence);
+    return (long)result;
+}
+
+void *__pluto_fs_read_all(void *path_str) {
+    const char *path = (const char *)path_str + 8;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return __pluto_string_new("", 0);
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        close(fd);
+        return __pluto_string_new("", 0);
+    }
+    size_t size = (size_t)st.st_size;
+    char *buf = (char *)malloc(size);
+    if (!buf) {
+        close(fd);
+        return __pluto_string_new("", 0);
+    }
+    size_t total_read = 0;
+    while (total_read < size) {
+        ssize_t n = read(fd, buf + total_read, size - total_read);
+        if (n <= 0) break;
+        total_read += (size_t)n;
+    }
+    close(fd);
+    void *result = __pluto_string_new(buf, (long)total_read);
+    free(buf);
+    return result;
+}
+
+long __pluto_fs_write_all(void *path_str, void *data_str) {
+    const char *path = (const char *)path_str + 8;
+    long len = *(long *)data_str;
+    const char *data = (const char *)data_str + 8;
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return -1;
+    size_t total_written = 0;
+    while (total_written < (size_t)len) {
+        ssize_t n = write(fd, data + total_written, (size_t)len - total_written);
+        if (n <= 0) { close(fd); return -1; }
+        total_written += (size_t)n;
+    }
+    close(fd);
+    return 0;
+}
+
+long __pluto_fs_append_all(void *path_str, void *data_str) {
+    const char *path = (const char *)path_str + 8;
+    long len = *(long *)data_str;
+    const char *data = (const char *)data_str + 8;
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) return -1;
+    size_t total_written = 0;
+    while (total_written < (size_t)len) {
+        ssize_t n = write(fd, data + total_written, (size_t)len - total_written);
+        if (n <= 0) { close(fd); return -1; }
+        total_written += (size_t)n;
+    }
+    close(fd);
+    return 0;
+}
+
+long __pluto_fs_exists(void *path_str) {
+    const char *path = (const char *)path_str + 8;
+    struct stat st;
+    return stat(path, &st) == 0 ? 1 : 0;
+}
+
+long __pluto_fs_file_size(void *path_str) {
+    const char *path = (const char *)path_str + 8;
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    return (long)st.st_size;
+}
+
+long __pluto_fs_is_dir(void *path_str) {
+    const char *path = (const char *)path_str + 8;
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    return S_ISDIR(st.st_mode) ? 1 : 0;
+}
+
+long __pluto_fs_is_file(void *path_str) {
+    const char *path = (const char *)path_str + 8;
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    return S_ISREG(st.st_mode) ? 1 : 0;
+}
+
+long __pluto_fs_remove(void *path_str) {
+    const char *path = (const char *)path_str + 8;
+    return unlink(path) == 0 ? 0 : -1;
+}
+
+long __pluto_fs_mkdir(void *path_str) {
+    const char *path = (const char *)path_str + 8;
+    return mkdir(path, 0755) == 0 ? 0 : -1;
+}
+
+long __pluto_fs_rmdir(void *path_str) {
+    const char *path = (const char *)path_str + 8;
+    return rmdir(path) == 0 ? 0 : -1;
+}
+
+long __pluto_fs_rename(void *from_str, void *to_str) {
+    const char *from = (const char *)from_str + 8;
+    const char *to = (const char *)to_str + 8;
+    return rename(from, to) == 0 ? 0 : -1;
+}
+
+long __pluto_fs_copy(void *from_str, void *to_str) {
+    const char *from = (const char *)from_str + 8;
+    const char *to = (const char *)to_str + 8;
+    int src_fd = open(from, O_RDONLY);
+    if (src_fd < 0) return -1;
+    int dst_fd = open(to, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (dst_fd < 0) { close(src_fd); return -1; }
+    char buf[4096];
+    ssize_t n;
+    while ((n = read(src_fd, buf, sizeof(buf))) > 0) {
+        size_t written = 0;
+        while (written < (size_t)n) {
+            ssize_t w = write(dst_fd, buf + written, (size_t)n - written);
+            if (w <= 0) { close(src_fd); close(dst_fd); return -1; }
+            written += (size_t)w;
+        }
+    }
+    close(src_fd);
+    close(dst_fd);
+    return n < 0 ? -1 : 0;
+}
+
+void *__pluto_fs_list_dir(void *path_str) {
+    const char *path = (const char *)path_str + 8;
+    void *arr = __pluto_array_new(8);
+    DIR *d = opendir(path);
+    if (!d) return arr;
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+        long name_len = (long)strlen(entry->d_name);
+        void *name_str = __pluto_string_new(entry->d_name, name_len);
+        __pluto_array_push(arr, (long)name_str);
+    }
+    closedir(d);
+    return arr;
+}
+
+void *__pluto_fs_temp_dir(void) {
+    char tmpl[] = "/tmp/pluto_XXXXXX";
+    char *result = mkdtemp(tmpl);
+    if (!result) return __pluto_string_new("", 0);
+    long len = (long)strlen(result);
+    return __pluto_string_new(result, len);
+}
+
+long __pluto_fs_seek_set(void) { return (long)SEEK_SET; }
+long __pluto_fs_seek_cur(void) { return (long)SEEK_CUR; }
+long __pluto_fs_seek_end(void) { return (long)SEEK_END; }
