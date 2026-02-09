@@ -77,13 +77,15 @@ Test files: `basics`, `operators`, `control_flow`, `strings`, `arrays`, `classes
 
 **Pre-commit hook** — A git pre-commit hook runs `cargo test` before every commit. All tests must pass for a commit to succeed.
 
+## CI
+
+GitHub Actions runs `cargo test` on both Linux (x86_64) and macOS (ARM64) for every push to `master` and every PR. Both checks must pass before merging — this is enforced by branch protection rules.
+
 ## Git Workflow
 
-**Master must always be green** — The `master` branch must always build and pass all tests. Never commit incomplete work, partial features, or broken code directly to `master`. All work happens on feature branches; `master` only receives completed, tested merges.
+**All changes go through PRs** — Direct pushes to `master` are blocked. Create a branch, push it, open a PR, and merge once CI passes. Use `gh pr create` to create PRs from the CLI.
 
-**Never work directly on master** — Always create a feature branch or worktree before making changes. Even small fixes get a branch. The only commits on `master` should be merge commits from completed feature branches.
-
-**Commit regularly on your branch** — Commit after completing each logical unit of work (a feature, a fix, a refactor). Do not accumulate large uncommitted changes. Intermediate commits on feature branches don't need to be green, but the final merge to master must be.
+**Commit regularly** — Commit after completing each logical unit of work (a feature, a fix, a refactor). Do not accumulate large uncommitted changes. Push your branch to verify on CI.
 
 **Use worktrees for parallel work** — When multiple agents or tasks are running concurrently, use git worktrees to avoid conflicts. Use a naming convention that identifies **you** (your session) so other agents know whose worktree is whose:
 ```bash
@@ -104,30 +106,6 @@ git branch -d <feature-name>
 - **Only clean up your own worktrees.** Run `git worktree list` to see all active worktrees. If a worktree/branch isn't yours, leave it alone — another agent may be actively using it.
 - **Never force-delete worktrees with uncommitted changes** unless you created them. Use `git worktree list` and check before removing.
 - **Don't delete branches that are checked out in other worktrees.** Git will error if you try — respect that error and leave the branch alone.
-
-**Branch per feature** — Each feature or task should be on its own branch. Merge to `master` when complete and tests pass.
-
-**Rebase onto master before merging** — Always resolve conflicts on your feature branch, never on master. Rebase your branch onto the latest master, fix any conflicts there, and verify tests pass. Then do a fast-forward merge to master. This keeps master's history clean and ensures conflicts are never resolved in a half-broken state on master.
-
-**Merge checklist** — Before merging to `master`, verify ALL of the following:
-1. `cargo test` passes on your branch (all unit, integration, and module tests)
-2. Rebase onto latest `master` and resolve any conflicts **on your branch**
-3. `cargo test` passes again after conflict resolution on your branch
-4. Fast-forward merge to `master` (should be clean, no conflicts)
-
-```bash
-# On your feature branch:
-git fetch origin                  # Get latest
-git rebase master                 # Rebase onto master, resolve conflicts HERE
-# Fix any conflicts, then: git add <files> && git rebase --continue
-cargo test                        # MUST pass on your branch after rebase
-
-# Then merge to master (fast-forward, no conflicts):
-git checkout master
-git pull                          # Get latest from other agents
-git merge <feature-name>          # Fast-forward merge (no conflicts)
-cargo test                        # Sanity check — should pass
-```
 
 **Pull when starting work** — Before beginning any new task, pull the latest `master` to start from the most up-to-date code:
 ```bash
