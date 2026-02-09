@@ -5,25 +5,20 @@
 The fundamental unit of a Pluto program is the `app`. An app declares its dependencies, defines its behavior, and is the unit of compilation and deployment.
 
 ```
-app OrderService {
-    inject db: APIDatabase
-    inject queue: MessageQueue
-
-    fn main() {
-        let ch = chan<Order>()
-        spawn process_orders(ch, self.db)
-
+app OrderService[db: APIDatabase, queue: MessageQueue] {
+    fn main(self) {
+        // process orders from the queue
         for order in self.queue.subscribe("orders") {
-            ch <- order
+            self.db.insert(order)!
         }
     }
 }
 ```
 
 An app:
-- Declares its dependencies via `inject`
-- Has a `main()` entry point
-- Can spawn processes and create channels
+- Declares its dependencies via bracket deps `[dep: Type]`
+- Has a `main(self)` entry point
+- Accesses dependencies through `self`
 - Does not know or care about infrastructure, scaling, or placement
 
 ## Why `app`?

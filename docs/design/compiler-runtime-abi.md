@@ -11,9 +11,12 @@ The compiler lowers Pluto values to native values as follows:
 - `int` -> `i64`
 - `float` -> `f64`
 - `bool` -> `i8` in the compiler, widened to `i32` when calling C print
-- `string` -> pointer to a string header
-- `class` -> pointer to heap-allocated struct data
-- `array` -> pointer to an array handle
+- `string` -> pointer to a GC-managed string header
+- `class` -> pointer to GC-managed heap-allocated struct data
+- `array` -> pointer to a GC-managed array handle
+- `Map<K,V>` -> pointer to a GC-managed hash table
+- `Set<T>` -> pointer to a GC-managed hash table
+- `fn(...)` -> pointer to a GC-managed closure object `[fn_ptr, captures...]`
 - `trait` -> currently passed as a fat pointer (data + vtable) at parameter
   boundaries only
 
@@ -67,6 +70,70 @@ Runtime functions:
 
 The compiler stores array elements as `i64` slots. Floats are bitcast and bools
 are zero-extended before storage.
+
+## Map Runtime
+
+Maps are GC-managed open-addressing hash tables (GC tag 4).
+
+Runtime functions:
+
+- `__pluto_map_new() -> void *`
+- `__pluto_map_insert(void *map, long key, long value)`
+- `__pluto_map_get(void *map, long key) -> long`
+- `__pluto_map_contains(void *map, long key) -> int`
+- `__pluto_map_remove(void *map, long key)`
+- `__pluto_map_len(void *map) -> long`
+- `__pluto_map_keys(void *map) -> void *` (returns array handle)
+- `__pluto_map_values(void *map) -> void *` (returns array handle)
+
+Keys and values are stored as `i64` slots (same bitcasting as arrays).
+
+## Set Runtime
+
+Sets are GC-managed open-addressing hash tables (GC tag 5).
+
+Runtime functions:
+
+- `__pluto_set_new() -> void *`
+- `__pluto_set_insert(void *set, long element)`
+- `__pluto_set_contains(void *set, long element) -> int`
+- `__pluto_set_remove(void *set, long element)`
+- `__pluto_set_len(void *set) -> long`
+- `__pluto_set_to_array(void *set) -> void *` (returns array handle)
+
+## Error Runtime
+
+Runtime functions for error propagation:
+
+- `__pluto_set_error(long error_tag, void *error_data)`
+- `__pluto_get_error() -> long` (returns error tag, 0 = no error)
+- `__pluto_clear_error()`
+- `__pluto_get_error_data() -> void *`
+
+Error tags are assigned per-error-type by the compiler. The runtime uses thread-local storage to hold the current error state.
+
+## Garbage Collector
+
+The runtime includes a mark-and-sweep GC. All heap allocations go through `__pluto_alloc` which registers them with the GC.
+
+GC tags identify allocation types for tracing:
+
+| Tag | Type | Tracing behavior |
+|-----|------|-----------------|
+| 0 | Unknown/class | Traces all pointer-sized slots |
+| 1 | String | No internal references to trace |
+| 2 | Array | Traces all element slots |
+| 3 | Closure | Traces captured variable slots |
+| 4 | Map | Traces key/value slots |
+| 5 | Set | Traces element slots |
+
+GC functions:
+
+- `__pluto_gc_push_root(void *ptr)` — push a GC root onto the shadow stack
+- `__pluto_gc_pop_roots(long count)` — pop N roots from the shadow stack
+- `__pluto_gc_heap_size() -> long` — return current heap usage in bytes
+
+The compiler generates `push_root`/`pop_roots` calls around allocations that might trigger collection.
 
 ## Trait Runtime (Experimental)
 

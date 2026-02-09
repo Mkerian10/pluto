@@ -54,8 +54,12 @@ enum Shape {
 }
 
 match shape {
-    Circle { radius } => print(radius)
-    Rectangle { width, height } => print(width * height)
+    Shape.Circle { radius } {
+        print(radius)
+    }
+    Shape.Rectangle { width, height } {
+        print(width * height)
+    }
 }
 ```
 
@@ -150,6 +154,74 @@ Function type syntax: `fn(int, float) string`, `fn() void`
 
 Closures capture variables from their enclosing scope by value (snapshot at creation time). Heap types (strings, arrays, classes) share the underlying data.
 
+## Generics
+
+Generics use monomorphization — the compiler generates concrete copies for each set of type arguments used.
+
+```
+fn identity<T>(x: T) T {
+    return x
+}
+
+class Box<T> {
+    value: T
+
+    fn get(self) T {
+        return self.value
+    }
+}
+
+enum Option<T> {
+    Some { value: T }
+    None
+}
+```
+
+Usage:
+
+```
+let b = Box<int> { value: 42 }
+let s = Box<string> { value: "hello" }
+let n = Option<int>.Some { value: 10 }
+
+// Type arguments inferred on function calls
+let x = identity(42)        // inferred as identity<int>
+```
+
+Key properties:
+- Function type arguments are always inferred (no explicit type args on calls)
+- Monomorphized names use `__` mangling: `Box__int`, `identity__string`
+- Generic classes, functions, and enums are supported
+- Current restrictions: no generic trait impls, no DI on generic classes, no type bounds
+
+## Maps and Sets
+
+Maps and sets are built-in collection types backed by GC-managed hash tables.
+
+```
+// Maps
+let m = Map<string, int> { "a": 1, "b": 2 }
+let empty = Map<string, int> {}
+m["c"] = 3
+print(m["a"])
+m.insert("d", 4)
+m.remove("a")
+print(m.contains("b"))
+print(m.len())
+for k in m.keys() { print(k) }
+for v in m.values() { print(v) }
+
+// Sets
+let s = Set<int> { 1, 2, 3 }
+s.insert(4)
+s.remove(1)
+print(s.contains(2))
+print(s.len())
+let arr = s.to_array()
+```
+
+Key types for map keys: `int`, `float`, `bool`, `string`, enums (hashable primitives only).
+
 ## Nominal vs Structural
 
 - **Nominal (default):** Two types with identical fields are NOT interchangeable unless they are the same named type. `APIDatabase` and `AccountsDatabase` are distinct types even if they have the same fields.
@@ -158,5 +230,3 @@ Closures capture variables from their enclosing scope by value (snapshot at crea
 ## Not Yet Implemented
 
 - **Option type** — `Option<T>` for absent values, `??` coalesce, `?.` null-safe chain
-- **Map / Set** — `{"key": value}` for maps, `{1, 2, 3}` for sets
-- **Generics** — `fn first<T>(items: [T]) T`, `class Container<T>`, trait constraints

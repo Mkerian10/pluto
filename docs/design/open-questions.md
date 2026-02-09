@@ -4,11 +4,10 @@ Areas that need further design work before implementation.
 
 ## Language Features
 
-- [ ] **Generics / type parameters** — syntax, constraints, monomorphization vs type erasure
-- [ ] **Collections** — built-in Map, Set? or stdlib? (arrays are implemented)
 - [ ] **Null / optional** — how are absent values represented? Option type? nullable types?
 - [ ] **Range syntax** — `0..n`, `0..=n` for loops and slices
 - [ ] **`loop` keyword** — infinite loop construct (currently use `while true`)
+- [ ] **`break` / `continue`** — loop control flow (currently use early `return`)
 
 ## Communication
 
@@ -24,7 +23,6 @@ Areas that need further design work before implementation.
 - [ ] **Supervision strategies** — one-for-one, one-for-all, rest-for-one?
 - [ ] **Observability** — built-in metrics, tracing, logging hooks?
 - [ ] **Runtime ↔ orchestration interface** — how do they communicate?
-- [ ] **Garbage collection** — current runtime leaks all heap allocations; need GC strategy
 
 ## Dependency Injection
 
@@ -63,8 +61,14 @@ Previously open questions that have been designed and implemented.
 - [x] **Imports** — `import module` syntax with qualified access (`module.item`)
 - [x] **Visibility** — `pub` keyword; private by default
 - [x] **Namespacing** — dot-separated qualified names (`math.add`)
-- [x] **DI scope** — bracket deps `class Foo[dep: Type]` in classes, `inject` in app declarations
+- [x] **DI scope** — bracket deps `class Foo[dep: Type]` in classes, app bracket deps
+- [x] **Ambient DI** — `uses` on classes, `ambient` in app, bare variable access desugared to `self.field`
 - [x] **DI depth** — transitive DI with topological sort, cycle detection at compile time
 - [x] **Early return** — `return` in functions and methods
 - [x] **Arrays** — literal syntax, indexing, `push`, `len`, `for-in` iteration
 - [x] **Extern functions** — `extern fn` declarations for FFI with C runtime
+- [x] **Generics** — monomorphization strategy, `fn first<T>(items: [T]) T`, `class Box<T>`, `enum Option<T>`
+- [x] **Collections** — built-in `Map<K, V>` and `Set<T>` with hash-table implementation
+- [x] **Garbage collection** — mark-and-sweep GC in the C runtime, tag-based tracing
+- [x] **Standard library (core)** — `std.strings`, `std.math`, `std.net`, `std.socket`, `std.fs`
+- [x] **String escape sequences** — `\n`, `\r`, `\t`, `\\`, `\"`
