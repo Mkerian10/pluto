@@ -744,7 +744,13 @@ impl<'a> Parser<'a> {
             Token::StringLit(_) => {
                 let tok = self.advance().unwrap();
                 let Token::StringLit(s) = &tok.node else { unreachable!() };
-                Ok(Spanned::new(Expr::StringLit(s.clone()), tok.span))
+                let s = s.clone();
+                let span = tok.span;
+                if s.contains('{') || s.contains('}') {
+                    self.parse_string_interp(&s, span)
+                } else {
+                    Ok(Spanned::new(Expr::StringLit(s), span))
+                }
             }
             Token::Ident => {
                 let ident = self.expect_ident()?;
@@ -859,6 +865,106 @@ impl<'a> Parser<'a> {
         } else {
             Ok(Spanned::new(Expr::Ident(ident.node.clone()), ident.span))
         }
+    }
+
+    fn is_at_end(&self) -> bool {
+        let mut i = self.pos;
+        while i < self.tokens.len() {
+            if !matches!(self.tokens[i].node, Token::Newline) {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    fn parse_string_interp(&self, raw: &str, span: crate::span::Span) -> Result<Spanned<Expr>, CompileError> {
+        let mut parts: Vec<StringInterpPart> = Vec::new();
+        let mut lit_buf = String::new();
+        let mut chars = raw.char_indices().peekable();
+
+        while let Some(&(_, ch)) = chars.peek() {
+            if ch == '{' {
+                chars.next();
+                // Check for escaped {{
+                if chars.peek().is_some_and(|&(_, c)| c == '{') {
+                    chars.next();
+                    lit_buf.push('{');
+                } else {
+                    // Flush literal buffer
+                    if !lit_buf.is_empty() {
+                        parts.push(StringInterpPart::Lit(std::mem::take(&mut lit_buf)));
+                    }
+                    // Collect expression chars until matching }
+                    let mut expr_str = String::new();
+                    let mut depth = 1;
+                    loop {
+                        match chars.next() {
+                            None => {
+                                return Err(CompileError::syntax(
+                                    "unterminated interpolation expression",
+                                    span,
+                                ));
+                            }
+                            Some((_, '{')) => {
+                                depth += 1;
+                                expr_str.push('{');
+                            }
+                            Some((_, '}')) => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                                expr_str.push('}');
+                            }
+                            Some((_, c)) => {
+                                expr_str.push(c);
+                            }
+                        }
+                    }
+                    // Sub-parse the expression
+                    let tokens = crate::lexer::lex(&expr_str)?;
+                    let mut sub_parser = Parser::new(&tokens, &expr_str);
+                    let expr = sub_parser.parse_expr(0)?;
+                    if !sub_parser.is_at_end() {
+                        return Err(CompileError::syntax(
+                            "unexpected tokens in interpolation expression",
+                            span,
+                        ));
+                    }
+                    parts.push(StringInterpPart::Expr(expr));
+                }
+            } else if ch == '}' {
+                chars.next();
+                // Check for escaped }}
+                if chars.peek().is_some_and(|&(_, c)| c == '}') {
+                    chars.next();
+                    lit_buf.push('}');
+                } else {
+                    return Err(CompileError::syntax(
+                        "unexpected '}' in string literal (use '}}' for literal brace)",
+                        span,
+                    ));
+                }
+            } else {
+                chars.next();
+                lit_buf.push(ch);
+            }
+        }
+
+        // Flush remaining literal
+        if !lit_buf.is_empty() {
+            parts.push(StringInterpPart::Lit(std::mem::take(&mut lit_buf)));
+        }
+
+        // Optimization: single literal → plain StringLit
+        if parts.len() == 1 {
+            if let StringInterpPart::Lit(s) = &parts[0] {
+                return Ok(Spanned::new(Expr::StringLit(s.clone()), span));
+            }
+        }
+
+        Ok(Spanned::new(Expr::StringInterp { parts }, span))
     }
 
     /// Lookahead to determine if `{ ... }` is a struct literal (contains `ident :`)
@@ -1152,6 +1258,42 @@ mod tests {
                         assert_eq!(fields.len(), 2);
                     }
                     _ => panic!("expected struct literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_string_interpolation() {
+        let prog = parse("fn main() {\n    let x = \"hello {name}\"\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::StringInterp { parts } => {
+                        assert_eq!(parts.len(), 2);
+                        assert!(matches!(&parts[0], StringInterpPart::Lit(s) if s == "hello "));
+                        assert!(matches!(&parts[1], StringInterpPart::Expr(_)));
+                    }
+                    _ => panic!("expected string interp, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_string_interp_escaped_braces() {
+        let prog = parse("fn main() {\n    let x = \"{{x}}\"\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::StringLit(s) => {
+                        assert_eq!(s, "{x}");
+                    }
+                    _ => panic!("expected string lit, got {:?}", value.node),
                 }
             }
             _ => panic!("expected let"),
