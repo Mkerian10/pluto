@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run, compile_and_run_stdout, compile_should_fail};
+use common::{compile_and_run, compile_and_run_stdout, compile_should_fail, plutoc};
 
 #[test]
 fn empty_main() {
@@ -206,4 +206,42 @@ fn extern_fn_duplicate_name_rejected() {
     compile_should_fail(
         "extern fn foo(x: int)\n\nfn foo(x: int) {\n}\n\nfn main() {\n}",
     );
+}
+
+// ============================================================
+// CLI smoke tests — exercise the actual plutoc binary subprocess
+// ============================================================
+
+#[test]
+fn cli_compile_and_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("test.pluto");
+    let bin = dir.path().join("test_bin");
+    std::fs::write(&src, "fn main() {\n    print(42)\n}").unwrap();
+    let output = plutoc().arg("compile").arg(&src).arg("-o").arg(&bin).output().unwrap();
+    assert!(output.status.success(), "CLI compile failed: {}", String::from_utf8_lossy(&output.stderr));
+    let run_output = std::process::Command::new(&bin).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run_output.stdout), "42\n");
+}
+
+#[test]
+fn cli_compile_error_formatting() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("test.pluto");
+    let bin = dir.path().join("test_bin");
+    std::fs::write(&src, "fn main() {\n    let x: int = \"hello\"\n}").unwrap();
+    let output = plutoc().arg("compile").arg(&src).arg("-o").arg(&bin).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error"), "Expected CLI error format, got: {}", stderr);
+}
+
+#[test]
+fn cli_run_subcommand() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("test.pluto");
+    std::fs::write(&src, "fn main() {\n    print(99)\n}").unwrap();
+    let output = plutoc().arg("run").arg(&src).output().unwrap();
+    assert!(output.status.success(), "CLI run failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "99\n");
 }
