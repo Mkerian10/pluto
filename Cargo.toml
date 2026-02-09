@@ -71,3 +71,7 @@ path = "tests/integration/modules.rs"
 [[test]]
 name = "prelude"
 path = "tests/integration/prelude.rs"
+
+[[test]]
+name = "gc"
+path = "tests/integration/gc.rs"

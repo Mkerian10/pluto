@@ -336,6 +336,10 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
             builder.switch_to_block(entry_block);
             builder.seal_block(entry_block);
 
+            // Initialize GC before any allocations
+            let gc_init_ref = module.declare_func_in_func(runtime.get("__pluto_gc_init"), builder.func);
+            builder.ins().call(gc_init_ref, &[]);
+
             let alloc_ref = module.declare_func_in_func(runtime.get("__pluto_alloc"), builder.func);
 
             // Create singletons in topological order
