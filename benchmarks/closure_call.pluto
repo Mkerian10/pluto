@@ -1,0 +1,15 @@
+fn main() {
+    let offset = 1
+    let add_offset = (x: int) => x + offset
+    let start = time_ns()
+    let sum = 0
+    let i = 0
+    while i < 10000000 {
+        sum = sum + add_offset(i)
+        i = i + 1
+    }
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("sum = {sum}")
+    print("elapsed: {ms} ms")
+}

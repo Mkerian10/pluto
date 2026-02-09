@@ -96,6 +96,7 @@ impl TypeEnv {
     pub fn new() -> Self {
         let mut builtins = HashSet::new();
         builtins.insert("print".to_string());
+        builtins.insert("time_ns".to_string());
         Self {
             scopes: vec![HashMap::new()],
             functions: HashMap::new(),

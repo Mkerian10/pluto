@@ -1,0 +1,14 @@
+fn main() {
+    let arr = [0]
+    let start = time_ns()
+    let i = 0
+    while i < 1000000 {
+        arr.push(i)
+        i = i + 1
+    }
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    let len = arr.len()
+    print("len = {len}")
+    print("elapsed: {ms} ms")
+}

@@ -821,6 +821,9 @@ impl<'a> LowerContext<'a> {
         if name.node == "print" {
             return self.lower_print(args);
         }
+        if name.node == "time_ns" {
+            return Ok(self.call_runtime("__pluto_time_ns", &[]));
+        }
 
         // Check if calling a closure variable
         if let Some(PlutoType::Fn(ref param_types, ref ret_type)) = self.var_types.get(&name.node).cloned() {
@@ -1453,6 +1456,10 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             // Check if calling a closure variable first
             if let Some(PlutoType::Fn(_, ret)) = var_types.get(&name.node) {
                 return *ret.clone();
+            }
+            // Check builtins
+            if name.node == "time_ns" {
+                return PlutoType::Int;
             }
             env.functions.get(&name.node).map(|s| s.return_type.clone()).unwrap_or(PlutoType::Void)
         }

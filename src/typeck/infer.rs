@@ -248,6 +248,15 @@ fn infer_call(
                 }
                 Ok(PlutoType::Void)
             }
+            "time_ns" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("time_ns() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                Ok(PlutoType::Int)
+            }
             _ => Err(CompileError::type_err(
                 format!("unknown builtin '{}'", name.node),
                 name.span,
