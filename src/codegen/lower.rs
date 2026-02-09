@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
+use cranelift_codegen::ir::immediates::Offset32;
 use cranelift_codegen::ir::{types, AbiParam, InstBuilder, MemFlags, Value};
 use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_module::{DataDescription, DataId, FuncId, Module};
@@ -9,6 +10,28 @@ use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::typeck::env::TypeEnv;
 use crate::typeck::types::PlutoType;
+
+/// Wrap a class pointer as a trait handle by calling __pluto_trait_wrap.
+fn wrap_class_as_trait(
+    class_val: Value,
+    class_name: &str,
+    trait_name: &str,
+    builder: &mut FunctionBuilder<'_>,
+    module: &mut dyn Module,
+    vtable_ids: &HashMap<(String, String), DataId>,
+    trait_wrap_id: FuncId,
+) -> Result<Value, CompileError> {
+    let vtable_data_id = vtable_ids
+        .get(&(class_name.to_string(), trait_name.to_string()))
+        .ok_or_else(|| {
+            CompileError::codegen(format!("no vtable for ({class_name}, {trait_name})"))
+        })?;
+    let gv = module.declare_data_in_func(*vtable_data_id, builder.func);
+    let vtable_ptr = builder.ins().global_value(types::I64, gv);
+    let func_ref = module.declare_func_in_func(trait_wrap_id, builder.func);
+    let call = builder.ins().call(func_ref, &[class_val, vtable_ptr]);
+    Ok(builder.inst_results(call)[0])
+}
 
 /// Lower a function body into Cranelift IR.
 #[allow(clippy::too_many_arguments)]
@@ -24,6 +47,7 @@ pub fn lower_function(
     array_ids: &HashMap<&str, FuncId>,
     class_name: Option<&str>,
     vtable_ids: &HashMap<(String, String), DataId>,
+    trait_wrap_id: FuncId,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -34,7 +58,7 @@ pub fn lower_function(
     let mut var_types = HashMap::new();
     let mut next_var = 0u32;
 
-    // Declare parameters as variables, handling trait fat pointers
+    // Declare parameters as variables — trait params are now a single I64 handle
     let mut cranelift_param_idx = 0usize;
     for param in func.params.iter() {
         let pty = if param.name.node == "self" {
@@ -47,36 +71,28 @@ pub fn lower_function(
             resolve_param_type(param, env)
         };
 
-        if let PlutoType::Trait(_) = &pty {
-            // Fat pointer: data_ptr + vtable_ptr
-            let data_var = Variable::from_u32(next_var);
-            next_var += 1;
-            builder.declare_var(data_var, types::I64);
-            let data_val = builder.block_params(entry_block)[cranelift_param_idx];
-            builder.def_var(data_var, data_val);
-            variables.insert(param.name.node.clone(), data_var);
-
-            let vtable_var = Variable::from_u32(next_var);
-            next_var += 1;
-            builder.declare_var(vtable_var, types::I64);
-            let vtable_val = builder.block_params(entry_block)[cranelift_param_idx + 1];
-            builder.def_var(vtable_var, vtable_val);
-            variables.insert(format!("{}_vtable", param.name.node), vtable_var);
-
-            var_types.insert(param.name.node.clone(), pty);
-            cranelift_param_idx += 2;
-        } else {
-            let ty = pluto_to_cranelift(&pty);
-            let var = Variable::from_u32(next_var);
-            next_var += 1;
-            builder.declare_var(var, ty);
-            let val = builder.block_params(entry_block)[cranelift_param_idx];
-            builder.def_var(var, val);
-            variables.insert(param.name.node.clone(), var);
-            var_types.insert(param.name.node.clone(), pty);
-            cranelift_param_idx += 1;
-        }
+        let ty = pluto_to_cranelift(&pty);
+        let var = Variable::from_u32(next_var);
+        next_var += 1;
+        builder.declare_var(var, ty);
+        let val = builder.block_params(entry_block)[cranelift_param_idx];
+        builder.def_var(var, val);
+        variables.insert(param.name.node.clone(), var);
+        var_types.insert(param.name.node.clone(), pty);
+        cranelift_param_idx += 1;
     }
+
+    // Compute expected return type for class→trait wrapping in return statements
+    let expected_return_type = if func.name.node == "main" {
+        Some(PlutoType::Int)
+    } else {
+        let lookup_name = if let Some(cn) = class_name {
+            format!("{}_{}", cn, func.name.node)
+        } else {
+            func.name.node.clone()
+        };
+        env.functions.get(&lookup_name).map(|s| s.return_type.clone())
+    };
 
     // Lower body statements
     let is_main = func.name.node == "main";
@@ -102,6 +118,8 @@ pub fn lower_function(
             string_ids,
             array_ids,
             vtable_ids,
+            trait_wrap_id,
+            &expected_return_type,
         )?;
         if stmt_terminates {
             terminated = true;
@@ -145,28 +163,52 @@ fn lower_stmt(
     string_ids: &HashMap<&str, FuncId>,
     array_ids: &HashMap<&str, FuncId>,
     vtable_ids: &HashMap<(String, String), DataId>,
+    trait_wrap_id: FuncId,
+    expected_return_type: &Option<PlutoType>,
 ) -> Result<(), CompileError> {
     if *terminated {
         return Ok(());
     }
     match stmt {
-        Stmt::Let { name, value, .. } => {
-            let val = lower_expr(&value.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+        Stmt::Let { name, ty, value } => {
+            let val = lower_expr(&value.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
             let val_type = infer_type_for_expr(&value.node, env, var_types);
-            let cl_type = pluto_to_cranelift(&val_type);
 
+            // Resolve declared type if present
+            let declared_type = ty.as_ref().map(|t| resolve_type_expr_to_pluto(&t.node, env));
+
+            // If assigning a class to a trait-typed variable, wrap it
+            let (final_val, store_type) = match (&val_type, &declared_type) {
+                (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
+                    let wrapped = wrap_class_as_trait(val, cn, tn, builder, module, vtable_ids, trait_wrap_id)?;
+                    (wrapped, PlutoType::Trait(tn.clone()))
+                }
+                (_, Some(dt)) => (val, dt.clone()),
+                _ => (val, val_type),
+            };
+
+            let cl_type = pluto_to_cranelift(&store_type);
             let var = Variable::from_u32(*next_var);
             *next_var += 1;
             builder.declare_var(var, cl_type);
-            builder.def_var(var, val);
+            builder.def_var(var, final_val);
             variables.insert(name.node.clone(), var);
-            var_types.insert(name.node.clone(), val_type);
+            var_types.insert(name.node.clone(), store_type);
         }
         Stmt::Return(value) => {
             match value {
                 Some(expr) => {
-                    let val = lower_expr(&expr.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
-                    builder.ins().return_(&[val]);
+                    let val = lower_expr(&expr.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
+                    let val_type = infer_type_for_expr(&expr.node, env, var_types);
+
+                    // If returning a class where a trait is expected, wrap it
+                    let final_val = match (&val_type, expected_return_type) {
+                        (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
+                            wrap_class_as_trait(val, cn, tn, builder, module, vtable_ids, trait_wrap_id)?
+                        }
+                        _ => val,
+                    };
+                    builder.ins().return_(&[final_val]);
                 }
                 None => {
                     builder.ins().return_(&[]);
@@ -175,29 +217,40 @@ fn lower_stmt(
             *terminated = true;
         }
         Stmt::Assign { target, value } => {
-            let val = lower_expr(&value.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            let val = lower_expr(&value.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
+            let val_type = infer_type_for_expr(&value.node, env, var_types);
+            let target_type = var_types.get(&target.node);
+
+            // If assigning a class to a trait-typed variable, wrap it
+            let final_val = match (&val_type, target_type) {
+                (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
+                    wrap_class_as_trait(val, cn, &tn.clone(), builder, module, vtable_ids, trait_wrap_id)?
+                }
+                _ => val,
+            };
+
             let var = variables.get(&target.node).ok_or_else(|| {
                 CompileError::codegen(format!("undefined variable '{}'", target.node))
             })?;
-            builder.def_var(*var, val);
+            builder.def_var(*var, final_val);
         }
         Stmt::FieldAssign { object, field, value } => {
-            let ptr = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
-            let val = lower_expr(&value.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            let ptr = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
+            let val = lower_expr(&value.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
             if let PlutoType::Class(class_name) = &obj_type {
                 if let Some(class_info) = env.classes.get(class_name) {
                     let offset = class_info.fields.iter()
                         .position(|(n, _)| *n == field.node)
-                        .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", field.node, class_name)))? as i32 * 8;
-                    builder.ins().store(MemFlags::new(), val, ptr, cranelift_codegen::ir::immediates::Offset32::new(offset));
+                        .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{class_name}'", field.node)))? as i32 * 8;
+                    builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
                 }
             }
         }
         Stmt::IndexAssign { object, index, value } => {
-            let handle = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
-            let idx = lower_expr(&index.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
-            let val = lower_expr(&value.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            let handle = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
+            let idx = lower_expr(&index.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
+            let val = lower_expr(&value.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
             if let PlutoType::Array(elem) = &obj_type {
                 let slot = to_array_slot(val, elem, builder);
@@ -206,7 +259,7 @@ fn lower_stmt(
             }
         }
         Stmt::If { condition, then_block, else_block } => {
-            let cond_val = lower_expr(&condition.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            let cond_val = lower_expr(&condition.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
 
             let then_bb = builder.create_block();
             let merge_bb = builder.create_block();
@@ -219,7 +272,7 @@ fn lower_stmt(
                 builder.seal_block(then_bb);
                 let mut then_terminated = false;
                 for s in &then_block.node.stmts {
-                    lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut then_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+                    lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut then_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, expected_return_type)?;
                 }
                 if !then_terminated {
                     builder.ins().jump(merge_bb, &[]);
@@ -229,7 +282,7 @@ fn lower_stmt(
                 builder.seal_block(else_bb);
                 let mut else_terminated = false;
                 for s in &else_blk.node.stmts {
-                    lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut else_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+                    lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut else_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, expected_return_type)?;
                 }
                 if !else_terminated {
                     builder.ins().jump(merge_bb, &[]);
@@ -245,7 +298,7 @@ fn lower_stmt(
                 builder.seal_block(then_bb);
                 let mut then_terminated = false;
                 for s in &then_block.node.stmts {
-                    lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut then_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+                    lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut then_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, expected_return_type)?;
                 }
                 if !then_terminated {
                     builder.ins().jump(merge_bb, &[]);
@@ -265,14 +318,14 @@ fn lower_stmt(
             builder.ins().jump(header_bb, &[]);
 
             builder.switch_to_block(header_bb);
-            let cond_val = lower_expr(&condition.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            let cond_val = lower_expr(&condition.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
             builder.ins().brif(cond_val, body_bb, &[], exit_bb, &[]);
 
             builder.switch_to_block(body_bb);
             builder.seal_block(body_bb);
             let mut body_terminated = false;
             for s in &body.node.stmts {
-                lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut body_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+                lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut body_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, expected_return_type)?;
             }
             if !body_terminated {
                 builder.ins().jump(header_bb, &[]);
@@ -284,7 +337,7 @@ fn lower_stmt(
         }
         Stmt::For { var, iterable, body } => {
             // Lower iterable to get array handle
-            let handle = lower_expr(&iterable.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            let handle = lower_expr(&iterable.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
 
             // Get element type from iterable
             let iter_type = infer_type_for_expr(&iterable.node, env, var_types);
@@ -344,7 +397,7 @@ fn lower_stmt(
             // Lower body statements
             let mut body_terminated = false;
             for s in &body.node.stmts {
-                lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut body_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+                lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut body_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, expected_return_type)?;
             }
 
             // Restore prior variable binding if shadowed
@@ -373,7 +426,7 @@ fn lower_stmt(
             builder.seal_block(exit_bb);
         }
         Stmt::Expr(expr) => {
-            lower_expr(&expr.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            lower_expr(&expr.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
         }
     }
     Ok(())
@@ -415,6 +468,7 @@ fn lower_expr(
     string_ids: &HashMap<&str, FuncId>,
     array_ids: &HashMap<&str, FuncId>,
     vtable_ids: &HashMap<(String, String), DataId>,
+    trait_wrap_id: FuncId,
 ) -> Result<Value, CompileError> {
     match expr {
         Expr::IntLit(n) => Ok(builder.ins().iconst(types::I64, *n)),
@@ -434,8 +488,8 @@ fn lower_expr(
             Ok(builder.use_var(*var))
         }
         Expr::BinOp { op, lhs, rhs } => {
-            let l = lower_expr(&lhs.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
-            let r = lower_expr(&rhs.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            let l = lower_expr(&lhs.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
+            let r = lower_expr(&rhs.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
 
             let lhs_type = infer_type_for_expr(&lhs.node, env, var_types);
             let is_float = lhs_type == PlutoType::Float;
@@ -488,7 +542,7 @@ fn lower_expr(
             Ok(result)
         }
         Expr::UnaryOp { op, operand } => {
-            let val = lower_expr(&operand.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            let val = lower_expr(&operand.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
             let operand_type = infer_type_for_expr(&operand.node, env, var_types);
             match op {
                 UnaryOp::Neg if operand_type == PlutoType::Float => Ok(builder.ins().fneg(val)),
@@ -501,7 +555,7 @@ fn lower_expr(
         }
         Expr::Call { name, args } => {
             if name.node == "print" {
-                return lower_print(builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, args);
+                return lower_print(builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, args);
             }
 
             let func_id = func_ids.get(&name.node).ok_or_else(|| {
@@ -514,20 +568,14 @@ fn lower_expr(
             let sig = env.functions.get(&name.node);
             let mut arg_values = Vec::new();
             for (i, arg) in args.iter().enumerate() {
-                let val = lower_expr(&arg.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+                let val = lower_expr(&arg.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
                 let arg_actual_type = infer_type_for_expr(&arg.node, env, var_types);
                 let param_expected = sig.and_then(|s| s.params.get(i));
 
                 if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_actual_type, param_expected) {
-                    // Fat pointer: push data_ptr then vtable_ptr
-                    arg_values.push(val);
-                    let vtable_key = (cn.clone(), tn.clone());
-                    let vtable_data_id = vtable_ids.get(&vtable_key).ok_or_else(|| {
-                        CompileError::codegen(format!("no vtable for ({cn}, {tn})"))
-                    })?;
-                    let gv = module.declare_data_in_func(*vtable_data_id, builder.func);
-                    let vtable_ptr = builder.ins().global_value(types::I64, gv);
-                    arg_values.push(vtable_ptr);
+                    // Wrap class as trait handle (single pointer)
+                    let wrapped = wrap_class_as_trait(val, cn, tn, builder, module, vtable_ids, trait_wrap_id)?;
+                    arg_values.push(wrapped);
                 } else {
                     arg_values.push(val);
                 }
@@ -554,11 +602,11 @@ fn lower_expr(
             let ptr = builder.inst_results(call)[0];
 
             for (lit_name, lit_val) in fields {
-                let val = lower_expr(&lit_val.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+                let val = lower_expr(&lit_val.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
                 let offset = class_info.fields.iter()
                     .position(|(n, _)| *n == lit_name.node)
                     .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", lit_name.node, name.node)))? as i32 * 8;
-                builder.ins().store(MemFlags::new(), val, ptr, cranelift_codegen::ir::immediates::Offset32::new(offset));
+                builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
             }
 
             Ok(ptr)
@@ -573,7 +621,7 @@ fn lower_expr(
             let elem_type = infer_type_for_expr(&elements[0].node, env, var_types);
             let func_ref_push = module.declare_func_in_func(array_ids["push"], builder.func);
             for elem in elements {
-                let val = lower_expr(&elem.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+                let val = lower_expr(&elem.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
                 let slot = to_array_slot(val, &elem_type, builder);
                 builder.ins().call(func_ref_push, &[handle, slot]);
             }
@@ -581,8 +629,8 @@ fn lower_expr(
             Ok(handle)
         }
         Expr::Index { object, index } => {
-            let handle = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
-            let idx = lower_expr(&index.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            let handle = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
+            let idx = lower_expr(&index.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
             if let PlutoType::Array(elem) = &obj_type {
                 let func_ref = module.declare_func_in_func(array_ids["get"], builder.func);
@@ -594,7 +642,7 @@ fn lower_expr(
             }
         }
         Expr::FieldAccess { object, field } => {
-            let ptr = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            let ptr = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
             if let PlutoType::Class(class_name) = &obj_type {
                 let class_info = env.classes.get(class_name).ok_or_else(|| {
@@ -608,13 +656,13 @@ fn lower_expr(
                     })?;
                 let offset = (field_idx as i32) * 8;
                 let cl_type = pluto_to_cranelift(field_type);
-                Ok(builder.ins().load(cl_type, MemFlags::new(), ptr, cranelift_codegen::ir::immediates::Offset32::new(offset)))
+                Ok(builder.ins().load(cl_type, MemFlags::new(), ptr, Offset32::new(offset)))
             } else {
                 Err(CompileError::codegen(format!("field access on non-class type {obj_type}")))
             }
         }
         Expr::MethodCall { object, method, args } => {
-            let obj_ptr = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+            let obj_ptr = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
 
             // Array methods
@@ -626,7 +674,7 @@ fn lower_expr(
                         return Ok(builder.inst_results(call)[0]);
                     }
                     "push" => {
-                        let arg_val = lower_expr(&args[0].node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+                        let arg_val = lower_expr(&args[0].node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
                         let slot = to_array_slot(arg_val, elem, builder);
                         let func_ref = module.declare_func_in_func(array_ids["push"], builder.func);
                         builder.ins().call(func_ref, &[obj_ptr, slot]);
@@ -648,7 +696,7 @@ fn lower_expr(
                 return Err(CompileError::codegen(format!("string has no method '{}'", method.node)));
             }
 
-            // Trait dynamic dispatch
+            // Trait dynamic dispatch via handle
             if let PlutoType::Trait(trait_name) = &obj_type {
                 let trait_info = env.traits.get(trait_name).ok_or_else(|| {
                     CompileError::codegen(format!("unknown trait '{trait_name}'"))
@@ -659,35 +707,38 @@ fn lower_expr(
                         CompileError::codegen(format!("trait '{trait_name}' has no method '{}'", method.node))
                     })?;
 
-                // Get vtable pointer from synthetic variable
-                let obj_name = match &object.node {
-                    Expr::Ident(name) => name.clone(),
-                    _ => return Err(CompileError::codegen("trait method dispatch requires identifier".to_string())),
-                };
-                let vtable_var = variables.get(&format!("{}_vtable", obj_name)).ok_or_else(|| {
-                    CompileError::codegen(format!("no vtable for '{obj_name}'"))
-                })?;
-                let vtable_ptr = builder.use_var(*vtable_var);
+                // obj_ptr is a trait handle: pointer to [data_ptr, vtable_ptr]
+                let data_ptr = builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(0));
+                let vtable_ptr = builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(8));
 
                 // Load fn_ptr from vtable at offset method_idx * 8
                 let offset = (method_idx as i32) * 8;
-                let fn_ptr = builder.ins().load(types::I64, MemFlags::new(), vtable_ptr, cranelift_codegen::ir::immediates::Offset32::new(offset));
+                let fn_ptr = builder.ins().load(types::I64, MemFlags::new(), vtable_ptr, Offset32::new(offset));
 
                 // Build indirect call signature
                 let method_sig = &trait_info.methods[method_idx].1;
                 let mut sig = module.make_signature();
                 sig.params.push(AbiParam::new(types::I64)); // self (data_ptr)
                 for param_ty in &method_sig.params[1..] {
-                    sig.params.push(AbiParam::new(pluto_to_cranelift(param_ty)));
+                    let cl_ty = pluto_to_cranelift(param_ty);
+                    sig.params.push(AbiParam::new(cl_ty));
                 }
                 if method_sig.return_type != PlutoType::Void {
                     sig.returns.push(AbiParam::new(pluto_to_cranelift(&method_sig.return_type)));
                 }
                 let sig_ref = builder.func.import_signature(sig);
 
-                let mut call_args = vec![obj_ptr]; // data_ptr as self
-                for arg in args {
-                    call_args.push(lower_expr(&arg.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?);
+                let mut call_args = vec![data_ptr]; // data_ptr as self
+                for (i, arg) in args.iter().enumerate() {
+                    let val = lower_expr(&arg.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
+                    let arg_type = infer_type_for_expr(&arg.node, env, var_types);
+                    let param_expected = method_sig.params.get(i + 1); // +1 to skip self
+                    if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_type, param_expected) {
+                        let wrapped = wrap_class_as_trait(val, cn, tn, builder, module, vtable_ids, trait_wrap_id)?;
+                        call_args.push(wrapped);
+                    } else {
+                        call_args.push(val);
+                    }
                 }
 
                 let call = builder.ins().call_indirect(sig_ref, fn_ptr, &call_args);
@@ -706,7 +757,7 @@ fn lower_expr(
 
                 let mut arg_values = vec![obj_ptr];
                 for arg in args {
-                    arg_values.push(lower_expr(&arg.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?);
+                    arg_values.push(lower_expr(&arg.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?);
                 }
 
                 let call = builder.ins().call(func_ref, &arg_values);
@@ -736,11 +787,12 @@ fn lower_print(
     string_ids: &HashMap<&str, FuncId>,
     array_ids: &HashMap<&str, FuncId>,
     vtable_ids: &HashMap<(String, String), DataId>,
+    trait_wrap_id: FuncId,
     args: &[crate::span::Spanned<Expr>],
 ) -> Result<Value, CompileError> {
     let arg = &args[0];
     let arg_type = infer_type_for_expr(&arg.node, env, var_types);
-    let arg_val = lower_expr(&arg.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids)?;
+    let arg_val = lower_expr(&arg.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
 
     match arg_type {
         PlutoType::Int => {
@@ -839,7 +891,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Void => types::I64,         // shouldn't be used for values
         PlutoType::Class(_) => types::I64,     // pointer
         PlutoType::Array(_) => types::I64,     // pointer to handle
-        PlutoType::Trait(_) => types::I64,     // fat pointer component
+        PlutoType::Trait(_) => types::I64,     // pointer to trait handle
     }
 }
 
