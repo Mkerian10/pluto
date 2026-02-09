@@ -11,7 +11,6 @@ Areas that need further design work before implementation.
 
 ## Communication
 
-- [ ] **Process spawning** — `spawn` syntax and semantics, process identity
 - [ ] **Geographic annotations** — syntax for region/locality constraints
 - [ ] **Service discovery** — how do apps find each other?
 - [ ] **Channels** — `chan<T>()`, directional types, backpressure strategies
@@ -32,9 +31,9 @@ Areas that need further design work before implementation.
 
 ## Concurrency
 
-- [ ] **Concurrency primitives** — mutexes, atomics, or purely message-based?
-- [ ] **Shared state** — is shared mutable state ever allowed, or is everything message-passing?
-- [ ] **Async/await** — is there an async model, or is everything synchronous + spawned processes?
+- [ ] **Move semantics on spawn** — how does move-on-spawn interact with closures? Explicit `move` annotation?
+- [ ] **Task groups / scopes** — structured concurrency construct for managing multiple tasks with automatic cancellation?
+- [ ] **Select / race** — waiting on the first of multiple tasks or channels to complete
 
 ## Tooling
 
@@ -72,3 +71,7 @@ Previously open questions that have been designed and implemented.
 - [x] **Garbage collection** — mark-and-sweep GC in the C runtime, tag-based tracing
 - [x] **Standard library (core)** — `std.strings`, `std.math`, `std.net`, `std.socket`, `std.fs`
 - [x] **String escape sequences** — `\n`, `\r`, `\t`, `\\`, `\"`
+- [x] **Concurrency model** — tasks (green threads) + OS threads, no shared mutable state, channels for communication
+- [x] **Concurrency primitives** — message-passing only, no mutexes/atomics exposed to user code
+- [x] **Spawn semantics** — `spawn` returns `Task<T>`, `.get()` is fallible (preserves error types + TaskCancelled)
+- [x] **Structured concurrency** — tasks must be consumed (`.get()` or `.detach()`), structured by default

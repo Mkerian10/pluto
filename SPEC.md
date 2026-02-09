@@ -40,6 +40,7 @@ Detailed design for each area of the language:
 | [Type System](docs/design/type-system.md) | Classes, traits, generics, nominal + structural typing |
 | [Error Handling](docs/design/error-handling.md) | Typed errors, inference, `!` and `catch` |
 | [Dependency Injection](docs/design/dependency-injection.md) | Bracket deps, ambient DI, auto-wiring, environment opacity |
+| [Concurrency](docs/design/concurrency.md) | Tasks, threads, structured concurrency, no shared mutable state |
 | [Communication](docs/design/communication.md) | Synchronous calls, channels, serialization |
 | [Mutability](docs/design/mutability.md) | Explicit mutation, compiler optimizations |
 | [Runtime](docs/design/runtime.md) | The Pluto "VM", GC, process lifecycle, crash recovery |
