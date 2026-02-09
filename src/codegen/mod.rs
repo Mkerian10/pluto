@@ -119,6 +119,30 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
         .map_err(|e| CompileError::codegen(format!("declare string_len error: {e}")))?;
     string_ids.insert("len", id);
 
+    // __pluto_int_to_string(I64) -> I64
+    let mut sig_int_to_str = module.make_signature();
+    sig_int_to_str.params.push(AbiParam::new(types::I64));
+    sig_int_to_str.returns.push(AbiParam::new(types::I64));
+    let id = module.declare_function("__pluto_int_to_string", Linkage::Import, &sig_int_to_str)
+        .map_err(|e| CompileError::codegen(format!("declare int_to_string error: {e}")))?;
+    string_ids.insert("int_to_str", id);
+
+    // __pluto_float_to_string(F64) -> I64
+    let mut sig_float_to_str = module.make_signature();
+    sig_float_to_str.params.push(AbiParam::new(types::F64));
+    sig_float_to_str.returns.push(AbiParam::new(types::I64));
+    let id = module.declare_function("__pluto_float_to_string", Linkage::Import, &sig_float_to_str)
+        .map_err(|e| CompileError::codegen(format!("declare float_to_string error: {e}")))?;
+    string_ids.insert("float_to_str", id);
+
+    // __pluto_bool_to_string(I32) -> I64
+    let mut sig_bool_to_str = module.make_signature();
+    sig_bool_to_str.params.push(AbiParam::new(types::I32));
+    sig_bool_to_str.returns.push(AbiParam::new(types::I64));
+    let id = module.declare_function("__pluto_bool_to_string", Linkage::Import, &sig_bool_to_str)
+        .map_err(|e| CompileError::codegen(format!("declare bool_to_string error: {e}")))?;
+    string_ids.insert("bool_to_str", id);
+
     // Declare array runtime functions
     let mut array_ids = HashMap::new();
 

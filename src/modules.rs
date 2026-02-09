@@ -388,6 +388,13 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
             rewrite_expr_for_module(&mut object.node, module_name, module_prog);
             rewrite_expr_for_module(&mut index.node, module_name, module_prog);
         }
+        Expr::StringInterp { parts } => {
+            for part in parts {
+                if let StringInterpPart::Expr(e) = part {
+                    rewrite_expr_for_module(&mut e.node, module_name, module_prog);
+                }
+            }
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
     }
 }
@@ -548,6 +555,13 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
         Expr::Index { object, index } => {
             rewrite_expr(&mut object.node, object.span, import_names);
             rewrite_expr(&mut index.node, index.span, import_names);
+        }
+        Expr::StringInterp { parts } => {
+            for part in parts {
+                if let StringInterpPart::Expr(e) = part {
+                    rewrite_expr(&mut e.node, e.span, import_names);
+                }
+            }
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
     }
