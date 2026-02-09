@@ -83,9 +83,9 @@ GitHub Actions runs `cargo test` on both Linux (x86_64) and macOS (ARM64) for ev
 
 ## Git Workflow
 
-**Push to `origin/master`** — Work directly on `master` and push. CI will validate your changes on both platforms. Branch protection ensures broken code can't be merged.
+**All changes go through PRs** — Direct pushes to `master` are blocked. Create a branch, push it, open a PR, and merge once CI passes. Use `gh pr create` to create PRs from the CLI.
 
-**Commit regularly** — Commit after completing each logical unit of work (a feature, a fix, a refactor). Do not accumulate large uncommitted changes. Push to verify on CI.
+**Commit regularly** — Commit after completing each logical unit of work (a feature, a fix, a refactor). Do not accumulate large uncommitted changes. Push your branch to verify on CI.
 
 **Use worktrees for parallel work** — When multiple agents or tasks are running concurrently, use git worktrees to avoid conflicts. Use a naming convention that identifies **you** (your session) so other agents know whose worktree is whose:
 ```bash
