@@ -694,3 +694,257 @@ fn trait_default_method_via_handle() {
     );
     assert_eq!(out, "0\n");
 }
+
+// Arithmetic output verification tests
+
+#[test]
+fn arithmetic_add_output() {
+    let out = compile_and_run_stdout("fn main() {\n    print(10 + 3)\n}");
+    assert_eq!(out, "13\n");
+}
+
+#[test]
+fn arithmetic_sub_output() {
+    let out = compile_and_run_stdout("fn main() {\n    print(10 - 3)\n}");
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn arithmetic_mul_output() {
+    let out = compile_and_run_stdout("fn main() {\n    print(10 * 3)\n}");
+    assert_eq!(out, "30\n");
+}
+
+#[test]
+fn arithmetic_div_output() {
+    let out = compile_and_run_stdout("fn main() {\n    print(10 / 3)\n}");
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn arithmetic_mod_output() {
+    let out = compile_and_run_stdout("fn main() {\n    print(10 % 3)\n}");
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn float_arithmetic() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(1.5 + 2.5)\n    print(5.0 - 1.5)\n    print(2.0 * 3.0)\n    print(7.0 / 2.0)\n}",
+    );
+    assert_eq!(out, "4.000000\n3.500000\n6.000000\n3.500000\n");
+}
+
+// Comparison operator tests
+
+#[test]
+fn comparison_greater_than() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(5 > 3)\n    print(3 > 5)\n    print(3 > 3)\n}",
+    );
+    assert_eq!(out, "true\nfalse\nfalse\n");
+}
+
+#[test]
+fn comparison_less_than_eq() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(3 <= 5)\n    print(5 <= 5)\n    print(6 <= 5)\n}",
+    );
+    assert_eq!(out, "true\ntrue\nfalse\n");
+}
+
+#[test]
+fn comparison_greater_than_eq() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(5 >= 3)\n    print(5 >= 5)\n    print(4 >= 5)\n}",
+    );
+    assert_eq!(out, "true\ntrue\nfalse\n");
+}
+
+#[test]
+fn int_equality() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(42 == 42)\n    print(42 == 43)\n    print(42 != 43)\n    print(42 != 42)\n}",
+    );
+    assert_eq!(out, "true\nfalse\ntrue\nfalse\n");
+}
+
+// Logical operator tests
+
+#[test]
+fn logical_and() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(true && true)\n    print(true && false)\n    print(false && true)\n    print(false && false)\n}",
+    );
+    assert_eq!(out, "true\nfalse\nfalse\nfalse\n");
+}
+
+#[test]
+fn logical_or() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(true || true)\n    print(true || false)\n    print(false || true)\n    print(false || false)\n}",
+    );
+    assert_eq!(out, "true\ntrue\ntrue\nfalse\n");
+}
+
+// Unary operator tests
+
+#[test]
+fn unary_negation() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 5\n    print(-x)\n    print(-10)\n}",
+    );
+    assert_eq!(out, "-5\n-10\n");
+}
+
+#[test]
+fn unary_not() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(!true)\n    print(!false)\n}",
+    );
+    assert_eq!(out, "false\ntrue\n");
+}
+
+// Control flow with output verification
+
+#[test]
+fn if_else_output() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    if true {\n        print(1)\n    } else {\n        print(2)\n    }\n    if false {\n        print(3)\n    } else {\n        print(4)\n    }\n}",
+    );
+    assert_eq!(out, "1\n4\n");
+}
+
+#[test]
+fn if_without_else() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    if true {\n        print(1)\n    }\n    if false {\n        print(2)\n    }\n    print(3)\n}",
+    );
+    assert_eq!(out, "1\n3\n");
+}
+
+#[test]
+fn nested_if_else() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 15\n    if x > 10 {\n        if x > 20 {\n            print(1)\n        } else {\n            print(2)\n        }\n    } else {\n        print(3)\n    }\n}",
+    );
+    assert_eq!(out, "2\n");
+}
+
+// Return value tests
+
+#[test]
+fn void_return() {
+    let out = compile_and_run_stdout(
+        "fn early(x: int) {\n    if x > 0 {\n        print(1)\n        return\n    }\n    print(2)\n}\n\nfn main() {\n    early(5)\n    early(-1)\n}",
+    );
+    assert_eq!(out, "1\n2\n");
+}
+
+#[test]
+fn multiple_return_paths() {
+    let out = compile_and_run_stdout(
+        "fn classify(x: int) string {\n    if x > 0 {\n        return \"positive\"\n    }\n    if x < 0 {\n        return \"negative\"\n    }\n    return \"zero\"\n}\n\nfn main() {\n    print(classify(5))\n    print(classify(-3))\n    print(classify(0))\n}",
+    );
+    assert_eq!(out, "positive\nnegative\nzero\n");
+}
+
+// Comments
+
+#[test]
+fn comments_ignored() {
+    let out = compile_and_run_stdout(
+        "// this is a comment\nfn main() {\n    // another comment\n    let x = 42 // inline comment\n    print(x)\n}",
+    );
+    assert_eq!(out, "42\n");
+}
+
+// Parenthesized expressions
+
+#[test]
+fn parenthesized_expressions() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print((2 + 3) * 4)\n    print(2 + 3 * 4)\n}",
+    );
+    assert_eq!(out, "20\n14\n");
+}
+
+// Recursive function
+
+#[test]
+fn recursive_function() {
+    let out = compile_and_run_stdout(
+        "fn factorial(n: int) int {\n    if n <= 1 {\n        return 1\n    }\n    return n * factorial(n - 1)\n}\n\nfn main() {\n    print(factorial(5))\n}",
+    );
+    assert_eq!(out, "120\n");
+}
+
+// Variable reassignment
+
+#[test]
+fn variable_reassignment() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 1\n    print(x)\n    x = 2\n    print(x)\n    x = x + 10\n    print(x)\n}",
+    );
+    assert_eq!(out, "1\n2\n12\n");
+}
+
+// Additional error rejection tests
+
+#[test]
+fn wrong_arg_count_rejected() {
+    compile_should_fail(
+        "fn add(a: int, b: int) int {\n    return a + b\n}\n\nfn main() {\n    let x = add(1)\n}",
+    );
+}
+
+#[test]
+fn return_type_mismatch_rejected() {
+    compile_should_fail(
+        "fn foo() int {\n    return true\n}\n\nfn main() {\n    foo()\n}",
+    );
+}
+
+#[test]
+fn arg_type_mismatch_rejected() {
+    compile_should_fail(
+        "fn foo(x: int) int {\n    return x\n}\n\nfn main() {\n    foo(\"hello\")\n}",
+    );
+}
+
+#[test]
+fn assign_type_mismatch_rejected() {
+    compile_should_fail(
+        "fn main() {\n    let x = 42\n    x = true\n}",
+    );
+}
+
+// Class with multiple methods
+
+#[test]
+fn class_multiple_methods() {
+    let out = compile_and_run_stdout(
+        "class Rect {\n    w: int\n    h: int\n\n    fn area(self) int {\n        return self.w * self.h\n    }\n\n    fn perimeter(self) int {\n        return 2 * (self.w + self.h)\n    }\n}\n\nfn main() {\n    let r = Rect { w: 3, h: 4 }\n    print(r.area())\n    print(r.perimeter())\n}",
+    );
+    assert_eq!(out, "12\n14\n");
+}
+
+// Chained string concatenation
+
+#[test]
+fn string_concat_chain() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let s = \"a\" + \"b\" + \"c\"\n    print(s)\n}",
+    );
+    assert_eq!(out, "abc\n");
+}
+
+// Bool equality
+
+#[test]
+fn bool_equality() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(true == true)\n    print(true == false)\n    print(false != true)\n}",
+    );
+    assert_eq!(out, "true\nfalse\ntrue\n");
+}
