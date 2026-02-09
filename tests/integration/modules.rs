@@ -1,6 +1,7 @@
 mod common;
 
 use std::process::Command;
+use std::path::Path;
 
 /// Write multiple files to a temp directory, compile the entry file, and return stdout.
 fn run_project(files: &[(&str, &str)]) -> String {
@@ -817,4 +818,144 @@ pub fn say(x: int) {
 "#),
     ]);
     assert_eq!(out, "1\n2\n");
+}
+
+// ============================================================
+// Stdlib: std.strings
+// ============================================================
+
+/// Copy a directory tree recursively.
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for entry in std::fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let ty = entry.file_type().unwrap();
+        let dest_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest_path);
+        } else {
+            std::fs::copy(entry.path(), &dest_path).unwrap();
+        }
+    }
+}
+
+/// Run a project that uses the real stdlib (copied from the repo's stdlib/ directory).
+fn run_project_with_stdlib(files: &[(&str, &str)]) -> String {
+    let dir = tempfile::tempdir().unwrap();
+
+    for (name, content) in files {
+        let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+    }
+
+    // Copy the real stdlib directory
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let stdlib_src = manifest_dir.join("stdlib");
+    let stdlib_dst = dir.path().join("stdlib");
+    copy_dir_recursive(&stdlib_src, &stdlib_dst);
+
+    let entry = dir.path().join("main.pluto");
+    let bin_path = dir.path().join("test_bin");
+
+    let compile_output = common::plutoc()
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&bin_path)
+        .output()
+        .unwrap();
+
+    assert!(
+        compile_output.status.success(),
+        "Compilation failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile_output.stdout),
+        String::from_utf8_lossy(&compile_output.stderr)
+    );
+
+    assert!(bin_path.exists(), "Binary was not created");
+
+    let run_output = Command::new(&bin_path).output().unwrap();
+    assert!(run_output.status.success(), "Binary exited with non-zero status");
+    String::from_utf8_lossy(&run_output.stdout).to_string()
+}
+
+#[test]
+fn stdlib_strings_basic() {
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", r#"import std.strings
+
+fn main() {
+    let s = "hello world"
+
+    print(strings.substring(s, 0, 5))
+    print(strings.contains(s, "world"))
+    print(strings.starts_with(s, "hello"))
+    print(strings.ends_with(s, "world"))
+    print(strings.index_of(s, "world"))
+    print(strings.char_at(s, 4))
+    print(strings.len(s))
+}
+"#),
+    ]);
+    assert_eq!(out, "hello\ntrue\ntrue\ntrue\n6\no\n11\n");
+}
+
+#[test]
+fn stdlib_strings_transform() {
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", r#"import std.strings
+
+fn main() {
+    print(strings.to_upper("hello"))
+    print(strings.to_lower("WORLD"))
+    print(strings.trim("  hi  "))
+    print(strings.replace("aXbXc", "X", "-"))
+
+    let parts = strings.split("a,b,c", ",")
+    print(parts[0])
+    print(parts[1])
+    print(parts[2])
+}
+"#),
+    ]);
+    assert_eq!(out, "HELLO\nworld\nhi\na-b-c\na\nb\nc\n");
+}
+
+// ============================================================
+// Stdlib: std.math
+// ============================================================
+
+#[test]
+fn stdlib_math_basic() {
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", r#"import std.math
+
+fn main() {
+    print(math.abs(0 - 5))
+    print(math.min(3, 7))
+    print(math.max(3, 7))
+    print(math.pow(2, 10))
+    print(math.clamp(15, 0, 10))
+    print(math.clamp(0 - 5, 0, 10))
+    print(math.clamp(5, 0, 10))
+}
+"#),
+    ]);
+    assert_eq!(out, "5\n3\n7\n1024\n10\n0\n5\n");
+}
+
+#[test]
+fn stdlib_math_pow_negative_exp() {
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", r#"import std.math
+
+fn main() {
+    print(math.pow(2, 0 - 3))
+}
+"#),
+    ]);
+    assert_eq!(out, "0\n");
 }
