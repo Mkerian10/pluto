@@ -1525,3 +1525,69 @@ double __pluto_tan(double x) {
 double __pluto_log(double x) {
     return log(x);
 }
+
+// ── Test framework ────────────────────────────────────────────────────────────
+
+void __pluto_expect_equal_int(long actual, long expected, long line) {
+    if (actual != expected) {
+        fprintf(stderr, "FAIL (line %ld): expected %ld to equal %ld\n", line, actual, expected);
+        exit(1);
+    }
+}
+
+void __pluto_expect_equal_float(double actual, double expected, long line) {
+    if (actual != expected) {
+        fprintf(stderr, "FAIL (line %ld): expected %f to equal %f\n", line, actual, expected);
+        exit(1);
+    }
+}
+
+void __pluto_expect_equal_bool(long actual, long expected, long line) {
+    const char *a_str = actual ? "true" : "false";
+    const char *e_str = expected ? "true" : "false";
+    if (actual != expected) {
+        fprintf(stderr, "FAIL (line %ld): expected %s to equal %s\n", line, a_str, e_str);
+        exit(1);
+    }
+}
+
+void __pluto_expect_equal_string(void *actual, void *expected, long line) {
+    if (!__pluto_string_eq(actual, expected)) {
+        long len_a = *(long *)actual;
+        long len_e = *(long *)expected;
+        const char *data_a = (const char *)actual + 8;
+        const char *data_e = (const char *)expected + 8;
+        fprintf(stderr, "FAIL (line %ld): expected \"%.*s\" to equal \"%.*s\"\n",
+                line, (int)len_a, data_a, (int)len_e, data_e);
+        exit(1);
+    }
+}
+
+void __pluto_expect_true(long actual, long line) {
+    if (!actual) {
+        fprintf(stderr, "FAIL (line %ld): expected true but got false\n", line);
+        exit(1);
+    }
+}
+
+void __pluto_expect_false(long actual, long line) {
+    if (actual) {
+        fprintf(stderr, "FAIL (line %ld): expected false but got true\n", line);
+        exit(1);
+    }
+}
+
+void __pluto_test_start(void *name_str) {
+    long len = *(long *)name_str;
+    const char *data = (const char *)name_str + 8;
+    printf("test %.*s ... ", (int)len, data);
+    fflush(stdout);
+}
+
+void __pluto_test_pass(void) {
+    printf("ok\n");
+}
+
+void __pluto_test_summary(long count) {
+    printf("\n%ld tests passed\n", count);
+}

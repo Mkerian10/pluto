@@ -1,0 +1,30 @@
+fn add(a: int, b: int) int {
+    return a + b
+}
+
+fn is_positive(n: int) bool {
+    return n > 0
+}
+
+test "addition works" {
+    expect(add(1, 2)).to_equal(3)
+    expect(add(-1, 1)).to_equal(0)
+    expect(add(0, 0)).to_equal(0)
+}
+
+test "negative addition" {
+    expect(add(-5, -3)).to_equal(-8)
+}
+
+test "boolean logic" {
+    expect(true).to_be_true()
+    expect(false).to_be_false()
+    expect(1 > 2).to_be_false()
+    expect(is_positive(42)).to_be_true()
+    expect(is_positive(-1)).to_be_false()
+}
+
+test "string equality" {
+    expect("hello").to_equal("hello")
+    expect("").to_equal("")
+}

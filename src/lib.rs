@@ -22,16 +22,51 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
     let mut program = parser.parse_program()?;
     prelude::inject_prelude(&mut program)?;
     ambient::desugar_ambient(&mut program)?;
+    // Strip test functions in non-test mode
+    let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
+        .map(|(_, fn_name)| fn_name.clone()).collect();
+    program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
+    program.test_info.clear();
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
-    codegen::codegen(&program, &env)
+    codegen::codegen(&program, &env, source)
 }
 
 /// Compile a source string directly (single-file, no module resolution).
 /// Used by tests and backward-compatible API.
 pub fn compile(source: &str, output_path: &Path) -> Result<(), CompileError> {
     let object_bytes = compile_to_object(source)?;
+
+    let obj_path = output_path.with_extension("o");
+    std::fs::write(&obj_path, &object_bytes)
+        .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
+
+    link(&obj_path, output_path)?;
+
+    let _ = std::fs::remove_file(&obj_path);
+
+    Ok(())
+}
+
+/// Compile a source string in test mode (lex → parse → prelude → typeck → monomorphize → closures → codegen).
+/// Tests are preserved and a test runner main is generated.
+pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError> {
+    let tokens = lexer::lex(source)?;
+    let mut parser = parser::Parser::new(&tokens, source);
+    let mut program = parser.parse_program()?;
+    prelude::inject_prelude(&mut program)?;
+    ambient::desugar_ambient(&mut program)?;
+    // test_info is NOT stripped in test mode
+    let mut env = typeck::type_check(&program)?;
+    monomorphize::monomorphize(&mut program, &mut env)?;
+    closures::lift_closures(&mut program, &mut env)?;
+    codegen::codegen(&program, &env, source)
+}
+
+/// Compile a source string in test mode directly (single-file, no module resolution).
+pub fn compile_test(source: &str, output_path: &Path) -> Result<(), CompileError> {
+    let object_bytes = compile_to_object_test_mode(source)?;
 
     let obj_path = output_path.with_extension("o");
     std::fs::write(&obj_path, &object_bytes)
@@ -55,6 +90,8 @@ pub fn compile_file(entry_file: &Path, output_path: &Path) -> Result<(), Compile
 
 /// Compile with an explicit stdlib root path.
 pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<(), CompileError> {
+    let source = std::fs::read_to_string(entry_file)
+        .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
     let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
     let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
 
@@ -62,10 +99,54 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
     prelude::inject_prelude(&mut program)?;
     ambient::desugar_ambient(&mut program)?;
+    // Strip test functions in non-test mode
+    let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
+        .map(|(_, fn_name)| fn_name.clone()).collect();
+    program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
+    program.test_info.clear();
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
-    let object_bytes = codegen::codegen(&program, &env)?;
+    let object_bytes = codegen::codegen(&program, &env, &source)?;
+
+    let obj_path = output_path.with_extension("o");
+    std::fs::write(&obj_path, &object_bytes)
+        .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
+
+    link(&obj_path, output_path)?;
+
+    let _ = std::fs::remove_file(&obj_path);
+
+    Ok(())
+}
+
+/// Compile a file in test mode. Tests are preserved and a test runner main is generated.
+pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<(), CompileError> {
+    let source = std::fs::read_to_string(entry_file)
+        .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
+    let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
+    let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
+
+    let graph = modules::resolve_modules(entry_file, effective_stdlib.as_deref())?;
+    let (mut program, _source_map) = modules::flatten_modules(graph)?;
+
+    if program.test_info.is_empty() {
+        return Err(CompileError::codegen(format!(
+            "no tests found in '{}'", entry_file.display()
+        )));
+    }
+    if program.app.is_some() {
+        return Err(CompileError::codegen(
+            "test files should not contain an app declaration".to_string()
+        ));
+    }
+
+    prelude::inject_prelude(&mut program)?;
+    ambient::desugar_ambient(&mut program)?;
+    let mut env = typeck::type_check(&program)?;
+    monomorphize::monomorphize(&mut program, &mut env)?;
+    closures::lift_closures(&mut program, &mut env)?;
+    let object_bytes = codegen::codegen(&program, &env, &source)?;
 
     let obj_path = output_path.with_extension("o");
     std::fs::write(&obj_path, &object_bytes)

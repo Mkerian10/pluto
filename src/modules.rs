@@ -75,6 +75,7 @@ fn load_directory_module(
         enums: Vec::new(),
         app: None,
         errors: Vec::new(),
+        test_info: Vec::new(),
     };
 
     let entries = std::fs::read_dir(dir).map_err(|e| {
@@ -105,6 +106,7 @@ fn load_directory_module(
             merged.app = Some(app_decl);
         }
         merged.errors.extend(program.errors);
+        merged.test_info.extend(program.test_info);
         // Collect imports from auto-merged files
         merged.imports.extend(program.imports);
     }
@@ -549,6 +551,14 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
                 module_name
             )));
         }
+    }
+
+    // Filter out test functions from imported modules before merging
+    for (_module_name, module_prog) in &mut graph.imports {
+        let test_fn_names: HashSet<String> = module_prog.test_info.iter()
+            .map(|(_, fn_name)| fn_name.clone()).collect();
+        module_prog.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
+        module_prog.test_info.clear();
     }
 
     // Add prefixed items from imports

@@ -195,6 +195,15 @@ fn check_stmt(
         }
         Stmt::Expr(expr) => {
             infer_expr(&expr.node, expr.span, env)?;
+            // Bare expect() as statement is likely a bug (forgot .to_equal() etc.)
+            if let Expr::Call { name, .. } = &expr.node {
+                if name.node == "expect" {
+                    return Err(CompileError::type_err(
+                        "expect() must be followed by an assertion method like .to_equal(), .to_be_true(), or .to_be_false()",
+                        expr.span,
+                    ));
+                }
+            }
         }
     }
     Ok(())

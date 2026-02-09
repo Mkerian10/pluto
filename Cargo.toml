@@ -91,3 +91,7 @@ path = "tests/integration/numeric.rs"
 [[test]]
 name = "fs"
 path = "tests/integration/fs.rs"
+
+[[test]]
+name = "testing"
+path = "tests/integration/testing.rs"

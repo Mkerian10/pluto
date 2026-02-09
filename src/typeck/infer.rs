@@ -459,6 +459,16 @@ fn infer_call(
                 }
                 Ok(PlutoType::Int)
             }
+            "expect" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("expect() takes exactly 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let inner_type = infer_expr(&args[0].node, args[0].span, env)?;
+                Ok(inner_type)  // passthrough — returns the inner type directly
+            }
             _ => Err(CompileError::type_err(
                 format!("unknown builtin '{}'", name.node),
                 name.span,
@@ -835,6 +845,59 @@ fn infer_method_call(
     span: crate::span::Span,
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
+    // Check for expect() intrinsic pattern
+    if let Expr::Call { name, args: expect_args, .. } = &object.node {
+        if name.node == "expect" && expect_args.len() == 1 {
+            let inner_type = infer_expr(&expect_args[0].node, expect_args[0].span, env)?;
+            // Register as builtin method resolution
+            if let Some(ref current) = env.current_fn {
+                env.method_resolutions.insert(
+                    (current.clone(), method.span.start),
+                    super::env::MethodResolution::Builtin,
+                );
+            }
+            match method.node.as_str() {
+                "to_equal" => {
+                    if args.len() != 1 {
+                        return Err(CompileError::type_err(
+                            format!("to_equal() expects 1 argument, got {}", args.len()),
+                            span,
+                        ));
+                    }
+                    let expected_type = infer_expr(&args[0].node, args[0].span, env)?;
+                    if inner_type != expected_type {
+                        return Err(CompileError::type_err(
+                            format!("to_equal: expected type {expected_type} but expect() wraps {inner_type}"),
+                            span,
+                        ));
+                    }
+                    return Ok(PlutoType::Void);
+                }
+                "to_be_true" | "to_be_false" => {
+                    if !args.is_empty() {
+                        return Err(CompileError::type_err(
+                            format!("{}() expects 0 arguments, got {}", method.node, args.len()),
+                            span,
+                        ));
+                    }
+                    if inner_type != PlutoType::Bool {
+                        return Err(CompileError::type_err(
+                            format!("{} requires bool, found {inner_type}", method.node),
+                            span,
+                        ));
+                    }
+                    return Ok(PlutoType::Void);
+                }
+                _ => {
+                    return Err(CompileError::type_err(
+                        format!("unknown assertion method: {}", method.node),
+                        method.span,
+                    ));
+                }
+            }
+        }
+    }
+
     let obj_type = infer_expr(&object.node, object.span, env)?;
     if let PlutoType::Array(elem) = &obj_type {
         match method.node.as_str() {
