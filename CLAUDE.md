@@ -52,3 +52,24 @@ Defined in `src/lib.rs::compile()`. Six stages:
 - `compile_and_run(source) -> i32` — compiles source string and returns exit code
 - `compile_and_run_stdout(source) -> String` — compiles and captures stdout
 - `compile_should_fail(source)` — asserts compilation produces an error
+
+**Module tests** — `tests/integration/modules.rs`. Multi-file test helpers:
+- `run_project(files) -> String` — writes multiple files to temp dir, compiles entry, returns stdout
+- `compile_project_should_fail(files)` — asserts multi-file compilation fails
+
+**Pre-commit hook** — A git pre-commit hook runs `cargo test` before every commit. All tests must pass for a commit to succeed.
+
+## Git Workflow
+
+**Commit regularly** — Commit after completing each logical unit of work (a feature, a fix, a refactor). Do not accumulate large uncommitted changes.
+
+**Use worktrees for parallel work** — When multiple agents or tasks are running concurrently, use git worktrees to avoid conflicts:
+```bash
+git worktree add ../pluto-<feature-name> -b <feature-name>  # Create worktree + branch
+# ... do work in ../pluto-<feature-name> ...
+git worktree remove ../pluto-<feature-name>                  # Clean up when done
+```
+
+**Branch per feature** — Each feature or task should be on its own branch. Merge to `master` when complete and tests pass.
+
+**Before starting work** — Check `git status` to ensure a clean working tree. If there are uncommitted changes from another agent, coordinate or use a worktree.
