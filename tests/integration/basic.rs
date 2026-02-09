@@ -1136,3 +1136,40 @@ fn string_interp_stray_close_rejected() {
         "unexpected '}'",
     );
 }
+
+// ============================================================
+// Extern fn tests
+// ============================================================
+
+#[test]
+fn extern_fn_call_print_int() {
+    // Call an existing C runtime function directly via extern fn
+    let out = compile_and_run_stdout(
+        "extern fn __pluto_print_int(value: int)\n\nfn main() {\n    __pluto_print_int(42)\n}",
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn extern_fn_with_return() {
+    // Call __pluto_string_len which takes I64 (string ptr) and returns I64
+    // We use __pluto_string_new to create a string, then check its length
+    let out = compile_and_run_stdout(
+        "extern fn __pluto_string_len(s: string) int\n\nfn main() {\n    let s = \"hello\"\n    let n = __pluto_string_len(s)\n    print(n)\n}",
+    );
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn extern_fn_class_param_rejected() {
+    compile_should_fail(
+        "class Foo {\n    x: int\n}\n\nextern fn bad(f: Foo)\n\nfn main() {\n}",
+    );
+}
+
+#[test]
+fn extern_fn_duplicate_name_rejected() {
+    compile_should_fail(
+        "extern fn foo(x: int)\n\nfn foo(x: int) {\n}\n\nfn main() {\n}",
+    );
+}

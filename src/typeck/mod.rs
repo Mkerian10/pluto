@@ -94,9 +94,62 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
         );
     }
 
-    // Pass 1b: Collect top-level function signatures
+    // Pass 1b: Register extern fn signatures (before regular fns so conflict checks work)
+    for ext in &program.extern_fns {
+        let e = &ext.node;
+
+        // Validate only primitive types allowed
+        let mut param_types = Vec::new();
+        for p in &e.params {
+            let ty = resolve_type(&p.ty, &env)?;
+            match &ty {
+                PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Void => {}
+                _ => {
+                    return Err(CompileError::type_err(
+                        format!("extern functions only support primitive types (int, float, bool, string), got '{}'", ty),
+                        p.ty.span,
+                    ));
+                }
+            }
+            param_types.push(ty);
+        }
+
+        let return_type = match &e.return_type {
+            Some(t) => {
+                let ty = resolve_type(t, &env)?;
+                match &ty {
+                    PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Void => {}
+                    _ => {
+                        return Err(CompileError::type_err(
+                            format!("extern functions only support primitive types (int, float, bool, string), got '{}'", ty),
+                            t.span,
+                        ));
+                    }
+                }
+                ty
+            }
+            None => PlutoType::Void,
+        };
+
+        env.functions.insert(
+            e.name.node.clone(),
+            FuncSig { params: param_types, return_type },
+        );
+        env.extern_fns.insert(e.name.node.clone());
+    }
+
+    // Pass 1b2: Collect top-level function signatures
     for func in &program.functions {
         let f = &func.node;
+
+        // Check for conflict with extern fn
+        if env.extern_fns.contains(&f.name.node) {
+            return Err(CompileError::type_err(
+                format!("duplicate function name '{}': defined as both fn and extern fn", f.name.node),
+                f.name.span,
+            ));
+        }
+
         let mut param_types = Vec::new();
         for p in &f.params {
             param_types.push(resolve_type(&p.ty, &env)?);
