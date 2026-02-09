@@ -119,6 +119,14 @@ mod tests {
     }
 
     #[test]
+    fn lex_match_keyword() {
+        let src = "match x";
+        let tokens = lex(src).unwrap();
+        assert!(matches!(tokens[0].node, Token::Match));
+        assert!(matches!(tokens[1].node, Token::Ident));
+    }
+
+    #[test]
     fn lex_string_with_escapes() {
         let src = r#""hello \"world\"""#;
         let tokens = lex(src).unwrap();

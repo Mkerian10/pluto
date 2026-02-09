@@ -54,6 +54,7 @@ fn load_directory_module(dir: &Path, source_map: &mut SourceMap) -> Result<Progr
         functions: Vec::new(),
         classes: Vec::new(),
         traits: Vec::new(),
+        enums: Vec::new(),
     };
 
     let entries = std::fs::read_dir(dir).map_err(|e| {
@@ -72,6 +73,7 @@ fn load_directory_module(dir: &Path, source_map: &mut SourceMap) -> Result<Progr
         merged.functions.extend(program.functions);
         merged.classes.extend(program.classes);
         merged.traits.extend(program.traits);
+        merged.enums.extend(program.enums);
         // Inner imports not supported in v1
         if !program.imports.is_empty() {
             return Err(CompileError::codegen(format!(
@@ -139,6 +141,7 @@ pub fn resolve_modules(entry_file: &Path) -> Result<ModuleGraph, CompileError> {
         root.functions.extend(program.functions);
         root.classes.extend(program.classes);
         root.traits.extend(program.traits);
+        root.enums.extend(program.enums);
     }
 
     // Resolve each import
@@ -338,6 +341,12 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
             rewrite_expr_for_module(&mut index.node, module_name, module_prog);
             rewrite_expr_for_module(&mut value.node, module_name, module_prog);
         }
+        Stmt::Match { expr, arms } => {
+            rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
+            for arm in arms {
+                rewrite_block_for_module(&mut arm.body.node, module_name, module_prog);
+            }
+        }
         Stmt::Expr(expr) => {
             rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
         }
@@ -387,6 +396,19 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
         Expr::Index { object, index } => {
             rewrite_expr_for_module(&mut object.node, module_name, module_prog);
             rewrite_expr_for_module(&mut index.node, module_name, module_prog);
+        }
+        Expr::EnumUnit { enum_name, .. } => {
+            if is_module_type(&enum_name.node, module_prog) {
+                enum_name.node = format!("{}.{}", module_name, enum_name.node);
+            }
+        }
+        Expr::EnumData { enum_name, fields, .. } => {
+            if is_module_type(&enum_name.node, module_prog) {
+                enum_name.node = format!("{}.{}", module_name, enum_name.node);
+            }
+            for (_, val) in fields {
+                rewrite_expr_for_module(&mut val.node, module_name, module_prog);
+            }
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
     }
@@ -483,6 +505,12 @@ fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
             rewrite_expr(&mut index.node, index.span, import_names);
             rewrite_expr(&mut value.node, value.span, import_names);
         }
+        Stmt::Match { expr, arms } => {
+            rewrite_expr(&mut expr.node, expr.span, import_names);
+            for arm in arms {
+                rewrite_block(&mut arm.body.node, import_names);
+            }
+        }
         Stmt::Expr(expr) => {
             rewrite_expr(&mut expr.node, expr.span, import_names);
         }
@@ -548,6 +576,15 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
         Expr::Index { object, index } => {
             rewrite_expr(&mut object.node, object.span, import_names);
             rewrite_expr(&mut index.node, index.span, import_names);
+        }
+        Expr::EnumUnit { enum_name, .. } => {
+            // If enum_name is a known import, prefix it
+            // (This will be handled when module flattening adds the enum)
+        }
+        Expr::EnumData { fields, .. } => {
+            for (_, val) in fields {
+                rewrite_expr(&mut val.node, val.span, import_names);
+            }
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
     }

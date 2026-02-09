@@ -56,6 +56,8 @@ pub enum Token {
     Break,
     #[token("continue")]
     Continue,
+    #[token("match")]
+    Match,
     #[token("import")]
     Import,
 
@@ -169,6 +171,7 @@ impl std::fmt::Display for Token {
             Token::In => write!(f, "in"),
             Token::Break => write!(f, "break"),
             Token::Continue => write!(f, "continue"),
+            Token::Match => write!(f, "match"),
             Token::Import => write!(f, "import"),
             Token::IntLit(n) => write!(f, "{n}"),
             Token::FloatLit(n) => write!(f, "{n}"),

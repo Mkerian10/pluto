@@ -1,5 +1,7 @@
 pub mod ast;
 
+use std::collections::HashSet;
+
 use crate::diagnostics::CompileError;
 use crate::lexer::token::Token;
 use crate::span::{Span, Spanned};
@@ -10,11 +12,12 @@ pub struct Parser<'a> {
     source: &'a str,
     pos: usize,
     restrict_struct_lit: bool,
+    enum_names: HashSet<String>,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Spanned<Token>], source: &'a str) -> Self {
-        Self { tokens, source, pos: 0, restrict_struct_lit: false }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names: HashSet::new() }
     }
 
     fn peek(&self) -> Option<&Spanned<Token>> {
@@ -112,11 +115,33 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn pre_scan_enum_names(&mut self) {
+        let saved = self.pos;
+        let mut i = 0;
+        while i < self.tokens.len() {
+            let is_enum = matches!(self.tokens[i].node, Token::Enum);
+            let is_pub_enum = i + 1 < self.tokens.len()
+                && matches!(self.tokens[i].node, Token::Pub)
+                && matches!(self.tokens[i + 1].node, Token::Enum);
+            if is_enum || is_pub_enum {
+                let name_idx = if is_pub_enum { i + 2 } else { i + 1 };
+                if name_idx < self.tokens.len() && matches!(self.tokens[name_idx].node, Token::Ident) {
+                    let name = self.source[self.tokens[name_idx].span.start..self.tokens[name_idx].span.end].to_string();
+                    self.enum_names.insert(name);
+                }
+            }
+            i += 1;
+        }
+        self.pos = saved;
+    }
+
     pub fn parse_program(&mut self) -> Result<Program, CompileError> {
+        self.pre_scan_enum_names();
         let mut imports = Vec::new();
         let mut functions = Vec::new();
         let mut classes = Vec::new();
         let mut traits = Vec::new();
+        let mut enums = Vec::new();
         self.skip_newlines();
 
         // Parse imports first
@@ -155,9 +180,14 @@ impl<'a> Parser<'a> {
                     tr.node.is_pub = is_pub;
                     traits.push(tr);
                 }
+                Token::Enum => {
+                    let mut e = self.parse_enum_decl()?;
+                    e.node.is_pub = is_pub;
+                    enums.push(e);
+                }
                 _ => {
                     return Err(CompileError::syntax(
-                        format!("expected 'fn', 'class', or 'trait', found {}", tok.node),
+                        format!("expected 'fn', 'class', 'trait', or 'enum', found {}", tok.node),
                         tok.span,
                     ));
                 }
@@ -165,7 +195,7 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        Ok(Program { imports, functions, classes, traits })
+        Ok(Program { imports, functions, classes, traits, enums })
     }
 
     fn parse_import(&mut self) -> Result<Spanned<ImportDecl>, CompileError> {
@@ -175,6 +205,51 @@ impl<'a> Parser<'a> {
         let end = module_name.span.end;
         self.consume_statement_end();
         Ok(Spanned::new(ImportDecl { module_name }, Span::new(start, end)))
+    }
+
+    fn parse_enum_decl(&mut self) -> Result<Spanned<EnumDecl>, CompileError> {
+        let enum_tok = self.expect(&Token::Enum)?;
+        let start = enum_tok.span.start;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut variants = Vec::new();
+        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+            let vname = self.expect_ident()?;
+            let fields = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
+                self.expect(&Token::LBrace)?;
+                self.skip_newlines();
+                let mut fields = Vec::new();
+                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+                    if !fields.is_empty() {
+                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                            self.advance();
+                        }
+                        self.skip_newlines();
+                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                            break;
+                        }
+                    }
+                    let fname = self.expect_ident()?;
+                    self.expect(&Token::Colon)?;
+                    let fty = self.parse_type()?;
+                    fields.push(Field { name: fname, ty: fty });
+                    self.skip_newlines();
+                }
+                self.expect(&Token::RBrace)?;
+                fields
+            } else {
+                Vec::new()
+            };
+            variants.push(EnumVariant { name: vname, fields });
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+
+        Ok(Spanned::new(EnumDecl { name, variants, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_trait(&mut self) -> Result<Spanned<TraitDecl>, CompileError> {
@@ -420,6 +495,7 @@ impl<'a> Parser<'a> {
             Token::If => self.parse_if_stmt(),
             Token::While => self.parse_while_stmt(),
             Token::For => self.parse_for_stmt(),
+            Token::Match => self.parse_match_stmt(),
             _ => {
                 // Parse a full expression, then check for `=` to determine
                 // if this is an assignment, field assignment, or expression statement.
@@ -571,6 +647,100 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    fn parse_match_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let match_tok = self.expect(&Token::Match)?;
+        let start = match_tok.span.start;
+        let old_restrict = self.restrict_struct_lit;
+        self.restrict_struct_lit = true;
+        let scrutinee = self.parse_expr(0)?;
+        self.restrict_struct_lit = old_restrict;
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut arms = Vec::new();
+        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+            let enum_name = self.expect_ident()?;
+            self.expect(&Token::Dot)?;
+            let variant_name = self.expect_ident()?;
+
+            let (bindings, body) = if self.is_match_bindings_ahead() {
+                // Parse bindings: { field_name, field_name: rename }
+                self.expect(&Token::LBrace)?;
+                self.skip_newlines();
+                let mut bindings = Vec::new();
+                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+                    if !bindings.is_empty() {
+                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                            self.advance();
+                        }
+                        self.skip_newlines();
+                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                            break;
+                        }
+                    }
+                    let field_name = self.expect_ident()?;
+                    let rename = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Colon) {
+                        self.advance();
+                        Some(self.expect_ident()?)
+                    } else {
+                        None
+                    };
+                    bindings.push((field_name, rename));
+                    self.skip_newlines();
+                }
+                self.expect(&Token::RBrace)?;
+                let body = self.parse_block()?;
+                (bindings, body)
+            } else {
+                let body = self.parse_block()?;
+                (Vec::new(), body)
+            };
+
+            arms.push(MatchArm { enum_name, variant_name, bindings, body });
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+
+        Ok(Spanned::new(Stmt::Match { expr: scrutinee, arms }, Span::new(start, end)))
+    }
+
+    fn is_match_bindings_ahead(&self) -> bool {
+        // We need to distinguish between:
+        //   Status.Active { print("active") }  -- unit arm, body block
+        //   Status.Suspended { reason } { print(reason) }  -- bindings then body
+        // Look for pattern: { (ident (: ident)? ,?)* } {
+        if self.pos >= self.tokens.len() || !matches!(self.tokens[self.pos].node, Token::LBrace) {
+            return false;
+        }
+        // Skip past newlines after the opening brace
+        let mut i = self.pos + 1;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        // Scan tokens: must only be Ident, Comma, Colon, Newline until we hit }
+        loop {
+            if i >= self.tokens.len() {
+                return false;
+            }
+            match &self.tokens[i].node {
+                Token::RBrace => {
+                    // Found closing }. Now check if next non-newline is {
+                    i += 1;
+                    while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+                        i += 1;
+                    }
+                    return i < self.tokens.len() && matches!(self.tokens[i].node, Token::LBrace);
+                }
+                Token::Ident | Token::Comma | Token::Colon | Token::Newline => {
+                    i += 1;
+                }
+                _ => return false,
+            }
+        }
+    }
+
     // Pratt parser for expressions
     fn parse_expr(&mut self, min_bp: u8) -> Result<Spanned<Expr>, CompileError> {
         let mut lhs = self.parse_prefix()?;
@@ -604,6 +774,59 @@ impl<'a> Parser<'a> {
                         },
                         span,
                     );
+                } else if matches!(&lhs.node, Expr::Ident(n) if self.enum_names.contains(n)) {
+                    // Enum construction: EnumName.Variant or EnumName.Variant { field: value }
+                    let enum_name_str = match &lhs.node {
+                        Expr::Ident(n) => n.clone(),
+                        _ => unreachable!(),
+                    };
+                    let enum_name_span = lhs.span;
+                    if !self.restrict_struct_lit
+                        && self.peek().is_some()
+                        && matches!(self.peek().unwrap().node, Token::LBrace)
+                        && self.is_struct_lit_ahead()
+                    {
+                        // EnumName.Variant { field: value }
+                        self.advance(); // consume '{'
+                        self.skip_newlines();
+                        let mut fields = Vec::new();
+                        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+                            if !fields.is_empty() {
+                                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                                    self.advance();
+                                }
+                                self.skip_newlines();
+                                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                                    break;
+                                }
+                            }
+                            let fname = self.expect_ident()?;
+                            self.expect(&Token::Colon)?;
+                            let fval = self.parse_expr(0)?;
+                            fields.push((fname, fval));
+                            self.skip_newlines();
+                        }
+                        let close = self.expect(&Token::RBrace)?;
+                        let span = Span::new(lhs.span.start, close.span.end);
+                        lhs = Spanned::new(
+                            Expr::EnumData {
+                                enum_name: Spanned::new(enum_name_str, enum_name_span),
+                                variant: field_name,
+                                fields,
+                            },
+                            span,
+                        );
+                    } else {
+                        // EnumName.Variant (unit)
+                        let span = Span::new(lhs.span.start, field_name.span.end);
+                        lhs = Spanned::new(
+                            Expr::EnumUnit {
+                                enum_name: Spanned::new(enum_name_str, enum_name_span),
+                                variant: field_name,
+                            },
+                            span,
+                        );
+                    }
                 } else if !self.restrict_struct_lit
                     && matches!(&lhs.node, Expr::Ident(_))
                     && self.peek().is_some()
@@ -1155,6 +1378,96 @@ mod tests {
                 }
             }
             _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_enum_decl_unit() {
+        let prog = parse("enum Color {\n    Red\n    Green\n    Blue\n}\n\nfn main() { }");
+        assert_eq!(prog.enums.len(), 1);
+        let e = &prog.enums[0].node;
+        assert_eq!(e.name.node, "Color");
+        assert_eq!(e.variants.len(), 3);
+        assert_eq!(e.variants[0].name.node, "Red");
+        assert!(e.variants[0].fields.is_empty());
+    }
+
+    #[test]
+    fn parse_enum_decl_data() {
+        let prog = parse("enum Status {\n    Active\n    Suspended { reason: string }\n}\n\nfn main() { }");
+        let e = &prog.enums[0].node;
+        assert_eq!(e.variants.len(), 2);
+        assert!(e.variants[0].fields.is_empty());
+        assert_eq!(e.variants[1].fields.len(), 1);
+        assert_eq!(e.variants[1].fields[0].name.node, "reason");
+    }
+
+    #[test]
+    fn parse_enum_unit_expr() {
+        let prog = parse("enum Color {\n    Red\n}\n\nfn main() {\n    let c = Color.Red\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::EnumUnit { enum_name, variant } => {
+                        assert_eq!(enum_name.node, "Color");
+                        assert_eq!(variant.node, "Red");
+                    }
+                    _ => panic!("expected EnumUnit, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_enum_data_expr() {
+        let prog = parse("enum Status {\n    Suspended { reason: string }\n}\n\nfn main() {\n    let s = Status.Suspended { reason: \"banned\" }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::EnumData { enum_name, variant, fields } => {
+                        assert_eq!(enum_name.node, "Status");
+                        assert_eq!(variant.node, "Suspended");
+                        assert_eq!(fields.len(), 1);
+                        assert_eq!(fields[0].0.node, "reason");
+                    }
+                    _ => panic!("expected EnumData, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_match_unit_arm() {
+        let prog = parse("enum Color {\n    Red\n    Blue\n}\n\nfn main() {\n    let c = Color.Red\n    match c {\n        Color.Red {\n            let x = 1\n        }\n        Color.Blue {\n            let x = 2\n        }\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[1].node {
+            Stmt::Match { arms, .. } => {
+                assert_eq!(arms.len(), 2);
+                assert_eq!(arms[0].enum_name.node, "Color");
+                assert_eq!(arms[0].variant_name.node, "Red");
+                assert!(arms[0].bindings.is_empty());
+            }
+            _ => panic!("expected match"),
+        }
+    }
+
+    #[test]
+    fn parse_match_binding_arm() {
+        let prog = parse("enum Status {\n    Active\n    Suspended { reason: string }\n}\n\nfn main() {\n    let s = Status.Active\n    match s {\n        Status.Active {\n            let x = 1\n        }\n        Status.Suspended { reason } {\n            print(reason)\n        }\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[1].node {
+            Stmt::Match { arms, .. } => {
+                assert_eq!(arms.len(), 2);
+                assert_eq!(arms[1].variant_name.node, "Suspended");
+                assert_eq!(arms[1].bindings.len(), 1);
+                assert_eq!(arms[1].bindings[0].0.node, "reason");
+                assert!(arms[1].bindings[0].1.is_none());
+            }
+            _ => panic!("expected match"),
         }
     }
 }
