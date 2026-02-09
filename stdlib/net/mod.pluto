@@ -1,0 +1,63 @@
+import std.socket
+
+pub class TcpListener {
+    fd: int
+
+    fn accept(self) TcpConnection {
+        let client_fd = socket.accept(self.fd)
+        return TcpConnection { fd: client_fd }
+    }
+
+    fn port(self) int {
+        return socket.get_port(self.fd)
+    }
+
+    fn close(self) int {
+        return socket.close(self.fd)
+    }
+}
+
+pub class TcpConnection {
+    fd: int
+
+    fn read(self, max_bytes: int) string {
+        return socket.read(self.fd, max_bytes)
+    }
+
+    fn write(self, data: string) int {
+        return socket.write(self.fd, data)
+    }
+
+    fn close(self) int {
+        return socket.close(self.fd)
+    }
+}
+
+pub fn listen(host: string, port: int) TcpListener {
+    let fd = socket.create(2, 1, 0)
+    if fd < 0 {
+        return TcpListener { fd: -1 }
+    }
+    socket.set_reuseaddr(fd)
+    if socket.bind(fd, host, port) < 0 {
+        socket.close(fd)
+        return TcpListener { fd: -1 }
+    }
+    if socket.listen(fd, 128) < 0 {
+        socket.close(fd)
+        return TcpListener { fd: -1 }
+    }
+    return TcpListener { fd: fd }
+}
+
+pub fn connect(host: string, port: int) TcpConnection {
+    let fd = socket.create(2, 1, 0)
+    if fd < 0 {
+        return TcpConnection { fd: -1 }
+    }
+    if socket.connect(fd, host, port) < 0 {
+        socket.close(fd)
+        return TcpConnection { fd: -1 }
+    }
+    return TcpConnection { fd: fd }
+}

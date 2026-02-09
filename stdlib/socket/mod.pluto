@@ -1,0 +1,50 @@
+extern fn __pluto_socket_create(domain: int, sock_type: int, protocol: int) int
+extern fn __pluto_socket_bind(fd: int, host: string, port: int) int
+extern fn __pluto_socket_listen(fd: int, backlog: int) int
+extern fn __pluto_socket_accept(fd: int) int
+extern fn __pluto_socket_connect(fd: int, host: string, port: int) int
+extern fn __pluto_socket_read(fd: int, max_bytes: int) string
+extern fn __pluto_socket_write(fd: int, data: string) int
+extern fn __pluto_socket_close(fd: int) int
+extern fn __pluto_socket_set_reuseaddr(fd: int) int
+extern fn __pluto_socket_get_port(fd: int) int
+
+pub fn create(domain: int, sock_type: int, protocol: int) int {
+    return __pluto_socket_create(domain, sock_type, protocol)
+}
+
+pub fn bind(fd: int, host: string, port: int) int {
+    return __pluto_socket_bind(fd, host, port)
+}
+
+pub fn listen(fd: int, backlog: int) int {
+    return __pluto_socket_listen(fd, backlog)
+}
+
+pub fn accept(fd: int) int {
+    return __pluto_socket_accept(fd)
+}
+
+pub fn connect(fd: int, host: string, port: int) int {
+    return __pluto_socket_connect(fd, host, port)
+}
+
+pub fn read(fd: int, max_bytes: int) string {
+    return __pluto_socket_read(fd, max_bytes)
+}
+
+pub fn write(fd: int, data: string) int {
+    return __pluto_socket_write(fd, data)
+}
+
+pub fn close(fd: int) int {
+    return __pluto_socket_close(fd)
+}
+
+pub fn set_reuseaddr(fd: int) int {
+    return __pluto_socket_set_reuseaddr(fd)
+}
+
+pub fn get_port(fd: int) int {
+    return __pluto_socket_get_port(fd)
+}
