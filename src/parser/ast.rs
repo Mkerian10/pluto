@@ -81,6 +81,11 @@ pub enum Stmt {
         condition: Spanned<Expr>,
         body: Spanned<Block>,
     },
+    For {
+        var: Spanned<String>,
+        iterable: Spanned<Expr>,
+        body: Spanned<Block>,
+    },
     IndexAssign {
         object: Spanned<Expr>,
         index: Spanned<Expr>,
