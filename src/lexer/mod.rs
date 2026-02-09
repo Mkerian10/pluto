@@ -111,6 +111,14 @@ mod tests {
     }
 
     #[test]
+    fn lex_import_keyword() {
+        let src = "import math";
+        let tokens = lex(src).unwrap();
+        assert!(matches!(tokens[0].node, Token::Import));
+        assert!(matches!(tokens[1].node, Token::Ident));
+    }
+
+    #[test]
     fn lex_string_with_escapes() {
         let src = r#""hello \"world\"""#;
         let tokens = lex(src).unwrap();

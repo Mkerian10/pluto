@@ -56,6 +56,8 @@ pub enum Token {
     Break,
     #[token("continue")]
     Continue,
+    #[token("import")]
+    Import,
 
     // Literals
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
@@ -115,6 +117,10 @@ pub enum Token {
     LBrace,
     #[token("}")]
     RBrace,
+    #[token("[")]
+    LBracket,
+    #[token("]")]
+    RBracket,
     #[token(",")]
     Comma,
     #[token(":")]
@@ -163,6 +169,7 @@ impl std::fmt::Display for Token {
             Token::In => write!(f, "in"),
             Token::Break => write!(f, "break"),
             Token::Continue => write!(f, "continue"),
+            Token::Import => write!(f, "import"),
             Token::IntLit(n) => write!(f, "{n}"),
             Token::FloatLit(n) => write!(f, "{n}"),
             Token::StringLit(s) => write!(f, "\"{s}\""),
@@ -186,6 +193,8 @@ impl std::fmt::Display for Token {
             Token::RParen => write!(f, ")"),
             Token::LBrace => write!(f, "{{"),
             Token::RBrace => write!(f, "}}"),
+            Token::LBracket => write!(f, "["),
+            Token::RBracket => write!(f, "]"),
             Token::Comma => write!(f, ","),
             Token::Colon => write!(f, ":"),
             Token::Arrow => write!(f, "->"),

@@ -3,5 +3,5 @@ fn add(a: int, b: int) int {
 }
 
 fn main() {
-    let x = add(1, 2)
+    print(add(1, 2))
 }
