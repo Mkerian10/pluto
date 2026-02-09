@@ -866,6 +866,12 @@ impl<'a> LowerContext<'a> {
                     Err(CompileError::codegen(format!("method call on non-class type {obj_type}")))
                 }
             }
+            Expr::Closure { .. } => {
+                Err(CompileError::codegen("closures should be lifted before codegen"))
+            }
+            Expr::ClosureCreate { .. } => {
+                Err(CompileError::codegen("closure codegen not yet implemented"))
+            }
         }
     }
 
@@ -900,7 +906,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I32, arg_val);
                 self.builder.ins().call(func_ref, &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -1062,6 +1068,13 @@ fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
                 PlutoType::Void
             }
         }
+        TypeExpr::Fn { params, return_type } => {
+            let param_types = params.iter()
+                .map(|p| resolve_type_expr_to_pluto(&p.node, env))
+                .collect();
+            let ret = resolve_type_expr_to_pluto(&return_type.node, env);
+            PlutoType::Fn(param_types, Box::new(ret))
+        }
     }
 }
 
@@ -1094,6 +1107,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Array(_) => types::I64,     // pointer to handle
         PlutoType::Trait(_) => types::I64,     // pointer to trait handle
         PlutoType::Enum(_) => types::I64,      // pointer to heap-allocated enum
+        PlutoType::Fn(_, _) => types::I64,     // pointer to closure object
     }
 }
 
@@ -1179,5 +1193,7 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 PlutoType::Void
             }
         }
+        Expr::Closure { .. } => PlutoType::Void,
+        Expr::ClosureCreate { .. } => PlutoType::Void,
     }
 }

@@ -9,6 +9,7 @@ pub enum PlutoType {
     Array(Box<PlutoType>),
     Trait(std::string::String),
     Enum(std::string::String),
+    Fn(Vec<PlutoType>, Box<PlutoType>),
 }
 
 impl std::fmt::Display for PlutoType {
@@ -23,6 +24,14 @@ impl std::fmt::Display for PlutoType {
             PlutoType::Array(inner) => write!(f, "[{inner}]"),
             PlutoType::Trait(name) => write!(f, "trait {name}"),
             PlutoType::Enum(name) => write!(f, "{name}"),
+            PlutoType::Fn(params, ret) => {
+                write!(f, "fn(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", p)?;
+                }
+                write!(f, ") {}", ret)
+            }
         }
     }
 }

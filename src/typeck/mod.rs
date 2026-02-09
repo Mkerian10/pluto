@@ -380,6 +380,13 @@ fn resolve_type(ty: &Spanned<TypeExpr>, env: &TypeEnv) -> Result<PlutoType, Comp
                 ))
             }
         }
+        TypeExpr::Fn { params, return_type } => {
+            let param_types = params.iter()
+                .map(|p| resolve_type(p, env))
+                .collect::<Result<Vec<_>, _>>()?;
+            let ret = resolve_type(return_type, env)?;
+            Ok(PlutoType::Fn(param_types, Box::new(ret)))
+        }
     }
 }
 
@@ -1162,6 +1169,15 @@ fn infer_expr(
             }
 
             Ok(sig.return_type.clone())
+        }
+        Expr::Closure { params, return_type, body } => {
+            // Will be fully implemented in Increment 2
+            let _ = (params, return_type, body);
+            Err(CompileError::type_err("closures not yet fully implemented", span))
+        }
+        Expr::ClosureCreate { .. } => {
+            // Only exists after closure lifting pass — unreachable during typeck
+            Ok(PlutoType::Void)
         }
     }
 }

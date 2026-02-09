@@ -73,6 +73,10 @@ pub enum TypeExpr {
     Named(String),
     Array(Box<Spanned<TypeExpr>>),
     Qualified { module: String, name: String },
+    Fn {
+        params: Vec<Box<Spanned<TypeExpr>>>,
+        return_type: Box<Spanned<TypeExpr>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +178,15 @@ pub enum Expr {
     },
     StringInterp {
         parts: Vec<StringInterpPart>,
+    },
+    Closure {
+        params: Vec<Param>,
+        return_type: Option<Spanned<TypeExpr>>,
+        body: Spanned<Block>,
+    },
+    ClosureCreate {
+        fn_name: String,
+        captures: Vec<String>,
     },
 }
 
