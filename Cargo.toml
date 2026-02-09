@@ -17,8 +17,48 @@ thiserror = "2"
 tempfile = "3"
 
 [[test]]
-name = "integration"
-path = "tests/integration/basic.rs"
+name = "basics"
+path = "tests/integration/basics.rs"
+
+[[test]]
+name = "operators"
+path = "tests/integration/operators.rs"
+
+[[test]]
+name = "control_flow"
+path = "tests/integration/control_flow.rs"
+
+[[test]]
+name = "strings"
+path = "tests/integration/strings.rs"
+
+[[test]]
+name = "arrays"
+path = "tests/integration/arrays.rs"
+
+[[test]]
+name = "classes"
+path = "tests/integration/classes.rs"
+
+[[test]]
+name = "traits"
+path = "tests/integration/traits.rs"
+
+[[test]]
+name = "enums"
+path = "tests/integration/enums.rs"
+
+[[test]]
+name = "closures"
+path = "tests/integration/closures.rs"
+
+[[test]]
+name = "di"
+path = "tests/integration/di.rs"
+
+[[test]]
+name = "errors"
+path = "tests/integration/errors.rs"
 
 [[test]]
 name = "modules"
