@@ -481,6 +481,54 @@ fn lower_expr(
             let call = builder.ins().call(func_ref, &[raw_ptr, len_val]);
             Ok(builder.inst_results(call)[0])
         }
+        Expr::StringInterp { parts } => {
+            // Convert each part to a string handle, then concat them all
+            let mut string_vals: Vec<Value> = Vec::new();
+            for part in parts {
+                match part {
+                    StringInterpPart::Lit(s) => {
+                        let raw_ptr = create_data_str(s, builder, module)?;
+                        let len_val = builder.ins().iconst(types::I64, s.len() as i64);
+                        let func_ref = module.declare_func_in_func(string_ids["new"], builder.func);
+                        let call = builder.ins().call(func_ref, &[raw_ptr, len_val]);
+                        string_vals.push(builder.inst_results(call)[0]);
+                    }
+                    StringInterpPart::Expr(e) => {
+                        let val = lower_expr(&e.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
+                        let t = infer_type_for_expr(&e.node, env, var_types);
+                        let str_val = match t {
+                            PlutoType::String => val,
+                            PlutoType::Int => {
+                                let func_ref = module.declare_func_in_func(string_ids["int_to_str"], builder.func);
+                                let call = builder.ins().call(func_ref, &[val]);
+                                builder.inst_results(call)[0]
+                            }
+                            PlutoType::Float => {
+                                let func_ref = module.declare_func_in_func(string_ids["float_to_str"], builder.func);
+                                let call = builder.ins().call(func_ref, &[val]);
+                                builder.inst_results(call)[0]
+                            }
+                            PlutoType::Bool => {
+                                let widened = builder.ins().uextend(types::I32, val);
+                                let func_ref = module.declare_func_in_func(string_ids["bool_to_str"], builder.func);
+                                let call = builder.ins().call(func_ref, &[widened]);
+                                builder.inst_results(call)[0]
+                            }
+                            _ => return Err(CompileError::codegen(format!("cannot interpolate {t}"))),
+                        };
+                        string_vals.push(str_val);
+                    }
+                }
+            }
+            // Concat all parts left to right
+            let mut result = string_vals[0];
+            let concat_ref = module.declare_func_in_func(string_ids["concat"], builder.func);
+            for part_val in &string_vals[1..] {
+                let call = builder.ins().call(concat_ref, &[result, *part_val]);
+                result = builder.inst_results(call)[0];
+            }
+            Ok(result)
+        }
         Expr::Ident(name) => {
             let var = variables.get(name).ok_or_else(|| {
                 CompileError::codegen(format!("undefined variable '{name}'"))
@@ -902,6 +950,7 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
         Expr::FloatLit(_) => PlutoType::Float,
         Expr::BoolLit(_) => PlutoType::Bool,
         Expr::StringLit(_) => PlutoType::String,
+        Expr::StringInterp { .. } => PlutoType::String,
         Expr::Ident(name) => var_types.get(name).cloned().unwrap_or(PlutoType::Void),
         Expr::BinOp { op, lhs, .. } => {
             match op {

@@ -134,6 +134,15 @@ pub enum Expr {
         object: Box<Spanned<Expr>>,
         index: Box<Spanned<Expr>>,
     },
+    StringInterp {
+        parts: Vec<StringInterpPart>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum StringInterpPart {
+    Lit(String),
+    Expr(Spanned<Expr>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
