@@ -25,7 +25,8 @@ void __pluto_print_string_no_newline(void *header) {
 }
 
 void *__pluto_alloc(long size) {
-    void *ptr = malloc(size);
+    if (size == 0) size = 8;
+    void *ptr = calloc(1, size);
     if (!ptr) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
     return ptr;
 }
