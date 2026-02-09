@@ -226,6 +226,8 @@ fn mangle_type(ty: &PlutoType) -> String {
             let ps: Vec<_> = ps.iter().map(mangle_type).collect();
             format!("fn_{}_ret_{}", ps.join("_"), mangle_type(r))
         }
+        PlutoType::Map(k, v) => format!("map_{}_{}", mangle_type(k), mangle_type(v)),
+        PlutoType::Set(t) => format!("set_{}", mangle_type(t)),
         PlutoType::Trait(n) => n.clone(),
         PlutoType::TypeParam(n) => n.clone(),
         PlutoType::Error => "error".into(),

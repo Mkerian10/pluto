@@ -61,6 +61,28 @@ pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<
             let resolved_args: Vec<PlutoType> = type_args.iter()
                 .map(|a| resolve_type(a, env))
                 .collect::<Result<Vec<_>, _>>()?;
+            // Built-in generic types: Map<K,V> and Set<T>
+            if name == "Map" {
+                if resolved_args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        format!("Map expects 2 type arguments, got {}", resolved_args.len()),
+                        ty.span,
+                    ));
+                }
+                return Ok(PlutoType::Map(
+                    Box::new(resolved_args[0].clone()),
+                    Box::new(resolved_args[1].clone()),
+                ));
+            }
+            if name == "Set" {
+                if resolved_args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("Set expects 1 type argument, got {}", resolved_args.len()),
+                        ty.span,
+                    ));
+                }
+                return Ok(PlutoType::Set(Box::new(resolved_args[0].clone())));
+            }
             // Check if already instantiated
             let mangled = env::mangle_name(name, &resolved_args);
             if env.classes.contains_key(&mangled) {
@@ -103,6 +125,28 @@ pub(crate) fn resolve_type_with_params(
             let ret = resolve_type_with_params(return_type, env, type_param_names)?;
             Ok(PlutoType::Fn(param_types, Box::new(ret)))
         }
+        TypeExpr::Generic { name, type_args } if name == "Map" || name == "Set" => {
+            let resolved_args: Vec<PlutoType> = type_args.iter()
+                .map(|a| resolve_type_with_params(a, env, type_param_names))
+                .collect::<Result<Vec<_>, _>>()?;
+            if name == "Map" {
+                if resolved_args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        format!("Map expects 2 type arguments, got {}", resolved_args.len()),
+                        ty.span,
+                    ));
+                }
+                Ok(PlutoType::Map(Box::new(resolved_args[0].clone()), Box::new(resolved_args[1].clone())))
+            } else {
+                if resolved_args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("Set expects 1 type argument, got {}", resolved_args.len()),
+                        ty.span,
+                    ));
+                }
+                Ok(PlutoType::Set(Box::new(resolved_args[0].clone())))
+            }
+        }
         _ => resolve_type(ty, env),
     }
 }
@@ -120,6 +164,11 @@ pub(crate) fn substitute_pluto_type(ty: &PlutoType, bindings: &HashMap<String, P
             ps.iter().map(|p| substitute_pluto_type(p, bindings)).collect(),
             Box::new(substitute_pluto_type(r, bindings)),
         ),
+        PlutoType::Map(k, v) => PlutoType::Map(
+            Box::new(substitute_pluto_type(k, bindings)),
+            Box::new(substitute_pluto_type(v, bindings)),
+        ),
+        PlutoType::Set(t) => PlutoType::Set(Box::new(substitute_pluto_type(t, bindings))),
         _ => ty.clone(),
     }
 }
@@ -148,6 +197,20 @@ pub(crate) fn unify(pattern: &PlutoType, concrete: &PlutoType, bindings: &mut Ha
                     if !unify(p, c, bindings) { return false; }
                 }
                 unify(pr, cr, bindings)
+            } else {
+                false
+            }
+        }
+        PlutoType::Map(pk, pv) => {
+            if let PlutoType::Map(ck, cv) = concrete {
+                unify(pk, ck, bindings) && unify(pv, cv, bindings)
+            } else {
+                false
+            }
+        }
+        PlutoType::Set(pt) => {
+            if let PlutoType::Set(ct) = concrete {
+                unify(pt, ct, bindings)
             } else {
                 false
             }

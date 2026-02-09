@@ -859,6 +859,17 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
                 rewrite_stmt_for_module(&mut stmt.node, module_name, module_prog);
             }
         }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                rewrite_expr_for_module(&mut k.node, module_name, module_prog);
+                rewrite_expr_for_module(&mut v.node, module_name, module_prog);
+            }
+        }
+        Expr::SetLit { elements, .. } => {
+            for elem in elements {
+                rewrite_expr_for_module(&mut elem.node, module_name, module_prog);
+            }
+        }
         Expr::ClosureCreate { .. } => {}
         Expr::Propagate { expr } => {
             rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
@@ -1126,6 +1137,17 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
         }
         Expr::Closure { body, .. } => {
             rewrite_block(&mut body.node, import_names);
+        }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                rewrite_expr(&mut k.node, k.span, import_names);
+                rewrite_expr(&mut v.node, v.span, import_names);
+            }
+        }
+        Expr::SetLit { elements, .. } => {
+            for elem in elements {
+                rewrite_expr(&mut elem.node, elem.span, import_names);
+            }
         }
         Expr::ClosureCreate { .. } => {}
         Expr::Propagate { expr } => {

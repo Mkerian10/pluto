@@ -288,6 +288,17 @@ fn collect_expr_effects(
                 collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
             }
         }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                collect_expr_effects(&k.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&v.node, direct_errors, edges, current_fn, env);
+            }
+        }
+        Expr::SetLit { elements, .. } => {
+            for e in elements {
+                collect_expr_effects(&e.node, direct_errors, edges, current_fn, env);
+            }
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => {}
     }
@@ -544,6 +555,19 @@ fn enforce_expr(
         }
         Expr::Closure { body, .. } => {
             enforce_block(&body.node, current_fn, env)
+        }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                enforce_expr(&k.node, k.span, current_fn, env)?;
+                enforce_expr(&v.node, v.span, current_fn, env)?;
+            }
+            Ok(())
+        }
+        Expr::SetLit { elements, .. } => {
+            for e in elements {
+                enforce_expr(&e.node, e.span, current_fn, env)?;
+            }
+            Ok(())
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => Ok(()),

@@ -18,6 +18,8 @@
 #define GC_TAG_STRING 1   // no child pointers
 #define GC_TAG_ARRAY  2   // handle [len][cap][data_ptr]; data buffer freed on sweep
 #define GC_TAG_TRAIT  3   // [data_ptr][vtable_ptr]; trace data_ptr only
+#define GC_TAG_MAP   4   // [count][cap][keys_ptr][vals_ptr][meta_ptr]
+#define GC_TAG_SET   5   // [count][cap][keys_ptr][meta_ptr]
 
 typedef struct GCHeader {
     struct GCHeader *next;    // 8B: linked list of all GC objects
@@ -101,15 +103,17 @@ static int gc_data_interval_cmp(const void *a, const void *b) {
 static void gc_build_intervals(void) {
     // Count objects
     size_t count = 0;
-    size_t array_count = 0;
+    size_t data_buf_count = 0;
     for (GCHeader *h = gc_head; h; h = h->next) {
         count++;
-        if (h->type_tag == GC_TAG_ARRAY) array_count++;
+        if (h->type_tag == GC_TAG_ARRAY) data_buf_count++;
+        else if (h->type_tag == GC_TAG_MAP) data_buf_count += 3;  // keys, vals, meta
+        else if (h->type_tag == GC_TAG_SET) data_buf_count += 2;  // keys, meta
     }
 
     gc_intervals = (GCInterval *)malloc(count * sizeof(GCInterval));
     gc_interval_count = count;
-    gc_data_intervals = (GCDataInterval *)malloc(array_count * sizeof(GCDataInterval));
+    gc_data_intervals = (GCDataInterval *)malloc(data_buf_count * sizeof(GCDataInterval));
     gc_data_interval_count = 0;
 
     size_t i = 0;
@@ -129,6 +133,27 @@ static void gc_build_intervals(void) {
                 gc_data_intervals[gc_data_interval_count].end = (char *)data_ptr + cap * 8;
                 gc_data_intervals[gc_data_interval_count].array_handle = user;
                 gc_data_interval_count++;
+            }
+        }
+        // Map handle: [count][cap][keys_ptr][vals_ptr][meta_ptr]
+        if (h->type_tag == GC_TAG_MAP && h->size >= 40) {
+            long *mh = (long *)user;
+            long cap = mh[1];
+            if (cap > 0) {
+                void *keys = (void *)mh[2]; void *vals = (void *)mh[3]; void *meta = (void *)mh[4];
+                if (keys) { gc_data_intervals[gc_data_interval_count].start = keys; gc_data_intervals[gc_data_interval_count].end = (char *)keys + cap * 8; gc_data_intervals[gc_data_interval_count].array_handle = user; gc_data_interval_count++; }
+                if (vals) { gc_data_intervals[gc_data_interval_count].start = vals; gc_data_intervals[gc_data_interval_count].end = (char *)vals + cap * 8; gc_data_intervals[gc_data_interval_count].array_handle = user; gc_data_interval_count++; }
+                if (meta) { gc_data_intervals[gc_data_interval_count].start = meta; gc_data_intervals[gc_data_interval_count].end = (char *)meta + cap; gc_data_intervals[gc_data_interval_count].array_handle = user; gc_data_interval_count++; }
+            }
+        }
+        // Set handle: [count][cap][keys_ptr][meta_ptr]
+        if (h->type_tag == GC_TAG_SET && h->size >= 32) {
+            long *sh = (long *)user;
+            long cap = sh[1];
+            if (cap > 0) {
+                void *keys = (void *)sh[2]; void *meta = (void *)sh[3];
+                if (keys) { gc_data_intervals[gc_data_interval_count].start = keys; gc_data_intervals[gc_data_interval_count].end = (char *)keys + cap * 8; gc_data_intervals[gc_data_interval_count].array_handle = user; gc_data_interval_count++; }
+                if (meta) { gc_data_intervals[gc_data_interval_count].start = meta; gc_data_intervals[gc_data_interval_count].end = (char *)meta + cap; gc_data_intervals[gc_data_interval_count].array_handle = user; gc_data_interval_count++; }
             }
         }
     }
@@ -221,6 +246,40 @@ static void gc_trace_object(void *user_ptr) {
             void *child_user = (char *)child + sizeof(GCHeader);
             gc_mark_object(child_user);
         }
+        break;
+    }
+    case GC_TAG_MAP: {
+        // Map handle: [count][cap][keys_ptr][vals_ptr][meta_ptr]
+        long *mh = (long *)user_ptr;
+        long count = mh[0]; long cap = mh[1];
+        long *keys = (long *)mh[2]; long *vals = (long *)mh[3];
+        unsigned char *meta = (unsigned char *)mh[4];
+        for (long i = 0; i < cap; i++) {
+            if (meta[i] >= 0x80) {
+                void *k = (void *)keys[i]; void *v = (void *)vals[i];
+                GCHeader *kh = gc_find_object(k);
+                if (kh && !kh->mark) gc_mark_object((char *)kh + sizeof(GCHeader));
+                GCHeader *vh = gc_find_object(v);
+                if (vh && !vh->mark) gc_mark_object((char *)vh + sizeof(GCHeader));
+            }
+        }
+        (void)count;
+        break;
+    }
+    case GC_TAG_SET: {
+        // Set handle: [count][cap][keys_ptr][meta_ptr]
+        long *sh = (long *)user_ptr;
+        long count = sh[0]; long cap = sh[1];
+        long *keys = (long *)sh[2];
+        unsigned char *meta = (unsigned char *)sh[3];
+        for (long i = 0; i < cap; i++) {
+            if (meta[i] >= 0x80) {
+                void *k = (void *)keys[i];
+                GCHeader *kh = gc_find_object(k);
+                if (kh && !kh->mark) gc_mark_object((char *)kh + sizeof(GCHeader));
+            }
+        }
+        (void)count;
         break;
     }
     case GC_TAG_OBJECT:
@@ -330,6 +389,19 @@ void __pluto_gc_collect(void) {
                 long *handle = (long *)((char *)h + sizeof(GCHeader));
                 void *data_ptr = (void *)handle[2];
                 if (data_ptr) free(data_ptr);
+            }
+            // Free map buffers
+            if (h->type_tag == GC_TAG_MAP && h->size >= 40) {
+                long *mh = (long *)((char *)h + sizeof(GCHeader));
+                if ((void *)mh[2]) free((void *)mh[2]);  // keys
+                if ((void *)mh[3]) free((void *)mh[3]);  // vals
+                if ((void *)mh[4]) free((void *)mh[4]);  // meta
+            }
+            // Free set buffers
+            if (h->type_tag == GC_TAG_SET && h->size >= 32) {
+                long *sh = (long *)((char *)h + sizeof(GCHeader));
+                if ((void *)sh[2]) free((void *)sh[2]);  // keys
+                if ((void *)sh[3]) free((void *)sh[3]);  // meta
             }
             free(h);
             freed_bytes += total;
@@ -840,4 +912,312 @@ long __pluto_socket_get_port(long fd) {
     socklen_t len = sizeof(addr);
     if (getsockname((int)fd, (struct sockaddr *)&addr, &len) != 0) return -1;
     return (long)ntohs(addr.sin_port);
+}
+
+// ── Map and Set runtime ───────────────────────────────────────────────────────
+// Key type tags: 0=int, 1=float, 2=bool, 3=string, 4=enum (discriminant)
+// Open addressing with linear probing.  Meta byte: 0=empty, 0x80=occupied.
+
+#define MAP_INIT_CAP 8
+#define MAP_LOAD_FACTOR_NUM 3
+#define MAP_LOAD_FACTOR_DEN 4
+
+static unsigned long ht_hash(long key, long key_type) {
+    unsigned long h;
+    switch (key_type) {
+    case 1: { // float — bitcast
+        double d;
+        memcpy(&d, &key, sizeof(double));
+        unsigned long bits;
+        memcpy(&bits, &d, sizeof(unsigned long));
+        h = bits * 0x9e3779b97f4a7c15ULL;
+        break;
+    }
+    case 3: { // string — FNV-1a
+        void *s = (void *)key;
+        long slen = *(long *)s;
+        const unsigned char *data = (const unsigned char *)s + 8;
+        h = 0xcbf29ce484222325ULL;
+        for (long i = 0; i < slen; i++) {
+            h ^= data[i];
+            h *= 0x100000001b3ULL;
+        }
+        break;
+    }
+    default: // int(0), bool(2), enum(4)
+        h = (unsigned long)key * 0x9e3779b97f4a7c15ULL;
+        break;
+    }
+    return h;
+}
+
+static int ht_eq(long a, long b, long key_type) {
+    if (key_type == 3) return __pluto_string_eq((void *)a, (void *)b);
+    return a == b;
+}
+
+// ── Map API ──────────────────────────────────────────────────────────────────
+// Handle layout (40 bytes, 5 fields): [count][capacity][keys_ptr][vals_ptr][meta_ptr]
+
+static void map_grow(long *handle, long key_type);
+
+void *__pluto_map_new(long key_type) {
+    long *h = (long *)gc_alloc(40, GC_TAG_MAP, 5);
+    h[0] = 0;            // count
+    h[1] = MAP_INIT_CAP; // capacity
+    h[2] = (long)calloc(MAP_INIT_CAP, 8);        // keys
+    h[3] = (long)calloc(MAP_INIT_CAP, 8);        // vals
+    h[4] = (long)calloc(MAP_INIT_CAP, 1);        // meta
+    (void)key_type;
+    return h;
+}
+
+void __pluto_map_insert(void *handle, long key_type, long key, long value) {
+    long *h = (long *)handle;
+    long count = h[0], cap = h[1];
+    // Grow if load > 75%
+    if (count * MAP_LOAD_FACTOR_DEN >= cap * MAP_LOAD_FACTOR_NUM) {
+        map_grow(h, key_type);
+        cap = h[1];
+    }
+    long *keys = (long *)h[2]; long *vals = (long *)h[3];
+    unsigned char *meta = (unsigned char *)h[4];
+    unsigned long idx = ht_hash(key, key_type) & (unsigned long)(cap - 1);
+    while (1) {
+        if (meta[idx] == 0) { // empty
+            keys[idx] = key; vals[idx] = value; meta[idx] = 0x80;
+            h[0] = count + 1;
+            return;
+        }
+        if (meta[idx] >= 0x80 && ht_eq(keys[idx], key, key_type)) { // overwrite
+            vals[idx] = value;
+            return;
+        }
+        idx = (idx + 1) & (unsigned long)(cap - 1);
+    }
+}
+
+long __pluto_map_get(void *handle, long key_type, long key) {
+    long *h = (long *)handle;
+    long cap = h[1];
+    long *keys = (long *)h[2]; long *vals = (long *)h[3];
+    unsigned char *meta = (unsigned char *)h[4];
+    unsigned long idx = ht_hash(key, key_type) & (unsigned long)(cap - 1);
+    while (1) {
+        if (meta[idx] == 0) {
+            fprintf(stderr, "pluto: map key not found\n");
+            exit(1);
+        }
+        if (meta[idx] >= 0x80 && ht_eq(keys[idx], key, key_type)) {
+            return vals[idx];
+        }
+        idx = (idx + 1) & (unsigned long)(cap - 1);
+    }
+}
+
+long __pluto_map_contains(void *handle, long key_type, long key) {
+    long *h = (long *)handle;
+    long cap = h[1];
+    long *keys = (long *)h[2];
+    unsigned char *meta = (unsigned char *)h[4];
+    unsigned long idx = ht_hash(key, key_type) & (unsigned long)(cap - 1);
+    while (1) {
+        if (meta[idx] == 0) return 0;
+        if (meta[idx] >= 0x80 && ht_eq(keys[idx], key, key_type)) return 1;
+        idx = (idx + 1) & (unsigned long)(cap - 1);
+    }
+}
+
+void __pluto_map_remove(void *handle, long key_type, long key) {
+    long *h = (long *)handle;
+    long cap = h[1];
+    long *keys = (long *)h[2];
+    unsigned char *meta = (unsigned char *)h[4];
+    unsigned long idx = ht_hash(key, key_type) & (unsigned long)(cap - 1);
+    while (1) {
+        if (meta[idx] == 0) return; // not found
+        if (meta[idx] >= 0x80 && ht_eq(keys[idx], key, key_type)) {
+            // Robin Hood / backward-shift deletion for correctness with linear probing
+            unsigned long empty = idx;
+            meta[empty] = 0;
+            unsigned long j = (empty + 1) & (unsigned long)(cap - 1);
+            while (meta[j] >= 0x80) {
+                unsigned long natural = ht_hash(keys[j], key_type) & (unsigned long)(cap - 1);
+                // Check if j is displaced past empty (wrapping)
+                int displaced;
+                if (empty <= j) displaced = (natural <= empty || natural > j);
+                else             displaced = (natural <= empty && natural > j);
+                if (displaced) {
+                    keys[empty] = keys[j];
+                    ((long *)h[3])[empty] = ((long *)h[3])[j];
+                    meta[empty] = meta[j];
+                    meta[j] = 0;
+                    empty = j;
+                }
+                j = (j + 1) & (unsigned long)(cap - 1);
+            }
+            h[0]--;
+            return;
+        }
+        idx = (idx + 1) & (unsigned long)(cap - 1);
+    }
+}
+
+long __pluto_map_len(void *handle) {
+    return ((long *)handle)[0];
+}
+
+void *__pluto_map_keys(void *handle) {
+    long *h = (long *)handle;
+    long cap = h[1];
+    long *keys = (long *)h[2];
+    unsigned char *meta = (unsigned char *)h[4];
+    void *arr = __pluto_array_new(h[0] > 0 ? h[0] : 4);
+    for (long i = 0; i < cap; i++) {
+        if (meta[i] >= 0x80) __pluto_array_push(arr, keys[i]);
+    }
+    return arr;
+}
+
+void *__pluto_map_values(void *handle) {
+    long *h = (long *)handle;
+    long cap = h[1];
+    long *vals = (long *)h[3];
+    unsigned char *meta = (unsigned char *)h[4];
+    void *arr = __pluto_array_new(h[0] > 0 ? h[0] : 4);
+    for (long i = 0; i < cap; i++) {
+        if (meta[i] >= 0x80) __pluto_array_push(arr, vals[i]);
+    }
+    return arr;
+}
+
+static void map_grow(long *h, long key_type) {
+    long old_cap = h[1];
+    long new_cap = old_cap * 2;
+    long *old_keys = (long *)h[2]; long *old_vals = (long *)h[3];
+    unsigned char *old_meta = (unsigned char *)h[4];
+    long *new_keys = (long *)calloc(new_cap, 8);
+    long *new_vals = (long *)calloc(new_cap, 8);
+    unsigned char *new_meta = (unsigned char *)calloc(new_cap, 1);
+    for (long i = 0; i < old_cap; i++) {
+        if (old_meta[i] >= 0x80) {
+            unsigned long idx = ht_hash(old_keys[i], key_type) & (unsigned long)(new_cap - 1);
+            while (new_meta[idx] >= 0x80) idx = (idx + 1) & (unsigned long)(new_cap - 1);
+            new_keys[idx] = old_keys[i]; new_vals[idx] = old_vals[i]; new_meta[idx] = 0x80;
+        }
+    }
+    free(old_keys); free(old_vals); free(old_meta);
+    h[1] = new_cap; h[2] = (long)new_keys; h[3] = (long)new_vals; h[4] = (long)new_meta;
+}
+
+// ── Set API ──────────────────────────────────────────────────────────────────
+// Handle layout (32 bytes, 4 fields): [count][capacity][keys_ptr][meta_ptr]
+
+static void set_grow(long *h, long key_type);
+
+void *__pluto_set_new(long key_type) {
+    long *h = (long *)gc_alloc(32, GC_TAG_SET, 4);
+    h[0] = 0;
+    h[1] = MAP_INIT_CAP;
+    h[2] = (long)calloc(MAP_INIT_CAP, 8);
+    h[3] = (long)calloc(MAP_INIT_CAP, 1);
+    (void)key_type;
+    return h;
+}
+
+void __pluto_set_insert(void *handle, long key_type, long elem) {
+    long *h = (long *)handle;
+    long count = h[0], cap = h[1];
+    if (count * MAP_LOAD_FACTOR_DEN >= cap * MAP_LOAD_FACTOR_NUM) {
+        set_grow(h, key_type);
+        cap = h[1];
+    }
+    long *keys = (long *)h[2];
+    unsigned char *meta = (unsigned char *)h[3];
+    unsigned long idx = ht_hash(elem, key_type) & (unsigned long)(cap - 1);
+    while (1) {
+        if (meta[idx] == 0) {
+            keys[idx] = elem; meta[idx] = 0x80;
+            h[0] = count + 1;
+            return;
+        }
+        if (meta[idx] >= 0x80 && ht_eq(keys[idx], elem, key_type)) return; // already present
+        idx = (idx + 1) & (unsigned long)(cap - 1);
+    }
+}
+
+long __pluto_set_contains(void *handle, long key_type, long elem) {
+    long *h = (long *)handle;
+    long cap = h[1];
+    long *keys = (long *)h[2];
+    unsigned char *meta = (unsigned char *)h[3];
+    unsigned long idx = ht_hash(elem, key_type) & (unsigned long)(cap - 1);
+    while (1) {
+        if (meta[idx] == 0) return 0;
+        if (meta[idx] >= 0x80 && ht_eq(keys[idx], elem, key_type)) return 1;
+        idx = (idx + 1) & (unsigned long)(cap - 1);
+    }
+}
+
+void __pluto_set_remove(void *handle, long key_type, long elem) {
+    long *h = (long *)handle;
+    long cap = h[1];
+    long *keys = (long *)h[2];
+    unsigned char *meta = (unsigned char *)h[3];
+    unsigned long idx = ht_hash(elem, key_type) & (unsigned long)(cap - 1);
+    while (1) {
+        if (meta[idx] == 0) return;
+        if (meta[idx] >= 0x80 && ht_eq(keys[idx], elem, key_type)) {
+            unsigned long empty = idx;
+            meta[empty] = 0;
+            unsigned long j = (empty + 1) & (unsigned long)(cap - 1);
+            while (meta[j] >= 0x80) {
+                unsigned long natural = ht_hash(keys[j], key_type) & (unsigned long)(cap - 1);
+                int displaced;
+                if (empty <= j) displaced = (natural <= empty || natural > j);
+                else             displaced = (natural <= empty && natural > j);
+                if (displaced) {
+                    keys[empty] = keys[j]; meta[empty] = meta[j]; meta[j] = 0; empty = j;
+                }
+                j = (j + 1) & (unsigned long)(cap - 1);
+            }
+            h[0]--;
+            return;
+        }
+        idx = (idx + 1) & (unsigned long)(cap - 1);
+    }
+}
+
+long __pluto_set_len(void *handle) {
+    return ((long *)handle)[0];
+}
+
+void *__pluto_set_to_array(void *handle) {
+    long *h = (long *)handle;
+    long cap = h[1];
+    long *keys = (long *)h[2];
+    unsigned char *meta = (unsigned char *)h[3];
+    void *arr = __pluto_array_new(h[0] > 0 ? h[0] : 4);
+    for (long i = 0; i < cap; i++) {
+        if (meta[i] >= 0x80) __pluto_array_push(arr, keys[i]);
+    }
+    return arr;
+}
+
+static void set_grow(long *h, long key_type) {
+    long old_cap = h[1];
+    long new_cap = old_cap * 2;
+    long *old_keys = (long *)h[2];
+    unsigned char *old_meta = (unsigned char *)h[3];
+    long *new_keys = (long *)calloc(new_cap, 8);
+    unsigned char *new_meta = (unsigned char *)calloc(new_cap, 1);
+    for (long i = 0; i < old_cap; i++) {
+        if (old_meta[i] >= 0x80) {
+            unsigned long idx = ht_hash(old_keys[i], key_type) & (unsigned long)(new_cap - 1);
+            while (new_meta[idx] >= 0x80) idx = (idx + 1) & (unsigned long)(new_cap - 1);
+            new_keys[idx] = old_keys[i]; new_meta[idx] = 0x80;
+        }
+    }
+    free(old_keys); free(old_meta);
+    h[1] = new_cap; h[2] = (long)new_keys; h[3] = (long)new_meta;
 }

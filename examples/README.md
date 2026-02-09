@@ -39,6 +39,7 @@ cargo run --release -- compile examples/add/main.pluto -o my_program
 | [traits](traits/) | traits, default methods, polymorphism | Interfaces with dynamic dispatch |
 | [app_demo](app_demo/) | `app`, dependency injection | Auto-wired services with bracket deps |
 | [stdlib](stdlib/) | `import std.strings`, `import std.math` | String utilities and math functions from the standard library |
+| [collections](collections/) | `Map<K,V>`, `Set<T>`, index, methods | Maps and sets with insert, remove, contains, iteration |
 | [networking](networking/) | `import std.net`, `import std.socket`, TCP | TCP echo server with TcpListener and TcpConnection |
 
 ## Language Quick Reference
@@ -88,6 +89,17 @@ nums.push(4)
 print(nums[0])
 print(nums.len())
 
+// Maps
+let m = Map<string, int> { "a": 1, "b": 2 }
+m["c"] = 3
+print(m["a"])
+for k in m.keys() { print(k) }
+
+// Sets
+let s = Set<int> { 1, 2, 3 }
+s.insert(4)
+print(s.contains(2))
+
 // Control flow
 if x > 0 { print("positive") }
 while x > 0 { x = x - 1 }
@@ -119,6 +131,8 @@ app MyApp[svc: Service] {
 | `bool` | Boolean | `true`, `false` |
 | `string` | Heap-allocated string | `"hello"` |
 | `[T]` | Array of T | `[1, 2, 3]` |
+| `Map<K, V>` | Hash map | `Map<string, int> { "a": 1 }` |
+| `Set<T>` | Hash set | `Set<int> { 1, 2, 3 }` |
 | `fn(T) R` | Function/closure type | `fn(int) string` |
 | Class names | Nominal class types | `Point`, `Database` |
 | Trait names | Structural trait types | `HasArea` |

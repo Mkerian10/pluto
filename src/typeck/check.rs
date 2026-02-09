@@ -227,28 +227,45 @@ fn check_index_assign(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     let obj_type = infer_expr(&object.node, object.span, env)?;
-    let elem_type = match &obj_type {
-        PlutoType::Array(elem) => *elem.clone(),
+    match &obj_type {
+        PlutoType::Array(elem) => {
+            let idx_type = infer_expr(&index.node, index.span, env)?;
+            if idx_type != PlutoType::Int {
+                return Err(CompileError::type_err(
+                    format!("array index must be int, found {idx_type}"),
+                    index.span,
+                ));
+            }
+            let val_type = infer_expr(&value.node, value.span, env)?;
+            if val_type != **elem {
+                return Err(CompileError::type_err(
+                    format!("index assignment: expected {elem}, found {val_type}"),
+                    value.span,
+                ));
+            }
+        }
+        PlutoType::Map(key_ty, val_ty) => {
+            let idx_type = infer_expr(&index.node, index.span, env)?;
+            if idx_type != **key_ty {
+                return Err(CompileError::type_err(
+                    format!("map key type mismatch: expected {key_ty}, found {idx_type}"),
+                    index.span,
+                ));
+            }
+            let val_type = infer_expr(&value.node, value.span, env)?;
+            if val_type != **val_ty {
+                return Err(CompileError::type_err(
+                    format!("map value type mismatch: expected {val_ty}, found {val_type}"),
+                    value.span,
+                ));
+            }
+        }
         _ => {
             return Err(CompileError::type_err(
-                format!("index assignment on non-array type {obj_type}"),
+                format!("index assignment on non-indexable type {obj_type}"),
                 object.span,
             ));
         }
-    };
-    let idx_type = infer_expr(&index.node, index.span, env)?;
-    if idx_type != PlutoType::Int {
-        return Err(CompileError::type_err(
-            format!("array index must be int, found {idx_type}"),
-            index.span,
-        ));
-    }
-    let val_type = infer_expr(&value.node, value.span, env)?;
-    if val_type != elem_type {
-        return Err(CompileError::type_err(
-            format!("index assignment: expected {elem_type}, found {val_type}"),
-            value.span,
-        ));
     }
     Ok(())
 }

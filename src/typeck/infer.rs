@@ -114,23 +114,34 @@ pub(crate) fn infer_expr(
         }
         Expr::Index { object, index } => {
             let obj_type = infer_expr(&object.node, object.span, env)?;
-            let elem_type = match &obj_type {
-                PlutoType::Array(elem) => *elem.clone(),
-                _ => {
-                    return Err(CompileError::type_err(
-                        format!("index on non-array type {obj_type}"),
-                        object.span,
-                    ));
+            match &obj_type {
+                PlutoType::Array(elem) => {
+                    let idx_type = infer_expr(&index.node, index.span, env)?;
+                    if idx_type != PlutoType::Int {
+                        return Err(CompileError::type_err(
+                            format!("array index must be int, found {idx_type}"),
+                            index.span,
+                        ));
+                    }
+                    Ok(*elem.clone())
                 }
-            };
-            let idx_type = infer_expr(&index.node, index.span, env)?;
-            if idx_type != PlutoType::Int {
-                return Err(CompileError::type_err(
-                    format!("array index must be int, found {idx_type}"),
-                    index.span,
-                ));
+                PlutoType::Map(key_ty, val_ty) => {
+                    let idx_type = infer_expr(&index.node, index.span, env)?;
+                    if idx_type != **key_ty {
+                        return Err(CompileError::type_err(
+                            format!("map key type mismatch: expected {key_ty}, found {idx_type}"),
+                            index.span,
+                        ));
+                    }
+                    Ok(*val_ty.clone())
+                }
+                _ => {
+                    Err(CompileError::type_err(
+                        format!("index on non-indexable type {obj_type}"),
+                        object.span,
+                    ))
+                }
             }
-            Ok(elem_type)
         }
         Expr::EnumUnit { enum_name, variant, type_args } => {
             infer_enum_unit(enum_name, variant, type_args, span, env)
@@ -152,6 +163,52 @@ pub(crate) fn infer_expr(
         Expr::ClosureCreate { .. } => {
             Ok(PlutoType::Void)
         }
+        Expr::MapLit { key_type, value_type, entries } => {
+            let kt = resolve_type(key_type, env)?;
+            let vt = resolve_type(value_type, env)?;
+            validate_hashable_key(&kt, key_type.span)?;
+            for (k, v) in entries {
+                let actual_k = infer_expr(&k.node, k.span, env)?;
+                if actual_k != kt {
+                    return Err(CompileError::type_err(
+                        format!("map key type mismatch: expected {kt}, found {actual_k}"),
+                        k.span,
+                    ));
+                }
+                let actual_v = infer_expr(&v.node, v.span, env)?;
+                if actual_v != vt {
+                    return Err(CompileError::type_err(
+                        format!("map value type mismatch: expected {vt}, found {actual_v}"),
+                        v.span,
+                    ));
+                }
+            }
+            Ok(PlutoType::Map(Box::new(kt), Box::new(vt)))
+        }
+        Expr::SetLit { elem_type, elements } => {
+            let et = resolve_type(elem_type, env)?;
+            validate_hashable_key(&et, elem_type.span)?;
+            for elem in elements {
+                let actual = infer_expr(&elem.node, elem.span, env)?;
+                if actual != et {
+                    return Err(CompileError::type_err(
+                        format!("set element type mismatch: expected {et}, found {actual}"),
+                        elem.span,
+                    ));
+                }
+            }
+            Ok(PlutoType::Set(Box::new(et)))
+        }
+    }
+}
+
+fn validate_hashable_key(ty: &PlutoType, span: crate::span::Span) -> Result<(), CompileError> {
+    match ty {
+        PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Enum(_) => Ok(()),
+        _ => Err(CompileError::type_err(
+            format!("type {ty} cannot be used as a map/set key (must be int, float, bool, string, or enum)"),
+            span,
+        )),
     }
 }
 
@@ -672,6 +729,161 @@ fn infer_method_call(
                 return Err(CompileError::type_err(
                     format!("array has no method '{}'", method.node),
                     method.span,
+                ));
+            }
+        }
+    }
+    // Map methods
+    if let PlutoType::Map(key_ty, val_ty) = &obj_type {
+        let builtin = |env: &mut TypeEnv, method: &Spanned<String>| {
+            if let Some(ref current) = env.current_fn {
+                env.method_resolutions.insert(
+                    (current.clone(), method.span.start),
+                    super::env::MethodResolution::Builtin,
+                );
+            }
+        };
+        match method.node.as_str() {
+            "len" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err("len() expects 0 arguments".to_string(), span));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Int);
+            }
+            "contains" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err("contains() expects 1 argument".to_string(), span));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **key_ty {
+                    return Err(CompileError::type_err(
+                        format!("contains(): expected {key_ty}, found {arg_type}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Bool);
+            }
+            "insert" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err("insert() expects 2 arguments".to_string(), span));
+                }
+                let k = infer_expr(&args[0].node, args[0].span, env)?;
+                if k != **key_ty {
+                    return Err(CompileError::type_err(
+                        format!("insert() key: expected {key_ty}, found {k}"), args[0].span,
+                    ));
+                }
+                let v = infer_expr(&args[1].node, args[1].span, env)?;
+                if v != **val_ty {
+                    return Err(CompileError::type_err(
+                        format!("insert() value: expected {val_ty}, found {v}"), args[1].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Void);
+            }
+            "remove" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err("remove() expects 1 argument".to_string(), span));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **key_ty {
+                    return Err(CompileError::type_err(
+                        format!("remove(): expected {key_ty}, found {arg_type}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Void);
+            }
+            "keys" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err("keys() expects 0 arguments".to_string(), span));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Array(key_ty.clone()));
+            }
+            "values" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err("values() expects 0 arguments".to_string(), span));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Array(val_ty.clone()));
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("Map has no method '{}'", method.node), method.span,
+                ));
+            }
+        }
+    }
+    // Set methods
+    if let PlutoType::Set(elem_ty) = &obj_type {
+        let builtin = |env: &mut TypeEnv, method: &Spanned<String>| {
+            if let Some(ref current) = env.current_fn {
+                env.method_resolutions.insert(
+                    (current.clone(), method.span.start),
+                    super::env::MethodResolution::Builtin,
+                );
+            }
+        };
+        match method.node.as_str() {
+            "len" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err("len() expects 0 arguments".to_string(), span));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Int);
+            }
+            "contains" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err("contains() expects 1 argument".to_string(), span));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **elem_ty {
+                    return Err(CompileError::type_err(
+                        format!("contains(): expected {elem_ty}, found {arg_type}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Bool);
+            }
+            "insert" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err("insert() expects 1 argument".to_string(), span));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **elem_ty {
+                    return Err(CompileError::type_err(
+                        format!("insert(): expected {elem_ty}, found {arg_type}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Void);
+            }
+            "remove" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err("remove() expects 1 argument".to_string(), span));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **elem_ty {
+                    return Err(CompileError::type_err(
+                        format!("remove(): expected {elem_ty}, found {arg_type}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Void);
+            }
+            "to_array" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err("to_array() expects 0 arguments".to_string(), span));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Array(elem_ty.clone()));
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("Set has no method '{}'", method.node), method.span,
                 ));
             }
         }

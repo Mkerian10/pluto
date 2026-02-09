@@ -53,6 +53,24 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_array_set", &[types::I64, types::I64, types::I64], &[])?;
         reg.declare(module, "__pluto_array_len", &[types::I64], &[types::I64])?;
 
+        // Map functions
+        reg.declare(module, "__pluto_map_new", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_map_insert", &[types::I64, types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_map_get", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_map_contains", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_map_remove", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_map_len", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_map_keys", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_map_values", &[types::I64], &[types::I64])?;
+
+        // Set functions
+        reg.declare(module, "__pluto_set_new", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_set_insert", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_set_contains", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_set_remove", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_set_len", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_set_to_array", &[types::I64], &[types::I64])?;
+
         // GC
         reg.declare(module, "__pluto_gc_init", &[], &[])?;
 

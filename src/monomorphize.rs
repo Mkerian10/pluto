@@ -236,6 +236,17 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
                 .collect(),
             return_type: Box::new(Spanned::new(pluto_type_to_type_expr(ret), Span::new(0, 0))),
         },
+        PlutoType::Map(k, v) => TypeExpr::Generic {
+            name: "Map".to_string(),
+            type_args: vec![
+                Spanned::new(pluto_type_to_type_expr(k), Span::new(0, 0)),
+                Spanned::new(pluto_type_to_type_expr(v), Span::new(0, 0)),
+            ],
+        },
+        PlutoType::Set(t) => TypeExpr::Generic {
+            name: "Set".to_string(),
+            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
+        },
         PlutoType::Error => TypeExpr::Named("error".to_string()),
         PlutoType::TypeParam(name) => TypeExpr::Named(name.clone()),
     }
@@ -431,6 +442,20 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
                 substitute_in_type_expr(&mut rt.node, bindings);
             }
             substitute_in_block(&mut body.node, bindings);
+        }
+        Expr::MapLit { key_type, value_type, entries } => {
+            substitute_in_type_expr(&mut key_type.node, bindings);
+            substitute_in_type_expr(&mut value_type.node, bindings);
+            for (k, v) in entries.iter_mut() {
+                substitute_in_expr(&mut k.node, bindings);
+                substitute_in_expr(&mut v.node, bindings);
+            }
+        }
+        Expr::SetLit { elem_type, elements } => {
+            substitute_in_type_expr(&mut elem_type.node, bindings);
+            for el in elements.iter_mut() {
+                substitute_in_expr(&mut el.node, bindings);
+            }
         }
         Expr::ClosureCreate { .. } => {}
         Expr::Propagate { expr } => {
@@ -749,6 +774,26 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
                 }
             }
         }
+        Expr::MapLit { key_type, value_type, entries } => {
+            offset_spanned(key_type, offset);
+            offset_type_expr_spans(&mut key_type.node, offset);
+            offset_spanned(value_type, offset);
+            offset_type_expr_spans(&mut value_type.node, offset);
+            for (k, v) in entries.iter_mut() {
+                offset_spanned(k, offset);
+                offset_expr_spans(&mut k.node, offset);
+                offset_spanned(v, offset);
+                offset_expr_spans(&mut v.node, offset);
+            }
+        }
+        Expr::SetLit { elem_type, elements } => {
+            offset_spanned(elem_type, offset);
+            offset_type_expr_spans(&mut elem_type.node, offset);
+            for el in elements.iter_mut() {
+                offset_spanned(el, offset);
+                offset_expr_spans(&mut el.node, offset);
+            }
+        }
     }
 }
 
@@ -930,6 +975,17 @@ fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(u
                 }
             }
         }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries.iter_mut() {
+                rewrite_expr(&mut k.node, k.span.start, k.span.end, rewrites);
+                rewrite_expr(&mut v.node, v.span.start, v.span.end, rewrites);
+            }
+        }
+        Expr::SetLit { elements, .. } => {
+            for el in elements.iter_mut() {
+                rewrite_expr(&mut el.node, el.span.start, el.span.end, rewrites);
+            }
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
         | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. } => {}
     }
@@ -1106,6 +1162,13 @@ fn resolve_generic_te_in_expr(expr: &mut Expr, env: &mut TypeEnv) -> Result<(), 
 fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), CompileError> {
     match te {
         TypeExpr::Generic { name, type_args } => {
+            // Built-in generic types (Map, Set) are kept as-is — no monomorphization needed
+            if name == "Map" || name == "Set" {
+                for arg in type_args.iter_mut() {
+                    resolve_generic_te(&mut arg.node, env)?;
+                }
+                return Ok(());
+            }
             // Resolve type args recursively first
             for arg in type_args.iter_mut() {
                 resolve_generic_te(&mut arg.node, env)?;

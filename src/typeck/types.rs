@@ -10,6 +10,8 @@ pub enum PlutoType {
     Trait(std::string::String),
     Enum(std::string::String),
     Fn(Vec<PlutoType>, Box<PlutoType>),
+    Map(Box<PlutoType>, Box<PlutoType>),
+    Set(Box<PlutoType>),
     Error,
     TypeParam(std::string::String),
 }
@@ -34,6 +36,8 @@ impl std::fmt::Display for PlutoType {
                 }
                 write!(f, ") {}", ret)
             }
+            PlutoType::Map(k, v) => write!(f, "Map<{k}, {v}>"),
+            PlutoType::Set(t) => write!(f, "Set<{t}>"),
             PlutoType::Error => write!(f, "error"),
             PlutoType::TypeParam(name) => write!(f, "{name}"),
         }
