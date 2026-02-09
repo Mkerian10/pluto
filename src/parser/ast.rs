@@ -4,6 +4,7 @@ use crate::span::Spanned;
 pub struct Program {
     pub imports: Vec<Spanned<ImportDecl>>,
     pub functions: Vec<Spanned<Function>>,
+    pub extern_fns: Vec<Spanned<ExternFnDecl>>,
     pub classes: Vec<Spanned<ClassDecl>>,
     pub traits: Vec<Spanned<TraitDecl>>,
     pub enums: Vec<Spanned<EnumDecl>>,
@@ -11,7 +12,30 @@ pub struct Program {
 
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
-    pub module_name: Spanned<String>,
+    pub path: Vec<Spanned<String>>,
+    pub alias: Option<Spanned<String>>,
+}
+
+impl ImportDecl {
+    pub fn binding_name(&self) -> &str {
+        if let Some(alias) = &self.alias {
+            &alias.node
+        } else {
+            &self.path.last().unwrap().node
+        }
+    }
+
+    pub fn full_path(&self) -> String {
+        self.path.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join(".")
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternFnDecl {
+    pub name: Spanned<String>,
+    pub params: Vec<Param>,
+    pub return_type: Option<Spanned<TypeExpr>>,
+    pub is_pub: bool,
 }
 
 #[derive(Debug, Clone)]

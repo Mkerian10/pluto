@@ -139,6 +139,7 @@ impl<'a> Parser<'a> {
         self.pre_scan_enum_names();
         let mut imports = Vec::new();
         let mut functions = Vec::new();
+        let mut extern_fns = Vec::new();
         let mut classes = Vec::new();
         let mut traits = Vec::new();
         let mut enums = Vec::new();
@@ -185,9 +186,12 @@ impl<'a> Parser<'a> {
                     e.node.is_pub = is_pub;
                     enums.push(e);
                 }
+                Token::Extern => {
+                    extern_fns.push(self.parse_extern_fn(is_pub)?);
+                }
                 _ => {
                     return Err(CompileError::syntax(
-                        format!("expected 'fn', 'class', 'trait', or 'enum', found {}", tok.node),
+                        format!("expected 'fn', 'class', 'trait', 'enum', or 'extern', found {}", tok.node),
                         tok.span,
                     ));
                 }
@@ -195,16 +199,73 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        Ok(Program { imports, functions, classes, traits, enums })
+        Ok(Program { imports, functions, extern_fns, classes, traits, enums })
     }
 
     fn parse_import(&mut self) -> Result<Spanned<ImportDecl>, CompileError> {
         let import_tok = self.expect(&Token::Import)?;
         let start = import_tok.span.start;
-        let module_name = self.expect_ident()?;
-        let end = module_name.span.end;
+        let first = self.expect_ident()?;
+        let mut path = vec![first];
+
+        // Parse dotted path segments: import std.io.fs
+        // Use peek_raw() so a newline stops the path (prevents `import a\n.b` from parsing as `import a.b`)
+        while self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Dot) {
+            self.advance(); // consume '.'
+            let segment = self.expect_ident()?;
+            path.push(segment);
+        }
+
+        let mut end = path.last().unwrap().span.end;
+
+        // Parse optional alias: `as name`
+        let alias = if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::As) {
+            self.advance(); // consume 'as'
+            let alias_name = self.expect_ident()?;
+            end = alias_name.span.end;
+            Some(alias_name)
+        } else {
+            None
+        };
+
         self.consume_statement_end();
-        Ok(Spanned::new(ImportDecl { module_name }, Span::new(start, end)))
+        Ok(Spanned::new(ImportDecl { path, alias }, Span::new(start, end)))
+    }
+
+    fn parse_extern_fn(&mut self, is_pub: bool) -> Result<Spanned<ExternFnDecl>, CompileError> {
+        let extern_tok = self.expect(&Token::Extern)?;
+        let start = extern_tok.span.start;
+        self.expect(&Token::Fn)?;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LParen)?;
+
+        let mut params = Vec::new();
+        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
+            if !params.is_empty() {
+                self.expect(&Token::Comma)?;
+            }
+            let pname = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let pty = self.parse_type()?;
+            params.push(Param { name: pname, ty: pty });
+        }
+        let close_paren = self.expect(&Token::RParen)?;
+        let mut end = close_paren.span.end;
+
+        // Optional return type — if next raw token is not newline/EOF, parse return type
+        let return_type = if !self.at_statement_boundary()
+            && self.peek().is_some()
+            && !matches!(self.peek().unwrap().node, Token::LBrace)
+        {
+            let ty = self.parse_type()?;
+            end = ty.span.end;
+            Some(ty)
+        } else {
+            None
+        };
+
+        self.consume_statement_end();
+        Ok(Spanned::new(ExternFnDecl { name, params, return_type, is_pub }, Span::new(start, end)))
     }
 
     fn parse_enum_decl(&mut self) -> Result<Spanned<EnumDecl>, CompileError> {
@@ -1498,8 +1559,44 @@ mod tests {
     fn parse_import() {
         let prog = parse("import math\n\nfn main() { }");
         assert_eq!(prog.imports.len(), 1);
-        assert_eq!(prog.imports[0].node.module_name.node, "math");
+        assert_eq!(prog.imports[0].node.binding_name(), "math");
+        assert_eq!(prog.imports[0].node.full_path(), "math");
         assert_eq!(prog.functions.len(), 1);
+    }
+
+    #[test]
+    fn parse_dotted_import() {
+        let prog = parse("import std.io.fs\n\nfn main() { }");
+        assert_eq!(prog.imports.len(), 1);
+        assert_eq!(prog.imports[0].node.path.len(), 3);
+        assert_eq!(prog.imports[0].node.binding_name(), "fs");
+        assert_eq!(prog.imports[0].node.full_path(), "std.io.fs");
+    }
+
+    #[test]
+    fn parse_import_alias() {
+        let prog = parse("import std.io as io\n\nfn main() { }");
+        assert_eq!(prog.imports.len(), 1);
+        assert_eq!(prog.imports[0].node.binding_name(), "io");
+        assert_eq!(prog.imports[0].node.full_path(), "std.io");
+    }
+
+    #[test]
+    fn parse_extern_fn_decl() {
+        let prog = parse("extern fn __pluto_print(s: string)\n\nfn main() { }");
+        assert_eq!(prog.extern_fns.len(), 1);
+        assert_eq!(prog.extern_fns[0].node.name.node, "__pluto_print");
+        assert_eq!(prog.extern_fns[0].node.params.len(), 1);
+        assert!(prog.extern_fns[0].node.return_type.is_none());
+        assert!(!prog.extern_fns[0].node.is_pub);
+    }
+
+    #[test]
+    fn parse_pub_extern_fn_with_return() {
+        let prog = parse("pub extern fn __read(path: string) string\n\nfn main() { }");
+        assert_eq!(prog.extern_fns.len(), 1);
+        assert!(prog.extern_fns[0].node.is_pub);
+        assert!(prog.extern_fns[0].node.return_type.is_some());
     }
 
     #[test]

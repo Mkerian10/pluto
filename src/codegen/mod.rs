@@ -188,6 +188,24 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
         .map_err(|e| CompileError::codegen(format!("declare array_len error: {e}")))?;
     array_ids.insert("len", id);
 
+    // Pass 0: Declare extern fns with Import linkage
+    for ext in &program.extern_fns {
+        let e = &ext.node;
+        if let Some(func_sig) = env.functions.get(&e.name.node) {
+            let mut sig = module.make_signature();
+            for param_ty in &func_sig.params {
+                sig.params.push(AbiParam::new(pluto_to_cranelift(param_ty)));
+            }
+            if func_sig.return_type != PlutoType::Void {
+                sig.returns.push(AbiParam::new(pluto_to_cranelift(&func_sig.return_type)));
+            }
+            let func_id = module
+                .declare_function(&e.name.node, Linkage::Import, &sig)
+                .map_err(|e| CompileError::codegen(format!("declare extern fn error: {e}")))?;
+            func_ids.insert(e.name.node.clone(), func_id);
+        }
+    }
+
     // Pass 1: Declare all top-level functions
     for func in &program.functions {
         let f = &func.node;
