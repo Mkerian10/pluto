@@ -127,6 +127,14 @@ mod tests {
     }
 
     #[test]
+    fn lex_uses_and_ambient_keywords() {
+        let src = "uses ambient";
+        let tokens = lex(src).unwrap();
+        assert!(matches!(tokens[0].node, Token::Uses));
+        assert!(matches!(tokens[1].node, Token::Ambient));
+    }
+
+    #[test]
     fn lex_string_with_escapes() {
         let src = r#""hello \"world\"""#;
         let tokens = lex(src).unwrap();

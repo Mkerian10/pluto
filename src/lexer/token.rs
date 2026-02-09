@@ -64,6 +64,10 @@ pub enum Token {
     As,
     #[token("extern")]
     Extern,
+    #[token("uses")]
+    Uses,
+    #[token("ambient")]
+    Ambient,
 
     // Literals
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
@@ -181,6 +185,8 @@ impl std::fmt::Display for Token {
             Token::Import => write!(f, "import"),
             Token::As => write!(f, "as"),
             Token::Extern => write!(f, "extern"),
+            Token::Uses => write!(f, "uses"),
+            Token::Ambient => write!(f, "ambient"),
             Token::IntLit(n) => write!(f, "{n}"),
             Token::FloatLit(n) => write!(f, "{n}"),
             Token::StringLit(s) => write!(f, "\"{s}\""),

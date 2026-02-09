@@ -310,7 +310,7 @@ impl<'a> Parser<'a> {
                 let name = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let ty = self.parse_type()?;
-                deps.push(Field { name, ty, is_injected: true });
+                deps.push(Field { name, ty, is_injected: true, is_ambient: false });
             }
             self.expect(&Token::RBracket)?;
         }
@@ -327,16 +327,24 @@ impl<'a> Parser<'a> {
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
+        // Parse ambient declarations and methods
+        let mut ambient_types = Vec::new();
         let mut methods = Vec::new();
         while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-            methods.push(self.parse_method()?);
+            if matches!(self.peek().unwrap().node, Token::Ambient) {
+                self.advance(); // consume 'ambient'
+                ambient_types.push(self.expect_ident()?);
+                self.consume_statement_end();
+            } else {
+                methods.push(self.parse_method()?);
+            }
             self.skip_newlines();
         }
 
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(AppDecl { name, inject_fields, methods }, Span::new(start, end)))
+        Ok(Spanned::new(AppDecl { name, inject_fields, ambient_types, methods }, Span::new(start, end)))
     }
 
     fn parse_enum_decl(&mut self) -> Result<Spanned<EnumDecl>, CompileError> {
@@ -367,7 +375,7 @@ impl<'a> Parser<'a> {
                     let fname = self.expect_ident()?;
                     self.expect(&Token::Colon)?;
                     let fty = self.parse_type()?;
-                    fields.push(Field { name: fname, ty: fty, is_injected: false });
+                    fields.push(Field { name: fname, ty: fty, is_injected: false, is_ambient: false });
                     self.skip_newlines();
                 }
                 self.expect(&Token::RBrace)?;
@@ -406,7 +414,7 @@ impl<'a> Parser<'a> {
             let fname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type()?;
-            fields.push(Field { name: fname, ty: fty, is_injected: false });
+            fields.push(Field { name: fname, ty: fty, is_injected: false, is_ambient: false });
             self.skip_newlines();
         }
 
@@ -491,6 +499,20 @@ impl<'a> Parser<'a> {
         let name = self.expect_ident()?;
         let type_params = self.parse_type_params()?;
 
+        // Parse optional `uses Type, Type2`
+        let uses = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Uses) {
+            self.advance(); // consume 'uses'
+            let mut types = Vec::new();
+            types.push(self.expect_ident()?);
+            while self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                self.advance(); // consume ','
+                types.push(self.expect_ident()?);
+            }
+            types
+        } else {
+            Vec::new()
+        };
+
         // Parse optional bracket deps: class Foo[dep: Type]
         let inject_fields = self.parse_bracket_deps()?;
 
@@ -522,7 +544,7 @@ impl<'a> Parser<'a> {
                 let fname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
-                fields.push(Field { name: fname, ty: fty, is_injected: false });
+                fields.push(Field { name: fname, ty: fty, is_injected: false, is_ambient: false });
                 self.consume_statement_end();
             }
             self.skip_newlines();
@@ -531,7 +553,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ClassDecl { name, type_params, fields, methods, impl_traits, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(ClassDecl { name, type_params, fields, methods, impl_traits, uses, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_method(&mut self) -> Result<Spanned<Function>, CompileError> {
@@ -2769,5 +2791,45 @@ mod tests {
     fn parse_non_generic_class_no_type_params() {
         let prog = parse("class Point {\n    x: int\n    y: int\n}");
         assert!(prog.classes[0].node.type_params.is_empty());
+    }
+
+    #[test]
+    fn parse_class_uses_single() {
+        let prog = parse("class Foo uses Logger {\n}");
+        let c = &prog.classes[0].node;
+        assert_eq!(c.uses.len(), 1);
+        assert_eq!(c.uses[0].node, "Logger");
+    }
+
+    #[test]
+    fn parse_class_uses_multiple_with_bracket_deps() {
+        let prog = parse("class Foo uses Logger, Config [db: UserDB] {\n}");
+        let c = &prog.classes[0].node;
+        assert_eq!(c.uses.len(), 2);
+        assert_eq!(c.uses[0].node, "Logger");
+        assert_eq!(c.uses[1].node, "Config");
+        // bracket dep
+        assert_eq!(c.fields.len(), 1);
+        assert_eq!(c.fields[0].name.node, "db");
+        assert!(c.fields[0].is_injected);
+    }
+
+    #[test]
+    fn parse_app_ambient() {
+        let prog = parse("app MyApp {\n    ambient Logger\n    fn main(self) {\n    }\n}");
+        let app = prog.app.as_ref().unwrap();
+        assert_eq!(app.node.ambient_types.len(), 1);
+        assert_eq!(app.node.ambient_types[0].node, "Logger");
+    }
+
+    #[test]
+    fn parse_class_uses_missing_comma_rejected() {
+        let tokens = lex("class Foo uses Logger Config {\n}").unwrap();
+        let mut parser = Parser::new(&tokens, "class Foo uses Logger Config {\n}");
+        // Should fail because 'Config' is unexpected after 'Logger' without comma
+        // The parser will try to parse 'Config' as bracket deps or impl,
+        // and fail because it expects '[', 'impl', or '{' after uses list
+        let result = parser.parse_program();
+        assert!(result.is_err());
     }
 }

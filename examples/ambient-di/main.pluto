@@ -1,0 +1,59 @@
+// Ambient DI example
+//
+// `uses` on a class declares ambient dependencies — they're automatically
+// injected and accessible as bare variables (no `self.` prefix needed).
+// `ambient Type` in the app registers the type for ambient injection.
+
+class Logger {
+    fn info(self, msg: string) {
+        print("[INFO] {msg}")
+    }
+
+    fn warn(self, msg: string) {
+        print("[WARN] {msg}")
+    }
+}
+
+class Config {
+    fn db_url(self) string {
+        return "postgres://localhost/mydb"
+    }
+}
+
+class Database {
+    fn query(self, sql: string) string {
+        return "result: {sql}"
+    }
+}
+
+// OrderService uses Logger and Config as ambient deps,
+// and Database as an explicit bracket dep.
+class OrderService uses Logger, Config [db: Database] {
+    fn process_order(self, id: int) {
+        // Ambient deps accessed as bare variables
+        logger.info("Processing order {id}")
+        let url = config.db_url()
+        logger.info("Using database: {url}")
+
+        // Explicit deps accessed via self
+        let result = self.db.query("SELECT * FROM orders WHERE id = {id}")
+        logger.info(result)
+    }
+}
+
+class NotificationService uses Logger {
+    fn notify(self, message: string) {
+        logger.info("Sending notification: {message}")
+    }
+}
+
+app MyApp[orders: OrderService, notifications: NotificationService] {
+    // Register Logger and Config as ambient types
+    ambient Logger
+    ambient Config
+
+    fn main(self) {
+        self.orders.process_order(42)
+        self.notifications.notify("Order processed!")
+    }
+}

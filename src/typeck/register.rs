@@ -367,6 +367,17 @@ pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeE
             impl_traits: Vec::new(),
         }));
 
+        // Populate ambient_types and validate each is a known class
+        for ambient_type in &app.ambient_types {
+            if !env.classes.contains_key(&ambient_type.node) {
+                return Err(CompileError::type_err(
+                    format!("ambient type '{}' is not a known class", ambient_type.node),
+                    ambient_type.span,
+                ));
+            }
+            env.ambient_types.insert(ambient_type.node.clone());
+        }
+
         // Register app methods (mangled as AppName_methodname)
         let mut method_names = Vec::new();
         let mut has_main = false;
@@ -432,6 +443,29 @@ pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeE
 
 pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     use std::collections::{HashMap as DMap, HashSet as DSet, VecDeque};
+
+    // Validate `uses` on classes — each used type must be declared `ambient` in the app
+    for class in &program.classes {
+        let c = &class.node;
+        if c.uses.is_empty() {
+            continue;
+        }
+        if program.app.is_none() {
+            return Err(CompileError::type_err(
+                format!("class '{}' uses ambient types, but no app declaration exists", c.name.node),
+                class.span,
+            ));
+        }
+        for used_type in &c.uses {
+            if !env.ambient_types.contains(&used_type.node) {
+                return Err(CompileError::type_err(
+                    format!("class '{}' uses ambient type '{}', but '{}' is not declared ambient in the app",
+                        c.name.node, used_type.node, used_type.node),
+                    used_type.span,
+                ));
+            }
+        }
+    }
 
     // Build adjacency: class -> list of dep types
     let mut graph: DMap<String, Vec<String>> = DMap::new();
