@@ -5,6 +5,7 @@ pub mod parser;
 pub mod typeck;
 pub mod codegen;
 pub mod modules;
+pub mod closures;
 
 use diagnostics::CompileError;
 use std::path::{Path, PathBuf};
@@ -17,10 +18,13 @@ pub fn compile(source: &str, output_path: &Path) -> Result<(), CompileError> {
 
     // 2. Parse
     let mut parser = parser::Parser::new(&tokens, source);
-    let program = parser.parse_program()?;
+    let mut program = parser.parse_program()?;
 
     // 3. Type check
-    let env = typeck::type_check(&program)?;
+    let mut env = typeck::type_check(&program)?;
+
+    // 3b. Lift closures
+    closures::lift_closures(&mut program, &mut env)?;
 
     // 4. Codegen → object bytes
     let object_bytes = codegen::codegen(&program, &env)?;
@@ -58,10 +62,13 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
     let graph = modules::resolve_modules(entry_file, effective_stdlib.as_deref())?;
 
     // 2. Flatten
-    let (program, _source_map) = modules::flatten_modules(graph)?;
+    let (mut program, _source_map) = modules::flatten_modules(graph)?;
 
     // 3. Type check
-    let env = typeck::type_check(&program)?;
+    let mut env = typeck::type_check(&program)?;
+
+    // 3b. Lift closures
+    closures::lift_closures(&mut program, &mut env)?;
 
     // 4. Codegen → object bytes
     let object_bytes = codegen::codegen(&program, &env)?;

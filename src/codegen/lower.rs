@@ -599,6 +599,39 @@ impl<'a> LowerContext<'a> {
                     return self.lower_print(args);
                 }
 
+                // Check if calling a closure variable
+                if let Some(PlutoType::Fn(ref param_types, ref ret_type)) = self.var_types.get(&name.node).cloned() {
+                    let closure_var = self.variables[&name.node];
+                    let closure_ptr = self.builder.use_var(closure_var);
+
+                    // Load fn_ptr from closure object at offset 0
+                    let fn_ptr = self.builder.ins().load(types::I64, MemFlags::new(), closure_ptr, Offset32::new(0));
+
+                    // Build indirect call signature: (I64 env, param_types...) -> ret
+                    let mut sig = self.module.make_signature();
+                    sig.params.push(AbiParam::new(types::I64)); // __env
+                    for pt in param_types {
+                        sig.params.push(AbiParam::new(pluto_to_cranelift(pt)));
+                    }
+                    if **ret_type != PlutoType::Void {
+                        sig.returns.push(AbiParam::new(pluto_to_cranelift(ret_type)));
+                    }
+                    let sig_ref = self.builder.func.import_signature(sig);
+
+                    let mut call_args = vec![closure_ptr]; // env ptr as first arg
+                    for arg in args {
+                        call_args.push(self.lower_expr(&arg.node)?);
+                    }
+
+                    let call = self.builder.ins().call_indirect(sig_ref, fn_ptr, &call_args);
+                    let results = self.builder.inst_results(call);
+                    return Ok(if results.is_empty() {
+                        self.builder.ins().iconst(types::I64, 0)
+                    } else {
+                        results[0]
+                    });
+                }
+
                 let func_id = self.func_ids.get(&name.node).ok_or_else(|| {
                     CompileError::codegen(format!("undefined function '{}'", name.node))
                 })?;
@@ -869,8 +902,37 @@ impl<'a> LowerContext<'a> {
             Expr::Closure { .. } => {
                 Err(CompileError::codegen("closures should be lifted before codegen"))
             }
-            Expr::ClosureCreate { .. } => {
-                Err(CompileError::codegen("closure codegen not yet implemented"))
+            Expr::ClosureCreate { fn_name, captures } => {
+                // 1. Look up the function ID for the lifted closure function
+                let func_id = self.func_ids.get(fn_name).ok_or_else(|| {
+                    CompileError::codegen(format!("undefined closure function '{}'", fn_name))
+                })?;
+
+                // 2. Allocate closure object: [fn_ptr: i64] [capture_0: i64] ...
+                let obj_size = (1 + captures.len()) as i64 * 8;
+                let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
+                let size_val = self.builder.ins().iconst(types::I64, obj_size);
+                let call = self.builder.ins().call(alloc_ref, &[size_val]);
+                let closure_ptr = self.builder.inst_results(call)[0];
+
+                // 3. Store function pointer at offset 0
+                let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+                let fn_addr = self.builder.ins().func_addr(types::I64, func_ref);
+                self.builder.ins().store(MemFlags::new(), fn_addr, closure_ptr, Offset32::new(0));
+
+                // 4. Store each captured variable at offset 8, 16, 24, ...
+                for (i, cap_name) in captures.iter().enumerate() {
+                    let cap_var = self.variables.get(cap_name).ok_or_else(|| {
+                        CompileError::codegen(format!("undefined capture variable '{}'", cap_name))
+                    })?;
+                    let cap_val = self.builder.use_var(*cap_var);
+                    let cap_type = self.var_types.get(cap_name).cloned().unwrap_or(PlutoType::Int);
+                    let slot = to_array_slot(cap_val, &cap_type, &mut self.builder);
+                    let offset = (1 + i) as i32 * 8;
+                    self.builder.ins().store(MemFlags::new(), slot, closure_ptr, Offset32::new(offset));
+                }
+
+                Ok(closure_ptr)
             }
         }
     }
@@ -963,6 +1025,25 @@ pub fn lower_function(
         variables.insert(param.name.node.clone(), var);
         var_types.insert(param.name.node.clone(), pty);
         cranelift_param_idx += 1;
+    }
+
+    // Closure prologue: load captured variables from __env pointer
+    if let Some(captures) = env.closure_fns.get(&func.name.node) {
+        let env_var = variables.get("__env").ok_or_else(|| {
+            CompileError::codegen(format!("closure '{}' missing __env param", func.name.node))
+        })?;
+        let env_ptr = builder.use_var(*env_var);
+        for (i, (cap_name, cap_type)) in captures.iter().enumerate() {
+            let offset = (1 + i) as i32 * 8; // skip fn_ptr at offset 0
+            let raw = builder.ins().load(types::I64, MemFlags::new(), env_ptr, Offset32::new(offset));
+            let val = from_array_slot(raw, cap_type, &mut builder);
+            let var = Variable::from_u32(next_var);
+            next_var += 1;
+            builder.declare_var(var, pluto_to_cranelift(cap_type));
+            builder.def_var(var, val);
+            variables.insert(cap_name.clone(), var);
+            var_types.insert(cap_name.clone(), cap_type.clone());
+        }
     }
 
     // Compute expected return type for class→trait wrapping in return statements
@@ -1133,6 +1214,10 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
         }
         Expr::Call { name, .. } => {
+            // Check if calling a closure variable first
+            if let Some(PlutoType::Fn(_, ret)) = var_types.get(&name.node) {
+                return *ret.clone();
+            }
             env.functions.get(&name.node).map(|s| s.return_type.clone()).unwrap_or(PlutoType::Void)
         }
         Expr::StructLit { name, .. } => PlutoType::Class(name.node.clone()),
@@ -1193,7 +1278,24 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 PlutoType::Void
             }
         }
-        Expr::Closure { .. } => PlutoType::Void,
-        Expr::ClosureCreate { .. } => PlutoType::Void,
+        Expr::Closure { params, return_type, .. } => {
+            let param_types: Vec<PlutoType> = params.iter()
+                .map(|p| resolve_type_expr_to_pluto(&p.ty.node, env))
+                .collect();
+            let ret = match return_type {
+                Some(rt) => resolve_type_expr_to_pluto(&rt.node, env),
+                None => PlutoType::Void,
+            };
+            PlutoType::Fn(param_types, Box::new(ret))
+        }
+        Expr::ClosureCreate { fn_name, .. } => {
+            if let Some(sig) = env.functions.get(fn_name) {
+                // Return fn type: skip the __env param (first param)
+                let param_types = sig.params[1..].to_vec();
+                PlutoType::Fn(param_types, Box::new(sig.return_type.clone()))
+            } else {
+                PlutoType::Void
+            }
+        }
     }
 }
