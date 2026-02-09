@@ -25,6 +25,14 @@ void *__pluto_alloc(long size) {
     return ptr;
 }
 
+void *__pluto_trait_wrap(long data_ptr, long vtable_ptr) {
+    long *handle = (long *)malloc(16);
+    if (!handle) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    handle[0] = data_ptr;
+    handle[1] = vtable_ptr;
+    return handle;
+}
+
 void *__pluto_string_new(const char *data, long len) {
     void *header = malloc(8 + len + 1);
     if (!header) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
