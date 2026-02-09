@@ -4,6 +4,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <setjmp.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -752,6 +753,13 @@ void *__pluto_get_error() {
 
 void __pluto_clear_error() {
     __pluto_current_error = NULL;
+}
+
+// Time
+long __pluto_time_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000000000L + (long)ts.tv_nsec;
 }
 
 // ── Socket runtime — POSIX sockets for networking ─────────────────────────────

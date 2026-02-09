@@ -204,3 +204,149 @@ fn error_raise_wrong_field_type_rejected() {
         "expected int",
     );
 }
+
+// ── Method error enforcement tests ─────────────────────────────────────────────
+
+#[test]
+fn error_bare_fallible_method_rejected() {
+    compile_should_fail_with(
+        "error Fail {}\n\nclass Svc {\n    _x: int\n    fn do_thing(self) {\n        raise Fail {}\n    }\n}\n\nfn main() {\n    let s = Svc { _x: 0 }\n    s.do_thing()\n}",
+        "must be handled",
+    );
+}
+
+#[test]
+fn error_method_propagate() {
+    let out = compile_and_run_stdout(
+        "error Fail {}\n\nclass Svc {\n    _x: int\n    fn do_thing(self) int {\n        raise Fail {}\n        return 0\n    }\n}\n\nfn wrapper() int {\n    let s = Svc { _x: 0 }\n    let x = s.do_thing()!\n    return x\n}\n\nfn main() {\n    let r = wrapper() catch -1\n    print(r)\n}",
+    );
+    assert_eq!(out, "-1\n");
+}
+
+#[test]
+fn error_method_catch_wildcard() {
+    let out = compile_and_run_stdout(
+        "error Fail {}\n\nclass Svc {\n    _x: int\n    fn do_thing(self) int {\n        raise Fail {}\n        return 0\n    }\n}\n\nfn main() {\n    let s = Svc { _x: 0 }\n    let r = s.do_thing() catch err { -99 }\n    print(r)\n}",
+    );
+    assert_eq!(out, "-99\n");
+}
+
+#[test]
+fn error_method_catch_shorthand() {
+    let out = compile_and_run_stdout(
+        "error Fail {}\n\nclass Svc {\n    _x: int\n    fn do_thing(self) int {\n        raise Fail {}\n        return 0\n    }\n}\n\nfn main() {\n    let s = Svc { _x: 0 }\n    let r = s.do_thing() catch 42\n    print(r)\n}",
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn error_method_bang_on_infallible_rejected() {
+    compile_should_fail_with(
+        "class Svc {\n    _x: int\n    fn safe(self) int {\n        return 1\n    }\n}\n\nfn main() {\n    let s = Svc { _x: 0 }\n    let x = s.safe()!\n}",
+        "infallible",
+    );
+}
+
+#[test]
+fn error_method_catch_on_infallible_rejected() {
+    compile_should_fail_with(
+        "class Svc {\n    _x: int\n    fn safe(self) int {\n        return 1\n    }\n}\n\nfn main() {\n    let s = Svc { _x: 0 }\n    let x = s.safe() catch 0\n}",
+        "infallible",
+    );
+}
+
+#[test]
+fn error_method_infallible_bare_ok() {
+    let out = compile_and_run_stdout(
+        "class Svc {\n    _x: int\n    fn safe(self) int {\n        return 42\n    }\n}\n\nfn main() {\n    let s = Svc { _x: 0 }\n    let x = s.safe()\n    print(x)\n}",
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn error_method_transitive_propagation() {
+    let out = compile_and_run_stdout(
+        "error Fail {}\n\nclass Inner {\n    _x: int\n    fn risky(self) int {\n        raise Fail {}\n        return 0\n    }\n}\n\nclass Outer {\n    _x: int\n    fn wrap(self) int {\n        let i = Inner { _x: 0 }\n        let x = i.risky()!\n        return x\n    }\n}\n\nfn main() {\n    let o = Outer { _x: 0 }\n    let r = o.wrap() catch -1\n    print(r)\n}",
+    );
+    assert_eq!(out, "-1\n");
+}
+
+#[test]
+fn error_default_trait_method_fallible() {
+    compile_should_fail_with(
+        "error Fail {}\n\ntrait Greeter {\n    fn greet(self) int {\n        raise Fail {}\n        return 0\n    }\n}\n\nclass A impl Greeter {\n    x: int\n}\n\nfn main() {\n    let a = A { x: 1 }\n    a.greet()\n}",
+        "must be handled",
+    );
+}
+
+#[test]
+fn error_trait_dispatch_any_fallible() {
+    compile_should_fail_with(
+        "error Fail {}\n\ntrait Worker {\n    fn work(self) int\n}\n\nclass Safe impl Worker {\n    fn work(self) int {\n        return 1\n    }\n}\n\nclass Risky impl Worker {\n    fn work(self) int {\n        raise Fail {}\n        return 0\n    }\n}\n\nfn use_worker(w: Worker) int {\n    return w.work()\n}",
+        "must be handled",
+    );
+}
+
+#[test]
+fn error_trait_dispatch_all_infallible() {
+    let out = compile_and_run_stdout(
+        "trait Worker {\n    fn work(self) int\n}\n\nclass A impl Worker {\n    _x: int\n    fn work(self) int {\n        return 1\n    }\n}\n\nclass B impl Worker {\n    _x: int\n    fn work(self) int {\n        return 2\n    }\n}\n\nfn use_worker(w: Worker) int {\n    return w.work()\n}\n\nfn main() {\n    let a = A { _x: 0 }\n    let r = use_worker(a)\n    print(r)\n}",
+    );
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn error_trait_dispatch_propagate() {
+    let out = compile_and_run_stdout(
+        "error Fail {}\n\ntrait Worker {\n    fn work(self) int\n}\n\nclass Risky impl Worker {\n    _x: int\n    fn work(self) int {\n        raise Fail {}\n        return 0\n    }\n}\n\nfn use_worker(w: Worker) int {\n    let r = w.work()!\n    return r\n}\n\nfn main() {\n    let r = Risky { _x: 0 }\n    let result = use_worker(r) catch -1\n    print(result)\n}",
+    );
+    assert_eq!(out, "-1\n");
+}
+
+#[test]
+fn error_app_method_fallible() {
+    compile_should_fail_with(
+        "error Fail {}\n\nclass Svc {\n    fn do_thing(self) {\n        raise Fail {}\n    }\n}\n\napp MyApp[svc: Svc] {\n    fn main(self) {\n        self.svc.do_thing()\n    }\n}",
+        "must be handled",
+    );
+}
+
+#[test]
+fn error_generic_fn_with_method_call_compiles() {
+    let out = compile_and_run_stdout(
+        "class Box {\n    val: int\n    fn get(self) int {\n        return self.val\n    }\n}\n\nfn identity<T>(x: T) T {\n    return x\n}\n\nfn main() {\n    let b = Box { val: 42 }\n    let v = b.get()\n    let r = identity(v)\n    print(r)\n}",
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn error_builtin_method_bang_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    let arr = [1, 2, 3]\n    arr.push(4)!\n}",
+        "infallible",
+    );
+}
+
+#[test]
+fn error_builtin_method_catch_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    let arr = [1, 2, 3]\n    let x = arr.len() catch 0\n}",
+        "infallible",
+    );
+}
+
+#[test]
+fn error_builtin_method_bare_ok() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let arr = [1, 2, 3]\n    arr.push(4)\n    print(arr.len())\n}",
+    );
+    assert_eq!(out, "4\n");
+}
+
+#[test]
+fn error_method_in_closure_body() {
+    compile_should_fail_with(
+        "error Fail {}\n\nclass Svc {\n    _x: int\n    fn risky(self) int {\n        raise Fail {}\n        return 0\n    }\n}\n\nfn main() {\n    let s = Svc { _x: 0 }\n    let f = (x: int) => s.risky()\n}",
+        "must be handled",
+    );
+}
