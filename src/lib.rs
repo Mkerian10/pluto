@@ -6,6 +6,7 @@ pub mod typeck;
 pub mod codegen;
 pub mod modules;
 pub mod closures;
+pub mod monomorphize;
 
 use diagnostics::CompileError;
 use std::path::{Path, PathBuf};
@@ -23,7 +24,10 @@ pub fn compile(source: &str, output_path: &Path) -> Result<(), CompileError> {
     // 3. Type check
     let mut env = typeck::type_check(&program)?;
 
-    // 3b. Lift closures
+    // 3b. Monomorphize generics
+    monomorphize::monomorphize(&mut program, &mut env)?;
+
+    // 3c. Lift closures
     closures::lift_closures(&mut program, &mut env)?;
 
     // 4. Codegen → object bytes
@@ -67,7 +71,10 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
     // 3. Type check
     let mut env = typeck::type_check(&program)?;
 
-    // 3b. Lift closures
+    // 3b. Monomorphize generics
+    monomorphize::monomorphize(&mut program, &mut env)?;
+
+    // 3c. Lift closures
     closures::lift_closures(&mut program, &mut env)?;
 
     // 4. Codegen → object bytes
