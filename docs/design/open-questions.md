@@ -35,6 +35,16 @@ Areas that need further design work before implementation.
 - [ ] **Task groups / scopes** — structured concurrency construct for managing multiple tasks with automatic cancellation?
 - [ ] **Select / race** — waiting on the first of multiple tasks or channels to complete
 
+## Contracts
+
+- [ ] **Contract inheritance on generics** — how do invariants interact with generics? Does `Box<T>` inherit T's invariants?
+- [ ] **Quantifiers** — should a future version support bounded quantifiers (`forall item in self.items: item.price > 0`)?
+- [ ] **Contract testing mode** — `@test` mode that inserts runtime assertions for all contracts (for debugging)?
+- [ ] **`old()` deep copy semantics** — what values can `old()` capture? Deep clone for heap types?
+- [ ] **Protocol composition** — can protocols be composed or extended?
+- [ ] **`@assume` scope** — should `@assume` apply to a single call, a block, or an entire function?
+- [ ] **Gradual adoption** — should contracts be opt-in per module, or always enforced?
+
 ## Tooling
 
 - [ ] **Testing** — built-in test framework, distributed testing support
@@ -75,3 +85,4 @@ Previously open questions that have been designed and implemented.
 - [x] **Concurrency primitives** — message-passing only, no mutexes/atomics exposed to user code
 - [x] **Spawn semantics** — `spawn` returns `Task<T>`, `.get()` is fallible (preserves error types + TaskCancelled)
 - [x] **Structured concurrency** — tasks must be consumed (`.get()` or `.detach()`), structured by default
+- [x] **Contract system** — 5-type contract stack: invariants, pre/post conditions, protocol contracts, failure semantics, interface guarantees. Compile-time first with runtime checks at boundaries.
