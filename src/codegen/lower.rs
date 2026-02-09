@@ -35,6 +35,21 @@ impl<'a> LowerContext<'a> {
         self.builder.finalize();
     }
 
+    /// Call a runtime function that returns a value.
+    fn call_runtime(&mut self, name: &str, args: &[Value]) -> Value {
+        let func_ref = self.module.declare_func_in_func(self.runtime.get(name), self.builder.func);
+        let call = self.builder.ins().call(func_ref, args);
+        let results = self.builder.inst_results(call);
+        debug_assert!(!results.is_empty(), "call_runtime used on void function {name}");
+        results[0]
+    }
+
+    /// Call a runtime function that returns void.
+    fn call_runtime_void(&mut self, name: &str, args: &[Value]) {
+        let func_ref = self.module.declare_func_in_func(self.runtime.get(name), self.builder.func);
+        self.builder.ins().call(func_ref, args);
+    }
+
     /// Wrap a class pointer as a trait handle by calling __pluto_trait_wrap.
     fn wrap_class_as_trait(
         &mut self,
@@ -49,9 +64,7 @@ impl<'a> LowerContext<'a> {
             })?;
         let gv = self.module.declare_data_in_func(*vtable_data_id, self.builder.func);
         let vtable_ptr = self.builder.ins().global_value(types::I64, gv);
-        let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_trait_wrap"), self.builder.func);
-        let call = self.builder.ins().call(func_ref, &[class_val, vtable_ptr]);
-        Ok(self.builder.inst_results(call)[0])
+        Ok(self.call_runtime("__pluto_trait_wrap", &[class_val, vtable_ptr]))
     }
 
     /// Emit a return with the default value for the current function's return type.
@@ -95,6 +108,8 @@ impl<'a> LowerContext<'a> {
         Ok(self.builder.ins().global_value(types::I64, gv))
     }
 
+    // ── lower_stmt dispatch ──────────────────────────────────────────────
+
     fn lower_stmt(
         &mut self,
         stmt: &Stmt,
@@ -104,33 +119,7 @@ impl<'a> LowerContext<'a> {
             return Ok(());
         }
         match stmt {
-            Stmt::Let { name, ty, value } => {
-                let val = self.lower_expr(&value.node)?;
-                let val_type = infer_type_for_expr(&value.node, self.env, &self.var_types);
-
-                // Resolve declared type if present
-                let declared_type = ty.as_ref().map(|t| resolve_type_expr_to_pluto(&t.node, self.env));
-
-                // If assigning a class to a trait-typed variable, wrap it
-                let (final_val, store_type) = match (&val_type, &declared_type) {
-                    (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
-                        let cn = cn.clone();
-                        let tn = tn.clone();
-                        let wrapped = self.wrap_class_as_trait(val, &cn, &tn)?;
-                        (wrapped, PlutoType::Trait(tn))
-                    }
-                    (_, Some(dt)) => (val, dt.clone()),
-                    _ => (val, val_type),
-                };
-
-                let cl_type = pluto_to_cranelift(&store_type);
-                let var = Variable::from_u32(self.next_var);
-                self.next_var += 1;
-                self.builder.declare_var(var, cl_type);
-                self.builder.def_var(var, final_val);
-                self.variables.insert(name.node.clone(), var);
-                self.var_types.insert(name.node.clone(), store_type);
-            }
+            Stmt::Let { name, ty, value } => self.lower_let(name, ty, value),
             Stmt::Return(value) => {
                 match value {
                     Some(expr) => {
@@ -152,6 +141,7 @@ impl<'a> LowerContext<'a> {
                     }
                 }
                 *terminated = true;
+                Ok(())
             }
             Stmt::Assign { target, value } => {
                 let val = self.lower_expr(&value.node)?;
@@ -170,6 +160,7 @@ impl<'a> LowerContext<'a> {
                     CompileError::codegen(format!("undefined variable '{}'", target.node))
                 })?;
                 self.builder.def_var(*var, final_val);
+                Ok(())
             }
             Stmt::FieldAssign { object, field, value } => {
                 let ptr = self.lower_expr(&object.node)?;
@@ -183,6 +174,7 @@ impl<'a> LowerContext<'a> {
                         self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
                     }
                 }
+                Ok(())
             }
             Stmt::IndexAssign { object, index, value } => {
                 let handle = self.lower_expr(&object.node)?;
@@ -191,335 +183,410 @@ impl<'a> LowerContext<'a> {
                 let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
                 if let PlutoType::Array(elem) = &obj_type {
                     let slot = to_array_slot(val, elem, &mut self.builder);
-                    let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_array_set"), self.builder.func);
-                    self.builder.ins().call(func_ref, &[handle, idx, slot]);
+                    self.call_runtime_void("__pluto_array_set", &[handle, idx, slot]);
                 }
+                Ok(())
             }
             Stmt::If { condition, then_block, else_block } => {
-                let cond_val = self.lower_expr(&condition.node)?;
-
-                let then_bb = self.builder.create_block();
-                let merge_bb = self.builder.create_block();
-
-                if let Some(else_blk) = else_block {
-                    let else_bb = self.builder.create_block();
-                    self.builder.ins().brif(cond_val, then_bb, &[], else_bb, &[]);
-
-                    self.builder.switch_to_block(then_bb);
-                    self.builder.seal_block(then_bb);
-                    let mut then_terminated = false;
-                    for s in &then_block.node.stmts {
-                        self.lower_stmt(&s.node, &mut then_terminated)?;
-                    }
-                    if !then_terminated {
-                        self.builder.ins().jump(merge_bb, &[]);
-                    }
-
-                    self.builder.switch_to_block(else_bb);
-                    self.builder.seal_block(else_bb);
-                    let mut else_terminated = false;
-                    for s in &else_blk.node.stmts {
-                        self.lower_stmt(&s.node, &mut else_terminated)?;
-                    }
-                    if !else_terminated {
-                        self.builder.ins().jump(merge_bb, &[]);
-                    }
-
-                    if then_terminated && else_terminated {
-                        *terminated = true;
-                    }
-                } else {
-                    self.builder.ins().brif(cond_val, then_bb, &[], merge_bb, &[]);
-
-                    self.builder.switch_to_block(then_bb);
-                    self.builder.seal_block(then_bb);
-                    let mut then_terminated = false;
-                    for s in &then_block.node.stmts {
-                        self.lower_stmt(&s.node, &mut then_terminated)?;
-                    }
-                    if !then_terminated {
-                        self.builder.ins().jump(merge_bb, &[]);
-                    }
-                }
-
-                if !*terminated {
-                    self.builder.switch_to_block(merge_bb);
-                    self.builder.seal_block(merge_bb);
-                }
+                self.lower_if(condition, then_block, else_block, terminated)
             }
-            Stmt::While { condition, body } => {
-                let header_bb = self.builder.create_block();
-                let body_bb = self.builder.create_block();
-                let exit_bb = self.builder.create_block();
-
-                self.builder.ins().jump(header_bb, &[]);
-
-                self.builder.switch_to_block(header_bb);
-                let cond_val = self.lower_expr(&condition.node)?;
-                self.builder.ins().brif(cond_val, body_bb, &[], exit_bb, &[]);
-
-                self.builder.switch_to_block(body_bb);
-                self.builder.seal_block(body_bb);
-                let mut body_terminated = false;
-                for s in &body.node.stmts {
-                    self.lower_stmt(&s.node, &mut body_terminated)?;
-                }
-                if !body_terminated {
-                    self.builder.ins().jump(header_bb, &[]);
-                }
-
-                self.builder.seal_block(header_bb);
-                self.builder.switch_to_block(exit_bb);
-                self.builder.seal_block(exit_bb);
-            }
-            Stmt::For { var, iterable, body } => {
-                // Lower iterable to get array handle
-                let handle = self.lower_expr(&iterable.node)?;
-
-                // Get element type from iterable
-                let iter_type = infer_type_for_expr(&iterable.node, self.env, &self.var_types);
-                let elem_type = match &iter_type {
-                    PlutoType::Array(elem) => *elem.clone(),
-                    _ => return Err(CompileError::codegen("for loop requires array".to_string())),
-                };
-
-                // Call len() on the array
-                let len_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_array_len"), self.builder.func);
-                let len_call = self.builder.ins().call(len_ref, &[handle]);
-                let len_val = self.builder.inst_results(len_call)[0];
-
-                // Create counter variable, init to 0
-                let counter_var = Variable::from_u32(self.next_var);
-                self.next_var += 1;
-                self.builder.declare_var(counter_var, types::I64);
-                let zero = self.builder.ins().iconst(types::I64, 0);
-                self.builder.def_var(counter_var, zero);
-
-                // Create blocks
-                let header_bb = self.builder.create_block();
-                let body_bb = self.builder.create_block();
-                let exit_bb = self.builder.create_block();
-
-                self.builder.ins().jump(header_bb, &[]);
-
-                // Header: check counter < len
-                self.builder.switch_to_block(header_bb);
-                let counter = self.builder.use_var(counter_var);
-                let cond = self.builder.ins().icmp(IntCC::SignedLessThan, counter, len_val);
-                self.builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
-
-                // Body
-                self.builder.switch_to_block(body_bb);
-                self.builder.seal_block(body_bb);
-
-                // Get element: array_get(handle, counter)
-                let counter_for_get = self.builder.use_var(counter_var);
-                let get_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_array_get"), self.builder.func);
-                let get_call = self.builder.ins().call(get_ref, &[handle, counter_for_get]);
-                let raw_slot = self.builder.inst_results(get_call)[0];
-                let elem_val = from_array_slot(raw_slot, &elem_type, &mut self.builder);
-
-                // Create loop variable, saving any prior binding for restoration
-                let prev_var = self.variables.get(&var.node).cloned();
-                let prev_type = self.var_types.get(&var.node).cloned();
-
-                let loop_var = Variable::from_u32(self.next_var);
-                self.next_var += 1;
-                let cl_elem_type = pluto_to_cranelift(&elem_type);
-                self.builder.declare_var(loop_var, cl_elem_type);
-                self.builder.def_var(loop_var, elem_val);
-                self.variables.insert(var.node.clone(), loop_var);
-                self.var_types.insert(var.node.clone(), elem_type);
-
-                // Lower body statements
-                let mut body_terminated = false;
-                for s in &body.node.stmts {
-                    self.lower_stmt(&s.node, &mut body_terminated)?;
-                }
-
-                // Restore prior variable binding if shadowed
-                if let Some(pv) = prev_var {
-                    self.variables.insert(var.node.clone(), pv);
-                } else {
-                    self.variables.remove(&var.node);
-                }
-                if let Some(pt) = prev_type {
-                    self.var_types.insert(var.node.clone(), pt);
-                } else {
-                    self.var_types.remove(&var.node);
-                }
-
-                // Increment counter
-                if !body_terminated {
-                    let counter_inc = self.builder.use_var(counter_var);
-                    let one = self.builder.ins().iconst(types::I64, 1);
-                    let new_counter = self.builder.ins().iadd(counter_inc, one);
-                    self.builder.def_var(counter_var, new_counter);
-                    self.builder.ins().jump(header_bb, &[]);
-                }
-
-                self.builder.seal_block(header_bb);
-                self.builder.switch_to_block(exit_bb);
-                self.builder.seal_block(exit_bb);
-            }
-            Stmt::Match { expr, arms } => {
-                let ptr = self.lower_expr(&expr.node)?;
-                let tag = self.builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(0));
-
-                let enum_name = match infer_type_for_expr(&expr.node, self.env, &self.var_types) {
-                    PlutoType::Enum(name) => name,
-                    _ => return Err(CompileError::codegen("match on non-enum".to_string())),
-                };
-                let enum_info = self.env.enums.get(&enum_name).ok_or_else(|| {
-                    CompileError::codegen(format!("unknown enum '{enum_name}'"))
-                })?.clone();
-
-                let merge_bb = self.builder.create_block();
-                let mut check_blocks = Vec::new();
-                let mut body_blocks = Vec::new();
-
-                for _ in 0..arms.len() {
-                    check_blocks.push(self.builder.create_block());
-                    body_blocks.push(self.builder.create_block());
-                }
-
-                // Jump to first check block
-                self.builder.ins().jump(check_blocks[0], &[]);
-
-                let mut all_terminated = true;
-
-                for (i, arm) in arms.iter().enumerate() {
-                    // Check block: compare tag
-                    self.builder.switch_to_block(check_blocks[i]);
-                    self.builder.seal_block(check_blocks[i]);
-
-                    let variant_idx = enum_info.variants.iter()
-                        .position(|(n, _)| *n == arm.variant_name.node)
-                        .unwrap() as i64;
-                    let expected_tag = self.builder.ins().iconst(types::I64, variant_idx);
-                    let cmp = self.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
-
-                    let fallthrough = if i + 1 < arms.len() {
-                        check_blocks[i + 1]
-                    } else {
-                        // Last arm: exhaustiveness guaranteed, so fallthrough to merge
-                        merge_bb
-                    };
-                    self.builder.ins().brif(cmp, body_blocks[i], &[], fallthrough, &[]);
-
-                    // Body block: extract bindings and lower body
-                    self.builder.switch_to_block(body_blocks[i]);
-                    self.builder.seal_block(body_blocks[i]);
-
-                    let variant_fields = &enum_info.variants.iter()
-                        .find(|(n, _)| *n == arm.variant_name.node)
-                        .unwrap().1;
-
-                    // Save previous variable bindings so we can restore after this arm
-                    let mut prev_vars: Vec<(String, Option<Variable>, Option<PlutoType>)> = Vec::new();
-
-                    for (binding_field, opt_rename) in &arm.bindings {
-                        let field_idx = variant_fields.iter()
-                            .position(|(n, _)| *n == binding_field.node)
-                            .unwrap();
-                        let field_type = &variant_fields[field_idx].1;
-                        let offset = ((1 + field_idx) as i32) * POINTER_SIZE;
-                        let raw = self.builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(offset));
-                        let val = from_array_slot(raw, field_type, &mut self.builder);
-
-                        let var_name = opt_rename.as_ref().map_or(&binding_field.node, |r| &r.node);
-                        let cl_type = pluto_to_cranelift(field_type);
-                        let var = Variable::from_u32(self.next_var);
-                        self.next_var += 1;
-                        self.builder.declare_var(var, cl_type);
-                        self.builder.def_var(var, val);
-
-                        prev_vars.push((
-                            var_name.clone(),
-                            self.variables.get(var_name).cloned(),
-                            self.var_types.get(var_name).cloned(),
-                        ));
-                        self.variables.insert(var_name.clone(), var);
-                        self.var_types.insert(var_name.clone(), field_type.clone());
-                    }
-
-                    let mut arm_terminated = false;
-                    for s in &arm.body.node.stmts {
-                        self.lower_stmt(&s.node, &mut arm_terminated)?;
-                    }
-
-                    // Restore previous variable bindings
-                    for (name, prev_var, prev_type) in prev_vars {
-                        if let Some(pv) = prev_var {
-                            self.variables.insert(name.clone(), pv);
-                        } else {
-                            self.variables.remove(&name);
-                        }
-                        if let Some(pt) = prev_type {
-                            self.var_types.insert(name, pt);
-                        } else {
-                            self.var_types.remove(&name);
-                        }
-                    }
-
-                    if !arm_terminated {
-                        self.builder.ins().jump(merge_bb, &[]);
-                    }
-                    if !arm_terminated {
-                        all_terminated = false;
-                    }
-                }
-
-                if all_terminated {
-                    *terminated = true;
-                }
-
-                // Always switch to and seal the merge block — it's referenced by
-                // the last arm's fallthrough even if unreachable.
-                self.builder.switch_to_block(merge_bb);
-                self.builder.seal_block(merge_bb);
-                if *terminated {
-                    // All arms returned; merge block is unreachable but needs a terminator.
-                    self.builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
-                }
-            }
+            Stmt::While { condition, body } => self.lower_while(condition, body),
+            Stmt::For { var, iterable, body } => self.lower_for(var, iterable, body),
+            Stmt::Match { expr, arms } => self.lower_match_stmt(expr, arms, terminated),
             Stmt::Raise { error_name, fields } => {
-                let error_info = self.env.errors.get(&error_name.node).ok_or_else(|| {
-                    CompileError::codegen(format!("unknown error '{}'", error_name.node))
-                })?.clone();
-                let num_fields = error_info.fields.len();
-                let size = (num_fields as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
-
-                // Allocate error object
-                let alloc_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_alloc"), self.builder.func);
-                let size_val = self.builder.ins().iconst(types::I64, size);
-                let call = self.builder.ins().call(alloc_ref, &[size_val]);
-                let ptr = self.builder.inst_results(call)[0];
-
-                // Store field values
-                let field_info = error_info.fields.clone();
-                for (lit_name, lit_val) in fields {
-                    let val = self.lower_expr(&lit_val.node)?;
-                    let offset = field_info.iter()
-                        .position(|(n, _)| *n == lit_name.node)
-                        .unwrap_or(0) as i32 * POINTER_SIZE;
-                    self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
-                }
-
-                // Set TLS error pointer
-                let raise_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_raise_error"), self.builder.func);
-                self.builder.ins().call(raise_ref, &[ptr]);
-
-                // Return default value (caller checks TLS)
-                self.emit_default_return();
+                self.lower_raise(error_name, fields)?;
                 *terminated = true;
+                Ok(())
             }
             Stmt::Expr(expr) => {
                 self.lower_expr(&expr.node)?;
+                Ok(())
             }
+        }
+    }
+
+    // ── lower_stmt extracted helpers ─────────────────────────────────────
+
+    fn lower_let(
+        &mut self,
+        name: &crate::span::Spanned<String>,
+        ty: &Option<crate::span::Spanned<TypeExpr>>,
+        value: &crate::span::Spanned<Expr>,
+    ) -> Result<(), CompileError> {
+        let val = self.lower_expr(&value.node)?;
+        let val_type = infer_type_for_expr(&value.node, self.env, &self.var_types);
+
+        // Resolve declared type if present
+        let declared_type = ty.as_ref().map(|t| resolve_type_expr_to_pluto(&t.node, self.env));
+
+        // If assigning a class to a trait-typed variable, wrap it
+        let (final_val, store_type) = match (&val_type, &declared_type) {
+            (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
+                let cn = cn.clone();
+                let tn = tn.clone();
+                let wrapped = self.wrap_class_as_trait(val, &cn, &tn)?;
+                (wrapped, PlutoType::Trait(tn))
+            }
+            (_, Some(dt)) => (val, dt.clone()),
+            _ => (val, val_type),
+        };
+
+        let cl_type = pluto_to_cranelift(&store_type);
+        let var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        self.builder.declare_var(var, cl_type);
+        self.builder.def_var(var, final_val);
+        self.variables.insert(name.node.clone(), var);
+        self.var_types.insert(name.node.clone(), store_type);
+        Ok(())
+    }
+
+    fn lower_if(
+        &mut self,
+        condition: &crate::span::Spanned<Expr>,
+        then_block: &crate::span::Spanned<Block>,
+        else_block: &Option<crate::span::Spanned<Block>>,
+        terminated: &mut bool,
+    ) -> Result<(), CompileError> {
+        let cond_val = self.lower_expr(&condition.node)?;
+
+        let then_bb = self.builder.create_block();
+        let merge_bb = self.builder.create_block();
+
+        if let Some(else_blk) = else_block {
+            let else_bb = self.builder.create_block();
+            self.builder.ins().brif(cond_val, then_bb, &[], else_bb, &[]);
+
+            self.builder.switch_to_block(then_bb);
+            self.builder.seal_block(then_bb);
+            let mut then_terminated = false;
+            for s in &then_block.node.stmts {
+                self.lower_stmt(&s.node, &mut then_terminated)?;
+            }
+            if !then_terminated {
+                self.builder.ins().jump(merge_bb, &[]);
+            }
+
+            self.builder.switch_to_block(else_bb);
+            self.builder.seal_block(else_bb);
+            let mut else_terminated = false;
+            for s in &else_blk.node.stmts {
+                self.lower_stmt(&s.node, &mut else_terminated)?;
+            }
+            if !else_terminated {
+                self.builder.ins().jump(merge_bb, &[]);
+            }
+
+            if then_terminated && else_terminated {
+                *terminated = true;
+            }
+        } else {
+            self.builder.ins().brif(cond_val, then_bb, &[], merge_bb, &[]);
+
+            self.builder.switch_to_block(then_bb);
+            self.builder.seal_block(then_bb);
+            let mut then_terminated = false;
+            for s in &then_block.node.stmts {
+                self.lower_stmt(&s.node, &mut then_terminated)?;
+            }
+            if !then_terminated {
+                self.builder.ins().jump(merge_bb, &[]);
+            }
+        }
+
+        if !*terminated {
+            self.builder.switch_to_block(merge_bb);
+            self.builder.seal_block(merge_bb);
         }
         Ok(())
     }
+
+    fn lower_while(
+        &mut self,
+        condition: &crate::span::Spanned<Expr>,
+        body: &crate::span::Spanned<Block>,
+    ) -> Result<(), CompileError> {
+        let header_bb = self.builder.create_block();
+        let body_bb = self.builder.create_block();
+        let exit_bb = self.builder.create_block();
+
+        self.builder.ins().jump(header_bb, &[]);
+
+        self.builder.switch_to_block(header_bb);
+        let cond_val = self.lower_expr(&condition.node)?;
+        self.builder.ins().brif(cond_val, body_bb, &[], exit_bb, &[]);
+
+        self.builder.switch_to_block(body_bb);
+        self.builder.seal_block(body_bb);
+        let mut body_terminated = false;
+        for s in &body.node.stmts {
+            self.lower_stmt(&s.node, &mut body_terminated)?;
+        }
+        if !body_terminated {
+            self.builder.ins().jump(header_bb, &[]);
+        }
+
+        self.builder.seal_block(header_bb);
+        self.builder.switch_to_block(exit_bb);
+        self.builder.seal_block(exit_bb);
+        Ok(())
+    }
+
+    fn lower_for(
+        &mut self,
+        var: &crate::span::Spanned<String>,
+        iterable: &crate::span::Spanned<Expr>,
+        body: &crate::span::Spanned<Block>,
+    ) -> Result<(), CompileError> {
+        // Lower iterable to get array handle
+        let handle = self.lower_expr(&iterable.node)?;
+
+        // Get element type from iterable
+        let iter_type = infer_type_for_expr(&iterable.node, self.env, &self.var_types);
+        let elem_type = match &iter_type {
+            PlutoType::Array(elem) => *elem.clone(),
+            _ => return Err(CompileError::codegen("for loop requires array".to_string())),
+        };
+
+        // Call len() on the array
+        let len_val = self.call_runtime("__pluto_array_len", &[handle]);
+
+        // Create counter variable, init to 0
+        let counter_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        self.builder.declare_var(counter_var, types::I64);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.def_var(counter_var, zero);
+
+        // Create blocks
+        let header_bb = self.builder.create_block();
+        let body_bb = self.builder.create_block();
+        let exit_bb = self.builder.create_block();
+
+        self.builder.ins().jump(header_bb, &[]);
+
+        // Header: check counter < len
+        self.builder.switch_to_block(header_bb);
+        let counter = self.builder.use_var(counter_var);
+        let cond = self.builder.ins().icmp(IntCC::SignedLessThan, counter, len_val);
+        self.builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
+
+        // Body
+        self.builder.switch_to_block(body_bb);
+        self.builder.seal_block(body_bb);
+
+        // Get element: array_get(handle, counter)
+        let counter_for_get = self.builder.use_var(counter_var);
+        let raw_slot = self.call_runtime("__pluto_array_get", &[handle, counter_for_get]);
+        let elem_val = from_array_slot(raw_slot, &elem_type, &mut self.builder);
+
+        // Create loop variable, saving any prior binding for restoration
+        let prev_var = self.variables.get(&var.node).cloned();
+        let prev_type = self.var_types.get(&var.node).cloned();
+
+        let loop_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        let cl_elem_type = pluto_to_cranelift(&elem_type);
+        self.builder.declare_var(loop_var, cl_elem_type);
+        self.builder.def_var(loop_var, elem_val);
+        self.variables.insert(var.node.clone(), loop_var);
+        self.var_types.insert(var.node.clone(), elem_type);
+
+        // Lower body statements
+        let mut body_terminated = false;
+        for s in &body.node.stmts {
+            self.lower_stmt(&s.node, &mut body_terminated)?;
+        }
+
+        // Restore prior variable binding if shadowed
+        if let Some(pv) = prev_var {
+            self.variables.insert(var.node.clone(), pv);
+        } else {
+            self.variables.remove(&var.node);
+        }
+        if let Some(pt) = prev_type {
+            self.var_types.insert(var.node.clone(), pt);
+        } else {
+            self.var_types.remove(&var.node);
+        }
+
+        // Increment counter
+        if !body_terminated {
+            let counter_inc = self.builder.use_var(counter_var);
+            let one = self.builder.ins().iconst(types::I64, 1);
+            let new_counter = self.builder.ins().iadd(counter_inc, one);
+            self.builder.def_var(counter_var, new_counter);
+            self.builder.ins().jump(header_bb, &[]);
+        }
+
+        self.builder.seal_block(header_bb);
+        self.builder.switch_to_block(exit_bb);
+        self.builder.seal_block(exit_bb);
+        Ok(())
+    }
+
+    fn lower_match_stmt(
+        &mut self,
+        expr: &crate::span::Spanned<Expr>,
+        arms: &[MatchArm],
+        terminated: &mut bool,
+    ) -> Result<(), CompileError> {
+        let ptr = self.lower_expr(&expr.node)?;
+        let tag = self.builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(0));
+
+        let enum_name = match infer_type_for_expr(&expr.node, self.env, &self.var_types) {
+            PlutoType::Enum(name) => name,
+            _ => return Err(CompileError::codegen("match on non-enum".to_string())),
+        };
+        let enum_info = self.env.enums.get(&enum_name).ok_or_else(|| {
+            CompileError::codegen(format!("unknown enum '{enum_name}'"))
+        })?.clone();
+
+        let merge_bb = self.builder.create_block();
+        let mut check_blocks = Vec::new();
+        let mut body_blocks = Vec::new();
+
+        for _ in 0..arms.len() {
+            check_blocks.push(self.builder.create_block());
+            body_blocks.push(self.builder.create_block());
+        }
+
+        // Jump to first check block
+        self.builder.ins().jump(check_blocks[0], &[]);
+
+        let mut all_terminated = true;
+
+        for (i, arm) in arms.iter().enumerate() {
+            // Check block: compare tag
+            self.builder.switch_to_block(check_blocks[i]);
+            self.builder.seal_block(check_blocks[i]);
+
+            let variant_idx = enum_info.variants.iter()
+                .position(|(n, _)| *n == arm.variant_name.node)
+                .unwrap() as i64;
+            let expected_tag = self.builder.ins().iconst(types::I64, variant_idx);
+            let cmp = self.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
+
+            let fallthrough = if i + 1 < arms.len() {
+                check_blocks[i + 1]
+            } else {
+                // Last arm: exhaustiveness guaranteed, so fallthrough to merge
+                merge_bb
+            };
+            self.builder.ins().brif(cmp, body_blocks[i], &[], fallthrough, &[]);
+
+            // Body block: extract bindings and lower body
+            self.builder.switch_to_block(body_blocks[i]);
+            self.builder.seal_block(body_blocks[i]);
+
+            let variant_fields = &enum_info.variants.iter()
+                .find(|(n, _)| *n == arm.variant_name.node)
+                .unwrap().1;
+
+            // Save previous variable bindings so we can restore after this arm
+            let mut prev_vars: Vec<(String, Option<Variable>, Option<PlutoType>)> = Vec::new();
+
+            for (binding_field, opt_rename) in &arm.bindings {
+                let field_idx = variant_fields.iter()
+                    .position(|(n, _)| *n == binding_field.node)
+                    .unwrap();
+                let field_type = &variant_fields[field_idx].1;
+                let offset = ((1 + field_idx) as i32) * POINTER_SIZE;
+                let raw = self.builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(offset));
+                let val = from_array_slot(raw, field_type, &mut self.builder);
+
+                let var_name = opt_rename.as_ref().map_or(&binding_field.node, |r| &r.node);
+                let cl_type = pluto_to_cranelift(field_type);
+                let var = Variable::from_u32(self.next_var);
+                self.next_var += 1;
+                self.builder.declare_var(var, cl_type);
+                self.builder.def_var(var, val);
+
+                prev_vars.push((
+                    var_name.clone(),
+                    self.variables.get(var_name).cloned(),
+                    self.var_types.get(var_name).cloned(),
+                ));
+                self.variables.insert(var_name.clone(), var);
+                self.var_types.insert(var_name.clone(), field_type.clone());
+            }
+
+            let mut arm_terminated = false;
+            for s in &arm.body.node.stmts {
+                self.lower_stmt(&s.node, &mut arm_terminated)?;
+            }
+
+            // Restore previous variable bindings
+            for (name, prev_var, prev_type) in prev_vars {
+                if let Some(pv) = prev_var {
+                    self.variables.insert(name.clone(), pv);
+                } else {
+                    self.variables.remove(&name);
+                }
+                if let Some(pt) = prev_type {
+                    self.var_types.insert(name, pt);
+                } else {
+                    self.var_types.remove(&name);
+                }
+            }
+
+            if !arm_terminated {
+                self.builder.ins().jump(merge_bb, &[]);
+            }
+            if !arm_terminated {
+                all_terminated = false;
+            }
+        }
+
+        if all_terminated {
+            *terminated = true;
+        }
+
+        // Always switch to and seal the merge block — it's referenced by
+        // the last arm's fallthrough even if unreachable.
+        self.builder.switch_to_block(merge_bb);
+        self.builder.seal_block(merge_bb);
+        if *terminated {
+            // All arms returned; merge block is unreachable but needs a terminator.
+            self.builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
+        }
+        Ok(())
+    }
+
+    fn lower_raise(
+        &mut self,
+        error_name: &crate::span::Spanned<String>,
+        fields: &[(crate::span::Spanned<String>, crate::span::Spanned<Expr>)],
+    ) -> Result<(), CompileError> {
+        let error_info = self.env.errors.get(&error_name.node).ok_or_else(|| {
+            CompileError::codegen(format!("unknown error '{}'", error_name.node))
+        })?.clone();
+        let num_fields = error_info.fields.len();
+        let size = (num_fields as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
+
+        // Allocate error object
+        let size_val = self.builder.ins().iconst(types::I64, size);
+        let ptr = self.call_runtime("__pluto_alloc", &[size_val]);
+
+        // Store field values
+        let field_info = error_info.fields.clone();
+        for (lit_name, lit_val) in fields {
+            let val = self.lower_expr(&lit_val.node)?;
+            let offset = field_info.iter()
+                .position(|(n, _)| *n == lit_name.node)
+                .unwrap_or(0) as i32 * POINTER_SIZE;
+            self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
+        }
+
+        // Set TLS error pointer
+        self.call_runtime_void("__pluto_raise_error", &[ptr]);
+
+        // Return default value (caller checks TLS)
+        self.emit_default_return();
+        Ok(())
+    }
+
+    // ── lower_expr dispatch ──────────────────────────────────────────────
 
     fn lower_expr(&mut self, expr: &Expr) -> Result<Value, CompileError> {
         match expr {
@@ -529,118 +596,16 @@ impl<'a> LowerContext<'a> {
             Expr::StringLit(s) => {
                 let raw_ptr = self.create_data_str(s)?;
                 let len_val = self.builder.ins().iconst(types::I64, s.len() as i64);
-                let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_new"), self.builder.func);
-                let call = self.builder.ins().call(func_ref, &[raw_ptr, len_val]);
-                Ok(self.builder.inst_results(call)[0])
+                Ok(self.call_runtime("__pluto_string_new", &[raw_ptr, len_val]))
             }
-            Expr::StringInterp { parts } => {
-                // Convert each part to a string handle, then concat them all
-                let mut string_vals: Vec<Value> = Vec::new();
-                for part in parts {
-                    match part {
-                        StringInterpPart::Lit(s) => {
-                            let raw_ptr = self.create_data_str(s)?;
-                            let len_val = self.builder.ins().iconst(types::I64, s.len() as i64);
-                            let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_new"), self.builder.func);
-                            let call = self.builder.ins().call(func_ref, &[raw_ptr, len_val]);
-                            string_vals.push(self.builder.inst_results(call)[0]);
-                        }
-                        StringInterpPart::Expr(e) => {
-                            let val = self.lower_expr(&e.node)?;
-                            let t = infer_type_for_expr(&e.node, self.env, &self.var_types);
-                            let str_val = match t {
-                                PlutoType::String => val,
-                                PlutoType::Int => {
-                                    let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_int_to_string"), self.builder.func);
-                                    let call = self.builder.ins().call(func_ref, &[val]);
-                                    self.builder.inst_results(call)[0]
-                                }
-                                PlutoType::Float => {
-                                    let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_float_to_string"), self.builder.func);
-                                    let call = self.builder.ins().call(func_ref, &[val]);
-                                    self.builder.inst_results(call)[0]
-                                }
-                                PlutoType::Bool => {
-                                    let widened = self.builder.ins().uextend(types::I32, val);
-                                    let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_bool_to_string"), self.builder.func);
-                                    let call = self.builder.ins().call(func_ref, &[widened]);
-                                    self.builder.inst_results(call)[0]
-                                }
-                                _ => return Err(CompileError::codegen(format!("cannot interpolate {t}"))),
-                            };
-                            string_vals.push(str_val);
-                        }
-                    }
-                }
-                // Concat all parts left to right
-                let mut result = string_vals[0];
-                let concat_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_concat"), self.builder.func);
-                for part_val in &string_vals[1..] {
-                    let call = self.builder.ins().call(concat_ref, &[result, *part_val]);
-                    result = self.builder.inst_results(call)[0];
-                }
-                Ok(result)
-            }
+            Expr::StringInterp { parts } => self.lower_string_interp(parts),
             Expr::Ident(name) => {
                 let var = self.variables.get(name).ok_or_else(|| {
                     CompileError::codegen(format!("undefined variable '{name}'"))
                 })?;
                 Ok(self.builder.use_var(*var))
             }
-            Expr::BinOp { op, lhs, rhs } => {
-                let l = self.lower_expr(&lhs.node)?;
-                let r = self.lower_expr(&rhs.node)?;
-
-                let lhs_type = infer_type_for_expr(&lhs.node, self.env, &self.var_types);
-                let is_float = lhs_type == PlutoType::Float;
-                let is_string = lhs_type == PlutoType::String;
-
-                let result = match op {
-                    BinOp::Add if is_string => {
-                        let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_concat"), self.builder.func);
-                        let call = self.builder.ins().call(func_ref, &[l, r]);
-                        self.builder.inst_results(call)[0]
-                    }
-                    BinOp::Add if is_float => self.builder.ins().fadd(l, r),
-                    BinOp::Add => self.builder.ins().iadd(l, r),
-                    BinOp::Sub if is_float => self.builder.ins().fsub(l, r),
-                    BinOp::Sub => self.builder.ins().isub(l, r),
-                    BinOp::Mul if is_float => self.builder.ins().fmul(l, r),
-                    BinOp::Mul => self.builder.ins().imul(l, r),
-                    BinOp::Div if is_float => self.builder.ins().fdiv(l, r),
-                    BinOp::Div => self.builder.ins().sdiv(l, r),
-                    BinOp::Mod => self.builder.ins().srem(l, r),
-                    BinOp::Eq if is_string => {
-                        let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_eq"), self.builder.func);
-                        let call = self.builder.ins().call(func_ref, &[l, r]);
-                        let i32_result = self.builder.inst_results(call)[0];
-                        self.builder.ins().ireduce(types::I8, i32_result)
-                    }
-                    BinOp::Eq if is_float => self.builder.ins().fcmp(FloatCC::Equal, l, r),
-                    BinOp::Eq => self.builder.ins().icmp(IntCC::Equal, l, r),
-                    BinOp::Neq if is_string => {
-                        let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_eq"), self.builder.func);
-                        let call = self.builder.ins().call(func_ref, &[l, r]);
-                        let i32_result = self.builder.inst_results(call)[0];
-                        let i8_result = self.builder.ins().ireduce(types::I8, i32_result);
-                        let one = self.builder.ins().iconst(types::I8, 1);
-                        self.builder.ins().bxor(i8_result, one)
-                    }
-                    BinOp::Neq if is_float => self.builder.ins().fcmp(FloatCC::NotEqual, l, r),
-                    BinOp::Neq => self.builder.ins().icmp(IntCC::NotEqual, l, r),
-                    BinOp::Lt if is_float => self.builder.ins().fcmp(FloatCC::LessThan, l, r),
-                    BinOp::Lt => self.builder.ins().icmp(IntCC::SignedLessThan, l, r),
-                    BinOp::Gt if is_float => self.builder.ins().fcmp(FloatCC::GreaterThan, l, r),
-                    BinOp::Gt => self.builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
-                    BinOp::LtEq if is_float => self.builder.ins().fcmp(FloatCC::LessThanOrEqual, l, r),
-                    BinOp::LtEq => self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r),
-                    BinOp::GtEq if is_float => self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, l, r),
-                    BinOp::GtEq => self.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r),
-                    BinOp::And => self.builder.ins().band(l, r),
-                    BinOp::Or => self.builder.ins().bor(l, r),
-                };
-                Ok(result)
-            }
+            Expr::BinOp { op, lhs, rhs } => self.lower_binop(op, lhs, rhs),
             Expr::UnaryOp { op, operand } => {
                 let val = self.lower_expr(&operand.node)?;
                 let operand_type = infer_type_for_expr(&operand.node, self.env, &self.var_types);
@@ -653,110 +618,15 @@ impl<'a> LowerContext<'a> {
                     }
                 }
             }
-            Expr::Call { name, args } => {
-                if name.node == "print" {
-                    return self.lower_print(args);
-                }
-
-                // Check if calling a closure variable
-                if let Some(PlutoType::Fn(ref param_types, ref ret_type)) = self.var_types.get(&name.node).cloned() {
-                    let closure_var = self.variables[&name.node];
-                    let closure_ptr = self.builder.use_var(closure_var);
-
-                    // Load fn_ptr from closure object at offset 0
-                    let fn_ptr = self.builder.ins().load(types::I64, MemFlags::new(), closure_ptr, Offset32::new(0));
-
-                    // Build indirect call signature: (I64 env, param_types...) -> ret
-                    let mut sig = self.module.make_signature();
-                    sig.params.push(AbiParam::new(types::I64)); // __env
-                    for pt in param_types {
-                        sig.params.push(AbiParam::new(pluto_to_cranelift(pt)));
-                    }
-                    if **ret_type != PlutoType::Void {
-                        sig.returns.push(AbiParam::new(pluto_to_cranelift(ret_type)));
-                    }
-                    let sig_ref = self.builder.func.import_signature(sig);
-
-                    let mut call_args = vec![closure_ptr]; // env ptr as first arg
-                    for arg in args {
-                        call_args.push(self.lower_expr(&arg.node)?);
-                    }
-
-                    let call = self.builder.ins().call_indirect(sig_ref, fn_ptr, &call_args);
-                    let results = self.builder.inst_results(call);
-                    return Ok(if results.is_empty() {
-                        self.builder.ins().iconst(types::I64, 0)
-                    } else {
-                        results[0]
-                    });
-                }
-
-                let func_id = self.func_ids.get(&name.node).ok_or_else(|| {
-                    CompileError::codegen(format!("undefined function '{}'", name.node))
-                })?;
-
-                let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
-
-                // Look up the function signature to check for trait params
-                let param_types: Vec<PlutoType> = self.env.functions.get(&name.node)
-                    .map(|s| s.params.clone())
-                    .unwrap_or_default();
-                let mut arg_values = Vec::new();
-                for (i, arg) in args.iter().enumerate() {
-                    let val = self.lower_expr(&arg.node)?;
-                    let arg_actual_type = infer_type_for_expr(&arg.node, self.env, &self.var_types);
-                    let param_expected = param_types.get(i);
-
-                    if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_actual_type, param_expected) {
-                        // Wrap class as trait handle (single pointer)
-                        let wrapped = self.wrap_class_as_trait(val, cn, tn)?;
-                        arg_values.push(wrapped);
-                    } else {
-                        arg_values.push(val);
-                    }
-                }
-
-                let call = self.builder.ins().call(func_ref, &arg_values);
-                let results = self.builder.inst_results(call);
-                if results.is_empty() {
-                    Ok(self.builder.ins().iconst(types::I64, 0))
-                } else {
-                    Ok(results[0])
-                }
-            }
-            Expr::StructLit { name, fields, .. } => {
-                let class_info = self.env.classes.get(&name.node).ok_or_else(|| {
-                    CompileError::codegen(format!("unknown class '{}'", name.node))
-                })?;
-                let num_fields = class_info.fields.len() as i64;
-                let size = num_fields * POINTER_SIZE as i64;
-
-                let alloc_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_alloc"), self.builder.func);
-                let size_val = self.builder.ins().iconst(types::I64, size);
-                let call = self.builder.ins().call(alloc_ref, &[size_val]);
-                let ptr = self.builder.inst_results(call)[0];
-
-                // Clone field info to avoid borrow conflict with self.lower_expr
-                let field_info: Vec<(String, PlutoType, bool)> = class_info.fields.clone();
-
-                for (lit_name, lit_val) in fields {
-                    let val = self.lower_expr(&lit_val.node)?;
-                    let offset = field_info.iter()
-                        .position(|(n, _, _)| *n == lit_name.node)
-                        .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", lit_name.node, name.node)))? as i32 * POINTER_SIZE;
-                    self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
-                }
-
-                Ok(ptr)
-            }
+            Expr::Call { name, args } => self.lower_call(name, args),
+            Expr::StructLit { name, fields, .. } => self.lower_struct_lit(name, fields),
             Expr::ArrayLit { elements } => {
                 let n = elements.len() as i64;
-                let func_ref_new = self.module.declare_func_in_func(self.runtime.get("__pluto_array_new"), self.builder.func);
                 let cap_val = self.builder.ins().iconst(types::I64, n);
-                let call = self.builder.ins().call(func_ref_new, &[cap_val]);
-                let handle = self.builder.inst_results(call)[0];
+                let handle = self.call_runtime("__pluto_array_new", &[cap_val]);
 
                 let elem_type = infer_type_for_expr(&elements[0].node, self.env, &self.var_types);
+                // Hoist func_ref before loop to avoid repeated HashMap lookups
                 let func_ref_push = self.module.declare_func_in_func(self.runtime.get("__pluto_array_push"), self.builder.func);
                 for elem in elements {
                     let val = self.lower_expr(&elem.node)?;
@@ -771,9 +641,7 @@ impl<'a> LowerContext<'a> {
                 let idx = self.lower_expr(&index.node)?;
                 let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
                 if let PlutoType::Array(elem) = &obj_type {
-                    let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_array_get"), self.builder.func);
-                    let call = self.builder.ins().call(func_ref, &[handle, idx]);
-                    let raw = self.builder.inst_results(call)[0];
+                    let raw = self.call_runtime("__pluto_array_get", &[handle, idx]);
                     Ok(from_array_slot(raw, elem, &mut self.builder))
                 } else {
                     Err(CompileError::codegen(format!("index on non-array type {obj_type}")))
@@ -787,10 +655,8 @@ impl<'a> LowerContext<'a> {
                 let alloc_size = (1 + max_fields) as i64 * POINTER_SIZE as i64;
                 let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
 
-                let alloc_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_alloc"), self.builder.func);
                 let size_val = self.builder.ins().iconst(types::I64, alloc_size);
-                let call = self.builder.ins().call(alloc_ref, &[size_val]);
-                let ptr = self.builder.inst_results(call)[0];
+                let ptr = self.call_runtime("__pluto_alloc", &[size_val]);
 
                 let tag_val = self.builder.ins().iconst(types::I64, variant_idx as i64);
                 self.builder.ins().store(MemFlags::new(), tag_val, ptr, Offset32::new(0));
@@ -798,32 +664,7 @@ impl<'a> LowerContext<'a> {
                 Ok(ptr)
             }
             Expr::EnumData { enum_name, variant, fields, .. } => {
-                let enum_info = self.env.enums.get(&enum_name.node).ok_or_else(|| {
-                    CompileError::codegen(format!("unknown enum '{}'", enum_name.node))
-                })?.clone();
-                let max_fields = enum_info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
-                let alloc_size = (1 + max_fields) as i64 * POINTER_SIZE as i64;
-                let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
-                let variant_fields = &enum_info.variants[variant_idx].1;
-
-                let alloc_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_alloc"), self.builder.func);
-                let size_val = self.builder.ins().iconst(types::I64, alloc_size);
-                let call = self.builder.ins().call(alloc_ref, &[size_val]);
-                let ptr = self.builder.inst_results(call)[0];
-
-                let tag_val = self.builder.ins().iconst(types::I64, variant_idx as i64);
-                self.builder.ins().store(MemFlags::new(), tag_val, ptr, Offset32::new(0));
-
-                for (lit_name, lit_val) in fields {
-                    let val = self.lower_expr(&lit_val.node)?;
-                    let field_idx = variant_fields.iter().position(|(n, _)| *n == lit_name.node).unwrap();
-                    let field_type = &variant_fields[field_idx].1;
-                    let slot = to_array_slot(val, field_type, &mut self.builder);
-                    let offset = ((1 + field_idx) as i32) * POINTER_SIZE;
-                    self.builder.ins().store(MemFlags::new(), slot, ptr, Offset32::new(offset));
-                }
-
-                Ok(ptr)
+                self.lower_enum_data(enum_name, variant, fields)
             }
             Expr::FieldAccess { object, field } => {
                 let ptr = self.lower_expr(&object.node)?;
@@ -850,9 +691,7 @@ impl<'a> LowerContext<'a> {
                 let val = self.lower_expr(&inner.node)?;
 
                 // Check TLS error state
-                let has_err_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_has_error"), self.builder.func);
-                let has_err_call = self.builder.ins().call(has_err_ref, &[]);
-                let has_err = self.builder.inst_results(has_err_call)[0];
+                let has_err = self.call_runtime("__pluto_has_error", &[]);
                 let zero = self.builder.ins().iconst(types::I64, 0);
                 let is_error = self.builder.ins().icmp(IntCC::NotEqual, has_err, zero);
 
@@ -870,238 +709,475 @@ impl<'a> LowerContext<'a> {
                 self.builder.seal_block(continue_bb);
                 Ok(val)
             }
-            Expr::Catch { expr: inner, handler } => {
-                // Lower the inner call
-                let val = self.lower_expr(&inner.node)?;
-                let val_type = infer_type_for_expr(&inner.node, self.env, &self.var_types);
-                let cl_type = pluto_to_cranelift(&val_type);
-
-                // Check TLS error state
-                let has_err_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_has_error"), self.builder.func);
-                let has_err_call = self.builder.ins().call(has_err_ref, &[]);
-                let has_err = self.builder.inst_results(has_err_call)[0];
-                let zero = self.builder.ins().iconst(types::I64, 0);
-                let is_error = self.builder.ins().icmp(IntCC::NotEqual, has_err, zero);
-
-                let catch_bb = self.builder.create_block();
-                let no_error_bb = self.builder.create_block();
-                let merge_bb = self.builder.create_block();
-                self.builder.append_block_param(merge_bb, cl_type);
-
-                self.builder.ins().brif(is_error, catch_bb, &[], no_error_bb, &[]);
-
-                // No-error block: jump to merge with the call result
-                self.builder.switch_to_block(no_error_bb);
-                self.builder.seal_block(no_error_bb);
-                self.builder.ins().jump(merge_bb, &[val]);
-
-                // Catch block: handle the error
-                self.builder.switch_to_block(catch_bb);
-                self.builder.seal_block(catch_bb);
-
-                let handler_val = match handler {
-                    CatchHandler::Wildcard { var, body } => {
-                        // Get error object BEFORE clearing
-                        let get_err_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_get_error"), self.builder.func);
-                        let get_err_call = self.builder.ins().call(get_err_ref, &[]);
-                        let err_obj = self.builder.inst_results(get_err_call)[0];
-
-                        // Clear the error
-                        let clear_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_clear_error"), self.builder.func);
-                        self.builder.ins().call(clear_ref, &[]);
-
-                        // Bind the error variable
-                        let err_var = Variable::from_u32(self.next_var);
-                        self.next_var += 1;
-                        self.builder.declare_var(err_var, types::I64);
-                        self.builder.def_var(err_var, err_obj);
-
-                        let prev_var = self.variables.get(&var.node).cloned();
-                        let prev_type = self.var_types.get(&var.node).cloned();
-                        self.variables.insert(var.node.clone(), err_var);
-                        self.var_types.insert(var.node.clone(), PlutoType::Error);
-
-                        let result = self.lower_expr(&body.node)?;
-
-                        // Restore previous binding
-                        if let Some(pv) = prev_var {
-                            self.variables.insert(var.node.clone(), pv);
-                        } else {
-                            self.variables.remove(&var.node);
-                        }
-                        if let Some(pt) = prev_type {
-                            self.var_types.insert(var.node.clone(), pt);
-                        } else {
-                            self.var_types.remove(&var.node);
-                        }
-
-                        result
-                    }
-                    CatchHandler::Shorthand(fallback) => {
-                        // Clear the error
-                        let clear_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_clear_error"), self.builder.func);
-                        self.builder.ins().call(clear_ref, &[]);
-
-                        self.lower_expr(&fallback.node)?
-                    }
-                };
-
-                self.builder.ins().jump(merge_bb, &[handler_val]);
-
-                // Merge block: result is the block parameter
-                self.builder.switch_to_block(merge_bb);
-                self.builder.seal_block(merge_bb);
-                Ok(self.builder.block_params(merge_bb)[0])
-            }
+            Expr::Catch { expr: inner, handler } => self.lower_catch(inner, handler),
             Expr::MethodCall { object, method, args } => {
-                let obj_ptr = self.lower_expr(&object.node)?;
-                let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
-
-                // Array methods
-                if let PlutoType::Array(elem) = &obj_type {
-                    match method.node.as_str() {
-                        "len" => {
-                            let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_array_len"), self.builder.func);
-                            let call = self.builder.ins().call(func_ref, &[obj_ptr]);
-                            return Ok(self.builder.inst_results(call)[0]);
-                        }
-                        "push" => {
-                            let elem = elem.clone();
-                            let arg_val = self.lower_expr(&args[0].node)?;
-                            let slot = to_array_slot(arg_val, &elem, &mut self.builder);
-                            let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_array_push"), self.builder.func);
-                            self.builder.ins().call(func_ref, &[obj_ptr, slot]);
-                            return Ok(self.builder.ins().iconst(types::I64, 0));
-                        }
-                        _ => {
-                            return Err(CompileError::codegen(format!("array has no method '{}'", method.node)));
-                        }
-                    }
-                }
-
-                // String methods
-                if obj_type == PlutoType::String {
-                    if method.node == "len" {
-                        let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_len"), self.builder.func);
-                        let call = self.builder.ins().call(func_ref, &[obj_ptr]);
-                        return Ok(self.builder.inst_results(call)[0]);
-                    }
-                    return Err(CompileError::codegen(format!("string has no method '{}'", method.node)));
-                }
-
-                // Trait dynamic dispatch via handle
-                if let PlutoType::Trait(trait_name) = &obj_type {
-                    let trait_info = self.env.traits.get(trait_name).ok_or_else(|| {
-                        CompileError::codegen(format!("unknown trait '{trait_name}'"))
-                    })?;
-                    let method_idx = trait_info.methods.iter()
-                        .position(|(n, _)| *n == method.node)
-                        .ok_or_else(|| {
-                            CompileError::codegen(format!("trait '{trait_name}' has no method '{}'", method.node))
-                        })?;
-
-                    // Clone method_sig to avoid borrow conflict with self.lower_expr
-                    let method_sig = trait_info.methods[method_idx].1.clone();
-
-                    // obj_ptr is a trait handle: pointer to [data_ptr, vtable_ptr]
-                    let data_ptr = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(0));
-                    let vtable_ptr = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(POINTER_SIZE));
-
-                    // Load fn_ptr from vtable at offset method_idx * POINTER_SIZE
-                    let offset = (method_idx as i32) * POINTER_SIZE;
-                    let fn_ptr = self.builder.ins().load(types::I64, MemFlags::new(), vtable_ptr, Offset32::new(offset));
-
-                    // Build indirect call signature
-                    let mut sig = self.module.make_signature();
-                    sig.params.push(AbiParam::new(types::I64)); // self (data_ptr)
-                    for param_ty in &method_sig.params[1..] {
-                        let cl_ty = pluto_to_cranelift(param_ty);
-                        sig.params.push(AbiParam::new(cl_ty));
-                    }
-                    if method_sig.return_type != PlutoType::Void {
-                        sig.returns.push(AbiParam::new(pluto_to_cranelift(&method_sig.return_type)));
-                    }
-                    let sig_ref = self.builder.func.import_signature(sig);
-
-                    let mut call_args = vec![data_ptr]; // data_ptr as self
-                    for (i, arg) in args.iter().enumerate() {
-                        let val = self.lower_expr(&arg.node)?;
-                        let arg_type = infer_type_for_expr(&arg.node, self.env, &self.var_types);
-                        let param_expected = method_sig.params.get(i + 1); // +1 to skip self
-                        if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_type, param_expected) {
-                            let wrapped = self.wrap_class_as_trait(val, cn, tn)?;
-                            call_args.push(wrapped);
-                        } else {
-                            call_args.push(val);
-                        }
-                    }
-
-                    let call = self.builder.ins().call_indirect(sig_ref, fn_ptr, &call_args);
-                    let results = self.builder.inst_results(call);
-                    if results.is_empty() {
-                        Ok(self.builder.ins().iconst(types::I64, 0))
-                    } else {
-                        Ok(results[0])
-                    }
-                } else if let PlutoType::Class(class_name) = &obj_type {
-                    let mangled = format!("{}_{}", class_name, method.node);
-                    let func_id = self.func_ids.get(&mangled).ok_or_else(|| {
-                        CompileError::codegen(format!("undefined method '{}'", method.node))
-                    })?;
-                    let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
-
-                    let mut arg_values = vec![obj_ptr];
-                    for arg in args {
-                        arg_values.push(self.lower_expr(&arg.node)?);
-                    }
-
-                    let call = self.builder.ins().call(func_ref, &arg_values);
-                    let results = self.builder.inst_results(call);
-                    if results.is_empty() {
-                        Ok(self.builder.ins().iconst(types::I64, 0))
-                    } else {
-                        Ok(results[0])
-                    }
-                } else {
-                    Err(CompileError::codegen(format!("method call on non-class type {obj_type}")))
-                }
+                self.lower_method_call(object, method, args)
             }
             Expr::Closure { .. } => {
                 Err(CompileError::codegen("closures should be lifted before codegen"))
             }
             Expr::ClosureCreate { fn_name, captures } => {
-                // 1. Look up the function ID for the lifted closure function
-                let func_id = self.func_ids.get(fn_name).ok_or_else(|| {
-                    CompileError::codegen(format!("undefined closure function '{}'", fn_name))
-                })?;
-
-                // 2. Allocate closure object: [fn_ptr: i64] [capture_0: i64] ...
-                let obj_size = (1 + captures.len()) as i64 * POINTER_SIZE as i64;
-                let alloc_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_alloc"), self.builder.func);
-                let size_val = self.builder.ins().iconst(types::I64, obj_size);
-                let call = self.builder.ins().call(alloc_ref, &[size_val]);
-                let closure_ptr = self.builder.inst_results(call)[0];
-
-                // 3. Store function pointer at offset 0
-                let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
-                let fn_addr = self.builder.ins().func_addr(types::I64, func_ref);
-                self.builder.ins().store(MemFlags::new(), fn_addr, closure_ptr, Offset32::new(0));
-
-                // 4. Store each captured variable at offset 8, 16, 24, ...
-                for (i, cap_name) in captures.iter().enumerate() {
-                    let cap_var = self.variables.get(cap_name).ok_or_else(|| {
-                        CompileError::codegen(format!("undefined capture variable '{}'", cap_name))
-                    })?;
-                    let cap_val = self.builder.use_var(*cap_var);
-                    let cap_type = self.var_types.get(cap_name).cloned().unwrap_or(PlutoType::Int);
-                    let slot = to_array_slot(cap_val, &cap_type, &mut self.builder);
-                    let offset = (1 + i) as i32 * POINTER_SIZE;
-                    self.builder.ins().store(MemFlags::new(), slot, closure_ptr, Offset32::new(offset));
-                }
-
-                Ok(closure_ptr)
+                self.lower_closure_create(fn_name, captures)
             }
         }
+    }
+
+    // ── lower_expr extracted helpers ─────────────────────────────────────
+
+    fn lower_string_interp(&mut self, parts: &[StringInterpPart]) -> Result<Value, CompileError> {
+        // Convert each part to a string handle, then concat them all
+        let mut string_vals: Vec<Value> = Vec::new();
+        for part in parts {
+            match part {
+                StringInterpPart::Lit(s) => {
+                    let raw_ptr = self.create_data_str(s)?;
+                    let len_val = self.builder.ins().iconst(types::I64, s.len() as i64);
+                    string_vals.push(self.call_runtime("__pluto_string_new", &[raw_ptr, len_val]));
+                }
+                StringInterpPart::Expr(e) => {
+                    let val = self.lower_expr(&e.node)?;
+                    let t = infer_type_for_expr(&e.node, self.env, &self.var_types);
+                    let str_val = match t {
+                        PlutoType::String => val,
+                        PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[val]),
+                        PlutoType::Float => self.call_runtime("__pluto_float_to_string", &[val]),
+                        PlutoType::Bool => {
+                            let widened = self.builder.ins().uextend(types::I32, val);
+                            self.call_runtime("__pluto_bool_to_string", &[widened])
+                        }
+                        _ => return Err(CompileError::codegen(format!("cannot interpolate {t}"))),
+                    };
+                    string_vals.push(str_val);
+                }
+            }
+        }
+        // Concat all parts left to right — hoist func_ref before loop
+        let mut result = string_vals[0];
+        let concat_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_concat"), self.builder.func);
+        for part_val in &string_vals[1..] {
+            let call = self.builder.ins().call(concat_ref, &[result, *part_val]);
+            result = self.builder.inst_results(call)[0];
+        }
+        Ok(result)
+    }
+
+    fn lower_binop(
+        &mut self,
+        op: &BinOp,
+        lhs: &crate::span::Spanned<Expr>,
+        rhs: &crate::span::Spanned<Expr>,
+    ) -> Result<Value, CompileError> {
+        let l = self.lower_expr(&lhs.node)?;
+        let r = self.lower_expr(&rhs.node)?;
+
+        let lhs_type = infer_type_for_expr(&lhs.node, self.env, &self.var_types);
+        let is_float = lhs_type == PlutoType::Float;
+        let is_string = lhs_type == PlutoType::String;
+
+        let result = match op {
+            BinOp::Add if is_string => self.call_runtime("__pluto_string_concat", &[l, r]),
+            BinOp::Add if is_float => self.builder.ins().fadd(l, r),
+            BinOp::Add => self.builder.ins().iadd(l, r),
+            BinOp::Sub if is_float => self.builder.ins().fsub(l, r),
+            BinOp::Sub => self.builder.ins().isub(l, r),
+            BinOp::Mul if is_float => self.builder.ins().fmul(l, r),
+            BinOp::Mul => self.builder.ins().imul(l, r),
+            BinOp::Div if is_float => self.builder.ins().fdiv(l, r),
+            BinOp::Div => self.builder.ins().sdiv(l, r),
+            BinOp::Mod => self.builder.ins().srem(l, r),
+            BinOp::Eq if is_string => {
+                let i32_result = self.call_runtime("__pluto_string_eq", &[l, r]);
+                self.builder.ins().ireduce(types::I8, i32_result)
+            }
+            BinOp::Eq if is_float => self.builder.ins().fcmp(FloatCC::Equal, l, r),
+            BinOp::Eq => self.builder.ins().icmp(IntCC::Equal, l, r),
+            BinOp::Neq if is_string => {
+                let i32_result = self.call_runtime("__pluto_string_eq", &[l, r]);
+                let i8_result = self.builder.ins().ireduce(types::I8, i32_result);
+                let one = self.builder.ins().iconst(types::I8, 1);
+                self.builder.ins().bxor(i8_result, one)
+            }
+            BinOp::Neq if is_float => self.builder.ins().fcmp(FloatCC::NotEqual, l, r),
+            BinOp::Neq => self.builder.ins().icmp(IntCC::NotEqual, l, r),
+            BinOp::Lt if is_float => self.builder.ins().fcmp(FloatCC::LessThan, l, r),
+            BinOp::Lt => self.builder.ins().icmp(IntCC::SignedLessThan, l, r),
+            BinOp::Gt if is_float => self.builder.ins().fcmp(FloatCC::GreaterThan, l, r),
+            BinOp::Gt => self.builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
+            BinOp::LtEq if is_float => self.builder.ins().fcmp(FloatCC::LessThanOrEqual, l, r),
+            BinOp::LtEq => self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r),
+            BinOp::GtEq if is_float => self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, l, r),
+            BinOp::GtEq => self.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r),
+            BinOp::And => self.builder.ins().band(l, r),
+            BinOp::Or => self.builder.ins().bor(l, r),
+        };
+        Ok(result)
+    }
+
+    fn lower_call(
+        &mut self,
+        name: &crate::span::Spanned<String>,
+        args: &[crate::span::Spanned<Expr>],
+    ) -> Result<Value, CompileError> {
+        if name.node == "print" {
+            return self.lower_print(args);
+        }
+
+        // Check if calling a closure variable
+        if let Some(PlutoType::Fn(ref param_types, ref ret_type)) = self.var_types.get(&name.node).cloned() {
+            let closure_var = self.variables[&name.node];
+            let closure_ptr = self.builder.use_var(closure_var);
+
+            // Load fn_ptr from closure object at offset 0
+            let fn_ptr = self.builder.ins().load(types::I64, MemFlags::new(), closure_ptr, Offset32::new(0));
+
+            // Build indirect call signature: (I64 env, param_types...) -> ret
+            let mut sig = self.module.make_signature();
+            sig.params.push(AbiParam::new(types::I64)); // __env
+            for pt in param_types {
+                sig.params.push(AbiParam::new(pluto_to_cranelift(pt)));
+            }
+            if **ret_type != PlutoType::Void {
+                sig.returns.push(AbiParam::new(pluto_to_cranelift(ret_type)));
+            }
+            let sig_ref = self.builder.func.import_signature(sig);
+
+            let mut call_args = vec![closure_ptr]; // env ptr as first arg
+            for arg in args {
+                call_args.push(self.lower_expr(&arg.node)?);
+            }
+
+            let call = self.builder.ins().call_indirect(sig_ref, fn_ptr, &call_args);
+            let results = self.builder.inst_results(call);
+            return Ok(if results.is_empty() {
+                self.builder.ins().iconst(types::I64, 0)
+            } else {
+                results[0]
+            });
+        }
+
+        let func_id = self.func_ids.get(&name.node).ok_or_else(|| {
+            CompileError::codegen(format!("undefined function '{}'", name.node))
+        })?;
+
+        let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+
+        // Look up the function signature to check for trait params
+        let param_types: Vec<PlutoType> = self.env.functions.get(&name.node)
+            .map(|s| s.params.clone())
+            .unwrap_or_default();
+        let mut arg_values = Vec::new();
+        for (i, arg) in args.iter().enumerate() {
+            let val = self.lower_expr(&arg.node)?;
+            let arg_actual_type = infer_type_for_expr(&arg.node, self.env, &self.var_types);
+            let param_expected = param_types.get(i);
+
+            if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_actual_type, param_expected) {
+                // Wrap class as trait handle (single pointer)
+                let wrapped = self.wrap_class_as_trait(val, cn, tn)?;
+                arg_values.push(wrapped);
+            } else {
+                arg_values.push(val);
+            }
+        }
+
+        let call = self.builder.ins().call(func_ref, &arg_values);
+        let results = self.builder.inst_results(call);
+        if results.is_empty() {
+            Ok(self.builder.ins().iconst(types::I64, 0))
+        } else {
+            Ok(results[0])
+        }
+    }
+
+    fn lower_struct_lit(
+        &mut self,
+        name: &crate::span::Spanned<String>,
+        fields: &[(crate::span::Spanned<String>, crate::span::Spanned<Expr>)],
+    ) -> Result<Value, CompileError> {
+        let class_info = self.env.classes.get(&name.node).ok_or_else(|| {
+            CompileError::codegen(format!("unknown class '{}'", name.node))
+        })?;
+        let num_fields = class_info.fields.len() as i64;
+        let size = num_fields * POINTER_SIZE as i64;
+
+        let size_val = self.builder.ins().iconst(types::I64, size);
+        let ptr = self.call_runtime("__pluto_alloc", &[size_val]);
+
+        // Clone field info to avoid borrow conflict with self.lower_expr
+        let field_info: Vec<(String, PlutoType, bool)> = class_info.fields.clone();
+
+        for (lit_name, lit_val) in fields {
+            let val = self.lower_expr(&lit_val.node)?;
+            let offset = field_info.iter()
+                .position(|(n, _, _)| *n == lit_name.node)
+                .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", lit_name.node, name.node)))? as i32 * POINTER_SIZE;
+            self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
+        }
+
+        Ok(ptr)
+    }
+
+    fn lower_enum_data(
+        &mut self,
+        enum_name: &crate::span::Spanned<String>,
+        variant: &crate::span::Spanned<String>,
+        fields: &[(crate::span::Spanned<String>, crate::span::Spanned<Expr>)],
+    ) -> Result<Value, CompileError> {
+        let enum_info = self.env.enums.get(&enum_name.node).ok_or_else(|| {
+            CompileError::codegen(format!("unknown enum '{}'", enum_name.node))
+        })?.clone();
+        let max_fields = enum_info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
+        let alloc_size = (1 + max_fields) as i64 * POINTER_SIZE as i64;
+        let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
+        let variant_fields = &enum_info.variants[variant_idx].1;
+
+        let size_val = self.builder.ins().iconst(types::I64, alloc_size);
+        let ptr = self.call_runtime("__pluto_alloc", &[size_val]);
+
+        let tag_val = self.builder.ins().iconst(types::I64, variant_idx as i64);
+        self.builder.ins().store(MemFlags::new(), tag_val, ptr, Offset32::new(0));
+
+        for (lit_name, lit_val) in fields {
+            let val = self.lower_expr(&lit_val.node)?;
+            let field_idx = variant_fields.iter().position(|(n, _)| *n == lit_name.node).unwrap();
+            let field_type = &variant_fields[field_idx].1;
+            let slot = to_array_slot(val, field_type, &mut self.builder);
+            let offset = ((1 + field_idx) as i32) * POINTER_SIZE;
+            self.builder.ins().store(MemFlags::new(), slot, ptr, Offset32::new(offset));
+        }
+
+        Ok(ptr)
+    }
+
+    fn lower_catch(
+        &mut self,
+        inner: &crate::span::Spanned<Expr>,
+        handler: &CatchHandler,
+    ) -> Result<Value, CompileError> {
+        // Lower the inner call
+        let val = self.lower_expr(&inner.node)?;
+        let val_type = infer_type_for_expr(&inner.node, self.env, &self.var_types);
+        let cl_type = pluto_to_cranelift(&val_type);
+
+        // Check TLS error state
+        let has_err = self.call_runtime("__pluto_has_error", &[]);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let is_error = self.builder.ins().icmp(IntCC::NotEqual, has_err, zero);
+
+        let catch_bb = self.builder.create_block();
+        let no_error_bb = self.builder.create_block();
+        let merge_bb = self.builder.create_block();
+        self.builder.append_block_param(merge_bb, cl_type);
+
+        self.builder.ins().brif(is_error, catch_bb, &[], no_error_bb, &[]);
+
+        // No-error block: jump to merge with the call result
+        self.builder.switch_to_block(no_error_bb);
+        self.builder.seal_block(no_error_bb);
+        self.builder.ins().jump(merge_bb, &[val]);
+
+        // Catch block: handle the error
+        self.builder.switch_to_block(catch_bb);
+        self.builder.seal_block(catch_bb);
+
+        let handler_val = match handler {
+            CatchHandler::Wildcard { var, body } => {
+                // Get error object BEFORE clearing
+                let err_obj = self.call_runtime("__pluto_get_error", &[]);
+
+                // Clear the error
+                self.call_runtime_void("__pluto_clear_error", &[]);
+
+                // Bind the error variable
+                let err_var = Variable::from_u32(self.next_var);
+                self.next_var += 1;
+                self.builder.declare_var(err_var, types::I64);
+                self.builder.def_var(err_var, err_obj);
+
+                let prev_var = self.variables.get(&var.node).cloned();
+                let prev_type = self.var_types.get(&var.node).cloned();
+                self.variables.insert(var.node.clone(), err_var);
+                self.var_types.insert(var.node.clone(), PlutoType::Error);
+
+                let result = self.lower_expr(&body.node)?;
+
+                // Restore previous binding
+                if let Some(pv) = prev_var {
+                    self.variables.insert(var.node.clone(), pv);
+                } else {
+                    self.variables.remove(&var.node);
+                }
+                if let Some(pt) = prev_type {
+                    self.var_types.insert(var.node.clone(), pt);
+                } else {
+                    self.var_types.remove(&var.node);
+                }
+
+                result
+            }
+            CatchHandler::Shorthand(fallback) => {
+                // Clear the error
+                self.call_runtime_void("__pluto_clear_error", &[]);
+
+                self.lower_expr(&fallback.node)?
+            }
+        };
+
+        self.builder.ins().jump(merge_bb, &[handler_val]);
+
+        // Merge block: result is the block parameter
+        self.builder.switch_to_block(merge_bb);
+        self.builder.seal_block(merge_bb);
+        Ok(self.builder.block_params(merge_bb)[0])
+    }
+
+    fn lower_method_call(
+        &mut self,
+        object: &crate::span::Spanned<Expr>,
+        method: &crate::span::Spanned<String>,
+        args: &[crate::span::Spanned<Expr>],
+    ) -> Result<Value, CompileError> {
+        let obj_ptr = self.lower_expr(&object.node)?;
+        let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
+
+        // Array methods
+        if let PlutoType::Array(elem) = &obj_type {
+            match method.node.as_str() {
+                "len" => {
+                    return Ok(self.call_runtime("__pluto_array_len", &[obj_ptr]));
+                }
+                "push" => {
+                    let elem = elem.clone();
+                    let arg_val = self.lower_expr(&args[0].node)?;
+                    let slot = to_array_slot(arg_val, &elem, &mut self.builder);
+                    self.call_runtime_void("__pluto_array_push", &[obj_ptr, slot]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                _ => {
+                    return Err(CompileError::codegen(format!("array has no method '{}'", method.node)));
+                }
+            }
+        }
+
+        // String methods
+        if obj_type == PlutoType::String {
+            if method.node == "len" {
+                return Ok(self.call_runtime("__pluto_string_len", &[obj_ptr]));
+            }
+            return Err(CompileError::codegen(format!("string has no method '{}'", method.node)));
+        }
+
+        // Trait dynamic dispatch via handle
+        if let PlutoType::Trait(trait_name) = &obj_type {
+            let trait_info = self.env.traits.get(trait_name).ok_or_else(|| {
+                CompileError::codegen(format!("unknown trait '{trait_name}'"))
+            })?;
+            let method_idx = trait_info.methods.iter()
+                .position(|(n, _)| *n == method.node)
+                .ok_or_else(|| {
+                    CompileError::codegen(format!("trait '{trait_name}' has no method '{}'", method.node))
+                })?;
+
+            // Clone method_sig to avoid borrow conflict with self.lower_expr
+            let method_sig = trait_info.methods[method_idx].1.clone();
+
+            // obj_ptr is a trait handle: pointer to [data_ptr, vtable_ptr]
+            let data_ptr = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(0));
+            let vtable_ptr = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(POINTER_SIZE));
+
+            // Load fn_ptr from vtable at offset method_idx * POINTER_SIZE
+            let offset = (method_idx as i32) * POINTER_SIZE;
+            let fn_ptr = self.builder.ins().load(types::I64, MemFlags::new(), vtable_ptr, Offset32::new(offset));
+
+            // Build indirect call signature
+            let mut sig = self.module.make_signature();
+            sig.params.push(AbiParam::new(types::I64)); // self (data_ptr)
+            for param_ty in &method_sig.params[1..] {
+                let cl_ty = pluto_to_cranelift(param_ty);
+                sig.params.push(AbiParam::new(cl_ty));
+            }
+            if method_sig.return_type != PlutoType::Void {
+                sig.returns.push(AbiParam::new(pluto_to_cranelift(&method_sig.return_type)));
+            }
+            let sig_ref = self.builder.func.import_signature(sig);
+
+            let mut call_args = vec![data_ptr]; // data_ptr as self
+            for (i, arg) in args.iter().enumerate() {
+                let val = self.lower_expr(&arg.node)?;
+                let arg_type = infer_type_for_expr(&arg.node, self.env, &self.var_types);
+                let param_expected = method_sig.params.get(i + 1); // +1 to skip self
+                if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_type, param_expected) {
+                    let wrapped = self.wrap_class_as_trait(val, cn, tn)?;
+                    call_args.push(wrapped);
+                } else {
+                    call_args.push(val);
+                }
+            }
+
+            let call = self.builder.ins().call_indirect(sig_ref, fn_ptr, &call_args);
+            let results = self.builder.inst_results(call);
+            if results.is_empty() {
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            } else {
+                Ok(results[0])
+            }
+        } else if let PlutoType::Class(class_name) = &obj_type {
+            let mangled = format!("{}_{}", class_name, method.node);
+            let func_id = self.func_ids.get(&mangled).ok_or_else(|| {
+                CompileError::codegen(format!("undefined method '{}'", method.node))
+            })?;
+            let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+
+            let mut arg_values = vec![obj_ptr];
+            for arg in args {
+                arg_values.push(self.lower_expr(&arg.node)?);
+            }
+
+            let call = self.builder.ins().call(func_ref, &arg_values);
+            let results = self.builder.inst_results(call);
+            if results.is_empty() {
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            } else {
+                Ok(results[0])
+            }
+        } else {
+            Err(CompileError::codegen(format!("method call on non-class type {obj_type}")))
+        }
+    }
+
+    fn lower_closure_create(
+        &mut self,
+        fn_name: &str,
+        captures: &[String],
+    ) -> Result<Value, CompileError> {
+        // 1. Look up the function ID for the lifted closure function
+        let func_id = self.func_ids.get(fn_name).ok_or_else(|| {
+            CompileError::codegen(format!("undefined closure function '{}'", fn_name))
+        })?;
+
+        // 2. Allocate closure object: [fn_ptr: i64] [capture_0: i64] ...
+        let obj_size = (1 + captures.len()) as i64 * POINTER_SIZE as i64;
+        let size_val = self.builder.ins().iconst(types::I64, obj_size);
+        let closure_ptr = self.call_runtime("__pluto_alloc", &[size_val]);
+
+        // 3. Store function pointer at offset 0
+        let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+        let fn_addr = self.builder.ins().func_addr(types::I64, func_ref);
+        self.builder.ins().store(MemFlags::new(), fn_addr, closure_ptr, Offset32::new(0));
+
+        // 4. Store each captured variable at offset 8, 16, 24, ...
+        for (i, cap_name) in captures.iter().enumerate() {
+            let cap_var = self.variables.get(cap_name).ok_or_else(|| {
+                CompileError::codegen(format!("undefined capture variable '{}'", cap_name))
+            })?;
+            let cap_val = self.builder.use_var(*cap_var);
+            let cap_type = self.var_types.get(cap_name).cloned().unwrap_or(PlutoType::Int);
+            let slot = to_array_slot(cap_val, &cap_type, &mut self.builder);
+            let offset = (1 + i) as i32 * POINTER_SIZE;
+            self.builder.ins().store(MemFlags::new(), slot, closure_ptr, Offset32::new(offset));
+        }
+
+        Ok(closure_ptr)
     }
 
     fn lower_print(
@@ -1114,26 +1190,18 @@ impl<'a> LowerContext<'a> {
 
         match arg_type {
             PlutoType::Int => {
-                let func_id = self.runtime.get("__pluto_print_int");
-                let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
-                self.builder.ins().call(func_ref, &[arg_val]);
+                self.call_runtime_void("__pluto_print_int", &[arg_val]);
             }
             PlutoType::Float => {
-                let func_id = self.runtime.get("__pluto_print_float");
-                let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
-                self.builder.ins().call(func_ref, &[arg_val]);
+                self.call_runtime_void("__pluto_print_float", &[arg_val]);
             }
             PlutoType::String => {
-                let func_id = self.runtime.get("__pluto_print_string");
-                let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
-                self.builder.ins().call(func_ref, &[arg_val]);
+                self.call_runtime_void("__pluto_print_string", &[arg_val]);
             }
             PlutoType::Bool => {
-                let func_id = self.runtime.get("__pluto_print_bool");
-                let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
                 // Widen I8 bool to I32 for the C function
                 let widened = self.builder.ins().uextend(types::I32, arg_val);
-                self.builder.ins().call(func_ref, &[widened]);
+                self.call_runtime_void("__pluto_print_bool", &[widened]);
             }
             PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Error | PlutoType::TypeParam(_) => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
