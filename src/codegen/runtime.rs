@@ -50,6 +50,9 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_array_set", &[types::I64, types::I64, types::I64], &[])?;
         reg.declare(module, "__pluto_array_len", &[types::I64], &[types::I64])?;
 
+        // GC
+        reg.declare(module, "__pluto_gc_init", &[], &[])?;
+
         Ok(reg)
     }
 
