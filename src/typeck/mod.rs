@@ -4,7 +4,7 @@ pub mod types;
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::Spanned;
-use env::{ClassInfo, FuncSig, TraitInfo, TypeEnv};
+use env::{ClassInfo, EnumInfo, FuncSig, TraitInfo, TypeEnv};
 use types::PlutoType;
 
 fn types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> bool {
@@ -46,6 +46,21 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
         }
 
         env.traits.insert(t.name.node.clone(), TraitInfo { methods, default_methods });
+    }
+
+    // Pass 0b: Register enums
+    for enum_decl in &program.enums {
+        let e = &enum_decl.node;
+        let mut variants = Vec::new();
+        for v in &e.variants {
+            let mut fields = Vec::new();
+            for f in &v.fields {
+                let ty = resolve_type(&f.ty, &env)?;
+                fields.push((f.name.node.clone(), ty));
+            }
+            variants.push((v.name.node.clone(), fields));
+        }
+        env.enums.insert(e.name.node.clone(), EnumInfo { variants });
     }
 
     // Pass 1a: Register class field definitions
@@ -267,6 +282,8 @@ fn resolve_type(ty: &Spanned<TypeExpr>, env: &TypeEnv) -> Result<PlutoType, Comp
                     Ok(PlutoType::Class(name.clone()))
                 } else if env.traits.contains_key(name) {
                     Ok(PlutoType::Trait(name.clone()))
+                } else if env.enums.contains_key(name) {
+                    Ok(PlutoType::Enum(name.clone()))
                 } else {
                     Err(CompileError::type_err(
                         format!("unknown type '{name}'"),
@@ -286,6 +303,8 @@ fn resolve_type(ty: &Spanned<TypeExpr>, env: &TypeEnv) -> Result<PlutoType, Comp
                 Ok(PlutoType::Class(prefixed))
             } else if env.traits.contains_key(&prefixed) {
                 Ok(PlutoType::Trait(prefixed))
+            } else if env.enums.contains_key(&prefixed) {
+                Ok(PlutoType::Enum(prefixed))
             } else {
                 Err(CompileError::type_err(
                     format!("unknown type '{}.{}'", module, name),
@@ -492,9 +511,83 @@ fn check_stmt(
                 ));
             }
         }
-        Stmt::Match { .. } => {
-            // Will be implemented in the type checker step
-            todo!("match type checking")
+        Stmt::Match { expr, arms } => {
+            let scrutinee_type = infer_expr(&expr.node, expr.span, env)?;
+            let enum_name = match &scrutinee_type {
+                PlutoType::Enum(name) => name.clone(),
+                _ => {
+                    return Err(CompileError::type_err(
+                        format!("match requires enum type, found {scrutinee_type}"),
+                        expr.span,
+                    ));
+                }
+            };
+            let enum_info = env.enums.get(&enum_name).ok_or_else(|| {
+                CompileError::type_err(
+                    format!("unknown enum '{enum_name}'"),
+                    expr.span,
+                )
+            })?.clone();
+
+            let mut covered = std::collections::HashSet::new();
+            for arm in arms {
+                if arm.enum_name.node != enum_name {
+                    return Err(CompileError::type_err(
+                        format!("match arm enum '{}' does not match scrutinee enum '{}'", arm.enum_name.node, enum_name),
+                        arm.enum_name.span,
+                    ));
+                }
+                let variant_info = enum_info.variants.iter().find(|(n, _)| *n == arm.variant_name.node);
+                let variant_fields = match variant_info {
+                    None => {
+                        return Err(CompileError::type_err(
+                            format!("enum '{}' has no variant '{}'", enum_name, arm.variant_name.node),
+                            arm.variant_name.span,
+                        ));
+                    }
+                    Some((_, fields)) => fields,
+                };
+                if !covered.insert(arm.variant_name.node.clone()) {
+                    return Err(CompileError::type_err(
+                        format!("duplicate match arm for variant '{}'", arm.variant_name.node),
+                        arm.variant_name.span,
+                    ));
+                }
+                if arm.bindings.len() != variant_fields.len() {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "variant '{}' has {} fields, but {} bindings provided",
+                            arm.variant_name.node, variant_fields.len(), arm.bindings.len()
+                        ),
+                        arm.variant_name.span,
+                    ));
+                }
+                env.push_scope();
+                for (binding_field, opt_rename) in &arm.bindings {
+                    let field_type = variant_fields.iter()
+                        .find(|(n, _)| *n == binding_field.node)
+                        .map(|(_, t)| t.clone())
+                        .ok_or_else(|| {
+                            CompileError::type_err(
+                                format!("variant '{}' has no field '{}'", arm.variant_name.node, binding_field.node),
+                                binding_field.span,
+                            )
+                        })?;
+                    let var_name = opt_rename.as_ref().map_or(&binding_field.node, |r| &r.node);
+                    env.define(var_name.clone(), field_type);
+                }
+                check_block(&arm.body.node, env, return_type)?;
+                env.pop_scope();
+            }
+            // Exhaustiveness check
+            for (variant_name, _) in &enum_info.variants {
+                if !covered.contains(variant_name) {
+                    return Err(CompileError::type_err(
+                        format!("non-exhaustive match: missing variant '{}'", variant_name),
+                        span,
+                    ));
+                }
+            }
         }
         Stmt::Expr(expr) => {
             infer_expr(&expr.node, expr.span, env)?;
@@ -774,9 +867,70 @@ fn infer_expr(
             }
             Ok(elem_type)
         }
-        Expr::EnumUnit { .. } | Expr::EnumData { .. } => {
-            // Will be implemented in the type checker step
-            todo!("enum type checking")
+        Expr::EnumUnit { enum_name, variant } => {
+            let enum_info = env.enums.get(&enum_name.node).ok_or_else(|| {
+                CompileError::type_err(
+                    format!("unknown enum '{}'", enum_name.node),
+                    enum_name.span,
+                )
+            })?;
+            let variant_info = enum_info.variants.iter().find(|(n, _)| *n == variant.node);
+            match variant_info {
+                None => Err(CompileError::type_err(
+                    format!("enum '{}' has no variant '{}'", enum_name.node, variant.node),
+                    variant.span,
+                )),
+                Some((_, fields)) if !fields.is_empty() => Err(CompileError::type_err(
+                    format!("variant '{}.{}' has fields; use {}.{} {{ ... }}", enum_name.node, variant.node, enum_name.node, variant.node),
+                    variant.span,
+                )),
+                Some(_) => Ok(PlutoType::Enum(enum_name.node.clone())),
+            }
+        }
+        Expr::EnumData { enum_name, variant, fields: lit_fields } => {
+            let enum_info = env.enums.get(&enum_name.node).ok_or_else(|| {
+                CompileError::type_err(
+                    format!("unknown enum '{}'", enum_name.node),
+                    enum_name.span,
+                )
+            })?.clone();
+            let variant_info = enum_info.variants.iter().find(|(n, _)| *n == variant.node);
+            match variant_info {
+                None => Err(CompileError::type_err(
+                    format!("enum '{}' has no variant '{}'", enum_name.node, variant.node),
+                    variant.span,
+                )),
+                Some((_, expected_fields)) => {
+                    if lit_fields.len() != expected_fields.len() {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "variant '{}.{}' has {} fields, but {} were provided",
+                                enum_name.node, variant.node, expected_fields.len(), lit_fields.len()
+                            ),
+                            span,
+                        ));
+                    }
+                    for (lit_name, lit_val) in lit_fields {
+                        let field_type = expected_fields.iter()
+                            .find(|(n, _)| *n == lit_name.node)
+                            .map(|(_, t)| t.clone())
+                            .ok_or_else(|| {
+                                CompileError::type_err(
+                                    format!("variant '{}.{}' has no field '{}'", enum_name.node, variant.node, lit_name.node),
+                                    lit_name.span,
+                                )
+                            })?;
+                        let val_type = infer_expr(&lit_val.node, lit_val.span, env)?;
+                        if val_type != field_type {
+                            return Err(CompileError::type_err(
+                                format!("field '{}': expected {field_type}, found {val_type}", lit_name.node),
+                                lit_val.span,
+                            ));
+                        }
+                    }
+                    Ok(PlutoType::Enum(enum_name.node.clone()))
+                }
+            }
         }
         Expr::MethodCall { object, method, args } => {
             let obj_type = infer_expr(&object.node, object.span, env)?;
@@ -1047,5 +1201,41 @@ mod tests {
     #[test]
     fn trait_default_method() {
         check("trait Foo {\n    fn bar(self) int {\n        return 0\n    }\n}\n\nclass X impl Foo {\n    val: int\n}\n\nfn main() {\n}").unwrap();
+    }
+
+    // Enum tests
+
+    #[test]
+    fn enum_registration() {
+        let env = check("enum Color {\n    Red\n    Green\n    Blue\n}\n\nfn main() {\n}").unwrap();
+        assert!(env.enums.contains_key("Color"));
+        assert_eq!(env.enums["Color"].variants.len(), 3);
+    }
+
+    #[test]
+    fn enum_unit_construction() {
+        check("enum Color {\n    Red\n    Blue\n}\n\nfn main() {\n    let c = Color.Red\n}").unwrap();
+    }
+
+    #[test]
+    fn enum_data_construction() {
+        check("enum Status {\n    Active\n    Suspended { reason: string }\n}\n\nfn main() {\n    let s = Status.Suspended { reason: \"banned\" }\n}").unwrap();
+    }
+
+    #[test]
+    fn enum_exhaustive_match() {
+        check("enum Color {\n    Red\n    Blue\n}\n\nfn main() {\n    let c = Color.Red\n    match c {\n        Color.Red {\n            let x = 1\n        }\n        Color.Blue {\n            let x = 2\n        }\n    }\n}").unwrap();
+    }
+
+    #[test]
+    fn enum_non_exhaustive_rejected() {
+        let result = check("enum Color {\n    Red\n    Blue\n}\n\nfn main() {\n    let c = Color.Red\n    match c {\n        Color.Red {\n            let x = 1\n        }\n    }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn enum_wrong_field_name_rejected() {
+        let result = check("enum Status {\n    Suspended { reason: string }\n}\n\nfn main() {\n    let s = Status.Suspended { msg: \"banned\" }\n}");
+        assert!(result.is_err());
     }
 }
