@@ -95,3 +95,7 @@ path = "tests/integration/fs.rs"
 [[test]]
 name = "testing"
 path = "tests/integration/testing.rs"
+
+[[test]]
+name = "stdlib_tests"
+path = "tests/integration/stdlib_tests.rs"

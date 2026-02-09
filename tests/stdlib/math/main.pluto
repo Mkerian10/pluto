@@ -1,0 +1,70 @@
+import std.math
+
+test "abs of positive" {
+    expect(math.abs(5)).to_equal(5)
+    expect(math.abs(1)).to_equal(1)
+    expect(math.abs(100)).to_equal(100)
+}
+
+test "abs of negative" {
+    expect(math.abs(-5)).to_equal(5)
+    expect(math.abs(-1)).to_equal(1)
+    expect(math.abs(-100)).to_equal(100)
+}
+
+test "abs of zero" {
+    expect(math.abs(0)).to_equal(0)
+}
+
+test "min" {
+    expect(math.min(1, 2)).to_equal(1)
+    expect(math.min(2, 1)).to_equal(1)
+    expect(math.min(5, 5)).to_equal(5)
+    expect(math.min(-3, 3)).to_equal(-3)
+    expect(math.min(0, -1)).to_equal(-1)
+}
+
+test "max" {
+    expect(math.max(1, 2)).to_equal(2)
+    expect(math.max(2, 1)).to_equal(2)
+    expect(math.max(5, 5)).to_equal(5)
+    expect(math.max(-3, 3)).to_equal(3)
+    expect(math.max(0, -1)).to_equal(0)
+}
+
+test "pow basic" {
+    expect(math.pow(2, 0)).to_equal(1)
+    expect(math.pow(2, 1)).to_equal(2)
+    expect(math.pow(2, 8)).to_equal(256)
+    expect(math.pow(3, 3)).to_equal(27)
+    expect(math.pow(10, 3)).to_equal(1000)
+}
+
+test "pow edge cases" {
+    expect(math.pow(0, 0)).to_equal(1)
+    expect(math.pow(0, 5)).to_equal(0)
+    expect(math.pow(1, 100)).to_equal(1)
+    expect(math.pow(-2, 3)).to_equal(-8)
+    expect(math.pow(-2, 4)).to_equal(16)
+}
+
+test "pow negative exponent returns zero" {
+    expect(math.pow(2, -1)).to_equal(0)
+    expect(math.pow(5, -10)).to_equal(0)
+}
+
+test "clamp within bounds" {
+    expect(math.clamp(5, 0, 10)).to_equal(5)
+    expect(math.clamp(0, 0, 10)).to_equal(0)
+    expect(math.clamp(10, 0, 10)).to_equal(10)
+}
+
+test "clamp below lower bound" {
+    expect(math.clamp(-5, 0, 10)).to_equal(0)
+    expect(math.clamp(-100, -10, 10)).to_equal(-10)
+}
+
+test "clamp above upper bound" {
+    expect(math.clamp(15, 0, 10)).to_equal(10)
+    expect(math.clamp(100, -10, 10)).to_equal(10)
+}
