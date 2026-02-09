@@ -1,0 +1,33 @@
+fn sieve(n: int) int {
+    let flags = [true]
+    let i = 1
+    while i < n {
+        flags.push(true)
+        i = i + 1
+    }
+
+    let count = 0
+    let p = 2
+    while p < n {
+        if flags[p] {
+            count = count + 1
+            let m = p + p
+            while m < n {
+                flags[m] = false
+                m = m + p
+            }
+        }
+        p = p + 1
+    }
+    return count
+}
+
+fn main() {
+    let n = 500000
+    let start = time_ns()
+    let result = sieve(n)
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("primes below {n}: {result}")
+    print("elapsed: {ms} ms")
+}

@@ -839,6 +839,11 @@ long __pluto_time_ns(void) {
     return (long)ts.tv_sec * 1000000000L + (long)ts.tv_nsec;
 }
 
+// GC introspection
+long __pluto_gc_heap_size(void) {
+    return (long)gc_bytes_allocated;
+}
+
 // ── Socket runtime — POSIX sockets for networking ─────────────────────────────
 
 __attribute__((constructor))

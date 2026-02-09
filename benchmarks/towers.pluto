@@ -1,0 +1,31 @@
+fn towers(discs: int, from: int, to: int, spare: int, pegs: [int], moves: int) int {
+    if discs == 0 {
+        return moves
+    }
+    let m = towers(discs - 1, from, spare, to, pegs, moves)
+    pegs[to] = pegs[to] + 1
+    pegs[from] = pegs[from] - 1
+    m = m + 1
+    m = towers(discs - 1, spare, to, from, pegs, m)
+    return m
+}
+
+fn main() {
+    let n = 20
+    let iters = 100
+    let start = time_ns()
+
+    let total_moves = 0
+    let i = 0
+    while i < iters {
+        let pegs = [n, 0, 0]
+        let m = towers(n, 0, 1, 2, pegs, 0)
+        total_moves = total_moves + m
+        i = i + 1
+    }
+
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("total moves: {total_moves}")
+    print("elapsed: {ms} ms")
+}

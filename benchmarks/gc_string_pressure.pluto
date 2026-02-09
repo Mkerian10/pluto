@@ -1,0 +1,17 @@
+fn main() {
+    let n = 100000
+    let start = time_ns()
+    let result = "start"
+    let i = 0
+    while i < n {
+        let tmp = "item_{i}_data"
+        result = tmp
+        i = i + 1
+    }
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    let heap = gc_heap_size()
+    print("final: {result}")
+    print("heap_size: {heap} bytes")
+    print("elapsed: {ms} ms")
+}

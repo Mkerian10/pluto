@@ -26,6 +26,14 @@ BENCHMARKS=(
     class_method
     closure_call
     trait_dispatch
+    gc_churn
+    gc_binary_trees
+    gc_string_pressure
+    sieve
+    bounce
+    towers
+    permute
+    queens
 )
 
 PASS=0

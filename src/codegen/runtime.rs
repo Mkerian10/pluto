@@ -91,6 +91,7 @@ impl RuntimeRegistry {
 
         // GC
         reg.declare(module, "__pluto_gc_init", &[], &[])?;
+        reg.declare(module, "__pluto_gc_heap_size", &[], &[types::I64])?;
 
         Ok(reg)
     }
