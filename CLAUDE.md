@@ -72,4 +72,17 @@ git worktree remove ../pluto-<feature-name>                  # Clean up when don
 
 **Branch per feature** — Each feature or task should be on its own branch. Merge to `master` when complete and tests pass.
 
+**Pull before merging** — Before merging your branch into `master`, always pull the latest changes to avoid conflicts with other agents' work:
+```bash
+git checkout master
+git pull                          # Get latest from other agents
+git merge <feature-name>         # Merge your branch
+# Resolve any conflicts, run cargo test, then commit
+```
+
+**Pull when starting work** — Before beginning any new task, pull the latest `master` to start from the most up-to-date code:
+```bash
+git pull                          # On master, before creating a worktree/branch
+```
+
 **Before starting work** — Check `git status` to ensure a clean working tree. If there are uncommitted changes from another agent, coordinate or use a worktree.
