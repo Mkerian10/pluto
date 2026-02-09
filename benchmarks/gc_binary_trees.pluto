@@ -1,0 +1,58 @@
+class TreeNode {
+    left: int
+    right: int
+    value: int
+}
+
+fn make_tree(depth: int) TreeNode {
+    if depth == 0 {
+        return TreeNode { left: 0, right: 0, value: 1 }
+    }
+    let left = make_tree(depth - 1)
+    let right = make_tree(depth - 1)
+    return TreeNode { left: 0, right: 0, value: check(left) + check(right) }
+}
+
+fn check(node: TreeNode) int {
+    return node.value
+}
+
+fn main() {
+    let min_depth = 4
+    let max_depth = 16
+    let stretch_depth = max_depth + 1
+
+    let start = time_ns()
+
+    let stretch = make_tree(stretch_depth)
+    print("stretch tree of depth {stretch_depth} check: {check(stretch)}")
+
+    let long_lived = make_tree(max_depth)
+
+    let depth = min_depth
+    while depth <= max_depth {
+        let iterations = 1
+        let d = 0
+        while d < (max_depth - depth + min_depth) {
+            iterations = iterations * 2
+            d = d + 1
+        }
+        let total_check = 0
+        let i = 0
+        while i < iterations {
+            let t = make_tree(depth)
+            total_check = total_check + check(t)
+            i = i + 1
+        }
+        print("{iterations} trees of depth {depth} check: {total_check}")
+        depth = depth + 2
+    }
+
+    print("long lived tree of depth {max_depth} check: {check(long_lived)}")
+
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    let heap = gc_heap_size()
+    print("heap_size: {heap} bytes")
+    print("elapsed: {ms} ms")
+}

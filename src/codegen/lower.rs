@@ -1088,6 +1088,9 @@ impl<'a> LowerContext<'a> {
             let arg = self.lower_expr(&args[0].node)?;
             return Ok(self.call_runtime("__pluto_log", &[arg]));
         }
+        if name.node == "gc_heap_size" {
+            return Ok(self.call_runtime("__pluto_gc_heap_size", &[]));
+        }
 
         // Check if calling a closure variable
         if let Some(PlutoType::Fn(ref param_types, ref ret_type)) = self.var_types.get(&name.node).cloned() {
@@ -1823,6 +1826,9 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 "sqrt" | "floor" | "ceil" | "round" | "sin" | "cos" | "tan" | "log"
             ) {
                 return PlutoType::Float;
+            }
+            if name.node == "gc_heap_size" {
+                return PlutoType::Int;
             }
             env.functions.get(&name.node).map(|s| s.return_type.clone()).unwrap_or(PlutoType::Void)
         }

@@ -1,0 +1,51 @@
+class Ball {
+    x: float
+    y: float
+    vx: float
+    vy: float
+}
+
+fn bounce_sim(steps: int) int {
+    let b = Ball { x: 0.0, y: 0.0, vx: 1.5, vy: 2.3 }
+    let box_size = 100.0
+
+    let i = 0
+    let bounces = 0
+    while i < steps {
+        b.x = b.x + b.vx
+        b.y = b.y + b.vy
+
+        if b.x < 0.0 {
+            b.x = 0.0 - b.x
+            b.vx = 0.0 - b.vx
+            bounces = bounces + 1
+        }
+        if b.x > box_size {
+            b.x = box_size - (b.x - box_size)
+            b.vx = 0.0 - b.vx
+            bounces = bounces + 1
+        }
+        if b.y < 0.0 {
+            b.y = 0.0 - b.y
+            b.vy = 0.0 - b.vy
+            bounces = bounces + 1
+        }
+        if b.y > box_size {
+            b.y = box_size - (b.y - box_size)
+            b.vy = 0.0 - b.vy
+            bounces = bounces + 1
+        }
+        i = i + 1
+    }
+    return bounces
+}
+
+fn main() {
+    let steps = 10000000
+    let start = time_ns()
+    let bounces = bounce_sim(steps)
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("bounces: {bounces}")
+    print("elapsed: {ms} ms")
+}

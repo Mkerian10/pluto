@@ -129,6 +129,7 @@ impl TypeEnv {
         builtins.insert("cos".to_string());
         builtins.insert("tan".to_string());
         builtins.insert("log".to_string());
+        builtins.insert("gc_heap_size".to_string());
         Self {
             scopes: vec![HashMap::new()],
             functions: HashMap::new(),

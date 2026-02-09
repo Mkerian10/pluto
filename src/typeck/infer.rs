@@ -450,6 +450,15 @@ fn infer_call(
                 }
                 Ok(PlutoType::Float)
             }
+            "gc_heap_size" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("gc_heap_size() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                Ok(PlutoType::Int)
+            }
             _ => Err(CompileError::type_err(
                 format!("unknown builtin '{}'", name.node),
                 name.span,

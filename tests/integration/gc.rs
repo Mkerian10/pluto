@@ -323,3 +323,50 @@ fn main() {
 "#);
     assert_eq!(out.trim(), "hello\nhola");
 }
+
+#[test]
+fn gc_heap_size_returns_positive() {
+    // After allocating a class, gc_heap_size() should return > 0
+    let out = compile_and_run_stdout(r#"
+class Obj {
+    value: int
+}
+
+fn main() {
+    let o = Obj { value: 42 }
+    let size = gc_heap_size()
+    if size > 0 {
+        print("positive")
+    } else {
+        print("zero")
+    }
+    print(o.value)
+}
+"#);
+    assert_eq!(out.trim(), "positive\n42");
+}
+
+#[test]
+fn gc_heap_size_bounded_after_churn() {
+    // Allocate and discard 10K objects; heap size should stay bounded (under 1MB)
+    let out = compile_and_run_stdout(r#"
+class Obj {
+    value: int
+}
+
+fn main() {
+    let i = 0
+    while i < 10000 {
+        let tmp = Obj { value: i }
+        i = i + 1
+    }
+    let size = gc_heap_size()
+    if size < 1048576 {
+        print("bounded")
+    } else {
+        print("LEAK: heap size = {size}")
+    }
+}
+"#);
+    assert_eq!(out.trim(), "bounded");
+}
