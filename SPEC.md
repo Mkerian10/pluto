@@ -38,7 +38,7 @@ Detailed design for each area of the language:
 | --- | --- |
 | [Program Structure](docs/design/program-structure.md) | Apps, modules, entry points |
 | [Type System](docs/design/type-system.md) | Classes, traits, nominal + structural typing |
-| [Error Handling](docs/design/error-handling.md) | Typed errors, inference, `?` and `catch` |
+| [Error Handling](docs/design/error-handling.md) | Typed errors, inference, `!` and `catch` |
 | [Dependency Injection](docs/design/dependency-injection.md) | `inject`, auto-wiring, environment opacity |
 | [Communication](docs/design/communication.md) | Synchronous calls, channels, serialization |
 | [Mutability](docs/design/mutability.md) | Explicit mutation, compiler optimizations |

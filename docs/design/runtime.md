@@ -1,5 +1,7 @@
 # Runtime
 
+> **Implementation status:** The current runtime is a minimal C library (`runtime/builtins.c`) providing `print`, memory allocation, string/array operations, and error handling primitives (`pluto_get_error`, `pluto_set_error`, `pluto_clear_error`). The full process supervisor, channel router, and GC described below are not yet implemented.
+
 ## The Pluto Runtime ("VM")
 
 Every Pluto program runs inside the Pluto runtime. Despite compiling to native code, the runtime provides a lightweight execution wrapper — conceptually similar to a Kubernetes pod manager but as a no-op when not needed.

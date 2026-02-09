@@ -6,50 +6,56 @@ Pluto uses a **nominal** type system by default, with **structural** typing for 
 
 ## Primitive Types
 
-| Type     | Description              |
-| -------- | ------------------------ |
-| `int`    | 64-bit signed integer    |
-| `float`  | 64-bit floating point    |
-| `bool`   | `true` / `false`         |
-| `string` | UTF-8 string             |
-| `byte`   | Single byte              |
-| `bytes`  | Byte array               |
+| Type     | Size | Description              | Status |
+| -------- | ---- | ------------------------ | ------ |
+| `int`    | I64  | 64-bit signed integer    | Implemented |
+| `float`  | F64  | 64-bit floating point    | Implemented |
+| `bool`   | I8   | `true` / `false`         | Implemented |
+| `string` | ptr  | Heap-allocated UTF-8     | Implemented |
+| `void`   | —    | No value                 | Implemented |
+| `byte`   | —    | Single byte              | Not implemented |
+| `bytes`  | —    | Byte array               | Not implemented |
 
-## Option Type
+## Arrays
 
-Absent values are represented with `Option<T>`. There is no `null` keyword.
+Arrays are the built-in collection type. They are heap-allocated, homogeneous, and dynamically sized.
 
 ```
-fn get_user(self, id: string) Option<User> {
-    // returns Some(user) or None
+let items = [1, 2, 3]           // array of int
+let names = ["alice", "bob"]    // array of string
+let empty: [int] = []           // empty typed array
+
+items.push(4)                   // append
+let n = items.len()             // length
+let first = items[0]            // index access
+items[0] = 10                   // index assignment
+
+for item in items {             // iteration
+    print(item)
 }
 ```
 
-Ergonomic sugar:
-```
-let user = self.get_user(id) ?? default_user   // coalesce
-let name = self.get_user(id)?.name             // null-safe chain
-```
-
-## Collections
-
-Built-in collection types with literal syntax:
-
-```
-let items = [1, 2, 3]                    // List<int>
-let scores = {"alice": 95, "bob": 87}    // Map<string, int>
-let ids = {1, 2, 3}                      // Set<int>
-```
+Type syntax: `[int]`, `[string]`, `[Point]`, etc.
 
 ## Enums
 
-Enums model data with variants. Variants can carry data.
+Enums model data with variants. Variants can be unit (no data) or carry named fields. Pattern matching via `match` with exhaustiveness checking.
 
 ```
-enum Status {
-    Active,
-    Suspended { reason: string },
-    Deleted { at: Timestamp },
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+enum Shape {
+    Circle { radius: float },
+    Rectangle { width: float, height: float },
+}
+
+match shape {
+    Circle { radius } => print(radius)
+    Rectangle { width, height } => print(width * height)
 }
 ```
 
@@ -60,85 +66,97 @@ Note: `error` types are a separate language concept (see [Error Handling](error-
 Classes hold data and define methods. There is **no inheritance**. Code reuse is achieved through traits and composition.
 
 ```
-class OrderProcessor {
-    inject db: APIDatabase
-    inject logger: Logger
+class Point {
+    x: int
+    y: int
 
-    orders_processed: int
-
-    fn new() OrderProcessor {
-        return OrderProcessor { orders_processed: 0 }
+    fn distance(self, other: Point) float {
+        let dx = self.x - other.x
+        let dy = self.y - other.y
+        return sqrt(dx * dx + dy * dy)
     }
+}
 
-    fn process(mut self, order: Order) {
+let p = Point { x: 1, y: 2 }
+print(p.x)
+```
+
+Classes can declare injected dependencies using bracket syntax:
+
+```
+class OrderService[db: Database, logger: Logger] {
+    fn process(self, order: Order) {
         self.db.insert(order)!
-        self.orders_processed += 1
-        self.logger.info("processed order {order.id}")
-    }
-
-    fn count(self) int {
-        return self.orders_processed
+        self.logger.info("done")
     }
 }
 ```
 
 Key properties:
-- Classes can declare `inject` dependencies (auto-wired by the runtime)
+- Bracket deps `[dep: Type]` are auto-wired by the DI system at compile time
 - Methods that modify fields must declare `mut self`
 - Methods that only read fields use `self` (immutable)
 - No `extends` or `inherits` keyword exists
-- Constructors are explicit `fn new()` methods
+- Struct literals construct instances: `Point { x: 1, y: 2 }`
 
 ## Traits
 
-Traits define shared behavior contracts with optional default implementations.
+Traits define shared behavior contracts with optional default implementations. Conformance is structural — if a class has the required methods with matching signatures, it satisfies the trait (explicit `impl` declaration is required).
 
 ```
-trait Serializable {
-    fn serialize(self) bytes
-    fn deserialize(data: bytes) Self
+trait Printable {
+    fn to_string(self) string
 }
 
-trait HealthCheck {
-    fn health(self) Status {
-        return Status.Ok
+trait Describable {
+    fn describe(self) string {
+        return "an object"
     }
 }
 
-class OrderProcessor impl Serializable, HealthCheck {
-    fn serialize(self) bytes { ... }
-    fn deserialize(data: bytes) OrderProcessor { ... }
-    // health() uses the default implementation
+class Point impl Printable, Describable {
+    x: int
+    y: int
+
+    fn to_string(self) string {
+        return "{self.x}, {self.y}"
+    }
+    // describe() uses the default implementation
 }
 ```
 
 Key properties:
 - Traits can have default method implementations
 - A class can implement multiple traits
-- The compiler auto-requires `Serializable` for any type sent over a cross-pod channel
+- Trait-typed parameters use vtable dispatch at runtime
 
-## Generics
+## Closures
 
-Angle bracket syntax with trait constraints:
+Arrow function syntax with capture by value:
 
 ```
-// Unconstrained
-fn first<T>(items: List<T>) T { ... }
+let add = (x: int, y: int) => x + y
+let greet = (name: string) => {
+    let msg = "hello {name}"
+    return msg
+}
 
-// Constrained by trait
-fn sort<T: Comparable>(items: List<T>) List<T> { ... }
-
-// Multiple constraints
-fn send_all<T: Serializable + Comparable>(items: List<T>) { ... }
+fn apply(f: fn(int) int, x: int) int {
+    return f(x)
+}
 ```
+
+Function type syntax: `fn(int, float) string`, `fn() void`
+
+Closures capture variables from their enclosing scope by value (snapshot at creation time). Heap types (strings, arrays, classes) share the underlying data.
 
 ## Nominal vs Structural
 
 - **Nominal (default):** Two types with identical fields are NOT interchangeable unless they are the same named type. `APIDatabase` and `AccountsDatabase` are distinct types even if they have the same fields.
-- **Structural (traits):** If a class has all the methods a trait requires, it may satisfy the trait. Exact rules TBD — may require explicit `impl` declaration.
+- **Structural (traits):** A class satisfies a trait if it declares `impl Trait` and provides all required methods with matching signatures. The compiler generates vtables for trait dispatch.
 
-## Open Questions
+## Not Yet Implemented
 
-- [ ] Pattern matching — syntax and exhaustiveness checking
-- [ ] Closures / lambdas — syntax and capture semantics
-- [ ] Exactly where structural vs nominal boundary applies
+- **Option type** — `Option<T>` for absent values, `??` coalesce, `?.` null-safe chain
+- **Map / Set** — `{"key": value}` for maps, `{1, 2, 3}` for sets
+- **Generics** — `fn first<T>(items: [T]) T`, `class Container<T>`, trait constraints

@@ -1,5 +1,7 @@
 # Communication Model
 
+> **Implementation status:** Not yet implemented. This document describes the design vision for Pluto's communication model. The current compiler supports local function calls only.
+
 ## Overview
 
 Pluto has a two-tier communication model:
