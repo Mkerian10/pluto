@@ -36,7 +36,7 @@ fn host_target_triple() -> Result<&'static str, CompileError> {
     }
 }
 
-pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError> {
+pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>, CompileError> {
     let mut flag_builder = settings::builder();
     flag_builder.set("is_pic", "true").unwrap();
 
@@ -187,7 +187,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids)?;
+            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source)?;
         }
 
         module
@@ -210,7 +210,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source)?;
             }
 
             module
@@ -261,7 +261,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source)?;
                             }
 
                             module
@@ -305,13 +305,85 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source)?;
             }
 
             module
                 .define_function(func_id, &mut fn_ctx)
                 .map_err(|e| CompileError::codegen(format!("define app method error: {e}")))?;
         }
+    }
+
+    // Generate test runner main (when test_info is non-empty)
+    if !program.test_info.is_empty() {
+        let mut main_sig = module.make_signature();
+        main_sig.returns.push(AbiParam::new(types::I64));
+        let main_id = module
+            .declare_function("main", Linkage::Export, &main_sig)
+            .map_err(|e| CompileError::codegen(format!("declare test main error: {e}")))?;
+
+        let mut fn_ctx = Context::new();
+        fn_ctx.func.signature = main_sig;
+
+        let mut builder_ctx = FunctionBuilderContext::new();
+        {
+            let mut builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
+            let entry_block = builder.create_block();
+            builder.switch_to_block(entry_block);
+            builder.seal_block(entry_block);
+
+            // Initialize GC
+            let gc_init_ref = module.declare_func_in_func(runtime.get("__pluto_gc_init"), builder.func);
+            builder.ins().call(gc_init_ref, &[]);
+
+            let test_start_ref = module.declare_func_in_func(runtime.get("__pluto_test_start"), builder.func);
+            let test_pass_ref = module.declare_func_in_func(runtime.get("__pluto_test_pass"), builder.func);
+            let string_new_ref = module.declare_func_in_func(runtime.get("__pluto_string_new"), builder.func);
+
+            for (display_name, fn_name) in &program.test_info {
+                // Create Pluto string for the test name
+                let mut data_desc = DataDescription::new();
+                let mut bytes = display_name.as_bytes().to_vec();
+                bytes.push(0);
+                data_desc.define(bytes.into_boxed_slice());
+                let data_id = module.declare_anonymous_data(false, false)
+                    .map_err(|e| CompileError::codegen(format!("declare test name data error: {e}")))?;
+                module.define_data(data_id, &data_desc)
+                    .map_err(|e| CompileError::codegen(format!("define test name data error: {e}")))?;
+                let gv = module.declare_data_in_func(data_id, builder.func);
+                let raw_ptr = builder.ins().global_value(types::I64, gv);
+                let len_val = builder.ins().iconst(types::I64, display_name.len() as i64);
+                let call = builder.ins().call(string_new_ref, &[raw_ptr, len_val]);
+                let name_str = builder.inst_results(call)[0];
+
+                // call __pluto_test_start(name_str)
+                builder.ins().call(test_start_ref, &[name_str]);
+
+                // call test function
+                let test_func_id = func_ids.get(fn_name).ok_or_else(|| {
+                    CompileError::codegen(format!("missing test function '{fn_name}'"))
+                })?;
+                let test_func_ref = module.declare_func_in_func(*test_func_id, builder.func);
+                builder.ins().call(test_func_ref, &[]);
+
+                // call __pluto_test_pass()
+                builder.ins().call(test_pass_ref, &[]);
+            }
+
+            // call __pluto_test_summary(count)
+            let test_summary_ref = module.declare_func_in_func(runtime.get("__pluto_test_summary"), builder.func);
+            let count_val = builder.ins().iconst(types::I64, program.test_info.len() as i64);
+            builder.ins().call(test_summary_ref, &[count_val]);
+
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder.ins().return_(&[zero]);
+
+            builder.finalize();
+        }
+
+        module
+            .define_function(main_id, &mut fn_ctx)
+            .map_err(|e| CompileError::codegen(format!("define test main error: {e}")))?;
     }
 
     // Generate synthetic main for DI wiring (when app exists)

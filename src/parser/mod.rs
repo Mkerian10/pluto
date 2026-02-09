@@ -153,6 +153,7 @@ impl<'a> Parser<'a> {
         let mut enums = Vec::new();
         let mut app = None;
         let mut errors = Vec::new();
+        let mut test_info: Vec<(String, String)> = Vec::new();
         self.skip_newlines();
 
         // Parse imports first
@@ -220,9 +221,50 @@ impl<'a> Parser<'a> {
                 Token::Extern => {
                     extern_fns.push(self.parse_extern_fn(is_pub)?);
                 }
+                Token::Test => {
+                    if is_pub {
+                        return Err(CompileError::syntax(
+                            "tests cannot be pub",
+                            tok.span,
+                        ));
+                    }
+                    let test_tok = self.expect(&Token::Test)?;
+                    let test_start = test_tok.span.start;
+                    let name_tok = self.expect(&Token::StringLit(String::new()))?;
+                    let display_name = match &name_tok.node {
+                        Token::StringLit(s) => s.clone(),
+                        _ => unreachable!(),
+                    };
+                    let name_span = name_tok.span;
+                    // Check for duplicate test names
+                    if test_info.iter().any(|(n, _)| *n == display_name) {
+                        return Err(CompileError::syntax(
+                            format!("duplicate test name: \"{}\"", display_name),
+                            name_span,
+                        ));
+                    }
+                    // Generate unique fn_name with collision avoidance
+                    let mut idx = test_info.len();
+                    let mut fn_name = format!("__test_{}", idx);
+                    while functions.iter().any(|f| f.node.name.node == fn_name) {
+                        idx += 1;
+                        fn_name = format!("__test_{}", idx);
+                    }
+                    let body = self.parse_block()?;
+                    let end = body.span.end;
+                    functions.push(Spanned::new(Function {
+                        name: Spanned::new(fn_name.clone(), name_span),
+                        type_params: vec![],
+                        params: vec![],
+                        return_type: None,
+                        body,
+                        is_pub: false,
+                    }, Span::new(test_start, end)));
+                    test_info.push((display_name, fn_name));
+                }
                 _ => {
                     return Err(CompileError::syntax(
-                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', or 'extern', found {}", tok.node),
+                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'test', or 'extern', found {}", tok.node),
                         tok.span,
                     ));
                 }
@@ -230,7 +272,7 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        Ok(Program { imports, functions, extern_fns, classes, traits, enums, app, errors })
+        Ok(Program { imports, functions, extern_fns, classes, traits, enums, app, errors, test_info })
     }
 
     fn parse_import(&mut self) -> Result<Spanned<ImportDecl>, CompileError> {
@@ -3018,5 +3060,17 @@ mod tests {
         // and fail because it expects '[', 'impl', or '{' after uses list
         let result = parser.parse_program();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_test_block() {
+        let src = "test \"hello\" {\n}\n";
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let prog = parser.parse_program().unwrap();
+        assert_eq!(prog.test_info.len(), 1);
+        assert_eq!(prog.test_info[0].0, "hello");
+        assert_eq!(prog.test_info[0].1, "__test_0");
+        assert_eq!(prog.functions.len(), 1);
     }
 }

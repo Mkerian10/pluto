@@ -27,6 +27,11 @@ enum Commands {
         /// Source file path
         file: PathBuf,
     },
+    /// Run tests in a .pluto source file
+    Test {
+        /// Source file path
+        file: PathBuf,
+    },
 }
 
 fn main() {
@@ -47,6 +52,27 @@ fn main() {
         Commands::Run { file } => {
             let tmp = std::env::temp_dir().join("pluto_run");
             if let Err(err) = plutoc::compile_file_with_stdlib(&file, &tmp, stdlib) {
+                let filename = file.to_string_lossy().to_string();
+                eprintln!("error [{}]: {err}", filename);
+                std::process::exit(1);
+            }
+
+            let status = std::process::Command::new(&tmp)
+                .status()
+                .unwrap_or_else(|e| {
+                    eprintln!("error: could not run compiled binary: {e}");
+                    std::process::exit(1);
+                });
+
+            let _ = std::fs::remove_file(&tmp);
+
+            if !status.success() {
+                std::process::exit(status.code().unwrap_or(1));
+            }
+        }
+        Commands::Test { file } => {
+            let tmp = std::env::temp_dir().join("pluto_test");
+            if let Err(err) = plutoc::compile_file_for_tests(&file, &tmp, stdlib) {
                 let filename = file.to_string_lossy().to_string();
                 eprintln!("error [{}]: {err}", filename);
                 std::process::exit(1);

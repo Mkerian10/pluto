@@ -10,6 +10,7 @@ pub struct Program {
     pub enums: Vec<Spanned<EnumDecl>>,
     pub app: Option<Spanned<AppDecl>>,
     pub errors: Vec<Spanned<ErrorDecl>>,
+    pub test_info: Vec<(String, String)>,  // (display_name, fn_name)
 }
 
 #[derive(Debug, Clone)]

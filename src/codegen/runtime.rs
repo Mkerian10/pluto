@@ -93,6 +93,17 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_gc_init", &[], &[])?;
         reg.declare(module, "__pluto_gc_heap_size", &[], &[types::I64])?;
 
+        // Test framework
+        reg.declare(module, "__pluto_expect_equal_int", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_expect_equal_float", &[types::F64, types::F64, types::I64], &[])?;
+        reg.declare(module, "__pluto_expect_equal_bool", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_expect_equal_string", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_expect_true", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_expect_false", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_test_start", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_test_pass", &[], &[])?;
+        reg.declare(module, "__pluto_test_summary", &[types::I64], &[])?;
+
         Ok(reg)
     }
 

@@ -23,6 +23,7 @@ struct LowerContext<'a> {
     func_ids: &'a HashMap<String, FuncId>,
     runtime: &'a RuntimeRegistry,
     vtable_ids: &'a HashMap<(String, String), DataId>,
+    source: &'a str,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
     var_types: HashMap<String, PlutoType>,
@@ -1011,6 +1012,10 @@ impl<'a> LowerContext<'a> {
         name: &crate::span::Spanned<String>,
         args: &[crate::span::Spanned<Expr>],
     ) -> Result<Value, CompileError> {
+        if name.node == "expect" {
+            // Passthrough — just return the lowered arg
+            return self.lower_expr(&args[0].node);
+        }
         if name.node == "print" {
             return self.lower_print(args);
         }
@@ -1307,6 +1312,43 @@ impl<'a> LowerContext<'a> {
         method: &crate::span::Spanned<String>,
         args: &[crate::span::Spanned<Expr>],
     ) -> Result<Value, CompileError> {
+        // Check for expect() intrinsic pattern
+        if let Expr::Call { name, args: expect_args, .. } = &object.node {
+            if name.node == "expect" && expect_args.len() == 1 {
+                let actual_val = self.lower_expr(&expect_args[0].node)?;
+                let inner_type = infer_type_for_expr(&expect_args[0].node, self.env, &self.var_types);
+                let line_no = byte_to_line(self.source, object.span.start);
+                let line_val = self.builder.ins().iconst(types::I64, line_no as i64);
+
+                match method.node.as_str() {
+                    "to_equal" => {
+                        let expected_val = self.lower_expr(&args[0].node)?;
+                        match inner_type {
+                            PlutoType::Int => self.call_runtime_void("__pluto_expect_equal_int", &[actual_val, expected_val, line_val]),
+                            PlutoType::Float => self.call_runtime_void("__pluto_expect_equal_float", &[actual_val, expected_val, line_val]),
+                            PlutoType::Bool => {
+                                let a = self.builder.ins().uextend(types::I64, actual_val);
+                                let e = self.builder.ins().uextend(types::I64, expected_val);
+                                self.call_runtime_void("__pluto_expect_equal_bool", &[a, e, line_val]);
+                            }
+                            PlutoType::String => self.call_runtime_void("__pluto_expect_equal_string", &[actual_val, expected_val, line_val]),
+                            _ => return Err(CompileError::codegen(format!("to_equal not supported for {inner_type}"))),
+                        }
+                    }
+                    "to_be_true" => {
+                        let a = self.builder.ins().uextend(types::I64, actual_val);
+                        self.call_runtime_void("__pluto_expect_true", &[a, line_val]);
+                    }
+                    "to_be_false" => {
+                        let a = self.builder.ins().uextend(types::I64, actual_val);
+                        self.call_runtime_void("__pluto_expect_false", &[a, line_val]);
+                    }
+                    _ => return Err(CompileError::codegen(format!("unknown assertion method: {}", method.node))),
+                }
+                return Ok(self.builder.ins().iconst(types::I64, 0)); // void
+            }
+        }
+
         let obj_ptr = self.lower_expr(&object.node)?;
         let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
 
@@ -1552,6 +1594,7 @@ pub fn lower_function(
     runtime: &RuntimeRegistry,
     class_name: Option<&str>,
     vtable_ids: &HashMap<(String, String), DataId>,
+    source: &str,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -1626,6 +1669,7 @@ pub fn lower_function(
         func_ids,
         runtime,
         vtable_ids,
+        source,
         variables,
         var_types,
         next_var,
@@ -1812,6 +1856,9 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 return *ret.clone();
             }
             // Check builtins
+            if name.node == "expect" && !args.is_empty() {
+                return infer_type_for_expr(&args[0].node, env, var_types);
+            }
             if name.node == "print" {
                 return PlutoType::Void;
             }
@@ -1885,6 +1932,12 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             infer_type_for_expr(&expr.node, env, var_types)
         }
         Expr::MethodCall { object, method, .. } => {
+            // expect() intrinsic methods always return Void
+            if let Expr::Call { name, .. } = &object.node {
+                if name.node == "expect" {
+                    return PlutoType::Void;
+                }
+            }
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
             if matches!(&obj_type, PlutoType::Array(_)) {
                 return match method.node.as_str() {
@@ -1949,4 +2002,9 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
         }
         Expr::Range { .. } => PlutoType::Range,
     }
+}
+
+/// Convert a byte offset to a 1-based line number.
+fn byte_to_line(source: &str, offset: usize) -> usize {
+    source[..offset.min(source.len())].bytes().filter(|b| *b == b'\n').count() + 1
 }
