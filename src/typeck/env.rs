@@ -65,6 +65,16 @@ pub enum InstKind {
     Enum(String),
 }
 
+#[derive(Debug, Clone)]
+pub enum MethodResolution {
+    /// Class method call — resolved to a specific mangled name
+    Class { mangled_name: String },
+    /// Trait dynamic dispatch — can't know concrete class at compile time
+    TraitDynamic { trait_name: String, method_name: String },
+    /// Built-in method (array.push, array.len, string.len) — always infallible
+    Builtin,
+}
+
 #[derive(Debug)]
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, PlutoType>>,
@@ -90,6 +100,10 @@ pub struct TypeEnv {
     pub generic_enums: HashMap<String, GenericEnumInfo>,
     pub instantiations: HashSet<Instantiation>,
     pub generic_rewrites: HashMap<(usize, usize), String>,
+    /// Method resolutions recorded during type inference, keyed by (current_fn_mangled_name, method.span.start)
+    pub method_resolutions: HashMap<(String, usize), MethodResolution>,
+    /// Currently being type-checked function's mangled name (set by check_function)
+    pub current_fn: Option<String>,
 }
 
 impl TypeEnv {
@@ -116,6 +130,8 @@ impl TypeEnv {
             generic_enums: HashMap::new(),
             instantiations: HashSet::new(),
             generic_rewrites: HashMap::new(),
+            method_resolutions: HashMap::new(),
+            current_fn: None,
         }
     }
 
@@ -162,6 +178,33 @@ impl TypeEnv {
 
     pub fn is_fn_fallible(&self, name: &str) -> bool {
         self.fn_errors.get(name).map_or(false, |e| !e.is_empty())
+    }
+
+    pub fn is_trait_method_potentially_fallible(&self, trait_name: &str, method_name: &str) -> bool {
+        for (class_name, info) in &self.classes {
+            if info.impl_traits.iter().any(|t| t == trait_name) {
+                let mangled = format!("{}_{}", class_name, method_name);
+                if self.is_fn_fallible(&mangled) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn resolve_method_fallibility(&self, current_fn: &str, span_start: usize) -> Result<bool, String> {
+        let key = (current_fn.to_string(), span_start);
+        match self.method_resolutions.get(&key) {
+            Some(MethodResolution::Class { mangled_name }) => Ok(self.is_fn_fallible(mangled_name)),
+            Some(MethodResolution::TraitDynamic { trait_name, method_name }) => {
+                Ok(self.is_trait_method_potentially_fallible(trait_name, method_name))
+            }
+            Some(MethodResolution::Builtin) => Ok(false),
+            None => Err(format!(
+                "internal error: unresolved method resolution at span {} in fn '{}'",
+                span_start, current_fn
+            )),
+        }
     }
 }
 
