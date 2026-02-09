@@ -9,7 +9,7 @@ pub struct FuncSig {
 
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
-    pub fields: Vec<(String, PlutoType)>,
+    pub fields: Vec<(String, PlutoType, bool)>,  // (name, type, is_injected)
     pub methods: Vec<String>,
     pub impl_traits: Vec<String>,
 }
@@ -25,6 +25,7 @@ pub struct EnumInfo {
     pub variants: Vec<(String, Vec<(String, PlutoType)>)>,
 }
 
+#[derive(Debug)]
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, PlutoType>>,
     pub functions: HashMap<String, FuncSig>,
@@ -37,6 +38,8 @@ pub struct TypeEnv {
     pub closure_captures: HashMap<(usize, usize), Vec<(String, PlutoType)>>,
     /// Lifted closure function name → captured variable names and types
     pub closure_fns: HashMap<String, Vec<(String, PlutoType)>>,
+    pub app: Option<(String, ClassInfo)>,
+    pub di_order: Vec<String>,
 }
 
 impl TypeEnv {
@@ -53,6 +56,8 @@ impl TypeEnv {
             extern_fns: HashSet::new(),
             closure_captures: HashMap::new(),
             closure_fns: HashMap::new(),
+            app: None,
+            di_order: Vec::new(),
         }
     }
 

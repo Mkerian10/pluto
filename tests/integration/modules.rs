@@ -548,3 +548,21 @@ pub fn print(s: string) {
     ]);
     assert_eq!(out, "hello world");
 }
+
+#[test]
+fn app_in_imported_module_rejected() {
+    compile_project_should_fail(&[
+        ("main.pluto", r#"import svc
+
+app MyApp {
+    fn main(self) {
+    }
+}
+"#),
+        ("svc.pluto", r#"pub app SvcApp {
+    fn main(self) {
+    }
+}
+"#),
+    ]);
+}
