@@ -378,3 +378,173 @@ fn main() {
 "#),
     ]);
 }
+
+// ============================================================
+// Hierarchical imports: import a.b
+// ============================================================
+
+#[test]
+fn hierarchical_import_file() {
+    let out = run_project(&[
+        ("main.pluto", "import utils.math\n\nfn main() {\n    print(math.add(3, 4))\n}"),
+        ("utils/math.pluto", "pub fn add(a: int, b: int) int {\n    return a + b\n}"),
+    ]);
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn hierarchical_import_directory() {
+    let out = run_project(&[
+        ("main.pluto", "import utils.math\n\nfn main() {\n    print(math.add(3, 4))\n    print(math.mul(5, 6))\n}"),
+        ("utils/math/add.pluto", "pub fn add(a: int, b: int) int {\n    return a + b\n}"),
+        ("utils/math/mul.pluto", "pub fn mul(a: int, b: int) int {\n    return a * b\n}"),
+    ]);
+    assert_eq!(out, "7\n30\n");
+}
+
+#[test]
+fn hierarchical_import_three_levels() {
+    let out = run_project(&[
+        ("main.pluto", "import a.b.c\n\nfn main() {\n    print(c.value())\n}"),
+        ("a/b/c.pluto", "pub fn value() int {\n    return 42\n}"),
+    ]);
+    assert_eq!(out, "42\n");
+}
+
+// ============================================================
+// Import alias
+// ============================================================
+
+#[test]
+fn import_alias() {
+    let out = run_project(&[
+        ("main.pluto", "import math as m\n\nfn main() {\n    print(m.add(10, 20))\n}"),
+        ("math.pluto", "pub fn add(a: int, b: int) int {\n    return a + b\n}"),
+    ]);
+    assert_eq!(out, "30\n");
+}
+
+#[test]
+fn hierarchical_import_alias() {
+    let out = run_project(&[
+        ("main.pluto", "import utils.math as m\n\nfn main() {\n    print(m.add(10, 20))\n}"),
+        ("utils/math.pluto", "pub fn add(a: int, b: int) int {\n    return a + b\n}"),
+    ]);
+    assert_eq!(out, "30\n");
+}
+
+// ============================================================
+// mod.pluto — directory with mod.pluto loads only that file
+// ============================================================
+
+#[test]
+fn mod_pluto_only_loads_mod_file() {
+    let out = run_project(&[
+        ("main.pluto", "import math\n\nfn main() {\n    print(math.add(1, 2))\n}"),
+        ("math/mod.pluto", "pub fn add(a: int, b: int) int {\n    return a + b\n}"),
+        ("math/extra.pluto", "pub fn mul(a: int, b: int) int {\n    return a * b\n}"),
+    ]);
+    // Only mod.pluto is loaded, so math.mul should not be available
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn mod_pluto_extra_not_visible() {
+    // math/extra.pluto defines mul(), but with mod.pluto present, only mod.pluto is loaded
+    compile_project_should_fail(&[
+        ("main.pluto", "import math\n\nfn main() {\n    print(math.mul(2, 3))\n}"),
+        ("math/mod.pluto", "pub fn add(a: int, b: int) int {\n    return a + b\n}"),
+        ("math/extra.pluto", "pub fn mul(a: int, b: int) int {\n    return a * b\n}"),
+    ]);
+}
+
+// ============================================================
+// Stdlib imports: import std.x
+// ============================================================
+
+#[test]
+fn stdlib_import_from_relative_stdlib_dir() {
+    // When ./stdlib exists relative to entry file, import std.mymod resolves from there
+    let out = run_project(&[
+        ("main.pluto", "import std.mymod\n\nfn main() {\n    print(mymod.value())\n}"),
+        ("stdlib/mymod.pluto", "pub fn value() int {\n    return 77\n}"),
+    ]);
+    assert_eq!(out, "77\n");
+}
+
+#[test]
+fn stdlib_import_missing_stdlib_root() {
+    // No stdlib/ directory, no --stdlib flag → error
+    compile_project_should_fail(&[
+        ("main.pluto", "import std.io\n\nfn main() {\n}"),
+    ]);
+}
+
+// ============================================================
+// Hierarchical import: missing intermediate directory
+// ============================================================
+
+#[test]
+fn hierarchical_import_missing_intermediate() {
+    compile_project_should_fail(&[
+        ("main.pluto", "import nonexistent.math\n\nfn main() {\n}"),
+    ]);
+}
+
+// ============================================================
+// Extern fn in imported module
+// ============================================================
+
+#[test]
+fn imported_module_with_extern_fn() {
+    // Module wraps a C runtime function via extern fn, main calls the wrapper
+    let out = run_project(&[
+        ("main.pluto", "import printer\n\nfn main() {\n    printer.say(42)\n}"),
+        ("printer.pluto", "extern fn __pluto_print_int(value: int)\n\npub fn say(x: int) {\n    __pluto_print_int(x)\n}"),
+    ]);
+    assert_eq!(out, "42\n");
+}
+
+// ============================================================
+// Stdlib end-to-end: import std.io
+// ============================================================
+
+#[test]
+fn stdlib_io_println() {
+    // stdlib/io/mod.pluto lives relative to the entry file
+    let out = run_project(&[
+        ("main.pluto", r#"import std.io
+
+fn main() {
+    io.println("hello from stdlib")
+}
+"#),
+        ("stdlib/io/mod.pluto", r#"extern fn __pluto_print_string(s: string)
+
+pub fn println(s: string) {
+    __pluto_print_string(s)
+}
+"#),
+    ]);
+    assert_eq!(out, "hello from stdlib\n");
+}
+
+#[test]
+fn stdlib_io_print_no_newline() {
+    let out = run_project(&[
+        ("main.pluto", r#"import std.io
+
+fn main() {
+    io.print("hello")
+    io.print(" world")
+}
+"#),
+        ("stdlib/io/mod.pluto", r#"extern fn __pluto_print_string_no_newline(s: string)
+
+pub fn print(s: string) {
+    __pluto_print_string_no_newline(s)
+}
+"#),
+    ]);
+    assert_eq!(out, "hello world");
+}

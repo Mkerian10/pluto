@@ -4,6 +4,10 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "plutoc", about = "The Pluto compiler")]
 struct Cli {
+    /// Path to stdlib root directory
+    #[arg(long, global = true)]
+    stdlib: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -28,9 +32,11 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
 
+    let stdlib = cli.stdlib.as_deref();
+
     match cli.command {
         Commands::Compile { file, output } => {
-            if let Err(err) = plutoc::compile_file(&file, &output) {
+            if let Err(err) = plutoc::compile_file_with_stdlib(&file, &output, stdlib) {
                 let filename = file.to_string_lossy().to_string();
                 // For file-based compilation, we don't have a single source string for rendering.
                 // Fall back to basic error display.
@@ -40,7 +46,7 @@ fn main() {
         }
         Commands::Run { file } => {
             let tmp = std::env::temp_dir().join("pluto_run");
-            if let Err(err) = plutoc::compile_file(&file, &tmp) {
+            if let Err(err) = plutoc::compile_file_with_stdlib(&file, &tmp, stdlib) {
                 let filename = file.to_string_lossy().to_string();
                 eprintln!("error [{}]: {err}", filename);
                 std::process::exit(1);
