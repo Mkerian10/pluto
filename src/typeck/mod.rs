@@ -606,6 +606,23 @@ fn infer_expr(
         Expr::FloatLit(_) => Ok(PlutoType::Float),
         Expr::BoolLit(_) => Ok(PlutoType::Bool),
         Expr::StringLit(_) => Ok(PlutoType::String),
+        Expr::StringInterp { parts } => {
+            for part in parts {
+                if let StringInterpPart::Expr(e) = part {
+                    let t = infer_expr(&e.node, e.span, env)?;
+                    match t {
+                        PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String => {}
+                        _ => {
+                            return Err(CompileError::type_err(
+                                format!("cannot interpolate {} into string", t),
+                                e.span,
+                            ));
+                        }
+                    }
+                }
+            }
+            Ok(PlutoType::String)
+        }
         Expr::Ident(name) => {
             env.lookup(name)
                 .cloned()
