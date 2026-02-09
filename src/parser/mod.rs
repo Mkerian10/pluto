@@ -774,10 +774,40 @@ impl<'a> Parser<'a> {
                 Ok(Spanned::new(Stmt::Continue, span))
             }
             _ => {
-                // Parse a full expression, then check for `=` to determine
-                // if this is an assignment, field assignment, or expression statement.
+                // Parse a full expression, then check for `=`, compound assignment,
+                // or `++`/`--` to determine statement kind.
                 let start = tok.span.start;
                 let expr = self.parse_expr(0)?;
+
+                // Check for compound assignment operator
+                let compound_op = self.peek().and_then(|t| match &t.node {
+                    Token::PlusEq => Some(BinOp::Add),
+                    Token::MinusEq => Some(BinOp::Sub),
+                    Token::StarEq => Some(BinOp::Mul),
+                    Token::SlashEq => Some(BinOp::Div),
+                    Token::PercentEq => Some(BinOp::Mod),
+                    _ => None,
+                });
+
+                if let Some(op) = compound_op {
+                    self.advance(); // consume compound assignment token
+                    let rhs = self.parse_expr(0)?;
+                    let end = rhs.span.end;
+                    self.consume_statement_end();
+                    // Desugar: x += y  =>  x = x + y
+                    return self.desugar_compound_assign(expr, op, rhs, start, end);
+                }
+
+                // Check for ++ / --
+                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::PlusPlus | Token::MinusMinus) {
+                    let inc_tok = self.advance().unwrap();
+                    let op = if matches!(inc_tok.node, Token::PlusPlus) { BinOp::Add } else { BinOp::Sub };
+                    let end = inc_tok.span.end;
+                    self.consume_statement_end();
+                    // Desugar: x++  =>  x = x + 1
+                    let one = Spanned::new(Expr::IntLit(1), Span::new(end, end));
+                    return self.desugar_compound_assign(expr, op, one, start, end);
+                }
 
                 if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Eq) {
                     self.advance(); // consume '='
@@ -826,6 +856,57 @@ impl<'a> Parser<'a> {
                     Ok(Spanned::new(Stmt::Expr(expr), Span::new(start, end)))
                 }
             }
+        }
+    }
+
+    /// Desugar compound assignment: `x += y` => `x = x + y`, also handles `x++` => `x = x + 1`.
+    /// Supports variable, field, and index targets.
+    fn desugar_compound_assign(
+        &self,
+        target_expr: Spanned<Expr>,
+        op: BinOp,
+        rhs: Spanned<Expr>,
+        start: usize,
+        end: usize,
+    ) -> Result<Spanned<Stmt>, CompileError> {
+        let span = Span::new(start, end);
+        // Build `target op rhs` expression using a clone of the target as the LHS
+        let bin_expr = Spanned::new(
+            Expr::BinOp {
+                op,
+                lhs: Box::new(target_expr.clone()),
+                rhs: Box::new(rhs),
+            },
+            span,
+        );
+        match target_expr.node {
+            Expr::Ident(name) => Ok(Spanned::new(
+                Stmt::Assign {
+                    target: Spanned::new(name, target_expr.span),
+                    value: bin_expr,
+                },
+                span,
+            )),
+            Expr::FieldAccess { object, field } => Ok(Spanned::new(
+                Stmt::FieldAssign {
+                    object: *object,
+                    field,
+                    value: bin_expr,
+                },
+                span,
+            )),
+            Expr::Index { object, index } => Ok(Spanned::new(
+                Stmt::IndexAssign {
+                    object: *object,
+                    index: *index,
+                    value: bin_expr,
+                },
+                span,
+            )),
+            _ => Err(CompileError::syntax(
+                "invalid compound assignment target",
+                target_expr.span,
+            )),
         }
     }
 

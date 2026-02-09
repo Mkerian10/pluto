@@ -222,3 +222,119 @@ fn bitwise_not_on_bool_rejected() {
         "cannot apply '~'",
     );
 }
+
+// ── compound assignment tests ──
+
+#[test]
+fn plus_equals() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 10\n    x += 5\n    print(x)\n}",
+    );
+    assert_eq!(out, "15\n");
+}
+
+#[test]
+fn minus_equals() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 10\n    x -= 3\n    print(x)\n}",
+    );
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn star_equals() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 4\n    x *= 3\n    print(x)\n}",
+    );
+    assert_eq!(out, "12\n");
+}
+
+#[test]
+fn slash_equals() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 20\n    x /= 4\n    print(x)\n}",
+    );
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn percent_equals() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 17\n    x %= 5\n    print(x)\n}",
+    );
+    assert_eq!(out, "2\n");
+}
+
+#[test]
+fn compound_assign_in_loop() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let sum = 0\n    for i in 1..=10 {\n        sum += i\n    }\n    print(sum)\n}",
+    );
+    assert_eq!(out, "55\n");
+}
+
+#[test]
+fn compound_assign_float() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 1.5\n    x += 2.5\n    print(x)\n}",
+    );
+    assert_eq!(out, "4.000000\n");
+}
+
+#[test]
+fn compound_assign_field() {
+    let out = compile_and_run_stdout(
+        "class Counter {\n    value: int\n}\n\nfn main() {\n    let c = Counter { value: 0 }\n    c.value += 10\n    print(c.value)\n}",
+    );
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn compound_assign_index() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let a = [1, 2, 3]\n    a[1] += 10\n    print(a[1])\n}",
+    );
+    assert_eq!(out, "12\n");
+}
+
+// ── increment / decrement tests ──
+
+#[test]
+fn increment() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 5\n    x++\n    print(x)\n}",
+    );
+    assert_eq!(out, "6\n");
+}
+
+#[test]
+fn decrement() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 5\n    x--\n    print(x)\n}",
+    );
+    assert_eq!(out, "4\n");
+}
+
+#[test]
+fn increment_in_while_loop() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let i = 0\n    while i < 5 {\n        print(i)\n        i++\n    }\n}",
+    );
+    assert_eq!(out, "0\n1\n2\n3\n4\n");
+}
+
+#[test]
+fn decrement_countdown() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let i = 3\n    while i > 0 {\n        print(i)\n        i--\n    }\n}",
+    );
+    assert_eq!(out, "3\n2\n1\n");
+}
+
+#[test]
+fn increment_field() {
+    let out = compile_and_run_stdout(
+        "class Counter {\n    value: int\n}\n\nfn main() {\n    let c = Counter { value: 0 }\n    c.value++\n    c.value++\n    c.value++\n    print(c.value)\n}",
+    );
+    assert_eq!(out, "3\n");
+}

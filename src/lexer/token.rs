@@ -105,8 +105,12 @@ pub enum Token {
     Ident,
 
     // Operators
+    #[token("++")]
+    PlusPlus,
     #[token("+")]
     Plus,
+    #[token("--")]
+    MinusMinus,
     #[token("-")]
     Minus,
     #[token("*")]
@@ -115,6 +119,16 @@ pub enum Token {
     Slash,
     #[token("%")]
     Percent,
+    #[token("+=")]
+    PlusEq,
+    #[token("-=")]
+    MinusEq,
+    #[token("*=")]
+    StarEq,
+    #[token("/=")]
+    SlashEq,
+    #[token("%=")]
+    PercentEq,
     #[token("=")]
     Eq,
     #[token("==")]
@@ -223,11 +237,18 @@ impl std::fmt::Display for Token {
             Token::FloatLit(n) => write!(f, "{n}"),
             Token::StringLit(s) => write!(f, "\"{s}\""),
             Token::Ident => write!(f, "identifier"),
+            Token::PlusPlus => write!(f, "++"),
             Token::Plus => write!(f, "+"),
+            Token::MinusMinus => write!(f, "--"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
             Token::Slash => write!(f, "/"),
             Token::Percent => write!(f, "%"),
+            Token::PlusEq => write!(f, "+="),
+            Token::MinusEq => write!(f, "-="),
+            Token::StarEq => write!(f, "*="),
+            Token::SlashEq => write!(f, "/="),
+            Token::PercentEq => write!(f, "%="),
             Token::Eq => write!(f, "="),
             Token::EqEq => write!(f, "=="),
             Token::BangEq => write!(f, "!="),
