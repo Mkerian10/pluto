@@ -122,3 +122,32 @@ void __pluto_array_set(void *handle, long index, long value) {
 long __pluto_array_len(void *handle) {
     return ((long *)handle)[0];
 }
+
+void *__pluto_int_to_string(long value) {
+    int len = snprintf(NULL, 0, "%ld", value);
+    void *header = malloc(8 + len + 1);
+    if (!header) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    *(long *)header = len;
+    snprintf((char *)header + 8, len + 1, "%ld", value);
+    return header;
+}
+
+void *__pluto_float_to_string(double value) {
+    int len = snprintf(NULL, 0, "%f", value);
+    void *header = malloc(8 + len + 1);
+    if (!header) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    *(long *)header = len;
+    snprintf((char *)header + 8, len + 1, "%f", value);
+    return header;
+}
+
+void *__pluto_bool_to_string(int value) {
+    const char *s = value ? "true" : "false";
+    long len = value ? 4 : 5;
+    void *header = malloc(8 + len + 1);
+    if (!header) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    *(long *)header = len;
+    memcpy((char *)header + 8, s, len);
+    ((char *)header)[8 + len] = '\0';
+    return header;
+}
