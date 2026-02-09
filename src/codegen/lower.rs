@@ -11,26 +11,903 @@ use crate::parser::ast::*;
 use crate::typeck::env::TypeEnv;
 use crate::typeck::types::PlutoType;
 
-/// Wrap a class pointer as a trait handle by calling __pluto_trait_wrap.
-fn wrap_class_as_trait(
-    class_val: Value,
-    class_name: &str,
-    trait_name: &str,
-    builder: &mut FunctionBuilder<'_>,
-    module: &mut dyn Module,
-    vtable_ids: &HashMap<(String, String), DataId>,
+struct LowerContext<'a> {
+    builder: FunctionBuilder<'a>,
+    module: &'a mut dyn Module,
+    env: &'a TypeEnv,
+    func_ids: &'a HashMap<String, FuncId>,
+    print_ids: &'a HashMap<&'static str, FuncId>,
+    alloc_id: FuncId,
+    string_ids: &'a HashMap<&'static str, FuncId>,
+    array_ids: &'a HashMap<&'static str, FuncId>,
+    vtable_ids: &'a HashMap<(String, String), DataId>,
     trait_wrap_id: FuncId,
-) -> Result<Value, CompileError> {
-    let vtable_data_id = vtable_ids
-        .get(&(class_name.to_string(), trait_name.to_string()))
-        .ok_or_else(|| {
-            CompileError::codegen(format!("no vtable for ({class_name}, {trait_name})"))
-        })?;
-    let gv = module.declare_data_in_func(*vtable_data_id, builder.func);
-    let vtable_ptr = builder.ins().global_value(types::I64, gv);
-    let func_ref = module.declare_func_in_func(trait_wrap_id, builder.func);
-    let call = builder.ins().call(func_ref, &[class_val, vtable_ptr]);
-    Ok(builder.inst_results(call)[0])
+    // Per-function mutable state
+    variables: HashMap<String, Variable>,
+    var_types: HashMap<String, PlutoType>,
+    next_var: u32,
+    expected_return_type: Option<PlutoType>,
+}
+
+impl<'a> LowerContext<'a> {
+    fn finalize(self) {
+        self.builder.finalize();
+    }
+
+    /// Wrap a class pointer as a trait handle by calling __pluto_trait_wrap.
+    fn wrap_class_as_trait(
+        &mut self,
+        class_val: Value,
+        class_name: &str,
+        trait_name: &str,
+    ) -> Result<Value, CompileError> {
+        let vtable_data_id = self.vtable_ids
+            .get(&(class_name.to_string(), trait_name.to_string()))
+            .ok_or_else(|| {
+                CompileError::codegen(format!("no vtable for ({class_name}, {trait_name})"))
+            })?;
+        let gv = self.module.declare_data_in_func(*vtable_data_id, self.builder.func);
+        let vtable_ptr = self.builder.ins().global_value(types::I64, gv);
+        let func_ref = self.module.declare_func_in_func(self.trait_wrap_id, self.builder.func);
+        let call = self.builder.ins().call(func_ref, &[class_val, vtable_ptr]);
+        Ok(self.builder.inst_results(call)[0])
+    }
+
+    /// Create a null-terminated string in the data section and return its pointer as a Value.
+    fn create_data_str(&mut self, s: &str) -> Result<Value, CompileError> {
+        let mut data_desc = DataDescription::new();
+        let mut bytes = s.as_bytes().to_vec();
+        bytes.push(0); // null terminator
+        data_desc.define(bytes.into_boxed_slice());
+
+        let data_id = self.module
+            .declare_anonymous_data(false, false)
+            .map_err(|e| CompileError::codegen(format!("declare data error: {e}")))?;
+        self.module
+            .define_data(data_id, &data_desc)
+            .map_err(|e| CompileError::codegen(format!("define data error: {e}")))?;
+
+        let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+        Ok(self.builder.ins().global_value(types::I64, gv))
+    }
+
+    fn lower_stmt(
+        &mut self,
+        stmt: &Stmt,
+        terminated: &mut bool,
+    ) -> Result<(), CompileError> {
+        if *terminated {
+            return Ok(());
+        }
+        match stmt {
+            Stmt::Let { name, ty, value } => {
+                let val = self.lower_expr(&value.node)?;
+                let val_type = infer_type_for_expr(&value.node, self.env, &self.var_types);
+
+                // Resolve declared type if present
+                let declared_type = ty.as_ref().map(|t| resolve_type_expr_to_pluto(&t.node, self.env));
+
+                // If assigning a class to a trait-typed variable, wrap it
+                let (final_val, store_type) = match (&val_type, &declared_type) {
+                    (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
+                        let cn = cn.clone();
+                        let tn = tn.clone();
+                        let wrapped = self.wrap_class_as_trait(val, &cn, &tn)?;
+                        (wrapped, PlutoType::Trait(tn))
+                    }
+                    (_, Some(dt)) => (val, dt.clone()),
+                    _ => (val, val_type),
+                };
+
+                let cl_type = pluto_to_cranelift(&store_type);
+                let var = Variable::from_u32(self.next_var);
+                self.next_var += 1;
+                self.builder.declare_var(var, cl_type);
+                self.builder.def_var(var, final_val);
+                self.variables.insert(name.node.clone(), var);
+                self.var_types.insert(name.node.clone(), store_type);
+            }
+            Stmt::Return(value) => {
+                match value {
+                    Some(expr) => {
+                        let val = self.lower_expr(&expr.node)?;
+                        let val_type = infer_type_for_expr(&expr.node, self.env, &self.var_types);
+
+                        // If returning a class where a trait is expected, wrap it
+                        let expected = self.expected_return_type.clone();
+                        let final_val = match (&val_type, &expected) {
+                            (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
+                                self.wrap_class_as_trait(val, cn, tn)?
+                            }
+                            _ => val,
+                        };
+                        self.builder.ins().return_(&[final_val]);
+                    }
+                    None => {
+                        self.builder.ins().return_(&[]);
+                    }
+                }
+                *terminated = true;
+            }
+            Stmt::Assign { target, value } => {
+                let val = self.lower_expr(&value.node)?;
+                let val_type = infer_type_for_expr(&value.node, self.env, &self.var_types);
+                let target_type = self.var_types.get(&target.node).cloned();
+
+                // If assigning a class to a trait-typed variable, wrap it
+                let final_val = match (&val_type, &target_type) {
+                    (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
+                        self.wrap_class_as_trait(val, cn, tn)?
+                    }
+                    _ => val,
+                };
+
+                let var = self.variables.get(&target.node).ok_or_else(|| {
+                    CompileError::codegen(format!("undefined variable '{}'", target.node))
+                })?;
+                self.builder.def_var(*var, final_val);
+            }
+            Stmt::FieldAssign { object, field, value } => {
+                let ptr = self.lower_expr(&object.node)?;
+                let val = self.lower_expr(&value.node)?;
+                let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
+                if let PlutoType::Class(class_name) = &obj_type {
+                    if let Some(class_info) = self.env.classes.get(class_name) {
+                        let offset = class_info.fields.iter()
+                            .position(|(n, _)| *n == field.node)
+                            .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{class_name}'", field.node)))? as i32 * 8;
+                        self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
+                    }
+                }
+            }
+            Stmt::IndexAssign { object, index, value } => {
+                let handle = self.lower_expr(&object.node)?;
+                let idx = self.lower_expr(&index.node)?;
+                let val = self.lower_expr(&value.node)?;
+                let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
+                if let PlutoType::Array(elem) = &obj_type {
+                    let slot = to_array_slot(val, elem, &mut self.builder);
+                    let func_ref = self.module.declare_func_in_func(self.array_ids["set"], self.builder.func);
+                    self.builder.ins().call(func_ref, &[handle, idx, slot]);
+                }
+            }
+            Stmt::If { condition, then_block, else_block } => {
+                let cond_val = self.lower_expr(&condition.node)?;
+
+                let then_bb = self.builder.create_block();
+                let merge_bb = self.builder.create_block();
+
+                if let Some(else_blk) = else_block {
+                    let else_bb = self.builder.create_block();
+                    self.builder.ins().brif(cond_val, then_bb, &[], else_bb, &[]);
+
+                    self.builder.switch_to_block(then_bb);
+                    self.builder.seal_block(then_bb);
+                    let mut then_terminated = false;
+                    for s in &then_block.node.stmts {
+                        self.lower_stmt(&s.node, &mut then_terminated)?;
+                    }
+                    if !then_terminated {
+                        self.builder.ins().jump(merge_bb, &[]);
+                    }
+
+                    self.builder.switch_to_block(else_bb);
+                    self.builder.seal_block(else_bb);
+                    let mut else_terminated = false;
+                    for s in &else_blk.node.stmts {
+                        self.lower_stmt(&s.node, &mut else_terminated)?;
+                    }
+                    if !else_terminated {
+                        self.builder.ins().jump(merge_bb, &[]);
+                    }
+
+                    if then_terminated && else_terminated {
+                        *terminated = true;
+                    }
+                } else {
+                    self.builder.ins().brif(cond_val, then_bb, &[], merge_bb, &[]);
+
+                    self.builder.switch_to_block(then_bb);
+                    self.builder.seal_block(then_bb);
+                    let mut then_terminated = false;
+                    for s in &then_block.node.stmts {
+                        self.lower_stmt(&s.node, &mut then_terminated)?;
+                    }
+                    if !then_terminated {
+                        self.builder.ins().jump(merge_bb, &[]);
+                    }
+                }
+
+                if !*terminated {
+                    self.builder.switch_to_block(merge_bb);
+                    self.builder.seal_block(merge_bb);
+                }
+            }
+            Stmt::While { condition, body } => {
+                let header_bb = self.builder.create_block();
+                let body_bb = self.builder.create_block();
+                let exit_bb = self.builder.create_block();
+
+                self.builder.ins().jump(header_bb, &[]);
+
+                self.builder.switch_to_block(header_bb);
+                let cond_val = self.lower_expr(&condition.node)?;
+                self.builder.ins().brif(cond_val, body_bb, &[], exit_bb, &[]);
+
+                self.builder.switch_to_block(body_bb);
+                self.builder.seal_block(body_bb);
+                let mut body_terminated = false;
+                for s in &body.node.stmts {
+                    self.lower_stmt(&s.node, &mut body_terminated)?;
+                }
+                if !body_terminated {
+                    self.builder.ins().jump(header_bb, &[]);
+                }
+
+                self.builder.seal_block(header_bb);
+                self.builder.switch_to_block(exit_bb);
+                self.builder.seal_block(exit_bb);
+            }
+            Stmt::For { var, iterable, body } => {
+                // Lower iterable to get array handle
+                let handle = self.lower_expr(&iterable.node)?;
+
+                // Get element type from iterable
+                let iter_type = infer_type_for_expr(&iterable.node, self.env, &self.var_types);
+                let elem_type = match &iter_type {
+                    PlutoType::Array(elem) => *elem.clone(),
+                    _ => return Err(CompileError::codegen("for loop requires array".to_string())),
+                };
+
+                // Call len() on the array
+                let len_ref = self.module.declare_func_in_func(self.array_ids["len"], self.builder.func);
+                let len_call = self.builder.ins().call(len_ref, &[handle]);
+                let len_val = self.builder.inst_results(len_call)[0];
+
+                // Create counter variable, init to 0
+                let counter_var = Variable::from_u32(self.next_var);
+                self.next_var += 1;
+                self.builder.declare_var(counter_var, types::I64);
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                self.builder.def_var(counter_var, zero);
+
+                // Create blocks
+                let header_bb = self.builder.create_block();
+                let body_bb = self.builder.create_block();
+                let exit_bb = self.builder.create_block();
+
+                self.builder.ins().jump(header_bb, &[]);
+
+                // Header: check counter < len
+                self.builder.switch_to_block(header_bb);
+                let counter = self.builder.use_var(counter_var);
+                let cond = self.builder.ins().icmp(IntCC::SignedLessThan, counter, len_val);
+                self.builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
+
+                // Body
+                self.builder.switch_to_block(body_bb);
+                self.builder.seal_block(body_bb);
+
+                // Get element: array_get(handle, counter)
+                let counter_for_get = self.builder.use_var(counter_var);
+                let get_ref = self.module.declare_func_in_func(self.array_ids["get"], self.builder.func);
+                let get_call = self.builder.ins().call(get_ref, &[handle, counter_for_get]);
+                let raw_slot = self.builder.inst_results(get_call)[0];
+                let elem_val = from_array_slot(raw_slot, &elem_type, &mut self.builder);
+
+                // Create loop variable, saving any prior binding for restoration
+                let prev_var = self.variables.get(&var.node).cloned();
+                let prev_type = self.var_types.get(&var.node).cloned();
+
+                let loop_var = Variable::from_u32(self.next_var);
+                self.next_var += 1;
+                let cl_elem_type = pluto_to_cranelift(&elem_type);
+                self.builder.declare_var(loop_var, cl_elem_type);
+                self.builder.def_var(loop_var, elem_val);
+                self.variables.insert(var.node.clone(), loop_var);
+                self.var_types.insert(var.node.clone(), elem_type);
+
+                // Lower body statements
+                let mut body_terminated = false;
+                for s in &body.node.stmts {
+                    self.lower_stmt(&s.node, &mut body_terminated)?;
+                }
+
+                // Restore prior variable binding if shadowed
+                if let Some(pv) = prev_var {
+                    self.variables.insert(var.node.clone(), pv);
+                } else {
+                    self.variables.remove(&var.node);
+                }
+                if let Some(pt) = prev_type {
+                    self.var_types.insert(var.node.clone(), pt);
+                } else {
+                    self.var_types.remove(&var.node);
+                }
+
+                // Increment counter
+                if !body_terminated {
+                    let counter_inc = self.builder.use_var(counter_var);
+                    let one = self.builder.ins().iconst(types::I64, 1);
+                    let new_counter = self.builder.ins().iadd(counter_inc, one);
+                    self.builder.def_var(counter_var, new_counter);
+                    self.builder.ins().jump(header_bb, &[]);
+                }
+
+                self.builder.seal_block(header_bb);
+                self.builder.switch_to_block(exit_bb);
+                self.builder.seal_block(exit_bb);
+            }
+            Stmt::Match { expr, arms } => {
+                let ptr = self.lower_expr(&expr.node)?;
+                let tag = self.builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(0));
+
+                let enum_name = match infer_type_for_expr(&expr.node, self.env, &self.var_types) {
+                    PlutoType::Enum(name) => name,
+                    _ => return Err(CompileError::codegen("match on non-enum".to_string())),
+                };
+                let enum_info = self.env.enums.get(&enum_name).ok_or_else(|| {
+                    CompileError::codegen(format!("unknown enum '{enum_name}'"))
+                })?.clone();
+
+                let merge_bb = self.builder.create_block();
+                let mut check_blocks = Vec::new();
+                let mut body_blocks = Vec::new();
+
+                for _ in 0..arms.len() {
+                    check_blocks.push(self.builder.create_block());
+                    body_blocks.push(self.builder.create_block());
+                }
+
+                // Jump to first check block
+                self.builder.ins().jump(check_blocks[0], &[]);
+
+                let mut all_terminated = true;
+
+                for (i, arm) in arms.iter().enumerate() {
+                    // Check block: compare tag
+                    self.builder.switch_to_block(check_blocks[i]);
+                    self.builder.seal_block(check_blocks[i]);
+
+                    let variant_idx = enum_info.variants.iter()
+                        .position(|(n, _)| *n == arm.variant_name.node)
+                        .unwrap() as i64;
+                    let expected_tag = self.builder.ins().iconst(types::I64, variant_idx);
+                    let cmp = self.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
+
+                    let fallthrough = if i + 1 < arms.len() {
+                        check_blocks[i + 1]
+                    } else {
+                        // Last arm: exhaustiveness guaranteed, so fallthrough to merge
+                        merge_bb
+                    };
+                    self.builder.ins().brif(cmp, body_blocks[i], &[], fallthrough, &[]);
+
+                    // Body block: extract bindings and lower body
+                    self.builder.switch_to_block(body_blocks[i]);
+                    self.builder.seal_block(body_blocks[i]);
+
+                    let variant_fields = &enum_info.variants.iter()
+                        .find(|(n, _)| *n == arm.variant_name.node)
+                        .unwrap().1;
+
+                    // Save previous variable bindings so we can restore after this arm
+                    let mut prev_vars: Vec<(String, Option<Variable>, Option<PlutoType>)> = Vec::new();
+
+                    for (binding_field, opt_rename) in &arm.bindings {
+                        let field_idx = variant_fields.iter()
+                            .position(|(n, _)| *n == binding_field.node)
+                            .unwrap();
+                        let field_type = &variant_fields[field_idx].1;
+                        let offset = ((1 + field_idx) * 8) as i32;
+                        let raw = self.builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(offset));
+                        let val = from_array_slot(raw, field_type, &mut self.builder);
+
+                        let var_name = opt_rename.as_ref().map_or(&binding_field.node, |r| &r.node);
+                        let cl_type = pluto_to_cranelift(field_type);
+                        let var = Variable::from_u32(self.next_var);
+                        self.next_var += 1;
+                        self.builder.declare_var(var, cl_type);
+                        self.builder.def_var(var, val);
+
+                        prev_vars.push((
+                            var_name.clone(),
+                            self.variables.get(var_name).cloned(),
+                            self.var_types.get(var_name).cloned(),
+                        ));
+                        self.variables.insert(var_name.clone(), var);
+                        self.var_types.insert(var_name.clone(), field_type.clone());
+                    }
+
+                    let mut arm_terminated = false;
+                    for s in &arm.body.node.stmts {
+                        self.lower_stmt(&s.node, &mut arm_terminated)?;
+                    }
+
+                    // Restore previous variable bindings
+                    for (name, prev_var, prev_type) in prev_vars {
+                        if let Some(pv) = prev_var {
+                            self.variables.insert(name.clone(), pv);
+                        } else {
+                            self.variables.remove(&name);
+                        }
+                        if let Some(pt) = prev_type {
+                            self.var_types.insert(name, pt);
+                        } else {
+                            self.var_types.remove(&name);
+                        }
+                    }
+
+                    if !arm_terminated {
+                        self.builder.ins().jump(merge_bb, &[]);
+                    }
+                    if !arm_terminated {
+                        all_terminated = false;
+                    }
+                }
+
+                if all_terminated {
+                    *terminated = true;
+                }
+
+                if !*terminated {
+                    self.builder.switch_to_block(merge_bb);
+                    self.builder.seal_block(merge_bb);
+                }
+            }
+            Stmt::Expr(expr) => {
+                self.lower_expr(&expr.node)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn lower_expr(&mut self, expr: &Expr) -> Result<Value, CompileError> {
+        match expr {
+            Expr::IntLit(n) => Ok(self.builder.ins().iconst(types::I64, *n)),
+            Expr::FloatLit(n) => Ok(self.builder.ins().f64const(*n)),
+            Expr::BoolLit(b) => Ok(self.builder.ins().iconst(types::I8, if *b { 1 } else { 0 })),
+            Expr::StringLit(s) => {
+                let raw_ptr = self.create_data_str(s)?;
+                let len_val = self.builder.ins().iconst(types::I64, s.len() as i64);
+                let func_ref = self.module.declare_func_in_func(self.string_ids["new"], self.builder.func);
+                let call = self.builder.ins().call(func_ref, &[raw_ptr, len_val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            Expr::StringInterp { parts } => {
+                // Convert each part to a string handle, then concat them all
+                let mut string_vals: Vec<Value> = Vec::new();
+                for part in parts {
+                    match part {
+                        StringInterpPart::Lit(s) => {
+                            let raw_ptr = self.create_data_str(s)?;
+                            let len_val = self.builder.ins().iconst(types::I64, s.len() as i64);
+                            let func_ref = self.module.declare_func_in_func(self.string_ids["new"], self.builder.func);
+                            let call = self.builder.ins().call(func_ref, &[raw_ptr, len_val]);
+                            string_vals.push(self.builder.inst_results(call)[0]);
+                        }
+                        StringInterpPart::Expr(e) => {
+                            let val = self.lower_expr(&e.node)?;
+                            let t = infer_type_for_expr(&e.node, self.env, &self.var_types);
+                            let str_val = match t {
+                                PlutoType::String => val,
+                                PlutoType::Int => {
+                                    let func_ref = self.module.declare_func_in_func(self.string_ids["int_to_str"], self.builder.func);
+                                    let call = self.builder.ins().call(func_ref, &[val]);
+                                    self.builder.inst_results(call)[0]
+                                }
+                                PlutoType::Float => {
+                                    let func_ref = self.module.declare_func_in_func(self.string_ids["float_to_str"], self.builder.func);
+                                    let call = self.builder.ins().call(func_ref, &[val]);
+                                    self.builder.inst_results(call)[0]
+                                }
+                                PlutoType::Bool => {
+                                    let widened = self.builder.ins().uextend(types::I32, val);
+                                    let func_ref = self.module.declare_func_in_func(self.string_ids["bool_to_str"], self.builder.func);
+                                    let call = self.builder.ins().call(func_ref, &[widened]);
+                                    self.builder.inst_results(call)[0]
+                                }
+                                _ => return Err(CompileError::codegen(format!("cannot interpolate {t}"))),
+                            };
+                            string_vals.push(str_val);
+                        }
+                    }
+                }
+                // Concat all parts left to right
+                let mut result = string_vals[0];
+                let concat_ref = self.module.declare_func_in_func(self.string_ids["concat"], self.builder.func);
+                for part_val in &string_vals[1..] {
+                    let call = self.builder.ins().call(concat_ref, &[result, *part_val]);
+                    result = self.builder.inst_results(call)[0];
+                }
+                Ok(result)
+            }
+            Expr::Ident(name) => {
+                let var = self.variables.get(name).ok_or_else(|| {
+                    CompileError::codegen(format!("undefined variable '{name}'"))
+                })?;
+                Ok(self.builder.use_var(*var))
+            }
+            Expr::BinOp { op, lhs, rhs } => {
+                let l = self.lower_expr(&lhs.node)?;
+                let r = self.lower_expr(&rhs.node)?;
+
+                let lhs_type = infer_type_for_expr(&lhs.node, self.env, &self.var_types);
+                let is_float = lhs_type == PlutoType::Float;
+                let is_string = lhs_type == PlutoType::String;
+
+                let result = match op {
+                    BinOp::Add if is_string => {
+                        let func_ref = self.module.declare_func_in_func(self.string_ids["concat"], self.builder.func);
+                        let call = self.builder.ins().call(func_ref, &[l, r]);
+                        self.builder.inst_results(call)[0]
+                    }
+                    BinOp::Add if is_float => self.builder.ins().fadd(l, r),
+                    BinOp::Add => self.builder.ins().iadd(l, r),
+                    BinOp::Sub if is_float => self.builder.ins().fsub(l, r),
+                    BinOp::Sub => self.builder.ins().isub(l, r),
+                    BinOp::Mul if is_float => self.builder.ins().fmul(l, r),
+                    BinOp::Mul => self.builder.ins().imul(l, r),
+                    BinOp::Div if is_float => self.builder.ins().fdiv(l, r),
+                    BinOp::Div => self.builder.ins().sdiv(l, r),
+                    BinOp::Mod => self.builder.ins().srem(l, r),
+                    BinOp::Eq if is_string => {
+                        let func_ref = self.module.declare_func_in_func(self.string_ids["eq"], self.builder.func);
+                        let call = self.builder.ins().call(func_ref, &[l, r]);
+                        let i32_result = self.builder.inst_results(call)[0];
+                        self.builder.ins().ireduce(types::I8, i32_result)
+                    }
+                    BinOp::Eq if is_float => self.builder.ins().fcmp(FloatCC::Equal, l, r),
+                    BinOp::Eq => self.builder.ins().icmp(IntCC::Equal, l, r),
+                    BinOp::Neq if is_string => {
+                        let func_ref = self.module.declare_func_in_func(self.string_ids["eq"], self.builder.func);
+                        let call = self.builder.ins().call(func_ref, &[l, r]);
+                        let i32_result = self.builder.inst_results(call)[0];
+                        let i8_result = self.builder.ins().ireduce(types::I8, i32_result);
+                        let one = self.builder.ins().iconst(types::I8, 1);
+                        self.builder.ins().bxor(i8_result, one)
+                    }
+                    BinOp::Neq if is_float => self.builder.ins().fcmp(FloatCC::NotEqual, l, r),
+                    BinOp::Neq => self.builder.ins().icmp(IntCC::NotEqual, l, r),
+                    BinOp::Lt if is_float => self.builder.ins().fcmp(FloatCC::LessThan, l, r),
+                    BinOp::Lt => self.builder.ins().icmp(IntCC::SignedLessThan, l, r),
+                    BinOp::Gt if is_float => self.builder.ins().fcmp(FloatCC::GreaterThan, l, r),
+                    BinOp::Gt => self.builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
+                    BinOp::LtEq if is_float => self.builder.ins().fcmp(FloatCC::LessThanOrEqual, l, r),
+                    BinOp::LtEq => self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r),
+                    BinOp::GtEq if is_float => self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, l, r),
+                    BinOp::GtEq => self.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r),
+                    BinOp::And => self.builder.ins().band(l, r),
+                    BinOp::Or => self.builder.ins().bor(l, r),
+                };
+                Ok(result)
+            }
+            Expr::UnaryOp { op, operand } => {
+                let val = self.lower_expr(&operand.node)?;
+                let operand_type = infer_type_for_expr(&operand.node, self.env, &self.var_types);
+                match op {
+                    UnaryOp::Neg if operand_type == PlutoType::Float => Ok(self.builder.ins().fneg(val)),
+                    UnaryOp::Neg => Ok(self.builder.ins().ineg(val)),
+                    UnaryOp::Not => {
+                        let one = self.builder.ins().iconst(types::I8, 1);
+                        Ok(self.builder.ins().bxor(val, one))
+                    }
+                }
+            }
+            Expr::Call { name, args } => {
+                if name.node == "print" {
+                    return self.lower_print(args);
+                }
+
+                let func_id = self.func_ids.get(&name.node).ok_or_else(|| {
+                    CompileError::codegen(format!("undefined function '{}'", name.node))
+                })?;
+
+                let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+
+                // Look up the function signature to check for trait params
+                let param_types: Vec<PlutoType> = self.env.functions.get(&name.node)
+                    .map(|s| s.params.clone())
+                    .unwrap_or_default();
+                let mut arg_values = Vec::new();
+                for (i, arg) in args.iter().enumerate() {
+                    let val = self.lower_expr(&arg.node)?;
+                    let arg_actual_type = infer_type_for_expr(&arg.node, self.env, &self.var_types);
+                    let param_expected = param_types.get(i);
+
+                    if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_actual_type, param_expected) {
+                        // Wrap class as trait handle (single pointer)
+                        let wrapped = self.wrap_class_as_trait(val, cn, tn)?;
+                        arg_values.push(wrapped);
+                    } else {
+                        arg_values.push(val);
+                    }
+                }
+
+                let call = self.builder.ins().call(func_ref, &arg_values);
+                let results = self.builder.inst_results(call);
+                if results.is_empty() {
+                    Ok(self.builder.ins().iconst(types::I64, 0))
+                } else {
+                    Ok(results[0])
+                }
+            }
+            Expr::StructLit { name, fields } => {
+                let class_info = self.env.classes.get(&name.node).ok_or_else(|| {
+                    CompileError::codegen(format!("unknown class '{}'", name.node))
+                })?;
+                let num_fields = class_info.fields.len() as i64;
+                let size = num_fields * 8;
+
+                let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
+                let size_val = self.builder.ins().iconst(types::I64, size);
+                let call = self.builder.ins().call(alloc_ref, &[size_val]);
+                let ptr = self.builder.inst_results(call)[0];
+
+                // Clone field info to avoid borrow conflict with self.lower_expr
+                let field_info: Vec<(String, PlutoType)> = class_info.fields.clone();
+
+                for (lit_name, lit_val) in fields {
+                    let val = self.lower_expr(&lit_val.node)?;
+                    let offset = field_info.iter()
+                        .position(|(n, _)| *n == lit_name.node)
+                        .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", lit_name.node, name.node)))? as i32 * 8;
+                    self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
+                }
+
+                Ok(ptr)
+            }
+            Expr::ArrayLit { elements } => {
+                let n = elements.len() as i64;
+                let func_ref_new = self.module.declare_func_in_func(self.array_ids["new"], self.builder.func);
+                let cap_val = self.builder.ins().iconst(types::I64, n);
+                let call = self.builder.ins().call(func_ref_new, &[cap_val]);
+                let handle = self.builder.inst_results(call)[0];
+
+                let elem_type = infer_type_for_expr(&elements[0].node, self.env, &self.var_types);
+                let func_ref_push = self.module.declare_func_in_func(self.array_ids["push"], self.builder.func);
+                for elem in elements {
+                    let val = self.lower_expr(&elem.node)?;
+                    let slot = to_array_slot(val, &elem_type, &mut self.builder);
+                    self.builder.ins().call(func_ref_push, &[handle, slot]);
+                }
+
+                Ok(handle)
+            }
+            Expr::Index { object, index } => {
+                let handle = self.lower_expr(&object.node)?;
+                let idx = self.lower_expr(&index.node)?;
+                let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
+                if let PlutoType::Array(elem) = &obj_type {
+                    let func_ref = self.module.declare_func_in_func(self.array_ids["get"], self.builder.func);
+                    let call = self.builder.ins().call(func_ref, &[handle, idx]);
+                    let raw = self.builder.inst_results(call)[0];
+                    Ok(from_array_slot(raw, elem, &mut self.builder))
+                } else {
+                    Err(CompileError::codegen(format!("index on non-array type {obj_type}")))
+                }
+            }
+            Expr::EnumUnit { enum_name, variant } => {
+                let enum_info = self.env.enums.get(&enum_name.node).ok_or_else(|| {
+                    CompileError::codegen(format!("unknown enum '{}'", enum_name.node))
+                })?;
+                let max_fields = enum_info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
+                let alloc_size = (1 + max_fields) as i64 * 8;
+                let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
+
+                let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
+                let size_val = self.builder.ins().iconst(types::I64, alloc_size);
+                let call = self.builder.ins().call(alloc_ref, &[size_val]);
+                let ptr = self.builder.inst_results(call)[0];
+
+                let tag_val = self.builder.ins().iconst(types::I64, variant_idx as i64);
+                self.builder.ins().store(MemFlags::new(), tag_val, ptr, Offset32::new(0));
+
+                Ok(ptr)
+            }
+            Expr::EnumData { enum_name, variant, fields } => {
+                let enum_info = self.env.enums.get(&enum_name.node).ok_or_else(|| {
+                    CompileError::codegen(format!("unknown enum '{}'", enum_name.node))
+                })?.clone();
+                let max_fields = enum_info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
+                let alloc_size = (1 + max_fields) as i64 * 8;
+                let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
+                let variant_fields = &enum_info.variants[variant_idx].1;
+
+                let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
+                let size_val = self.builder.ins().iconst(types::I64, alloc_size);
+                let call = self.builder.ins().call(alloc_ref, &[size_val]);
+                let ptr = self.builder.inst_results(call)[0];
+
+                let tag_val = self.builder.ins().iconst(types::I64, variant_idx as i64);
+                self.builder.ins().store(MemFlags::new(), tag_val, ptr, Offset32::new(0));
+
+                for (lit_name, lit_val) in fields {
+                    let val = self.lower_expr(&lit_val.node)?;
+                    let field_idx = variant_fields.iter().position(|(n, _)| *n == lit_name.node).unwrap();
+                    let field_type = &variant_fields[field_idx].1;
+                    let slot = to_array_slot(val, field_type, &mut self.builder);
+                    let offset = ((1 + field_idx) * 8) as i32;
+                    self.builder.ins().store(MemFlags::new(), slot, ptr, Offset32::new(offset));
+                }
+
+                Ok(ptr)
+            }
+            Expr::FieldAccess { object, field } => {
+                let ptr = self.lower_expr(&object.node)?;
+                let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
+                if let PlutoType::Class(class_name) = &obj_type {
+                    let class_info = self.env.classes.get(class_name).ok_or_else(|| {
+                        CompileError::codegen(format!("unknown class '{class_name}'"))
+                    })?;
+                    let (field_idx, (_, field_type)) = class_info.fields.iter()
+                        .enumerate()
+                        .find(|(_, (n, _))| *n == field.node)
+                        .ok_or_else(|| {
+                            CompileError::codegen(format!("unknown field '{}'", field.node))
+                        })?;
+                    let offset = (field_idx as i32) * 8;
+                    let cl_type = pluto_to_cranelift(field_type);
+                    Ok(self.builder.ins().load(cl_type, MemFlags::new(), ptr, Offset32::new(offset)))
+                } else {
+                    Err(CompileError::codegen(format!("field access on non-class type {obj_type}")))
+                }
+            }
+            Expr::MethodCall { object, method, args } => {
+                let obj_ptr = self.lower_expr(&object.node)?;
+                let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
+
+                // Array methods
+                if let PlutoType::Array(elem) = &obj_type {
+                    match method.node.as_str() {
+                        "len" => {
+                            let func_ref = self.module.declare_func_in_func(self.array_ids["len"], self.builder.func);
+                            let call = self.builder.ins().call(func_ref, &[obj_ptr]);
+                            return Ok(self.builder.inst_results(call)[0]);
+                        }
+                        "push" => {
+                            let elem = elem.clone();
+                            let arg_val = self.lower_expr(&args[0].node)?;
+                            let slot = to_array_slot(arg_val, &elem, &mut self.builder);
+                            let func_ref = self.module.declare_func_in_func(self.array_ids["push"], self.builder.func);
+                            self.builder.ins().call(func_ref, &[obj_ptr, slot]);
+                            return Ok(self.builder.ins().iconst(types::I64, 0));
+                        }
+                        _ => {
+                            return Err(CompileError::codegen(format!("array has no method '{}'", method.node)));
+                        }
+                    }
+                }
+
+                // String methods
+                if obj_type == PlutoType::String {
+                    if method.node == "len" {
+                        let func_ref = self.module.declare_func_in_func(self.string_ids["len"], self.builder.func);
+                        let call = self.builder.ins().call(func_ref, &[obj_ptr]);
+                        return Ok(self.builder.inst_results(call)[0]);
+                    }
+                    return Err(CompileError::codegen(format!("string has no method '{}'", method.node)));
+                }
+
+                // Trait dynamic dispatch via handle
+                if let PlutoType::Trait(trait_name) = &obj_type {
+                    let trait_info = self.env.traits.get(trait_name).ok_or_else(|| {
+                        CompileError::codegen(format!("unknown trait '{trait_name}'"))
+                    })?;
+                    let method_idx = trait_info.methods.iter()
+                        .position(|(n, _)| *n == method.node)
+                        .ok_or_else(|| {
+                            CompileError::codegen(format!("trait '{trait_name}' has no method '{}'", method.node))
+                        })?;
+
+                    // Clone method_sig to avoid borrow conflict with self.lower_expr
+                    let method_sig = trait_info.methods[method_idx].1.clone();
+
+                    // obj_ptr is a trait handle: pointer to [data_ptr, vtable_ptr]
+                    let data_ptr = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(0));
+                    let vtable_ptr = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(8));
+
+                    // Load fn_ptr from vtable at offset method_idx * 8
+                    let offset = (method_idx as i32) * 8;
+                    let fn_ptr = self.builder.ins().load(types::I64, MemFlags::new(), vtable_ptr, Offset32::new(offset));
+
+                    // Build indirect call signature
+                    let mut sig = self.module.make_signature();
+                    sig.params.push(AbiParam::new(types::I64)); // self (data_ptr)
+                    for param_ty in &method_sig.params[1..] {
+                        let cl_ty = pluto_to_cranelift(param_ty);
+                        sig.params.push(AbiParam::new(cl_ty));
+                    }
+                    if method_sig.return_type != PlutoType::Void {
+                        sig.returns.push(AbiParam::new(pluto_to_cranelift(&method_sig.return_type)));
+                    }
+                    let sig_ref = self.builder.func.import_signature(sig);
+
+                    let mut call_args = vec![data_ptr]; // data_ptr as self
+                    for (i, arg) in args.iter().enumerate() {
+                        let val = self.lower_expr(&arg.node)?;
+                        let arg_type = infer_type_for_expr(&arg.node, self.env, &self.var_types);
+                        let param_expected = method_sig.params.get(i + 1); // +1 to skip self
+                        if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_type, param_expected) {
+                            let wrapped = self.wrap_class_as_trait(val, cn, tn)?;
+                            call_args.push(wrapped);
+                        } else {
+                            call_args.push(val);
+                        }
+                    }
+
+                    let call = self.builder.ins().call_indirect(sig_ref, fn_ptr, &call_args);
+                    let results = self.builder.inst_results(call);
+                    if results.is_empty() {
+                        Ok(self.builder.ins().iconst(types::I64, 0))
+                    } else {
+                        Ok(results[0])
+                    }
+                } else if let PlutoType::Class(class_name) = &obj_type {
+                    let mangled = format!("{}_{}", class_name, method.node);
+                    let func_id = self.func_ids.get(&mangled).ok_or_else(|| {
+                        CompileError::codegen(format!("undefined method '{}'", method.node))
+                    })?;
+                    let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+
+                    let mut arg_values = vec![obj_ptr];
+                    for arg in args {
+                        arg_values.push(self.lower_expr(&arg.node)?);
+                    }
+
+                    let call = self.builder.ins().call(func_ref, &arg_values);
+                    let results = self.builder.inst_results(call);
+                    if results.is_empty() {
+                        Ok(self.builder.ins().iconst(types::I64, 0))
+                    } else {
+                        Ok(results[0])
+                    }
+                } else {
+                    Err(CompileError::codegen(format!("method call on non-class type {obj_type}")))
+                }
+            }
+        }
+    }
+
+    fn lower_print(
+        &mut self,
+        args: &[crate::span::Spanned<Expr>],
+    ) -> Result<Value, CompileError> {
+        let arg = &args[0];
+        let arg_type = infer_type_for_expr(&arg.node, self.env, &self.var_types);
+        let arg_val = self.lower_expr(&arg.node)?;
+
+        match arg_type {
+            PlutoType::Int => {
+                let func_id = self.print_ids["int"];
+                let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+                self.builder.ins().call(func_ref, &[arg_val]);
+            }
+            PlutoType::Float => {
+                let func_id = self.print_ids["float"];
+                let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+                self.builder.ins().call(func_ref, &[arg_val]);
+            }
+            PlutoType::String => {
+                let func_id = self.print_ids["string"];
+                let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+                self.builder.ins().call(func_ref, &[arg_val]);
+            }
+            PlutoType::Bool => {
+                let func_id = self.print_ids["bool"];
+                let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+                // Widen I8 bool to I32 for the C function
+                let widened = self.builder.ins().uextend(types::I32, arg_val);
+                self.builder.ins().call(func_ref, &[widened]);
+            }
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) => {
+                return Err(CompileError::codegen(format!("cannot print {arg_type}")));
+            }
+        }
+
+        // print returns void, so return a dummy value
+        Ok(self.builder.ins().iconst(types::I64, 0))
+    }
 }
 
 /// Lower a function body into Cranelift IR.
@@ -41,10 +918,10 @@ pub fn lower_function(
     env: &TypeEnv,
     module: &mut dyn Module,
     func_ids: &HashMap<String, FuncId>,
-    print_ids: &HashMap<&str, FuncId>,
+    print_ids: &HashMap<&'static str, FuncId>,
     alloc_id: FuncId,
-    string_ids: &HashMap<&str, FuncId>,
-    array_ids: &HashMap<&str, FuncId>,
+    string_ids: &HashMap<&'static str, FuncId>,
+    array_ids: &HashMap<&'static str, FuncId>,
     class_name: Option<&str>,
     vtable_ids: &HashMap<(String, String), DataId>,
     trait_wrap_id: FuncId,
@@ -94,33 +971,32 @@ pub fn lower_function(
         env.functions.get(&lookup_name).map(|s| s.return_type.clone())
     };
 
-    // Lower body statements
+    // Build context and lower body
     let is_main = func.name.node == "main";
-    let mut terminated = false;
+    let mut ctx = LowerContext {
+        builder,
+        module,
+        env,
+        func_ids,
+        print_ids,
+        alloc_id,
+        string_ids,
+        array_ids,
+        vtable_ids,
+        trait_wrap_id,
+        variables,
+        var_types,
+        next_var,
+        expected_return_type,
+    };
 
+    let mut terminated = false;
     for stmt in &func.body.node.stmts {
         if terminated {
             break;
         }
         let stmt_terminates = matches!(stmt.node, Stmt::Return(_));
-        lower_stmt(
-            &stmt.node,
-            &mut builder,
-            env,
-            module,
-            &mut variables,
-            &mut var_types,
-            &mut next_var,
-            func_ids,
-            &mut terminated,
-            print_ids,
-            alloc_id,
-            string_ids,
-            array_ids,
-            vtable_ids,
-            trait_wrap_id,
-            &expected_return_type,
-        )?;
+        ctx.lower_stmt(&stmt.node, &mut terminated)?;
         if stmt_terminates {
             terminated = true;
         }
@@ -128,8 +1004,8 @@ pub fn lower_function(
 
     // If main and no explicit return, return 0
     if is_main && !terminated {
-        let zero = builder.ins().iconst(types::I64, 0);
-        builder.ins().return_(&[zero]);
+        let zero = ctx.builder.ins().iconst(types::I64, 0);
+        ctx.builder.ins().return_(&[zero]);
     } else if !terminated {
         // Void function with no return
         let lookup_name = if let Some(cn) = class_name {
@@ -137,906 +1013,14 @@ pub fn lower_function(
         } else {
             func.name.node.clone()
         };
-        let ret_type = env.functions.get(&lookup_name).map(|s| &s.return_type);
+        let ret_type = ctx.env.functions.get(&lookup_name).map(|s| &s.return_type);
         if ret_type == Some(&PlutoType::Void) {
-            builder.ins().return_(&[]);
+            ctx.builder.ins().return_(&[]);
         }
     }
 
-    builder.finalize();
+    ctx.finalize();
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn lower_stmt(
-    stmt: &Stmt,
-    builder: &mut FunctionBuilder<'_>,
-    env: &TypeEnv,
-    module: &mut dyn Module,
-    variables: &mut HashMap<String, Variable>,
-    var_types: &mut HashMap<String, PlutoType>,
-    next_var: &mut u32,
-    func_ids: &HashMap<String, FuncId>,
-    terminated: &mut bool,
-    print_ids: &HashMap<&str, FuncId>,
-    alloc_id: FuncId,
-    string_ids: &HashMap<&str, FuncId>,
-    array_ids: &HashMap<&str, FuncId>,
-    vtable_ids: &HashMap<(String, String), DataId>,
-    trait_wrap_id: FuncId,
-    expected_return_type: &Option<PlutoType>,
-) -> Result<(), CompileError> {
-    if *terminated {
-        return Ok(());
-    }
-    match stmt {
-        Stmt::Let { name, ty, value } => {
-            let val = lower_expr(&value.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let val_type = infer_type_for_expr(&value.node, env, var_types);
-
-            // Resolve declared type if present
-            let declared_type = ty.as_ref().map(|t| resolve_type_expr_to_pluto(&t.node, env));
-
-            // If assigning a class to a trait-typed variable, wrap it
-            let (final_val, store_type) = match (&val_type, &declared_type) {
-                (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
-                    let wrapped = wrap_class_as_trait(val, cn, tn, builder, module, vtable_ids, trait_wrap_id)?;
-                    (wrapped, PlutoType::Trait(tn.clone()))
-                }
-                (_, Some(dt)) => (val, dt.clone()),
-                _ => (val, val_type),
-            };
-
-            let cl_type = pluto_to_cranelift(&store_type);
-            let var = Variable::from_u32(*next_var);
-            *next_var += 1;
-            builder.declare_var(var, cl_type);
-            builder.def_var(var, final_val);
-            variables.insert(name.node.clone(), var);
-            var_types.insert(name.node.clone(), store_type);
-        }
-        Stmt::Return(value) => {
-            match value {
-                Some(expr) => {
-                    let val = lower_expr(&expr.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-                    let val_type = infer_type_for_expr(&expr.node, env, var_types);
-
-                    // If returning a class where a trait is expected, wrap it
-                    let final_val = match (&val_type, expected_return_type) {
-                        (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
-                            wrap_class_as_trait(val, cn, tn, builder, module, vtable_ids, trait_wrap_id)?
-                        }
-                        _ => val,
-                    };
-                    builder.ins().return_(&[final_val]);
-                }
-                None => {
-                    builder.ins().return_(&[]);
-                }
-            }
-            *terminated = true;
-        }
-        Stmt::Assign { target, value } => {
-            let val = lower_expr(&value.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let val_type = infer_type_for_expr(&value.node, env, var_types);
-            let target_type = var_types.get(&target.node);
-
-            // If assigning a class to a trait-typed variable, wrap it
-            let final_val = match (&val_type, target_type) {
-                (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
-                    wrap_class_as_trait(val, cn, &tn.clone(), builder, module, vtable_ids, trait_wrap_id)?
-                }
-                _ => val,
-            };
-
-            let var = variables.get(&target.node).ok_or_else(|| {
-                CompileError::codegen(format!("undefined variable '{}'", target.node))
-            })?;
-            builder.def_var(*var, final_val);
-        }
-        Stmt::FieldAssign { object, field, value } => {
-            let ptr = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let val = lower_expr(&value.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let obj_type = infer_type_for_expr(&object.node, env, var_types);
-            if let PlutoType::Class(class_name) = &obj_type {
-                if let Some(class_info) = env.classes.get(class_name) {
-                    let offset = class_info.fields.iter()
-                        .position(|(n, _)| *n == field.node)
-                        .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{class_name}'", field.node)))? as i32 * 8;
-                    builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
-                }
-            }
-        }
-        Stmt::IndexAssign { object, index, value } => {
-            let handle = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let idx = lower_expr(&index.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let val = lower_expr(&value.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let obj_type = infer_type_for_expr(&object.node, env, var_types);
-            if let PlutoType::Array(elem) = &obj_type {
-                let slot = to_array_slot(val, elem, builder);
-                let func_ref = module.declare_func_in_func(array_ids["set"], builder.func);
-                builder.ins().call(func_ref, &[handle, idx, slot]);
-            }
-        }
-        Stmt::If { condition, then_block, else_block } => {
-            let cond_val = lower_expr(&condition.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-
-            let then_bb = builder.create_block();
-            let merge_bb = builder.create_block();
-
-            if let Some(else_blk) = else_block {
-                let else_bb = builder.create_block();
-                builder.ins().brif(cond_val, then_bb, &[], else_bb, &[]);
-
-                builder.switch_to_block(then_bb);
-                builder.seal_block(then_bb);
-                let mut then_terminated = false;
-                for s in &then_block.node.stmts {
-                    lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut then_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, expected_return_type)?;
-                }
-                if !then_terminated {
-                    builder.ins().jump(merge_bb, &[]);
-                }
-
-                builder.switch_to_block(else_bb);
-                builder.seal_block(else_bb);
-                let mut else_terminated = false;
-                for s in &else_blk.node.stmts {
-                    lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut else_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, expected_return_type)?;
-                }
-                if !else_terminated {
-                    builder.ins().jump(merge_bb, &[]);
-                }
-
-                if then_terminated && else_terminated {
-                    *terminated = true;
-                }
-            } else {
-                builder.ins().brif(cond_val, then_bb, &[], merge_bb, &[]);
-
-                builder.switch_to_block(then_bb);
-                builder.seal_block(then_bb);
-                let mut then_terminated = false;
-                for s in &then_block.node.stmts {
-                    lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut then_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, expected_return_type)?;
-                }
-                if !then_terminated {
-                    builder.ins().jump(merge_bb, &[]);
-                }
-            }
-
-            if !*terminated {
-                builder.switch_to_block(merge_bb);
-                builder.seal_block(merge_bb);
-            }
-        }
-        Stmt::While { condition, body } => {
-            let header_bb = builder.create_block();
-            let body_bb = builder.create_block();
-            let exit_bb = builder.create_block();
-
-            builder.ins().jump(header_bb, &[]);
-
-            builder.switch_to_block(header_bb);
-            let cond_val = lower_expr(&condition.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            builder.ins().brif(cond_val, body_bb, &[], exit_bb, &[]);
-
-            builder.switch_to_block(body_bb);
-            builder.seal_block(body_bb);
-            let mut body_terminated = false;
-            for s in &body.node.stmts {
-                lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut body_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, expected_return_type)?;
-            }
-            if !body_terminated {
-                builder.ins().jump(header_bb, &[]);
-            }
-
-            builder.seal_block(header_bb);
-            builder.switch_to_block(exit_bb);
-            builder.seal_block(exit_bb);
-        }
-        Stmt::For { var, iterable, body } => {
-            // Lower iterable to get array handle
-            let handle = lower_expr(&iterable.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-
-            // Get element type from iterable
-            let iter_type = infer_type_for_expr(&iterable.node, env, var_types);
-            let elem_type = match &iter_type {
-                PlutoType::Array(elem) => *elem.clone(),
-                _ => return Err(CompileError::codegen("for loop requires array".to_string())),
-            };
-
-            // Call len() on the array
-            let len_ref = module.declare_func_in_func(array_ids["len"], builder.func);
-            let len_call = builder.ins().call(len_ref, &[handle]);
-            let len_val = builder.inst_results(len_call)[0];
-
-            // Create counter variable, init to 0
-            let counter_var = Variable::from_u32(*next_var);
-            *next_var += 1;
-            builder.declare_var(counter_var, types::I64);
-            let zero = builder.ins().iconst(types::I64, 0);
-            builder.def_var(counter_var, zero);
-
-            // Create blocks
-            let header_bb = builder.create_block();
-            let body_bb = builder.create_block();
-            let exit_bb = builder.create_block();
-
-            builder.ins().jump(header_bb, &[]);
-
-            // Header: check counter < len
-            builder.switch_to_block(header_bb);
-            let counter = builder.use_var(counter_var);
-            let cond = builder.ins().icmp(IntCC::SignedLessThan, counter, len_val);
-            builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
-
-            // Body
-            builder.switch_to_block(body_bb);
-            builder.seal_block(body_bb);
-
-            // Get element: array_get(handle, counter)
-            let counter_for_get = builder.use_var(counter_var);
-            let get_ref = module.declare_func_in_func(array_ids["get"], builder.func);
-            let get_call = builder.ins().call(get_ref, &[handle, counter_for_get]);
-            let raw_slot = builder.inst_results(get_call)[0];
-            let elem_val = from_array_slot(raw_slot, &elem_type, builder);
-
-            // Create loop variable, saving any prior binding for restoration
-            let prev_var = variables.get(&var.node).cloned();
-            let prev_type = var_types.get(&var.node).cloned();
-
-            let loop_var = Variable::from_u32(*next_var);
-            *next_var += 1;
-            let cl_elem_type = pluto_to_cranelift(&elem_type);
-            builder.declare_var(loop_var, cl_elem_type);
-            builder.def_var(loop_var, elem_val);
-            variables.insert(var.node.clone(), loop_var);
-            var_types.insert(var.node.clone(), elem_type);
-
-            // Lower body statements
-            let mut body_terminated = false;
-            for s in &body.node.stmts {
-                lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut body_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, expected_return_type)?;
-            }
-
-            // Restore prior variable binding if shadowed
-            if let Some(pv) = prev_var {
-                variables.insert(var.node.clone(), pv);
-            } else {
-                variables.remove(&var.node);
-            }
-            if let Some(pt) = prev_type {
-                var_types.insert(var.node.clone(), pt);
-            } else {
-                var_types.remove(&var.node);
-            }
-
-            // Increment counter
-            if !body_terminated {
-                let counter_inc = builder.use_var(counter_var);
-                let one = builder.ins().iconst(types::I64, 1);
-                let new_counter = builder.ins().iadd(counter_inc, one);
-                builder.def_var(counter_var, new_counter);
-                builder.ins().jump(header_bb, &[]);
-            }
-
-            builder.seal_block(header_bb);
-            builder.switch_to_block(exit_bb);
-            builder.seal_block(exit_bb);
-        }
-        Stmt::Match { expr, arms } => {
-            let ptr = lower_expr(&expr.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let tag = builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(0));
-
-            let enum_name = match infer_type_for_expr(&expr.node, env, var_types) {
-                PlutoType::Enum(name) => name,
-                _ => return Err(CompileError::codegen("match on non-enum".to_string())),
-            };
-            let enum_info = env.enums.get(&enum_name).ok_or_else(|| {
-                CompileError::codegen(format!("unknown enum '{enum_name}'"))
-            })?.clone();
-
-            let merge_bb = builder.create_block();
-            let mut check_blocks = Vec::new();
-            let mut body_blocks = Vec::new();
-
-            for _ in 0..arms.len() {
-                check_blocks.push(builder.create_block());
-                body_blocks.push(builder.create_block());
-            }
-
-            // Jump to first check block
-            builder.ins().jump(check_blocks[0], &[]);
-
-            let mut all_terminated = true;
-
-            for (i, arm) in arms.iter().enumerate() {
-                // Check block: compare tag
-                builder.switch_to_block(check_blocks[i]);
-                builder.seal_block(check_blocks[i]);
-
-                let variant_idx = enum_info.variants.iter()
-                    .position(|(n, _)| *n == arm.variant_name.node)
-                    .unwrap() as i64;
-                let expected_tag = builder.ins().iconst(types::I64, variant_idx);
-                let cmp = builder.ins().icmp(IntCC::Equal, tag, expected_tag);
-
-                let fallthrough = if i + 1 < arms.len() {
-                    check_blocks[i + 1]
-                } else {
-                    // Last arm: exhaustiveness guaranteed, so fallthrough to merge
-                    merge_bb
-                };
-                builder.ins().brif(cmp, body_blocks[i], &[], fallthrough, &[]);
-
-                // Body block: extract bindings and lower body
-                builder.switch_to_block(body_blocks[i]);
-                builder.seal_block(body_blocks[i]);
-
-                let variant_fields = &enum_info.variants.iter()
-                    .find(|(n, _)| *n == arm.variant_name.node)
-                    .unwrap().1;
-
-                // Save previous variable bindings so we can restore after this arm
-                let mut prev_vars: Vec<(String, Option<Variable>, Option<PlutoType>)> = Vec::new();
-
-                for (binding_field, opt_rename) in &arm.bindings {
-                    let field_idx = variant_fields.iter()
-                        .position(|(n, _)| *n == binding_field.node)
-                        .unwrap();
-                    let field_type = &variant_fields[field_idx].1;
-                    let offset = ((1 + field_idx) * 8) as i32;
-                    let raw = builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(offset));
-                    let val = from_array_slot(raw, field_type, builder);
-
-                    let var_name = opt_rename.as_ref().map_or(&binding_field.node, |r| &r.node);
-                    let cl_type = pluto_to_cranelift(field_type);
-                    let var = Variable::from_u32(*next_var);
-                    *next_var += 1;
-                    builder.declare_var(var, cl_type);
-                    builder.def_var(var, val);
-
-                    prev_vars.push((
-                        var_name.clone(),
-                        variables.get(var_name).cloned(),
-                        var_types.get(var_name).cloned(),
-                    ));
-                    variables.insert(var_name.clone(), var);
-                    var_types.insert(var_name.clone(), field_type.clone());
-                }
-
-                let mut arm_terminated = false;
-                for s in &arm.body.node.stmts {
-                    lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut arm_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, expected_return_type)?;
-                }
-
-                // Restore previous variable bindings
-                for (name, prev_var, prev_type) in prev_vars {
-                    if let Some(pv) = prev_var {
-                        variables.insert(name.clone(), pv);
-                    } else {
-                        variables.remove(&name);
-                    }
-                    if let Some(pt) = prev_type {
-                        var_types.insert(name, pt);
-                    } else {
-                        var_types.remove(&name);
-                    }
-                }
-
-                if !arm_terminated {
-                    builder.ins().jump(merge_bb, &[]);
-                } else {
-                    // If this arm returns, it doesn't reach merge
-                }
-                if !arm_terminated {
-                    all_terminated = false;
-                }
-            }
-
-            if all_terminated {
-                *terminated = true;
-            }
-
-            if !*terminated {
-                builder.switch_to_block(merge_bb);
-                builder.seal_block(merge_bb);
-            }
-        }
-        Stmt::Expr(expr) => {
-            lower_expr(&expr.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-        }
-    }
-    Ok(())
-}
-
-/// Create a null-terminated string in the data section and return its pointer as a Value.
-fn create_data_str(
-    s: &str,
-    builder: &mut FunctionBuilder<'_>,
-    module: &mut dyn Module,
-) -> Result<Value, CompileError> {
-    let mut data_desc = DataDescription::new();
-    let mut bytes = s.as_bytes().to_vec();
-    bytes.push(0); // null terminator
-    data_desc.define(bytes.into_boxed_slice());
-
-    let data_id = module
-        .declare_anonymous_data(false, false)
-        .map_err(|e| CompileError::codegen(format!("declare data error: {e}")))?;
-    module
-        .define_data(data_id, &data_desc)
-        .map_err(|e| CompileError::codegen(format!("define data error: {e}")))?;
-
-    let gv = module.declare_data_in_func(data_id, builder.func);
-    Ok(builder.ins().global_value(types::I64, gv))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn lower_expr(
-    expr: &Expr,
-    builder: &mut FunctionBuilder<'_>,
-    env: &TypeEnv,
-    module: &mut dyn Module,
-    variables: &HashMap<String, Variable>,
-    var_types: &HashMap<String, PlutoType>,
-    func_ids: &HashMap<String, FuncId>,
-    print_ids: &HashMap<&str, FuncId>,
-    alloc_id: FuncId,
-    string_ids: &HashMap<&str, FuncId>,
-    array_ids: &HashMap<&str, FuncId>,
-    vtable_ids: &HashMap<(String, String), DataId>,
-    trait_wrap_id: FuncId,
-) -> Result<Value, CompileError> {
-    match expr {
-        Expr::IntLit(n) => Ok(builder.ins().iconst(types::I64, *n)),
-        Expr::FloatLit(n) => Ok(builder.ins().f64const(*n)),
-        Expr::BoolLit(b) => Ok(builder.ins().iconst(types::I8, if *b { 1 } else { 0 })),
-        Expr::StringLit(s) => {
-            let raw_ptr = create_data_str(s, builder, module)?;
-            let len_val = builder.ins().iconst(types::I64, s.len() as i64);
-            let func_ref = module.declare_func_in_func(string_ids["new"], builder.func);
-            let call = builder.ins().call(func_ref, &[raw_ptr, len_val]);
-            Ok(builder.inst_results(call)[0])
-        }
-        Expr::StringInterp { parts } => {
-            // Convert each part to a string handle, then concat them all
-            let mut string_vals: Vec<Value> = Vec::new();
-            for part in parts {
-                match part {
-                    StringInterpPart::Lit(s) => {
-                        let raw_ptr = create_data_str(s, builder, module)?;
-                        let len_val = builder.ins().iconst(types::I64, s.len() as i64);
-                        let func_ref = module.declare_func_in_func(string_ids["new"], builder.func);
-                        let call = builder.ins().call(func_ref, &[raw_ptr, len_val]);
-                        string_vals.push(builder.inst_results(call)[0]);
-                    }
-                    StringInterpPart::Expr(e) => {
-                        let val = lower_expr(&e.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-                        let t = infer_type_for_expr(&e.node, env, var_types);
-                        let str_val = match t {
-                            PlutoType::String => val,
-                            PlutoType::Int => {
-                                let func_ref = module.declare_func_in_func(string_ids["int_to_str"], builder.func);
-                                let call = builder.ins().call(func_ref, &[val]);
-                                builder.inst_results(call)[0]
-                            }
-                            PlutoType::Float => {
-                                let func_ref = module.declare_func_in_func(string_ids["float_to_str"], builder.func);
-                                let call = builder.ins().call(func_ref, &[val]);
-                                builder.inst_results(call)[0]
-                            }
-                            PlutoType::Bool => {
-                                let widened = builder.ins().uextend(types::I32, val);
-                                let func_ref = module.declare_func_in_func(string_ids["bool_to_str"], builder.func);
-                                let call = builder.ins().call(func_ref, &[widened]);
-                                builder.inst_results(call)[0]
-                            }
-                            _ => return Err(CompileError::codegen(format!("cannot interpolate {t}"))),
-                        };
-                        string_vals.push(str_val);
-                    }
-                }
-            }
-            // Concat all parts left to right
-            let mut result = string_vals[0];
-            let concat_ref = module.declare_func_in_func(string_ids["concat"], builder.func);
-            for part_val in &string_vals[1..] {
-                let call = builder.ins().call(concat_ref, &[result, *part_val]);
-                result = builder.inst_results(call)[0];
-            }
-            Ok(result)
-        }
-        Expr::Ident(name) => {
-            let var = variables.get(name).ok_or_else(|| {
-                CompileError::codegen(format!("undefined variable '{name}'"))
-            })?;
-            Ok(builder.use_var(*var))
-        }
-        Expr::BinOp { op, lhs, rhs } => {
-            let l = lower_expr(&lhs.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let r = lower_expr(&rhs.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-
-            let lhs_type = infer_type_for_expr(&lhs.node, env, var_types);
-            let is_float = lhs_type == PlutoType::Float;
-            let is_string = lhs_type == PlutoType::String;
-
-            let result = match op {
-                BinOp::Add if is_string => {
-                    let func_ref = module.declare_func_in_func(string_ids["concat"], builder.func);
-                    let call = builder.ins().call(func_ref, &[l, r]);
-                    builder.inst_results(call)[0]
-                }
-                BinOp::Add if is_float => builder.ins().fadd(l, r),
-                BinOp::Add => builder.ins().iadd(l, r),
-                BinOp::Sub if is_float => builder.ins().fsub(l, r),
-                BinOp::Sub => builder.ins().isub(l, r),
-                BinOp::Mul if is_float => builder.ins().fmul(l, r),
-                BinOp::Mul => builder.ins().imul(l, r),
-                BinOp::Div if is_float => builder.ins().fdiv(l, r),
-                BinOp::Div => builder.ins().sdiv(l, r),
-                BinOp::Mod => builder.ins().srem(l, r),
-                BinOp::Eq if is_string => {
-                    let func_ref = module.declare_func_in_func(string_ids["eq"], builder.func);
-                    let call = builder.ins().call(func_ref, &[l, r]);
-                    let i32_result = builder.inst_results(call)[0];
-                    builder.ins().ireduce(types::I8, i32_result)
-                }
-                BinOp::Eq if is_float => builder.ins().fcmp(FloatCC::Equal, l, r),
-                BinOp::Eq => builder.ins().icmp(IntCC::Equal, l, r),
-                BinOp::Neq if is_string => {
-                    let func_ref = module.declare_func_in_func(string_ids["eq"], builder.func);
-                    let call = builder.ins().call(func_ref, &[l, r]);
-                    let i32_result = builder.inst_results(call)[0];
-                    let i8_result = builder.ins().ireduce(types::I8, i32_result);
-                    let one = builder.ins().iconst(types::I8, 1);
-                    builder.ins().bxor(i8_result, one)
-                }
-                BinOp::Neq if is_float => builder.ins().fcmp(FloatCC::NotEqual, l, r),
-                BinOp::Neq => builder.ins().icmp(IntCC::NotEqual, l, r),
-                BinOp::Lt if is_float => builder.ins().fcmp(FloatCC::LessThan, l, r),
-                BinOp::Lt => builder.ins().icmp(IntCC::SignedLessThan, l, r),
-                BinOp::Gt if is_float => builder.ins().fcmp(FloatCC::GreaterThan, l, r),
-                BinOp::Gt => builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
-                BinOp::LtEq if is_float => builder.ins().fcmp(FloatCC::LessThanOrEqual, l, r),
-                BinOp::LtEq => builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r),
-                BinOp::GtEq if is_float => builder.ins().fcmp(FloatCC::GreaterThanOrEqual, l, r),
-                BinOp::GtEq => builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r),
-                BinOp::And => builder.ins().band(l, r),
-                BinOp::Or => builder.ins().bor(l, r),
-            };
-            Ok(result)
-        }
-        Expr::UnaryOp { op, operand } => {
-            let val = lower_expr(&operand.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let operand_type = infer_type_for_expr(&operand.node, env, var_types);
-            match op {
-                UnaryOp::Neg if operand_type == PlutoType::Float => Ok(builder.ins().fneg(val)),
-                UnaryOp::Neg => Ok(builder.ins().ineg(val)),
-                UnaryOp::Not => {
-                    let one = builder.ins().iconst(types::I8, 1);
-                    Ok(builder.ins().bxor(val, one))
-                }
-            }
-        }
-        Expr::Call { name, args } => {
-            if name.node == "print" {
-                return lower_print(builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, args);
-            }
-
-            let func_id = func_ids.get(&name.node).ok_or_else(|| {
-                CompileError::codegen(format!("undefined function '{}'", name.node))
-            })?;
-
-            let func_ref = module.declare_func_in_func(*func_id, builder.func);
-
-            // Look up the function signature to check for trait params
-            let sig = env.functions.get(&name.node);
-            let mut arg_values = Vec::new();
-            for (i, arg) in args.iter().enumerate() {
-                let val = lower_expr(&arg.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-                let arg_actual_type = infer_type_for_expr(&arg.node, env, var_types);
-                let param_expected = sig.and_then(|s| s.params.get(i));
-
-                if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_actual_type, param_expected) {
-                    // Wrap class as trait handle (single pointer)
-                    let wrapped = wrap_class_as_trait(val, cn, tn, builder, module, vtable_ids, trait_wrap_id)?;
-                    arg_values.push(wrapped);
-                } else {
-                    arg_values.push(val);
-                }
-            }
-
-            let call = builder.ins().call(func_ref, &arg_values);
-            let results = builder.inst_results(call);
-            if results.is_empty() {
-                Ok(builder.ins().iconst(types::I64, 0))
-            } else {
-                Ok(results[0])
-            }
-        }
-        Expr::StructLit { name, fields } => {
-            let class_info = env.classes.get(&name.node).ok_or_else(|| {
-                CompileError::codegen(format!("unknown class '{}'", name.node))
-            })?;
-            let num_fields = class_info.fields.len() as i64;
-            let size = num_fields * 8;
-
-            let alloc_ref = module.declare_func_in_func(alloc_id, builder.func);
-            let size_val = builder.ins().iconst(types::I64, size);
-            let call = builder.ins().call(alloc_ref, &[size_val]);
-            let ptr = builder.inst_results(call)[0];
-
-            for (lit_name, lit_val) in fields {
-                let val = lower_expr(&lit_val.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-                let offset = class_info.fields.iter()
-                    .position(|(n, _)| *n == lit_name.node)
-                    .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", lit_name.node, name.node)))? as i32 * 8;
-                builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
-            }
-
-            Ok(ptr)
-        }
-        Expr::ArrayLit { elements } => {
-            let n = elements.len() as i64;
-            let func_ref_new = module.declare_func_in_func(array_ids["new"], builder.func);
-            let cap_val = builder.ins().iconst(types::I64, n);
-            let call = builder.ins().call(func_ref_new, &[cap_val]);
-            let handle = builder.inst_results(call)[0];
-
-            let elem_type = infer_type_for_expr(&elements[0].node, env, var_types);
-            let func_ref_push = module.declare_func_in_func(array_ids["push"], builder.func);
-            for elem in elements {
-                let val = lower_expr(&elem.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-                let slot = to_array_slot(val, &elem_type, builder);
-                builder.ins().call(func_ref_push, &[handle, slot]);
-            }
-
-            Ok(handle)
-        }
-        Expr::Index { object, index } => {
-            let handle = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let idx = lower_expr(&index.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let obj_type = infer_type_for_expr(&object.node, env, var_types);
-            if let PlutoType::Array(elem) = &obj_type {
-                let func_ref = module.declare_func_in_func(array_ids["get"], builder.func);
-                let call = builder.ins().call(func_ref, &[handle, idx]);
-                let raw = builder.inst_results(call)[0];
-                Ok(from_array_slot(raw, elem, builder))
-            } else {
-                Err(CompileError::codegen(format!("index on non-array type {obj_type}")))
-            }
-        }
-        Expr::EnumUnit { enum_name, variant } => {
-            let enum_info = env.enums.get(&enum_name.node).ok_or_else(|| {
-                CompileError::codegen(format!("unknown enum '{}'", enum_name.node))
-            })?;
-            let max_fields = enum_info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
-            let alloc_size = (1 + max_fields) as i64 * 8;
-            let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
-
-            let alloc_ref = module.declare_func_in_func(alloc_id, builder.func);
-            let size_val = builder.ins().iconst(types::I64, alloc_size);
-            let call = builder.ins().call(alloc_ref, &[size_val]);
-            let ptr = builder.inst_results(call)[0];
-
-            let tag_val = builder.ins().iconst(types::I64, variant_idx as i64);
-            builder.ins().store(MemFlags::new(), tag_val, ptr, Offset32::new(0));
-
-            Ok(ptr)
-        }
-        Expr::EnumData { enum_name, variant, fields } => {
-            let enum_info = env.enums.get(&enum_name.node).ok_or_else(|| {
-                CompileError::codegen(format!("unknown enum '{}'", enum_name.node))
-            })?.clone();
-            let max_fields = enum_info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
-            let alloc_size = (1 + max_fields) as i64 * 8;
-            let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
-            let variant_fields = &enum_info.variants[variant_idx].1;
-
-            let alloc_ref = module.declare_func_in_func(alloc_id, builder.func);
-            let size_val = builder.ins().iconst(types::I64, alloc_size);
-            let call = builder.ins().call(alloc_ref, &[size_val]);
-            let ptr = builder.inst_results(call)[0];
-
-            let tag_val = builder.ins().iconst(types::I64, variant_idx as i64);
-            builder.ins().store(MemFlags::new(), tag_val, ptr, Offset32::new(0));
-
-            for (lit_name, lit_val) in fields {
-                let val = lower_expr(&lit_val.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-                let field_idx = variant_fields.iter().position(|(n, _)| *n == lit_name.node).unwrap();
-                let field_type = &variant_fields[field_idx].1;
-                let slot = to_array_slot(val, field_type, builder);
-                let offset = ((1 + field_idx) * 8) as i32;
-                builder.ins().store(MemFlags::new(), slot, ptr, Offset32::new(offset));
-            }
-
-            Ok(ptr)
-        }
-        Expr::FieldAccess { object, field } => {
-            let ptr = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let obj_type = infer_type_for_expr(&object.node, env, var_types);
-            if let PlutoType::Class(class_name) = &obj_type {
-                let class_info = env.classes.get(class_name).ok_or_else(|| {
-                    CompileError::codegen(format!("unknown class '{class_name}'"))
-                })?;
-                let (field_idx, (_, field_type)) = class_info.fields.iter()
-                    .enumerate()
-                    .find(|(_, (n, _))| *n == field.node)
-                    .ok_or_else(|| {
-                        CompileError::codegen(format!("unknown field '{}'", field.node))
-                    })?;
-                let offset = (field_idx as i32) * 8;
-                let cl_type = pluto_to_cranelift(field_type);
-                Ok(builder.ins().load(cl_type, MemFlags::new(), ptr, Offset32::new(offset)))
-            } else {
-                Err(CompileError::codegen(format!("field access on non-class type {obj_type}")))
-            }
-        }
-        Expr::MethodCall { object, method, args } => {
-            let obj_ptr = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-            let obj_type = infer_type_for_expr(&object.node, env, var_types);
-
-            // Array methods
-            if let PlutoType::Array(elem) = &obj_type {
-                match method.node.as_str() {
-                    "len" => {
-                        let func_ref = module.declare_func_in_func(array_ids["len"], builder.func);
-                        let call = builder.ins().call(func_ref, &[obj_ptr]);
-                        return Ok(builder.inst_results(call)[0]);
-                    }
-                    "push" => {
-                        let arg_val = lower_expr(&args[0].node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-                        let slot = to_array_slot(arg_val, elem, builder);
-                        let func_ref = module.declare_func_in_func(array_ids["push"], builder.func);
-                        builder.ins().call(func_ref, &[obj_ptr, slot]);
-                        return Ok(builder.ins().iconst(types::I64, 0));
-                    }
-                    _ => {
-                        return Err(CompileError::codegen(format!("array has no method '{}'", method.node)));
-                    }
-                }
-            }
-
-            // String methods
-            if obj_type == PlutoType::String {
-                if method.node == "len" {
-                    let func_ref = module.declare_func_in_func(string_ids["len"], builder.func);
-                    let call = builder.ins().call(func_ref, &[obj_ptr]);
-                    return Ok(builder.inst_results(call)[0]);
-                }
-                return Err(CompileError::codegen(format!("string has no method '{}'", method.node)));
-            }
-
-            // Trait dynamic dispatch via handle
-            if let PlutoType::Trait(trait_name) = &obj_type {
-                let trait_info = env.traits.get(trait_name).ok_or_else(|| {
-                    CompileError::codegen(format!("unknown trait '{trait_name}'"))
-                })?;
-                let method_idx = trait_info.methods.iter()
-                    .position(|(n, _)| *n == method.node)
-                    .ok_or_else(|| {
-                        CompileError::codegen(format!("trait '{trait_name}' has no method '{}'", method.node))
-                    })?;
-
-                // obj_ptr is a trait handle: pointer to [data_ptr, vtable_ptr]
-                let data_ptr = builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(0));
-                let vtable_ptr = builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(8));
-
-                // Load fn_ptr from vtable at offset method_idx * 8
-                let offset = (method_idx as i32) * 8;
-                let fn_ptr = builder.ins().load(types::I64, MemFlags::new(), vtable_ptr, Offset32::new(offset));
-
-                // Build indirect call signature
-                let method_sig = &trait_info.methods[method_idx].1;
-                let mut sig = module.make_signature();
-                sig.params.push(AbiParam::new(types::I64)); // self (data_ptr)
-                for param_ty in &method_sig.params[1..] {
-                    let cl_ty = pluto_to_cranelift(param_ty);
-                    sig.params.push(AbiParam::new(cl_ty));
-                }
-                if method_sig.return_type != PlutoType::Void {
-                    sig.returns.push(AbiParam::new(pluto_to_cranelift(&method_sig.return_type)));
-                }
-                let sig_ref = builder.func.import_signature(sig);
-
-                let mut call_args = vec![data_ptr]; // data_ptr as self
-                for (i, arg) in args.iter().enumerate() {
-                    let val = lower_expr(&arg.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-                    let arg_type = infer_type_for_expr(&arg.node, env, var_types);
-                    let param_expected = method_sig.params.get(i + 1); // +1 to skip self
-                    if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_type, param_expected) {
-                        let wrapped = wrap_class_as_trait(val, cn, tn, builder, module, vtable_ids, trait_wrap_id)?;
-                        call_args.push(wrapped);
-                    } else {
-                        call_args.push(val);
-                    }
-                }
-
-                let call = builder.ins().call_indirect(sig_ref, fn_ptr, &call_args);
-                let results = builder.inst_results(call);
-                if results.is_empty() {
-                    Ok(builder.ins().iconst(types::I64, 0))
-                } else {
-                    Ok(results[0])
-                }
-            } else if let PlutoType::Class(class_name) = &obj_type {
-                let mangled = format!("{}_{}", class_name, method.node);
-                let func_id = func_ids.get(&mangled).ok_or_else(|| {
-                    CompileError::codegen(format!("undefined method '{}'", method.node))
-                })?;
-                let func_ref = module.declare_func_in_func(*func_id, builder.func);
-
-                let mut arg_values = vec![obj_ptr];
-                for arg in args {
-                    arg_values.push(lower_expr(&arg.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?);
-                }
-
-                let call = builder.ins().call(func_ref, &arg_values);
-                let results = builder.inst_results(call);
-                if results.is_empty() {
-                    Ok(builder.ins().iconst(types::I64, 0))
-                } else {
-                    Ok(results[0])
-                }
-            } else {
-                Err(CompileError::codegen(format!("method call on non-class type {obj_type}")))
-            }
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn lower_print(
-    builder: &mut FunctionBuilder<'_>,
-    env: &TypeEnv,
-    module: &mut dyn Module,
-    variables: &HashMap<String, Variable>,
-    var_types: &HashMap<String, PlutoType>,
-    func_ids: &HashMap<String, FuncId>,
-    print_ids: &HashMap<&str, FuncId>,
-    alloc_id: FuncId,
-    string_ids: &HashMap<&str, FuncId>,
-    array_ids: &HashMap<&str, FuncId>,
-    vtable_ids: &HashMap<(String, String), DataId>,
-    trait_wrap_id: FuncId,
-    args: &[crate::span::Spanned<Expr>],
-) -> Result<Value, CompileError> {
-    let arg = &args[0];
-    let arg_type = infer_type_for_expr(&arg.node, env, var_types);
-    let arg_val = lower_expr(&arg.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
-
-    match arg_type {
-        PlutoType::Int => {
-            let func_id = print_ids["int"];
-            let func_ref = module.declare_func_in_func(func_id, builder.func);
-            builder.ins().call(func_ref, &[arg_val]);
-        }
-        PlutoType::Float => {
-            let func_id = print_ids["float"];
-            let func_ref = module.declare_func_in_func(func_id, builder.func);
-            builder.ins().call(func_ref, &[arg_val]);
-        }
-        PlutoType::String => {
-            let func_id = print_ids["string"];
-            let func_ref = module.declare_func_in_func(func_id, builder.func);
-            builder.ins().call(func_ref, &[arg_val]);
-        }
-        PlutoType::Bool => {
-            let func_id = print_ids["bool"];
-            let func_ref = module.declare_func_in_func(func_id, builder.func);
-            // Widen I8 bool to I32 for the C function
-            let widened = builder.ins().uextend(types::I32, arg_val);
-            builder.ins().call(func_ref, &[widened]);
-        }
-        PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) => {
-            return Err(CompileError::codegen(format!("cannot print {arg_type}")));
-        }
-    }
-
-    // print returns void, so return a dummy value
-    Ok(builder.ins().iconst(types::I64, 0))
 }
 
 fn resolve_param_type(param: &Param, env: &TypeEnv) -> PlutoType {
