@@ -6,6 +6,11 @@ use crate::span::{Span, Spanned};
 use crate::typeck::env::{mangle_name, InstKind, Instantiation, TypeEnv};
 use crate::typeck::types::PlutoType;
 
+/// Span offset multiplier for monomorphized bodies. Each iteration gets unique
+/// spans to avoid closure capture key collisions. Must exceed any realistic
+/// source file size.
+const SPAN_OFFSET_MULTIPLIER: usize = 10_000_000;
+
 /// Monomorphize generic items: instantiate concrete copies, type-check their bodies,
 /// rewrite call sites via the rewrite map, then remove generic templates.
 pub fn monomorphize(program: &mut Program, env: &mut TypeEnv) -> Result<(), CompileError> {
@@ -27,7 +32,7 @@ pub fn monomorphize(program: &mut Program, env: &mut TypeEnv) -> Result<(), Comp
 
         for inst in pending {
             iteration += 1;
-            let span_offset = iteration * 10_000_000;
+            let span_offset = iteration * SPAN_OFFSET_MULTIPLIER;
             let mangled = mangle_name(
                 match &inst.kind {
                     InstKind::Function(n) | InstKind::Class(n) | InstKind::Enum(n) => n.as_str(),
