@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PlutoType {
     Int,
     Float,
@@ -11,6 +11,7 @@ pub enum PlutoType {
     Enum(std::string::String),
     Fn(Vec<PlutoType>, Box<PlutoType>),
     Error,
+    TypeParam(std::string::String),
 }
 
 impl std::fmt::Display for PlutoType {
@@ -34,6 +35,7 @@ impl std::fmt::Display for PlutoType {
                 write!(f, ") {}", ret)
             }
             PlutoType::Error => write!(f, "error"),
+            PlutoType::TypeParam(name) => write!(f, "{name}"),
         }
     }
 }
