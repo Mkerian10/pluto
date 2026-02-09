@@ -261,3 +261,87 @@ fn time_ns_elapsed() {
     );
     assert_eq!(out, "ok\n");
 }
+
+// === Underscore in numeric literals ===
+
+#[test]
+fn underscore_int_literal() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 1_000_000\n    print(x)\n}",
+    );
+    assert_eq!(out, "1000000\n");
+}
+
+#[test]
+fn underscore_int_literal_small() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 1_0\n    print(x)\n}",
+    );
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn underscore_float_literal() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 1_000.50\n    print(x)\n}",
+    );
+    assert_eq!(out, "1000.500000\n");
+}
+
+#[test]
+fn underscore_float_both_sides() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 1_000.000_5\n    print(x)\n}",
+    );
+    assert_eq!(out, "1000.000500\n");
+}
+
+#[test]
+fn underscore_arithmetic() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 1_000 + 2_000\n    print(x)\n}",
+    );
+    assert_eq!(out, "3000\n");
+}
+
+// === Multi-line function calls ===
+
+#[test]
+fn multiline_function_call() {
+    let out = compile_and_run_stdout(
+        "fn add(a: int, b: int) int {\n    return a + b\n}\nfn main() {\n    let x = add(\n        1,\n        2\n    )\n    print(x)\n}",
+    );
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn multiline_function_call_trailing_comma() {
+    let out = compile_and_run_stdout(
+        "fn add(a: int, b: int) int {\n    return a + b\n}\nfn main() {\n    let x = add(\n        1,\n        2,\n    )\n    print(x)\n}",
+    );
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn multiline_method_call() {
+    let out = compile_and_run_stdout(
+        "class Calc {\n    val: int\n\n    fn add(self, x: int) int {\n        return self.val + x\n    }\n}\nfn main() {\n    let c = Calc { val: 10 }\n    let r = c.add(\n        5\n    )\n    print(r)\n}",
+    );
+    assert_eq!(out, "15\n");
+}
+
+#[test]
+fn multiline_array_literal() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let arr = [\n        1,\n        2,\n        3\n    ]\n    print(arr.len())\n}",
+    );
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn multiline_nested_call() {
+    let out = compile_and_run_stdout(
+        "fn add(a: int, b: int) int {\n    return a + b\n}\nfn main() {\n    let x = add(\n        add(\n            1,\n            2\n        ),\n        add(\n            3,\n            4\n        )\n    )\n    print(x)\n}",
+    );
+    assert_eq!(out, "10\n");
+}
