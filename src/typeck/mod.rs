@@ -63,13 +63,52 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
         env.enums.insert(e.name.node.clone(), EnumInfo { variants });
     }
 
-    // Pass 1a: Register class field definitions
+    // Pass 0c: Register app (before classes, so app deps can reference classes registered below)
+    if let Some(app_spanned) = &program.app {
+        let app = &app_spanned.node;
+        let app_name = app.name.node.clone();
+
+        // Conflict check: app + top-level main
+        if program.functions.iter().any(|f| f.node.name.node == "main") {
+            return Err(CompileError::type_err(
+                "cannot have both an app declaration and a top-level main function".to_string(),
+                app_spanned.span,
+            ));
+        }
+
+        // We register the app as a class so method mangling/self resolution works identically.
+        // Inject fields are resolved later (after classes are registered) in a second pass.
+        // For now, insert a placeholder ClassInfo with no fields.
+        env.classes.insert(
+            app_name.clone(),
+            ClassInfo {
+                fields: Vec::new(),
+                methods: Vec::new(),
+                impl_traits: Vec::new(),
+            },
+        );
+    }
+
+    // Pass 1a: Register class names first (so bracket deps can reference forward-declared classes)
+    for class in &program.classes {
+        let c = &class.node;
+        env.classes.insert(
+            c.name.node.clone(),
+            ClassInfo {
+                fields: Vec::new(),
+                methods: Vec::new(),
+                impl_traits: Vec::new(),
+            },
+        );
+    }
+
+    // Pass 1a2: Resolve class fields and traits (now that all class names are known)
     for class in &program.classes {
         let c = &class.node;
         let mut fields = Vec::new();
         for f in &c.fields {
             let ty = resolve_type(&f.ty, &env)?;
-            fields.push((f.name.node.clone(), ty));
+            fields.push((f.name.node.clone(), ty, f.is_injected));
         }
 
         // Validate trait names
@@ -84,14 +123,10 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
             impl_trait_names.push(trait_name.node.clone());
         }
 
-        env.classes.insert(
-            c.name.node.clone(),
-            ClassInfo {
-                fields,
-                methods: Vec::new(),
-                impl_traits: impl_trait_names,
-            },
-        );
+        if let Some(info) = env.classes.get_mut(&c.name.node) {
+            info.fields = fields;
+            info.impl_traits = impl_trait_names;
+        }
     }
 
     // Pass 1b: Register extern fn signatures (before regular fns so conflict checks work)
@@ -194,6 +229,222 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
         // Update the ClassInfo with method names
         if let Some(info) = env.classes.get_mut(class_name) {
             info.methods = method_names;
+        }
+    }
+
+    // Pass 1c2: Register app fields and methods (now that all classes are registered)
+    if let Some(app_spanned) = &program.app {
+        let app = &app_spanned.node;
+        let app_name = app.name.node.clone();
+
+        // Resolve inject field types
+        let mut fields = Vec::new();
+        for f in &app.inject_fields {
+            let ty = resolve_type(&f.ty, &env)?;
+            fields.push((f.name.node.clone(), ty, f.is_injected));
+        }
+
+        // Update the ClassInfo with resolved fields
+        if let Some(info) = env.classes.get_mut(&app_name) {
+            info.fields = fields.clone();
+        }
+
+        // Store in env.app
+        env.app = Some((app_name.clone(), ClassInfo {
+            fields: fields.clone(),
+            methods: Vec::new(),
+            impl_traits: Vec::new(),
+        }));
+
+        // Register app methods (mangled as AppName_methodname)
+        let mut method_names = Vec::new();
+        let mut has_main = false;
+        for method in &app.methods {
+            let m = &method.node;
+            let mangled = format!("{}_{}", app_name, m.name.node);
+            method_names.push(m.name.node.clone());
+
+            if m.name.node == "main" {
+                has_main = true;
+                // Verify main has self as first param
+                if m.params.is_empty() || m.params[0].name.node != "self" {
+                    return Err(CompileError::type_err(
+                        "app main method must take 'self' as first parameter".to_string(),
+                        m.name.span,
+                    ));
+                }
+                // Verify main returns void (no return type annotation)
+                if m.return_type.is_some() {
+                    return Err(CompileError::type_err(
+                        "app main method must not have a return type".to_string(),
+                        m.name.span,
+                    ));
+                }
+            }
+
+            let mut param_types = Vec::new();
+            for p in &m.params {
+                if p.name.node == "self" {
+                    param_types.push(PlutoType::Class(app_name.clone()));
+                } else {
+                    param_types.push(resolve_type(&p.ty, &env)?);
+                }
+            }
+            let return_type = match &m.return_type {
+                Some(t) => resolve_type(t, &env)?,
+                None => PlutoType::Void,
+            };
+            env.functions.insert(
+                mangled,
+                FuncSig { params: param_types, return_type },
+            );
+        }
+
+        if !has_main {
+            return Err(CompileError::type_err(
+                "app must have a 'main' method".to_string(),
+                app.name.span,
+            ));
+        }
+
+        // Update class info with method names
+        if let Some(info) = env.classes.get_mut(&app_name) {
+            info.methods = method_names.clone();
+        }
+        // Also update env.app
+        if let Some((_, ref mut app_info)) = env.app {
+            app_info.methods = method_names;
+        }
+    }
+
+    // DI graph validation: build dependency graph, topological sort, cycle detection
+    {
+        use std::collections::{HashMap as DMap, HashSet as DSet, VecDeque};
+
+        // Build adjacency: class -> list of dep types
+        let mut graph: DMap<String, Vec<String>> = DMap::new();
+        let mut all_di_classes = DSet::new();
+
+        for (class_name, class_info) in &env.classes {
+            let deps: Vec<String> = class_info.fields.iter()
+                .filter(|(_, _, inj)| *inj)
+                .map(|(_, ty, _)| {
+                    match ty {
+                        PlutoType::Class(name) => name.clone(),
+                        _ => String::new(),
+                    }
+                })
+                .filter(|n| !n.is_empty())
+                .collect();
+            if !deps.is_empty() {
+                all_di_classes.insert(class_name.clone());
+                for d in &deps {
+                    all_di_classes.insert(d.clone());
+                }
+                graph.insert(class_name.clone(), deps);
+            }
+        }
+
+        // Also add classes that are deps but have no deps themselves
+        for c in &all_di_classes {
+            graph.entry(c.clone()).or_insert_with(Vec::new);
+        }
+
+        // Verify all injected types are known classes
+        for (class_name, deps) in &graph {
+            for dep in deps {
+                if !env.classes.contains_key(dep) {
+                    // Find the span for better error reporting
+                    let span = if let Some(app_spanned) = &program.app {
+                        if app_spanned.node.name.node == *class_name {
+                            app_spanned.span
+                        } else {
+                            program.classes.iter()
+                                .find(|c| c.node.name.node == *class_name)
+                                .map(|c| c.span)
+                                .unwrap_or(app_spanned.span)
+                        }
+                    } else {
+                        program.classes.iter()
+                            .find(|c| c.node.name.node == *class_name)
+                            .map(|c| c.span)
+                            .unwrap_or(crate::span::Span { start: 0, end: 0, file_id: 0 })
+                    };
+                    return Err(CompileError::type_err(
+                        format!("injected dependency '{}' in class '{}' is not a known class", dep, class_name),
+                        span,
+                    ));
+                }
+            }
+        }
+
+        // Topological sort (Kahn's algorithm)
+        if !all_di_classes.is_empty() {
+            let mut in_degree: DMap<String, usize> = DMap::new();
+            for c in &all_di_classes {
+                in_degree.insert(c.clone(), 0);
+            }
+            for (_, deps) in &graph {
+                for dep in deps {
+                    *in_degree.entry(dep.clone()).or_insert(0) += 1;
+                }
+            }
+
+            // Note: in_degree counts how many classes DEPEND ON this class,
+            // but for topological sort we want "dependents" direction.
+            // Actually, let's redo: edge A->B means A depends on B.
+            // For topo sort (creation order), B must be created before A.
+            // in_degree[X] = number of classes X depends on (graph[X].len())
+            let mut in_degree2: DMap<String, usize> = DMap::new();
+            for c in &all_di_classes {
+                in_degree2.insert(c.clone(), graph.get(c).map_or(0, |v| v.len()));
+            }
+
+            let mut queue: VecDeque<String> = VecDeque::new();
+            for (c, deg) in &in_degree2 {
+                if *deg == 0 {
+                    queue.push_back(c.clone());
+                }
+            }
+
+            let mut order = Vec::new();
+            while let Some(node) = queue.pop_front() {
+                order.push(node.clone());
+                // For each class that depends on `node`, decrement its in_degree
+                for (class, deps) in &graph {
+                    if deps.contains(&node) {
+                        if let Some(deg) = in_degree2.get_mut(class) {
+                            *deg -= 1;
+                            if *deg == 0 {
+                                queue.push_back(class.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            if order.len() != all_di_classes.len() {
+                // Cycle detected — find the cycle for the error message
+                let remaining: Vec<String> = all_di_classes.iter()
+                    .filter(|c| !order.contains(c))
+                    .cloned()
+                    .collect();
+                let cycle_str = remaining.join(" -> ");
+                let span = program.app.as_ref()
+                    .map(|a| a.span)
+                    .or_else(|| program.classes.first().map(|c| c.span))
+                    .unwrap_or(crate::span::Span { start: 0, end: 0, file_id: 0 });
+                return Err(CompileError::type_err(
+                    format!("circular dependency detected: {}", cycle_str),
+                    span,
+                ));
+            }
+
+            // Filter out the app name from di_order (app is wired separately)
+            let app_name_opt = env.app.as_ref().map(|(n, _)| n.clone());
+            env.di_order = order.into_iter()
+                .filter(|n| Some(n) != app_name_opt.as_ref())
+                .collect();
         }
     }
 
@@ -331,6 +582,15 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
                     }
                 }
             }
+        }
+    }
+
+    // Pass 2d: Type-check app method bodies
+    if let Some(app_spanned) = &program.app {
+        let app = &app_spanned.node;
+        let app_name = &app.name.node;
+        for method in &app.methods {
+            check_function(&method.node, &mut env, Some(app_name))?;
         }
     }
 
@@ -497,8 +757,8 @@ fn check_stmt(
                 )
             })?;
             let field_type = class_info.fields.iter()
-                .find(|(n, _)| *n == field.node)
-                .map(|(_, t)| t.clone())
+                .find(|(n, _, _)| *n == field.node)
+                .map(|(_, t, _)| t.clone())
                 .ok_or_else(|| {
                     CompileError::type_err(
                         format!("class '{class_name}' has no field '{}'", field.node),
@@ -859,6 +1119,14 @@ fn infer_expr(
                 )
             })?;
 
+            // Block construction of classes with injected dependencies
+            if class_info.fields.iter().any(|(_, _, inj)| *inj) {
+                return Err(CompileError::type_err(
+                    format!("cannot manually construct class '{}' with injected dependencies", name.node),
+                    span,
+                ));
+            }
+
             // Check all fields are provided
             if lit_fields.len() != class_info.fields.len() {
                 return Err(CompileError::type_err(
@@ -875,8 +1143,8 @@ fn infer_expr(
             // Check each field matches
             for (lit_name, lit_val) in lit_fields {
                 let field_type = class_info.fields.iter()
-                    .find(|(n, _)| *n == lit_name.node)
-                    .map(|(_, t)| t.clone())
+                    .find(|(n, _, _)| *n == lit_name.node)
+                    .map(|(_, t, _)| t.clone())
                     .ok_or_else(|| {
                         CompileError::type_err(
                             format!("class '{}' has no field '{}'", name.node, lit_name.node),
@@ -915,8 +1183,8 @@ fn infer_expr(
                 )
             })?;
             class_info.fields.iter()
-                .find(|(n, _)| *n == field.node)
-                .map(|(_, t)| t.clone())
+                .find(|(n, _, _)| *n == field.node)
+                .map(|(_, t, _)| t.clone())
                 .ok_or_else(|| {
                     CompileError::type_err(
                         format!("class '{class_name}' has no field '{}'", field.node),
@@ -1327,5 +1595,64 @@ mod tests {
     fn enum_wrong_field_name_rejected() {
         let result = check("enum Status {\n    Suspended { reason: string }\n}\n\nfn main() {\n    let s = Status.Suspended { msg: \"banned\" }\n}");
         assert!(result.is_err());
+    }
+
+    // App / DI tests
+
+    #[test]
+    fn app_basic_registration() {
+        let env = check("app MyApp {\n    fn main(self) {\n    }\n}").unwrap();
+        assert!(env.app.is_some());
+        let (name, _) = env.app.as_ref().unwrap();
+        assert_eq!(name, "MyApp");
+    }
+
+    #[test]
+    fn app_with_deps() {
+        let env = check("class Database {\n    fn query(self) string {\n        return \"result\"\n    }\n}\n\napp MyApp[db: Database] {\n    fn main(self) {\n        let r = self.db.query()\n    }\n}").unwrap();
+        assert!(env.app.is_some());
+        assert_eq!(env.di_order.len(), 1);
+        assert_eq!(env.di_order[0], "Database");
+    }
+
+    #[test]
+    fn di_cycle_rejected() {
+        let result = check("class A[b: B] {\n}\n\nclass B[a: A] {\n}\n\napp MyApp[a: A] {\n    fn main(self) {\n    }\n}");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("circular dependency"), "expected cycle error, got: {}", err);
+    }
+
+    #[test]
+    fn di_struct_lit_for_inject_class_rejected() {
+        // UserService has bracket deps + a regular field, so struct literal construction should be rejected
+        let result = check("class Database {\n    x: int\n}\n\nclass UserService[db: Database] {\n    name: string\n}\n\nfn main() {\n    let d = Database { x: 1 }\n    let u = UserService { db: d, name: \"test\" }\n}");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("injected dependencies"), "expected inject error, got: {}", err);
+    }
+
+    #[test]
+    fn app_and_main_rejected() {
+        let result = check("fn main() {\n}\n\napp MyApp {\n    fn main(self) {\n    }\n}");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("cannot have both"), "expected conflict error, got: {}", err);
+    }
+
+    #[test]
+    fn app_missing_main_rejected() {
+        let result = check("app MyApp {\n    fn other(self) {\n    }\n}");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("must have a 'main' method"), "expected missing main error, got: {}", err);
+    }
+
+    #[test]
+    fn app_main_no_self_rejected() {
+        let result = check("app MyApp {\n    fn main() {\n    }\n}");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("self"), "expected self error, got: {}", err);
     }
 }
