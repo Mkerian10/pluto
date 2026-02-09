@@ -264,6 +264,13 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
     for func in &program.functions {
         let f = &func.node;
 
+        if env.builtins.contains(&f.name.node) {
+            return Err(CompileError::type_err(
+                format!("function '{}' cannot shadow builtin '{}'", f.name.node, f.name.node),
+                f.name.span,
+            ));
+        }
+
         // Check for conflict with extern fn
         if env.extern_fns.contains(&f.name.node) {
             return Err(CompileError::type_err(

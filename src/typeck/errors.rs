@@ -183,7 +183,15 @@ fn collect_expr_effects(
         Expr::Propagate { expr: inner } => {
             match &inner.node {
                 Expr::Call { name, args } => {
-                    edges.insert(name.node.clone());
+                    if name.node == "pow"
+                        && env
+                            .fallible_builtin_calls
+                            .contains(&(current_fn.to_string(), name.span.start))
+                    {
+                        direct_errors.insert("MathError".to_string());
+                    } else {
+                        edges.insert(name.node.clone());
+                    }
                     for arg in args {
                         collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
                     }
@@ -242,6 +250,9 @@ fn collect_expr_effects(
         }
         Expr::UnaryOp { operand, .. } => {
             collect_expr_effects(&operand.node, direct_errors, edges, current_fn, env);
+        }
+        Expr::Cast { expr: inner, .. } => {
+            collect_expr_effects(&inner.node, direct_errors, edges, current_fn, env);
         }
         Expr::Call { args, .. } => {
             for arg in args {
@@ -419,7 +430,11 @@ fn enforce_expr(
             for arg in args {
                 enforce_expr(&arg.node, arg.span, current_fn, env)?;
             }
-            if env.is_fn_fallible(&name.node) {
+            let is_fallible_pow = name.node == "pow"
+                && env
+                    .fallible_builtin_calls
+                    .contains(&(current_fn.to_string(), name.span.start));
+            if is_fallible_pow || env.is_fn_fallible(&name.node) {
                 return Err(CompileError::type_err(
                     format!(
                         "call to fallible function '{}' must be handled with ! or catch",
@@ -450,7 +465,11 @@ fn enforce_expr(
                 for arg in args {
                     enforce_expr(&arg.node, arg.span, current_fn, env)?;
                 }
-                if !env.is_fn_fallible(&name.node) {
+                let is_fallible_pow = name.node == "pow"
+                    && env
+                        .fallible_builtin_calls
+                        .contains(&(current_fn.to_string(), name.span.start));
+                if !is_fallible_pow && !env.is_fn_fallible(&name.node) {
                     return Err(CompileError::type_err(
                         format!("'!' applied to infallible function '{}'", name.node),
                         span,
@@ -484,7 +503,11 @@ fn enforce_expr(
                     for arg in args {
                         enforce_expr(&arg.node, arg.span, current_fn, env)?;
                     }
-                    if !env.is_fn_fallible(&name.node) {
+                    let is_fallible_pow = name.node == "pow"
+                        && env
+                            .fallible_builtin_calls
+                            .contains(&(current_fn.to_string(), name.span.start));
+                    if !is_fallible_pow && !env.is_fn_fallible(&name.node) {
                         return Err(CompileError::type_err(
                             format!("catch applied to infallible function '{}'", name.node),
                             span,
@@ -522,6 +545,7 @@ fn enforce_expr(
             enforce_expr(&rhs.node, rhs.span, current_fn, env)
         }
         Expr::UnaryOp { operand, .. } => enforce_expr(&operand.node, operand.span, current_fn, env),
+        Expr::Cast { expr: inner, .. } => enforce_expr(&inner.node, inner.span, current_fn, env),
         Expr::StructLit { fields, .. } => {
             for (_, val) in fields {
                 enforce_expr(&val.node, val.span, current_fn, env)?;

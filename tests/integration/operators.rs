@@ -1,5 +1,5 @@
 mod common;
-use common::compile_and_run_stdout;
+use common::{compile_and_run_stdout, compile_should_fail_with};
 
 #[test]
 fn arithmetic_operations() {
@@ -125,4 +125,100 @@ fn bool_equality() {
         "fn main() {\n    print(true == true)\n    print(true == false)\n    print(false != true)\n}",
     );
     assert_eq!(out, "true\nfalse\ntrue\n");
+}
+
+// ── Bitwise operators ─────────────────────────────────────────────────────────
+
+#[test]
+fn bitwise_and() {
+    let out = compile_and_run_stdout("fn main() {\n    print(255 & 15)\n}");
+    assert_eq!(out, "15\n");
+}
+
+#[test]
+fn bitwise_or() {
+    let out = compile_and_run_stdout("fn main() {\n    print(12 | 10)\n}");
+    assert_eq!(out, "14\n");
+}
+
+#[test]
+fn bitwise_xor() {
+    let out = compile_and_run_stdout("fn main() {\n    print(255 ^ 170)\n}");
+    assert_eq!(out, "85\n");
+}
+
+#[test]
+fn bitwise_shl() {
+    let out = compile_and_run_stdout("fn main() {\n    print(1 << 4)\n}");
+    assert_eq!(out, "16\n");
+}
+
+#[test]
+fn bitwise_shr() {
+    let out = compile_and_run_stdout("fn main() {\n    print(16 >> 2)\n}");
+    assert_eq!(out, "4\n");
+}
+
+#[test]
+fn bitwise_not() {
+    // ~0 == -1 in two's complement
+    let out = compile_and_run_stdout("fn main() {\n    print(~0)\n}");
+    assert_eq!(out, "-1\n");
+}
+
+#[test]
+fn bitwise_not_value() {
+    // ~255 with 64-bit int
+    let out = compile_and_run_stdout("fn main() {\n    print(~255)\n}");
+    assert_eq!(out, "-256\n");
+}
+
+#[test]
+fn bitwise_combined() {
+    // (12 | 10) & 14 == 14 & 14 == 14
+    let out = compile_and_run_stdout("fn main() {\n    print((12 | 10) & 14)\n}");
+    assert_eq!(out, "14\n");
+}
+
+#[test]
+fn bitwise_precedence_or_xor_and() {
+    // a & b has higher precedence than a | b and a ^ b
+    // 3 | 5 & 6 => 3 | (5 & 6) = 3 | 4 = 7
+    let out = compile_and_run_stdout("fn main() {\n    print(3 | 5 & 6)\n}");
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn bitwise_shift_precedence() {
+    // shift binds tighter than comparison:  1 << 4 > 10  =>  (1 << 4) > 10  =>  16 > 10  =>  true
+    let out = compile_and_run_stdout("fn main() {\n    print(1 << 4 > 10)\n}");
+    assert_eq!(out, "true\n");
+}
+
+#[test]
+fn bitwise_double_not() {
+    let out = compile_and_run_stdout("fn main() {\n    print(~~42)\n}");
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn bitwise_not_with_or() {
+    let out = compile_and_run_stdout("fn main() {\n    print(~(3 | 4))\n}");
+    assert_eq!(out, "-8\n");
+}
+
+#[test]
+fn bitwise_on_float_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    let x = 1.0 & 2.0\n}",
+        "bitwise operators require int",
+    );
+}
+
+#[test]
+fn bitwise_not_on_bool_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    let x = ~true\n}",
+        "cannot apply '~'",
+    );
 }

@@ -118,6 +118,7 @@ fn link(obj_path: &Path, output_path: &Path) -> Result<(), CompileError> {
     let status = std::process::Command::new("cc")
         .arg(obj_path)
         .arg(runtime_o)
+        .arg("-lm")
         .arg("-o")
         .arg(output_path)
         .status()

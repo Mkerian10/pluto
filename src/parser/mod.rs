@@ -1110,7 +1110,7 @@ impl<'a> Parser<'a> {
         let mut lhs = self.parse_prefix()?;
 
         loop {
-            let Some(tok) = self.peek() else { break };
+            let Some(tok) = self.peek().cloned() else { break };
 
             // Dot notation (postfix) — highest precedence
             if matches!(tok.node, Token::Dot) {
@@ -1360,6 +1360,21 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            // Postfix as — type cast (binds tighter than all infix operators)
+            if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::As) {
+                self.advance(); // consume 'as'
+                let target_type = self.parse_type()?;
+                let span = Span::new(lhs.span.start, target_type.span.end);
+                lhs = Spanned::new(
+                    Expr::Cast {
+                        expr: Box::new(lhs),
+                        target_type,
+                    },
+                    span,
+                );
+                continue;
+            }
+
             // Check for generic enum expression: EnumName<type_args>.Variant
             if matches!(&lhs.node, Expr::Ident(n) if self.enum_names.contains(n))
                 && matches!(tok.node, Token::Lt)
@@ -1424,6 +1439,34 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            // Right shift: detect adjacent `>` `>` as `>>` without adding a lexer token.
+            if matches!(tok.node, Token::Gt)
+                && self.tokens.get(self.pos + 1).is_some_and(|next| {
+                    matches!(next.node, Token::Gt) && tok.span.end == next.span.start
+                })
+            {
+                let op = BinOp::Shr;
+                let (lbp, rbp) = infix_binding_power(op);
+                if lbp < min_bp {
+                    break;
+                }
+
+                self.advance(); // first '>'
+                self.advance(); // second '>'
+
+                let rhs = self.parse_expr(rbp)?;
+                let span = Span::new(lhs.span.start, rhs.span.end);
+                lhs = Spanned::new(
+                    Expr::BinOp {
+                        op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    span,
+                );
+                continue;
+            }
+
             let op = match &tok.node {
                 Token::Plus => BinOp::Add,
                 Token::Minus => BinOp::Sub,
@@ -1438,6 +1481,10 @@ impl<'a> Parser<'a> {
                 Token::GtEq => BinOp::GtEq,
                 Token::AmpAmp => BinOp::And,
                 Token::PipePipe => BinOp::Or,
+                Token::Amp => BinOp::BitAnd,
+                Token::Pipe => BinOp::BitOr,
+                Token::Caret => BinOp::BitXor,
+                Token::Shl => BinOp::Shl,
                 _ => break,
             };
 
@@ -1538,6 +1585,16 @@ impl<'a> Parser<'a> {
                 let end = operand.span.end;
                 Ok(Spanned::new(
                     Expr::UnaryOp { op: UnaryOp::Not, operand: Box::new(operand) },
+                    Span::new(start, end),
+                ))
+            }
+            Token::Tilde => {
+                let tok = self.advance().unwrap();
+                let start = tok.span.start;
+                let operand = self.parse_prefix()?;
+                let end = operand.span.end;
+                Ok(Spanned::new(
+                    Expr::UnaryOp { op: UnaryOp::BitNot, operand: Box::new(operand) },
                     Span::new(start, end),
                 ))
             }
@@ -2023,10 +2080,14 @@ fn infix_binding_power(op: BinOp) -> (u8, u8) {
     match op {
         BinOp::Or => (1, 2),
         BinOp::And => (3, 4),
-        BinOp::Eq | BinOp::Neq => (5, 6),
-        BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => (7, 8),
-        BinOp::Add | BinOp::Sub => (9, 10),
-        BinOp::Mul | BinOp::Div | BinOp::Mod => (11, 12),
+        BinOp::BitOr => (5, 6),
+        BinOp::BitXor => (7, 8),
+        BinOp::BitAnd => (9, 10),
+        BinOp::Eq | BinOp::Neq => (11, 12),
+        BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => (13, 14),
+        BinOp::Shl | BinOp::Shr => (15, 16),
+        BinOp::Add | BinOp::Sub => (17, 18),
+        BinOp::Mul | BinOp::Div | BinOp::Mod => (19, 20),
     }
 }
 

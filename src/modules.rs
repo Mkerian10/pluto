@@ -816,6 +816,10 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
         Expr::UnaryOp { operand, .. } => {
             rewrite_expr_for_module(&mut operand.node, module_name, module_prog);
         }
+        Expr::Cast { expr: inner, target_type } => {
+            rewrite_expr_for_module(&mut inner.node, module_name, module_prog);
+            prefix_type_expr(&mut target_type.node, module_name, module_prog);
+        }
         Expr::ArrayLit { elements } => {
             for elem in elements {
                 rewrite_expr_for_module(&mut elem.node, module_name, module_prog);
@@ -1103,6 +1107,10 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
         }
         Expr::UnaryOp { operand, .. } => {
             rewrite_expr(&mut operand.node, operand.span, import_names);
+        }
+        Expr::Cast { expr: inner, target_type } => {
+            rewrite_expr(&mut inner.node, inner.span, import_names);
+            rewrite_type_expr(target_type, import_names);
         }
         Expr::ArrayLit { elements } => {
             for elem in elements {

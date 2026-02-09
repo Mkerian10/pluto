@@ -13,7 +13,7 @@ pub(crate) use resolve::resolve_type_for_monomorphize;
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::Program;
-use env::TypeEnv;
+use env::{ErrorInfo, TypeEnv};
 use types::PlutoType;
 
 fn types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> bool {
@@ -45,6 +45,9 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     register::register_enums(program, &mut env)?;
     register::register_app_placeholder(program, &mut env)?;
     register::register_errors(program, &mut env)?;
+    env.errors.entry("MathError".to_string()).or_insert(ErrorInfo {
+        fields: vec![("message".to_string(), PlutoType::String)],
+    });
     register::register_class_names(program, &mut env)?;
     register::resolve_class_fields(program, &mut env)?;
     register::register_extern_fns(program, &mut env)?;

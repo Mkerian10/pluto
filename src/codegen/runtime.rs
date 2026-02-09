@@ -46,6 +46,24 @@ impl RuntimeRegistry {
         // Time
         reg.declare(module, "__pluto_time_ns", &[], &[types::I64])?;
 
+        // Math builtins
+        reg.declare(module, "__pluto_abs_int", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_min_int", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_max_int", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_pow_int", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_abs_float", &[types::F64], &[types::F64])?;
+        reg.declare(module, "__pluto_min_float", &[types::F64, types::F64], &[types::F64])?;
+        reg.declare(module, "__pluto_max_float", &[types::F64, types::F64], &[types::F64])?;
+        reg.declare(module, "__pluto_pow_float", &[types::F64, types::F64], &[types::F64])?;
+        reg.declare(module, "__pluto_sqrt", &[types::F64], &[types::F64])?;
+        reg.declare(module, "__pluto_floor", &[types::F64], &[types::F64])?;
+        reg.declare(module, "__pluto_ceil", &[types::F64], &[types::F64])?;
+        reg.declare(module, "__pluto_round", &[types::F64], &[types::F64])?;
+        reg.declare(module, "__pluto_sin", &[types::F64], &[types::F64])?;
+        reg.declare(module, "__pluto_cos", &[types::F64], &[types::F64])?;
+        reg.declare(module, "__pluto_tan", &[types::F64], &[types::F64])?;
+        reg.declare(module, "__pluto_log", &[types::F64], &[types::F64])?;
+
         // Array functions
         reg.declare(module, "__pluto_array_new", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_array_push", &[types::I64, types::I64], &[])?;

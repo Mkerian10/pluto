@@ -102,6 +102,8 @@ pub struct TypeEnv {
     pub generic_rewrites: HashMap<(usize, usize), String>,
     /// Method resolutions recorded during type inference, keyed by (current_fn_mangled_name, method.span.start)
     pub method_resolutions: HashMap<(String, usize), MethodResolution>,
+    /// Built-in call sites that are fallible, keyed by (current_fn_mangled_name, call_name.span.start)
+    pub fallible_builtin_calls: HashSet<(String, usize)>,
     /// Currently being type-checked function's mangled name (set by check_function)
     pub current_fn: Option<String>,
     /// Ambient types declared in the app (for validation)
@@ -113,6 +115,18 @@ impl TypeEnv {
         let mut builtins = HashSet::new();
         builtins.insert("print".to_string());
         builtins.insert("time_ns".to_string());
+        builtins.insert("abs".to_string());
+        builtins.insert("min".to_string());
+        builtins.insert("max".to_string());
+        builtins.insert("pow".to_string());
+        builtins.insert("sqrt".to_string());
+        builtins.insert("floor".to_string());
+        builtins.insert("ceil".to_string());
+        builtins.insert("round".to_string());
+        builtins.insert("sin".to_string());
+        builtins.insert("cos".to_string());
+        builtins.insert("tan".to_string());
+        builtins.insert("log".to_string());
         Self {
             scopes: vec![HashMap::new()],
             functions: HashMap::new(),
@@ -133,6 +147,7 @@ impl TypeEnv {
             instantiations: HashSet::new(),
             generic_rewrites: HashMap::new(),
             method_resolutions: HashMap::new(),
+            fallible_builtin_calls: HashSet::new(),
             current_fn: None,
             ambient_types: HashSet::new(),
         }
