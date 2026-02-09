@@ -8,6 +8,18 @@ use super::infer::infer_expr;
 use super::types_compatible;
 
 pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
+    let prev_fn = env.current_fn.take();
+    env.current_fn = Some(if let Some(cn) = class_name {
+        format!("{}_{}", cn, func.name.node)
+    } else {
+        func.name.node.clone()
+    });
+    let result = check_function_body(func, env, class_name);
+    env.current_fn = prev_fn;
+    result
+}
+
+fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
     env.push_scope();
 
     // Add parameters to scope
