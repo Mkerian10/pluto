@@ -629,6 +629,12 @@ fn infer_method_call(
                         span,
                     ));
                 }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
                 return Ok(PlutoType::Int);
             }
             "push" => {
@@ -645,6 +651,12 @@ fn infer_method_call(
                         args[0].span,
                     ));
                 }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
                 return Ok(PlutoType::Void);
             }
             _ => {
@@ -657,6 +669,12 @@ fn infer_method_call(
     }
     if obj_type == PlutoType::String {
         if method.node == "len" && args.is_empty() {
+            if let Some(ref current) = env.current_fn {
+                env.method_resolutions.insert(
+                    (current.clone(), method.span.start),
+                    super::env::MethodResolution::Builtin,
+                );
+            }
             return Ok(PlutoType::Int);
         }
         return Err(CompileError::type_err(
@@ -708,6 +726,15 @@ fn infer_method_call(
                 ));
             }
         }
+        if let Some(ref current) = env.current_fn {
+            env.method_resolutions.insert(
+                (current.clone(), method.span.start),
+                super::env::MethodResolution::TraitDynamic {
+                    trait_name: trait_name.clone(),
+                    method_name: method.node.clone(),
+                },
+            );
+        }
         return Ok(method_sig.return_type.clone());
     }
 
@@ -722,6 +749,12 @@ fn infer_method_call(
     };
 
     let mangled = format!("{}_{}", class_name, method.node);
+    if let Some(ref current) = env.current_fn {
+        env.method_resolutions.insert(
+            (current.clone(), method.span.start),
+            super::env::MethodResolution::Class { mangled_name: mangled.clone() },
+        );
+    }
     let sig = env.functions.get(&mangled).ok_or_else(|| {
         CompileError::type_err(
             format!("class '{class_name}' has no method '{}'", method.node),
