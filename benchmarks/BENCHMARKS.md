@@ -1,132 +1,172 @@
-# Pluto Benchmark Suite — Target List
+# Pluto Benchmark Suite
 
-50 benchmarks from reputable suites for cross-language comparison.
+## About
 
-**Status key:**
-- ✅ Implemented — already in the benchmark suite
-- 🟢 Ready — can implement with current Pluto features
-- 🟡 Stretch — needs minor workarounds or features almost available
-- 🔴 Blocked — needs features Pluto doesn't have yet
+This benchmark suite measures Pluto's runtime performance against C, Go, and Python
+on identical workloads running on the same hardware. All benchmarks run in the
+`compare.sh` script and in the GitHub Actions `benchmarks.yml` workflow.
 
-**Source key:** CLBG = Computer Language Benchmarks Game, AWFY = Are We Fast Yet, SM = SciMark 2.0, Classic = well-known PL benchmarks
+Pluto has **no optimization passes** yet (Cranelift emits unoptimized native code), so
+these numbers represent a baseline. As we add optimizations, we expect to see
+improvement over time — that's the whole point of tracking this.
 
----
+### Methodology
 
-## Recursion / Call Overhead
+Each benchmark is implemented independently in Pluto, C, Go, and Python with the
+same algorithm and parameters. Timing is measured inside each program (wall-clock,
+monotonic). We report single-run milliseconds — not averages, not warmed up, not
+cherry-picked.
 
-| # | Benchmark | Source | Status | What it tests |
-|---|-----------|--------|--------|---------------|
-| 1 | **fib** | Classic | ✅ | Naive recursive fib(35). Pure function call overhead. |
-| 2 | **ackermann** | Classic | 🟢 | A(3,12) — ~100K deep recursive calls. Tests stack/call overhead at extreme depth. |
-| 3 | **tak** | Classic | 🟢 | Takeuchi function tak(18,12,6) — triple recursion, ~63K calls. Classic Lisp benchmark. |
-| 4 | **towers** | AWFY | ✅ | Towers of Hanoi, 20 discs × 100 iters. Recursion + array mutation. |
-
-## Array / Loop / Integer
-
-| # | Benchmark | Source | Status | What it tests |
-|---|-----------|--------|--------|---------------|
-| 5 | **loop-sum** | Classic | ✅ | Sum 0..100M in a while loop. Raw loop + integer add overhead. |
-| 6 | **sieve** | AWFY | ✅ | Sieve of Eratosthenes, primes below 500K. Bool array marking. |
-| 7 | **permute** | AWFY | ✅ | Heap's algorithm, all permutations of 10 elements. Recursion + array swaps. |
-| 8 | **queens** | AWFY | ✅ | 12-Queens backtracking solver. Recursion + constraint arrays. |
-| 9 | **fannkuch-redux** | CLBG | 🟢 | Pancake flipping over all permutations of 10 elements. Array reversal in tight loop. |
-| 10 | **quicksort** | Classic | 🟢 | Sort 1M random integers (LCG-generated). Partition + recursive sort. |
-| 11 | **mergesort** | Classic | 🟢 | Sort 1M random integers. Divide-and-conquer with auxiliary array. |
-| 12 | **insertion-sort** | Classic | 🟢 | Sort 50K random integers. O(n²) with shifts. Tests raw array move performance. |
-| 13 | **binary-search** | Classic | 🟢 | 10M lookups in a sorted 1M-element array. Tests array indexing + branching. |
-| 14 | **knapsack** | Classic | 🟢 | 0/1 knapsack via dynamic programming. 2D table (flattened to 1D array). |
-| 15 | **levenshtein** | Classic | 🟢 | Edit distance between two long strings. 2D DP table, tests array access patterns. |
-
-## Floating-Point / Numerical
-
-| # | Benchmark | Source | Status | What it tests |
-|---|-----------|--------|--------|---------------|
-| 16 | **bounce** | AWFY | ✅ | Ball bouncing simulation, 10M steps. Float add + conditional branches. |
-| 17 | **n-body** | CLBG | 🟢 | Jovian planet gravitational sim, 50M steps. Float-heavy with sqrt. 5 bodies as class instances. |
-| 18 | **spectral-norm** | CLBG | 🟢 | Compute spectral norm via power method on 5500×5500 matrix. Float multiply-accumulate + sqrt. |
-| 19 | **mandelbrot** | AWFY | 🟢 | Mandelbrot set computation, 750×750 grid. Float iteration with early exit. (No bitmap output — just count iterations.) |
-| 20 | **matrix-multiply** | Classic | 🟢 | Multiply two 500×500 float matrices (naive O(n³)). 1D array simulating 2D. Tests cache + float throughput. |
-| 21 | **pi-summation** | Classic | 🟢 | Leibniz series for pi, 100M terms. Single-loop float accumulator. |
-| 22 | **monte-carlo-pi** | SM | 🟢 | Estimate pi via random sampling, 100M points. LCG PRNG + float comparison. |
-| 23 | **SOR** | SM | 🟢 | Jacobi successive over-relaxation on 500×500 grid, 100 iterations. Stencil access pattern. 1D array simulating 2D. |
-| 24 | **sparse-matrix-multiply** | SM | 🟢 | Sparse matrix (CSR format) × dense vector. Indirect array indexing, tests irregular memory access. |
-| 25 | **LU-decomposition** | SM | 🟢 | LU factorization with partial pivoting, 500×500 matrix. Float-heavy, row swapping. |
-| 26 | **FFT** | SM | 🟢 | Fast Fourier Transform on 2^16 complex numbers. Bit-reversal + butterfly ops. Uses sin/cos builtins. |
-| 27 | **euler** | Classic | 🟢 | Solve ODE via Euler method, 10M steps. Simple float loop with repeated multiply-add. |
-
-## GC / Memory Allocation
-
-| # | Benchmark | Source | Status | What it tests |
-|---|-----------|--------|--------|---------------|
-| 28 | **gc-churn** | Custom | ✅ | Allocate 1M short-lived class instances. Pure allocation throughput + GC reclaim. |
-| 29 | **gc-binary-trees** | CLBG | ✅ | Build/check/discard binary trees depth 4–16. Classic GC stress benchmark (Boehm's GCBench). |
-| 30 | **gc-string-pressure** | Custom | ✅ | 100K intermediate strings via interpolation. Tests string GC. |
-| 31 | **storage** | AWFY | 🟢 | Build tree of arrays (depth 6), count leaf elements. Stresses GC with nested array structures. |
-| 32 | **gc-linked-list** | Classic | 🟢 | Build and traverse 1M-node linked list (class with next field). Tests GC with long-lived pointer chains. |
-
-## OOP / Polymorphism / Dispatch
-
-| # | Benchmark | Source | Status | What it tests |
-|---|-----------|--------|--------|---------------|
-| 33 | **class-method** | Custom | ✅ | 10M method calls on a single class instance. Direct dispatch overhead. |
-| 34 | **trait-dispatch** | Custom | ✅ | 10M method calls through trait interface. Vtable indirect dispatch overhead. |
-| 35 | **closure-call** | Custom | ✅ | 10M closure invocations with captured variable. Indirect call + capture access overhead. |
-| 36 | **n-body-oop** | AWFY | 🟢 | Same physics as n-body but with Body class + methods. Tests OOP field access vs raw variables. |
-| 37 | **richards** | AWFY | 🟡 | OS task scheduler simulation (12 classes). Classic OOP benchmark — tests polymorphic dispatch, queue management, state machines. Needs trait-based polymorphism mapping. |
-| 38 | **list** | AWFY | 🟢 | Linked-list operations (create, traverse, compare) using class nodes. Tests pointer-chasing + recursion. |
-| 39 | **CD** | AWFY | 🟡 | Collision detection with kd-tree (16 classes). Complex OOP + spatial algorithms. Needs careful trait hierarchy mapping. |
-| 40 | **deltablue** | AWFY | 🔴 | Incremental constraint solver (20 classes, 99 methods). Requires inheritance-like patterns not available in Pluto. |
-
-## String / Text Processing
-
-| # | Benchmark | Source | Status | What it tests |
-|---|-----------|--------|--------|---------------|
-| 41 | **string-concat** | Custom | ✅ | Concatenate 100K strings via interpolation. Tests string allocation + copy. |
-| 42 | **json-parse** | AWFY | 🟡 | Hand-written recursive-descent JSON parser. Tests character-by-character string processing. Needs string indexing (s[i] or char-at). |
-| 43 | **brainfuck-interp** | Classic | 🟡 | Interpret a Brainfuck program (e.g., mandelbrot.bf). Tests interpreter dispatch loop + array ops. Needs string indexing for instruction fetch. |
-
-## Hash Table / Map / Set
-
-| # | Benchmark | Source | Status | What it tests |
-|---|-----------|--------|--------|---------------|
-| 44 | **map-insert-lookup** | Classic | 🟢 | Insert 1M key-value pairs into Map, then look up each. Tests Pluto's built-in Map performance. |
-| 45 | **set-operations** | Classic | 🟢 | Insert/contains/remove on Set with 1M elements. Tests Pluto's built-in Set performance. |
-| 46 | **k-nucleotide** | CLBG | 🔴 | Count DNA k-mer frequencies in a large sequence. Needs file I/O (stdin), string slicing, sort. |
-| 47 | **havlak** | AWFY | 🔴 | Loop detection on control-flow graph (18 classes, uses maps/sets). Needs complex OOP + potentially inheritance. |
-
-## I/O / System (Future)
-
-| # | Benchmark | Source | Status | What it tests |
-|---|-----------|--------|--------|---------------|
-| 48 | **fasta** | CLBG | 🔴 | Generate DNA sequences with PRNG. Needs stdout line output. |
-| 49 | **reverse-complement** | CLBG | 🔴 | Reverse-complement a FASTA sequence. Needs stdin/stdout, string/byte manipulation. |
-| 50 | **pidigits** | CLBG | 🔴 | Compute N digits of pi. Needs arbitrary-precision (big integer) arithmetic. |
+**Important caveats:**
+- These are **our own ports**, not canonical implementations. The algorithms match
+  the published specifications, but our implementations may differ in ways that
+  affect performance (e.g., using 1D arrays to simulate 2D, different data layout
+  choices). Results are a **sanity check**, not a rigorous benchmark publication.
+- C is compiled with `-O2`. Go and Python use default settings.
+- Pluto's codegen target is detected at compile time (aarch64-darwin, x86_64-linux, etc.)
+  but there are no target-specific optimizations.
 
 ---
 
-## Summary
+## Benchmark Sources
+
+We draw from three well-known, published benchmark suites plus a handful of custom
+micro-benchmarks for Pluto-specific features.
+
+### Computer Language Benchmarks Game (CLBG)
+
+Website: https://benchmarksgame-team.pages.debian.net/benchmarksgame/
+
+The most widely used cross-language performance comparison. Maintained since 2004.
+Contains 10 benchmark programs with canonical implementations in 20+ languages.
+Results are publicly visible and frequently cited in language comparisons.
+
+**Benchmarks from CLBG in our suite:**
+
+| Benchmark | Status | What it tests |
+|-----------|--------|---------------|
+| **binary-trees** | ✅ | Allocate/traverse/discard binary trees of depth 4–16. Classic GC stress test (based on Boehm's GCBench). |
+| **fannkuch-redux** | 🟢 | Pancake-flip counting over all permutations of N elements. Tight array reversal loops. |
+| **n-body** | 🟢 | Jovian planet gravitational simulation, 50M steps. Float-heavy with sqrt. |
+| **spectral-norm** | 🟢 | Power method on an infinite matrix. Nested-loop float multiply-accumulate. |
+| **mandelbrot** | 🟢 | Mandelbrot set fractal computation. Float iteration with early exit. (We compute iteration counts only — no bitmap output.) |
+| **k-nucleotide** | 🔴 | DNA k-mer frequency counting. Needs file I/O, string slicing, sort. |
+| **fasta** | 🔴 | DNA sequence generation with LCG PRNG. Needs formatted stdout output. |
+| **reverse-complement** | 🔴 | Reverse-complement a FASTA sequence. Needs stdin/stdout. |
+| **pidigits** | 🔴 | Digits of pi via spigot algorithm. Needs arbitrary-precision integers. |
+| **regex-redux** | 🔴 | Regex matching and substitution on DNA data. Needs regex library. |
+
+### Are We Fast Yet (AWFY)
+
+Paper: "Cross-Language Compiler Benchmarking: Are We Fast Yet?" (Marr et al., 2016)
+Repository: https://github.com/smarr/are-we-fast-yet
+
+Academic benchmark suite designed specifically for comparing language implementations.
+14 benchmarks limited to features present in most languages (objects, closures, arrays).
+No stdlib dependencies, no threads, no file I/O. Reference implementations exist in
+Java, JavaScript, Smalltalk, Ruby, and others.
+
+**Benchmarks from AWFY in our suite:**
+
+| Benchmark | Status | What it tests |
+|-----------|--------|---------------|
+| **bounce** | ✅ | Ball bouncing simulation, 10M steps. Float arithmetic + conditionals. |
+| **sieve** | ✅ | Sieve of Eratosthenes, primes below 500K. Boolean array operations. |
+| **permute** | ✅ | Heap's algorithm, all 10! permutations. Recursion + array swaps. |
+| **queens** | ✅ | 12-Queens backtracking solver. Recursion + constraint arrays. |
+| **towers** | ✅ | Towers of Hanoi, 20 discs × 100 iters. Recursion + array mutation. |
+| **storage** | 🟢 | Tree of arrays (depth 6), count leaves. GC stress with nested allocations. |
+| **list** | 🟢 | Linked-list create/traverse/compare using class nodes. Pointer-chasing + recursion. |
+| **n-body** | 🟢 | N-body simulation with Body class + methods. (AWFY version uses OOP patterns.) |
+| **mandelbrot** | 🟢 | Mandelbrot computation. (AWFY version — compute only, no I/O.) |
+| **richards** | 🟡 | OS task scheduler simulation (12 classes). Tests polymorphic dispatch + state machines. |
+| **CD** | 🟡 | Collision detection via kd-tree (16 classes). Complex spatial OOP. |
+| **json** | 🟡 | Recursive-descent JSON parser. Character-by-character string processing. Needs string indexing. |
+| **deltablue** | 🔴 | Incremental constraint solver (20 classes, 99 methods). Needs inheritance-like dispatch. |
+| **havlak** | 🔴 | Loop detection on control-flow graphs. Needs complex OOP + collections. |
+
+### SciMark 2.0
+
+Website: https://math.nist.gov/scimark2/
+Source: NIST (National Institute of Standards and Technology)
+
+Standard benchmark for scientific/numerical computing. 5 computational kernels.
+Reference implementations in C and Java. All are purely numerical — arrays and float
+math only, no objects, no strings, no I/O.
+
+**Benchmarks from SciMark in our suite:**
+
+| Benchmark | Status | What it tests |
+|-----------|--------|---------------|
+| **FFT** | 🟢 | Fast Fourier Transform on 2^16 complex numbers. Bit-reversal + butterfly operations. Uses sin/cos. |
+| **SOR** | 🟢 | Jacobi successive over-relaxation on 500×500 grid. Stencil access pattern (1D array simulating 2D). |
+| **monte-carlo** | 🟢 | Estimate pi via random sampling, 100M points. LCG PRNG + float comparison. |
+| **sparse-matrix-multiply** | 🟢 | Sparse matrix (CSR format) × dense vector. Indirect array indexing. |
+| **LU-decomposition** | 🟢 | LU factorization with partial pivoting, 500×500 matrix. Row swapping + float arithmetic. |
+
+### Custom Micro-Benchmarks
+
+These are **not from any published suite**. They test Pluto-specific features
+(closures, traits, DI, GC introspection) that don't have equivalents in the suites
+above. Useful for tracking Pluto's own progress but not meaningful for cross-language
+comparison.
+
+| Benchmark | Status | What it tests |
+|-----------|--------|---------------|
+| **fib** | ✅ | Naive recursive fib(35). Pure function call overhead. |
+| **loop-sum** | ✅ | Sum 0..100M. Raw loop + integer add overhead. |
+| **string-concat** | ✅ | 100K string concatenations via interpolation. |
+| **array-push** | ✅ | Push 1M elements to dynamic array. |
+| **array-iter** | ✅ | Iterate and sum 1M-element array. |
+| **class-method** | ✅ | 10M direct method calls. |
+| **closure-call** | ✅ | 10M closure invocations with capture. |
+| **trait-dispatch** | ✅ | 10M calls through trait vtable. |
+| **gc-churn** | ✅ | Allocate 1M short-lived objects. GC throughput. |
+| **gc-string-pressure** | ✅ | 100K intermediate strings. String GC. |
+
+---
+
+## Status Summary
 
 | Status | Count | Description |
 |--------|-------|-------------|
-| ✅ Implemented | 14 | Already in the suite |
-| 🟢 Ready | 25 | Can implement now with current features |
-| 🟡 Stretch | 5 | Needs minor workarounds or near-future features |
-| 🔴 Blocked | 6 | Needs features not yet in Pluto |
-| **Total** | **50** | |
+| ✅ Implemented | 15 | In the suite today |
+| 🟢 Ready | 14 | Can implement with current Pluto features |
+| 🟡 Stretch | 3 | Needs workarounds (string indexing, complex trait mapping) |
+| 🔴 Blocked | 7 | Needs language features not yet available |
+| **Total** | **39** | |
 
-## Priority Order for Implementation
+**From published suites:** 29 (CLBG: 10, AWFY: 14, SciMark: 5)
+**Custom/Pluto-specific:** 10
 
-**Phase 1 — Quick wins (pure compute, no new features needed):**
-ackermann, tak, pi-summation, monte-carlo-pi, euler, binary-search, insertion-sort, fannkuch-redux
+---
 
-**Phase 2 — Array-heavy (1D array tricks for 2D problems):**
-matrix-multiply, SOR, sparse-matrix-multiply, LU-decomposition, FFT, quicksort, mergesort, knapsack, levenshtein
+## Cross-Language Comparison (compare.sh)
 
-**Phase 3 — Object/GC-oriented:**
-n-body, n-body-oop, spectral-norm, mandelbrot, storage, gc-linked-list, list, map-insert-lookup, set-operations
+The `compare.sh` script and GitHub Actions workflow run 7 algorithm benchmarks
+(the ones with reference implementations in C, Go, and Python) head-to-head:
 
-**Phase 4 — Complex OOP (may need trait enhancements):**
-richards, CD, json-parse, brainfuck-interp
+    fib, loop_sum, sieve, bounce, towers, permute, queens
 
-**Phase 5 — After new language features:**
-deltablue, k-nucleotide, fasta, reverse-complement, havlak, pidigits
+Reference implementations live in `reference/{c,go,python}/`. Each does the same
+work with the same parameters and prints `elapsed: {ms} ms`.
+
+These are all **our own ports** of well-known algorithms. The C/Go/Python versions
+use idiomatic code for each language. Results won't match numbers published elsewhere
+(different hardware, different workload sizes, different implementation choices) but
+they're valid **relative comparisons on the same machine in the same run**.
+
+---
+
+## Implementation Priorities
+
+**Next up (pure compute, no new features needed):**
+fannkuch-redux, spectral-norm, n-body, mandelbrot, monte-carlo, storage, list, FFT, SOR
+
+**After that (need 2D array simulation, more complex setup):**
+sparse-matrix-multiply, LU-decomposition
+
+**Needs language work first:**
+richards (complex trait dispatch), CD (kd-tree OOP), json (string indexing),
+deltablue (inheritance), havlak (complex OOP + collections),
+k-nucleotide / fasta / reverse-complement / pidigits / regex-redux (I/O, stdlib)
