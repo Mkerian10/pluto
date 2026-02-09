@@ -121,6 +121,16 @@ fn error_with_class_return() {
     assert_eq!(out, "5\n10\n0\n0\n");
 }
 
+#[test]
+fn error_catch_wildcard_variable_used() {
+    // Safety-net: catch wildcard binds `err` and the body *uses* it.
+    // Verifies the variable is properly scoped and accessible inside the catch block.
+    let out = compile_and_run_stdout(
+        "error BadInput {\n    code: int\n}\n\nfn validate(x: int) int {\n    if x < 0 {\n        raise BadInput { code: x }\n    }\n    return x\n}\n\nfn main() {\n    let x = 42\n    let result = validate(-5) catch err { x }\n    print(result)\n    print(x)\n}",
+    );
+    assert_eq!(out, "42\n42\n");
+}
+
 // Error handling compile-time rejection tests
 
 #[test]
