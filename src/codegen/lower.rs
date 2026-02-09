@@ -11,6 +11,9 @@ use crate::parser::ast::*;
 use crate::typeck::env::TypeEnv;
 use crate::typeck::types::PlutoType;
 
+/// Size of a pointer in bytes. All heap-allocated objects use pointer-sized slots.
+pub const POINTER_SIZE: i32 = 8;
+
 struct LowerContext<'a> {
     builder: FunctionBuilder<'a>,
     module: &'a mut dyn Module,
@@ -179,7 +182,7 @@ impl<'a> LowerContext<'a> {
                     if let Some(class_info) = self.env.classes.get(class_name) {
                         let offset = class_info.fields.iter()
                             .position(|(n, _, _)| *n == field.node)
-                            .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{class_name}'", field.node)))? as i32 * 8;
+                            .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{class_name}'", field.node)))? as i32 * POINTER_SIZE;
                         self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
                     }
                 }
@@ -423,7 +426,7 @@ impl<'a> LowerContext<'a> {
                             .position(|(n, _)| *n == binding_field.node)
                             .unwrap();
                         let field_type = &variant_fields[field_idx].1;
-                        let offset = ((1 + field_idx) * 8) as i32;
+                        let offset = ((1 + field_idx) as i32) * POINTER_SIZE;
                         let raw = self.builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(offset));
                         let val = from_array_slot(raw, field_type, &mut self.builder);
 
@@ -484,7 +487,7 @@ impl<'a> LowerContext<'a> {
                     CompileError::codegen(format!("unknown error '{}'", error_name.node))
                 })?.clone();
                 let num_fields = error_info.fields.len();
-                let size = (num_fields as i64 * 8).max(8);
+                let size = (num_fields as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
 
                 // Allocate error object
                 let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
@@ -498,7 +501,7 @@ impl<'a> LowerContext<'a> {
                     let val = self.lower_expr(&lit_val.node)?;
                     let offset = field_info.iter()
                         .position(|(n, _)| *n == lit_name.node)
-                        .unwrap_or(0) as i32 * 8;
+                        .unwrap_or(0) as i32 * POINTER_SIZE;
                     self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
                 }
 
@@ -725,7 +728,7 @@ impl<'a> LowerContext<'a> {
                     CompileError::codegen(format!("unknown class '{}'", name.node))
                 })?;
                 let num_fields = class_info.fields.len() as i64;
-                let size = num_fields * 8;
+                let size = num_fields * POINTER_SIZE as i64;
 
                 let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
                 let size_val = self.builder.ins().iconst(types::I64, size);
@@ -739,7 +742,7 @@ impl<'a> LowerContext<'a> {
                     let val = self.lower_expr(&lit_val.node)?;
                     let offset = field_info.iter()
                         .position(|(n, _, _)| *n == lit_name.node)
-                        .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", lit_name.node, name.node)))? as i32 * 8;
+                        .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", lit_name.node, name.node)))? as i32 * POINTER_SIZE;
                     self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
                 }
 
@@ -780,7 +783,7 @@ impl<'a> LowerContext<'a> {
                     CompileError::codegen(format!("unknown enum '{}'", enum_name.node))
                 })?;
                 let max_fields = enum_info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
-                let alloc_size = (1 + max_fields) as i64 * 8;
+                let alloc_size = (1 + max_fields) as i64 * POINTER_SIZE as i64;
                 let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
 
                 let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
@@ -798,7 +801,7 @@ impl<'a> LowerContext<'a> {
                     CompileError::codegen(format!("unknown enum '{}'", enum_name.node))
                 })?.clone();
                 let max_fields = enum_info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
-                let alloc_size = (1 + max_fields) as i64 * 8;
+                let alloc_size = (1 + max_fields) as i64 * POINTER_SIZE as i64;
                 let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
                 let variant_fields = &enum_info.variants[variant_idx].1;
 
@@ -815,7 +818,7 @@ impl<'a> LowerContext<'a> {
                     let field_idx = variant_fields.iter().position(|(n, _)| *n == lit_name.node).unwrap();
                     let field_type = &variant_fields[field_idx].1;
                     let slot = to_array_slot(val, field_type, &mut self.builder);
-                    let offset = ((1 + field_idx) * 8) as i32;
+                    let offset = ((1 + field_idx) as i32) * POINTER_SIZE;
                     self.builder.ins().store(MemFlags::new(), slot, ptr, Offset32::new(offset));
                 }
 
@@ -834,7 +837,7 @@ impl<'a> LowerContext<'a> {
                         .ok_or_else(|| {
                             CompileError::codegen(format!("unknown field '{}'", field.node))
                         })?;
-                    let offset = (field_idx as i32) * 8;
+                    let offset = (field_idx as i32) * POINTER_SIZE;
                     let cl_type = pluto_to_cranelift(field_type);
                     Ok(self.builder.ins().load(cl_type, MemFlags::new(), ptr, Offset32::new(offset)))
                 } else {
@@ -1001,10 +1004,10 @@ impl<'a> LowerContext<'a> {
 
                     // obj_ptr is a trait handle: pointer to [data_ptr, vtable_ptr]
                     let data_ptr = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(0));
-                    let vtable_ptr = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(8));
+                    let vtable_ptr = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(POINTER_SIZE));
 
-                    // Load fn_ptr from vtable at offset method_idx * 8
-                    let offset = (method_idx as i32) * 8;
+                    // Load fn_ptr from vtable at offset method_idx * POINTER_SIZE
+                    let offset = (method_idx as i32) * POINTER_SIZE;
                     let fn_ptr = self.builder.ins().load(types::I64, MemFlags::new(), vtable_ptr, Offset32::new(offset));
 
                     // Build indirect call signature
@@ -1072,7 +1075,7 @@ impl<'a> LowerContext<'a> {
                 })?;
 
                 // 2. Allocate closure object: [fn_ptr: i64] [capture_0: i64] ...
-                let obj_size = (1 + captures.len()) as i64 * 8;
+                let obj_size = (1 + captures.len()) as i64 * POINTER_SIZE as i64;
                 let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
                 let size_val = self.builder.ins().iconst(types::I64, obj_size);
                 let call = self.builder.ins().call(alloc_ref, &[size_val]);
@@ -1091,7 +1094,7 @@ impl<'a> LowerContext<'a> {
                     let cap_val = self.builder.use_var(*cap_var);
                     let cap_type = self.var_types.get(cap_name).cloned().unwrap_or(PlutoType::Int);
                     let slot = to_array_slot(cap_val, &cap_type, &mut self.builder);
-                    let offset = (1 + i) as i32 * 8;
+                    let offset = (1 + i) as i32 * POINTER_SIZE;
                     self.builder.ins().store(MemFlags::new(), slot, closure_ptr, Offset32::new(offset));
                 }
 
@@ -1198,7 +1201,7 @@ pub fn lower_function(
         })?;
         let env_ptr = builder.use_var(*env_var);
         for (i, (cap_name, cap_type)) in captures.iter().enumerate() {
-            let offset = (1 + i) as i32 * 8; // skip fn_ptr at offset 0
+            let offset = (1 + i) as i32 * POINTER_SIZE; // skip fn_ptr at offset 0
             let raw = builder.ins().load(types::I64, MemFlags::new(), env_ptr, Offset32::new(offset));
             let val = from_array_slot(raw, cap_type, &mut builder);
             let var = Variable::from_u32(next_var);
@@ -1279,7 +1282,7 @@ fn resolve_param_type(param: &Param, env: &TypeEnv) -> PlutoType {
     resolve_type_expr_to_pluto(&param.ty.node, env)
 }
 
-fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
+pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
     match ty {
         TypeExpr::Named(name) => match name.as_str() {
             "int" => PlutoType::Int,

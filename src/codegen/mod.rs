@@ -14,13 +14,31 @@ use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::typeck::env::TypeEnv;
 use crate::typeck::types::PlutoType;
-use lower::{lower_function, pluto_to_cranelift};
+use lower::{lower_function, pluto_to_cranelift, resolve_type_expr_to_pluto, POINTER_SIZE};
+
+fn host_target_triple() -> Result<&'static str, CompileError> {
+    if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+        Ok("aarch64-apple-darwin")
+    } else if cfg!(all(target_arch = "x86_64", target_os = "macos")) {
+        Ok("x86_64-apple-darwin")
+    } else if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
+        Ok("x86_64-unknown-linux-gnu")
+    } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
+        Ok("aarch64-unknown-linux-gnu")
+    } else {
+        Err(CompileError::codegen(format!(
+            "unsupported host target: {}-{}",
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        )))
+    }
+}
 
 pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError> {
     let mut flag_builder = settings::builder();
     flag_builder.set("is_pic", "true").unwrap();
 
-    let isa_builder = cranelift_codegen::isa::lookup_by_name("aarch64-apple-darwin")
+    let isa_builder = cranelift_codegen::isa::lookup_by_name(host_target_triple()?)
         .map_err(|e| CompileError::codegen(format!("unsupported target: {e}")))?;
     let isa = isa_builder
         .finish(settings::Flags::new(flag_builder))
@@ -315,7 +333,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
             if let Some(trait_info) = env.traits.get(trait_name) {
                 let num_methods = trait_info.methods.len();
                 let mut data_desc = DataDescription::new();
-                let zeros = vec![0u8; num_methods * 8];
+                let zeros = vec![0u8; num_methods * POINTER_SIZE as usize];
                 data_desc.define(zeros.into_boxed_slice());
 
                 for (i, (method_name, _)) in trait_info.methods.iter().enumerate() {
@@ -324,7 +342,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
                         CompileError::codegen(format!("missing func_id for vtable entry {mangled}"))
                     })?;
                     let func_ref = module.declare_func_in_data(*fid, &mut data_desc);
-                    data_desc.write_function_addr((i * 8) as u32, func_ref);
+                    data_desc.write_function_addr((i as u32) * POINTER_SIZE as u32, func_ref);
                 }
 
                 let data_id = module.declare_anonymous_data(false, false)
@@ -507,7 +525,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
                 let class_info = env.classes.get(class_name).ok_or_else(|| {
                     CompileError::codegen(format!("DI: unknown class '{}'", class_name))
                 })?;
-                let size = class_info.fields.len() as i64 * 8;
+                let size = class_info.fields.len() as i64 * POINTER_SIZE as i64;
                 let size_val = builder.ins().iconst(types::I64, size);
                 let call = builder.ins().call(alloc_ref, &[size_val]);
                 let ptr = builder.inst_results(call)[0];
@@ -517,7 +535,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
                     if *is_injected {
                         if let PlutoType::Class(dep_name) = field_ty {
                             if let Some(&dep_ptr) = singletons.get(dep_name) {
-                                let offset = (i as i32) * 8;
+                                let offset = (i as i32) * POINTER_SIZE;
                                 builder.ins().store(
                                     MemFlags::new(),
                                     dep_ptr,
@@ -537,7 +555,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
             let app_info = env.classes.get(app_name).ok_or_else(|| {
                 CompileError::codegen(format!("DI: unknown app class '{}'", app_name))
             })?;
-            let app_size = app_info.fields.len() as i64 * 8;
+            let app_size = app_info.fields.len() as i64 * POINTER_SIZE as i64;
             let app_size_val = builder.ins().iconst(types::I64, app_size);
             let app_call = builder.ins().call(alloc_ref, &[app_size_val]);
             let app_ptr = builder.inst_results(app_call)[0];
@@ -546,7 +564,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
                 if *is_injected {
                     if let PlutoType::Class(dep_name) = field_ty {
                         if let Some(&dep_ptr) = singletons.get(dep_name) {
-                            let offset = (i as i32) * 8;
+                            let offset = (i as i32) * POINTER_SIZE;
                             builder.ins().store(
                                 MemFlags::new(),
                                 dep_ptr,
@@ -582,54 +600,6 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
     let bytes = object.emit().map_err(|e| CompileError::codegen(format!("emit error: {e}")))?;
 
     Ok(bytes)
-}
-
-fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
-    match ty {
-        TypeExpr::Named(name) => match name.as_str() {
-            "int" => PlutoType::Int,
-            "float" => PlutoType::Float,
-            "bool" => PlutoType::Bool,
-            "string" => PlutoType::String,
-            _ => {
-                if env.classes.contains_key(name) {
-                    PlutoType::Class(name.clone())
-                } else if env.traits.contains_key(name) {
-                    PlutoType::Trait(name.clone())
-                } else if env.enums.contains_key(name) {
-                    PlutoType::Enum(name.clone())
-                } else {
-                    PlutoType::Void
-                }
-            }
-        },
-        TypeExpr::Array(inner) => {
-            let elem = resolve_type_expr_to_pluto(&inner.node, env);
-            PlutoType::Array(Box::new(elem))
-        }
-        TypeExpr::Qualified { module, name } => {
-            let prefixed = format!("{}.{}", module, name);
-            if env.classes.contains_key(&prefixed) {
-                PlutoType::Class(prefixed)
-            } else if env.traits.contains_key(&prefixed) {
-                PlutoType::Trait(prefixed)
-            } else if env.enums.contains_key(&prefixed) {
-                PlutoType::Enum(prefixed)
-            } else {
-                PlutoType::Void
-            }
-        }
-        TypeExpr::Fn { params, return_type } => {
-            let param_types = params.iter()
-                .map(|p| resolve_type_expr_to_pluto(&p.node, env))
-                .collect();
-            let ret = resolve_type_expr_to_pluto(&return_type.node, env);
-            PlutoType::Fn(param_types, Box::new(ret))
-        }
-        TypeExpr::Generic { .. } => {
-            panic!("Generic TypeExpr should not reach codegen — monomorphize should have resolved it")
-        }
-    }
 }
 
 fn resolve_param_pluto_type(param: &Param, env: &TypeEnv) -> PlutoType {
