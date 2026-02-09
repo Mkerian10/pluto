@@ -959,3 +959,85 @@ fn main() {
     ]);
     assert_eq!(out, "0\n");
 }
+
+// ============================================================
+// Stdlib: std.socket
+// ============================================================
+
+#[test]
+fn stdlib_socket_create_close() {
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", r#"import std.socket
+
+fn main() {
+    let fd = socket.create(2, 1, 0)
+    if fd >= 0 {
+        print("created")
+    }
+    socket.close(fd)
+    print("closed")
+}
+"#),
+    ]);
+    assert_eq!(out, "created\nclosed\n");
+}
+
+#[test]
+fn stdlib_net_tcp_roundtrip() {
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", r#"import std.socket
+
+fn main() {
+    let server_fd = socket.create(2, 1, 0)
+    socket.set_reuseaddr(server_fd)
+    socket.bind(server_fd, "127.0.0.1", 0)
+    socket.listen(server_fd, 128)
+    let port = socket.get_port(server_fd)
+
+    let client_fd = socket.create(2, 1, 0)
+    socket.connect(client_fd, "127.0.0.1", port)
+
+    let conn_fd = socket.accept(server_fd)
+
+    socket.write(client_fd, "hello")
+    let msg1 = socket.read(conn_fd, 1024)
+    print(msg1)
+
+    socket.write(conn_fd, "world")
+    let msg2 = socket.read(client_fd, 1024)
+    print(msg2)
+
+    socket.close(conn_fd)
+    socket.close(client_fd)
+    socket.close(server_fd)
+}
+"#),
+    ]);
+    assert_eq!(out, "hello\nworld\n");
+}
+
+#[test]
+fn stdlib_net_classes() {
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", r#"import std.net
+import std.socket
+
+fn main() {
+    let server = net.listen("127.0.0.1", 0)
+    let port = server.port()
+
+    let client = net.connect("127.0.0.1", port)
+    let conn = server.accept()
+
+    client.write("ping")
+    let msg = conn.read(1024)
+    print(msg)
+
+    conn.close()
+    client.close()
+    server.close()
+}
+"#),
+    ]);
+    assert_eq!(out, "ping\n");
+}
