@@ -504,3 +504,47 @@ fn imported_module_with_extern_fn() {
     ]);
     assert_eq!(out, "42\n");
 }
+
+// ============================================================
+// Stdlib end-to-end: import std.io
+// ============================================================
+
+#[test]
+fn stdlib_io_println() {
+    // stdlib/io/mod.pluto lives relative to the entry file
+    let out = run_project(&[
+        ("main.pluto", r#"import std.io
+
+fn main() {
+    io.println("hello from stdlib")
+}
+"#),
+        ("stdlib/io/mod.pluto", r#"extern fn __pluto_print_string(s: string)
+
+pub fn println(s: string) {
+    __pluto_print_string(s)
+}
+"#),
+    ]);
+    assert_eq!(out, "hello from stdlib\n");
+}
+
+#[test]
+fn stdlib_io_print_no_newline() {
+    let out = run_project(&[
+        ("main.pluto", r#"import std.io
+
+fn main() {
+    io.print("hello")
+    io.print(" world")
+}
+"#),
+        ("stdlib/io/mod.pluto", r#"extern fn __pluto_print_string_no_newline(s: string)
+
+pub fn print(s: string) {
+    __pluto_print_string_no_newline(s)
+}
+"#),
+    ]);
+    assert_eq!(out, "hello world");
+}
