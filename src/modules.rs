@@ -48,7 +48,22 @@ fn load_and_parse(path: &Path, source_map: &mut SourceMap) -> Result<(Program, u
 }
 
 /// Load all .pluto files in a directory and merge into one Program.
+/// If `mod.pluto` exists, only that file is loaded; otherwise all .pluto files are auto-merged.
 fn load_directory_module(dir: &Path, source_map: &mut SourceMap) -> Result<Program, CompileError> {
+    let mod_file = dir.join("mod.pluto");
+    if mod_file.is_file() {
+        // mod.pluto exists — load only that file
+        let (program, _) = load_and_parse(&mod_file, source_map)?;
+        if !program.imports.is_empty() {
+            return Err(CompileError::codegen(format!(
+                "transitive imports not supported: '{}' contains imports",
+                mod_file.display()
+            )));
+        }
+        return Ok(program);
+    }
+
+    // No mod.pluto — auto-merge all .pluto files
     let mut merged = Program {
         imports: Vec::new(),
         functions: Vec::new(),
@@ -88,12 +103,62 @@ fn load_directory_module(dir: &Path, source_map: &mut SourceMap) -> Result<Progr
     Ok(merged)
 }
 
+/// Resolve a multi-segment import path to a module.
+/// Walks the directory hierarchy: for each intermediate segment, must find a directory.
+/// For the final segment: try `<name>.pluto` first, then `<name>/` directory.
+fn resolve_module_path(
+    segments: &[Spanned<String>],
+    base_dir: &Path,
+    source_map: &mut SourceMap,
+    import_span: Span,
+) -> Result<Program, CompileError> {
+    let mut current_dir = base_dir.to_path_buf();
+
+    // Walk intermediate segments (all but the last)
+    for segment in &segments[..segments.len() - 1] {
+        let next_dir = current_dir.join(&segment.node);
+        if !next_dir.is_dir() {
+            return Err(CompileError::syntax(
+                format!("cannot find module path: '{}' is not a directory", next_dir.display()),
+                import_span,
+            ));
+        }
+        current_dir = next_dir;
+    }
+
+    // Resolve final segment
+    let final_seg = &segments[segments.len() - 1];
+    let file_path = current_dir.join(format!("{}.pluto", final_seg.node));
+    let dir_path = current_dir.join(&final_seg.node);
+
+    if file_path.is_file() {
+        let (module_prog, _) = load_and_parse(&file_path, source_map)?;
+        if !module_prog.imports.is_empty() {
+            return Err(CompileError::codegen(format!(
+                "transitive imports not supported: '{}' contains imports",
+                file_path.display()
+            )));
+        }
+        Ok(module_prog)
+    } else if dir_path.is_dir() {
+        load_directory_module(&dir_path, source_map)
+    } else {
+        let full_path: Vec<&str> = segments.iter().map(|s| s.node.as_str()).collect();
+        Err(CompileError::syntax(
+            format!("cannot find module '{}': no directory or file found", full_path.join(".")),
+            final_seg.span,
+        ))
+    }
+}
+
 /// Resolve all modules referenced by the entry file.
 ///
 /// 1. Parse entry file to discover imports
 /// 2. Load sibling .pluto files (excluding imported single-file modules) and merge into root
 /// 3. For each import, find `<name>/` directory or `<name>.pluto` and load as a separate module
-pub fn resolve_modules(entry_file: &Path) -> Result<ModuleGraph, CompileError> {
+///
+/// `stdlib_root`: if set, `import std.x` resolves `x` from this path instead of entry_dir.
+pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<ModuleGraph, CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e| {
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display()))
     })?;
@@ -160,16 +225,13 @@ pub fn resolve_modules(entry_file: &Path) -> Result<ModuleGraph, CompileError> {
             continue; // skip duplicate imports
         }
 
-        // For single-segment imports, resolve from entry_dir as before
-        // For multi-segment imports, navigate directory hierarchy
         let first_segment = &import.node.path[0].node;
 
-        // Try directory first: <entry_dir>/<name>/
-        let dir_path = entry_dir.join(first_segment);
-        let file_path_candidate = entry_dir.join(format!("{}.pluto", first_segment));
-
         if import.node.path.len() == 1 {
-            // Single-segment import (e.g., `import math`)
+            // Single-segment import (e.g., `import math`) — resolve from entry_dir
+            let dir_path = entry_dir.join(first_segment);
+            let file_path_candidate = entry_dir.join(format!("{}.pluto", first_segment));
+
             if dir_path.is_dir() {
                 let module_prog = load_directory_module(&dir_path, &mut source_map)?;
                 imports.push((binding_name, module_prog));
@@ -188,13 +250,38 @@ pub fn resolve_modules(entry_file: &Path) -> Result<ModuleGraph, CompileError> {
                     import.node.path[0].span,
                 ));
             }
+        } else if first_segment == "std" {
+            // Stdlib import: `import std.io` → resolve remaining path from stdlib_root
+            let fallback_stdlib = entry_dir.join("stdlib");
+            let effective_stdlib: Option<&Path> = if let Some(root) = stdlib_root {
+                Some(root)
+            } else if fallback_stdlib.is_dir() {
+                Some(&fallback_stdlib)
+            } else {
+                None
+            };
+
+            match effective_stdlib {
+                Some(root) => {
+                    // Skip the "std" prefix, resolve remaining segments from stdlib root
+                    let remaining = &import.node.path[1..];
+                    let module_prog = resolve_module_path(remaining, root, &mut source_map, import.span)?;
+                    imports.push((binding_name, module_prog));
+                }
+                None => {
+                    return Err(CompileError::syntax(
+                        format!(
+                            "cannot import '{}': no stdlib root found (tried --stdlib flag, PLUTO_STDLIB env var, and ./stdlib relative to entry file)",
+                            full_path
+                        ),
+                        import.span,
+                    ));
+                }
+            }
         } else {
-            // Multi-segment import — resolve in Increment 2
-            // For now, error on multi-segment imports
-            return Err(CompileError::syntax(
-                format!("hierarchical imports not yet supported: '{}'", full_path),
-                import.span,
-            ));
+            // Multi-segment import from project (e.g., `import utils.math`) — resolve from entry_dir
+            let module_prog = resolve_module_path(&import.node.path, entry_dir, &mut source_map, import.span)?;
+            imports.push((binding_name, module_prog));
         }
     }
 
@@ -278,10 +365,13 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
             }
         }
 
-        // Also add non-pub classes/traits/functions that are needed internally
-        // (for now, import ALL items from the module but mark non-pub ones)
-        // Actually, for v1, we only expose pub items. Internal items stay internal.
-        // If a pub function references a non-pub type, that would be a user error.
+        // Add ALL extern fns from imported modules with prefixed names
+        // (both pub and private — module-internal code may call them)
+        for ext_fn in &module_prog.extern_fns {
+            let mut prefixed = ext_fn.clone();
+            prefixed.node.name.node = format!("{}.{}", module_name, ext_fn.node.name.node);
+            graph.root.extern_fns.push(prefixed);
+        }
     }
 
     // Rewrite qualified references in root program's AST
@@ -395,8 +485,10 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
 fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Program) {
     match expr {
         Expr::Call { name, args } => {
-            // Prefix calls to module-internal functions
-            if module_prog.functions.iter().any(|f| f.node.name.node == name.node) {
+            // Prefix calls to module-internal functions and extern fns
+            if module_prog.functions.iter().any(|f| f.node.name.node == name.node)
+                || module_prog.extern_fns.iter().any(|f| f.node.name.node == name.node)
+            {
                 name.node = format!("{}.{}", module_name, name.node);
             }
             for arg in args {
