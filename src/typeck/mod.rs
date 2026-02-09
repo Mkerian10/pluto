@@ -175,10 +175,32 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
                 fields.push((f.name.node.clone(), ty, f.is_injected));
             }
             let method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
+            // Build method signatures with TypeParam types
+            let mut method_sigs = HashMap::new();
+            for m in &c.methods {
+                let mut param_types = Vec::new();
+                for p in &m.node.params {
+                    if p.name.node == "self" {
+                        // self will be substituted to the concrete class type during instantiation
+                        param_types.push(PlutoType::Class(c.name.node.clone()));
+                    } else {
+                        param_types.push(resolve_type_with_params(&p.ty, &mut env, &tp_names)?);
+                    }
+                }
+                let return_type = match &m.node.return_type {
+                    Some(t) => resolve_type_with_params(t, &mut env, &tp_names)?,
+                    None => PlutoType::Void,
+                };
+                method_sigs.insert(m.node.name.node.clone(), env::FuncSig {
+                    params: param_types,
+                    return_type,
+                });
+            }
             env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
                 type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
                 fields,
                 methods: method_names,
+                method_sigs,
                 impl_traits: Vec::new(),
             });
             continue;
@@ -902,6 +924,25 @@ fn ensure_generic_class_instantiated(
         methods: gen_info.methods.clone(),
         impl_traits: gen_info.impl_traits.clone(),
     });
+    // Also register concrete method signatures
+    // Need to substitute self type as well (it references the base class name)
+    for (method_name, sig) in &gen_info.method_sigs {
+        let concrete_params: Vec<PlutoType> = sig.params.iter()
+            .map(|p| {
+                if *p == PlutoType::Class(base_name.to_string()) {
+                    PlutoType::Class(mangled.clone())
+                } else {
+                    substitute_pluto_type(p, &bindings)
+                }
+            })
+            .collect();
+        let concrete_ret = substitute_pluto_type(&sig.return_type, &bindings);
+        let func_name = format!("{}_{}", mangled, method_name);
+        env.functions.insert(func_name, env::FuncSig {
+            params: concrete_params,
+            return_type: concrete_ret,
+        });
+    }
     env.instantiations.insert(Instantiation {
         kind: InstKind::Class(base_name.to_string()),
         type_args: type_args.to_vec(),
@@ -939,6 +980,11 @@ fn ensure_generic_enum_instantiated(
         type_args: type_args.to_vec(),
     });
     mangled
+}
+
+/// Resolve a TypeExpr to a PlutoType — thin wrapper for use by monomorphize.
+pub(crate) fn resolve_type_for_monomorphize(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<PlutoType, CompileError> {
+    resolve_type(ty, env)
 }
 
 pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {

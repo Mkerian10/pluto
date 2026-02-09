@@ -42,6 +42,7 @@ pub struct GenericClassInfo {
     pub type_params: Vec<String>,
     pub fields: Vec<(String, PlutoType, bool)>,  // may contain TypeParam
     pub methods: Vec<String>,
+    pub method_sigs: HashMap<String, FuncSig>,  // method_name → sig (may contain TypeParam)
     pub impl_traits: Vec<String>,
 }
 
