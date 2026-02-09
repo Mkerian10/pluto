@@ -403,13 +403,7 @@ fn build_signature(func: &Function, module: &impl Module, env: &TypeEnv) -> cran
 
     for param in &func.params {
         let ty = resolve_param_pluto_type(param, env);
-        if let PlutoType::Trait(_) = &ty {
-            // Fat pointer: data_ptr + vtable_ptr
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-        } else {
-            sig.params.push(AbiParam::new(pluto_to_cranelift(&ty)));
-        }
+        sig.params.push(AbiParam::new(pluto_to_cranelift(&ty)));
     }
 
     let ret_type = if func.name.node == "main" {
@@ -435,12 +429,7 @@ fn build_method_signature(func: &Function, module: &impl Module, class_name: &st
             sig.params.push(AbiParam::new(types::I64));
         } else {
             let ty = resolve_param_pluto_type(param, env);
-            if let PlutoType::Trait(_) = &ty {
-                sig.params.push(AbiParam::new(types::I64));
-                sig.params.push(AbiParam::new(types::I64));
-            } else {
-                sig.params.push(AbiParam::new(pluto_to_cranelift(&ty)));
-            }
+            sig.params.push(AbiParam::new(pluto_to_cranelift(&ty)));
         }
     }
 

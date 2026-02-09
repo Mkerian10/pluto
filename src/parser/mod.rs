@@ -419,6 +419,7 @@ impl<'a> Parser<'a> {
             Token::Return => self.parse_return_stmt(),
             Token::If => self.parse_if_stmt(),
             Token::While => self.parse_while_stmt(),
+            Token::For => self.parse_for_stmt(),
             _ => {
                 // Parse a full expression, then check for `=` to determine
                 // if this is an assignment, field assignment, or expression statement.
@@ -548,6 +549,24 @@ impl<'a> Parser<'a> {
 
         Ok(Spanned::new(
             Stmt::While { condition, body },
+            Span::new(start, end),
+        ))
+    }
+
+    fn parse_for_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let for_tok = self.expect(&Token::For)?;
+        let start = for_tok.span.start;
+        let var = self.expect_ident()?;
+        self.expect(&Token::In)?;
+        let old_restrict = self.restrict_struct_lit;
+        self.restrict_struct_lit = true;
+        let iterable = self.parse_expr(0)?;
+        self.restrict_struct_lit = old_restrict;
+        let body = self.parse_block()?;
+        let end = body.span.end;
+
+        Ok(Spanned::new(
+            Stmt::For { var, iterable, body },
             Span::new(start, end),
         ))
     }
@@ -1106,6 +1125,18 @@ mod tests {
                 assert_eq!(name, "Point");
             }
             _ => panic!("expected qualified type"),
+        }
+    }
+
+    #[test]
+    fn parse_for_loop() {
+        let prog = parse("fn main() {\n    for x in arr {\n        print(x)\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::For { var, .. } => {
+                assert_eq!(var.node, "x");
+            }
+            _ => panic!("expected for statement"),
         }
     }
 
