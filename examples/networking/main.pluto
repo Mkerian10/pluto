@@ -1,0 +1,40 @@
+import std.net
+import std.socket
+
+// A tiny HTTP server you can hit with curl or a browser.
+//
+// Run:
+//   cargo run --release -- run --stdlib stdlib examples/networking/main.pluto
+//
+// Then visit the URL printed to the console, or:
+//   curl http://127.0.0.1:<port>
+
+fn handle(conn: net.TcpConnection) {
+    let request = conn.read(4096)
+    print("--- request ---")
+    print(request)
+
+    let body = "<html><body><h1>Hello from Pluto!</h1><p>You just got served by a Pluto TCP server.</p></body></html>"
+    let content_length = "{body.len()}"
+    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n{body}"
+    conn.write(response)
+    conn.close()
+}
+
+fn main() {
+    let server = net.listen("127.0.0.1", 8080)
+    let port = server.port()
+    print("listening on http://127.0.0.1:{port}")
+    print("press Ctrl+C to stop")
+
+    // Serve 3 requests then exit (no infinite loops in v1)
+    let i = 0
+    while i < 3 {
+        let conn = server.accept()
+        handle(conn)
+        i = i + 1
+    }
+
+    server.close()
+    print("server stopped")
+}
