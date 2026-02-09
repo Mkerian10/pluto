@@ -25,6 +25,11 @@ pub struct EnumInfo {
     pub variants: Vec<(String, Vec<(String, PlutoType)>)>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ErrorInfo {
+    pub fields: Vec<(String, PlutoType)>,
+}
+
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, PlutoType>>,
     pub functions: HashMap<String, FuncSig>,
@@ -32,6 +37,7 @@ pub struct TypeEnv {
     pub classes: HashMap<String, ClassInfo>,
     pub traits: HashMap<String, TraitInfo>,
     pub enums: HashMap<String, EnumInfo>,
+    pub errors: HashMap<String, ErrorInfo>,
     pub extern_fns: HashSet<String>,
 }
 
@@ -46,6 +52,7 @@ impl TypeEnv {
             classes: HashMap::new(),
             traits: HashMap::new(),
             enums: HashMap::new(),
+            errors: HashMap::new(),
             extern_fns: HashSet::new(),
         }
     }

@@ -71,6 +71,7 @@ fn load_directory_module(dir: &Path, source_map: &mut SourceMap) -> Result<Progr
         classes: Vec::new(),
         traits: Vec::new(),
         enums: Vec::new(),
+        errors: Vec::new(),
     };
 
     let entries = std::fs::read_dir(dir).map_err(|e| {
@@ -91,6 +92,7 @@ fn load_directory_module(dir: &Path, source_map: &mut SourceMap) -> Result<Progr
         merged.classes.extend(program.classes);
         merged.traits.extend(program.traits);
         merged.enums.extend(program.enums);
+        merged.errors.extend(program.errors);
         // Inner imports not supported in v1
         if !program.imports.is_empty() {
             return Err(CompileError::codegen(format!(
@@ -212,6 +214,7 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
         root.classes.extend(program.classes);
         root.traits.extend(program.traits);
         root.enums.extend(program.enums);
+        root.errors.extend(program.errors);
     }
 
     // Resolve each import
@@ -365,6 +368,18 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
             }
         }
 
+        // Add pub errors with prefixed names
+        for error_decl in &module_prog.errors {
+            if error_decl.node.is_pub {
+                let mut prefixed_error = error_decl.clone();
+                prefixed_error.node.name.node = format!("{}.{}", module_name, error_decl.node.name.node);
+                for field in &mut prefixed_error.node.fields {
+                    prefix_type_expr(&mut field.ty.node, module_name, module_prog);
+                }
+                graph.root.errors.push(prefixed_error);
+            }
+        }
+
         // Add ALL extern fns from imported modules WITHOUT prefixing
         // (extern fns refer to actual C symbols — their names must stay as-is)
         for ext_fn in &module_prog.extern_fns {
@@ -391,6 +406,7 @@ fn is_module_type(name: &str, module_prog: &Program) -> bool {
     module_prog.classes.iter().any(|c| c.node.name.node == name)
         || module_prog.traits.iter().any(|t| t.node.name.node == name)
         || module_prog.enums.iter().any(|e| e.node.name.node == name)
+        || module_prog.errors.iter().any(|e| e.node.name.node == name)
 }
 
 /// Prefix type expressions that reference module-internal types.
@@ -479,6 +495,14 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
                 rewrite_block_for_module(&mut arm.body.node, module_name, module_prog);
             }
         }
+        Stmt::Raise { error_name, fields } => {
+            if module_prog.errors.iter().any(|e| e.node.name.node == error_name.node) {
+                error_name.node = format!("{}.{}", module_name, error_name.node);
+            }
+            for (_, val) in fields {
+                rewrite_expr_for_module(&mut val.node, module_name, module_prog);
+            }
+        }
         Stmt::Expr(expr) => {
             rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
         }
@@ -546,6 +570,20 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
             for part in parts {
                 if let StringInterpPart::Expr(e) = part {
                     rewrite_expr_for_module(&mut e.node, module_name, module_prog);
+                }
+            }
+        }
+        Expr::Propagate { expr } => {
+            rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
+        }
+        Expr::Catch { expr, handler } => {
+            rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
+            match handler {
+                CatchHandler::Wildcard { body, .. } => {
+                    rewrite_expr_for_module(&mut body.node, module_name, module_prog);
+                }
+                CatchHandler::Shorthand(fallback) => {
+                    rewrite_expr_for_module(&mut fallback.node, module_name, module_prog);
                 }
             }
         }
@@ -650,6 +688,11 @@ fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
                 rewrite_block(&mut arm.body.node, import_names);
             }
         }
+        Stmt::Raise { fields, .. } => {
+            for (_, val) in fields {
+                rewrite_expr(&mut val.node, val.span, import_names);
+            }
+        }
         Stmt::Expr(expr) => {
             rewrite_expr(&mut expr.node, expr.span, import_names);
         }
@@ -729,6 +772,20 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
             for part in parts {
                 if let StringInterpPart::Expr(e) = part {
                     rewrite_expr(&mut e.node, e.span, import_names);
+                }
+            }
+        }
+        Expr::Propagate { expr } => {
+            rewrite_expr(&mut expr.node, expr.span, import_names);
+        }
+        Expr::Catch { expr, handler } => {
+            rewrite_expr(&mut expr.node, expr.span, import_names);
+            match handler {
+                CatchHandler::Wildcard { body, .. } => {
+                    rewrite_expr(&mut body.node, body.span, import_names);
+                }
+                CatchHandler::Shorthand(fallback) => {
+                    rewrite_expr(&mut fallback.node, fallback.span, import_names);
                 }
             }
         }
