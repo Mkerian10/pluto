@@ -636,3 +636,61 @@ fn trait_method_with_params() {
     );
     assert_eq!(out, "123\n");
 }
+
+// Trait handle tests (heap-allocated trait values)
+
+#[test]
+fn trait_typed_local() {
+    let out = compile_and_run_stdout(
+        "trait HasVal {\n    fn get(self) int\n}\n\nclass X impl HasVal {\n    val: int\n\n    fn get(self) int {\n        return self.val\n    }\n}\n\nfn main() {\n    let x: HasVal = X { val: 42 }\n    print(x.get())\n}",
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn trait_return_value() {
+    let out = compile_and_run_stdout(
+        "trait HasVal {\n    fn get(self) int\n}\n\nclass X impl HasVal {\n    val: int\n\n    fn get(self) int {\n        return self.val\n    }\n}\n\nfn make() HasVal {\n    return X { val: 77 }\n}\n\nfn main() {\n    print(make().get())\n}",
+    );
+    assert_eq!(out, "77\n");
+}
+
+#[test]
+fn trait_forward() {
+    let out = compile_and_run_stdout(
+        "trait HasVal {\n    fn get(self) int\n}\n\nclass X impl HasVal {\n    val: int\n\n    fn get(self) int {\n        return self.val\n    }\n}\n\nfn show(v: HasVal) {\n    print(v.get())\n}\n\nfn forward(v: HasVal) {\n    show(v)\n}\n\nfn main() {\n    let x = X { val: 55 }\n    forward(x)\n}",
+    );
+    assert_eq!(out, "55\n");
+}
+
+#[test]
+fn trait_method_on_call_result() {
+    let out = compile_and_run_stdout(
+        "trait HasVal {\n    fn get(self) int\n}\n\nclass X impl HasVal {\n    val: int\n\n    fn get(self) int {\n        return self.val\n    }\n}\n\nfn make_val() HasVal {\n    return X { val: 88 }\n}\n\nfn main() {\n    print(make_val().get())\n}",
+    );
+    assert_eq!(out, "88\n");
+}
+
+#[test]
+fn trait_local_reassignment() {
+    let out = compile_and_run_stdout(
+        "trait HasVal {\n    fn get(self) int\n}\n\nclass A impl HasVal {\n    x: int\n\n    fn get(self) int {\n        return self.x\n    }\n}\n\nclass B impl HasVal {\n    y: int\n\n    fn get(self) int {\n        return self.y * 2\n    }\n}\n\nfn main() {\n    let v: HasVal = A { x: 10 }\n    print(v.get())\n    v = B { y: 20 }\n    print(v.get())\n}",
+    );
+    assert_eq!(out, "10\n40\n");
+}
+
+#[test]
+fn trait_polymorphic_dispatch() {
+    let out = compile_and_run_stdout(
+        "trait Animal {\n    fn speak(self) int\n}\n\nclass Dog impl Animal {\n    volume: int\n\n    fn speak(self) int {\n        return self.volume\n    }\n}\n\nclass Cat impl Animal {\n    volume: int\n\n    fn speak(self) int {\n        return self.volume * 3\n    }\n}\n\nfn make_sound(a: Animal) {\n    print(a.speak())\n}\n\nfn main() {\n    let d = Dog { volume: 10 }\n    let c = Cat { volume: 5 }\n    make_sound(d)\n    make_sound(c)\n}",
+    );
+    assert_eq!(out, "10\n15\n");
+}
+
+#[test]
+fn trait_default_method_via_handle() {
+    let out = compile_and_run_stdout(
+        "trait Greeter {\n    fn greet(self) int {\n        return 0\n    }\n}\n\nclass X impl Greeter {\n    val: int\n}\n\nfn show(g: Greeter) {\n    print(g.greet())\n}\n\nfn main() {\n    let x = X { val: 5 }\n    show(x)\n}",
+    );
+    assert_eq!(out, "0\n");
+}
