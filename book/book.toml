@@ -1,0 +1,10 @@
+[book]
+title = "The Pluto Programming Language"
+authors = ["Matthew Kerian"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/Mkerian10/pluto"
