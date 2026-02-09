@@ -245,3 +245,19 @@ fn cli_run_subcommand() {
     assert!(output.status.success(), "CLI run failed: {}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "99\n");
 }
+
+#[test]
+fn time_ns_returns_positive() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let t = time_ns()\n    if t > 0 {\n        print(\"ok\")\n    }\n}",
+    );
+    assert_eq!(out, "ok\n");
+}
+
+#[test]
+fn time_ns_elapsed() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let start = time_ns()\n    let i = 0\n    while i < 1000000 {\n        i = i + 1\n    }\n    let elapsed = time_ns() - start\n    if elapsed > 0 {\n        print(\"ok\")\n    }\n}",
+    );
+    assert_eq!(out, "ok\n");
+}

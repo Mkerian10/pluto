@@ -1,0 +1,15 @@
+fn fib(n: int) int {
+    if n <= 1 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main() {
+    let start = time_ns()
+    let result = fib(35)
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("fib(35) = {result}")
+    print("elapsed: {ms} ms")
+}

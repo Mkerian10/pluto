@@ -43,6 +43,9 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_get_error", &[], &[types::I64])?;
         reg.declare(module, "__pluto_clear_error", &[], &[])?;
 
+        // Time
+        reg.declare(module, "__pluto_time_ns", &[], &[types::I64])?;
+
         // Array functions
         reg.declare(module, "__pluto_array_new", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_array_push", &[types::I64, types::I64], &[])?;
