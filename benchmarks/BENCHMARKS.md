@@ -101,8 +101,8 @@ math only, no objects, no strings, no I/O.
 | **FFT** | ✅ | Fast Fourier Transform on 2^16 complex numbers (100 iterations). Bit-reversal + butterfly operations. Uses sin/cos. |
 | **SOR** | ✅ | Jacobi successive over-relaxation on 500×500 grid (100 iterations). Stencil access pattern (1D array simulating 2D). |
 | **monte-carlo** | ✅ | Estimate pi via random sampling, 100M points. LCG PRNG + float comparison. |
-| **sparse-matrix-multiply** | 🟢 | Sparse matrix (CSR format) × dense vector. Indirect array indexing. |
-| **LU-decomposition** | 🟢 | LU factorization with partial pivoting, 500×500 matrix. Row swapping + float arithmetic. |
+| **sparse-matrix-multiply** | ✅ | Sparse matrix (CSR format, 5000×5000, 50K nonzeros) × dense vector, 1000 iterations. Indirect array indexing. |
+| **LU-decomposition** | ✅ | LU factorization with partial pivoting, 500×500 matrix, 10 iterations. Row swapping + float arithmetic. |
 
 ### Custom Micro-Benchmarks
 
@@ -130,11 +130,13 @@ comparison.
 
 | Status | Count | Description |
 |--------|-------|-------------|
-| ✅ Implemented | 24 | In the suite today |
-| 🟢 Ready | 2 | Can implement with current Pluto features |
+| ✅ Implemented | 26 | In the suite today |
+| 🟢 Ready | 0 | Can implement with current Pluto features |
 | 🟡 Stretch | 3 | Needs workarounds (string indexing, complex trait mapping) |
 | 🔴 Blocked | 7 | Needs language features not yet available |
 | **Total** | **36** | |
+
+All benchmarks implementable with current language features are now complete.
 
 **From published suites:** 26 (CLBG: 10, AWFY: 14, SciMark: 5) — note: n-body and mandelbrot appear in both CLBG and AWFY but are counted once
 **Custom/Pluto-specific:** 10
@@ -160,9 +162,6 @@ they're valid **relative comparisons on the same machine in the same run**.
 ---
 
 ## Implementation Priorities
-
-**Next up (need 2D array simulation, more complex setup):**
-sparse-matrix-multiply, LU-decomposition
 
 **Needs language work first:**
 richards (complex trait dispatch), CD (kd-tree OOP), json (string indexing),
