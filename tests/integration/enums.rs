@@ -43,7 +43,7 @@ fn enum_multiple_data_fields() {
 #[test]
 fn enum_return_from_function() {
     let out = compile_and_run_stdout(
-        "enum Outcome {\n    Ok { value: int }\n    Err { code: int }\n}\n\nfn compute(x: int) Outcome {\n    if x > 0 {\n        return Outcome.Ok { value: x * 2 }\n    }\n    return Outcome.Err { code: -1 }\n}\n\nfn main() {\n    let r = compute(5)\n    match r {\n        Outcome.Ok { value } {\n            print(value)\n        }\n        Outcome.Err { code } {\n            print(code)\n        }\n    }\n}",
+        "enum Result {\n    Ok { value: int }\n    Err { code: int }\n}\n\nfn compute(x: int) Result {\n    if x > 0 {\n        return Result.Ok { value: x * 2 }\n    }\n    return Result.Err { code: -1 }\n}\n\nfn main() {\n    let r = compute(5)\n    match r {\n        Result.Ok { value } {\n            print(value)\n        }\n        Result.Err { code } {\n            print(code)\n        }\n    }\n}",
     );
     assert_eq!(out, "10\n");
 }
