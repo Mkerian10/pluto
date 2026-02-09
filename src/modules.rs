@@ -71,6 +71,7 @@ fn load_directory_module(dir: &Path, source_map: &mut SourceMap) -> Result<Progr
         classes: Vec::new(),
         traits: Vec::new(),
         enums: Vec::new(),
+        app: None,
     };
 
     let entries = std::fs::read_dir(dir).map_err(|e| {
@@ -91,6 +92,15 @@ fn load_directory_module(dir: &Path, source_map: &mut SourceMap) -> Result<Progr
         merged.classes.extend(program.classes);
         merged.traits.extend(program.traits);
         merged.enums.extend(program.enums);
+        if let Some(app_decl) = program.app {
+            if merged.app.is_some() {
+                return Err(CompileError::codegen(format!(
+                    "multiple app declarations in module directory '{}'",
+                    dir.display()
+                )));
+            }
+            merged.app = Some(app_decl);
+        }
         // Inner imports not supported in v1
         if !program.imports.is_empty() {
             return Err(CompileError::codegen(format!(
@@ -212,6 +222,14 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
         root.classes.extend(program.classes);
         root.traits.extend(program.traits);
         root.enums.extend(program.enums);
+        if let Some(app_decl) = program.app {
+            if root.app.is_some() {
+                return Err(CompileError::codegen(
+                    "multiple app declarations in project".to_string(),
+                ));
+            }
+            root.app = Some(app_decl);
+        }
     }
 
     // Resolve each import
@@ -295,6 +313,16 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
 /// - Rewrite qualified references in the root program's AST
 pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), CompileError> {
     let import_names: HashSet<String> = graph.imports.iter().map(|(n, _)| n.clone()).collect();
+
+    // Reject app declarations in imported modules
+    for (module_name, module_prog) in &graph.imports {
+        if module_prog.app.is_some() {
+            return Err(CompileError::codegen(format!(
+                "app declarations are not allowed in imported modules (found in '{}')",
+                module_name
+            )));
+        }
+    }
 
     // Add prefixed items from imports
     for (module_name, module_prog) in &graph.imports {
@@ -570,6 +598,11 @@ fn rewrite_program(program: &mut Program, import_names: &HashSet<String>) {
             if let Some(body) = &mut method.body {
                 rewrite_block(&mut body.node, import_names);
             }
+        }
+    }
+    if let Some(app) = &mut program.app {
+        for method in &mut app.node.methods {
+            rewrite_function_body(&mut method.node, import_names);
         }
     }
 }
