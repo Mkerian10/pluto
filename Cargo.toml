@@ -99,3 +99,11 @@ path = "tests/integration/testing.rs"
 [[test]]
 name = "stdlib_tests"
 path = "tests/integration/stdlib_tests.rs"
+
+[[test]]
+name = "json_tests"
+path = "tests/integration/json_tests.rs"
+
+[[test]]
+name = "http_tests"
+path = "tests/integration/http_tests.rs"

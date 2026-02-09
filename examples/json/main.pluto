@@ -1,0 +1,45 @@
+import std.json
+
+fn main() {
+    // Parse a JSON string
+    let data = json.parse("{{\"name\": \"Alice\", \"age\": 30, \"scores\": [95, 87, 92]}}")!
+    print("Parsed JSON:")
+    print("  Name: " + data.get("name").get_string())
+    let age = data.get("age").get_int()
+    print("  Age: {age}")
+
+    let scores = data.get("scores")
+    let s0 = scores.at(0).get_int()
+    let s1 = scores.at(1).get_int()
+    let s2 = scores.at(2).get_int()
+    print("  Scores: {s0}, {s1}, {s2}")
+
+    // Build JSON programmatically
+    let response = json.object()
+    response.set("status", json.string("ok"))
+    response.set("count", json.int(3))
+
+    let items = json.array()
+    items.push(json.string("apple"))
+    items.push(json.string("banana"))
+    items.push(json.string("cherry"))
+    response.set("items", items)
+
+    response.set("metadata", json.null())
+
+    print("")
+    print("Built JSON:")
+    print(response.to_string())
+
+    // Round-trip: stringify then parse back
+    let s = response.to_string()
+    let parsed = json.parse(s)!
+    print("")
+    print("Round-trip verified:")
+    print("  status: " + parsed.get("status").get_string())
+    let count = parsed.get("count").get_int()
+    print("  count: {count}")
+    print("  first item: " + parsed.get("items").at(0).get_string())
+    let is_null = parsed.get("metadata").is_null()
+    print("  metadata is null: {is_null}")
+}
