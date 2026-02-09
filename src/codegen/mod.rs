@@ -73,6 +73,14 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
     let alloc_id = module.declare_function("__pluto_alloc", Linkage::Import, &sig_alloc)
         .map_err(|e| CompileError::codegen(format!("declare alloc error: {e}")))?;
 
+    // Declare __pluto_trait_wrap(I64, I64) -> I64
+    let mut sig_trait_wrap = module.make_signature();
+    sig_trait_wrap.params.push(AbiParam::new(types::I64));
+    sig_trait_wrap.params.push(AbiParam::new(types::I64));
+    sig_trait_wrap.returns.push(AbiParam::new(types::I64));
+    let trait_wrap_id = module.declare_function("__pluto_trait_wrap", Linkage::Import, &sig_trait_wrap)
+        .map_err(|e| CompileError::codegen(format!("declare trait_wrap error: {e}")))?;
+
     // Declare string runtime functions
     let mut string_ids = HashMap::new();
 
@@ -268,7 +276,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_function(f, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, None, &vtable_ids)?;
+            lower_function(f, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, None, &vtable_ids, trait_wrap_id)?;
         }
 
         module
@@ -291,7 +299,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(&c.name.node), &vtable_ids)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(&c.name.node), &vtable_ids, trait_wrap_id)?;
             }
 
             module
@@ -341,7 +349,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(class_name), &vtable_ids)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(class_name), &vtable_ids, trait_wrap_id)?;
                             }
 
                             module
@@ -403,13 +411,7 @@ fn build_signature(func: &Function, module: &impl Module, env: &TypeEnv) -> cran
 
     for param in &func.params {
         let ty = resolve_param_pluto_type(param, env);
-        if let PlutoType::Trait(_) = &ty {
-            // Fat pointer: data_ptr + vtable_ptr
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-        } else {
-            sig.params.push(AbiParam::new(pluto_to_cranelift(&ty)));
-        }
+        sig.params.push(AbiParam::new(pluto_to_cranelift(&ty)));
     }
 
     let ret_type = if func.name.node == "main" {
@@ -435,12 +437,7 @@ fn build_method_signature(func: &Function, module: &impl Module, class_name: &st
             sig.params.push(AbiParam::new(types::I64));
         } else {
             let ty = resolve_param_pluto_type(param, env);
-            if let PlutoType::Trait(_) = &ty {
-                sig.params.push(AbiParam::new(types::I64));
-                sig.params.push(AbiParam::new(types::I64));
-            } else {
-                sig.params.push(AbiParam::new(pluto_to_cranelift(&ty)));
-            }
+            sig.params.push(AbiParam::new(pluto_to_cranelift(&ty)));
         }
     }
 
