@@ -66,6 +66,29 @@ pub(crate) fn infer_expr(
                     }
                     Ok(PlutoType::Bool)
                 }
+                UnaryOp::BitNot => {
+                    if t != PlutoType::Int {
+                        return Err(CompileError::type_err(
+                            format!("cannot apply '~' to type {t}"),
+                            span,
+                        ));
+                    }
+                    Ok(PlutoType::Int)
+                }
+            }
+        }
+        Expr::Cast { expr, target_type } => {
+            let source = infer_expr(&expr.node, expr.span, env)?;
+            let target = resolve_type(target_type, env)?;
+            match (&source, &target) {
+                (PlutoType::Int, PlutoType::Float)
+                | (PlutoType::Float, PlutoType::Int)
+                | (PlutoType::Int, PlutoType::Bool)
+                | (PlutoType::Bool, PlutoType::Int) => Ok(target),
+                _ => Err(CompileError::type_err(
+                    format!("cannot cast from {source} to {target}"),
+                    span,
+                )),
             }
         }
         Expr::Call { name, args } => infer_call(name, args, span, env),
@@ -74,30 +97,32 @@ pub(crate) fn infer_expr(
         }
         Expr::FieldAccess { object, field } => {
             let obj_type = infer_expr(&object.node, object.span, env)?;
-            let class_name = match &obj_type {
-                PlutoType::Class(name) => name.clone(),
-                _ => {
-                    return Err(CompileError::type_err(
-                        format!("field access on non-class type {obj_type}"),
-                        object.span,
-                    ));
+            match &obj_type {
+                PlutoType::Class(class_name) => {
+                    let class_info = env.classes.get(class_name).ok_or_else(|| {
+                        CompileError::type_err(
+                            format!("unknown class '{class_name}'"),
+                            object.span,
+                        )
+                    })?;
+                    class_info.fields.iter()
+                        .find(|(n, _, _)| *n == field.node)
+                        .map(|(_, t, _)| t.clone())
+                        .ok_or_else(|| {
+                            CompileError::type_err(
+                                format!("class '{class_name}' has no field '{}'", field.node),
+                                field.span,
+                            )
+                        })
                 }
-            };
-            let class_info = env.classes.get(&class_name).ok_or_else(|| {
-                CompileError::type_err(
-                    format!("unknown class '{class_name}'"),
+                PlutoType::Error if field.node == "message" && env.errors.contains_key("MathError") => {
+                    Ok(PlutoType::String)
+                }
+                _ => Err(CompileError::type_err(
+                    format!("field access on non-class type {obj_type}"),
                     object.span,
-                )
-            })?;
-            class_info.fields.iter()
-                .find(|(n, _, _)| *n == field.node)
-                .map(|(_, t, _)| t.clone())
-                .ok_or_else(|| {
-                    CompileError::type_err(
-                        format!("class '{class_name}' has no field '{}'", field.node),
-                        field.span,
-                    )
-                })
+                )),
+            }
         }
         Expr::ArrayLit { elements } => {
             let first_type = infer_expr(&elements[0].node, elements[0].span, env)?;
@@ -274,6 +299,15 @@ fn infer_binop(
             }
             Ok(PlutoType::Bool)
         }
+        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+            if lt != PlutoType::Int || rt != PlutoType::Int {
+                return Err(CompileError::type_err(
+                    format!("bitwise operators require int operands, found {lt} and {rt}"),
+                    span,
+                ));
+            }
+            Ok(PlutoType::Int)
+        }
     }
 }
 
@@ -313,6 +347,91 @@ fn infer_call(
                     ));
                 }
                 Ok(PlutoType::Int)
+            }
+            "abs" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("abs() expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let t = infer_expr(&args[0].node, args[0].span, env)?;
+                match t {
+                    PlutoType::Int | PlutoType::Float => Ok(t),
+                    _ => Err(CompileError::type_err(
+                        format!("abs() expects int or float, found {t}"),
+                        args[0].span,
+                    )),
+                }
+            }
+            "min" | "max" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 2 arguments, got {}", name.node, args.len()),
+                        span,
+                    ));
+                }
+                let left = infer_expr(&args[0].node, args[0].span, env)?;
+                let right = infer_expr(&args[1].node, args[1].span, env)?;
+                if left != right {
+                    return Err(CompileError::type_err(
+                        format!("{}() requires matching argument types, found {left} and {right}", name.node),
+                        span,
+                    ));
+                }
+                match left {
+                    PlutoType::Int | PlutoType::Float => Ok(left),
+                    _ => Err(CompileError::type_err(
+                        format!("{}() expects int or float arguments, found {left}", name.node),
+                        span,
+                    )),
+                }
+            }
+            "pow" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        format!("pow() expects 2 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let base_ty = infer_expr(&args[0].node, args[0].span, env)?;
+                let exp_ty = infer_expr(&args[1].node, args[1].span, env)?;
+                if base_ty != exp_ty {
+                    return Err(CompileError::type_err(
+                        format!("pow() requires matching argument types, found {base_ty} and {exp_ty}"),
+                        span,
+                    ));
+                }
+                match base_ty {
+                    PlutoType::Int => {
+                        if let Some(current_fn) = &env.current_fn {
+                            env.fallible_builtin_calls
+                                .insert((current_fn.clone(), name.span.start));
+                        }
+                        Ok(PlutoType::Int)
+                    }
+                    PlutoType::Float => Ok(PlutoType::Float),
+                    _ => Err(CompileError::type_err(
+                        format!("pow() expects int,int or float,float, found {base_ty}"),
+                        span,
+                    )),
+                }
+            }
+            "sqrt" | "floor" | "ceil" | "round" | "sin" | "cos" | "tan" | "log" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 1 argument, got {}", name.node, args.len()),
+                        span,
+                    ));
+                }
+                let t = infer_expr(&args[0].node, args[0].span, env)?;
+                if t != PlutoType::Float {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects float, found {t}", name.node),
+                        args[0].span,
+                    ));
+                }
+                Ok(PlutoType::Float)
             }
             _ => Err(CompileError::type_err(
                 format!("unknown builtin '{}'", name.node),
@@ -663,7 +782,12 @@ fn infer_catch(
     let success_type = infer_expr(&expr.node, expr.span, env)?;
     let handler_type = match handler {
         CatchHandler::Wildcard { body, .. } => {
-            infer_expr(&body.node, body.span, env)?
+            let CatchHandler::Wildcard { var, .. } = handler else { unreachable!() };
+            env.push_scope();
+            env.define(var.node.clone(), PlutoType::Error);
+            let t = infer_expr(&body.node, body.span, env)?;
+            env.pop_scope();
+            t
         }
         CatchHandler::Shorthand(fallback) => {
             infer_expr(&fallback.node, fallback.span, env)?

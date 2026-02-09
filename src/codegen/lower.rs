@@ -621,6 +621,22 @@ impl<'a> LowerContext<'a> {
                         let one = self.builder.ins().iconst(types::I8, 1);
                         Ok(self.builder.ins().bxor(val, one))
                     }
+                    UnaryOp::BitNot => Ok(self.builder.ins().bnot(val)),
+                }
+            }
+            Expr::Cast { expr: inner, target_type } => {
+                let val = self.lower_expr(&inner.node)?;
+                let source_type = infer_type_for_expr(&inner.node, self.env, &self.var_types);
+                let target_type = resolve_type_expr_to_pluto(&target_type.node, self.env);
+                match (source_type, target_type) {
+                    (PlutoType::Int, PlutoType::Float) => Ok(self.builder.ins().fcvt_from_sint(types::F64, val)),
+                    (PlutoType::Float, PlutoType::Int) => Ok(self.builder.ins().fcvt_to_sint_sat(types::I64, val)),
+                    (PlutoType::Int, PlutoType::Bool) => {
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        Ok(self.builder.ins().icmp(IntCC::NotEqual, val, zero))
+                    }
+                    (PlutoType::Bool, PlutoType::Int) => Ok(self.builder.ins().uextend(types::I64, val)),
+                    _ => Err(CompileError::codegen("invalid cast in lowered AST".to_string())),
                 }
             }
             Expr::Call { name, args } => self.lower_call(name, args),
@@ -717,6 +733,8 @@ impl<'a> LowerContext<'a> {
                     let offset = (field_idx as i32) * POINTER_SIZE;
                     let cl_type = pluto_to_cranelift(field_type);
                     Ok(self.builder.ins().load(cl_type, MemFlags::new(), ptr, Offset32::new(offset)))
+                } else if obj_type == PlutoType::Error && field.node == "message" {
+                    Ok(self.builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(0)))
                 } else {
                     Err(CompileError::codegen(format!("field access on non-class type {obj_type}")))
                 }
@@ -844,6 +862,11 @@ impl<'a> LowerContext<'a> {
             BinOp::GtEq => self.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r),
             BinOp::And => self.builder.ins().band(l, r),
             BinOp::Or => self.builder.ins().bor(l, r),
+            BinOp::BitAnd => self.builder.ins().band(l, r),
+            BinOp::BitOr => self.builder.ins().bor(l, r),
+            BinOp::BitXor => self.builder.ins().bxor(l, r),
+            BinOp::Shl => self.builder.ins().ishl(l, r),
+            BinOp::Shr => self.builder.ins().sshr(l, r),
         };
         Ok(result)
     }
@@ -858,6 +881,77 @@ impl<'a> LowerContext<'a> {
         }
         if name.node == "time_ns" {
             return Ok(self.call_runtime("__pluto_time_ns", &[]));
+        }
+        if name.node == "abs" {
+            let arg = self.lower_expr(&args[0].node)?;
+            let arg_ty = infer_type_for_expr(&args[0].node, self.env, &self.var_types);
+            return Ok(match arg_ty {
+                PlutoType::Int => self.call_runtime("__pluto_abs_int", &[arg]),
+                PlutoType::Float => self.call_runtime("__pluto_abs_float", &[arg]),
+                _ => return Err(CompileError::codegen("invalid abs() argument type in lowered AST".to_string())),
+            });
+        }
+        if name.node == "min" {
+            let a = self.lower_expr(&args[0].node)?;
+            let b = self.lower_expr(&args[1].node)?;
+            let arg_ty = infer_type_for_expr(&args[0].node, self.env, &self.var_types);
+            return Ok(match arg_ty {
+                PlutoType::Int => self.call_runtime("__pluto_min_int", &[a, b]),
+                PlutoType::Float => self.call_runtime("__pluto_min_float", &[a, b]),
+                _ => return Err(CompileError::codegen("invalid min() argument type in lowered AST".to_string())),
+            });
+        }
+        if name.node == "max" {
+            let a = self.lower_expr(&args[0].node)?;
+            let b = self.lower_expr(&args[1].node)?;
+            let arg_ty = infer_type_for_expr(&args[0].node, self.env, &self.var_types);
+            return Ok(match arg_ty {
+                PlutoType::Int => self.call_runtime("__pluto_max_int", &[a, b]),
+                PlutoType::Float => self.call_runtime("__pluto_max_float", &[a, b]),
+                _ => return Err(CompileError::codegen("invalid max() argument type in lowered AST".to_string())),
+            });
+        }
+        if name.node == "pow" {
+            let base = self.lower_expr(&args[0].node)?;
+            let exp = self.lower_expr(&args[1].node)?;
+            let arg_ty = infer_type_for_expr(&args[0].node, self.env, &self.var_types);
+            return Ok(match arg_ty {
+                PlutoType::Int => self.call_runtime("__pluto_pow_int", &[base, exp]),
+                PlutoType::Float => self.call_runtime("__pluto_pow_float", &[base, exp]),
+                _ => return Err(CompileError::codegen("invalid pow() argument type in lowered AST".to_string())),
+            });
+        }
+        if name.node == "sqrt" {
+            let arg = self.lower_expr(&args[0].node)?;
+            return Ok(self.call_runtime("__pluto_sqrt", &[arg]));
+        }
+        if name.node == "floor" {
+            let arg = self.lower_expr(&args[0].node)?;
+            return Ok(self.call_runtime("__pluto_floor", &[arg]));
+        }
+        if name.node == "ceil" {
+            let arg = self.lower_expr(&args[0].node)?;
+            return Ok(self.call_runtime("__pluto_ceil", &[arg]));
+        }
+        if name.node == "round" {
+            let arg = self.lower_expr(&args[0].node)?;
+            return Ok(self.call_runtime("__pluto_round", &[arg]));
+        }
+        if name.node == "sin" {
+            let arg = self.lower_expr(&args[0].node)?;
+            return Ok(self.call_runtime("__pluto_sin", &[arg]));
+        }
+        if name.node == "cos" {
+            let arg = self.lower_expr(&args[0].node)?;
+            return Ok(self.call_runtime("__pluto_cos", &[arg]));
+        }
+        if name.node == "tan" {
+            let arg = self.lower_expr(&args[0].node)?;
+            return Ok(self.call_runtime("__pluto_tan", &[arg]));
+        }
+        if name.node == "log" {
+            let arg = self.lower_expr(&args[0].node)?;
+            return Ok(self.call_runtime("__pluto_log", &[arg]));
         }
 
         // Check if calling a closure variable
@@ -1567,17 +1661,31 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
         Expr::UnaryOp { op, operand } => {
             match op {
                 UnaryOp::Not => PlutoType::Bool,
+                UnaryOp::BitNot => PlutoType::Int,
                 UnaryOp::Neg => infer_type_for_expr(&operand.node, env, var_types),
             }
         }
-        Expr::Call { name, .. } => {
+        Expr::Cast { target_type, .. } => resolve_type_expr_to_pluto(&target_type.node, env),
+        Expr::Call { name, args } => {
             // Check if calling a closure variable first
             if let Some(PlutoType::Fn(_, ret)) = var_types.get(&name.node) {
                 return *ret.clone();
             }
             // Check builtins
+            if name.node == "print" {
+                return PlutoType::Void;
+            }
             if name.node == "time_ns" {
                 return PlutoType::Int;
+            }
+            if name.node == "abs" || name.node == "min" || name.node == "max" || name.node == "pow" {
+                return infer_type_for_expr(&args[0].node, env, var_types);
+            }
+            if matches!(
+                name.node.as_str(),
+                "sqrt" | "floor" | "ceil" | "round" | "sin" | "cos" | "tan" | "log"
+            ) {
+                return PlutoType::Float;
             }
             env.functions.get(&name.node).map(|s| s.return_type.clone()).unwrap_or(PlutoType::Void)
         }
@@ -1593,6 +1701,8 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 } else {
                     PlutoType::Void
                 }
+            } else if obj_type == PlutoType::Error && field.node == "message" {
+                PlutoType::String
             } else {
                 PlutoType::Void
             }

@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <math.h>
 
 // ── GC Infrastructure ─────────────────────────────────────────────────────────
 
@@ -1436,3 +1437,86 @@ void *__pluto_fs_temp_dir(void) {
 long __pluto_fs_seek_set(void) { return (long)SEEK_SET; }
 long __pluto_fs_seek_cur(void) { return (long)SEEK_CUR; }
 long __pluto_fs_seek_end(void) { return (long)SEEK_END; }
+
+// ── Math builtins ─────────────────────────────────────────────────────────────
+
+long __pluto_abs_int(long x) {
+    return x < 0 ? -x : x;
+}
+
+double __pluto_abs_float(double x) {
+    return fabs(x);
+}
+
+long __pluto_min_int(long a, long b) {
+    return a < b ? a : b;
+}
+
+double __pluto_min_float(double a, double b) {
+    return a < b ? a : b;
+}
+
+long __pluto_max_int(long a, long b) {
+    return a > b ? a : b;
+}
+
+double __pluto_max_float(double a, double b) {
+    return a > b ? a : b;
+}
+
+long __pluto_pow_int(long base, long exp) {
+    if (exp < 0) {
+        // Raise MathError via the runtime error system
+        const char *msg = "negative exponent in integer pow";
+        void *msg_str = __pluto_string_new(msg, (long)strlen(msg));
+        void *err_obj = __pluto_alloc(8); // 1 field: message
+        *(long *)err_obj = (long)msg_str;
+        __pluto_raise_error(err_obj);
+        return 0;
+    }
+    long result = 1;
+    long b = base;
+    long e = exp;
+    while (e > 0) {
+        if (e & 1) result *= b;
+        b *= b;
+        e >>= 1;
+    }
+    return result;
+}
+
+double __pluto_pow_float(double base, double exp) {
+    return pow(base, exp);
+}
+
+double __pluto_sqrt(double x) {
+    return sqrt(x);
+}
+
+double __pluto_floor(double x) {
+    return floor(x);
+}
+
+double __pluto_ceil(double x) {
+    return ceil(x);
+}
+
+double __pluto_round(double x) {
+    return round(x);
+}
+
+double __pluto_sin(double x) {
+    return sin(x);
+}
+
+double __pluto_cos(double x) {
+    return cos(x);
+}
+
+double __pluto_tan(double x) {
+    return tan(x);
+}
+
+double __pluto_log(double x) {
+    return log(x);
+}

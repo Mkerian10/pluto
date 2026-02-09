@@ -121,6 +121,8 @@ pub enum Token {
     EqEq,
     #[token("!=")]
     BangEq,
+    #[token("<<")]
+    Shl,
     #[token("<")]
     Lt,
     #[token(">")]
@@ -129,6 +131,14 @@ pub enum Token {
     LtEq,
     #[token(">=")]
     GtEq,
+    #[token("&")]
+    Amp,
+    #[token("|")]
+    Pipe,
+    #[token("^")]
+    Caret,
+    #[token("~")]
+    Tilde,
     #[token("&&")]
     AmpAmp,
     #[token("||")]
@@ -217,10 +227,15 @@ impl std::fmt::Display for Token {
             Token::Eq => write!(f, "="),
             Token::EqEq => write!(f, "=="),
             Token::BangEq => write!(f, "!="),
+            Token::Shl => write!(f, "<<"),
             Token::Lt => write!(f, "<"),
             Token::Gt => write!(f, ">"),
             Token::LtEq => write!(f, "<="),
             Token::GtEq => write!(f, ">="),
+            Token::Amp => write!(f, "&"),
+            Token::Pipe => write!(f, "|"),
+            Token::Caret => write!(f, "^"),
+            Token::Tilde => write!(f, "~"),
             Token::AmpAmp => write!(f, "&&"),
             Token::PipePipe => write!(f, "||"),
             Token::Bang => write!(f, "!"),

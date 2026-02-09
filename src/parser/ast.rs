@@ -230,6 +230,10 @@ pub enum Expr {
         expr: Box<Spanned<Expr>>,
         handler: CatchHandler,
     },
+    Cast {
+        expr: Box<Spanned<Expr>>,
+        target_type: Spanned<TypeExpr>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -253,12 +257,18 @@ pub enum BinOp {
     GtEq,
     And,
     Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UnaryOp {
     Neg,
     Not,
+    BitNot,
 }
 
 #[derive(Debug, Clone)]

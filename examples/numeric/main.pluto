@@ -1,0 +1,62 @@
+// Numeric operations: bitwise, casting, and math builtins
+
+fn main() {
+    // Bitwise operators (int only)
+    let flags = 255 & 15
+    print(flags)
+
+    let shifted = 1 << 4
+    print(shifted)
+
+    let inverted = ~0
+    print(inverted)
+
+    let combined = 12 | 10 ^ 3
+    print(combined)
+
+    let right = 32 >> 2
+    print(right)
+
+    // Type casting with 'as'
+    let f = 42 as float
+    print(f)
+
+    let i = 3.14 as int
+    print(i)
+
+    let b = 1 as bool
+    print(b)
+
+    let zero_bool = 0 as bool
+    print(zero_bool)
+
+    let back = true as int
+    print(back)
+
+    // Math builtins
+    print(abs(-42))
+    print(abs(-2.5))
+
+    print(min(3, 7))
+    print(max(3, 7))
+
+    // pow(int, int) is fallible — must handle errors
+    let result = pow(2, 10) catch 0
+    print(result)
+
+    // pow(float, float) is infallible
+    print(pow(2.0, 0.5))
+
+    // Trig and other float math
+    print(sqrt(16.0))
+    print(floor(3.7))
+    print(ceil(3.2))
+    print(round(3.5))
+    print(sin(0.0))
+    print(cos(0.0))
+    print(log(1.0))
+
+    // pow with negative exponent raises MathError
+    let safe = pow(2, -1) catch 0
+    print(safe)
+}

@@ -185,6 +185,9 @@ fn collect_free_vars_expr(
         Expr::UnaryOp { operand, .. } => {
             collect_free_vars_expr(&operand.node, param_names, outer_depth, env, captures, seen);
         }
+        Expr::Cast { expr: inner, .. } => {
+            collect_free_vars_expr(&inner.node, param_names, outer_depth, env, captures, seen);
+        }
         Expr::Call { args, .. } => {
             for arg in args {
                 collect_free_vars_expr(&arg.node, param_names, outer_depth, env, captures, seen);

@@ -338,6 +338,9 @@ fn rewrite_expr(expr: &mut Expr, span: Span, active: &HashSet<String>) {
                 rewrite_expr(&mut elem.node, elem.span, active);
             }
         }
+        Expr::Cast { expr: inner, .. } => {
+            rewrite_expr(&mut inner.node, inner.span, active);
+        }
         // Literals and non-rewritable expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => {}

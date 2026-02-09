@@ -123,6 +123,9 @@ fn lift_in_expr(
         Expr::UnaryOp { operand, .. } => {
             lift_in_expr(&mut operand.node, operand.span, env, counter, new_fns)?;
         }
+        Expr::Cast { expr: inner, .. } => {
+            lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
+        }
         Expr::Call { args, .. } => {
             for arg in args {
                 lift_in_expr(&mut arg.node, arg.span, env, counter, new_fns)?;
@@ -336,6 +339,12 @@ fn infer_type_from_expr(expr: &Expr) -> PlutoType {
                 _ => infer_type_from_expr(&lhs.node),
             }
         }
+        Expr::Cast { target_type, .. } => resolve_type_for_lift(&target_type.node),
+        Expr::UnaryOp { op, operand } => match op {
+            UnaryOp::Not => PlutoType::Bool,
+            UnaryOp::BitNot => PlutoType::Int,
+            UnaryOp::Neg => infer_type_from_expr(&operand.node),
+        },
         _ => PlutoType::Int, // fallback — typeck has already validated
     }
 }

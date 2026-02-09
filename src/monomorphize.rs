@@ -383,6 +383,10 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
         Expr::UnaryOp { operand, .. } => {
             substitute_in_expr(&mut operand.node, bindings);
         }
+        Expr::Cast { expr: inner, target_type } => {
+            substitute_in_expr(&mut inner.node, bindings);
+            substitute_in_type_expr(&mut target_type.node, bindings);
+        }
         Expr::Call { args, .. } => {
             for arg in args.iter_mut() {
                 substitute_in_expr(&mut arg.node, bindings);
@@ -668,6 +672,12 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
             offset_spanned(operand, offset);
             offset_expr_spans(&mut operand.node, offset);
         }
+        Expr::Cast { expr: inner, target_type } => {
+            offset_spanned(inner, offset);
+            offset_expr_spans(&mut inner.node, offset);
+            offset_spanned(target_type, offset);
+            offset_type_expr_spans(&mut target_type.node, offset);
+        }
         Expr::Call { name, args } => {
             offset_spanned(name, offset);
             for arg in args.iter_mut() {
@@ -933,6 +943,9 @@ fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(u
         Expr::UnaryOp { operand, .. } => {
             rewrite_expr(&mut operand.node, operand.span.start, operand.span.end, rewrites);
         }
+        Expr::Cast { expr: inner, .. } => {
+            rewrite_expr(&mut inner.node, inner.span.start, inner.span.end, rewrites);
+        }
         Expr::FieldAccess { object, .. } => {
             rewrite_expr(&mut object.node, object.span.start, object.span.end, rewrites);
         }
@@ -1112,6 +1125,10 @@ fn resolve_generic_te_in_expr(expr: &mut Expr, env: &mut TypeEnv) -> Result<(), 
         }
         Expr::UnaryOp { operand, .. } => {
             resolve_generic_te_in_expr(&mut operand.node, env)?;
+        }
+        Expr::Cast { expr: inner, target_type } => {
+            resolve_generic_te_in_expr(&mut inner.node, env)?;
+            resolve_generic_te(&mut target_type.node, env)?;
         }
         Expr::FieldAccess { object, .. } => {
             resolve_generic_te_in_expr(&mut object.node, env)?;

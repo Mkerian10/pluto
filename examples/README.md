@@ -44,6 +44,7 @@ cargo run --release -- compile examples/add/main.pluto -o my_program
 | [file_io](file_io/) | `import std.fs`, file ops, error handling | File read/write, copy, rename, directories, seek |
 | [ambient-di](ambient-di/) | `uses`, `ambient`, dependency injection | Ambient DI with bare variable access to injected deps |
 | [http_server](http_server/) | `import std.net`, `import std.fs`, `import std.strings` | Static file HTTP server with content-type detection and 404s |
+| [numeric](numeric/) | bitwise ops, `as` casting, math builtins | Bitwise operators, type casting, math functions, fallible `pow` |
 
 ## Language Quick Reference
 

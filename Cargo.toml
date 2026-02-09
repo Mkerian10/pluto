@@ -85,5 +85,9 @@ name = "sets"
 path = "tests/integration/sets.rs"
 
 [[test]]
+name = "numeric"
+path = "tests/integration/numeric.rs"
+
+[[test]]
 name = "fs"
 path = "tests/integration/fs.rs"
