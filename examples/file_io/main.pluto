@@ -1,0 +1,69 @@
+import std.fs
+
+// Demonstrates file I/O: write, read, append, copy, directory ops.
+//
+// Run:
+//   cargo run --release -- run --stdlib stdlib examples/file_io/main.pluto
+
+fn main() {
+    let tmp = fs.temp_dir()
+    print("temp dir: {tmp}")
+
+    // Write and read a file
+    let path = tmp + "/greeting.txt"
+    fs.write_all(path, "Hello, Pluto!")!
+    let content = fs.read_all(path)!
+    print("read: {content}")
+
+    // File metadata
+    print("exists: {fs.exists(path)}")
+    print("is_file: {fs.is_file(path)}")
+    print("size: {fs.file_size(path)!}")
+
+    // Append to file
+    fs.append_all(path, " Welcome.")!
+    let updated = fs.read_all(path)!
+    print("after append: {updated}")
+
+    // Copy and rename
+    let copy_path = tmp + "/copy.txt"
+    fs.copy(path, copy_path)!
+    print("copy exists: {fs.exists(copy_path)}")
+
+    let renamed = tmp + "/renamed.txt"
+    fs.rename(copy_path, renamed)!
+    print("renamed exists: {fs.exists(renamed)}")
+    print("copy gone: {fs.exists(copy_path)}")
+
+    // Directory operations
+    let sub = tmp + "/subdir"
+    fs.mkdir(sub)!
+    print("subdir is_dir: {fs.is_dir(sub)}")
+
+    fs.write_all(sub + "/a.txt", "a")!
+    fs.write_all(sub + "/b.txt", "b")!
+    let entries = fs.list_dir(sub)!
+    print("entries: {entries.len()}")
+
+    // File class with seek
+    let f = fs.open_read(path)!
+    let first5 = f.read(5)
+    print("first 5: {first5}")
+    f.seek(0, fs.SEEK_SET())!
+    let all = f.read(1024)
+    print("seeked back: {all}")
+    f.close()!
+
+    // Error handling
+    let missing = fs.read_all("/does_not_exist.txt") catch "file not found!"
+    print("caught: {missing}")
+
+    // Cleanup
+    fs.remove(sub + "/a.txt")!
+    fs.remove(sub + "/b.txt")!
+    fs.rmdir(sub)!
+    fs.remove(path)!
+    fs.remove(renamed)!
+    fs.rmdir(tmp)!
+    print("cleanup done")
+}

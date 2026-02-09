@@ -41,6 +41,7 @@ cargo run --release -- compile examples/add/main.pluto -o my_program
 | [stdlib](stdlib/) | `import std.strings`, `import std.math` | String utilities and math functions from the standard library |
 | [collections](collections/) | `Map<K,V>`, `Set<T>`, index, methods | Maps and sets with insert, remove, contains, iteration |
 | [networking](networking/) | `import std.net`, `import std.socket`, TCP | TCP echo server with TcpListener and TcpConnection |
+| [file_io](file_io/) | `import std.fs`, file ops, error handling | File read/write, copy, rename, directories, seek |
 
 ## Language Quick Reference
 

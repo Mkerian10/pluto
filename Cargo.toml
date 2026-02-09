@@ -83,3 +83,7 @@ path = "tests/integration/maps.rs"
 [[test]]
 name = "sets"
 path = "tests/integration/sets.rs"
+
+[[test]]
+name = "fs"
+path = "tests/integration/fs.rs"

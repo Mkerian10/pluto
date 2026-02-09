@@ -1,0 +1,183 @@
+pub error FileError {
+    message: string
+}
+
+extern fn __pluto_fs_strerror() string
+extern fn __pluto_fs_open_read(path: string) int
+extern fn __pluto_fs_open_write(path: string) int
+extern fn __pluto_fs_open_append(path: string) int
+extern fn __pluto_fs_close(fd: int) int
+extern fn __pluto_fs_read(fd: int, max_bytes: int) string
+extern fn __pluto_fs_write(fd: int, data: string) int
+extern fn __pluto_fs_seek(fd: int, offset: int, whence: int) int
+extern fn __pluto_fs_read_all(path: string) string
+extern fn __pluto_fs_write_all(path: string, data: string) int
+extern fn __pluto_fs_append_all(path: string, data: string) int
+extern fn __pluto_fs_exists(path: string) int
+extern fn __pluto_fs_file_size(path: string) int
+extern fn __pluto_fs_is_dir(path: string) int
+extern fn __pluto_fs_is_file(path: string) int
+extern fn __pluto_fs_remove(path: string) int
+extern fn __pluto_fs_mkdir(path: string) int
+extern fn __pluto_fs_rmdir(path: string) int
+extern fn __pluto_fs_rename(from: string, to: string) int
+extern fn __pluto_fs_copy(from: string, to: string) int
+extern fn __pluto_fs_list_dir(path: string) [string]
+extern fn __pluto_fs_temp_dir() string
+extern fn __pluto_fs_seek_set() int
+extern fn __pluto_fs_seek_cur() int
+extern fn __pluto_fs_seek_end() int
+
+pub class File {
+    fd: int
+
+    fn read(self, max_bytes: int) string {
+        return __pluto_fs_read(self.fd, max_bytes)
+    }
+
+    fn write(self, data: string) int {
+        let n = __pluto_fs_write(self.fd, data)
+        if n < 0 {
+            raise FileError { message: __pluto_fs_strerror() }
+        }
+        return n
+    }
+
+    fn seek(self, offset: int, whence: int) int {
+        let pos = __pluto_fs_seek(self.fd, offset, whence)
+        if pos < 0 {
+            raise FileError { message: __pluto_fs_strerror() }
+        }
+        return pos
+    }
+
+    fn close(self) {
+        let r = __pluto_fs_close(self.fd)
+        if r < 0 {
+            raise FileError { message: __pluto_fs_strerror() }
+        }
+    }
+}
+
+pub fn open_read(path: string) File {
+    let fd = __pluto_fs_open_read(path)
+    if fd < 0 {
+        raise FileError { message: __pluto_fs_strerror() }
+    }
+    return File { fd: fd }
+}
+
+pub fn open_write(path: string) File {
+    let fd = __pluto_fs_open_write(path)
+    if fd < 0 {
+        raise FileError { message: __pluto_fs_strerror() }
+    }
+    return File { fd: fd }
+}
+
+pub fn open_append(path: string) File {
+    let fd = __pluto_fs_open_append(path)
+    if fd < 0 {
+        raise FileError { message: __pluto_fs_strerror() }
+    }
+    return File { fd: fd }
+}
+
+pub fn read_all(path: string) string {
+    if __pluto_fs_exists(path) == 0 {
+        raise FileError { message: "file not found: " + path }
+    }
+    return __pluto_fs_read_all(path)
+}
+
+pub fn write_all(path: string, data: string) {
+    let r = __pluto_fs_write_all(path, data)
+    if r < 0 {
+        raise FileError { message: __pluto_fs_strerror() }
+    }
+}
+
+pub fn append_all(path: string, data: string) {
+    let r = __pluto_fs_append_all(path, data)
+    if r < 0 {
+        raise FileError { message: __pluto_fs_strerror() }
+    }
+}
+
+pub fn exists(path: string) bool {
+    return __pluto_fs_exists(path) == 1
+}
+
+pub fn file_size(path: string) int {
+    let s = __pluto_fs_file_size(path)
+    if s < 0 {
+        raise FileError { message: __pluto_fs_strerror() }
+    }
+    return s
+}
+
+pub fn is_dir(path: string) bool {
+    return __pluto_fs_is_dir(path) == 1
+}
+
+pub fn is_file(path: string) bool {
+    return __pluto_fs_is_file(path) == 1
+}
+
+pub fn remove(path: string) {
+    let r = __pluto_fs_remove(path)
+    if r < 0 {
+        raise FileError { message: __pluto_fs_strerror() }
+    }
+}
+
+pub fn mkdir(path: string) {
+    let r = __pluto_fs_mkdir(path)
+    if r < 0 {
+        raise FileError { message: __pluto_fs_strerror() }
+    }
+}
+
+pub fn rmdir(path: string) {
+    let r = __pluto_fs_rmdir(path)
+    if r < 0 {
+        raise FileError { message: __pluto_fs_strerror() }
+    }
+}
+
+pub fn rename(from: string, to: string) {
+    let r = __pluto_fs_rename(from, to)
+    if r < 0 {
+        raise FileError { message: __pluto_fs_strerror() }
+    }
+}
+
+pub fn copy(from: string, to: string) {
+    let r = __pluto_fs_copy(from, to)
+    if r < 0 {
+        raise FileError { message: __pluto_fs_strerror() }
+    }
+}
+
+pub fn list_dir(path: string) [string] {
+    if __pluto_fs_is_dir(path) == 0 {
+        raise FileError { message: "not a directory: " + path }
+    }
+    return __pluto_fs_list_dir(path)
+}
+
+pub fn temp_dir() string {
+    return __pluto_fs_temp_dir()
+}
+
+pub fn SEEK_SET() int {
+    return __pluto_fs_seek_set()
+}
+
+pub fn SEEK_CUR() int {
+    return __pluto_fs_seek_cur()
+}
+
+pub fn SEEK_END() int {
+    return __pluto_fs_seek_end()
+}
