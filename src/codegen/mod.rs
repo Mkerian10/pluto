@@ -397,6 +397,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
                             let body = trait_method.body.as_ref().unwrap();
                             let tmp_func = Function {
                                 name: trait_method.name.clone(),
+                                type_params: vec![],
                                 params: trait_method.params.clone(),
                                 return_type: trait_method.return_type.clone(),
                                 body: body.clone(),
@@ -624,6 +625,9 @@ fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
                 .collect();
             let ret = resolve_type_expr_to_pluto(&return_type.node, env);
             PlutoType::Fn(param_types, Box::new(ret))
+        }
+        TypeExpr::Generic { .. } => {
+            panic!("Generic TypeExpr should not reach codegen — monomorphize should have resolved it")
         }
     }
 }

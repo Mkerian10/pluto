@@ -335,6 +335,7 @@ impl<'a> Parser<'a> {
         let enum_tok = self.expect(&Token::Enum)?;
         let start = enum_tok.span.start;
         let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
@@ -373,7 +374,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(EnumDecl { name, variants, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(EnumDecl { name, type_params, variants, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_error_decl(&mut self) -> Result<Spanned<ErrorDecl>, CompileError> {
@@ -480,6 +481,7 @@ impl<'a> Parser<'a> {
         let class_tok = self.expect(&Token::Class)?;
         let start = class_tok.span.start;
         let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
 
         // Parse optional bracket deps: class Foo[dep: Type]
         let inject_fields = self.parse_bracket_deps()?;
@@ -521,7 +523,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ClassDecl { name, fields, methods, impl_traits, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(ClassDecl { name, type_params, fields, methods, impl_traits, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_method(&mut self) -> Result<Spanned<Function>, CompileError> {
@@ -564,15 +566,48 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { name, params, return_type, body, is_pub: false },
+            Function { name, type_params: vec![], params, return_type, body, is_pub: false },
             Span::new(start, end),
         ))
+    }
+
+    /// Parse optional type parameters: `<T>`, `<A, B>`, or empty.
+    fn parse_type_params(&mut self) -> Result<Vec<Spanned<String>>, CompileError> {
+        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Lt) {
+            self.advance(); // consume '<'
+            let mut params = Vec::new();
+            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::Gt) {
+                if !params.is_empty() {
+                    self.expect(&Token::Comma)?;
+                }
+                params.push(self.expect_ident()?);
+            }
+            self.expect(&Token::Gt)?;
+            Ok(params)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Parse a type argument list: `<int, string>`, etc. Assumes we're positioned at `<`.
+    fn parse_type_arg_list(&mut self) -> Result<Vec<Spanned<TypeExpr>>, CompileError> {
+        self.expect(&Token::Lt)?;
+        let mut args = Vec::new();
+        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::Gt) {
+            if !args.is_empty() {
+                self.expect(&Token::Comma)?;
+            }
+            args.push(self.parse_type()?);
+        }
+        self.expect(&Token::Gt)?;
+        Ok(args)
     }
 
     fn parse_function(&mut self) -> Result<Spanned<Function>, CompileError> {
         let fn_tok = self.expect(&Token::Fn)?;
         let start = fn_tok.span.start;
         let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
         self.expect(&Token::LParen)?;
 
         let mut params = Vec::new();
@@ -598,7 +633,7 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { name, params, return_type, body, is_pub: false },
+            Function { name, type_params, params, return_type, body, is_pub: false },
             Span::new(start, end),
         ))
     }
@@ -645,8 +680,23 @@ impl<'a> Parser<'a> {
             if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Dot) {
                 self.advance(); // consume '.'
                 let type_name = self.expect_ident()?;
-                let span = Span::new(ident.span.start, type_name.span.end);
-                Ok(Spanned::new(TypeExpr::Qualified { module: ident.node, name: type_name.node }, span))
+                let qualified_name = format!("{}.{}", ident.node, type_name.node);
+                let end_span = type_name.span.end;
+                // Check for generic type args on qualified type: module.Type<int, string>
+                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Lt) {
+                    let type_args = self.parse_type_arg_list()?;
+                    let end = type_args.last().map_or(end_span, |_| self.tokens[self.pos - 1].span.end);
+                    Ok(Spanned::new(TypeExpr::Generic { name: qualified_name, type_args }, Span::new(ident.span.start, end)))
+                } else {
+                    let span = Span::new(ident.span.start, end_span);
+                    Ok(Spanned::new(TypeExpr::Qualified { module: ident.node, name: type_name.node }, span))
+                }
+            } else if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Lt) {
+                // Generic type: Type<int, string>
+                let start = ident.span.start;
+                let type_args = self.parse_type_arg_list()?;
+                let end = self.tokens[self.pos - 1].span.end; // end of '>'
+                Ok(Spanned::new(TypeExpr::Generic { name: ident.node, type_args }, Span::new(start, end)))
             } else {
                 Ok(Spanned::new(TypeExpr::Named(ident.node), ident.span))
             }
@@ -898,7 +948,7 @@ impl<'a> Parser<'a> {
                 (Vec::new(), body)
             };
 
-            arms.push(MatchArm { enum_name, variant_name, bindings, body });
+            arms.push(MatchArm { enum_name, variant_name, type_args: vec![], bindings, body });
             self.skip_newlines();
         }
 
@@ -1096,6 +1146,7 @@ impl<'a> Parser<'a> {
                             Expr::EnumData {
                                 enum_name: Spanned::new(enum_name_str, enum_name_span),
                                 variant: field_name,
+                                type_args: vec![],
                                 fields,
                             },
                             span,
@@ -1107,6 +1158,7 @@ impl<'a> Parser<'a> {
                             Expr::EnumUnit {
                                 enum_name: Spanned::new(enum_name_str, enum_name_span),
                                 variant: field_name,
+                                type_args: vec![],
                             },
                             span,
                         );
@@ -1149,6 +1201,7 @@ impl<'a> Parser<'a> {
                     lhs = Spanned::new(
                         Expr::StructLit {
                             name: Spanned::new(qualified_name, name_span),
+                            type_args: vec![],
                             fields,
                         },
                         span,
@@ -1198,6 +1251,7 @@ impl<'a> Parser<'a> {
                             Expr::EnumData {
                                 enum_name: Spanned::new(qualified_enum_name, enum_name_span),
                                 variant: field_name,
+                                type_args: vec![],
                                 fields,
                             },
                             span,
@@ -1210,6 +1264,7 @@ impl<'a> Parser<'a> {
                             Expr::EnumUnit {
                                 enum_name: Spanned::new(qualified_enum_name, enum_name_span),
                                 variant: field_name,
+                                type_args: vec![],
                             },
                             span,
                         );
@@ -1272,6 +1327,70 @@ impl<'a> Parser<'a> {
                     Expr::Catch { expr: Box::new(lhs), handler },
                     span,
                 );
+                continue;
+            }
+
+            // Check for generic enum expression: EnumName<type_args>.Variant
+            if matches!(&lhs.node, Expr::Ident(n) if self.enum_names.contains(n))
+                && matches!(tok.node, Token::Lt)
+                && self.is_generic_enum_expr_ahead()
+            {
+                let enum_name_str = match &lhs.node {
+                    Expr::Ident(n) => n.clone(),
+                    _ => unreachable!(),
+                };
+                let enum_name_span = lhs.span;
+                let type_args = self.parse_type_arg_list()?;
+                self.expect(&Token::Dot)?;
+                let variant = self.expect_ident()?;
+
+                if !self.restrict_struct_lit
+                    && self.peek().is_some()
+                    && matches!(self.peek().unwrap().node, Token::LBrace)
+                    && self.is_struct_lit_ahead()
+                {
+                    // EnumName<type_args>.Variant { field: value }
+                    self.advance(); // consume '{'
+                    self.skip_newlines();
+                    let mut fields = Vec::new();
+                    while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+                        if !fields.is_empty() {
+                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                                self.advance();
+                            }
+                            self.skip_newlines();
+                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                                break;
+                            }
+                        }
+                        let fname = self.expect_ident()?;
+                        self.expect(&Token::Colon)?;
+                        let fval = self.parse_expr(0)?;
+                        fields.push((fname, fval));
+                        self.skip_newlines();
+                    }
+                    let close = self.expect(&Token::RBrace)?;
+                    let span = Span::new(lhs.span.start, close.span.end);
+                    lhs = Spanned::new(
+                        Expr::EnumData {
+                            enum_name: Spanned::new(enum_name_str, enum_name_span),
+                            variant,
+                            type_args,
+                            fields,
+                        },
+                        span,
+                    );
+                } else {
+                    let span = Span::new(lhs.span.start, variant.span.end);
+                    lhs = Spanned::new(
+                        Expr::EnumUnit {
+                            enum_name: Spanned::new(enum_name_str, enum_name_span),
+                            variant,
+                            type_args,
+                        },
+                        span,
+                    );
+                }
                 continue;
             }
 
@@ -1467,10 +1586,40 @@ impl<'a> Parser<'a> {
                 }
                 let close = self.expect(&Token::RBrace)?;
                 let span = Span::new(ident.span.start, close.span.end);
-                Ok(Spanned::new(Expr::StructLit { name: ident, fields }, span))
+                Ok(Spanned::new(Expr::StructLit { name: ident, type_args: vec![], fields }, span))
             } else {
                 Ok(Spanned::new(Expr::Ident(ident.node.clone()), ident.span))
             }
+        } else if !self.restrict_struct_lit
+            && self.peek().is_some()
+            && matches!(self.peek().unwrap().node, Token::Lt)
+            && self.is_generic_struct_lit_ahead()
+        {
+            // Generic struct literal: Ident<type_args> { field: value, ... }
+            let start = ident.span.start;
+            let type_args = self.parse_type_arg_list()?;
+            self.advance(); // consume '{'
+            self.skip_newlines();
+            let mut fields = Vec::new();
+            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+                if !fields.is_empty() {
+                    if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                        self.advance();
+                    }
+                    self.skip_newlines();
+                    if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                        break;
+                    }
+                }
+                let fname = self.expect_ident()?;
+                self.expect(&Token::Colon)?;
+                let fval = self.parse_expr(0)?;
+                fields.push((fname, fval));
+                self.skip_newlines();
+            }
+            let close = self.expect(&Token::RBrace)?;
+            let span = Span::new(start, close.span.end);
+            Ok(Spanned::new(Expr::StructLit { name: ident, type_args, fields }, span))
         } else {
             Ok(Spanned::new(Expr::Ident(ident.node.clone()), ident.span))
         }
@@ -1663,6 +1812,88 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    /// Lookahead to determine if `<...> {` starts a generic struct literal.
+    /// We're positioned at `<`. Count balanced `<>`s; if they close and next non-newline is `{`
+    /// containing `ident:`, return true.
+    fn is_generic_struct_lit_ahead(&self) -> bool {
+        let mut i = self.pos;
+        // skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Lt) {
+            return false;
+        }
+        i += 1;
+        let mut depth = 1;
+        while i < self.tokens.len() && depth > 0 {
+            match &self.tokens[i].node {
+                Token::Lt => depth += 1,
+                Token::Gt => depth -= 1,
+                Token::GtEq => {
+                    // `>=` could be `> =` in some contexts but not here
+                    return false;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        if depth != 0 {
+            return false;
+        }
+        // Skip newlines after `>`
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        // Must be followed by `{` and then `ident :`
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::LBrace) {
+            return false;
+        }
+        // Now check if contents look like struct fields: ident :
+        i += 1;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Ident) {
+            return false;
+        }
+        i += 1;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        i < self.tokens.len() && matches!(self.tokens[i].node, Token::Colon)
+    }
+
+    /// Lookahead from current position (at `<`) to see if balanced `<...>` followed by `.`.
+    fn is_generic_enum_expr_ahead(&self) -> bool {
+        let mut i = self.pos;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Lt) {
+            return false;
+        }
+        i += 1;
+        let mut depth = 1;
+        while i < self.tokens.len() && depth > 0 {
+            match &self.tokens[i].node {
+                Token::Lt => depth += 1,
+                Token::Gt => depth -= 1,
+                Token::GtEq => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        if depth != 0 {
+            return false;
+        }
+        // Must be followed by `.`
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        i < self.tokens.len() && matches!(self.tokens[i].node, Token::Dot)
+    }
+
     /// Lookahead to determine if `{ ... }` is a struct literal (contains `ident :`)
     fn is_struct_lit_ahead(&self) -> bool {
         // We're positioned at `{`. Look past it for `ident :`
@@ -1819,7 +2050,7 @@ mod tests {
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
                 match &value.node {
-                    Expr::StructLit { name, fields } => {
+                    Expr::StructLit { name, fields, .. } => {
                         assert_eq!(name.node, "Point");
                         assert_eq!(fields.len(), 2);
                         assert_eq!(fields[0].0.node, "x");
@@ -1985,7 +2216,7 @@ mod tests {
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
                 match &value.node {
-                    Expr::StructLit { name, fields } => {
+                    Expr::StructLit { name, fields, .. } => {
                         assert_eq!(name.node, "math.Point");
                         assert_eq!(fields.len(), 2);
                     }
@@ -2024,7 +2255,7 @@ mod tests {
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
                 match &value.node {
-                    Expr::EnumUnit { enum_name, variant } => {
+                    Expr::EnumUnit { enum_name, variant, .. } => {
                         assert_eq!(enum_name.node, "Color");
                         assert_eq!(variant.node, "Red");
                     }
@@ -2042,7 +2273,7 @@ mod tests {
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
                 match &value.node {
-                    Expr::EnumData { enum_name, variant, fields } => {
+                    Expr::EnumData { enum_name, variant, fields, .. } => {
                         assert_eq!(enum_name.node, "Status");
                         assert_eq!(variant.node, "Suspended");
                         assert_eq!(fields.len(), 1);
@@ -2285,5 +2516,183 @@ mod tests {
         assert!(c.fields[0].is_injected);
         assert_eq!(c.fields[1].name.node, "name");
         assert!(!c.fields[1].is_injected);
+    }
+
+    // ==================== Generics ====================
+
+    #[test]
+    fn parse_generic_function() {
+        let prog = parse("fn identity<T>(x: T) T {\n    return x\n}");
+        assert_eq!(prog.functions.len(), 1);
+        let f = &prog.functions[0].node;
+        assert_eq!(f.name.node, "identity");
+        assert_eq!(f.type_params.len(), 1);
+        assert_eq!(f.type_params[0].node, "T");
+        assert_eq!(f.params.len(), 1);
+        assert!(matches!(&f.params[0].ty.node, TypeExpr::Named(n) if n == "T"));
+        assert!(matches!(&f.return_type.as_ref().unwrap().node, TypeExpr::Named(n) if n == "T"));
+    }
+
+    #[test]
+    fn parse_generic_function_two_params() {
+        let prog = parse("fn swap<A, B>(a: A, b: B) A {\n    return a\n}");
+        let f = &prog.functions[0].node;
+        assert_eq!(f.type_params.len(), 2);
+        assert_eq!(f.type_params[0].node, "A");
+        assert_eq!(f.type_params[1].node, "B");
+    }
+
+    #[test]
+    fn parse_generic_class() {
+        let prog = parse("class Pair<A, B> {\n    first: A\n    second: B\n}");
+        assert_eq!(prog.classes.len(), 1);
+        let c = &prog.classes[0].node;
+        assert_eq!(c.name.node, "Pair");
+        assert_eq!(c.type_params.len(), 2);
+        assert_eq!(c.type_params[0].node, "A");
+        assert_eq!(c.type_params[1].node, "B");
+        assert_eq!(c.fields.len(), 2);
+        assert!(matches!(&c.fields[0].ty.node, TypeExpr::Named(n) if n == "A"));
+        assert!(matches!(&c.fields[1].ty.node, TypeExpr::Named(n) if n == "B"));
+    }
+
+    #[test]
+    fn parse_generic_enum() {
+        let prog = parse("enum Option<T> {\n    Some { value: T }\n    None\n}");
+        assert_eq!(prog.enums.len(), 1);
+        let e = &prog.enums[0].node;
+        assert_eq!(e.name.node, "Option");
+        assert_eq!(e.type_params.len(), 1);
+        assert_eq!(e.type_params[0].node, "T");
+        assert_eq!(e.variants.len(), 2);
+        assert_eq!(e.variants[0].name.node, "Some");
+        assert_eq!(e.variants[1].name.node, "None");
+    }
+
+    #[test]
+    fn parse_generic_type_in_annotation() {
+        let prog = parse("fn foo() {\n    let x: Pair<int, string> = 0\n}");
+        let body = &prog.functions[0].node.body.node;
+        if let Stmt::Let { ty: Some(ty), .. } = &body.stmts[0].node {
+            match &ty.node {
+                TypeExpr::Generic { name, type_args } => {
+                    assert_eq!(name, "Pair");
+                    assert_eq!(type_args.len(), 2);
+                    assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
+                    assert!(matches!(&type_args[1].node, TypeExpr::Named(n) if n == "string"));
+                }
+                other => panic!("expected TypeExpr::Generic, got {:?}", other),
+            }
+        } else {
+            panic!("expected let with type annotation");
+        }
+    }
+
+    #[test]
+    fn parse_generic_struct_lit() {
+        let prog = parse("class Pair<A, B> {\n    first: A\n    second: B\n}\n\nfn main() {\n    let p = Pair<int, string> { first: 1, second: \"hi\" }\n}");
+        let body = &prog.functions[0].node.body.node;
+        if let Stmt::Let { value, .. } = &body.stmts[0].node {
+            match &value.node {
+                Expr::StructLit { name, type_args, fields } => {
+                    assert_eq!(name.node, "Pair");
+                    assert_eq!(type_args.len(), 2);
+                    assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
+                    assert!(matches!(&type_args[1].node, TypeExpr::Named(n) if n == "string"));
+                    assert_eq!(fields.len(), 2);
+                }
+                other => panic!("expected StructLit, got {:?}", other),
+            }
+        } else {
+            panic!("expected let");
+        }
+    }
+
+    #[test]
+    fn parse_generic_enum_unit() {
+        let prog = parse("enum Option<T> {\n    Some { value: T }\n    None\n}\n\nfn main() {\n    let n = Option<int>.None\n}");
+        let body = &prog.functions[0].node.body.node;
+        if let Stmt::Let { value, .. } = &body.stmts[0].node {
+            match &value.node {
+                Expr::EnumUnit { enum_name, variant, type_args } => {
+                    assert_eq!(enum_name.node, "Option");
+                    assert_eq!(variant.node, "None");
+                    assert_eq!(type_args.len(), 1);
+                    assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
+                }
+                other => panic!("expected EnumUnit, got {:?}", other),
+            }
+        } else {
+            panic!("expected let");
+        }
+    }
+
+    #[test]
+    fn parse_generic_enum_data() {
+        let prog = parse("enum Option<T> {\n    Some { value: T }\n    None\n}\n\nfn main() {\n    let s = Option<int>.Some { value: 42 }\n}");
+        let body = &prog.functions[0].node.body.node;
+        if let Stmt::Let { value, .. } = &body.stmts[0].node {
+            match &value.node {
+                Expr::EnumData { enum_name, variant, fields, type_args } => {
+                    assert_eq!(enum_name.node, "Option");
+                    assert_eq!(variant.node, "Some");
+                    assert_eq!(type_args.len(), 1);
+                    assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
+                    assert_eq!(fields.len(), 1);
+                }
+                other => panic!("expected EnumData, got {:?}", other),
+            }
+        } else {
+            panic!("expected let");
+        }
+    }
+
+    #[test]
+    fn parse_nested_generic_type() {
+        let prog = parse("fn foo() {\n    let x: Option<[int]> = 0\n}");
+        let body = &prog.functions[0].node.body.node;
+        if let Stmt::Let { ty: Some(ty), .. } = &body.stmts[0].node {
+            match &ty.node {
+                TypeExpr::Generic { name, type_args } => {
+                    assert_eq!(name, "Option");
+                    assert_eq!(type_args.len(), 1);
+                    assert!(matches!(&type_args[0].node, TypeExpr::Array(_)));
+                }
+                other => panic!("expected TypeExpr::Generic, got {:?}", other),
+            }
+        } else {
+            panic!("expected let with type annotation");
+        }
+    }
+
+    #[test]
+    fn parse_nested_generic_in_generic() {
+        let prog = parse("fn foo() {\n    let x: Pair<int, Option<string>> = 0\n}");
+        let body = &prog.functions[0].node.body.node;
+        if let Stmt::Let { ty: Some(ty), .. } = &body.stmts[0].node {
+            match &ty.node {
+                TypeExpr::Generic { name, type_args } => {
+                    assert_eq!(name, "Pair");
+                    assert_eq!(type_args.len(), 2);
+                    assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
+                    assert!(matches!(&type_args[1].node, TypeExpr::Generic { name, .. } if name == "Option"));
+                }
+                other => panic!("expected TypeExpr::Generic, got {:?}", other),
+            }
+        } else {
+            panic!("expected let with type annotation");
+        }
+    }
+
+    #[test]
+    fn parse_non_generic_function_no_type_params() {
+        let prog = parse("fn add(x: int, y: int) int {\n    return x + y\n}");
+        assert!(prog.functions[0].node.type_params.is_empty());
+    }
+
+    #[test]
+    fn parse_non_generic_class_no_type_params() {
+        let prog = parse("class Point {\n    x: int\n    y: int\n}");
+        assert!(prog.classes[0].node.type_params.is_empty());
     }
 }

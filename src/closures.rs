@@ -227,6 +227,7 @@ fn lift_in_expr(
                 // Create the lifted Function
                 let lifted = Function {
                     name: Spanned::new(fn_name.clone(), Span::new(0, 0)),
+                    type_params: vec![],
                     params: all_params,
                     return_type: if ret_type == PlutoType::Void {
                         None
@@ -285,6 +286,7 @@ fn resolve_type_for_lift(ty: &TypeExpr) -> PlutoType {
             let ret = resolve_type_for_lift(&return_type.node);
             PlutoType::Fn(pts, Box::new(ret))
         }
+        TypeExpr::Generic { name, .. } => PlutoType::Class(name.clone()),
     }
 }
 

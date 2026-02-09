@@ -457,6 +457,14 @@ fn prefix_type_expr(ty: &mut TypeExpr, module_name: &str, module_prog: &Program)
             }
             prefix_type_expr(&mut return_type.node, module_name, module_prog);
         }
+        TypeExpr::Generic { name, type_args } => {
+            if is_module_type(name, module_prog) {
+                *name = format!("{}.{}", module_name, name);
+            }
+            for arg in type_args {
+                prefix_type_expr(&mut arg.node, module_name, module_prog);
+            }
+        }
     }
 }
 
@@ -554,7 +562,7 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
                 rewrite_expr_for_module(&mut arg.node, module_name, module_prog);
             }
         }
-        Expr::StructLit { name, fields } => {
+        Expr::StructLit { name, fields, .. } => {
             if is_module_type(&name.node, module_prog) {
                 name.node = format!("{}.{}", module_name, name.node);
             }
@@ -687,6 +695,18 @@ fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, import_names: &HashSet<String>)
                 rewrite_type_expr(p, import_names);
             }
             rewrite_type_expr(return_type, import_names);
+        }
+        TypeExpr::Generic { name, type_args } => {
+            // Check if the base name is a qualified type from an import
+            if let Some(dot_pos) = name.find('.') {
+                let module = &name[..dot_pos];
+                if import_names.contains(module) {
+                    // Already qualified, leave the name alone
+                }
+            }
+            for arg in type_args {
+                rewrite_type_expr(arg, import_names);
+            }
         }
     }
 }

@@ -720,7 +720,7 @@ impl<'a> LowerContext<'a> {
                     Ok(results[0])
                 }
             }
-            Expr::StructLit { name, fields } => {
+            Expr::StructLit { name, fields, .. } => {
                 let class_info = self.env.classes.get(&name.node).ok_or_else(|| {
                     CompileError::codegen(format!("unknown class '{}'", name.node))
                 })?;
@@ -775,7 +775,7 @@ impl<'a> LowerContext<'a> {
                     Err(CompileError::codegen(format!("index on non-array type {obj_type}")))
                 }
             }
-            Expr::EnumUnit { enum_name, variant } => {
+            Expr::EnumUnit { enum_name, variant, .. } => {
                 let enum_info = self.env.enums.get(&enum_name.node).ok_or_else(|| {
                     CompileError::codegen(format!("unknown enum '{}'", enum_name.node))
                 })?;
@@ -793,7 +793,7 @@ impl<'a> LowerContext<'a> {
 
                 Ok(ptr)
             }
-            Expr::EnumData { enum_name, variant, fields } => {
+            Expr::EnumData { enum_name, variant, fields, .. } => {
                 let enum_info = self.env.enums.get(&enum_name.node).ok_or_else(|| {
                     CompileError::codegen(format!("unknown enum '{}'", enum_name.node))
                 })?.clone();
@@ -1320,6 +1320,9 @@ fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
                 .collect();
             let ret = resolve_type_expr_to_pluto(&return_type.node, env);
             PlutoType::Fn(param_types, Box::new(ret))
+        }
+        TypeExpr::Generic { .. } => {
+            panic!("Generic TypeExpr should not reach codegen — monomorphize should have resolved it")
         }
     }
 }
