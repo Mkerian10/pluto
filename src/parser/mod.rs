@@ -1212,12 +1212,18 @@ impl<'a> Parser<'a> {
                 // Check if it's a method call
                 if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
                     self.advance(); // consume '('
+                    self.skip_newlines();
                     let mut args = Vec::new();
                     while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
                         if !args.is_empty() {
                             self.expect(&Token::Comma)?;
+                            self.skip_newlines();
+                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
+                                break; // trailing comma
+                            }
                         }
                         args.push(self.parse_expr(0)?);
+                        self.skip_newlines();
                     }
                     let close = self.expect(&Token::RParen)?;
                     let span = Span::new(lhs.span.start, close.span.end);
@@ -1709,12 +1715,18 @@ impl<'a> Parser<'a> {
             Token::LBracket => {
                 let tok = self.advance().unwrap();
                 let start = tok.span.start;
+                self.skip_newlines();
                 let mut elements = Vec::new();
                 while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBracket) {
                     if !elements.is_empty() {
                         self.expect(&Token::Comma)?;
+                        self.skip_newlines();
+                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBracket) {
+                            break; // trailing comma
+                        }
                     }
                     elements.push(self.parse_expr(0)?);
+                    self.skip_newlines();
                 }
                 let close = self.expect(&Token::RBracket)?;
                 let end = close.span.end;
@@ -1744,12 +1756,18 @@ impl<'a> Parser<'a> {
         // Check for function call
         if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
             self.advance(); // consume '('
+            self.skip_newlines();
             let mut args = Vec::new();
             while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
                 if !args.is_empty() {
                     self.expect(&Token::Comma)?;
+                    self.skip_newlines();
+                    if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
+                        break; // trailing comma
+                    }
                 }
                 args.push(self.parse_expr(0)?);
+                self.skip_newlines();
             }
             let close = self.expect(&Token::RParen)?;
             let span = Span::new(ident.span.start, close.span.end);

@@ -70,10 +70,10 @@ pub enum Token {
     Ambient,
 
     // Literals
-    #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
+    #[regex(r"[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<i64>().ok())]
     IntLit(i64),
 
-    #[regex(r"[0-9]+\.[0-9]+", |lex| lex.slice().parse::<f64>().ok())]
+    #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<f64>().ok())]
     FloatLit(f64),
 
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {
