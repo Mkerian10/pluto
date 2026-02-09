@@ -492,6 +492,10 @@ fn check_stmt(
                 ));
             }
         }
+        Stmt::Match { .. } => {
+            // Will be implemented in the type checker step
+            todo!("match type checking")
+        }
         Stmt::Expr(expr) => {
             infer_expr(&expr.node, expr.span, env)?;
         }
@@ -769,6 +773,10 @@ fn infer_expr(
                 ));
             }
             Ok(elem_type)
+        }
+        Expr::EnumUnit { .. } | Expr::EnumData { .. } => {
+            // Will be implemented in the type checker step
+            todo!("enum type checking")
         }
         Expr::MethodCall { object, method, args } => {
             let obj_type = infer_expr(&object.node, object.span, env)?;

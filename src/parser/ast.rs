@@ -6,6 +6,7 @@ pub struct Program {
     pub functions: Vec<Spanned<Function>>,
     pub classes: Vec<Spanned<ClassDecl>>,
     pub traits: Vec<Spanned<TraitDecl>>,
+    pub enums: Vec<Spanned<EnumDecl>>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +92,10 @@ pub enum Stmt {
         index: Spanned<Expr>,
         value: Spanned<Expr>,
     },
+    Match {
+        expr: Spanned<Expr>,
+        arms: Vec<MatchArm>,
+    },
     Expr(Spanned<Expr>),
 }
 
@@ -134,6 +139,15 @@ pub enum Expr {
         object: Box<Spanned<Expr>>,
         index: Box<Spanned<Expr>>,
     },
+    EnumUnit {
+        enum_name: Spanned<String>,
+        variant: Spanned<String>,
+    },
+    EnumData {
+        enum_name: Spanned<String>,
+        variant: Spanned<String>,
+        fields: Vec<(Spanned<String>, Spanned<Expr>)>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -172,4 +186,25 @@ pub struct TraitMethod {
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub body: Option<Spanned<Block>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumDecl {
+    pub name: Spanned<String>,
+    pub variants: Vec<EnumVariant>,
+    pub is_pub: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariant {
+    pub name: Spanned<String>,
+    pub fields: Vec<Field>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub enum_name: Spanned<String>,
+    pub variant_name: Spanned<String>,
+    pub bindings: Vec<(Spanned<String>, Option<Spanned<String>>)>,
+    pub body: Spanned<Block>,
 }
