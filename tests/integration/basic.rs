@@ -31,6 +31,34 @@ fn compile_and_run(source: &str) -> i32 {
     run_output.status.code().unwrap_or(-1)
 }
 
+fn compile_and_run_stdout(source: &str) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let src_path = dir.path().join("test.pluto");
+    let bin_path = dir.path().join("test_bin");
+
+    std::fs::write(&src_path, source).unwrap();
+
+    let compile_output = plutoc()
+        .arg("compile")
+        .arg(&src_path)
+        .arg("-o")
+        .arg(&bin_path)
+        .output()
+        .unwrap();
+
+    assert!(
+        compile_output.status.success(),
+        "Compilation failed: {}",
+        String::from_utf8_lossy(&compile_output.stderr)
+    );
+
+    assert!(bin_path.exists(), "Binary was not created");
+
+    let run_output = Command::new(&bin_path).output().unwrap();
+    assert!(run_output.status.success(), "Binary exited with non-zero status");
+    String::from_utf8_lossy(&run_output.stdout).to_string()
+}
+
 fn compile_should_fail(source: &str) {
     let dir = tempfile::tempdir().unwrap();
     let src_path = dir.path().join("test.pluto");
@@ -122,4 +150,375 @@ fn undefined_variable_rejected() {
 #[test]
 fn undefined_function_rejected() {
     compile_should_fail("fn main() {\n    let x = foo(1)\n}");
+}
+
+#[test]
+fn print_int() {
+    let out = compile_and_run_stdout("fn main() {\n    print(42)\n}");
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn print_int_expression() {
+    let out = compile_and_run_stdout(
+        "fn add(a: int, b: int) int {\n    return a + b\n}\n\nfn main() {\n    print(add(1, 2))\n}",
+    );
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn print_float() {
+    let out = compile_and_run_stdout("fn main() {\n    print(3.14)\n}");
+    assert_eq!(out, "3.140000\n");
+}
+
+#[test]
+fn print_bool() {
+    let out = compile_and_run_stdout("fn main() {\n    print(true)\n    print(false)\n}");
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn print_string() {
+    let out = compile_and_run_stdout("fn main() {\n    print(\"hello world\")\n}");
+    assert_eq!(out, "hello world\n");
+}
+
+#[test]
+fn print_multiple() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(1)\n    print(2)\n    print(3)\n}",
+    );
+    assert_eq!(out, "1\n2\n3\n");
+}
+
+#[test]
+fn print_in_loop() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let i = 0\n    while i < 3 {\n        print(i)\n        i = i + 1\n    }\n}",
+    );
+    assert_eq!(out, "0\n1\n2\n");
+}
+
+#[test]
+fn print_wrong_arg_count() {
+    compile_should_fail("fn main() {\n    print(1, 2)\n}");
+}
+
+#[test]
+fn print_no_args() {
+    compile_should_fail("fn main() {\n    print()\n}");
+}
+
+// Class tests
+
+#[test]
+fn class_construct_and_field_access() {
+    let out = compile_and_run_stdout(
+        "class Point {\n    x: int\n    y: int\n}\n\nfn main() {\n    let p = Point { x: 3, y: 4 }\n    print(p.x)\n    print(p.y)\n}",
+    );
+    assert_eq!(out, "3\n4\n");
+}
+
+#[test]
+fn class_method_call() {
+    let out = compile_and_run_stdout(
+        "class Point {\n    x: int\n    y: int\n\n    fn sum(self) int {\n        return self.x + self.y\n    }\n}\n\nfn main() {\n    let p = Point { x: 3, y: 4 }\n    print(p.sum())\n}",
+    );
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn class_field_mutation() {
+    let out = compile_and_run_stdout(
+        "class Counter {\n    val: int\n\n    fn get(self) int {\n        return self.val\n    }\n}\n\nfn main() {\n    let c = Counter { val: 0 }\n    c.val = 42\n    print(c.get())\n}",
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn class_as_function_param() {
+    let out = compile_and_run_stdout(
+        "class Point {\n    x: int\n    y: int\n}\n\nfn get_x(p: Point) int {\n    return p.x\n}\n\nfn main() {\n    let p = Point { x: 99, y: 0 }\n    print(get_x(p))\n}",
+    );
+    assert_eq!(out, "99\n");
+}
+
+#[test]
+fn class_method_with_params() {
+    let out = compile_and_run_stdout(
+        "class Adder {\n    base: int\n\n    fn add(self, n: int) int {\n        return self.base + n\n    }\n}\n\nfn main() {\n    let a = Adder { base: 10 }\n    print(a.add(5))\n}",
+    );
+    assert_eq!(out, "15\n");
+}
+
+#[test]
+fn function_returning_class() {
+    let out = compile_and_run_stdout(
+        "class Point {\n    x: int\n    y: int\n}\n\nfn make_point(x: int, y: int) Point {\n    return Point { x: x, y: y }\n}\n\nfn main() {\n    let p = make_point(10, 20)\n    print(p.x)\n    print(p.y)\n}",
+    );
+    assert_eq!(out, "10\n20\n");
+}
+
+// String tests
+
+#[test]
+fn string_concatenation() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let s = \"hello \" + \"world\"\n    print(s)\n}",
+    );
+    assert_eq!(out, "hello world\n");
+}
+
+#[test]
+fn string_len() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"hello\".len())\n}",
+    );
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn string_equality() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"foo\" == \"foo\")\n    print(\"foo\" == \"bar\")\n    print(\"foo\" != \"bar\")\n    print(\"foo\" != \"foo\")\n}",
+    );
+    assert_eq!(out, "true\nfalse\ntrue\nfalse\n");
+}
+
+#[test]
+fn string_let_binding_and_print() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let s = \"hello world\"\n    print(s)\n}",
+    );
+    assert_eq!(out, "hello world\n");
+}
+
+#[test]
+fn string_as_function_param() {
+    let out = compile_and_run_stdout(
+        "fn greet(name: string) string {\n    return \"hello \" + name\n}\n\nfn main() {\n    print(greet(\"world\"))\n}",
+    );
+    assert_eq!(out, "hello world\n");
+}
+
+#[test]
+fn string_function_return() {
+    let out = compile_and_run_stdout(
+        "fn get_msg() string {\n    return \"hi\"\n}\n\nfn main() {\n    print(get_msg())\n}",
+    );
+    assert_eq!(out, "hi\n");
+}
+
+#[test]
+fn string_in_struct_field() {
+    let out = compile_and_run_stdout(
+        "class Person {\n    name: string\n    age: int\n}\n\nfn main() {\n    let p = Person { name: \"alice\", age: 30 }\n    print(p.name)\n    print(p.age)\n}",
+    );
+    assert_eq!(out, "alice\n30\n");
+}
+
+#[test]
+fn string_concat_len() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let s = \"ab\" + \"cde\"\n    print(s.len())\n}",
+    );
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn string_empty() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"\".len())\n}",
+    );
+    assert_eq!(out, "0\n");
+}
+
+#[test]
+fn string_concat_not_int() {
+    compile_should_fail("fn main() {\n    let s = \"hello\" + 42\n}");
+}
+
+// Array tests
+
+#[test]
+fn array_literal_and_index() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let a = [10, 20, 30]\n    print(a[0])\n    print(a[1])\n    print(a[2])\n}",
+    );
+    assert_eq!(out, "10\n20\n30\n");
+}
+
+#[test]
+fn array_len() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let a = [1, 2, 3, 4, 5]\n    print(a.len())\n}",
+    );
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn array_push_and_len() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let a = [1, 2, 3]\n    a.push(4)\n    print(a.len())\n    print(a[3])\n}",
+    );
+    assert_eq!(out, "4\n4\n");
+}
+
+#[test]
+fn array_index_assign() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let a = [10, 20, 30]\n    a[1] = 99\n    print(a[0])\n    print(a[1])\n    print(a[2])\n}",
+    );
+    assert_eq!(out, "10\n99\n30\n");
+}
+
+#[test]
+fn array_of_strings() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let a = [\"hello\", \"world\"]\n    print(a[0])\n    print(a[1])\n}",
+    );
+    assert_eq!(out, "hello\nworld\n");
+}
+
+#[test]
+fn array_of_bools() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let a = [true, false, true]\n    print(a[0])\n    print(a[1])\n    print(a[2])\n}",
+    );
+    assert_eq!(out, "true\nfalse\ntrue\n");
+}
+
+#[test]
+fn array_of_floats() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let a = [1.5, 2.5]\n    print(a[0])\n    print(a[1])\n}",
+    );
+    assert_eq!(out, "1.500000\n2.500000\n");
+}
+
+#[test]
+fn array_as_function_param() {
+    let out = compile_and_run_stdout(
+        "fn first(a: [int]) int {\n    return a[0]\n}\n\nfn main() {\n    let a = [42, 99]\n    print(first(a))\n}",
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn array_as_return_value() {
+    let out = compile_and_run_stdout(
+        "fn make() [int] {\n    return [10, 20, 30]\n}\n\nfn main() {\n    let a = make()\n    print(a[1])\n    print(a.len())\n}",
+    );
+    assert_eq!(out, "20\n3\n");
+}
+
+#[test]
+fn array_in_while_loop() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let a = [0, 0, 0]\n    let i = 0\n    while i < 3 {\n        a[i] = i * 10\n        i = i + 1\n    }\n    print(a[0])\n    print(a[1])\n    print(a[2])\n}",
+    );
+    assert_eq!(out, "0\n10\n20\n");
+}
+
+#[test]
+fn array_in_struct_field() {
+    let out = compile_and_run_stdout(
+        "class Bag {\n    items: [int]\n}\n\nfn main() {\n    let b = Bag { items: [1, 2, 3] }\n    print(b.items[0])\n    print(b.items.len())\n}",
+    );
+    assert_eq!(out, "1\n3\n");
+}
+
+#[test]
+fn array_mixed_types_rejected() {
+    compile_should_fail("fn main() {\n    let a = [1, true]\n}");
+}
+
+#[test]
+fn array_index_non_int_rejected() {
+    compile_should_fail("fn main() {\n    let a = [1, 2, 3]\n    let x = a[true]\n}");
+}
+
+#[test]
+fn array_push_wrong_type_rejected() {
+    compile_should_fail("fn main() {\n    let a = [1, 2]\n    a.push(\"x\")\n}");
+}
+
+// Trait tests
+
+#[test]
+fn trait_basic_impl() {
+    let out = compile_and_run_stdout(
+        "trait Foo {\n    fn bar(self) int\n}\n\nclass X impl Foo {\n    val: int\n\n    fn bar(self) int {\n        return self.val\n    }\n}\n\nfn main() {\n    let x = X { val: 42 }\n    print(x.bar())\n}",
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn trait_as_function_param() {
+    let out = compile_and_run_stdout(
+        "trait Foo {\n    fn bar(self) int\n}\n\nclass X impl Foo {\n    val: int\n\n    fn bar(self) int {\n        return self.val\n    }\n}\n\nfn process(f: Foo) int {\n    return f.bar()\n}\n\nfn main() {\n    let x = X { val: 99 }\n    print(process(x))\n}",
+    );
+    assert_eq!(out, "99\n");
+}
+
+#[test]
+fn trait_default_method() {
+    let out = compile_and_run_stdout(
+        "trait Greetable {\n    fn greet(self) int {\n        return 0\n    }\n}\n\nclass X impl Greetable {\n    val: int\n}\n\nfn main() {\n    let x = X { val: 5 }\n    print(x.greet())\n}",
+    );
+    assert_eq!(out, "0\n");
+}
+
+#[test]
+fn trait_default_method_override() {
+    let out = compile_and_run_stdout(
+        "trait Greetable {\n    fn greet(self) int {\n        return 0\n    }\n}\n\nclass X impl Greetable {\n    val: int\n\n    fn greet(self) int {\n        return self.val\n    }\n}\n\nfn main() {\n    let x = X { val: 77 }\n    print(x.greet())\n}",
+    );
+    assert_eq!(out, "77\n");
+}
+
+#[test]
+fn trait_multiple_classes() {
+    let out = compile_and_run_stdout(
+        "trait HasVal {\n    fn get(self) int\n}\n\nclass A impl HasVal {\n    x: int\n\n    fn get(self) int {\n        return self.x\n    }\n}\n\nclass B impl HasVal {\n    y: int\n\n    fn get(self) int {\n        return self.y * 2\n    }\n}\n\nfn show(v: HasVal) {\n    print(v.get())\n}\n\nfn main() {\n    let a = A { x: 10 }\n    let b = B { y: 20 }\n    show(a)\n    show(b)\n}",
+    );
+    assert_eq!(out, "10\n40\n");
+}
+
+#[test]
+fn trait_multiple_traits() {
+    let out = compile_and_run_stdout(
+        "trait HasX {\n    fn get_x(self) int\n}\n\ntrait HasY {\n    fn get_y(self) int\n}\n\nclass Point impl HasX, HasY {\n    x: int\n    y: int\n\n    fn get_x(self) int {\n        return self.x\n    }\n\n    fn get_y(self) int {\n        return self.y\n    }\n}\n\nfn show_x(h: HasX) {\n    print(h.get_x())\n}\n\nfn show_y(h: HasY) {\n    print(h.get_y())\n}\n\nfn main() {\n    let p = Point { x: 3, y: 7 }\n    show_x(p)\n    show_y(p)\n}",
+    );
+    assert_eq!(out, "3\n7\n");
+}
+
+#[test]
+fn trait_missing_method_rejected() {
+    compile_should_fail(
+        "trait Foo {\n    fn bar(self) int\n}\n\nclass X impl Foo {\n    val: int\n}\n\nfn main() {\n}",
+    );
+}
+
+#[test]
+fn trait_wrong_return_type_rejected() {
+    compile_should_fail(
+        "trait Foo {\n    fn bar(self) int\n}\n\nclass X impl Foo {\n    val: int\n\n    fn bar(self) bool {\n        return true\n    }\n}\n\nfn main() {\n}",
+    );
+}
+
+#[test]
+fn trait_unknown_trait_rejected() {
+    compile_should_fail(
+        "class X impl NonExistent {\n    val: int\n}\n\nfn main() {\n}",
+    );
+}
+
+#[test]
+fn trait_method_with_params() {
+    let out = compile_and_run_stdout(
+        "trait Adder {\n    fn add(self, x: int) int\n}\n\nclass MyAdder impl Adder {\n    base: int\n\n    fn add(self, x: int) int {\n        return self.base + x\n    }\n}\n\nfn do_add(a: Adder, val: int) int {\n    return a.add(val)\n}\n\nfn main() {\n    let a = MyAdder { base: 100 }\n    print(do_add(a, 23))\n}",
+    );
+    assert_eq!(out, "123\n");
 }

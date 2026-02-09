@@ -1,0 +1,11 @@
+fn greet(name: string) string {
+    return "hello " + name
+}
+
+fn main() {
+    let s = "world"
+    let greeting = greet(s)
+    print(greeting)
+    print(greeting.len())
+    print("foo" == "foo")
+}

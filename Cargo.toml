@@ -19,3 +19,7 @@ tempfile = "3"
 [[test]]
 name = "integration"
 path = "tests/integration/basic.rs"
+
+[[test]]
+name = "modules"
+path = "tests/integration/modules.rs"
