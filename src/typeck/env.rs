@@ -32,6 +32,7 @@ pub struct TypeEnv {
     pub classes: HashMap<String, ClassInfo>,
     pub traits: HashMap<String, TraitInfo>,
     pub enums: HashMap<String, EnumInfo>,
+    pub extern_fns: HashSet<String>,
 }
 
 impl TypeEnv {
@@ -45,6 +46,7 @@ impl TypeEnv {
             classes: HashMap::new(),
             traits: HashMap::new(),
             enums: HashMap::new(),
+            extern_fns: HashSet::new(),
         }
     }
 

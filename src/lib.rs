@@ -7,7 +7,7 @@ pub mod codegen;
 pub mod modules;
 
 use diagnostics::CompileError;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Compile a source string directly (single-file, no module resolution).
 /// Used by tests and backward-compatible API.
@@ -41,9 +41,21 @@ pub fn compile(source: &str, output_path: &Path) -> Result<(), CompileError> {
 
 /// Compile from a file path with full module resolution.
 /// Loads all .pluto files in the entry file's directory, resolves imports, flattens, then compiles.
+///
+/// `stdlib_root`: optional path to stdlib directory. If None, will try PLUTO_STDLIB env var,
+/// then `./stdlib` relative to entry file.
 pub fn compile_file(entry_file: &Path, output_path: &Path) -> Result<(), CompileError> {
+    compile_file_with_stdlib(entry_file, output_path, None)
+}
+
+/// Compile with an explicit stdlib root path.
+pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<(), CompileError> {
+    // Check PLUTO_STDLIB env var as fallback
+    let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
+    let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
+
     // 1. Resolve modules
-    let graph = modules::resolve_modules(entry_file)?;
+    let graph = modules::resolve_modules(entry_file, effective_stdlib.as_deref())?;
 
     // 2. Flatten
     let (program, _source_map) = modules::flatten_modules(graph)?;
