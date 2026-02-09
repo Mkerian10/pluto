@@ -25,6 +25,11 @@ pub struct EnumInfo {
     pub variants: Vec<(String, Vec<(String, PlutoType)>)>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ErrorInfo {
+    pub fields: Vec<(String, PlutoType)>,
+}
+
 #[derive(Debug)]
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, PlutoType>>,
@@ -33,6 +38,7 @@ pub struct TypeEnv {
     pub classes: HashMap<String, ClassInfo>,
     pub traits: HashMap<String, TraitInfo>,
     pub enums: HashMap<String, EnumInfo>,
+    pub errors: HashMap<String, ErrorInfo>,
     pub extern_fns: HashSet<String>,
     /// Captures for each closure, keyed by (start, end) byte offset of the Expr::Closure node
     pub closure_captures: HashMap<(usize, usize), Vec<(String, PlutoType)>>,
@@ -40,6 +46,9 @@ pub struct TypeEnv {
     pub closure_fns: HashMap<String, Vec<(String, PlutoType)>>,
     pub app: Option<(String, ClassInfo)>,
     pub di_order: Vec<String>,
+    /// Per-function error sets: maps function name to set of error type names it can raise.
+    /// Populated by the error inference pass.
+    pub fn_errors: HashMap<String, HashSet<String>>,
 }
 
 impl TypeEnv {
@@ -53,11 +62,13 @@ impl TypeEnv {
             classes: HashMap::new(),
             traits: HashMap::new(),
             enums: HashMap::new(),
+            errors: HashMap::new(),
             extern_fns: HashSet::new(),
             closure_captures: HashMap::new(),
             closure_fns: HashMap::new(),
             app: None,
             di_order: Vec::new(),
+            fn_errors: HashMap::new(),
         }
     }
 
@@ -100,5 +111,9 @@ impl TypeEnv {
         self.classes.get(class_name)
             .map(|c| c.impl_traits.iter().any(|t| t == trait_name))
             .unwrap_or(false)
+    }
+
+    pub fn is_fn_fallible(&self, name: &str) -> bool {
+        self.fn_errors.get(name).map_or(false, |e| !e.is_empty())
     }
 }

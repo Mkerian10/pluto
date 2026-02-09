@@ -22,6 +22,7 @@ struct LowerContext<'a> {
     array_ids: &'a HashMap<&'static str, FuncId>,
     vtable_ids: &'a HashMap<(String, String), DataId>,
     trait_wrap_id: FuncId,
+    error_ids: &'a HashMap<&'static str, FuncId>,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
     var_types: HashMap<String, PlutoType>,
@@ -51,6 +52,29 @@ impl<'a> LowerContext<'a> {
         let func_ref = self.module.declare_func_in_func(self.trait_wrap_id, self.builder.func);
         let call = self.builder.ins().call(func_ref, &[class_val, vtable_ptr]);
         Ok(self.builder.inst_results(call)[0])
+    }
+
+    /// Emit a return with the default value for the current function's return type.
+    /// Used by raise and propagation to exit the function when an error occurs.
+    fn emit_default_return(&mut self) {
+        match &self.expected_return_type {
+            Some(PlutoType::Void) | None => {
+                self.builder.ins().return_(&[]);
+            }
+            Some(PlutoType::Float) => {
+                let val = self.builder.ins().f64const(0.0);
+                self.builder.ins().return_(&[val]);
+            }
+            Some(PlutoType::Bool) => {
+                let val = self.builder.ins().iconst(types::I8, 0);
+                self.builder.ins().return_(&[val]);
+            }
+            Some(_) => {
+                // Int, String, Class, Array, Enum, Error — all I64
+                let val = self.builder.ins().iconst(types::I64, 0);
+                self.builder.ins().return_(&[val]);
+            }
+        }
     }
 
     /// Create a null-terminated string in the data section and return its pointer as a Value.
@@ -455,6 +479,37 @@ impl<'a> LowerContext<'a> {
                     self.builder.seal_block(merge_bb);
                 }
             }
+            Stmt::Raise { error_name, fields } => {
+                let error_info = self.env.errors.get(&error_name.node).ok_or_else(|| {
+                    CompileError::codegen(format!("unknown error '{}'", error_name.node))
+                })?.clone();
+                let num_fields = error_info.fields.len();
+                let size = (num_fields as i64 * 8).max(8);
+
+                // Allocate error object
+                let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
+                let size_val = self.builder.ins().iconst(types::I64, size);
+                let call = self.builder.ins().call(alloc_ref, &[size_val]);
+                let ptr = self.builder.inst_results(call)[0];
+
+                // Store field values
+                let field_info = error_info.fields.clone();
+                for (lit_name, lit_val) in fields {
+                    let val = self.lower_expr(&lit_val.node)?;
+                    let offset = field_info.iter()
+                        .position(|(n, _)| *n == lit_name.node)
+                        .unwrap_or(0) as i32 * 8;
+                    self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
+                }
+
+                // Set TLS error pointer
+                let raise_ref = self.module.declare_func_in_func(self.error_ids["raise"], self.builder.func);
+                self.builder.ins().call(raise_ref, &[ptr]);
+
+                // Return default value (caller checks TLS)
+                self.emit_default_return();
+                *terminated = true;
+            }
             Stmt::Expr(expr) => {
                 self.lower_expr(&expr.node)?;
             }
@@ -786,6 +841,114 @@ impl<'a> LowerContext<'a> {
                     Err(CompileError::codegen(format!("field access on non-class type {obj_type}")))
                 }
             }
+            Expr::Propagate { expr: inner } => {
+                // Lower the inner call
+                let val = self.lower_expr(&inner.node)?;
+
+                // Check TLS error state
+                let has_err_ref = self.module.declare_func_in_func(self.error_ids["has_error"], self.builder.func);
+                let has_err_call = self.builder.ins().call(has_err_ref, &[]);
+                let has_err = self.builder.inst_results(has_err_call)[0];
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let is_error = self.builder.ins().icmp(IntCC::NotEqual, has_err, zero);
+
+                let propagate_bb = self.builder.create_block();
+                let continue_bb = self.builder.create_block();
+                self.builder.ins().brif(is_error, propagate_bb, &[], continue_bb, &[]);
+
+                // Propagate block: return default (error stays in TLS for caller)
+                self.builder.switch_to_block(propagate_bb);
+                self.builder.seal_block(propagate_bb);
+                self.emit_default_return();
+
+                // Continue block: no error, use the call result
+                self.builder.switch_to_block(continue_bb);
+                self.builder.seal_block(continue_bb);
+                Ok(val)
+            }
+            Expr::Catch { expr: inner, handler } => {
+                // Lower the inner call
+                let val = self.lower_expr(&inner.node)?;
+                let val_type = infer_type_for_expr(&inner.node, self.env, &self.var_types);
+                let cl_type = pluto_to_cranelift(&val_type);
+
+                // Check TLS error state
+                let has_err_ref = self.module.declare_func_in_func(self.error_ids["has_error"], self.builder.func);
+                let has_err_call = self.builder.ins().call(has_err_ref, &[]);
+                let has_err = self.builder.inst_results(has_err_call)[0];
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let is_error = self.builder.ins().icmp(IntCC::NotEqual, has_err, zero);
+
+                let catch_bb = self.builder.create_block();
+                let no_error_bb = self.builder.create_block();
+                let merge_bb = self.builder.create_block();
+                self.builder.append_block_param(merge_bb, cl_type);
+
+                self.builder.ins().brif(is_error, catch_bb, &[], no_error_bb, &[]);
+
+                // No-error block: jump to merge with the call result
+                self.builder.switch_to_block(no_error_bb);
+                self.builder.seal_block(no_error_bb);
+                self.builder.ins().jump(merge_bb, &[val]);
+
+                // Catch block: handle the error
+                self.builder.switch_to_block(catch_bb);
+                self.builder.seal_block(catch_bb);
+
+                let handler_val = match handler {
+                    CatchHandler::Wildcard { var, body } => {
+                        // Get error object BEFORE clearing
+                        let get_err_ref = self.module.declare_func_in_func(self.error_ids["get_error"], self.builder.func);
+                        let get_err_call = self.builder.ins().call(get_err_ref, &[]);
+                        let err_obj = self.builder.inst_results(get_err_call)[0];
+
+                        // Clear the error
+                        let clear_ref = self.module.declare_func_in_func(self.error_ids["clear"], self.builder.func);
+                        self.builder.ins().call(clear_ref, &[]);
+
+                        // Bind the error variable
+                        let err_var = Variable::from_u32(self.next_var);
+                        self.next_var += 1;
+                        self.builder.declare_var(err_var, types::I64);
+                        self.builder.def_var(err_var, err_obj);
+
+                        let prev_var = self.variables.get(&var.node).cloned();
+                        let prev_type = self.var_types.get(&var.node).cloned();
+                        self.variables.insert(var.node.clone(), err_var);
+                        self.var_types.insert(var.node.clone(), PlutoType::Error);
+
+                        let result = self.lower_expr(&body.node)?;
+
+                        // Restore previous binding
+                        if let Some(pv) = prev_var {
+                            self.variables.insert(var.node.clone(), pv);
+                        } else {
+                            self.variables.remove(&var.node);
+                        }
+                        if let Some(pt) = prev_type {
+                            self.var_types.insert(var.node.clone(), pt);
+                        } else {
+                            self.var_types.remove(&var.node);
+                        }
+
+                        result
+                    }
+                    CatchHandler::Shorthand(fallback) => {
+                        // Clear the error
+                        let clear_ref = self.module.declare_func_in_func(self.error_ids["clear"], self.builder.func);
+                        self.builder.ins().call(clear_ref, &[]);
+
+                        self.lower_expr(&fallback.node)?
+                    }
+                };
+
+                self.builder.ins().jump(merge_bb, &[handler_val]);
+
+                // Merge block: result is the block parameter
+                self.builder.switch_to_block(merge_bb);
+                self.builder.seal_block(merge_bb);
+                Ok(self.builder.block_params(merge_bb)[0])
+            }
             Expr::MethodCall { object, method, args } => {
                 let obj_ptr = self.lower_expr(&object.node)?;
                 let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
@@ -968,7 +1131,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I32, arg_val);
                 self.builder.ins().call(func_ref, &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Error => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -993,6 +1156,7 @@ pub fn lower_function(
     class_name: Option<&str>,
     vtable_ids: &HashMap<(String, String), DataId>,
     trait_wrap_id: FuncId,
+    error_ids: &HashMap<&'static str, FuncId>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -1071,6 +1235,7 @@ pub fn lower_function(
         array_ids,
         vtable_ids,
         trait_wrap_id,
+        error_ids,
         variables,
         var_types,
         next_var,
@@ -1189,6 +1354,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Trait(_) => types::I64,     // pointer to trait handle
         PlutoType::Enum(_) => types::I64,      // pointer to heap-allocated enum
         PlutoType::Fn(_, _) => types::I64,     // pointer to closure object
+        PlutoType::Error => types::I64,        // pointer to error object
     }
 }
 
@@ -1250,6 +1416,14 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
         }
         Expr::EnumUnit { enum_name, .. } | Expr::EnumData { enum_name, .. } => {
             PlutoType::Enum(enum_name.node.clone())
+        }
+        Expr::Propagate { expr } => {
+            // Propagation returns the success type of the inner call
+            infer_type_for_expr(&expr.node, env, var_types)
+        }
+        Expr::Catch { expr, .. } => {
+            // Catch returns the success type (same as the inner call)
+            infer_type_for_expr(&expr.node, env, var_types)
         }
         Expr::MethodCall { object, method, .. } => {
             let obj_type = infer_type_for_expr(&object.node, env, var_types);

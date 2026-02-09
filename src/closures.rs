@@ -99,6 +99,11 @@ fn lift_in_stmt(
         Stmt::Expr(expr) => {
             lift_in_expr(&mut expr.node, expr.span, env, counter, new_fns)?;
         }
+        Stmt::Raise { fields, .. } => {
+            for (_, val) in fields {
+                lift_in_expr(&mut val.node, val.span, env, counter, new_fns)?;
+            }
+        }
     }
     Ok(())
 }
@@ -241,6 +246,20 @@ fn lift_in_expr(
                 };
             }
         }
+        Expr::Propagate { expr: inner } => {
+            lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
+        }
+        Expr::Catch { expr: inner, handler } => {
+            lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
+            match handler {
+                CatchHandler::Wildcard { body, .. } => {
+                    lift_in_expr(&mut body.node, body.span, env, counter, new_fns)?;
+                }
+                CatchHandler::Shorthand(fb) => {
+                    lift_in_expr(&mut fb.node, fb.span, env, counter, new_fns)?;
+                }
+            }
+        }
         // Non-capturing expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => {}
@@ -319,5 +338,6 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
                 return_type: Box::new(Spanned::new(pluto_type_to_type_expr(ret), Span::new(0, 0))),
             }
         }
+        PlutoType::Error => TypeExpr::Named("error".to_string()),
     }
 }
