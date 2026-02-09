@@ -74,7 +74,7 @@ fn generic_class_method() {
 #[test]
 fn generic_enum_option() {
     let out = compile_and_run_stdout(
-        "enum Option<T> {\n    Some { value: T }\n    None\n}\n\nfn main() {\n    let o = Option<int>.Some { value: 42 }\n    match o {\n        Option.Some { value: v } {\n            print(v)\n        }\n        Option.None {\n            print(0)\n        }\n    }\n}",
+        "enum MyOption<T> {\n    Some { value: T }\n    None\n}\n\nfn main() {\n    let o = MyOption<int>.Some { value: 42 }\n    match o {\n        MyOption.Some { value: v } {\n            print(v)\n        }\n        MyOption.None {\n            print(0)\n        }\n    }\n}",
     );
     assert_eq!(out, "42\n");
 }
@@ -82,7 +82,7 @@ fn generic_enum_option() {
 #[test]
 fn generic_enum_option_none() {
     let out = compile_and_run_stdout(
-        "enum Option<T> {\n    Some { value: T }\n    None\n}\n\nfn main() {\n    let o = Option<int>.None\n    match o {\n        Option.Some { value: v } {\n            print(v)\n        }\n        Option.None {\n            print(0)\n        }\n    }\n}",
+        "enum MyOption<T> {\n    Some { value: T }\n    None\n}\n\nfn main() {\n    let o = MyOption<int>.None\n    match o {\n        MyOption.Some { value: v } {\n            print(v)\n        }\n        MyOption.None {\n            print(0)\n        }\n    }\n}",
     );
     assert_eq!(out, "0\n");
 }

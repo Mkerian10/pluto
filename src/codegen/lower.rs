@@ -474,9 +474,13 @@ impl<'a> LowerContext<'a> {
                     *terminated = true;
                 }
 
-                if !*terminated {
-                    self.builder.switch_to_block(merge_bb);
-                    self.builder.seal_block(merge_bb);
+                // Always switch to and seal the merge block — it's referenced by
+                // the last arm's fallthrough even if unreachable.
+                self.builder.switch_to_block(merge_bb);
+                self.builder.seal_block(merge_bb);
+                if *terminated {
+                    // All arms returned; merge block is unreachable but needs a terminator.
+                    self.builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
                 }
             }
             Stmt::Raise { error_name, fields } => {

@@ -7,6 +7,7 @@ pub mod codegen;
 pub mod modules;
 pub mod closures;
 pub mod monomorphize;
+pub mod prelude;
 
 use diagnostics::CompileError;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,9 @@ pub fn compile(source: &str, output_path: &Path) -> Result<(), CompileError> {
     // 2. Parse
     let mut parser = parser::Parser::new(&tokens, source);
     let mut program = parser.parse_program()?;
+
+    // 2b. Inject prelude
+    prelude::inject_prelude(&mut program)?;
 
     // 3. Type check
     let mut env = typeck::type_check(&program)?;
@@ -67,6 +71,9 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
 
     // 2. Flatten
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
+
+    // 2b. Inject prelude
+    prelude::inject_prelude(&mut program)?;
 
     // 3. Type check
     let mut env = typeck::type_check(&program)?;
