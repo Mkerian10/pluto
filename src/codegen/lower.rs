@@ -425,9 +425,124 @@ fn lower_stmt(
             builder.switch_to_block(exit_bb);
             builder.seal_block(exit_bb);
         }
-        Stmt::Match { .. } => {
-            // Will be implemented in the codegen step
-            todo!("match codegen")
+        Stmt::Match { expr, arms } => {
+            let ptr = lower_expr(&expr.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
+            let tag = builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(0));
+
+            let enum_name = match infer_type_for_expr(&expr.node, env, var_types) {
+                PlutoType::Enum(name) => name,
+                _ => return Err(CompileError::codegen("match on non-enum".to_string())),
+            };
+            let enum_info = env.enums.get(&enum_name).ok_or_else(|| {
+                CompileError::codegen(format!("unknown enum '{enum_name}'"))
+            })?.clone();
+
+            let merge_bb = builder.create_block();
+            let mut check_blocks = Vec::new();
+            let mut body_blocks = Vec::new();
+
+            for _ in 0..arms.len() {
+                check_blocks.push(builder.create_block());
+                body_blocks.push(builder.create_block());
+            }
+
+            // Jump to first check block
+            builder.ins().jump(check_blocks[0], &[]);
+
+            let mut all_terminated = true;
+
+            for (i, arm) in arms.iter().enumerate() {
+                // Check block: compare tag
+                builder.switch_to_block(check_blocks[i]);
+                builder.seal_block(check_blocks[i]);
+
+                let variant_idx = enum_info.variants.iter()
+                    .position(|(n, _)| *n == arm.variant_name.node)
+                    .unwrap() as i64;
+                let expected_tag = builder.ins().iconst(types::I64, variant_idx);
+                let cmp = builder.ins().icmp(IntCC::Equal, tag, expected_tag);
+
+                let fallthrough = if i + 1 < arms.len() {
+                    check_blocks[i + 1]
+                } else {
+                    // Last arm: exhaustiveness guaranteed, so fallthrough to merge
+                    merge_bb
+                };
+                builder.ins().brif(cmp, body_blocks[i], &[], fallthrough, &[]);
+
+                // Body block: extract bindings and lower body
+                builder.switch_to_block(body_blocks[i]);
+                builder.seal_block(body_blocks[i]);
+
+                let variant_fields = &enum_info.variants.iter()
+                    .find(|(n, _)| *n == arm.variant_name.node)
+                    .unwrap().1;
+
+                // Save previous variable bindings so we can restore after this arm
+                let mut prev_vars: Vec<(String, Option<Variable>, Option<PlutoType>)> = Vec::new();
+
+                for (binding_field, opt_rename) in &arm.bindings {
+                    let field_idx = variant_fields.iter()
+                        .position(|(n, _)| *n == binding_field.node)
+                        .unwrap();
+                    let field_type = &variant_fields[field_idx].1;
+                    let offset = ((1 + field_idx) * 8) as i32;
+                    let raw = builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(offset));
+                    let val = from_array_slot(raw, field_type, builder);
+
+                    let var_name = opt_rename.as_ref().map_or(&binding_field.node, |r| &r.node);
+                    let cl_type = pluto_to_cranelift(field_type);
+                    let var = Variable::from_u32(*next_var);
+                    *next_var += 1;
+                    builder.declare_var(var, cl_type);
+                    builder.def_var(var, val);
+
+                    prev_vars.push((
+                        var_name.clone(),
+                        variables.get(var_name).cloned(),
+                        var_types.get(var_name).cloned(),
+                    ));
+                    variables.insert(var_name.clone(), var);
+                    var_types.insert(var_name.clone(), field_type.clone());
+                }
+
+                let mut arm_terminated = false;
+                for s in &arm.body.node.stmts {
+                    lower_stmt(&s.node, builder, env, module, variables, var_types, next_var, func_ids, &mut arm_terminated, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id, expected_return_type)?;
+                }
+
+                // Restore previous variable bindings
+                for (name, prev_var, prev_type) in prev_vars {
+                    if let Some(pv) = prev_var {
+                        variables.insert(name.clone(), pv);
+                    } else {
+                        variables.remove(&name);
+                    }
+                    if let Some(pt) = prev_type {
+                        var_types.insert(name, pt);
+                    } else {
+                        var_types.remove(&name);
+                    }
+                }
+
+                if !arm_terminated {
+                    builder.ins().jump(merge_bb, &[]);
+                } else {
+                    // If this arm returns, it doesn't reach merge
+                }
+                if !arm_terminated {
+                    all_terminated = false;
+                }
+            }
+
+            if all_terminated {
+                *terminated = true;
+            }
+
+            if !*terminated {
+                builder.switch_to_block(merge_bb);
+                builder.seal_block(merge_bb);
+            }
         }
         Stmt::Expr(expr) => {
             lower_expr(&expr.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
@@ -645,9 +760,51 @@ fn lower_expr(
                 Err(CompileError::codegen(format!("index on non-array type {obj_type}")))
             }
         }
-        Expr::EnumUnit { .. } | Expr::EnumData { .. } => {
-            // Will be implemented in the codegen step
-            todo!("enum codegen")
+        Expr::EnumUnit { enum_name, variant } => {
+            let enum_info = env.enums.get(&enum_name.node).ok_or_else(|| {
+                CompileError::codegen(format!("unknown enum '{}'", enum_name.node))
+            })?;
+            let max_fields = enum_info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
+            let alloc_size = (1 + max_fields) as i64 * 8;
+            let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
+
+            let alloc_ref = module.declare_func_in_func(alloc_id, builder.func);
+            let size_val = builder.ins().iconst(types::I64, alloc_size);
+            let call = builder.ins().call(alloc_ref, &[size_val]);
+            let ptr = builder.inst_results(call)[0];
+
+            let tag_val = builder.ins().iconst(types::I64, variant_idx as i64);
+            builder.ins().store(MemFlags::new(), tag_val, ptr, Offset32::new(0));
+
+            Ok(ptr)
+        }
+        Expr::EnumData { enum_name, variant, fields } => {
+            let enum_info = env.enums.get(&enum_name.node).ok_or_else(|| {
+                CompileError::codegen(format!("unknown enum '{}'", enum_name.node))
+            })?.clone();
+            let max_fields = enum_info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
+            let alloc_size = (1 + max_fields) as i64 * 8;
+            let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
+            let variant_fields = &enum_info.variants[variant_idx].1;
+
+            let alloc_ref = module.declare_func_in_func(alloc_id, builder.func);
+            let size_val = builder.ins().iconst(types::I64, alloc_size);
+            let call = builder.ins().call(alloc_ref, &[size_val]);
+            let ptr = builder.inst_results(call)[0];
+
+            let tag_val = builder.ins().iconst(types::I64, variant_idx as i64);
+            builder.ins().store(MemFlags::new(), tag_val, ptr, Offset32::new(0));
+
+            for (lit_name, lit_val) in fields {
+                let val = lower_expr(&lit_val.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
+                let field_idx = variant_fields.iter().position(|(n, _)| *n == lit_name.node).unwrap();
+                let field_type = &variant_fields[field_idx].1;
+                let slot = to_array_slot(val, field_type, builder);
+                let offset = ((1 + field_idx) * 8) as i32;
+                builder.ins().store(MemFlags::new(), slot, ptr, Offset32::new(offset));
+            }
+
+            Ok(ptr)
         }
         Expr::FieldAccess { object, field } => {
             let ptr = lower_expr(&object.node, builder, env, module, variables, var_types, func_ids, print_ids, alloc_id, string_ids, array_ids, vtable_ids, trait_wrap_id)?;
@@ -850,6 +1007,8 @@ fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
                     PlutoType::Class(name.clone())
                 } else if env.traits.contains_key(name) {
                     PlutoType::Trait(name.clone())
+                } else if env.enums.contains_key(name) {
+                    PlutoType::Enum(name.clone())
                 } else {
                     PlutoType::Void
                 }
@@ -865,6 +1024,8 @@ fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
                 PlutoType::Class(prefixed)
             } else if env.traits.contains_key(&prefixed) {
                 PlutoType::Trait(prefixed)
+            } else if env.enums.contains_key(&prefixed) {
+                PlutoType::Enum(prefixed)
             } else {
                 PlutoType::Void
             }
