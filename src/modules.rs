@@ -49,17 +49,19 @@ fn load_and_parse(path: &Path, source_map: &mut SourceMap) -> Result<(Program, u
 
 /// Load all .pluto files in a directory and merge into one Program.
 /// If `mod.pluto` exists, only that file is loaded; otherwise all .pluto files are auto-merged.
-fn load_directory_module(dir: &Path, source_map: &mut SourceMap) -> Result<Program, CompileError> {
+/// Sub-imports within loaded files are recursively resolved and flattened into the result.
+fn load_directory_module(
+    dir: &Path,
+    source_map: &mut SourceMap,
+    visited: &mut HashSet<PathBuf>,
+    effective_stdlib: Option<&Path>,
+) -> Result<Program, CompileError> {
     let mod_file = dir.join("mod.pluto");
     if mod_file.is_file() {
         // mod.pluto exists — load only that file
-        let (program, _) = load_and_parse(&mod_file, source_map)?;
-        if !program.imports.is_empty() {
-            return Err(CompileError::codegen(format!(
-                "transitive imports not supported: '{}' contains imports",
-                mod_file.display()
-            )));
-        }
+        let (mut program, _) = load_and_parse(&mod_file, source_map)?;
+        // Recursively resolve any imports within mod.pluto
+        resolve_module_imports(&mut program, dir, source_map, visited, effective_stdlib)?;
         return Ok(program);
     }
 
@@ -103,26 +105,24 @@ fn load_directory_module(dir: &Path, source_map: &mut SourceMap) -> Result<Progr
             merged.app = Some(app_decl);
         }
         merged.errors.extend(program.errors);
-        // Inner imports not supported in v1
-        if !program.imports.is_empty() {
-            return Err(CompileError::codegen(format!(
-                "transitive imports not supported: '{}' contains imports",
-                file_path.display()
-            )));
-        }
+        // Collect imports from auto-merged files
+        merged.imports.extend(program.imports);
     }
+
+    // Recursively resolve any imports within the merged module
+    resolve_module_imports(&mut merged, dir, source_map, visited, effective_stdlib)?;
 
     Ok(merged)
 }
 
-/// Resolve a multi-segment import path to a module.
-/// Walks the directory hierarchy: for each intermediate segment, must find a directory.
-/// For the final segment: try `<name>.pluto` first, then `<name>/` directory.
+/// Resolve a multi-segment import path to a module, with recursive sub-import resolution.
 fn resolve_module_path(
     segments: &[Spanned<String>],
     base_dir: &Path,
     source_map: &mut SourceMap,
     import_span: Span,
+    visited: &mut HashSet<PathBuf>,
+    effective_stdlib: Option<&Path>,
 ) -> Result<Program, CompileError> {
     let mut current_dir = base_dir.to_path_buf();
 
@@ -144,22 +144,238 @@ fn resolve_module_path(
     let dir_path = current_dir.join(&final_seg.node);
 
     if file_path.is_file() {
-        let (module_prog, _) = load_and_parse(&file_path, source_map)?;
-        if !module_prog.imports.is_empty() {
+        let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
+        if visited.contains(&canonical) {
             return Err(CompileError::codegen(format!(
-                "transitive imports not supported: '{}' contains imports",
+                "circular import detected: '{}'",
                 file_path.display()
             )));
         }
+        visited.insert(canonical.clone());
+        let (mut module_prog, _) = load_and_parse(&file_path, source_map)?;
+        // Recursively resolve sub-imports
+        resolve_module_imports(&mut module_prog, &current_dir, source_map, visited, effective_stdlib)?;
+        visited.remove(&canonical);
         Ok(module_prog)
     } else if dir_path.is_dir() {
-        load_directory_module(&dir_path, source_map)
+        load_directory_module(&dir_path, source_map, visited, effective_stdlib)
     } else {
         let full_path: Vec<&str> = segments.iter().map(|s| s.node.as_str()).collect();
         Err(CompileError::syntax(
             format!("cannot find module '{}': no directory or file found", full_path.join(".")),
             final_seg.span,
         ))
+    }
+}
+
+/// Resolve all imports within a module's Program, flattening sub-imports into it.
+/// This is the core recursive function: for each import in `program`, resolve the sub-module,
+/// then flatten its items into `program` with prefixed names.
+fn resolve_module_imports(
+    program: &mut Program,
+    module_dir: &Path,
+    source_map: &mut SourceMap,
+    visited: &mut HashSet<PathBuf>,
+    effective_stdlib: Option<&Path>,
+) -> Result<(), CompileError> {
+    if program.imports.is_empty() {
+        return Ok(());
+    }
+
+    let imports_to_resolve: Vec<Spanned<ImportDecl>> = std::mem::take(&mut program.imports);
+    let mut imported_names = HashSet::new();
+    let mut resolved_imports: Vec<(String, Program)> = Vec::new();
+
+    for import in &imports_to_resolve {
+        let binding_name = import.node.binding_name().to_string();
+        let full_path = import.node.full_path();
+        if !imported_names.insert(binding_name.clone()) {
+            continue; // skip duplicate imports
+        }
+
+        let first_segment = &import.node.path[0].node;
+
+        if import.node.path.len() == 1 {
+            // Single-segment import
+            let dir_path = module_dir.join(first_segment);
+            let file_path_candidate = module_dir.join(format!("{}.pluto", first_segment));
+
+            if dir_path.is_dir() {
+                let module_prog = load_directory_module(&dir_path, source_map, visited, effective_stdlib)?;
+                resolved_imports.push((binding_name, module_prog));
+            } else if file_path_candidate.is_file() {
+                let canonical = file_path_candidate.canonicalize().unwrap_or_else(|_| file_path_candidate.clone());
+                if visited.contains(&canonical) {
+                    return Err(CompileError::codegen(format!(
+                        "circular import detected: '{}'",
+                        file_path_candidate.display()
+                    )));
+                }
+                visited.insert(canonical.clone());
+                let (mut module_prog, _) = load_and_parse(&file_path_candidate, source_map)?;
+                resolve_module_imports(&mut module_prog, module_dir, source_map, visited, effective_stdlib)?;
+                visited.remove(&canonical);
+                resolved_imports.push((binding_name, module_prog));
+            } else {
+                return Err(CompileError::syntax(
+                    format!("cannot find module '{}': no directory or file found", full_path),
+                    import.node.path[0].span,
+                ));
+            }
+        } else if first_segment == "std" {
+            // Stdlib import
+            match effective_stdlib {
+                Some(root) => {
+                    let remaining = &import.node.path[1..];
+                    let module_prog = resolve_module_path(remaining, root, source_map, import.span, visited, effective_stdlib)?;
+                    resolved_imports.push((binding_name, module_prog));
+                }
+                None => {
+                    return Err(CompileError::syntax(
+                        format!(
+                            "cannot import '{}': no stdlib root found (tried --stdlib flag, PLUTO_STDLIB env var, and ./stdlib relative to entry file)",
+                            full_path
+                        ),
+                        import.span,
+                    ));
+                }
+            }
+        } else {
+            // Multi-segment import from project
+            let module_prog = resolve_module_path(&import.node.path, module_dir, source_map, import.span, visited, effective_stdlib)?;
+            resolved_imports.push((binding_name, module_prog));
+        }
+    }
+
+    // Flatten resolved imports into the program
+    flatten_into_program(program, resolved_imports)?;
+
+    Ok(())
+}
+
+/// Flatten resolved imports into a program by prefixing names.
+/// Used for sub-module flattening (within a module's own imports).
+/// Adds ALL items (not just pub) since visibility is deferred.
+fn flatten_into_program(
+    program: &mut Program,
+    imports: Vec<(String, Program)>,
+) -> Result<(), CompileError> {
+    let import_names: HashSet<String> = imports.iter().map(|(n, _)| n.clone()).collect();
+
+    // Reject app declarations in imported modules
+    for (module_name, module_prog) in &imports {
+        if module_prog.app.is_some() {
+            return Err(CompileError::codegen(format!(
+                "app declarations are not allowed in imported modules (found in '{}')",
+                module_name
+            )));
+        }
+    }
+
+    for (module_name, module_prog) in &imports {
+        // Add ALL functions with prefixed names (no pub filter — visibility deferred)
+        for func in &module_prog.functions {
+            let mut prefixed_func = func.clone();
+            prefixed_func.node.name.node = format!("{}.{}", module_name, func.node.name.node);
+            prefix_function_types(&mut prefixed_func.node, module_name, module_prog);
+            program.functions.push(prefixed_func);
+        }
+
+        // Add ALL classes with prefixed names
+        for class in &module_prog.classes {
+            let mut prefixed_class = class.clone();
+            prefixed_class.node.name.node = format!("{}.{}", module_name, class.node.name.node);
+            for field in &mut prefixed_class.node.fields {
+                prefix_type_expr(&mut field.ty.node, module_name, module_prog);
+            }
+            for method in &mut prefixed_class.node.methods {
+                prefix_function_types(&mut method.node, module_name, module_prog);
+            }
+            for trait_name in &mut prefixed_class.node.impl_traits {
+                if module_prog.traits.iter().any(|t| t.node.name.node == trait_name.node) {
+                    trait_name.node = format!("{}.{}", module_name, trait_name.node);
+                }
+            }
+            program.classes.push(prefixed_class);
+        }
+
+        // Add ALL traits with prefixed names
+        for tr in &module_prog.traits {
+            let mut prefixed_trait = tr.clone();
+            prefixed_trait.node.name.node = format!("{}.{}", module_name, tr.node.name.node);
+            for method in &mut prefixed_trait.node.methods {
+                for param in &mut method.params {
+                    prefix_type_expr(&mut param.ty.node, module_name, module_prog);
+                }
+                if let Some(ret) = &mut method.return_type {
+                    prefix_type_expr(&mut ret.node, module_name, module_prog);
+                }
+            }
+            program.traits.push(prefixed_trait);
+        }
+
+        // Add ALL enums with prefixed names
+        for enum_decl in &module_prog.enums {
+            let mut prefixed_enum = enum_decl.clone();
+            prefixed_enum.node.name.node = format!("{}.{}", module_name, enum_decl.node.name.node);
+            for variant in &mut prefixed_enum.node.variants {
+                for field in &mut variant.fields {
+                    prefix_type_expr(&mut field.ty.node, module_name, module_prog);
+                }
+            }
+            program.enums.push(prefixed_enum);
+        }
+
+        // Add ALL errors with prefixed names
+        for error_decl in &module_prog.errors {
+            let mut prefixed_error = error_decl.clone();
+            prefixed_error.node.name.node = format!("{}.{}", module_name, error_decl.node.name.node);
+            for field in &mut prefixed_error.node.fields {
+                prefix_type_expr(&mut field.ty.node, module_name, module_prog);
+            }
+            program.errors.push(prefixed_error);
+        }
+
+        // Add ALL extern fns WITHOUT prefixing (C symbols stay as-is)
+        for ext_fn in &module_prog.extern_fns {
+            // Deduplicate: check if already present with same name
+            let existing = program.extern_fns.iter()
+                .find(|e| e.node.name.node == ext_fn.node.name.node);
+            if let Some(existing) = existing {
+                // Verify signatures match
+                if !extern_fn_sigs_match(&existing.node, &ext_fn.node) {
+                    return Err(CompileError::codegen(format!(
+                        "conflicting extern fn signatures for '{}'",
+                        ext_fn.node.name.node
+                    )));
+                }
+                // Same signature, skip duplicate
+            } else {
+                program.extern_fns.push(ext_fn.clone());
+            }
+        }
+    }
+
+    // Rewrite qualified references in the program's AST
+    rewrite_program(program, &import_names);
+
+    Ok(())
+}
+
+/// Check if two extern fn declarations have matching signatures.
+fn extern_fn_sigs_match(a: &ExternFnDecl, b: &ExternFnDecl) -> bool {
+    if a.params.len() != b.params.len() {
+        return false;
+    }
+    for (pa, pb) in a.params.iter().zip(b.params.iter()) {
+        if pa.ty.node != pb.ty.node {
+            return false;
+        }
+    }
+    match (&a.return_type, &b.return_type) {
+        (Some(ra), Some(rb)) => ra.node == rb.node,
+        (None, None) => true,
+        _ => false,
     }
 }
 
@@ -180,12 +396,24 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
 
     let mut source_map = SourceMap::new();
 
+    // Compute effective stdlib root once
+    let fallback_stdlib = entry_dir.join("stdlib");
+    let effective_stdlib: Option<&Path> = if let Some(root) = stdlib_root {
+        Some(root)
+    } else if fallback_stdlib.is_dir() {
+        Some(&fallback_stdlib)
+    } else {
+        None
+    };
+
+    // Circular import detection: track canonical paths in resolution stack
+    let mut visited = HashSet::new();
+    visited.insert(entry_file.clone());
+
     // First, parse the entry file to discover imports
     let (entry_prog, _entry_file_id) = load_and_parse(&entry_file, &mut source_map)?;
 
     // Collect import binding names to know which sibling .pluto files are imported modules
-    // For single-segment imports like `import math`, the binding name is "math"
-    // For multi-segment imports like `import std.io`, the first path component is used for sibling check
     let import_first_segments: HashSet<String> = entry_prog.imports.iter()
         .map(|i| i.node.path[0].node.clone())
         .collect();
@@ -235,7 +463,7 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
         root.errors.extend(program.errors);
     }
 
-    // Resolve each import
+    // Resolve each import (now with recursive sub-import support)
     let mut imports = Vec::new();
     let mut imported_names = HashSet::new();
 
@@ -254,16 +482,21 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
             let file_path_candidate = entry_dir.join(format!("{}.pluto", first_segment));
 
             if dir_path.is_dir() {
-                let module_prog = load_directory_module(&dir_path, &mut source_map)?;
+                let module_prog = load_directory_module(&dir_path, &mut source_map, &mut visited, effective_stdlib)?;
                 imports.push((binding_name, module_prog));
             } else if file_path_candidate.is_file() {
-                let (module_prog, _) = load_and_parse(&file_path_candidate, &mut source_map)?;
-                if !module_prog.imports.is_empty() {
+                let canonical = file_path_candidate.canonicalize().unwrap_or_else(|_| file_path_candidate.clone());
+                if visited.contains(&canonical) {
                     return Err(CompileError::codegen(format!(
-                        "transitive imports not supported: '{}' contains imports",
+                        "circular import detected: '{}'",
                         file_path_candidate.display()
                     )));
                 }
+                visited.insert(canonical.clone());
+                let (mut module_prog, _) = load_and_parse(&file_path_candidate, &mut source_map)?;
+                // Recursively resolve sub-imports
+                resolve_module_imports(&mut module_prog, entry_dir, &mut source_map, &mut visited, effective_stdlib)?;
+                visited.remove(&canonical);
                 imports.push((binding_name, module_prog));
             } else {
                 return Err(CompileError::syntax(
@@ -273,20 +506,11 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
             }
         } else if first_segment == "std" {
             // Stdlib import: `import std.io` → resolve remaining path from stdlib_root
-            let fallback_stdlib = entry_dir.join("stdlib");
-            let effective_stdlib: Option<&Path> = if let Some(root) = stdlib_root {
-                Some(root)
-            } else if fallback_stdlib.is_dir() {
-                Some(&fallback_stdlib)
-            } else {
-                None
-            };
-
             match effective_stdlib {
                 Some(root) => {
                     // Skip the "std" prefix, resolve remaining segments from stdlib root
                     let remaining = &import.node.path[1..];
-                    let module_prog = resolve_module_path(remaining, root, &mut source_map, import.span)?;
+                    let module_prog = resolve_module_path(remaining, root, &mut source_map, import.span, &mut visited, effective_stdlib)?;
                     imports.push((binding_name, module_prog));
                 }
                 None => {
@@ -301,7 +525,7 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
             }
         } else {
             // Multi-segment import from project (e.g., `import utils.math`) — resolve from entry_dir
-            let module_prog = resolve_module_path(&import.node.path, entry_dir, &mut source_map, import.span)?;
+            let module_prog = resolve_module_path(&import.node.path, entry_dir, &mut source_map, import.span, &mut visited, effective_stdlib)?;
             imports.push((binding_name, module_prog));
         }
     }
@@ -312,7 +536,7 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
 /// Flatten imported modules into the root program by prefixing names.
 ///
 /// For each imported module:
-/// - Add its `pub` items with prefixed names (e.g., `math`'s `add` → `math.add`)
+/// - Add ALL items with prefixed names (visibility deferred)
 /// - Rewrite qualified references in the root program's AST
 pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), CompileError> {
     let import_names: HashSet<String> = graph.imports.iter().map(|(n, _)| n.clone()).collect();
@@ -329,92 +553,91 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
 
     // Add prefixed items from imports
     for (module_name, module_prog) in &graph.imports {
-        // Add pub functions with prefixed names
+        // Add ALL functions with prefixed names (no pub filter — visibility deferred)
         for func in &module_prog.functions {
-            if func.node.is_pub {
-                let mut prefixed_func = func.clone();
-                prefixed_func.node.name.node = format!("{}.{}", module_name, func.node.name.node);
-                // Prefix types in params and return type that reference module-internal classes
-                prefix_function_types(&mut prefixed_func.node, module_name, module_prog);
-                graph.root.functions.push(prefixed_func);
-            }
+            let mut prefixed_func = func.clone();
+            prefixed_func.node.name.node = format!("{}.{}", module_name, func.node.name.node);
+            // Prefix types in params and return type that reference module-internal classes
+            prefix_function_types(&mut prefixed_func.node, module_name, module_prog);
+            graph.root.functions.push(prefixed_func);
         }
 
-        // Add pub classes with prefixed names
+        // Add ALL classes with prefixed names
         for class in &module_prog.classes {
-            if class.node.is_pub {
-                let mut prefixed_class = class.clone();
-                prefixed_class.node.name.node = format!("{}.{}", module_name, class.node.name.node);
-                // Prefix field types that reference module-internal classes
-                for field in &mut prefixed_class.node.fields {
-                    prefix_type_expr(&mut field.ty.node, module_name, module_prog);
-                }
-                // Prefix method params/return types and names
-                for method in &mut prefixed_class.node.methods {
-                    prefix_function_types(&mut method.node, module_name, module_prog);
-                }
-                // Prefix trait names
-                for trait_name in &mut prefixed_class.node.impl_traits {
-                    if module_prog.traits.iter().any(|t| t.node.name.node == trait_name.node) {
-                        trait_name.node = format!("{}.{}", module_name, trait_name.node);
-                    }
-                }
-                graph.root.classes.push(prefixed_class);
+            let mut prefixed_class = class.clone();
+            prefixed_class.node.name.node = format!("{}.{}", module_name, class.node.name.node);
+            // Prefix field types that reference module-internal classes
+            for field in &mut prefixed_class.node.fields {
+                prefix_type_expr(&mut field.ty.node, module_name, module_prog);
             }
+            // Prefix method params/return types and names
+            for method in &mut prefixed_class.node.methods {
+                prefix_function_types(&mut method.node, module_name, module_prog);
+            }
+            // Prefix trait names
+            for trait_name in &mut prefixed_class.node.impl_traits {
+                if module_prog.traits.iter().any(|t| t.node.name.node == trait_name.node) {
+                    trait_name.node = format!("{}.{}", module_name, trait_name.node);
+                }
+            }
+            graph.root.classes.push(prefixed_class);
         }
 
-        // Add pub traits with prefixed names
+        // Add ALL traits with prefixed names
         for tr in &module_prog.traits {
-            if tr.node.is_pub {
-                let mut prefixed_trait = tr.clone();
-                prefixed_trait.node.name.node = format!("{}.{}", module_name, tr.node.name.node);
-                // Prefix types in method signatures
-                for method in &mut prefixed_trait.node.methods {
-                    for param in &mut method.params {
-                        prefix_type_expr(&mut param.ty.node, module_name, module_prog);
-                    }
-                    if let Some(ret) = &mut method.return_type {
-                        prefix_type_expr(&mut ret.node, module_name, module_prog);
-                    }
+            let mut prefixed_trait = tr.clone();
+            prefixed_trait.node.name.node = format!("{}.{}", module_name, tr.node.name.node);
+            // Prefix types in method signatures
+            for method in &mut prefixed_trait.node.methods {
+                for param in &mut method.params {
+                    prefix_type_expr(&mut param.ty.node, module_name, module_prog);
                 }
-                graph.root.traits.push(prefixed_trait);
+                if let Some(ret) = &mut method.return_type {
+                    prefix_type_expr(&mut ret.node, module_name, module_prog);
+                }
             }
+            graph.root.traits.push(prefixed_trait);
         }
 
-        // Add pub enums with prefixed names
+        // Add ALL enums with prefixed names
         for enum_decl in &module_prog.enums {
-            if enum_decl.node.is_pub {
-                let mut prefixed_enum = enum_decl.clone();
-                prefixed_enum.node.name.node = format!("{}.{}", module_name, enum_decl.node.name.node);
-                // Prefix field types in variants that reference module-internal types
-                for variant in &mut prefixed_enum.node.variants {
-                    for field in &mut variant.fields {
-                        prefix_type_expr(&mut field.ty.node, module_name, module_prog);
-                    }
-                }
-                graph.root.enums.push(prefixed_enum);
-            }
-        }
-
-        // Add pub errors with prefixed names
-        for error_decl in &module_prog.errors {
-            if error_decl.node.is_pub {
-                let mut prefixed_error = error_decl.clone();
-                prefixed_error.node.name.node = format!("{}.{}", module_name, error_decl.node.name.node);
-                for field in &mut prefixed_error.node.fields {
+            let mut prefixed_enum = enum_decl.clone();
+            prefixed_enum.node.name.node = format!("{}.{}", module_name, enum_decl.node.name.node);
+            // Prefix field types in variants that reference module-internal types
+            for variant in &mut prefixed_enum.node.variants {
+                for field in &mut variant.fields {
                     prefix_type_expr(&mut field.ty.node, module_name, module_prog);
                 }
-                graph.root.errors.push(prefixed_error);
             }
+            graph.root.enums.push(prefixed_enum);
+        }
+
+        // Add ALL errors with prefixed names
+        for error_decl in &module_prog.errors {
+            let mut prefixed_error = error_decl.clone();
+            prefixed_error.node.name.node = format!("{}.{}", module_name, error_decl.node.name.node);
+            for field in &mut prefixed_error.node.fields {
+                prefix_type_expr(&mut field.ty.node, module_name, module_prog);
+            }
+            graph.root.errors.push(prefixed_error);
         }
 
         // Add ALL extern fns from imported modules WITHOUT prefixing
         // (extern fns refer to actual C symbols — their names must stay as-is)
         for ext_fn in &module_prog.extern_fns {
-            // Deduplicate: only add if not already present
-            let already_exists = graph.root.extern_fns.iter()
-                .any(|e| e.node.name.node == ext_fn.node.name.node);
-            if !already_exists {
+            // Deduplicate: check if already present with same name
+            let existing = graph.root.extern_fns.iter()
+                .find(|e| e.node.name.node == ext_fn.node.name.node);
+            if let Some(existing) = existing {
+                // Verify signatures match
+                if !extern_fn_sigs_match(&existing.node, &ext_fn.node) {
+                    return Err(CompileError::codegen(format!(
+                        "conflicting extern fn signatures for '{}'",
+                        ext_fn.node.name.node
+                    )));
+                }
+                // Same signature, skip duplicate
+            } else {
                 graph.root.extern_fns.push(ext_fn.clone());
             }
         }
@@ -534,6 +757,10 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
                 if is_module_type(&arm.enum_name.node, module_prog) {
                     arm.enum_name.node = format!("{}.{}", module_name, arm.enum_name.node);
                 }
+                // Rewrite type_args in match arms
+                for ta in &mut arm.type_args {
+                    prefix_type_expr(&mut ta.node, module_name, module_prog);
+                }
                 rewrite_block_for_module(&mut arm.body.node, module_name, module_prog);
             }
         }
@@ -562,9 +789,12 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
                 rewrite_expr_for_module(&mut arg.node, module_name, module_prog);
             }
         }
-        Expr::StructLit { name, fields, .. } => {
+        Expr::StructLit { name, type_args, fields } => {
             if is_module_type(&name.node, module_prog) {
                 name.node = format!("{}.{}", module_name, name.node);
+            }
+            for ta in type_args {
+                prefix_type_expr(&mut ta.node, module_name, module_prog);
             }
             for (_, val) in fields {
                 rewrite_expr_for_module(&mut val.node, module_name, module_prog);
@@ -595,14 +825,20 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
             rewrite_expr_for_module(&mut object.node, module_name, module_prog);
             rewrite_expr_for_module(&mut index.node, module_name, module_prog);
         }
-        Expr::EnumUnit { enum_name, .. } => {
+        Expr::EnumUnit { enum_name, type_args, .. } => {
             if is_module_type(&enum_name.node, module_prog) {
                 enum_name.node = format!("{}.{}", module_name, enum_name.node);
             }
+            for ta in type_args {
+                prefix_type_expr(&mut ta.node, module_name, module_prog);
+            }
         }
-        Expr::EnumData { enum_name, fields, .. } => {
+        Expr::EnumData { enum_name, type_args, fields, .. } => {
             if is_module_type(&enum_name.node, module_prog) {
                 enum_name.node = format!("{}.{}", module_name, enum_name.node);
+            }
+            for ta in type_args {
+                prefix_type_expr(&mut ta.node, module_name, module_prog);
             }
             for (_, val) in fields {
                 rewrite_expr_for_module(&mut val.node, module_name, module_prog);
@@ -645,6 +881,7 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
 /// Rewrite qualified references in the root program.
 /// Converts MethodCall { object: Ident("module"), method, args } → Call { name: "module.method", args }
 /// when "module" is a known import name.
+/// Also rewrites declaration-level types (class fields, trait sigs, error fields, enum variant fields, app inject fields).
 fn rewrite_program(program: &mut Program, import_names: &HashSet<String>) {
     for func in &mut program.functions {
         rewrite_function_body(&mut func.node, import_names);
@@ -653,17 +890,46 @@ fn rewrite_program(program: &mut Program, import_names: &HashSet<String>) {
         for method in &mut class.node.methods {
             rewrite_function_body(&mut method.node, import_names);
         }
+        // Rewrite class field types
+        for field in &mut class.node.fields {
+            rewrite_type_expr(&mut field.ty, import_names);
+        }
     }
     for tr in &mut program.traits {
         for method in &mut tr.node.methods {
+            // Rewrite trait method param/return types
+            for param in &mut method.params {
+                rewrite_type_expr(&mut param.ty, import_names);
+            }
+            if let Some(ret) = &mut method.return_type {
+                rewrite_type_expr(ret, import_names);
+            }
             if let Some(body) = &mut method.body {
                 rewrite_block(&mut body.node, import_names);
+            }
+        }
+    }
+    // Rewrite error field types
+    for error in &mut program.errors {
+        for field in &mut error.node.fields {
+            rewrite_type_expr(&mut field.ty, import_names);
+        }
+    }
+    // Rewrite enum variant field types
+    for enum_decl in &mut program.enums {
+        for variant in &mut enum_decl.node.variants {
+            for field in &mut variant.fields {
+                rewrite_type_expr(&mut field.ty, import_names);
             }
         }
     }
     if let Some(app) = &mut program.app {
         for method in &mut app.node.methods {
             rewrite_function_body(&mut method.node, import_names);
+        }
+        // Rewrite app inject field types
+        for field in &mut app.node.inject_fields {
+            rewrite_type_expr(&mut field.ty, import_names);
         }
     }
 }
@@ -759,6 +1025,10 @@ fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
         Stmt::Match { expr, arms } => {
             rewrite_expr(&mut expr.node, expr.span, import_names);
             for arm in arms {
+                // Rewrite type_args in match arms
+                for ta in &mut arm.type_args {
+                    rewrite_type_expr(ta, import_names);
+                }
                 rewrite_block(&mut arm.body.node, import_names);
             }
         }
@@ -798,21 +1068,20 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
             }
         }
         Expr::FieldAccess { object, field } => {
-            // Check if this is module.Type (which wasn't followed by { for struct lit)
-            // This could be used in other contexts; leave as-is for now, it will be
-            // handled by the type checker if needed
             rewrite_expr(&mut object.node, object.span, import_names);
             let _ = field;
         }
         Expr::Call { name, args } => {
-            // name might already be qualified (e.g., "math.add") from struct lit parsing
             for arg in args {
                 rewrite_expr(&mut arg.node, arg.span, import_names);
             }
             let _ = name;
         }
-        Expr::StructLit { fields, .. } => {
+        Expr::StructLit { type_args, fields, .. } => {
             // name is already qualified from parser (e.g., "math.Point")
+            for ta in type_args {
+                rewrite_type_expr(ta, import_names);
+            }
             for (_, val) in fields {
                 rewrite_expr(&mut val.node, val.span, import_names);
             }
@@ -833,11 +1102,17 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
             rewrite_expr(&mut object.node, object.span, import_names);
             rewrite_expr(&mut index.node, index.span, import_names);
         }
-        Expr::EnumUnit { .. } => {
+        Expr::EnumUnit { type_args, .. } => {
             // enum_name is already qualified from parser (e.g., "math.Status")
+            for ta in type_args {
+                rewrite_type_expr(ta, import_names);
+            }
         }
-        Expr::EnumData { fields, .. } => {
+        Expr::EnumData { type_args, fields, .. } => {
             // enum_name is already qualified from parser (e.g., "math.Status")
+            for ta in type_args {
+                rewrite_type_expr(ta, import_names);
+            }
             for (_, val) in fields {
                 rewrite_expr(&mut val.node, val.span, import_names);
             }
