@@ -365,12 +365,15 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
             }
         }
 
-        // Add ALL extern fns from imported modules with prefixed names
-        // (both pub and private — module-internal code may call them)
+        // Add ALL extern fns from imported modules WITHOUT prefixing
+        // (extern fns refer to actual C symbols — their names must stay as-is)
         for ext_fn in &module_prog.extern_fns {
-            let mut prefixed = ext_fn.clone();
-            prefixed.node.name.node = format!("{}.{}", module_name, ext_fn.node.name.node);
-            graph.root.extern_fns.push(prefixed);
+            // Deduplicate: only add if not already present
+            let already_exists = graph.root.extern_fns.iter()
+                .any(|e| e.node.name.node == ext_fn.node.name.node);
+            if !already_exists {
+                graph.root.extern_fns.push(ext_fn.clone());
+            }
         }
     }
 
@@ -485,10 +488,8 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
 fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Program) {
     match expr {
         Expr::Call { name, args } => {
-            // Prefix calls to module-internal functions and extern fns
-            if module_prog.functions.iter().any(|f| f.node.name.node == name.node)
-                || module_prog.extern_fns.iter().any(|f| f.node.name.node == name.node)
-            {
+            // Prefix calls to module-internal functions (but NOT extern fns — those are C symbols)
+            if module_prog.functions.iter().any(|f| f.node.name.node == name.node) {
                 name.node = format!("{}.{}", module_name, name.node);
             }
             for arg in args {

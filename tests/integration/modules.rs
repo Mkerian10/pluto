@@ -490,3 +490,17 @@ fn hierarchical_import_missing_intermediate() {
         ("main.pluto", "import nonexistent.math\n\nfn main() {\n}"),
     ]);
 }
+
+// ============================================================
+// Extern fn in imported module
+// ============================================================
+
+#[test]
+fn imported_module_with_extern_fn() {
+    // Module wraps a C runtime function via extern fn, main calls the wrapper
+    let out = run_project(&[
+        ("main.pluto", "import printer\n\nfn main() {\n    printer.say(42)\n}"),
+        ("printer.pluto", "extern fn __pluto_print_int(value: int)\n\npub fn say(x: int) {\n    __pluto_print_int(x)\n}"),
+    ]);
+    assert_eq!(out, "42\n");
+}
