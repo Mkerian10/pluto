@@ -20,12 +20,18 @@ pub struct TraitInfo {
     pub default_methods: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct EnumInfo {
+    pub variants: Vec<(String, Vec<(String, PlutoType)>)>,
+}
+
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, PlutoType>>,
     pub functions: HashMap<String, FuncSig>,
     pub builtins: HashSet<String>,
     pub classes: HashMap<String, ClassInfo>,
     pub traits: HashMap<String, TraitInfo>,
+    pub enums: HashMap<String, EnumInfo>,
 }
 
 impl TypeEnv {
@@ -38,6 +44,7 @@ impl TypeEnv {
             builtins,
             classes: HashMap::new(),
             traits: HashMap::new(),
+            enums: HashMap::new(),
         }
     }
 
