@@ -42,6 +42,7 @@ cargo run --release -- compile examples/add/main.pluto -o my_program
 | [collections](collections/) | `Map<K,V>`, `Set<T>`, index, methods | Maps and sets with insert, remove, contains, iteration |
 | [networking](networking/) | `import std.net`, `import std.socket`, TCP | TCP echo server with TcpListener and TcpConnection |
 | [file_io](file_io/) | `import std.fs`, file ops, error handling | File read/write, copy, rename, directories, seek |
+| [ambient-di](ambient-di/) | `uses`, `ambient`, dependency injection | Ambient DI with bare variable access to injected deps |
 
 ## Language Quick Reference
 
@@ -113,13 +114,23 @@ let msg = "x is {x} and name is {name}"
 let double = (x: int) => x * 2
 fn apply(f: fn(int) int, x: int) int { return f(x) }
 
-// Dependency injection
+// Dependency injection (explicit)
 class Database { fn query(self) string { return "data" } }
 class Service[db: Database] {
     fn run(self) { print(self.db.query()) }
 }
 app MyApp[svc: Service] {
     fn main(self) { self.svc.run() }
+}
+
+// Ambient dependency injection
+class Logger { fn info(self, msg: string) { print(msg) } }
+class OrderService uses Logger {
+    fn process(self) { logger.info("processing") }
+}
+app MyApp2[svc: OrderService] {
+    ambient Logger
+    fn main(self) { self.svc.process() }
 }
 ```
 

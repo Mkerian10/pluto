@@ -8,6 +8,7 @@ pub mod modules;
 pub mod closures;
 pub mod monomorphize;
 pub mod prelude;
+pub mod ambient;
 
 use diagnostics::CompileError;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
     let mut parser = parser::Parser::new(&tokens, source);
     let mut program = parser.parse_program()?;
     prelude::inject_prelude(&mut program)?;
+    ambient::desugar_ambient(&mut program)?;
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
@@ -59,6 +61,7 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
     let graph = modules::resolve_modules(entry_file, effective_stdlib.as_deref())?;
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
     prelude::inject_prelude(&mut program)?;
+    ambient::desugar_ambient(&mut program)?;
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;

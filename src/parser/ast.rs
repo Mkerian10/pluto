@@ -47,6 +47,7 @@ pub struct ClassDecl {
     pub fields: Vec<Field>,
     pub methods: Vec<Spanned<Function>>,
     pub impl_traits: Vec<Spanned<String>>,
+    pub uses: Vec<Spanned<String>>,
     pub is_pub: bool,
 }
 
@@ -55,12 +56,14 @@ pub struct Field {
     pub name: Spanned<String>,
     pub ty: Spanned<TypeExpr>,
     pub is_injected: bool,
+    pub is_ambient: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct AppDecl {
     pub name: Spanned<String>,
     pub inject_fields: Vec<Field>,
+    pub ambient_types: Vec<Spanned<String>>,
     pub methods: Vec<Spanned<Function>>,
 }
 

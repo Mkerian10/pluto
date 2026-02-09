@@ -104,6 +104,8 @@ pub struct TypeEnv {
     pub method_resolutions: HashMap<(String, usize), MethodResolution>,
     /// Currently being type-checked function's mangled name (set by check_function)
     pub current_fn: Option<String>,
+    /// Ambient types declared in the app (for validation)
+    pub ambient_types: HashSet<String>,
 }
 
 impl TypeEnv {
@@ -132,6 +134,7 @@ impl TypeEnv {
             generic_rewrites: HashMap::new(),
             method_resolutions: HashMap::new(),
             current_fn: None,
+            ambient_types: HashSet::new(),
         }
     }
 
