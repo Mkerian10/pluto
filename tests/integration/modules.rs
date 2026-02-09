@@ -3,7 +3,7 @@ mod common;
 use std::process::Command;
 use std::path::Path;
 
-/// Write multiple files to a temp directory, compile the entry file, and return stdout.
+/// Write multiple files to a temp directory, compile the entry file via library call, and return stdout.
 fn run_project(files: &[(&str, &str)]) -> String {
     let dir = tempfile::tempdir().unwrap();
 
@@ -18,29 +18,15 @@ fn run_project(files: &[(&str, &str)]) -> String {
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    let compile_output = common::plutoc()
-        .arg("compile")
-        .arg(&entry)
-        .arg("-o")
-        .arg(&bin_path)
-        .output()
-        .unwrap();
-
-    assert!(
-        compile_output.status.success(),
-        "Compilation failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&compile_output.stdout),
-        String::from_utf8_lossy(&compile_output.stderr)
-    );
-
-    assert!(bin_path.exists(), "Binary was not created");
+    plutoc::compile_file(&entry, &bin_path)
+        .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
 
     let run_output = Command::new(&bin_path).output().unwrap();
     assert!(run_output.status.success(), "Binary exited with non-zero status");
     String::from_utf8_lossy(&run_output.stdout).to_string()
 }
 
-/// Write multiple files to a temp directory, compile entry file, assert compilation fails.
+/// Write multiple files to a temp directory, compile entry file via library call, assert compilation fails.
 fn compile_project_should_fail(files: &[(&str, &str)]) {
     let dir = tempfile::tempdir().unwrap();
 
@@ -55,15 +41,10 @@ fn compile_project_should_fail(files: &[(&str, &str)]) {
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    let output = common::plutoc()
-        .arg("compile")
-        .arg(&entry)
-        .arg("-o")
-        .arg(&bin_path)
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success(), "Compilation should have failed");
+    assert!(
+        plutoc::compile_file(&entry, &bin_path).is_err(),
+        "Compilation should have failed"
+    );
 }
 
 // ============================================================
@@ -860,22 +841,8 @@ fn run_project_with_stdlib(files: &[(&str, &str)]) -> String {
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    let compile_output = common::plutoc()
-        .arg("compile")
-        .arg(&entry)
-        .arg("-o")
-        .arg(&bin_path)
-        .output()
-        .unwrap();
-
-    assert!(
-        compile_output.status.success(),
-        "Compilation failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&compile_output.stdout),
-        String::from_utf8_lossy(&compile_output.stderr)
-    );
-
-    assert!(bin_path.exists(), "Binary was not created");
+    plutoc::compile_file_with_stdlib(&entry, &bin_path, Some(&stdlib_dst))
+        .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
 
     let run_output = Command::new(&bin_path).output().unwrap();
     assert!(run_output.status.success(), "Binary exited with non-zero status");
