@@ -39,6 +39,9 @@ pub struct TypeEnv {
     pub enums: HashMap<String, EnumInfo>,
     pub errors: HashMap<String, ErrorInfo>,
     pub extern_fns: HashSet<String>,
+    /// Per-function error sets: maps function name to set of error type names it can raise.
+    /// Populated by the error inference pass.
+    pub fn_errors: HashMap<String, HashSet<String>>,
 }
 
 impl TypeEnv {
@@ -54,6 +57,7 @@ impl TypeEnv {
             enums: HashMap::new(),
             errors: HashMap::new(),
             extern_fns: HashSet::new(),
+            fn_errors: HashMap::new(),
         }
     }
 
@@ -82,5 +86,9 @@ impl TypeEnv {
         self.classes.get(class_name)
             .map(|c| c.impl_traits.iter().any(|t| t == trait_name))
             .unwrap_or(false)
+    }
+
+    pub fn is_fn_fallible(&self, name: &str) -> bool {
+        self.fn_errors.get(name).map_or(false, |e| !e.is_empty())
     }
 }
