@@ -156,3 +156,22 @@ void *__pluto_bool_to_string(int value) {
     ((char *)header)[8 + len] = '\0';
     return header;
 }
+
+// Error handling runtime — thread-local error state (single-threaded for MVP)
+static void *__pluto_current_error = NULL;
+
+void __pluto_raise_error(void *error_obj) {
+    __pluto_current_error = error_obj;
+}
+
+long __pluto_has_error() {
+    return __pluto_current_error != NULL ? 1 : 0;
+}
+
+void *__pluto_get_error() {
+    return __pluto_current_error;
+}
+
+void __pluto_clear_error() {
+    __pluto_current_error = NULL;
+}
