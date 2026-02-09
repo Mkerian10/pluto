@@ -1,0 +1,93 @@
+import std.strings
+
+test "len" {
+    expect(strings.len("hello")).to_equal(5)
+    expect(strings.len("")).to_equal(0)
+    expect(strings.len("a")).to_equal(1)
+    expect(strings.len("hello world")).to_equal(11)
+}
+
+test "substring" {
+    expect(strings.substring("hello world", 0, 5)).to_equal("hello")
+    expect(strings.substring("hello world", 6, 5)).to_equal("world")
+    expect(strings.substring("abcdef", 2, 3)).to_equal("cde")
+    expect(strings.substring("test", 0, 0)).to_equal("")
+}
+
+test "contains" {
+    expect(strings.contains("hello world", "world")).to_be_true()
+    expect(strings.contains("hello world", "hello")).to_be_true()
+    expect(strings.contains("hello world", "xyz")).to_be_false()
+    expect(strings.contains("hello", "")).to_be_true()
+    expect(strings.contains("", "a")).to_be_false()
+}
+
+test "starts_with" {
+    expect(strings.starts_with("hello world", "hello")).to_be_true()
+    expect(strings.starts_with("hello world", "world")).to_be_false()
+    expect(strings.starts_with("hello", "hello")).to_be_true()
+    expect(strings.starts_with("hello", "")).to_be_true()
+    expect(strings.starts_with("", "a")).to_be_false()
+}
+
+test "ends_with" {
+    expect(strings.ends_with("hello world", "world")).to_be_true()
+    expect(strings.ends_with("hello world", "hello")).to_be_false()
+    expect(strings.ends_with("hello", "hello")).to_be_true()
+    expect(strings.ends_with("hello", "")).to_be_true()
+    expect(strings.ends_with("", "a")).to_be_false()
+}
+
+test "index_of" {
+    expect(strings.index_of("hello world", "world")).to_equal(6)
+    expect(strings.index_of("hello world", "hello")).to_equal(0)
+    expect(strings.index_of("hello world", "xyz")).to_equal(-1)
+    expect(strings.index_of("abcabc", "bc")).to_equal(1)
+}
+
+test "trim" {
+    expect(strings.trim("  hello  ")).to_equal("hello")
+    expect(strings.trim("hello")).to_equal("hello")
+    expect(strings.trim("  ")).to_equal("")
+    expect(strings.trim("")).to_equal("")
+}
+
+test "to_upper" {
+    expect(strings.to_upper("hello")).to_equal("HELLO")
+    expect(strings.to_upper("Hello World")).to_equal("HELLO WORLD")
+    expect(strings.to_upper("ABC")).to_equal("ABC")
+    expect(strings.to_upper("")).to_equal("")
+}
+
+test "to_lower" {
+    expect(strings.to_lower("HELLO")).to_equal("hello")
+    expect(strings.to_lower("Hello World")).to_equal("hello world")
+    expect(strings.to_lower("abc")).to_equal("abc")
+    expect(strings.to_lower("")).to_equal("")
+}
+
+test "replace" {
+    expect(strings.replace("hello world", "world", "pluto")).to_equal("hello pluto")
+    expect(strings.replace("aaa", "a", "bb")).to_equal("bbbbbb")
+    expect(strings.replace("hello", "xyz", "abc")).to_equal("hello")
+}
+
+test "split" {
+    let parts = strings.split("a,b,c", ",")
+    expect(parts.len()).to_equal(3)
+    expect(parts[0]).to_equal("a")
+    expect(parts[1]).to_equal("b")
+    expect(parts[2]).to_equal("c")
+}
+
+test "split single element" {
+    let parts = strings.split("hello", ",")
+    expect(parts.len()).to_equal(1)
+    expect(parts[0]).to_equal("hello")
+}
+
+test "char_at" {
+    expect(strings.char_at("hello", 0)).to_equal("h")
+    expect(strings.char_at("hello", 4)).to_equal("o")
+    expect(strings.char_at("abc", 1)).to_equal("b")
+}
