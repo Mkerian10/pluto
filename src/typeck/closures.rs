@@ -38,7 +38,11 @@ pub(crate) fn infer_closure(
     };
 
     // Check the body against the determined return type
+    // Reset loop_depth so break/continue inside closures can't escape to enclosing loop
+    let saved_loop_depth = env.loop_depth;
+    env.loop_depth = 0;
     check_block(&body.node, env, &final_ret)?;
+    env.loop_depth = saved_loop_depth;
 
     // Collect captures: find free variables that come from outer scopes
     let param_names: HashSet<&str> = params.iter().map(|p| p.name.node.as_str()).collect();
@@ -152,6 +156,7 @@ fn collect_free_vars_stmt(
                 collect_free_vars_expr(&val.node, param_names, outer_depth, env, captures, seen);
             }
         }
+        Stmt::Break | Stmt::Continue => {}
     }
 }
 
@@ -256,6 +261,10 @@ fn collect_free_vars_expr(
             for elem in elements {
                 collect_free_vars_expr(&elem.node, param_names, outer_depth, env, captures, seen);
             }
+        }
+        Expr::Range { start, end, .. } => {
+            collect_free_vars_expr(&start.node, param_names, outer_depth, env, captures, seen);
+            collect_free_vars_expr(&end.node, param_names, outer_depth, env, captures, seen);
         }
         // Literals and other non-capturing expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)

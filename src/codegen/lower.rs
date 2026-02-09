@@ -28,6 +28,8 @@ struct LowerContext<'a> {
     var_types: HashMap<String, PlutoType>,
     next_var: u32,
     expected_return_type: Option<PlutoType>,
+    /// Stack of (continue_target, break_target) blocks for break/continue
+    loop_stack: Vec<(cranelift_codegen::ir::Block, cranelift_codegen::ir::Block)>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -203,6 +205,22 @@ impl<'a> LowerContext<'a> {
                 *terminated = true;
                 Ok(())
             }
+            Stmt::Break => {
+                let (_, break_bb) = self.loop_stack.last().ok_or_else(|| {
+                    CompileError::codegen("break outside of loop".to_string())
+                })?;
+                self.builder.ins().jump(*break_bb, &[]);
+                *terminated = true;
+                Ok(())
+            }
+            Stmt::Continue => {
+                let (continue_bb, _) = self.loop_stack.last().ok_or_else(|| {
+                    CompileError::codegen("continue outside of loop".to_string())
+                })?;
+                self.builder.ins().jump(*continue_bb, &[]);
+                *terminated = true;
+                Ok(())
+            }
             Stmt::Expr(expr) => {
                 self.lower_expr(&expr.node)?;
                 Ok(())
@@ -323,10 +341,12 @@ impl<'a> LowerContext<'a> {
 
         self.builder.switch_to_block(body_bb);
         self.builder.seal_block(body_bb);
+        self.loop_stack.push((header_bb, exit_bb));
         let mut body_terminated = false;
         for s in &body.node.stmts {
             self.lower_stmt(&s.node, &mut body_terminated)?;
         }
+        self.loop_stack.pop();
         if !body_terminated {
             self.builder.ins().jump(header_bb, &[]);
         }
@@ -338,6 +358,111 @@ impl<'a> LowerContext<'a> {
     }
 
     fn lower_for(
+        &mut self,
+        var: &crate::span::Spanned<String>,
+        iterable: &crate::span::Spanned<Expr>,
+        body: &crate::span::Spanned<Block>,
+    ) -> Result<(), CompileError> {
+        let iter_type = infer_type_for_expr(&iterable.node, self.env, &self.var_types);
+        match &iter_type {
+            PlutoType::Range => self.lower_for_range(var, iterable, body),
+            PlutoType::Array(_) => self.lower_for_array(var, iterable, body),
+            _ => Err(CompileError::codegen("for loop requires array or range".to_string())),
+        }
+    }
+
+    fn lower_for_range(
+        &mut self,
+        var: &crate::span::Spanned<String>,
+        iterable: &crate::span::Spanned<Expr>,
+        body: &crate::span::Spanned<Block>,
+    ) -> Result<(), CompileError> {
+        // Extract start, end, inclusive from the Range expression
+        let (start_expr, end_expr, inclusive) = match &iterable.node {
+            Expr::Range { start, end, inclusive } => (&start.node, &end.node, *inclusive),
+            _ => return Err(CompileError::codegen("expected range expression".to_string())),
+        };
+
+        let start_val = self.lower_expr(start_expr)?;
+        let end_val = self.lower_expr(end_expr)?;
+
+        // Create counter variable initialized to start
+        let counter_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        self.builder.declare_var(counter_var, types::I64);
+        self.builder.def_var(counter_var, start_val);
+
+        // Create blocks
+        let header_bb = self.builder.create_block();
+        let body_bb = self.builder.create_block();
+        let increment_bb = self.builder.create_block();
+        let exit_bb = self.builder.create_block();
+
+        self.builder.ins().jump(header_bb, &[]);
+
+        // Header: check counter < end (exclusive) or counter <= end (inclusive)
+        self.builder.switch_to_block(header_bb);
+        let counter = self.builder.use_var(counter_var);
+        let cmp = if inclusive {
+            IntCC::SignedLessThanOrEqual
+        } else {
+            IntCC::SignedLessThan
+        };
+        let cond = self.builder.ins().icmp(cmp, counter, end_val);
+        self.builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
+
+        // Body
+        self.builder.switch_to_block(body_bb);
+        self.builder.seal_block(body_bb);
+
+        // Loop variable = counter value directly (ranges iterate ints)
+        let prev_var = self.variables.get(&var.node).cloned();
+        let prev_type = self.var_types.get(&var.node).cloned();
+
+        // Use counter_var as the loop variable directly
+        self.variables.insert(var.node.clone(), counter_var);
+        self.var_types.insert(var.node.clone(), PlutoType::Int);
+
+        // Push loop stack: continue goes to increment, break goes to exit
+        self.loop_stack.push((increment_bb, exit_bb));
+        let mut body_terminated = false;
+        for s in &body.node.stmts {
+            self.lower_stmt(&s.node, &mut body_terminated)?;
+        }
+        self.loop_stack.pop();
+
+        if !body_terminated {
+            self.builder.ins().jump(increment_bb, &[]);
+        }
+
+        // Increment block
+        self.builder.switch_to_block(increment_bb);
+        self.builder.seal_block(increment_bb);
+        let counter_inc = self.builder.use_var(counter_var);
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let new_counter = self.builder.ins().iadd(counter_inc, one);
+        self.builder.def_var(counter_var, new_counter);
+        self.builder.ins().jump(header_bb, &[]);
+
+        self.builder.seal_block(header_bb);
+        self.builder.switch_to_block(exit_bb);
+        self.builder.seal_block(exit_bb);
+
+        // Restore prior variable binding
+        if let Some(pv) = prev_var {
+            self.variables.insert(var.node.clone(), pv);
+        } else {
+            self.variables.remove(&var.node);
+        }
+        if let Some(pt) = prev_type {
+            self.var_types.insert(var.node.clone(), pt);
+        } else {
+            self.var_types.remove(&var.node);
+        }
+        Ok(())
+    }
+
+    fn lower_for_array(
         &mut self,
         var: &crate::span::Spanned<String>,
         iterable: &crate::span::Spanned<Expr>,
@@ -366,6 +491,7 @@ impl<'a> LowerContext<'a> {
         // Create blocks
         let header_bb = self.builder.create_block();
         let body_bb = self.builder.create_block();
+        let increment_bb = self.builder.create_block();
         let exit_bb = self.builder.create_block();
 
         self.builder.ins().jump(header_bb, &[]);
@@ -397,11 +523,13 @@ impl<'a> LowerContext<'a> {
         self.variables.insert(var.node.clone(), loop_var);
         self.var_types.insert(var.node.clone(), elem_type);
 
-        // Lower body statements
+        // Push loop stack: continue goes to increment, break goes to exit
+        self.loop_stack.push((increment_bb, exit_bb));
         let mut body_terminated = false;
         for s in &body.node.stmts {
             self.lower_stmt(&s.node, &mut body_terminated)?;
         }
+        self.loop_stack.pop();
 
         // Restore prior variable binding if shadowed
         if let Some(pv) = prev_var {
@@ -415,14 +543,18 @@ impl<'a> LowerContext<'a> {
             self.var_types.remove(&var.node);
         }
 
-        // Increment counter
         if !body_terminated {
-            let counter_inc = self.builder.use_var(counter_var);
-            let one = self.builder.ins().iconst(types::I64, 1);
-            let new_counter = self.builder.ins().iadd(counter_inc, one);
-            self.builder.def_var(counter_var, new_counter);
-            self.builder.ins().jump(header_bb, &[]);
+            self.builder.ins().jump(increment_bb, &[]);
         }
+
+        // Increment block
+        self.builder.switch_to_block(increment_bb);
+        self.builder.seal_block(increment_bb);
+        let counter_inc = self.builder.use_var(counter_var);
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let new_counter = self.builder.ins().iadd(counter_inc, one);
+        self.builder.def_var(counter_var, new_counter);
+        self.builder.ins().jump(header_bb, &[]);
 
         self.builder.seal_block(header_bb);
         self.builder.switch_to_block(exit_bb);
@@ -771,6 +903,9 @@ impl<'a> LowerContext<'a> {
             }
             Expr::ClosureCreate { fn_name, captures } => {
                 self.lower_closure_create(fn_name, captures)
+            }
+            Expr::Range { .. } => {
+                Err(CompileError::codegen("range expressions can only be used as for loop iterables".to_string()))
             }
         }
     }
@@ -1394,7 +1529,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I32, arg_val);
                 self.call_runtime_void("__pluto_print_bool", &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Error | PlutoType::TypeParam(_) => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -1492,6 +1627,7 @@ pub fn lower_function(
         var_types,
         next_var,
         expected_return_type,
+        loop_stack: Vec::new(),
     };
 
     // Initialize GC at start of non-app main
@@ -1626,6 +1762,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Map(_, _) => types::I64,    // pointer to map handle
         PlutoType::Set(_) => types::I64,       // pointer to set handle
         PlutoType::Error => types::I64,        // pointer to error object
+        PlutoType::Range => types::I64,           // not used as a value type
         PlutoType::TypeParam(_) => panic!("TypeParam should not reach codegen"),
     }
 }
@@ -1804,5 +1941,6 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 PlutoType::Void
             }
         }
+        Expr::Range { .. } => PlutoType::Range,
     }
 }

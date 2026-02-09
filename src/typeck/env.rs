@@ -108,6 +108,8 @@ pub struct TypeEnv {
     pub current_fn: Option<String>,
     /// Ambient types declared in the app (for validation)
     pub ambient_types: HashSet<String>,
+    /// Nesting depth of loops (for validating break/continue)
+    pub loop_depth: u32,
 }
 
 impl TypeEnv {
@@ -150,6 +152,7 @@ impl TypeEnv {
             fallible_builtin_calls: HashSet::new(),
             current_fn: None,
             ambient_types: HashSet::new(),
+            loop_depth: 0,
         }
     }
 
@@ -248,6 +251,7 @@ fn mangle_type(ty: &PlutoType) -> String {
         PlutoType::Set(t) => format!("set_{}", mangle_type(t)),
         PlutoType::Trait(n) => n.clone(),
         PlutoType::TypeParam(n) => n.clone(),
+        PlutoType::Range => "range".into(),
         PlutoType::Error => "error".into(),
     }
 }

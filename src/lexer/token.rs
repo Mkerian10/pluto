@@ -167,6 +167,10 @@ pub enum Token {
     Arrow,
     #[token("=>")]
     FatArrow,
+    #[token("..=")]
+    DotDotEq,
+    #[token("..")]
+    DotDot,
     #[token(".")]
     Dot,
     #[token("?")]
@@ -249,6 +253,8 @@ impl std::fmt::Display for Token {
             Token::Colon => write!(f, ":"),
             Token::Arrow => write!(f, "->"),
             Token::FatArrow => write!(f, "=>"),
+            Token::DotDotEq => write!(f, "..="),
+            Token::DotDot => write!(f, ".."),
             Token::Dot => write!(f, "."),
             Token::Question => write!(f, "?"),
             Token::Newline => write!(f, "newline"),

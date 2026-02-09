@@ -249,6 +249,7 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         },
         PlutoType::Error => TypeExpr::Named("error".to_string()),
         PlutoType::TypeParam(name) => TypeExpr::Named(name.clone()),
+        PlutoType::Range => TypeExpr::Named("range".to_string()),
     }
 }
 
@@ -369,6 +370,7 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
         Stmt::Expr(expr) => {
             substitute_in_expr(&mut expr.node, bindings);
         }
+        Stmt::Break | Stmt::Continue => {}
     }
 }
 
@@ -462,6 +464,10 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
             }
         }
         Expr::ClosureCreate { .. } => {}
+        Expr::Range { start, end, .. } => {
+            substitute_in_expr(&mut start.node, bindings);
+            substitute_in_expr(&mut end.node, bindings);
+        }
         Expr::Propagate { expr } => {
             substitute_in_expr(&mut expr.node, bindings);
         }
@@ -655,6 +661,7 @@ fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
             offset_spanned(expr, offset);
             offset_expr_spans(&mut expr.node, offset);
         }
+        Stmt::Break | Stmt::Continue => {}
     }
 }
 
@@ -667,6 +674,12 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
             offset_expr_spans(&mut lhs.node, offset);
             offset_spanned(rhs, offset);
             offset_expr_spans(&mut rhs.node, offset);
+        }
+        Expr::Range { start, end, .. } => {
+            offset_spanned(start, offset);
+            offset_expr_spans(&mut start.node, offset);
+            offset_spanned(end, offset);
+            offset_expr_spans(&mut end.node, offset);
         }
         Expr::UnaryOp { operand, .. } => {
             offset_spanned(operand, offset);
@@ -897,6 +910,7 @@ fn rewrite_stmt(stmt: &mut Stmt, rewrites: &HashMap<(usize, usize), String>) {
         Stmt::Expr(expr) => {
             rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
         }
+        Stmt::Break | Stmt::Continue => {}
     }
 }
 
@@ -939,6 +953,10 @@ fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(u
         Expr::BinOp { lhs, rhs, .. } => {
             rewrite_expr(&mut lhs.node, lhs.span.start, lhs.span.end, rewrites);
             rewrite_expr(&mut rhs.node, rhs.span.start, rhs.span.end, rewrites);
+        }
+        Expr::Range { start, end, .. } => {
+            rewrite_expr(&mut start.node, start.span.start, start.span.end, rewrites);
+            rewrite_expr(&mut end.node, end.span.start, end.span.end, rewrites);
         }
         Expr::UnaryOp { operand, .. } => {
             rewrite_expr(&mut operand.node, operand.span.start, operand.span.end, rewrites);
@@ -1093,6 +1111,7 @@ fn resolve_generic_te_in_stmt(stmt: &mut Stmt, env: &mut TypeEnv) -> Result<(), 
             }
         }
         Stmt::Expr(expr) => resolve_generic_te_in_expr(&mut expr.node, env)?,
+        Stmt::Break | Stmt::Continue => {}
     }
     Ok(())
 }
@@ -1122,6 +1141,10 @@ fn resolve_generic_te_in_expr(expr: &mut Expr, env: &mut TypeEnv) -> Result<(), 
         Expr::BinOp { lhs, rhs, .. } => {
             resolve_generic_te_in_expr(&mut lhs.node, env)?;
             resolve_generic_te_in_expr(&mut rhs.node, env)?;
+        }
+        Expr::Range { start, end, .. } => {
+            resolve_generic_te_in_expr(&mut start.node, env)?;
+            resolve_generic_te_in_expr(&mut end.node, env)?;
         }
         Expr::UnaryOp { operand, .. } => {
             resolve_generic_te_in_expr(&mut operand.node, env)?;

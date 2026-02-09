@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run, compile_and_run_stdout, compile_should_fail};
+use common::{compile_and_run, compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
 
 #[test]
 fn if_else() {
@@ -152,4 +152,158 @@ fn for_loop_nested_same_array() {
         "fn main() {\n    let a = [1, 2]\n    for x in a {\n        for y in a {\n            print(x * 10 + y)\n        }\n    }\n}",
     );
     assert_eq!(out, "11\n12\n21\n22\n");
+}
+
+// ── break tests ──
+
+#[test]
+fn while_break() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let i = 0\n    while true {\n        if i == 3 {\n            break\n        }\n        print(i)\n        i = i + 1\n    }\n    print(99)\n}",
+    );
+    assert_eq!(out, "0\n1\n2\n99\n");
+}
+
+#[test]
+fn for_break() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    for x in [10, 20, 30, 40, 50] {\n        if x == 30 {\n            break\n        }\n        print(x)\n    }\n    print(99)\n}",
+    );
+    assert_eq!(out, "10\n20\n99\n");
+}
+
+#[test]
+fn nested_loops_inner_break() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    for x in [1, 2] {\n        for y in [10, 20, 30] {\n            if y == 20 {\n                break\n            }\n            print(x * 100 + y)\n        }\n    }\n}",
+    );
+    assert_eq!(out, "110\n210\n");
+}
+
+#[test]
+fn break_outside_loop_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    break\n}",
+        "can only be used inside a loop",
+    );
+}
+
+// ── continue tests ──
+
+#[test]
+fn while_continue() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let i = 0\n    while i < 5 {\n        i = i + 1\n        if i == 3 {\n            continue\n        }\n        print(i)\n    }\n}",
+    );
+    assert_eq!(out, "1\n2\n4\n5\n");
+}
+
+#[test]
+fn for_continue() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    for x in [1, 2, 3, 4, 5] {\n        if x == 3 {\n            continue\n        }\n        print(x)\n    }\n}",
+    );
+    assert_eq!(out, "1\n2\n4\n5\n");
+}
+
+#[test]
+fn continue_outside_loop_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    continue\n}",
+        "can only be used inside a loop",
+    );
+}
+
+// ── range tests ──
+
+#[test]
+fn range_exclusive() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    for i in 0..5 {\n        print(i)\n    }\n}",
+    );
+    assert_eq!(out, "0\n1\n2\n3\n4\n");
+}
+
+#[test]
+fn range_inclusive() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    for i in 0..=5 {\n        print(i)\n    }\n}",
+    );
+    assert_eq!(out, "0\n1\n2\n3\n4\n5\n");
+}
+
+#[test]
+fn range_variable_endpoints() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let start = 2\n    let end = 6\n    for i in start..end {\n        print(i)\n    }\n}",
+    );
+    assert_eq!(out, "2\n3\n4\n5\n");
+}
+
+#[test]
+fn range_empty() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    for i in 5..3 {\n        print(i)\n    }\n    print(99)\n}",
+    );
+    assert_eq!(out, "99\n");
+}
+
+#[test]
+fn range_expression_endpoints() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let n = 3\n    for i in 0..(n * 2) {\n        print(i)\n    }\n}",
+    );
+    assert_eq!(out, "0\n1\n2\n3\n4\n5\n");
+}
+
+#[test]
+fn range_sum() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let total = 0\n    for i in 1..=10 {\n        total = total + i\n    }\n    print(total)\n}",
+    );
+    assert_eq!(out, "55\n");
+}
+
+// ── combined tests ──
+
+#[test]
+fn break_in_range_for() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    for i in 0..100 {\n        if i == 4 {\n            break\n        }\n        print(i)\n    }\n}",
+    );
+    assert_eq!(out, "0\n1\n2\n3\n");
+}
+
+#[test]
+fn continue_in_range_for() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    for i in 0..6 {\n        if i % 2 == 0 {\n            continue\n        }\n        print(i)\n    }\n}",
+    );
+    assert_eq!(out, "1\n3\n5\n");
+}
+
+#[test]
+fn nested_range_with_break() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    for i in 0..3 {\n        for j in 0..10 {\n            if j == 2 {\n                break\n            }\n            print(i * 10 + j)\n        }\n    }\n}",
+    );
+    assert_eq!(out, "0\n1\n10\n11\n20\n21\n");
+}
+
+// ── closure edge cases ──
+
+#[test]
+fn break_in_closure_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    while true {\n        let f = () => { break }\n    }\n}",
+        "can only be used inside a loop",
+    );
+}
+
+#[test]
+fn continue_in_closure_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    while true {\n        let f = () => { continue }\n    }\n}",
+        "can only be used inside a loop",
+    );
 }
