@@ -41,11 +41,28 @@ Pluto's 0th class object is the **app** because:
 
 ## Modules
 
-> **Status:** Open design question.
->
-> Topics to resolve:
-> - Import syntax
-> - Visibility modifiers (public/private)
-> - Namespacing strategy
-> - How modules relate to apps
-> - Can a module contain multiple apps?
+Modules organize code into separate files and namespaces.
+
+```
+import math
+import utils as u
+
+fn main() {
+    let v = math.add(1, 2)
+    u.log("result: {v}")
+}
+```
+
+Key properties:
+- `import <name>` loads a sibling file (`<name>.pluto`) or directory (`<name>/`)
+- Items must be marked `pub` to be visible across modules (private by default)
+- Imported items are accessed via qualified names: `math.add()`, `math.Point { x: 1, y: 2 }`
+- Files in the same directory are auto-merged (no import needed)
+- Hierarchical imports supported: `import net.http`
+- Import aliases: `import utils as u`
+- Modules cannot contain `app` declarations (only the entry file can)
+
+### Open Questions
+
+- [ ] How do apps compose across modules?
+- [ ] Transitive imports (currently restricted — imported modules can't import other modules)

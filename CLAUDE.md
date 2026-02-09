@@ -17,24 +17,38 @@ cargo run -- run <file.pluto>      # Compile and immediately run
 
 ## Compiler Pipeline
 
-Defined in `src/lib.rs::compile()`. Six stages:
+Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and `compile()` (single-source-string). Eight stages:
 
 1. **Lex** (`src/lexer/`) — logos-based tokenizer, produces `Vec<Spanned<Token>>`
 2. **Parse** (`src/parser/`) — recursive descent + Pratt parsing for expressions, produces `Program` AST
-3. **Type check** (`src/typeck/`) — two-pass: first registers all declarations, then checks bodies. Returns `TypeEnv`
-4. **Codegen** (`src/codegen/`) — lowers AST to Cranelift IR, produces object bytes
-5. **Link** (`src/lib.rs::link()`) — compiles `runtime/builtins.c` with `cc`, links both `.o` files into final binary
-6. **Cleanup** — removes temp `.o` files
+3. **Module resolve** (`src/modules.rs`) — discovers imported modules, parses them, validates visibility
+4. **Module flatten** (`src/modules.rs`) — merges imported items into the main program with prefixed names (e.g., `math.add`)
+5. **Closure lift** (`src/closures.rs`) — transforms `Expr::Closure` into top-level functions + `Expr::ClosureCreate`
+6. **Type check** (`src/typeck/`) — multi-pass: registers declarations (traits, enums, app, errors, classes, functions), checks bodies, infers error sets, enforces error handling. Returns `TypeEnv`
+7. **Codegen** (`src/codegen/`) — lowers AST to Cranelift IR, produces object bytes
+8. **Link** (`src/lib.rs::link()`) — compiles `runtime/builtins.c` with `cc`, links both `.o` files into final binary
 
 ## Key Architecture Notes
 
 **Spanned types** — All AST nodes are wrapped in `Spanned<T>` (defined in `src/span.rs`), carrying a `Span { start, end }` byte offset. Access the inner value with `.node` and source location with `.span`.
 
-**Type system** — `PlutoType` enum in `src/typeck/types.rs`: `Int` (I64), `Float` (F64), `Bool` (I8), `String` (heap-allocated), `Void`, `Class(name)`, `Array(element_type)`, `Trait(name)`. Nominal typing by default, structural for traits (via vtables).
+**Type system** — `PlutoType` enum in `src/typeck/types.rs`: `Int` (I64), `Float` (F64), `Bool` (I8), `String` (heap-allocated), `Void`, `Class(name)`, `Array(element_type)`, `Trait(name)`, `Enum(name)`, `Fn(params, return_type)`, `Error`. Nominal typing by default, structural for traits (via vtables).
+
+**Enums** — Unit variants (`Color::Red`) and data-carrying variants (`Shape::Circle { radius: float }`). `match` with exhaustiveness checking.
+
+**Closures** — Arrow syntax `(x: int) => x + 1`. Capture by value. Represented as heap-allocated `[fn_ptr, captures...]`. Lifted to top-level functions by `src/closures.rs` before typeck.
+
+**Error handling** — `error` declarations, `raise` to throw, `!` postfix to propagate, `catch` (shorthand or wildcard) to handle. Compiler infers error-ability via fixed-point analysis and enforces handling at call sites.
+
+**App + DI** — `app` declaration with `fn main(self)`. Classes use bracket deps `class Foo[dep: Type]` for injection. Compile-time topological sort wires singletons. Codegen synthesizes `main()` that allocates and connects all dependencies.
+
+**Modules** — `import math` with `pub` visibility. Flatten-before-typeck design: imported items get prefixed names (e.g., `math.add`). Supports directory modules, single-file modules, and hierarchical imports.
+
+**String interpolation** — `"hello {name}"` with arbitrary expressions inside `{}`.
 
 **Codegen target** — Hardcoded to `aarch64-apple-darwin` in `src/codegen/mod.rs`. Needs platform detection in the future.
 
-**Linking with C runtime** — The compiler embeds `runtime/builtins.c` via `include_str!()` and compiles it with `cc` at link time. This provides `print`, memory allocation, string ops, and array ops.
+**Linking with C runtime** — The compiler embeds `runtime/builtins.c` via `include_str!()` and compiles it with `cc` at link time. This provides `print`, memory allocation, string ops, array ops, and error handling runtime (`pluto_get_error`, `pluto_set_error`, `pluto_clear_error`).
 
 **No semicolons** — Pluto uses newline-based statement termination. Newlines are lexed as `Token::Newline` and the parser consumes them at statement boundaries while skipping them inside expressions.
 

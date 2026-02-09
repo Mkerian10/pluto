@@ -60,12 +60,38 @@ class OrderService {
 
 The whole-program compiler verifies that every `inject` declaration has a provider in the dependency graph. Missing dependencies are compile-time errors, not runtime surprises.
 
-## Scope
+## Current Implementation
 
-> **Status:** Open design question.
->
-> Topics to resolve:
-> - Can `inject` appear in any class, or only at certain scopes (app-level, service-level)?
-> - How deep can DI go? Can a class three layers deep in the call stack declare `inject`?
-> - How are DI providers registered? Is there a separate binding configuration?
-> - Lifecycle management — singleton vs per-request vs per-process
+DI is implemented with compile-time wiring:
+
+- **Bracket deps:** Classes declare dependencies with `class Foo[dep: Type]` syntax. These are stored before regular fields in memory.
+- **App as root:** The `app` declaration is the DI root. All dependencies are declared as bracket deps on classes.
+- **Topological sort:** The compiler orders singletons by dependency, detects cycles at compile time.
+- **Synthetic main:** Codegen generates a `main()` that allocates all singletons, wires dependencies, then calls the app's `main(self)`.
+- **Struct literal blocking:** Classes with injected fields cannot be constructed manually via struct literals.
+
+```
+class Logger {
+    fn info(self, msg: string) {
+        print(msg)
+    }
+}
+
+class OrderService[logger: Logger] {
+    fn process(self) {
+        self.logger.info("processing")
+    }
+}
+
+app MyApp[svc: OrderService] {
+    fn main(self) {
+        self.svc.process()
+    }
+}
+```
+
+## Open Questions
+
+- [ ] How are DI providers registered per environment? (currently no environment-specific config)
+- [ ] Lifecycle management — singleton vs per-request vs per-process (currently all singletons)
+- [ ] Can `inject` appear in nested classes not directly referenced by the app?
