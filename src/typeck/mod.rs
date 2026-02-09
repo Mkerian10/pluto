@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::Spanned;
-use env::{ClassInfo, EnumInfo, ErrorInfo, FuncSig, TraitInfo, TypeEnv};
+use env::{ClassInfo, EnumInfo, ErrorInfo, FuncSig, GenericClassInfo, GenericEnumInfo, GenericFuncSig, InstKind, Instantiation, TraitInfo, TypeEnv};
 use types::PlutoType;
 
 fn types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> bool {
@@ -46,11 +46,11 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
                 if p.name.node == "self" {
                     param_types.push(PlutoType::Void); // placeholder for self
                 } else {
-                    param_types.push(resolve_type(&p.ty, &env)?);
+                    param_types.push(resolve_type(&p.ty, &mut env)?);
                 }
             }
             let return_type = match &m.return_type {
-                Some(rt) => resolve_type(rt, &env)?,
+                Some(rt) => resolve_type(rt, &mut env)?,
                 None => PlutoType::Void,
             };
             methods.push((m.name.node.clone(), FuncSig { params: param_types, return_type }));
@@ -65,11 +65,29 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     // Pass 0b: Register enums
     for enum_decl in &program.enums {
         let e = &enum_decl.node;
+        if !e.type_params.is_empty() {
+            // Generic enum — register in generic_enums with TypeParam types
+            let tp_names: std::collections::HashSet<String> = e.type_params.iter().map(|tp| tp.node.clone()).collect();
+            let mut variants = Vec::new();
+            for v in &e.variants {
+                let mut fields = Vec::new();
+                for f in &v.fields {
+                    let ty = resolve_type_with_params(&f.ty, &mut env, &tp_names)?;
+                    fields.push((f.name.node.clone(), ty));
+                }
+                variants.push((v.name.node.clone(), fields));
+            }
+            env.generic_enums.insert(e.name.node.clone(), GenericEnumInfo {
+                type_params: e.type_params.iter().map(|tp| tp.node.clone()).collect(),
+                variants,
+            });
+            continue;
+        }
         let mut variants = Vec::new();
         for v in &e.variants {
             let mut fields = Vec::new();
             for f in &v.fields {
-                let ty = resolve_type(&f.ty, &env)?;
+                let ty = resolve_type(&f.ty, &mut env)?;
                 fields.push((f.name.node.clone(), ty));
             }
             variants.push((v.name.node.clone(), fields));
@@ -108,7 +126,7 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
         let e = &error_decl.node;
         let mut fields = Vec::new();
         for f in &e.fields {
-            let ty = resolve_type(&f.ty, &env)?;
+            let ty = resolve_type(&f.ty, &mut env)?;
             fields.push((f.name.node.clone(), ty));
         }
         env.errors.insert(e.name.node.clone(), ErrorInfo { fields });
@@ -117,6 +135,10 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     // Pass 1a: Register class names first (so bracket deps can reference forward-declared classes)
     for class in &program.classes {
         let c = &class.node;
+        if !c.type_params.is_empty() {
+            // Generic class — skip concrete registration (handled below)
+            continue;
+        }
         env.classes.insert(
             c.name.node.clone(),
             ClassInfo {
@@ -130,9 +152,40 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     // Pass 1a2: Resolve class fields and traits (now that all class names are known)
     for class in &program.classes {
         let c = &class.node;
+        if !c.type_params.is_empty() {
+            // Generic class — register in generic_classes
+            // v1 restriction: no trait impls on generic classes
+            if !c.impl_traits.is_empty() {
+                return Err(CompileError::type_err(
+                    "generic classes cannot implement traits (v1 restriction)".to_string(),
+                    class.span,
+                ));
+            }
+            // v1 restriction: no DI on generic classes
+            if c.fields.iter().any(|f| f.is_injected) {
+                return Err(CompileError::type_err(
+                    "generic classes cannot have injected dependencies (v1 restriction)".to_string(),
+                    class.span,
+                ));
+            }
+            let tp_names: std::collections::HashSet<String> = c.type_params.iter().map(|tp| tp.node.clone()).collect();
+            let mut fields = Vec::new();
+            for f in &c.fields {
+                let ty = resolve_type_with_params(&f.ty, &mut env, &tp_names)?;
+                fields.push((f.name.node.clone(), ty, f.is_injected));
+            }
+            let method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
+            env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
+                type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
+                fields,
+                methods: method_names,
+                impl_traits: Vec::new(),
+            });
+            continue;
+        }
         let mut fields = Vec::new();
         for f in &c.fields {
-            let ty = resolve_type(&f.ty, &env)?;
+            let ty = resolve_type(&f.ty, &mut env)?;
             fields.push((f.name.node.clone(), ty, f.is_injected));
         }
 
@@ -161,7 +214,7 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
         // Validate only primitive types allowed
         let mut param_types = Vec::new();
         for p in &e.params {
-            let ty = resolve_type(&p.ty, &env)?;
+            let ty = resolve_type(&p.ty, &mut env)?;
             match &ty {
                 PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Void => {}
                 _ => {
@@ -176,7 +229,7 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
 
         let return_type = match &e.return_type {
             Some(t) => {
-                let ty = resolve_type(t, &env)?;
+                let ty = resolve_type(t, &mut env)?;
                 match &ty {
                     PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Void => {}
                     _ => {
@@ -210,12 +263,31 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
             ));
         }
 
+        if !f.type_params.is_empty() {
+            // Generic function — register in generic_functions with TypeParam types
+            let tp_names: std::collections::HashSet<String> = f.type_params.iter().map(|tp| tp.node.clone()).collect();
+            let mut param_types = Vec::new();
+            for p in &f.params {
+                param_types.push(resolve_type_with_params(&p.ty, &mut env, &tp_names)?);
+            }
+            let return_type = match &f.return_type {
+                Some(t) => resolve_type_with_params(t, &mut env, &tp_names)?,
+                None => PlutoType::Void,
+            };
+            env.generic_functions.insert(f.name.node.clone(), GenericFuncSig {
+                type_params: f.type_params.iter().map(|tp| tp.node.clone()).collect(),
+                params: param_types,
+                return_type,
+            });
+            continue;
+        }
+
         let mut param_types = Vec::new();
         for p in &f.params {
-            param_types.push(resolve_type(&p.ty, &env)?);
+            param_types.push(resolve_type(&p.ty, &mut env)?);
         }
         let return_type = match &f.return_type {
-            Some(t) => resolve_type(t, &env)?,
+            Some(t) => resolve_type(t, &mut env)?,
             None => PlutoType::Void,
         };
         env.functions.insert(
@@ -227,6 +299,7 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     // Pass 1c: Collect method signatures (mangled name: ClassName_method)
     for class in &program.classes {
         let c = &class.node;
+        if !c.type_params.is_empty() { continue; } // Skip generic classes
         let class_name = &c.name.node;
         let mut method_names = Vec::new();
         for method in &c.methods {
@@ -239,11 +312,11 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
                 if p.name.node == "self" {
                     param_types.push(PlutoType::Class(class_name.clone()));
                 } else {
-                    param_types.push(resolve_type(&p.ty, &env)?);
+                    param_types.push(resolve_type(&p.ty, &mut env)?);
                 }
             }
             let return_type = match &m.return_type {
-                Some(t) => resolve_type(t, &env)?,
+                Some(t) => resolve_type(t, &mut env)?,
                 None => PlutoType::Void,
             };
             env.functions.insert(
@@ -265,7 +338,7 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
         // Resolve inject field types
         let mut fields = Vec::new();
         for f in &app.inject_fields {
-            let ty = resolve_type(&f.ty, &env)?;
+            let ty = resolve_type(&f.ty, &mut env)?;
             fields.push((f.name.node.clone(), ty, f.is_injected));
         }
 
@@ -312,11 +385,11 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
                 if p.name.node == "self" {
                     param_types.push(PlutoType::Class(app_name.clone()));
                 } else {
-                    param_types.push(resolve_type(&p.ty, &env)?);
+                    param_types.push(resolve_type(&p.ty, &mut env)?);
                 }
             }
             let return_type = match &m.return_type {
-                Some(t) => resolve_type(t, &env)?,
+                Some(t) => resolve_type(t, &mut env)?,
                 None => PlutoType::Void,
             };
             env.functions.insert(
@@ -476,6 +549,7 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     // Pass 1d: Trait conformance checking
     for class in &program.classes {
         let c = &class.node;
+        if !c.type_params.is_empty() { continue; } // Skip generic classes
         let class_name = &c.name.node;
         let class_info = env.classes.get(class_name).ok_or_else(|| {
             CompileError::type_err(
@@ -569,12 +643,14 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
 
     // Pass 2: Check function bodies
     for func in &program.functions {
+        if !func.node.type_params.is_empty() { continue; } // Skip generic functions
         check_function(&func.node, &mut env, None)?;
     }
 
     // Pass 2b: Check method bodies
     for class in &program.classes {
         let c = &class.node;
+        if !c.type_params.is_empty() { continue; } // Skip generic classes
         for method in &c.methods {
             check_function(&method.node, &mut env, Some(&c.name.node))?;
         }
@@ -583,6 +659,7 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     // Pass 2c: Type-check default method bodies for classes that inherit them
     for class in &program.classes {
         let c = &class.node;
+        if !c.type_params.is_empty() { continue; } // Skip generic classes
         let class_name = &c.name.node;
         let class_method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
 
@@ -629,7 +706,7 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     Ok(env)
 }
 
-fn resolve_type(ty: &Spanned<TypeExpr>, env: &TypeEnv) -> Result<PlutoType, CompileError> {
+fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<PlutoType, CompileError> {
     match &ty.node {
         TypeExpr::Named(name) => match name.as_str() {
             "int" => Ok(PlutoType::Int),
@@ -684,12 +761,18 @@ fn resolve_type(ty: &Spanned<TypeExpr>, env: &TypeEnv) -> Result<PlutoType, Comp
             let resolved_args: Vec<PlutoType> = type_args.iter()
                 .map(|a| resolve_type(a, env))
                 .collect::<Result<Vec<_>, _>>()?;
-            // Build mangled name and check if already instantiated
+            // Check if already instantiated
             let mangled = crate::typeck::env::mangle_name(name, &resolved_args);
             if env.classes.contains_key(&mangled) {
                 Ok(PlutoType::Class(mangled))
             } else if env.enums.contains_key(&mangled) {
                 Ok(PlutoType::Enum(mangled))
+            } else if env.generic_classes.contains_key(name.as_str()) {
+                let m = ensure_generic_class_instantiated(name, &resolved_args, env);
+                Ok(PlutoType::Class(m))
+            } else if env.generic_enums.contains_key(name.as_str()) {
+                let m = ensure_generic_enum_instantiated(name, &resolved_args, env);
+                Ok(PlutoType::Enum(m))
             } else {
                 Err(CompileError::type_err(
                     format!("unknown generic type '{name}'"),
@@ -700,7 +783,165 @@ fn resolve_type(ty: &Spanned<TypeExpr>, env: &TypeEnv) -> Result<PlutoType, Comp
     }
 }
 
-fn check_function(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
+fn resolve_type_with_params(
+    ty: &Spanned<TypeExpr>,
+    env: &mut TypeEnv,
+    type_param_names: &std::collections::HashSet<String>,
+) -> Result<PlutoType, CompileError> {
+    match &ty.node {
+        TypeExpr::Named(name) if type_param_names.contains(name) => {
+            Ok(PlutoType::TypeParam(name.clone()))
+        }
+        TypeExpr::Array(inner) => {
+            let elem = resolve_type_with_params(inner, env, type_param_names)?;
+            Ok(PlutoType::Array(Box::new(elem)))
+        }
+        TypeExpr::Fn { params, return_type } => {
+            let param_types = params.iter()
+                .map(|p| resolve_type_with_params(p, env, type_param_names))
+                .collect::<Result<Vec<_>, _>>()?;
+            let ret = resolve_type_with_params(return_type, env, type_param_names)?;
+            Ok(PlutoType::Fn(param_types, Box::new(ret)))
+        }
+        _ => resolve_type(ty, env),
+    }
+}
+
+fn substitute_pluto_type(ty: &PlutoType, bindings: &HashMap<String, PlutoType>) -> PlutoType {
+    match ty {
+        PlutoType::TypeParam(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        PlutoType::Array(inner) => PlutoType::Array(Box::new(substitute_pluto_type(inner, bindings))),
+        PlutoType::Fn(ps, r) => PlutoType::Fn(
+            ps.iter().map(|p| substitute_pluto_type(p, bindings)).collect(),
+            Box::new(substitute_pluto_type(r, bindings)),
+        ),
+        _ => ty.clone(),
+    }
+}
+
+fn unify(pattern: &PlutoType, concrete: &PlutoType, bindings: &mut HashMap<String, PlutoType>) -> bool {
+    match pattern {
+        PlutoType::TypeParam(name) => {
+            if let Some(existing) = bindings.get(name) {
+                existing == concrete
+            } else {
+                bindings.insert(name.clone(), concrete.clone());
+                true
+            }
+        }
+        PlutoType::Array(p_inner) => {
+            if let PlutoType::Array(c_inner) = concrete {
+                unify(p_inner, c_inner, bindings)
+            } else {
+                false
+            }
+        }
+        PlutoType::Fn(pp, pr) => {
+            if let PlutoType::Fn(cp, cr) = concrete {
+                if pp.len() != cp.len() { return false; }
+                for (p, c) in pp.iter().zip(cp.iter()) {
+                    if !unify(p, c, bindings) { return false; }
+                }
+                unify(pr, cr, bindings)
+            } else {
+                false
+            }
+        }
+        _ => pattern == concrete,
+    }
+}
+
+fn ensure_generic_func_instantiated(
+    base_name: &str,
+    type_args: &[PlutoType],
+    env: &mut TypeEnv,
+) -> String {
+    let mangled = env::mangle_name(base_name, type_args);
+    if env.functions.contains_key(&mangled) {
+        return mangled;
+    }
+    let gen_sig = env.generic_functions.get(base_name).unwrap().clone();
+    let bindings: HashMap<String, PlutoType> = gen_sig.type_params.iter()
+        .zip(type_args.iter())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let concrete_params: Vec<PlutoType> = gen_sig.params.iter()
+        .map(|p| substitute_pluto_type(p, &bindings))
+        .collect();
+    let concrete_ret = substitute_pluto_type(&gen_sig.return_type, &bindings);
+    env.functions.insert(mangled.clone(), FuncSig {
+        params: concrete_params,
+        return_type: concrete_ret,
+    });
+    env.instantiations.insert(Instantiation {
+        kind: InstKind::Function(base_name.to_string()),
+        type_args: type_args.to_vec(),
+    });
+    mangled
+}
+
+fn ensure_generic_class_instantiated(
+    base_name: &str,
+    type_args: &[PlutoType],
+    env: &mut TypeEnv,
+) -> String {
+    let mangled = env::mangle_name(base_name, type_args);
+    if env.classes.contains_key(&mangled) {
+        return mangled;
+    }
+    let gen_info = env.generic_classes.get(base_name).unwrap().clone();
+    let bindings: HashMap<String, PlutoType> = gen_info.type_params.iter()
+        .zip(type_args.iter())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let concrete_fields: Vec<(String, PlutoType, bool)> = gen_info.fields.iter()
+        .map(|(n, t, inj)| (n.clone(), substitute_pluto_type(t, &bindings), *inj))
+        .collect();
+    env.classes.insert(mangled.clone(), ClassInfo {
+        fields: concrete_fields,
+        methods: gen_info.methods.clone(),
+        impl_traits: gen_info.impl_traits.clone(),
+    });
+    env.instantiations.insert(Instantiation {
+        kind: InstKind::Class(base_name.to_string()),
+        type_args: type_args.to_vec(),
+    });
+    mangled
+}
+
+fn ensure_generic_enum_instantiated(
+    base_name: &str,
+    type_args: &[PlutoType],
+    env: &mut TypeEnv,
+) -> String {
+    let mangled = env::mangle_name(base_name, type_args);
+    if env.enums.contains_key(&mangled) {
+        return mangled;
+    }
+    let gen_info = env.generic_enums.get(base_name).unwrap().clone();
+    let bindings: HashMap<String, PlutoType> = gen_info.type_params.iter()
+        .zip(type_args.iter())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let concrete_variants: Vec<(String, Vec<(String, PlutoType)>)> = gen_info.variants.iter()
+        .map(|(vname, fields)| {
+            let concrete_fields: Vec<(String, PlutoType)> = fields.iter()
+                .map(|(fname, fty)| (fname.clone(), substitute_pluto_type(fty, &bindings)))
+                .collect();
+            (vname.clone(), concrete_fields)
+        })
+        .collect();
+    env.enums.insert(mangled.clone(), EnumInfo {
+        variants: concrete_variants,
+    });
+    env.instantiations.insert(Instantiation {
+        kind: InstKind::Enum(base_name.to_string()),
+        type_args: type_args.to_vec(),
+    });
+    mangled
+}
+
+pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
     env.push_scope();
 
     // Add parameters to scope
@@ -921,7 +1162,11 @@ fn check_stmt(
 
             let mut covered = std::collections::HashSet::new();
             for arm in arms {
-                if arm.enum_name.node != enum_name {
+                // Accept exact match, or base generic name match (e.g., "Option" matches "Option__int")
+                let arm_matches = arm.enum_name.node == enum_name
+                    || (env.generic_enums.contains_key(&arm.enum_name.node)
+                        && enum_name.starts_with(&format!("{}__", arm.enum_name.node)));
+                if !arm_matches {
                     return Err(CompileError::type_err(
                         format!("match arm enum '{}' does not match scrutinee enum '{}'", arm.enum_name.node, enum_name),
                         arm.enum_name.span,
@@ -1199,6 +1444,51 @@ fn infer_expr(
                 return Ok(*ret_type);
             }
 
+            // Check if calling a generic function — infer type args from arguments
+            if env.generic_functions.contains_key(&name.node) {
+                let gen_sig = env.generic_functions.get(&name.node).unwrap().clone();
+                if args.len() != gen_sig.params.len() {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "function '{}' expects {} arguments, got {}",
+                            name.node, gen_sig.params.len(), args.len()
+                        ),
+                        span,
+                    ));
+                }
+                // Infer arg types and unify with generic params
+                let mut arg_types = Vec::new();
+                for arg in args {
+                    arg_types.push(infer_expr(&arg.node, arg.span, env)?);
+                }
+                let mut bindings = HashMap::new();
+                for (param_ty, arg_ty) in gen_sig.params.iter().zip(&arg_types) {
+                    if !unify(param_ty, arg_ty, &mut bindings) {
+                        return Err(CompileError::type_err(
+                            format!("cannot infer type parameters for '{}'", name.node),
+                            span,
+                        ));
+                    }
+                }
+                // Check all type params are bound
+                for tp in &gen_sig.type_params {
+                    if !bindings.contains_key(tp) {
+                        return Err(CompileError::type_err(
+                            format!("cannot infer type parameter '{}' for '{}'", tp, name.node),
+                            span,
+                        ));
+                    }
+                }
+                let type_args: Vec<PlutoType> = gen_sig.type_params.iter()
+                    .map(|tp| bindings[tp].clone())
+                    .collect();
+                let mangled = ensure_generic_func_instantiated(&name.node, &type_args, env);
+                // Store rewrite
+                env.generic_rewrites.insert((span.start, span.end), mangled.clone());
+                let concrete_ret = substitute_pluto_type(&gen_sig.return_type, &bindings);
+                return Ok(concrete_ret);
+            }
+
             let sig = env.functions.get(&name.node).ok_or_else(|| {
                 CompileError::type_err(
                     format!("undefined function '{}'", name.node),
@@ -1235,18 +1525,46 @@ fn infer_expr(
 
             Ok(sig_clone.return_type)
         }
-        Expr::StructLit { name, fields: lit_fields, .. } => {
-            let class_info = env.classes.get(&name.node).ok_or_else(|| {
-                CompileError::type_err(
-                    format!("unknown class '{}'", name.node),
-                    name.span,
-                )
-            })?.clone();
+        Expr::StructLit { name, fields: lit_fields, type_args, .. } => {
+            // Handle generic struct lit with explicit type args
+            let (class_info, effective_name) = if !type_args.is_empty() {
+                if !env.generic_classes.contains_key(&name.node) {
+                    return Err(CompileError::type_err(
+                        format!("unknown generic class '{}'", name.node),
+                        name.span,
+                    ));
+                }
+                let gen_info = env.generic_classes.get(&name.node).unwrap().clone();
+                if type_args.len() != gen_info.type_params.len() {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "class '{}' expects {} type arguments, got {}",
+                            name.node, gen_info.type_params.len(), type_args.len()
+                        ),
+                        span,
+                    ));
+                }
+                let resolved_args: Vec<PlutoType> = type_args.iter()
+                    .map(|a| resolve_type(a, env))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mangled = ensure_generic_class_instantiated(&name.node, &resolved_args, env);
+                env.generic_rewrites.insert((span.start, span.end), mangled.clone());
+                let ci = env.classes.get(&mangled).unwrap().clone();
+                (ci, mangled)
+            } else {
+                let ci = env.classes.get(&name.node).ok_or_else(|| {
+                    CompileError::type_err(
+                        format!("unknown class '{}'", name.node),
+                        name.span,
+                    )
+                })?.clone();
+                (ci, name.node.clone())
+            };
 
             // Block construction of classes with injected dependencies
             if class_info.fields.iter().any(|(_, _, inj)| *inj) {
                 return Err(CompileError::type_err(
-                    format!("cannot manually construct class '{}' with injected dependencies", name.node),
+                    format!("cannot manually construct class '{}' with injected dependencies", effective_name),
                     span,
                 ));
             }
@@ -1256,7 +1574,7 @@ fn infer_expr(
                 return Err(CompileError::type_err(
                     format!(
                         "class '{}' has {} fields, but {} were provided",
-                        name.node,
+                        effective_name,
                         class_info.fields.len(),
                         lit_fields.len()
                     ),
@@ -1271,7 +1589,7 @@ fn infer_expr(
                     .map(|(_, t, _)| t.clone())
                     .ok_or_else(|| {
                         CompileError::type_err(
-                            format!("class '{}' has no field '{}'", name.node, lit_name.node),
+                            format!("class '{}' has no field '{}'", effective_name, lit_name.node),
                             lit_name.span,
                         )
                     })?;
@@ -1287,7 +1605,7 @@ fn infer_expr(
                 }
             }
 
-            Ok(PlutoType::Class(name.node.clone()))
+            Ok(PlutoType::Class(effective_name))
         }
         Expr::FieldAccess { object, field } => {
             let obj_type = infer_expr(&object.node, object.span, env)?;
@@ -1349,37 +1667,91 @@ fn infer_expr(
             }
             Ok(elem_type)
         }
-        Expr::EnumUnit { enum_name, variant, .. } => {
-            let enum_info = env.enums.get(&enum_name.node).ok_or_else(|| {
-                CompileError::type_err(
-                    format!("unknown enum '{}'", enum_name.node),
-                    enum_name.span,
-                )
-            })?;
+        Expr::EnumUnit { enum_name, variant, type_args } => {
+            let (enum_info, effective_name) = if !type_args.is_empty() {
+                if !env.generic_enums.contains_key(&enum_name.node) {
+                    return Err(CompileError::type_err(
+                        format!("unknown generic enum '{}'", enum_name.node),
+                        enum_name.span,
+                    ));
+                }
+                let gen_info = env.generic_enums.get(&enum_name.node).unwrap().clone();
+                if type_args.len() != gen_info.type_params.len() {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "enum '{}' expects {} type arguments, got {}",
+                            enum_name.node, gen_info.type_params.len(), type_args.len()
+                        ),
+                        span,
+                    ));
+                }
+                let resolved_args: Vec<PlutoType> = type_args.iter()
+                    .map(|a| resolve_type(a, env))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mangled = ensure_generic_enum_instantiated(&enum_name.node, &resolved_args, env);
+                env.generic_rewrites.insert((span.start, span.end), mangled.clone());
+                let ei = env.enums.get(&mangled).unwrap().clone();
+                (ei, mangled)
+            } else {
+                let ei = env.enums.get(&enum_name.node).ok_or_else(|| {
+                    CompileError::type_err(
+                        format!("unknown enum '{}'", enum_name.node),
+                        enum_name.span,
+                    )
+                })?.clone();
+                (ei, enum_name.node.clone())
+            };
             let variant_info = enum_info.variants.iter().find(|(n, _)| *n == variant.node);
             match variant_info {
                 None => Err(CompileError::type_err(
-                    format!("enum '{}' has no variant '{}'", enum_name.node, variant.node),
+                    format!("enum '{}' has no variant '{}'", effective_name, variant.node),
                     variant.span,
                 )),
                 Some((_, fields)) if !fields.is_empty() => Err(CompileError::type_err(
-                    format!("variant '{}.{}' has fields; use {}.{} {{ ... }}", enum_name.node, variant.node, enum_name.node, variant.node),
+                    format!("variant '{}.{}' has fields; use {}.{} {{ ... }}", effective_name, variant.node, effective_name, variant.node),
                     variant.span,
                 )),
-                Some(_) => Ok(PlutoType::Enum(enum_name.node.clone())),
+                Some(_) => Ok(PlutoType::Enum(effective_name)),
             }
         }
-        Expr::EnumData { enum_name, variant, fields: lit_fields, .. } => {
-            let enum_info = env.enums.get(&enum_name.node).ok_or_else(|| {
-                CompileError::type_err(
-                    format!("unknown enum '{}'", enum_name.node),
-                    enum_name.span,
-                )
-            })?.clone();
+        Expr::EnumData { enum_name, variant, fields: lit_fields, type_args } => {
+            let (enum_info, effective_name) = if !type_args.is_empty() {
+                if !env.generic_enums.contains_key(&enum_name.node) {
+                    return Err(CompileError::type_err(
+                        format!("unknown generic enum '{}'", enum_name.node),
+                        enum_name.span,
+                    ));
+                }
+                let gen_info = env.generic_enums.get(&enum_name.node).unwrap().clone();
+                if type_args.len() != gen_info.type_params.len() {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "enum '{}' expects {} type arguments, got {}",
+                            enum_name.node, gen_info.type_params.len(), type_args.len()
+                        ),
+                        span,
+                    ));
+                }
+                let resolved_args: Vec<PlutoType> = type_args.iter()
+                    .map(|a| resolve_type(a, env))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mangled = ensure_generic_enum_instantiated(&enum_name.node, &resolved_args, env);
+                env.generic_rewrites.insert((span.start, span.end), mangled.clone());
+                let ei = env.enums.get(&mangled).unwrap().clone();
+                (ei, mangled)
+            } else {
+                let ei = env.enums.get(&enum_name.node).ok_or_else(|| {
+                    CompileError::type_err(
+                        format!("unknown enum '{}'", enum_name.node),
+                        enum_name.span,
+                    )
+                })?.clone();
+                (ei, enum_name.node.clone())
+            };
             let variant_info = enum_info.variants.iter().find(|(n, _)| *n == variant.node);
             match variant_info {
                 None => Err(CompileError::type_err(
-                    format!("enum '{}' has no variant '{}'", enum_name.node, variant.node),
+                    format!("enum '{}' has no variant '{}'", effective_name, variant.node),
                     variant.span,
                 )),
                 Some((_, expected_fields)) => {
@@ -1387,7 +1759,7 @@ fn infer_expr(
                         return Err(CompileError::type_err(
                             format!(
                                 "variant '{}.{}' has {} fields, but {} were provided",
-                                enum_name.node, variant.node, expected_fields.len(), lit_fields.len()
+                                effective_name, variant.node, expected_fields.len(), lit_fields.len()
                             ),
                             span,
                         ));
@@ -1398,7 +1770,7 @@ fn infer_expr(
                             .map(|(_, t)| t.clone())
                             .ok_or_else(|| {
                                 CompileError::type_err(
-                                    format!("variant '{}.{}' has no field '{}'", enum_name.node, variant.node, lit_name.node),
+                                    format!("variant '{}.{}' has no field '{}'", effective_name, variant.node, lit_name.node),
                                     lit_name.span,
                                 )
                             })?;
@@ -1410,7 +1782,7 @@ fn infer_expr(
                             ));
                         }
                     }
-                    Ok(PlutoType::Enum(enum_name.node.clone()))
+                    Ok(PlutoType::Enum(effective_name))
                 }
             }
         }
@@ -2685,5 +3057,90 @@ mod tests {
     fn let_bare_call_to_fallible_rejected() {
         let result = check("error Oops {\n    msg: string\n}\n\nfn get() int {\n    raise Oops { msg: \"bad\" }\n    return 0\n}\n\nfn main() {\n    let x = get()\n}");
         assert!(result.is_err());
+    }
+
+    // ── Generics ──────────────────────────────────────────────
+
+    #[test]
+    fn generic_function_call_infers_int() {
+        let env = check("fn identity<T>(x: T) T {\n    return x\n}\n\nfn main() {\n    let x: int = identity(42)\n}").unwrap();
+        // The generic function should be registered
+        assert!(env.generic_functions.contains_key("identity"));
+        // A concrete instantiation should be eagerly registered
+        assert!(env.functions.contains_key("identity__int"));
+    }
+
+    #[test]
+    fn generic_function_call_infers_string() {
+        let env = check("fn identity<T>(x: T) T {\n    return x\n}\n\nfn main() {\n    let x: string = identity(\"hello\")\n}").unwrap();
+        assert!(env.functions.contains_key("identity__string"));
+    }
+
+    #[test]
+    fn generic_function_wrong_arg_count_rejected() {
+        let result = check("fn identity<T>(x: T) T {\n    return x\n}\n\nfn main() {\n    let x = identity(1, 2)\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn generic_class_struct_lit_accepted() {
+        let env = check("class Box<T> {\n    value: T\n}\n\nfn main() {\n    let b = Box<int> { value: 42 }\n}").unwrap();
+        assert!(env.generic_classes.contains_key("Box"));
+        assert!(env.classes.contains_key("Box__int"));
+    }
+
+    #[test]
+    fn generic_class_wrong_type_arg_count_rejected() {
+        let result = check("class Box<T> {\n    value: T\n}\n\nfn main() {\n    let b = Box<int, string> { value: 42 }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn generic_class_two_params() {
+        let env = check("class Pair<A, B> {\n    first: A\n    second: B\n}\n\nfn main() {\n    let p = Pair<int, string> { first: 1, second: \"hi\" }\n}").unwrap();
+        assert!(env.classes.contains_key("Pair__int_string"));
+    }
+
+    #[test]
+    fn generic_enum_data_accepted() {
+        let env = check("enum Option<T> {\n    Some { value: T }\n    None\n}\n\nfn main() {\n    let o = Option<int>.Some { value: 42 }\n}").unwrap();
+        assert!(env.generic_enums.contains_key("Option"));
+        assert!(env.enums.contains_key("Option__int"));
+    }
+
+    #[test]
+    fn generic_enum_unit_accepted() {
+        let env = check("enum Option<T> {\n    Some { value: T }\n    None\n}\n\nfn main() {\n    let o = Option<int>.None\n}").unwrap();
+        assert!(env.enums.contains_key("Option__int"));
+    }
+
+    #[test]
+    fn generic_match_base_name_accepted() {
+        let env = check("enum Option<T> {\n    Some { value: T }\n    None\n}\n\nfn main() {\n    let o = Option<int>.Some { value: 42 }\n    match o {\n        Option.Some { value: v } {\n            print(v)\n        }\n        Option.None {\n            print(0)\n        }\n    }\n}").unwrap();
+        assert!(env.enums.contains_key("Option__int"));
+    }
+
+    #[test]
+    fn generic_class_with_trait_impl_rejected() {
+        let result = check("trait Printable {\n    fn show(self) string\n}\n\nclass Box<T> impl Printable {\n    value: T\n\n    fn show(self) string {\n        return \"box\"\n    }\n}\n\nfn main() {\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn generic_class_with_di_rejected() {
+        let result = check("class Dep {\n    x: int\n}\n\nclass Box<T>[dep: Dep] {\n    value: T\n}\n\nfn main() {\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn generic_type_in_annotation() {
+        let env = check("class Box<T> {\n    value: T\n}\n\nfn main() {\n    let b: Box<int> = Box<int> { value: 42 }\n}").unwrap();
+        assert!(env.classes.contains_key("Box__int"));
+    }
+
+    #[test]
+    fn generic_function_two_type_params() {
+        let env = check("fn first<A, B>(a: A, b: B) A {\n    return a\n}\n\nfn main() {\n    let x: int = first(42, \"hello\")\n}").unwrap();
+        assert!(env.functions.contains_key("first__int_string"));
     }
 }
