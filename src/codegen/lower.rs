@@ -83,7 +83,7 @@ impl<'a> LowerContext<'a> {
                 self.builder.ins().return_(&[val]);
             }
             Some(_) => {
-                // Int, String, Class, Array, Enum, Error — all I64
+                // Int, String, Class, Array, Enum, Map, Set, Error — all I64
                 let val = self.builder.ins().iconst(types::I64, 0);
                 self.builder.ins().return_(&[val]);
             }
@@ -184,6 +184,11 @@ impl<'a> LowerContext<'a> {
                 if let PlutoType::Array(elem) = &obj_type {
                     let slot = to_array_slot(val, elem, &mut self.builder);
                     self.call_runtime_void("__pluto_array_set", &[handle, idx, slot]);
+                } else if let PlutoType::Map(key_ty, val_ty) = &obj_type {
+                    let tag = self.builder.ins().iconst(types::I64, key_type_tag(key_ty));
+                    let key_slot = to_array_slot(idx, key_ty, &mut self.builder);
+                    let val_slot = to_array_slot(val, val_ty, &mut self.builder);
+                    self.call_runtime_void("__pluto_map_insert", &[handle, tag, key_slot, val_slot]);
                 }
                 Ok(())
             }
@@ -636,6 +641,31 @@ impl<'a> LowerContext<'a> {
 
                 Ok(handle)
             }
+            Expr::MapLit { key_type, value_type, entries } => {
+                let kt = resolve_type_expr_to_pluto(&key_type.node, self.env);
+                let vt = resolve_type_expr_to_pluto(&value_type.node, self.env);
+                let tag = self.builder.ins().iconst(types::I64, key_type_tag(&kt));
+                let handle = self.call_runtime("__pluto_map_new", &[tag]);
+                for (k_expr, v_expr) in entries {
+                    let k_val = self.lower_expr(&k_expr.node)?;
+                    let v_val = self.lower_expr(&v_expr.node)?;
+                    let key_slot = to_array_slot(k_val, &kt, &mut self.builder);
+                    let val_slot = to_array_slot(v_val, &vt, &mut self.builder);
+                    self.call_runtime_void("__pluto_map_insert", &[handle, tag, key_slot, val_slot]);
+                }
+                Ok(handle)
+            }
+            Expr::SetLit { elem_type, elements } => {
+                let et = resolve_type_expr_to_pluto(&elem_type.node, self.env);
+                let tag = self.builder.ins().iconst(types::I64, key_type_tag(&et));
+                let handle = self.call_runtime("__pluto_set_new", &[tag]);
+                for elem in elements {
+                    let val = self.lower_expr(&elem.node)?;
+                    let slot = to_array_slot(val, &et, &mut self.builder);
+                    self.call_runtime_void("__pluto_set_insert", &[handle, tag, slot]);
+                }
+                Ok(handle)
+            }
             Expr::Index { object, index } => {
                 let handle = self.lower_expr(&object.node)?;
                 let idx = self.lower_expr(&index.node)?;
@@ -643,8 +673,13 @@ impl<'a> LowerContext<'a> {
                 if let PlutoType::Array(elem) = &obj_type {
                     let raw = self.call_runtime("__pluto_array_get", &[handle, idx]);
                     Ok(from_array_slot(raw, elem, &mut self.builder))
+                } else if let PlutoType::Map(key_ty, val_ty) = &obj_type {
+                    let tag = self.builder.ins().iconst(types::I64, key_type_tag(&key_ty));
+                    let key_slot = to_array_slot(idx, &key_ty, &mut self.builder);
+                    let raw = self.call_runtime("__pluto_map_get", &[handle, tag, key_slot]);
+                    Ok(from_array_slot(raw, &val_ty, &mut self.builder))
                 } else {
-                    Err(CompileError::codegen(format!("index on non-array type {obj_type}")))
+                    Err(CompileError::codegen(format!("index on non-indexable type {obj_type}")))
                 }
             }
             Expr::EnumUnit { enum_name, variant, .. } => {
@@ -1062,6 +1097,65 @@ impl<'a> LowerContext<'a> {
             }
         }
 
+        // Map methods
+        if let PlutoType::Map(key_ty, val_ty) = &obj_type {
+            let tag = self.builder.ins().iconst(types::I64, key_type_tag(key_ty));
+            match method.node.as_str() {
+                "len" => return Ok(self.call_runtime("__pluto_map_len", &[obj_ptr])),
+                "contains" => {
+                    let k = self.lower_expr(&args[0].node)?;
+                    let key_slot = to_array_slot(k, key_ty, &mut self.builder);
+                    let result = self.call_runtime("__pluto_map_contains", &[obj_ptr, tag, key_slot]);
+                    return Ok(self.builder.ins().ireduce(types::I8, result));
+                }
+                "insert" => {
+                    let k = self.lower_expr(&args[0].node)?;
+                    let v = self.lower_expr(&args[1].node)?;
+                    let key_slot = to_array_slot(k, key_ty, &mut self.builder);
+                    let val_slot = to_array_slot(v, val_ty, &mut self.builder);
+                    self.call_runtime_void("__pluto_map_insert", &[obj_ptr, tag, key_slot, val_slot]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "remove" => {
+                    let k = self.lower_expr(&args[0].node)?;
+                    let key_slot = to_array_slot(k, key_ty, &mut self.builder);
+                    self.call_runtime_void("__pluto_map_remove", &[obj_ptr, tag, key_slot]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "keys" => return Ok(self.call_runtime("__pluto_map_keys", &[obj_ptr])),
+                "values" => return Ok(self.call_runtime("__pluto_map_values", &[obj_ptr])),
+                _ => return Err(CompileError::codegen(format!("Map has no method '{}'", method.node))),
+            }
+        }
+
+        // Set methods
+        if let PlutoType::Set(elem_ty) = &obj_type {
+            let tag = self.builder.ins().iconst(types::I64, key_type_tag(elem_ty));
+            match method.node.as_str() {
+                "len" => return Ok(self.call_runtime("__pluto_set_len", &[obj_ptr])),
+                "contains" => {
+                    let e = self.lower_expr(&args[0].node)?;
+                    let slot = to_array_slot(e, elem_ty, &mut self.builder);
+                    let result = self.call_runtime("__pluto_set_contains", &[obj_ptr, tag, slot]);
+                    return Ok(self.builder.ins().ireduce(types::I8, result));
+                }
+                "insert" => {
+                    let e = self.lower_expr(&args[0].node)?;
+                    let slot = to_array_slot(e, elem_ty, &mut self.builder);
+                    self.call_runtime_void("__pluto_set_insert", &[obj_ptr, tag, slot]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "remove" => {
+                    let e = self.lower_expr(&args[0].node)?;
+                    let slot = to_array_slot(e, elem_ty, &mut self.builder);
+                    self.call_runtime_void("__pluto_set_remove", &[obj_ptr, tag, slot]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "to_array" => return Ok(self.call_runtime("__pluto_set_to_array", &[obj_ptr])),
+                _ => return Err(CompileError::codegen(format!("Set has no method '{}'", method.node))),
+            }
+        }
+
         // String methods
         if obj_type == PlutoType::String {
             if method.node == "len" {
@@ -1206,7 +1300,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I32, arg_val);
                 self.call_runtime_void("__pluto_print_bool", &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Error | PlutoType::TypeParam(_) => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Error | PlutoType::TypeParam(_) => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -1390,8 +1484,17 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
             let ret = resolve_type_expr_to_pluto(&return_type.node, env);
             PlutoType::Fn(param_types, Box::new(ret))
         }
-        TypeExpr::Generic { .. } => {
-            panic!("Generic TypeExpr should not reach codegen — monomorphize should have resolved it")
+        TypeExpr::Generic { name, type_args } => {
+            if name == "Map" && type_args.len() == 2 {
+                let k = resolve_type_expr_to_pluto(&type_args[0].node, env);
+                let v = resolve_type_expr_to_pluto(&type_args[1].node, env);
+                PlutoType::Map(Box::new(k), Box::new(v))
+            } else if name == "Set" && type_args.len() == 1 {
+                let t = resolve_type_expr_to_pluto(&type_args[0].node, env);
+                PlutoType::Set(Box::new(t))
+            } else {
+                panic!("Generic TypeExpr should not reach codegen — monomorphize should have resolved it")
+            }
         }
     }
 }
@@ -1426,8 +1529,23 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Trait(_) => types::I64,     // pointer to trait handle
         PlutoType::Enum(_) => types::I64,      // pointer to heap-allocated enum
         PlutoType::Fn(_, _) => types::I64,     // pointer to closure object
+        PlutoType::Map(_, _) => types::I64,    // pointer to map handle
+        PlutoType::Set(_) => types::I64,       // pointer to set handle
         PlutoType::Error => types::I64,        // pointer to error object
         PlutoType::TypeParam(_) => panic!("TypeParam should not reach codegen"),
+    }
+}
+
+/// Returns the key type tag integer for the runtime hash table.
+/// 0=int, 1=float, 2=bool, 3=string, 4=enum
+fn key_type_tag(ty: &PlutoType) -> i64 {
+    match ty {
+        PlutoType::Int => 0,
+        PlutoType::Float => 1,
+        PlutoType::Bool => 2,
+        PlutoType::String => 3,
+        PlutoType::Enum(_) => 4,
+        _ => 0, // fallback
     }
 }
 
@@ -1487,9 +1605,20 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
             if let PlutoType::Array(elem) = obj_type {
                 *elem
+            } else if let PlutoType::Map(_, v) = obj_type {
+                *v
             } else {
                 PlutoType::Void
             }
+        }
+        Expr::MapLit { key_type, value_type, .. } => {
+            let kt = resolve_type_expr_to_pluto(&key_type.node, env);
+            let vt = resolve_type_expr_to_pluto(&value_type.node, env);
+            PlutoType::Map(Box::new(kt), Box::new(vt))
+        }
+        Expr::SetLit { elem_type, .. } => {
+            let et = resolve_type_expr_to_pluto(&elem_type.node, env);
+            PlutoType::Set(Box::new(et))
         }
         Expr::EnumUnit { enum_name, .. } | Expr::EnumData { enum_name, .. } => {
             PlutoType::Enum(enum_name.node.clone())
@@ -1508,6 +1637,23 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 return match method.node.as_str() {
                     "len" => PlutoType::Int,
                     _ => PlutoType::Void,
+                };
+            }
+            if let PlutoType::Map(key_ty, val_ty) = &obj_type {
+                return match method.node.as_str() {
+                    "len" => PlutoType::Int,
+                    "contains" => PlutoType::Bool,
+                    "keys" => PlutoType::Array(key_ty.clone()),
+                    "values" => PlutoType::Array(val_ty.clone()),
+                    _ => PlutoType::Void, // insert, remove
+                };
+            }
+            if let PlutoType::Set(elem_ty) = &obj_type {
+                return match method.node.as_str() {
+                    "len" => PlutoType::Int,
+                    "contains" => PlutoType::Bool,
+                    "to_array" => PlutoType::Array(elem_ty.clone()),
+                    _ => PlutoType::Void, // insert, remove
                 };
             }
             if obj_type == PlutoType::String && method.node == "len" {

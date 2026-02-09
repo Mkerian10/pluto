@@ -207,6 +207,15 @@ pub enum Expr {
         return_type: Option<Spanned<TypeExpr>>,
         body: Spanned<Block>,
     },
+    MapLit {
+        key_type: Spanned<TypeExpr>,
+        value_type: Spanned<TypeExpr>,
+        entries: Vec<(Spanned<Expr>, Spanned<Expr>)>,
+    },
+    SetLit {
+        elem_type: Spanned<TypeExpr>,
+        elements: Vec<Spanned<Expr>>,
+    },
     ClosureCreate {
         fn_name: String,
         captures: Vec<String>,

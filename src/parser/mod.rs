@@ -1599,6 +1599,73 @@ impl<'a> Parser<'a> {
                 Ok(Spanned::new(Expr::Ident(ident.node.clone()), ident.span))
             }
         } else if !self.restrict_struct_lit
+            && (ident.node == "Map" || ident.node == "Set")
+            && self.peek().is_some()
+            && matches!(self.peek().unwrap().node, Token::Lt)
+        {
+            // Map<K, V> { ... } or Set<T> { ... }
+            let start = ident.span.start;
+            let type_args = self.parse_type_arg_list()?;
+            self.expect(&Token::LBrace)?;
+            self.skip_newlines();
+
+            if ident.node == "Map" {
+                if type_args.len() != 2 {
+                    return Err(CompileError::syntax(
+                        format!("Map expects 2 type arguments, got {}", type_args.len()),
+                        ident.span,
+                    ));
+                }
+                let key_type = type_args[0].clone();
+                let value_type = type_args[1].clone();
+                let mut entries = Vec::new();
+                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+                    if !entries.is_empty() {
+                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                            self.advance();
+                        }
+                        self.skip_newlines();
+                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                            break;
+                        }
+                    }
+                    let key_expr = self.parse_expr(0)?;
+                    self.expect(&Token::Colon)?;
+                    let val_expr = self.parse_expr(0)?;
+                    entries.push((key_expr, val_expr));
+                    self.skip_newlines();
+                }
+                let close = self.expect(&Token::RBrace)?;
+                let span = Span::new(start, close.span.end);
+                Ok(Spanned::new(Expr::MapLit { key_type, value_type, entries }, span))
+            } else {
+                // Set
+                if type_args.len() != 1 {
+                    return Err(CompileError::syntax(
+                        format!("Set expects 1 type argument, got {}", type_args.len()),
+                        ident.span,
+                    ));
+                }
+                let elem_type = type_args[0].clone();
+                let mut elements = Vec::new();
+                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+                    if !elements.is_empty() {
+                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                            self.advance();
+                        }
+                        self.skip_newlines();
+                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                            break;
+                        }
+                    }
+                    elements.push(self.parse_expr(0)?);
+                    self.skip_newlines();
+                }
+                let close = self.expect(&Token::RBrace)?;
+                let span = Span::new(start, close.span.end);
+                Ok(Spanned::new(Expr::SetLit { elem_type, elements }, span))
+            }
+        } else if !self.restrict_struct_lit
             && self.peek().is_some()
             && matches!(self.peek().unwrap().node, Token::Lt)
             && self.is_generic_struct_lit_ahead()

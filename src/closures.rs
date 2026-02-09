@@ -261,6 +261,17 @@ fn lift_in_expr(
                 }
             }
         }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                lift_in_expr(&mut k.node, k.span, env, counter, new_fns)?;
+                lift_in_expr(&mut v.node, v.span, env, counter, new_fns)?;
+            }
+        }
+        Expr::SetLit { elements, .. } => {
+            for elem in elements {
+                lift_in_expr(&mut elem.node, elem.span, env, counter, new_fns)?;
+            }
+        }
         // Non-capturing expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => {}
@@ -286,7 +297,18 @@ fn resolve_type_for_lift(ty: &TypeExpr) -> PlutoType {
             let ret = resolve_type_for_lift(&return_type.node);
             PlutoType::Fn(pts, Box::new(ret))
         }
-        TypeExpr::Generic { name, .. } => PlutoType::Class(name.clone()),
+        TypeExpr::Generic { name, type_args } => {
+            if name == "Map" && type_args.len() == 2 {
+                let k = resolve_type_for_lift(&type_args[0].node);
+                let v = resolve_type_for_lift(&type_args[1].node);
+                PlutoType::Map(Box::new(k), Box::new(v))
+            } else if name == "Set" && type_args.len() == 1 {
+                let t = resolve_type_for_lift(&type_args[0].node);
+                PlutoType::Set(Box::new(t))
+            } else {
+                PlutoType::Class(name.clone())
+            }
+        }
     }
 }
 
@@ -340,6 +362,17 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
                 return_type: Box::new(Spanned::new(pluto_type_to_type_expr(ret), Span::new(0, 0))),
             }
         }
+        PlutoType::Map(k, v) => TypeExpr::Generic {
+            name: "Map".to_string(),
+            type_args: vec![
+                Spanned::new(pluto_type_to_type_expr(k), Span::new(0, 0)),
+                Spanned::new(pluto_type_to_type_expr(v), Span::new(0, 0)),
+            ],
+        },
+        PlutoType::Set(t) => TypeExpr::Generic {
+            name: "Set".to_string(),
+            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
+        },
         PlutoType::Error => TypeExpr::Named("error".to_string()),
         PlutoType::TypeParam(name) => TypeExpr::Named(name.clone()),
     }
