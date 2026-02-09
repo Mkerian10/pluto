@@ -143,6 +143,7 @@ impl<'a> Parser<'a> {
         let mut classes = Vec::new();
         let mut traits = Vec::new();
         let mut enums = Vec::new();
+        let mut app = None;
         self.skip_newlines();
 
         // Parse imports first
@@ -166,6 +167,22 @@ impl<'a> Parser<'a> {
             })?;
 
             match &tok.node {
+                Token::App => {
+                    if is_pub {
+                        return Err(CompileError::syntax(
+                            "app declarations cannot be pub",
+                            tok.span,
+                        ));
+                    }
+                    let app_decl = self.parse_app_decl()?;
+                    if app.is_some() {
+                        return Err(CompileError::syntax(
+                            "duplicate app declaration",
+                            app_decl.span,
+                        ));
+                    }
+                    app = Some(app_decl);
+                }
                 Token::Class => {
                     let mut class = self.parse_class()?;
                     class.node.is_pub = is_pub;
@@ -191,7 +208,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     return Err(CompileError::syntax(
-                        format!("expected 'fn', 'class', 'trait', 'enum', or 'extern', found {}", tok.node),
+                        format!("expected 'fn', 'class', 'trait', 'enum', 'app', or 'extern', found {}", tok.node),
                         tok.span,
                     ));
                 }
@@ -199,7 +216,7 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        Ok(Program { imports, functions, extern_fns, classes, traits, enums })
+        Ok(Program { imports, functions, extern_fns, classes, traits, enums, app })
     }
 
     fn parse_import(&mut self) -> Result<Spanned<ImportDecl>, CompileError> {
@@ -268,6 +285,46 @@ impl<'a> Parser<'a> {
         Ok(Spanned::new(ExternFnDecl { name, params, return_type, is_pub }, Span::new(start, end)))
     }
 
+    fn parse_bracket_deps(&mut self) -> Result<Vec<Field>, CompileError> {
+        let mut deps = Vec::new();
+        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBracket) {
+            self.advance(); // consume '['
+            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBracket) {
+                if !deps.is_empty() {
+                    self.expect(&Token::Comma)?;
+                }
+                let name = self.expect_ident()?;
+                self.expect(&Token::Colon)?;
+                let ty = self.parse_type()?;
+                deps.push(Field { name, ty, is_injected: true });
+            }
+            self.expect(&Token::RBracket)?;
+        }
+        Ok(deps)
+    }
+
+    fn parse_app_decl(&mut self) -> Result<Spanned<AppDecl>, CompileError> {
+        let app_tok = self.expect(&Token::App)?;
+        let start = app_tok.span.start;
+        let name = self.expect_ident()?;
+
+        let inject_fields = self.parse_bracket_deps()?;
+
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut methods = Vec::new();
+        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+            methods.push(self.parse_method()?);
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+
+        Ok(Spanned::new(AppDecl { name, inject_fields, methods }, Span::new(start, end)))
+    }
+
     fn parse_enum_decl(&mut self) -> Result<Spanned<EnumDecl>, CompileError> {
         let enum_tok = self.expect(&Token::Enum)?;
         let start = enum_tok.span.start;
@@ -295,7 +352,7 @@ impl<'a> Parser<'a> {
                     let fname = self.expect_ident()?;
                     self.expect(&Token::Colon)?;
                     let fty = self.parse_type()?;
-                    fields.push(Field { name: fname, ty: fty });
+                    fields.push(Field { name: fname, ty: fty, is_injected: false });
                     self.skip_newlines();
                 }
                 self.expect(&Token::RBrace)?;
@@ -387,6 +444,9 @@ impl<'a> Parser<'a> {
         let start = class_tok.span.start;
         let name = self.expect_ident()?;
 
+        // Parse optional bracket deps: class Foo[dep: Type]
+        let inject_fields = self.parse_bracket_deps()?;
+
         // Check for `impl Trait1, Trait2`
         let impl_traits = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Impl) {
             self.advance(); // consume 'impl'
@@ -404,7 +464,8 @@ impl<'a> Parser<'a> {
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
-        let mut fields = Vec::new();
+        // Injected fields come first, then regular body fields
+        let mut fields: Vec<Field> = inject_fields;
         let mut methods = Vec::new();
 
         while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
@@ -414,7 +475,7 @@ impl<'a> Parser<'a> {
                 let fname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
-                fields.push(Field { name: fname, ty: fty });
+                fields.push(Field { name: fname, ty: fty, is_injected: false });
                 self.consume_statement_end();
             }
             self.skip_newlines();
@@ -2026,5 +2087,46 @@ mod tests {
             }
             _ => panic!("expected fn type, got {:?}", f.params[0].ty.node),
         }
+    }
+
+    #[test]
+    fn parse_app_decl_basic() {
+        let prog = parse("app MyApp {\n    fn main(self) {\n    }\n}");
+        let app = prog.app.as_ref().unwrap();
+        assert_eq!(app.node.name.node, "MyApp");
+        assert!(app.node.inject_fields.is_empty());
+        assert_eq!(app.node.methods.len(), 1);
+        assert_eq!(app.node.methods[0].node.name.node, "main");
+    }
+
+    #[test]
+    fn parse_app_with_bracket_deps() {
+        let prog = parse("class Database {\n}\n\napp MyApp[db: Database] {\n    fn main(self) {\n    }\n}");
+        let app = prog.app.as_ref().unwrap();
+        assert_eq!(app.node.name.node, "MyApp");
+        assert_eq!(app.node.inject_fields.len(), 1);
+        assert_eq!(app.node.inject_fields[0].name.node, "db");
+        assert!(app.node.inject_fields[0].is_injected);
+    }
+
+    #[test]
+    fn parse_class_with_bracket_deps() {
+        let prog = parse("class Database {\n}\n\nclass UserService[db: Database] {\n    fn query(self) {\n    }\n}");
+        let c = &prog.classes[1].node;
+        assert_eq!(c.name.node, "UserService");
+        assert_eq!(c.fields.len(), 1);
+        assert_eq!(c.fields[0].name.node, "db");
+        assert!(c.fields[0].is_injected);
+    }
+
+    #[test]
+    fn parse_class_bracket_deps_and_regular_fields() {
+        let prog = parse("class Database {\n}\n\nclass Service[db: Database] {\n    name: string\n\n    fn run(self) {\n    }\n}");
+        let c = &prog.classes[1].node;
+        assert_eq!(c.fields.len(), 2);
+        assert_eq!(c.fields[0].name.node, "db");
+        assert!(c.fields[0].is_injected);
+        assert_eq!(c.fields[1].name.node, "name");
+        assert!(!c.fields[1].is_injected);
     }
 }

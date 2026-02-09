@@ -154,7 +154,7 @@ impl<'a> LowerContext<'a> {
                 if let PlutoType::Class(class_name) = &obj_type {
                     if let Some(class_info) = self.env.classes.get(class_name) {
                         let offset = class_info.fields.iter()
-                            .position(|(n, _)| *n == field.node)
+                            .position(|(n, _, _)| *n == field.node)
                             .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{class_name}'", field.node)))? as i32 * 8;
                         self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
                     }
@@ -678,12 +678,12 @@ impl<'a> LowerContext<'a> {
                 let ptr = self.builder.inst_results(call)[0];
 
                 // Clone field info to avoid borrow conflict with self.lower_expr
-                let field_info: Vec<(String, PlutoType)> = class_info.fields.clone();
+                let field_info: Vec<(String, PlutoType, bool)> = class_info.fields.clone();
 
                 for (lit_name, lit_val) in fields {
                     let val = self.lower_expr(&lit_val.node)?;
                     let offset = field_info.iter()
-                        .position(|(n, _)| *n == lit_name.node)
+                        .position(|(n, _, _)| *n == lit_name.node)
                         .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", lit_name.node, name.node)))? as i32 * 8;
                     self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
                 }
@@ -773,9 +773,9 @@ impl<'a> LowerContext<'a> {
                     let class_info = self.env.classes.get(class_name).ok_or_else(|| {
                         CompileError::codegen(format!("unknown class '{class_name}'"))
                     })?;
-                    let (field_idx, (_, field_type)) = class_info.fields.iter()
+                    let (field_idx, (_, field_type, _)) = class_info.fields.iter()
                         .enumerate()
-                        .find(|(_, (n, _))| *n == field.node)
+                        .find(|(_, (n, _, _))| *n == field.node)
                         .ok_or_else(|| {
                             CompileError::codegen(format!("unknown field '{}'", field.node))
                         })?;
@@ -1047,7 +1047,7 @@ pub fn lower_function(
     }
 
     // Compute expected return type for class→trait wrapping in return statements
-    let expected_return_type = if func.name.node == "main" {
+    let expected_return_type = if func.name.node == "main" && class_name.is_none() {
         Some(PlutoType::Int)
     } else {
         let lookup_name = if let Some(cn) = class_name {
@@ -1059,7 +1059,7 @@ pub fn lower_function(
     };
 
     // Build context and lower body
-    let is_main = func.name.node == "main";
+    let is_main = func.name.node == "main" && class_name.is_none();
     let mut ctx = LowerContext {
         builder,
         module,
@@ -1226,8 +1226,8 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             if let PlutoType::Class(class_name) = &obj_type {
                 if let Some(class_info) = env.classes.get(class_name) {
                     class_info.fields.iter()
-                        .find(|(n, _)| *n == field.node)
-                        .map(|(_, t)| t.clone())
+                        .find(|(n, _, _)| *n == field.node)
+                        .map(|(_, t, _)| t.clone())
                         .unwrap_or(PlutoType::Void)
                 } else {
                     PlutoType::Void
