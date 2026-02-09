@@ -19,6 +19,11 @@ void __pluto_print_bool(int value) {
     printf("%s\n", value ? "true" : "false");
 }
 
+void __pluto_print_string_no_newline(void *header) {
+    const char *data = (const char *)header + 8;
+    printf("%s", data);
+}
+
 void *__pluto_alloc(long size) {
     void *ptr = malloc(size);
     if (!ptr) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
