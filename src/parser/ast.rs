@@ -8,6 +8,7 @@ pub struct Program {
     pub classes: Vec<Spanned<ClassDecl>>,
     pub traits: Vec<Spanned<TraitDecl>>,
     pub enums: Vec<Spanned<EnumDecl>>,
+    pub app: Option<Spanned<AppDecl>>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +52,14 @@ pub struct ClassDecl {
 pub struct Field {
     pub name: Spanned<String>,
     pub ty: Spanned<TypeExpr>,
+    pub is_injected: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppDecl {
+    pub name: Spanned<String>,
+    pub inject_fields: Vec<Field>,
+    pub methods: Vec<Spanned<Function>>,
 }
 
 #[derive(Debug, Clone)]
