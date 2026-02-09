@@ -1303,6 +1303,11 @@ pub fn lower_function(
         expected_return_type,
     };
 
+    // Initialize GC at start of non-app main
+    if is_main {
+        ctx.call_runtime_void("__pluto_gc_init", &[]);
+    }
+
     let mut terminated = false;
     for stmt in &func.body.node.stmts {
         if terminated {
