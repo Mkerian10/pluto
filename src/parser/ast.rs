@@ -43,6 +43,7 @@ pub struct ExternFnDecl {
 #[derive(Debug, Clone)]
 pub struct ClassDecl {
     pub name: Spanned<String>,
+    pub type_params: Vec<Spanned<String>>,
     pub fields: Vec<Field>,
     pub methods: Vec<Spanned<Function>>,
     pub impl_traits: Vec<Spanned<String>>,
@@ -66,6 +67,7 @@ pub struct AppDecl {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: Spanned<String>,
+    pub type_params: Vec<Spanned<String>>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub body: Spanned<Block>,
@@ -86,6 +88,10 @@ pub enum TypeExpr {
     Fn {
         params: Vec<Box<Spanned<TypeExpr>>>,
         return_type: Box<Spanned<TypeExpr>>,
+    },
+    Generic {
+        name: String,
+        type_args: Vec<Spanned<TypeExpr>>,
     },
 }
 
@@ -172,6 +178,7 @@ pub enum Expr {
     },
     StructLit {
         name: Spanned<String>,
+        type_args: Vec<Spanned<TypeExpr>>,
         fields: Vec<(Spanned<String>, Spanned<Expr>)>,
     },
     ArrayLit {
@@ -184,10 +191,12 @@ pub enum Expr {
     EnumUnit {
         enum_name: Spanned<String>,
         variant: Spanned<String>,
+        type_args: Vec<Spanned<TypeExpr>>,
     },
     EnumData {
         enum_name: Spanned<String>,
         variant: Spanned<String>,
+        type_args: Vec<Spanned<TypeExpr>>,
         fields: Vec<(Spanned<String>, Spanned<Expr>)>,
     },
     StringInterp {
@@ -258,6 +267,7 @@ pub struct TraitMethod {
 #[derive(Debug, Clone)]
 pub struct EnumDecl {
     pub name: Spanned<String>,
+    pub type_params: Vec<Spanned<String>>,
     pub variants: Vec<EnumVariant>,
     pub is_pub: bool,
 }
@@ -288,6 +298,7 @@ pub struct EnumVariant {
 pub struct MatchArm {
     pub enum_name: Spanned<String>,
     pub variant_name: Spanned<String>,
+    pub type_args: Vec<Spanned<TypeExpr>>,
     pub bindings: Vec<(Spanned<String>, Option<Spanned<String>>)>,
     pub body: Spanned<Block>,
 }

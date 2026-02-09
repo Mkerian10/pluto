@@ -117,3 +117,26 @@ impl TypeEnv {
         self.fn_errors.get(name).map_or(false, |e| !e.is_empty())
     }
 }
+
+pub fn mangle_name(base: &str, type_args: &[PlutoType]) -> String {
+    let suffixes: Vec<String> = type_args.iter().map(mangle_type).collect();
+    format!("{}__{}", base, suffixes.join("_"))
+}
+
+fn mangle_type(ty: &PlutoType) -> String {
+    match ty {
+        PlutoType::Int => "int".into(),
+        PlutoType::Float => "float".into(),
+        PlutoType::Bool => "bool".into(),
+        PlutoType::String => "string".into(),
+        PlutoType::Void => "void".into(),
+        PlutoType::Class(n) | PlutoType::Enum(n) => n.clone(),
+        PlutoType::Array(inner) => format!("arr_{}", mangle_type(inner)),
+        PlutoType::Fn(ps, r) => {
+            let ps: Vec<_> = ps.iter().map(mangle_type).collect();
+            format!("fn_{}_ret_{}", ps.join("_"), mangle_type(r))
+        }
+        PlutoType::Trait(n) => n.clone(),
+        PlutoType::Error => "error".into(),
+    }
+}
