@@ -354,8 +354,10 @@ fn check_stmt(
                         value.span,
                     ));
                 }
+                env.define(name.node.clone(), expected);
+            } else {
+                env.define(name.node.clone(), val_type);
             }
-            env.define(name.node.clone(), val_type);
         }
         Stmt::Return(value) => {
             let actual = match value {
