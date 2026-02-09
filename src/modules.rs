@@ -243,6 +243,21 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
             }
         }
 
+        // Add pub enums with prefixed names
+        for enum_decl in &module_prog.enums {
+            if enum_decl.node.is_pub {
+                let mut prefixed_enum = enum_decl.clone();
+                prefixed_enum.node.name.node = format!("{}.{}", module_name, enum_decl.node.name.node);
+                // Prefix field types in variants that reference module-internal types
+                for variant in &mut prefixed_enum.node.variants {
+                    for field in &mut variant.fields {
+                        prefix_type_expr(&mut field.ty.node, module_name, module_prog);
+                    }
+                }
+                graph.root.enums.push(prefixed_enum);
+            }
+        }
+
         // Also add non-pub classes/traits/functions that are needed internally
         // (for now, import ALL items from the module but mark non-pub ones)
         // Actually, for v1, we only expose pub items. Internal items stay internal.
@@ -262,6 +277,7 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
 fn is_module_type(name: &str, module_prog: &Program) -> bool {
     module_prog.classes.iter().any(|c| c.node.name.node == name)
         || module_prog.traits.iter().any(|t| t.node.name.node == name)
+        || module_prog.enums.iter().any(|e| e.node.name.node == name)
 }
 
 /// Prefix type expressions that reference module-internal types.
@@ -344,6 +360,9 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
         Stmt::Match { expr, arms } => {
             rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
             for arm in arms {
+                if is_module_type(&arm.enum_name.node, module_prog) {
+                    arm.enum_name.node = format!("{}.{}", module_name, arm.enum_name.node);
+                }
                 rewrite_block_for_module(&mut arm.body.node, module_name, module_prog);
             }
         }
@@ -577,11 +596,11 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
             rewrite_expr(&mut object.node, object.span, import_names);
             rewrite_expr(&mut index.node, index.span, import_names);
         }
-        Expr::EnumUnit { enum_name, .. } => {
-            // If enum_name is a known import, prefix it
-            // (This will be handled when module flattening adds the enum)
+        Expr::EnumUnit { .. } => {
+            // enum_name is already qualified from parser (e.g., "math.Status")
         }
         Expr::EnumData { fields, .. } => {
+            // enum_name is already qualified from parser (e.g., "math.Status")
             for (_, val) in fields {
                 rewrite_expr(&mut val.node, val.span, import_names);
             }
