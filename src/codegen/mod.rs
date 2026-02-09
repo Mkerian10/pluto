@@ -2,7 +2,8 @@ pub mod lower;
 
 use std::collections::HashMap;
 
-use cranelift_codegen::ir::{types, AbiParam};
+use cranelift_codegen::ir::immediates::Offset32;
+use cranelift_codegen::ir::{types, AbiParam, InstBuilder, MemFlags, Value};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
 use cranelift_frontend::FunctionBuilderContext;
@@ -402,6 +403,148 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
                 }
             }
         }
+    }
+
+    // Pass 1d: Declare app methods
+    if let Some(app_spanned) = &program.app {
+        let app = &app_spanned.node;
+        let app_name = &app.name.node;
+        for method in &app.methods {
+            let m = &method.node;
+            let mangled = format!("{}_{}", app_name, m.name.node);
+            let sig = build_method_signature(m, &module, app_name, env);
+            let func_id = module
+                .declare_function(&mangled, Linkage::Local, &sig)
+                .map_err(|e| CompileError::codegen(format!("declare app method error: {e}")))?;
+            func_ids.insert(mangled, func_id);
+        }
+    }
+
+    // Pass 2d: Define app method bodies
+    if let Some(app_spanned) = &program.app {
+        let app = &app_spanned.node;
+        let app_name = &app.name.node;
+        for method in &app.methods {
+            let m = &method.node;
+            let mangled = format!("{}_{}", app_name, m.name.node);
+            let func_id = func_ids[&mangled];
+            let sig = build_method_signature(m, &module, app_name, env);
+
+            let mut fn_ctx = Context::new();
+            fn_ctx.func.signature = sig;
+
+            let mut builder_ctx = FunctionBuilderContext::new();
+            {
+                let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
+                lower_function(m, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(app_name), &vtable_ids, trait_wrap_id)?;
+            }
+
+            module
+                .define_function(func_id, &mut fn_ctx)
+                .map_err(|e| CompileError::codegen(format!("define app method error: {e}")))?;
+        }
+    }
+
+    // Generate synthetic main for DI wiring (when app exists)
+    if let Some(app_spanned) = &program.app {
+        let app = &app_spanned.node;
+        let app_name = &app.name.node;
+
+        // Declare main with Export linkage
+        let mut main_sig = module.make_signature();
+        main_sig.returns.push(AbiParam::new(types::I64));
+        let main_id = module
+            .declare_function("main", Linkage::Export, &main_sig)
+            .map_err(|e| CompileError::codegen(format!("declare synthetic main error: {e}")))?;
+
+        let mut fn_ctx = Context::new();
+        fn_ctx.func.signature = main_sig;
+
+        let mut builder_ctx = FunctionBuilderContext::new();
+        {
+            let mut builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
+            let entry_block = builder.create_block();
+            builder.switch_to_block(entry_block);
+            builder.seal_block(entry_block);
+
+            let alloc_ref = module.declare_func_in_func(alloc_id, builder.func);
+
+            // Create singletons in topological order
+            let mut singletons: HashMap<String, Value> = HashMap::new();
+
+            for class_name in &env.di_order {
+                let class_info = env.classes.get(class_name).ok_or_else(|| {
+                    CompileError::codegen(format!("DI: unknown class '{}'", class_name))
+                })?;
+                let size = class_info.fields.len() as i64 * 8;
+                let size_val = builder.ins().iconst(types::I64, size);
+                let call = builder.ins().call(alloc_ref, &[size_val]);
+                let ptr = builder.inst_results(call)[0];
+
+                // Wire injected fields
+                for (i, (_, field_ty, is_injected)) in class_info.fields.iter().enumerate() {
+                    if *is_injected {
+                        if let PlutoType::Class(dep_name) = field_ty {
+                            if let Some(&dep_ptr) = singletons.get(dep_name) {
+                                let offset = (i as i32) * 8;
+                                builder.ins().store(
+                                    MemFlags::new(),
+                                    dep_ptr,
+                                    ptr,
+                                    Offset32::new(offset),
+                                );
+                            }
+                        }
+                    }
+                    // Non-injected fields are zero-initialized by calloc
+                }
+
+                singletons.insert(class_name.clone(), ptr);
+            }
+
+            // Allocate and wire the app itself
+            let app_info = env.classes.get(app_name).ok_or_else(|| {
+                CompileError::codegen(format!("DI: unknown app class '{}'", app_name))
+            })?;
+            let app_size = app_info.fields.len() as i64 * 8;
+            let app_size_val = builder.ins().iconst(types::I64, app_size);
+            let app_call = builder.ins().call(alloc_ref, &[app_size_val]);
+            let app_ptr = builder.inst_results(app_call)[0];
+
+            for (i, (_, field_ty, is_injected)) in app_info.fields.iter().enumerate() {
+                if *is_injected {
+                    if let PlutoType::Class(dep_name) = field_ty {
+                        if let Some(&dep_ptr) = singletons.get(dep_name) {
+                            let offset = (i as i32) * 8;
+                            builder.ins().store(
+                                MemFlags::new(),
+                                dep_ptr,
+                                app_ptr,
+                                Offset32::new(offset),
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Call AppName_main(app_ptr)
+            let app_main_mangled = format!("{}_main", app_name);
+            let app_main_id = func_ids.get(&app_main_mangled).ok_or_else(|| {
+                CompileError::codegen(format!("DI: missing app main function '{}'", app_main_mangled))
+            })?;
+            let app_main_ref = module.declare_func_in_func(*app_main_id, builder.func);
+            builder.ins().call(app_main_ref, &[app_ptr]);
+
+            // Return 0
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder.ins().return_(&[zero]);
+
+            builder.finalize();
+        }
+
+        module
+            .define_function(main_id, &mut fn_ctx)
+            .map_err(|e| CompileError::codegen(format!("define synthetic main error: {e}")))?;
     }
 
     let object = module.finish();
