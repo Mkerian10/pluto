@@ -1,0 +1,14 @@
+fn main() {
+    let start = time_ns()
+    let s = ""
+    let i = 0
+    while i < 100000 {
+        s = "{s}x"
+        i = i + 1
+    }
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    let len = s.len()
+    print("len = {len}")
+    print("elapsed: {ms} ms")
+}
