@@ -1260,10 +1260,23 @@ fn infer_expr(
 /// If the body has a single return with an expression, we infer from that.
 /// Otherwise default to Void.
 fn infer_closure_return_type(block: &Block, env: &mut TypeEnv) -> Result<PlutoType, CompileError> {
-    // Walk all statements, find return statements with values
+    // Walk statements sequentially, processing let bindings so that
+    // variables are in scope when we encounter a return statement.
     for stmt in &block.stmts {
-        if let Stmt::Return(Some(expr)) = &stmt.node {
-            return infer_expr(&expr.node, expr.span, env);
+        match &stmt.node {
+            Stmt::Let { name, ty, value } => {
+                let val_type = infer_expr(&value.node, value.span, env)?;
+                if let Some(declared_ty) = ty {
+                    let expected = resolve_type(declared_ty, env)?;
+                    env.define(name.node.clone(), expected);
+                } else {
+                    env.define(name.node.clone(), val_type);
+                }
+            }
+            Stmt::Return(Some(expr)) => {
+                return infer_expr(&expr.node, expr.span, env);
+            }
+            _ => {}
         }
     }
     Ok(PlutoType::Void)
