@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>The Pluto Programming Language</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <span class="badge">Served by Pluto</span>
+    <h1>The Pluto Programming Language</h1>
+    <p>A language for distributed backend systems with geographic awareness.</p>
+
+    <h2>Hello, World</h2>
+    <pre><code>fn main() {
+    print("hello, world")
+}</code></pre>
+
+    <h2>What makes Pluto different?</h2>
+    <p>Pluto treats the <strong>app</strong> as a first-class concept. Dependency injection,
+    error handling, and inter-service communication are built into the language &mdash;
+    not bolted on as libraries.</p>
+
+    <h2>Dependency Injection</h2>
+    <pre><code>class UserService[db: Database] {
+    fn get_user(self, id: int) User {
+        return db.find(id)
+    }
+}
+
+app MyApp {
+    inject Database
+    inject UserService
+
+    fn main(self) {
+        let user = self.users.get_user(1)
+        print(user.name)
+    }
+}</code></pre>
+
+    <h2>Error Handling</h2>
+    <p>Errors are a first-class concept. The compiler infers which functions can fail
+    and enforces handling at every call site.</p>
+    <pre><code>error NotFound {
+    message: string
+}
+
+fn find_user(id: int) User {
+    if id < 0 {
+        raise NotFound { message: "invalid id" }
+    }
+    return lookup(id)
+}
+
+fn main() {
+    let user = find_user(42) catch NotFound {
+        print("user not found")
+        return
+    }
+    print(user.name)
+}</code></pre>
+
+    <h2>This page is served by Pluto</h2>
+    <p>This entire site is served by an HTTP server written in Pluto, using the
+    <code>std.net</code> and <code>std.fs</code> standard library modules.
+    <a href="/about.html">Learn more</a>.</p>
+</body>
+</html>

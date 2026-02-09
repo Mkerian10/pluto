@@ -1,0 +1,110 @@
+import std.net
+import std.fs
+import std.strings
+
+// A static file HTTP server written in Pluto.
+//
+// Run:
+//   cargo run --release -- run --stdlib stdlib examples/http_server/main.pluto
+//
+// Then visit http://127.0.0.1:8080 in your browser.
+// Serves files from examples/http_server/public/
+
+fn content_type(path: string) string {
+    if strings.ends_with(path, ".html") {
+        return "text/html"
+    }
+    if strings.ends_with(path, ".css") {
+        return "text/css"
+    }
+    if strings.ends_with(path, ".js") {
+        return "application/javascript"
+    }
+    if strings.ends_with(path, ".json") {
+        return "application/json"
+    }
+    if strings.ends_with(path, ".png") {
+        return "image/png"
+    }
+    if strings.ends_with(path, ".jpg") {
+        return "image/jpeg"
+    }
+    if strings.ends_with(path, ".svg") {
+        return "image/svg+xml"
+    }
+    if strings.ends_with(path, ".ico") {
+        return "image/x-icon"
+    }
+    if strings.ends_with(path, ".txt") {
+        return "text/plain"
+    }
+    return "application/octet-stream"
+}
+
+fn respond(conn: net.TcpConnection, status: string, ctype: string, body: string) {
+    let len = "{body.len()}"
+    let response = "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}"
+    conn.write(response)
+    conn.close()
+}
+
+fn respond_404(conn: net.TcpConnection, path: string) {
+    let body = "<html><body><h1>404 Not Found</h1><p>The path <code>{path}</code> was not found.</p></body></html>"
+    respond(conn, "404 Not Found", "text/html", body)
+}
+
+fn parse_request_path(request: string) string {
+    // Parse "GET /path HTTP/1.1\r\n..."
+    let parts = strings.split(request, " ")
+    if parts.len() < 2 {
+        return "/"
+    }
+    return parts[1]
+}
+
+fn serve_file(conn: net.TcpConnection, root: string, url_path: string) {
+    let file_path = root + url_path
+
+    // Serve index.html for directory requests
+    if strings.ends_with(file_path, "/") {
+        file_path = file_path + "index.html"
+    }
+
+    // If it's a directory without trailing slash, try index.html
+    if fs.exists(file_path) {
+        if fs.is_dir(file_path) {
+            file_path = file_path + "/index.html"
+        }
+    }
+
+    if fs.exists(file_path) == false {
+        respond_404(conn, url_path)
+        return
+    }
+
+    let body = fs.read_all(file_path) catch ""
+    let ctype = content_type(file_path)
+    print("  200 {ctype} ({body.len()} bytes)")
+    respond(conn, "200 OK", ctype, body)
+}
+
+fn main() {
+    let root = "examples/http_server/public"
+    let server = net.listen("127.0.0.1", 8080)
+    let port = server.port()
+    print("Pluto HTTP Server")
+    print("Serving files from: {root}")
+    print("Listening on http://127.0.0.1:{port}")
+    print("")
+
+    while true {
+        let conn = server.accept()
+        let request = conn.read(4096)
+
+        if request.len() > 0 {
+            let path = parse_request_path(request)
+            print("{path}")
+            serve_file(conn, root, path)
+        }
+    }
+}

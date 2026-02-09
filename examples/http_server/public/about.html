@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>About - The Pluto Programming Language</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <span class="badge">Served by Pluto</span>
+    <h1>About the Pluto HTTP Server</h1>
+    <p><a href="/">Back to home</a></p>
+
+    <h2>How it works</h2>
+    <p>This server is written entirely in Pluto. It uses three standard library modules:</p>
+    <ul>
+        <li><code>std.net</code> &mdash; TCP listener and connections</li>
+        <li><code>std.fs</code> &mdash; Reading files from disk</li>
+        <li><code>std.strings</code> &mdash; Parsing HTTP requests</li>
+    </ul>
+
+    <h2>The server code</h2>
+    <pre><code>import std.net
+import std.fs
+import std.strings
+
+fn main() {
+    let server = net.listen("127.0.0.1", 8080)
+    print("Listening on http://127.0.0.1:8080")
+
+    while true {
+        let conn = server.accept()
+        let request = conn.read(4096)
+        let path = parse_request_path(request)
+        serve_file(conn, "public", path)
+    }
+}</code></pre>
+
+    <p>The full source is about 90 lines of Pluto, including content-type detection,
+    404 handling, and index.html resolution for directories.</p>
+</body>
+</html>
