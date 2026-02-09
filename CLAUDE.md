@@ -77,7 +77,7 @@ git worktree add ../pluto-<feature-name> -b <feature-name>
 # Do your work in the worktree directory
 # ... work in ../pluto-<feature-name> ...
 
-# When done: merge to master, then clean up YOUR worktree and branch
+# When done: rebase onto master, merge, then clean up YOUR worktree and branch
 git worktree remove ../pluto-<feature-name>
 git branch -d <feature-name>
 ```
@@ -89,19 +89,26 @@ git branch -d <feature-name>
 
 **Branch per feature** — Each feature or task should be on its own branch. Merge to `master` when complete and tests pass.
 
+**Rebase onto master before merging** — Always resolve conflicts on your feature branch, never on master. Rebase your branch onto the latest master, fix any conflicts there, and verify tests pass. Then do a fast-forward merge to master. This keeps master's history clean and ensures conflicts are never resolved in a half-broken state on master.
+
 **Merge checklist** — Before merging to `master`, verify ALL of the following:
 1. `cargo test` passes on your branch (all unit, integration, and module tests)
-2. Pull latest `master` and resolve any conflicts
-3. `cargo test` passes again after conflict resolution
-4. Only then commit the merge to `master`
+2. Rebase onto latest `master` and resolve any conflicts **on your branch**
+3. `cargo test` passes again after conflict resolution on your branch
+4. Fast-forward merge to `master` (should be clean, no conflicts)
 
 ```bash
+# On your feature branch:
+git fetch origin                  # Get latest
+git rebase master                 # Rebase onto master, resolve conflicts HERE
+# Fix any conflicts, then: git add <files> && git rebase --continue
+cargo test                        # MUST pass on your branch after rebase
+
+# Then merge to master (fast-forward, no conflicts):
 git checkout master
 git pull                          # Get latest from other agents
-git merge <feature-name>          # Merge your branch
-# Resolve any conflicts
-cargo test                        # MUST pass before committing
-git commit                        # Only if tests pass
+git merge <feature-name>          # Fast-forward merge (no conflicts)
+cargo test                        # Sanity check — should pass
 ```
 
 **Pull when starting work** — Before beginning any new task, pull the latest `master` to start from the most up-to-date code:
