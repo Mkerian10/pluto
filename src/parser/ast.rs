@@ -8,6 +8,7 @@ pub struct Program {
     pub classes: Vec<Spanned<ClassDecl>>,
     pub traits: Vec<Spanned<TraitDecl>>,
     pub enums: Vec<Spanned<EnumDecl>>,
+    pub errors: Vec<Spanned<ErrorDecl>>,
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +121,10 @@ pub enum Stmt {
         expr: Spanned<Expr>,
         arms: Vec<MatchArm>,
     },
+    Raise {
+        error_name: Spanned<String>,
+        fields: Vec<(Spanned<String>, Spanned<Expr>)>,
+    },
     Expr(Spanned<Expr>),
 }
 
@@ -175,6 +180,13 @@ pub enum Expr {
     StringInterp {
         parts: Vec<StringInterpPart>,
     },
+    Propagate {
+        expr: Box<Spanned<Expr>>,
+    },
+    Catch {
+        expr: Box<Spanned<Expr>>,
+        handler: CatchHandler,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -226,6 +238,22 @@ pub struct EnumDecl {
     pub name: Spanned<String>,
     pub variants: Vec<EnumVariant>,
     pub is_pub: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ErrorDecl {
+    pub name: Spanned<String>,
+    pub fields: Vec<Field>,
+    pub is_pub: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum CatchHandler {
+    Wildcard {
+        var: Spanned<String>,
+        body: Box<Spanned<Expr>>,
+    },
+    Shorthand(Box<Spanned<Expr>>),
 }
 
 #[derive(Debug, Clone)]

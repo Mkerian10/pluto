@@ -143,6 +143,7 @@ impl<'a> Parser<'a> {
         let mut classes = Vec::new();
         let mut traits = Vec::new();
         let mut enums = Vec::new();
+        let mut errors = Vec::new();
         self.skip_newlines();
 
         // Parse imports first
@@ -186,12 +187,17 @@ impl<'a> Parser<'a> {
                     e.node.is_pub = is_pub;
                     enums.push(e);
                 }
+                Token::Error => {
+                    let mut err_decl = self.parse_error_decl()?;
+                    err_decl.node.is_pub = is_pub;
+                    errors.push(err_decl);
+                }
                 Token::Extern => {
                     extern_fns.push(self.parse_extern_fn(is_pub)?);
                 }
                 _ => {
                     return Err(CompileError::syntax(
-                        format!("expected 'fn', 'class', 'trait', 'enum', or 'extern', found {}", tok.node),
+                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', or 'extern', found {}", tok.node),
                         tok.span,
                     ));
                 }
@@ -199,7 +205,7 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        Ok(Program { imports, functions, extern_fns, classes, traits, enums })
+        Ok(Program { imports, functions, extern_fns, classes, traits, enums, errors })
     }
 
     fn parse_import(&mut self) -> Result<Spanned<ImportDecl>, CompileError> {
@@ -311,6 +317,37 @@ impl<'a> Parser<'a> {
         let end = close.span.end;
 
         Ok(Spanned::new(EnumDecl { name, variants, is_pub: false }, Span::new(start, end)))
+    }
+
+    fn parse_error_decl(&mut self) -> Result<Spanned<ErrorDecl>, CompileError> {
+        let err_tok = self.expect(&Token::Error)?;
+        let start = err_tok.span.start;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut fields = Vec::new();
+        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+            if !fields.is_empty() {
+                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                    self.advance();
+                }
+                self.skip_newlines();
+                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                    break;
+                }
+            }
+            let fname = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let fty = self.parse_type()?;
+            fields.push(Field { name: fname, ty: fty });
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+
+        Ok(Spanned::new(ErrorDecl { name, fields, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_trait(&mut self) -> Result<Spanned<TraitDecl>, CompileError> {
@@ -557,6 +594,7 @@ impl<'a> Parser<'a> {
             Token::While => self.parse_while_stmt(),
             Token::For => self.parse_for_stmt(),
             Token::Match => self.parse_match_stmt(),
+            Token::Raise => self.parse_raise_stmt(),
             _ => {
                 // Parse a full expression, then check for `=` to determine
                 // if this is an assignment, field assignment, or expression statement.
@@ -817,6 +855,88 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_raise_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let raise_tok = self.expect(&Token::Raise)?;
+        let start = raise_tok.span.start;
+        let first = self.expect_ident()?;
+
+        // Check for qualified name: raise module.ErrorName { ... }
+        let error_name = if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Dot) {
+            self.advance(); // consume '.'
+            let second = self.expect_ident()?;
+            let span = Span::new(first.span.start, second.span.end);
+            Spanned::new(format!("{}.{}", first.node, second.node), span)
+        } else {
+            first
+        };
+
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut fields = Vec::new();
+        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+            if !fields.is_empty() {
+                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                    self.advance();
+                }
+                self.skip_newlines();
+                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                    break;
+                }
+            }
+            let fname = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let fval = self.parse_expr(0)?;
+            fields.push((fname, fval));
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+        self.consume_statement_end();
+
+        Ok(Spanned::new(
+            Stmt::Raise { error_name, fields },
+            Span::new(start, end),
+        ))
+    }
+
+    fn parse_catch_handler(&mut self) -> Result<(CatchHandler, usize), CompileError> {
+        // Lookahead: if ident followed by {, it's wildcard form
+        if self.is_catch_wildcard_ahead() {
+            let var = self.expect_ident()?;
+            self.expect(&Token::LBrace)?;
+            self.skip_newlines();
+            let body = self.parse_expr(0)?;
+            self.skip_newlines();
+            let close = self.expect(&Token::RBrace)?;
+            Ok((CatchHandler::Wildcard { var, body: Box::new(body) }, close.span.end))
+        } else {
+            let fallback = self.parse_expr(0)?;
+            let end = fallback.span.end;
+            Ok((CatchHandler::Shorthand(Box::new(fallback)), end))
+        }
+    }
+
+    fn is_catch_wildcard_ahead(&self) -> bool {
+        let mut i = self.pos;
+        // skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        // Must be ident
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Ident) {
+            return false;
+        }
+        i += 1;
+        // skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        // Must be {
+        i < self.tokens.len() && matches!(self.tokens[i].node, Token::LBrace)
+    }
+
     // Pratt parser for expressions
     fn parse_expr(&mut self, min_bp: u8) -> Result<Spanned<Expr>, CompileError> {
         let mut lhs = self.parse_prefix()?;
@@ -1036,6 +1156,37 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            // Postfix ? — reserved for future Option/null handling
+            if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Question) {
+                return Err(CompileError::syntax(
+                    "? is reserved for future Option/null handling; use ! for error propagation",
+                    self.peek_raw().unwrap().span,
+                ));
+            }
+
+            // Postfix ! — error propagation (must be on same line via peek_raw)
+            if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Bang) {
+                let bang = self.advance().unwrap();
+                let span = Span::new(lhs.span.start, bang.span.end);
+                lhs = Spanned::new(
+                    Expr::Propagate { expr: Box::new(lhs) },
+                    span,
+                );
+                continue;
+            }
+
+            // Postfix catch — error handling (must be on same line via peek_raw)
+            if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Catch) {
+                self.advance(); // consume 'catch'
+                let (handler, end) = self.parse_catch_handler()?;
+                let span = Span::new(lhs.span.start, end);
+                lhs = Spanned::new(
+                    Expr::Catch { expr: Box::new(lhs), handler },
+                    span,
+                );
+                continue;
+            }
+
             let op = match &tok.node {
                 Token::Plus => BinOp::Add,
                 Token::Minus => BinOp::Sub,
@@ -1168,6 +1319,12 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 Ok(Spanned::new(Expr::ArrayLit { elements }, Span::new(start, end)))
+            }
+            Token::Question => {
+                return Err(CompileError::syntax(
+                    "? is reserved for future Option/null handling; use ! for error propagation",
+                    tok.span,
+                ));
             }
             _ => Err(CompileError::syntax(
                 format!("unexpected token {} in expression", tok.node),

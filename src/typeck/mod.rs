@@ -4,7 +4,7 @@ pub mod types;
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::Spanned;
-use env::{ClassInfo, EnumInfo, FuncSig, TraitInfo, TypeEnv};
+use env::{ClassInfo, EnumInfo, ErrorInfo, FuncSig, TraitInfo, TypeEnv};
 use types::PlutoType;
 
 fn types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> bool {
@@ -61,6 +61,17 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
             variants.push((v.name.node.clone(), fields));
         }
         env.enums.insert(e.name.node.clone(), EnumInfo { variants });
+    }
+
+    // Pass 0c: Register errors
+    for error_decl in &program.errors {
+        let e = &error_decl.node;
+        let mut fields = Vec::new();
+        for f in &e.fields {
+            let ty = resolve_type(&f.ty, &env)?;
+            fields.push((f.name.node.clone(), ty));
+        }
+        env.errors.insert(e.name.node.clone(), ErrorInfo { fields });
     }
 
     // Pass 1a: Register class field definitions
@@ -662,6 +673,44 @@ fn check_stmt(
                 }
             }
         }
+        Stmt::Raise { error_name, fields } => {
+            // Validate that the error type exists
+            let error_info = env.errors.get(&error_name.node).ok_or_else(|| {
+                CompileError::type_err(
+                    format!("unknown error type '{}'", error_name.node),
+                    error_name.span,
+                )
+            })?.clone();
+            // Validate field count
+            if fields.len() != error_info.fields.len() {
+                return Err(CompileError::type_err(
+                    format!(
+                        "error '{}' has {} fields, but {} were provided",
+                        error_name.node, error_info.fields.len(), fields.len()
+                    ),
+                    span,
+                ));
+            }
+            // Validate each field
+            for (lit_name, lit_val) in fields {
+                let field_type = error_info.fields.iter()
+                    .find(|(n, _)| *n == lit_name.node)
+                    .map(|(_, t)| t.clone())
+                    .ok_or_else(|| {
+                        CompileError::type_err(
+                            format!("error '{}' has no field '{}'", error_name.node, lit_name.node),
+                            lit_name.span,
+                        )
+                    })?;
+                let val_type = infer_expr(&lit_val.node, lit_val.span, env)?;
+                if val_type != field_type {
+                    return Err(CompileError::type_err(
+                        format!("field '{}': expected {field_type}, found {val_type}", lit_name.node),
+                        lit_val.span,
+                    ));
+                }
+            }
+        }
         Stmt::Expr(expr) => {
             infer_expr(&expr.node, expr.span, env)?;
         }
@@ -1021,6 +1070,35 @@ fn infer_expr(
                     Ok(PlutoType::Enum(enum_name.node.clone()))
                 }
             }
+        }
+        Expr::Propagate { expr } => {
+            // The inner expression must be a call-like expression
+            let inner_type = infer_expr(&expr.node, expr.span, env)?;
+            // In MVP, ! just returns the success type (enforcement pass will check fallibility)
+            Ok(inner_type)
+        }
+        Expr::Catch { expr, handler } => {
+            let success_type = infer_expr(&expr.node, expr.span, env)?;
+            // Type check the handler (without wildcard scope binding — that needs
+            // mutable env, done in check_stmt for let/expr statements)
+            let handler_type = match handler {
+                CatchHandler::Wildcard { body, .. } => {
+                    // In infer_expr we can't push_scope (env is &), so just infer body type.
+                    // The wildcard var won't resolve, but this path is only hit for nested
+                    // catch in expressions. Full checking happens via check_stmt → check_catch.
+                    infer_expr(&body.node, body.span, env)?
+                }
+                CatchHandler::Shorthand(fallback) => {
+                    infer_expr(&fallback.node, fallback.span, env)?
+                }
+            };
+            if !types_compatible(&handler_type, &success_type, env) {
+                return Err(CompileError::type_err(
+                    format!("catch handler type mismatch: expected {success_type}, found {handler_type}"),
+                    span,
+                ));
+            }
+            Ok(success_type)
         }
         Expr::MethodCall { object, method, args } => {
             let obj_type = infer_expr(&object.node, object.span, env)?;
