@@ -55,3 +55,14 @@ fn enum_mixed_variants() {
     );
     assert_eq!(out, "42\n99\n0\n");
 }
+
+#[test]
+fn match_binding_shadow_restore() {
+    // Safety-net: a variable `x` exists before the match, a match arm binds the
+    // same name `x`, uses it inside the arm body, and then the outer `x` is used
+    // after the match to verify it is properly restored.
+    let out = compile_and_run_stdout(
+        "enum Wrapper {\n    Val { x: int }\n    Empty\n}\n\nfn main() {\n    let x = 100\n    let w = Wrapper.Val { x: 7 }\n    match w {\n        Wrapper.Val { x } {\n            print(x)\n        }\n        Wrapper.Empty {\n            print(0)\n        }\n    }\n    print(x)\n}",
+    );
+    assert_eq!(out, "7\n100\n");
+}
