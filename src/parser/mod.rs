@@ -17,6 +17,14 @@ pub struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Spanned<Token>], source: &'a str) -> Self {
+        // Seed with prelude enum names so all parse paths (including interpolation
+        // sub-parsers) know about Option, Result, etc.
+        let enum_names = crate::prelude::prelude_enum_names().clone();
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names }
+    }
+
+    /// Constructor without prelude seeding — used only to parse the prelude source itself.
+    pub fn new_without_prelude(tokens: &'a [Spanned<Token>], source: &'a str) -> Self {
         Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names: HashSet::new() }
     }
 
