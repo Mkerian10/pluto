@@ -1,0 +1,718 @@
+use std::collections::HashMap;
+
+use crate::diagnostics::CompileError;
+use crate::parser::ast::*;
+use super::env::{self, ClassInfo, EnumInfo, ErrorInfo, FuncSig, GenericClassInfo, GenericEnumInfo, GenericFuncSig, TraitInfo, TypeEnv};
+use super::types::PlutoType;
+use super::resolve::{resolve_type, resolve_type_with_params};
+use super::check::check_function;
+
+pub(crate) fn register_traits(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for trait_decl in &program.traits {
+        let t = &trait_decl.node;
+        let mut methods = Vec::new();
+        let mut default_methods = Vec::new();
+
+        for m in &t.methods {
+            let mut param_types = Vec::new();
+            for p in &m.params {
+                if p.name.node == "self" {
+                    param_types.push(PlutoType::Void); // placeholder for self
+                } else {
+                    param_types.push(resolve_type(&p.ty, env)?);
+                }
+            }
+            let return_type = match &m.return_type {
+                Some(rt) => resolve_type(rt, env)?,
+                None => PlutoType::Void,
+            };
+            methods.push((m.name.node.clone(), FuncSig { params: param_types, return_type }));
+            if m.body.is_some() {
+                default_methods.push(m.name.node.clone());
+            }
+        }
+
+        env.traits.insert(t.name.node.clone(), TraitInfo { methods, default_methods });
+    }
+    Ok(())
+}
+
+pub(crate) fn register_enums(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for enum_decl in &program.enums {
+        let e = &enum_decl.node;
+        if !e.type_params.is_empty() {
+            // Generic enum — register in generic_enums with TypeParam types
+            let tp_names: std::collections::HashSet<String> = e.type_params.iter().map(|tp| tp.node.clone()).collect();
+            let mut variants = Vec::new();
+            for v in &e.variants {
+                let mut fields = Vec::new();
+                for f in &v.fields {
+                    let ty = resolve_type_with_params(&f.ty, env, &tp_names)?;
+                    fields.push((f.name.node.clone(), ty));
+                }
+                variants.push((v.name.node.clone(), fields));
+            }
+            env.generic_enums.insert(e.name.node.clone(), GenericEnumInfo {
+                type_params: e.type_params.iter().map(|tp| tp.node.clone()).collect(),
+                variants,
+            });
+            continue;
+        }
+        let mut variants = Vec::new();
+        for v in &e.variants {
+            let mut fields = Vec::new();
+            for f in &v.fields {
+                let ty = resolve_type(&f.ty, env)?;
+                fields.push((f.name.node.clone(), ty));
+            }
+            variants.push((v.name.node.clone(), fields));
+        }
+        env.enums.insert(e.name.node.clone(), EnumInfo { variants });
+    }
+    Ok(())
+}
+
+pub(crate) fn register_app_placeholder(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    if let Some(app_spanned) = &program.app {
+        let app = &app_spanned.node;
+        let app_name = app.name.node.clone();
+
+        // Conflict check: app + top-level main
+        if program.functions.iter().any(|f| f.node.name.node == "main") {
+            return Err(CompileError::type_err(
+                "cannot have both an app declaration and a top-level main function".to_string(),
+                app_spanned.span,
+            ));
+        }
+
+        // We register the app as a class so method mangling/self resolution works identically.
+        // Inject fields are resolved later (after classes are registered) in a second pass.
+        // For now, insert a placeholder ClassInfo with no fields.
+        env.classes.insert(
+            app_name.clone(),
+            ClassInfo {
+                fields: Vec::new(),
+                methods: Vec::new(),
+                impl_traits: Vec::new(),
+            },
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn register_errors(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for error_decl in &program.errors {
+        let e = &error_decl.node;
+        let mut fields = Vec::new();
+        for f in &e.fields {
+            let ty = resolve_type(&f.ty, env)?;
+            fields.push((f.name.node.clone(), ty));
+        }
+        env.errors.insert(e.name.node.clone(), ErrorInfo { fields });
+    }
+    Ok(())
+}
+
+pub(crate) fn register_class_names(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for class in &program.classes {
+        let c = &class.node;
+        if !c.type_params.is_empty() {
+            // Generic class — skip concrete registration (handled in resolve_class_fields)
+            continue;
+        }
+        env.classes.insert(
+            c.name.node.clone(),
+            ClassInfo {
+                fields: Vec::new(),
+                methods: Vec::new(),
+                impl_traits: Vec::new(),
+            },
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for class in &program.classes {
+        let c = &class.node;
+        if !c.type_params.is_empty() {
+            // Generic class — register in generic_classes
+            // v1 restriction: no trait impls on generic classes
+            if !c.impl_traits.is_empty() {
+                return Err(CompileError::type_err(
+                    "generic classes cannot implement traits (v1 restriction)".to_string(),
+                    class.span,
+                ));
+            }
+            // v1 restriction: no DI on generic classes
+            if c.fields.iter().any(|f| f.is_injected) {
+                return Err(CompileError::type_err(
+                    "generic classes cannot have injected dependencies (v1 restriction)".to_string(),
+                    class.span,
+                ));
+            }
+            let tp_names: std::collections::HashSet<String> = c.type_params.iter().map(|tp| tp.node.clone()).collect();
+            let mut fields = Vec::new();
+            for f in &c.fields {
+                let ty = resolve_type_with_params(&f.ty, env, &tp_names)?;
+                fields.push((f.name.node.clone(), ty, f.is_injected));
+            }
+            let method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
+            // Build method signatures with TypeParam types
+            let mut method_sigs = HashMap::new();
+            for m in &c.methods {
+                let mut param_types = Vec::new();
+                for p in &m.node.params {
+                    if p.name.node == "self" {
+                        // self will be substituted to the concrete class type during instantiation
+                        param_types.push(PlutoType::Class(c.name.node.clone()));
+                    } else {
+                        param_types.push(resolve_type_with_params(&p.ty, env, &tp_names)?);
+                    }
+                }
+                let return_type = match &m.node.return_type {
+                    Some(t) => resolve_type_with_params(t, env, &tp_names)?,
+                    None => PlutoType::Void,
+                };
+                method_sigs.insert(m.node.name.node.clone(), env::FuncSig {
+                    params: param_types,
+                    return_type,
+                });
+            }
+            env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
+                type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
+                fields,
+                methods: method_names,
+                method_sigs,
+                impl_traits: Vec::new(),
+            });
+            continue;
+        }
+        let mut fields = Vec::new();
+        for f in &c.fields {
+            let ty = resolve_type(&f.ty, env)?;
+            fields.push((f.name.node.clone(), ty, f.is_injected));
+        }
+
+        // Validate trait names
+        let mut impl_trait_names = Vec::new();
+        for trait_name in &c.impl_traits {
+            if !env.traits.contains_key(&trait_name.node) {
+                return Err(CompileError::type_err(
+                    format!("unknown trait '{}'", trait_name.node),
+                    trait_name.span,
+                ));
+            }
+            impl_trait_names.push(trait_name.node.clone());
+        }
+
+        if let Some(info) = env.classes.get_mut(&c.name.node) {
+            info.fields = fields;
+            info.impl_traits = impl_trait_names;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn register_extern_fns(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for ext in &program.extern_fns {
+        let e = &ext.node;
+
+        // Validate only primitive types allowed
+        let mut param_types = Vec::new();
+        for p in &e.params {
+            let ty = resolve_type(&p.ty, env)?;
+            match &ty {
+                PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Void | PlutoType::Array(_) => {}
+                _ => {
+                    return Err(CompileError::type_err(
+                        format!("extern functions only support primitive types and arrays (int, float, bool, string, array), got '{}'", ty),
+                        p.ty.span,
+                    ));
+                }
+            }
+            param_types.push(ty);
+        }
+
+        let return_type = match &e.return_type {
+            Some(t) => {
+                let ty = resolve_type(t, env)?;
+                match &ty {
+                    PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Void | PlutoType::Array(_) => {}
+                    _ => {
+                        return Err(CompileError::type_err(
+                            format!("extern functions only support primitive types and arrays (int, float, bool, string, array), got '{}'", ty),
+                            t.span,
+                        ));
+                    }
+                }
+                ty
+            }
+            None => PlutoType::Void,
+        };
+
+        env.functions.insert(
+            e.name.node.clone(),
+            FuncSig { params: param_types, return_type },
+        );
+        env.extern_fns.insert(e.name.node.clone());
+    }
+    Ok(())
+}
+
+pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for func in &program.functions {
+        let f = &func.node;
+
+        // Check for conflict with extern fn
+        if env.extern_fns.contains(&f.name.node) {
+            return Err(CompileError::type_err(
+                format!("duplicate function name '{}': defined as both fn and extern fn", f.name.node),
+                f.name.span,
+            ));
+        }
+
+        if !f.type_params.is_empty() {
+            // Generic function — register in generic_functions with TypeParam types
+            let tp_names: std::collections::HashSet<String> = f.type_params.iter().map(|tp| tp.node.clone()).collect();
+            let mut param_types = Vec::new();
+            for p in &f.params {
+                param_types.push(resolve_type_with_params(&p.ty, env, &tp_names)?);
+            }
+            let return_type = match &f.return_type {
+                Some(t) => resolve_type_with_params(t, env, &tp_names)?,
+                None => PlutoType::Void,
+            };
+            env.generic_functions.insert(f.name.node.clone(), GenericFuncSig {
+                type_params: f.type_params.iter().map(|tp| tp.node.clone()).collect(),
+                params: param_types,
+                return_type,
+            });
+            continue;
+        }
+
+        let mut param_types = Vec::new();
+        for p in &f.params {
+            param_types.push(resolve_type(&p.ty, env)?);
+        }
+        let return_type = match &f.return_type {
+            Some(t) => resolve_type(t, env)?,
+            None => PlutoType::Void,
+        };
+        env.functions.insert(
+            f.name.node.clone(),
+            FuncSig { params: param_types, return_type },
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn register_method_sigs(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for class in &program.classes {
+        let c = &class.node;
+        if !c.type_params.is_empty() { continue; } // Skip generic classes
+        let class_name = &c.name.node;
+        let mut method_names = Vec::new();
+        for method in &c.methods {
+            let m = &method.node;
+            let mangled = format!("{}_{}", class_name, m.name.node);
+            method_names.push(m.name.node.clone());
+
+            let mut param_types = Vec::new();
+            for p in &m.params {
+                if p.name.node == "self" {
+                    param_types.push(PlutoType::Class(class_name.clone()));
+                } else {
+                    param_types.push(resolve_type(&p.ty, env)?);
+                }
+            }
+            let return_type = match &m.return_type {
+                Some(t) => resolve_type(t, env)?,
+                None => PlutoType::Void,
+            };
+            env.functions.insert(
+                mangled,
+                FuncSig { params: param_types, return_type },
+            );
+        }
+        // Update the ClassInfo with method names
+        if let Some(info) = env.classes.get_mut(class_name) {
+            info.methods = method_names;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    if let Some(app_spanned) = &program.app {
+        let app = &app_spanned.node;
+        let app_name = app.name.node.clone();
+
+        // Resolve inject field types
+        let mut fields = Vec::new();
+        for f in &app.inject_fields {
+            let ty = resolve_type(&f.ty, env)?;
+            fields.push((f.name.node.clone(), ty, f.is_injected));
+        }
+
+        // Update the ClassInfo with resolved fields
+        if let Some(info) = env.classes.get_mut(&app_name) {
+            info.fields = fields.clone();
+        }
+
+        // Store in env.app
+        env.app = Some((app_name.clone(), ClassInfo {
+            fields: fields.clone(),
+            methods: Vec::new(),
+            impl_traits: Vec::new(),
+        }));
+
+        // Register app methods (mangled as AppName_methodname)
+        let mut method_names = Vec::new();
+        let mut has_main = false;
+        for method in &app.methods {
+            let m = &method.node;
+            let mangled = format!("{}_{}", app_name, m.name.node);
+            method_names.push(m.name.node.clone());
+
+            if m.name.node == "main" {
+                has_main = true;
+                // Verify main has self as first param
+                if m.params.is_empty() || m.params[0].name.node != "self" {
+                    return Err(CompileError::type_err(
+                        "app main method must take 'self' as first parameter".to_string(),
+                        m.name.span,
+                    ));
+                }
+                // Verify main returns void (no return type annotation)
+                if m.return_type.is_some() {
+                    return Err(CompileError::type_err(
+                        "app main method must not have a return type".to_string(),
+                        m.name.span,
+                    ));
+                }
+            }
+
+            let mut param_types = Vec::new();
+            for p in &m.params {
+                if p.name.node == "self" {
+                    param_types.push(PlutoType::Class(app_name.clone()));
+                } else {
+                    param_types.push(resolve_type(&p.ty, env)?);
+                }
+            }
+            let return_type = match &m.return_type {
+                Some(t) => resolve_type(t, env)?,
+                None => PlutoType::Void,
+            };
+            env.functions.insert(
+                mangled,
+                FuncSig { params: param_types, return_type },
+            );
+        }
+
+        if !has_main {
+            return Err(CompileError::type_err(
+                "app must have a 'main' method".to_string(),
+                app.name.span,
+            ));
+        }
+
+        // Update class info with method names
+        if let Some(info) = env.classes.get_mut(&app_name) {
+            info.methods = method_names.clone();
+        }
+        // Also update env.app
+        if let Some((_, ref mut app_info)) = env.app {
+            app_info.methods = method_names;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    use std::collections::{HashMap as DMap, HashSet as DSet, VecDeque};
+
+    // Build adjacency: class -> list of dep types
+    let mut graph: DMap<String, Vec<String>> = DMap::new();
+    let mut all_di_classes = DSet::new();
+
+    for (class_name, class_info) in &env.classes {
+        let deps: Vec<String> = class_info.fields.iter()
+            .filter(|(_, _, inj)| *inj)
+            .map(|(_, ty, _)| {
+                match ty {
+                    PlutoType::Class(name) => name.clone(),
+                    _ => String::new(),
+                }
+            })
+            .filter(|n| !n.is_empty())
+            .collect();
+        if !deps.is_empty() {
+            all_di_classes.insert(class_name.clone());
+            for d in &deps {
+                all_di_classes.insert(d.clone());
+            }
+            graph.insert(class_name.clone(), deps);
+        }
+    }
+
+    // Also add classes that are deps but have no deps themselves
+    for c in &all_di_classes {
+        graph.entry(c.clone()).or_insert_with(Vec::new);
+    }
+
+    // Verify all injected types are known classes
+    for (class_name, deps) in &graph {
+        for dep in deps {
+            if !env.classes.contains_key(dep) {
+                // Find the span for better error reporting
+                let span = if let Some(app_spanned) = &program.app {
+                    if app_spanned.node.name.node == *class_name {
+                        app_spanned.span
+                    } else {
+                        program.classes.iter()
+                            .find(|c| c.node.name.node == *class_name)
+                            .map(|c| c.span)
+                            .unwrap_or(app_spanned.span)
+                    }
+                } else {
+                    program.classes.iter()
+                        .find(|c| c.node.name.node == *class_name)
+                        .map(|c| c.span)
+                        .unwrap_or(crate::span::Span { start: 0, end: 0, file_id: 0 })
+                };
+                return Err(CompileError::type_err(
+                    format!("injected dependency '{}' in class '{}' is not a known class", dep, class_name),
+                    span,
+                ));
+            }
+        }
+    }
+
+    // Topological sort (Kahn's algorithm)
+    if !all_di_classes.is_empty() {
+        let mut in_degree: DMap<String, usize> = DMap::new();
+        for c in &all_di_classes {
+            in_degree.insert(c.clone(), 0);
+        }
+        for (_, deps) in &graph {
+            for dep in deps {
+                *in_degree.entry(dep.clone()).or_insert(0) += 1;
+            }
+        }
+
+        // Note: in_degree counts how many classes DEPEND ON this class,
+        // but for topological sort we want "dependents" direction.
+        // Actually, let's redo: edge A->B means A depends on B.
+        // For topo sort (creation order), B must be created before A.
+        // in_degree[X] = number of classes X depends on (graph[X].len())
+        let mut in_degree2: DMap<String, usize> = DMap::new();
+        for c in &all_di_classes {
+            in_degree2.insert(c.clone(), graph.get(c).map_or(0, |v| v.len()));
+        }
+
+        let mut queue: VecDeque<String> = VecDeque::new();
+        for (c, deg) in &in_degree2 {
+            if *deg == 0 {
+                queue.push_back(c.clone());
+            }
+        }
+
+        let mut order = Vec::new();
+        while let Some(node) = queue.pop_front() {
+            order.push(node.clone());
+            // For each class that depends on `node`, decrement its in_degree
+            for (class, deps) in &graph {
+                if deps.contains(&node) {
+                    if let Some(deg) = in_degree2.get_mut(class) {
+                        *deg -= 1;
+                        if *deg == 0 {
+                            queue.push_back(class.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        if order.len() != all_di_classes.len() {
+            // Cycle detected — find the cycle for the error message
+            let remaining: Vec<String> = all_di_classes.iter()
+                .filter(|c| !order.contains(c))
+                .cloned()
+                .collect();
+            let cycle_str = remaining.join(" -> ");
+            let span = program.app.as_ref()
+                .map(|a| a.span)
+                .or_else(|| program.classes.first().map(|c| c.span))
+                .unwrap_or(crate::span::Span { start: 0, end: 0, file_id: 0 });
+            return Err(CompileError::type_err(
+                format!("circular dependency detected: {}", cycle_str),
+                span,
+            ));
+        }
+
+        // Filter out the app name from di_order (app is wired separately)
+        let app_name_opt = env.app.as_ref().map(|(n, _)| n.clone());
+        env.di_order = order.into_iter()
+            .filter(|n| Some(n) != app_name_opt.as_ref())
+            .collect();
+    }
+    Ok(())
+}
+
+pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for class in &program.classes {
+        let c = &class.node;
+        if !c.type_params.is_empty() { continue; } // Skip generic classes
+        let class_name = &c.name.node;
+        let class_info = env.classes.get(class_name).ok_or_else(|| {
+            CompileError::type_err(
+                format!("unknown class '{}'", class_name),
+                class.span,
+            )
+        })?.clone();
+
+        for trait_name_spanned in &c.impl_traits {
+            let trait_name = &trait_name_spanned.node;
+            let trait_info = env.traits.get(trait_name).ok_or_else(|| {
+                CompileError::type_err(
+                    format!("unknown trait '{}'", trait_name),
+                    trait_name_spanned.span,
+                )
+            })?.clone();
+
+            for (method_name, trait_sig) in &trait_info.methods {
+                let mangled = format!("{}_{}", class_name, method_name);
+
+                if class_info.methods.contains(method_name) {
+                    // Class has this method — verify signature matches
+                    let class_sig = env.functions.get(&mangled).ok_or_else(|| {
+                        CompileError::type_err(
+                            format!("missing method signature for '{}.{}'", class_name, method_name),
+                            trait_name_spanned.span,
+                        )
+                    })?;
+                    // Compare non-self params
+                    let trait_non_self = &trait_sig.params[1..];
+                    let class_non_self = &class_sig.params[1..];
+                    if trait_non_self.len() != class_non_self.len() {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "method '{}' of class '{}' has wrong number of parameters for trait '{}'",
+                                method_name, class_name, trait_name
+                            ),
+                            trait_name_spanned.span,
+                        ));
+                    }
+                    for (i, (tp, cp)) in trait_non_self.iter().zip(class_non_self).enumerate() {
+                        if tp != cp {
+                            return Err(CompileError::type_err(
+                                format!(
+                                    "method '{}' parameter {} type mismatch: trait '{}' expects {}, class '{}' has {}",
+                                    method_name, i + 1, trait_name, tp, class_name, cp
+                                ),
+                                trait_name_spanned.span,
+                            ));
+                        }
+                    }
+                    if trait_sig.return_type != class_sig.return_type {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "method '{}' return type mismatch: trait '{}' expects {}, class '{}' returns {}",
+                                method_name, trait_name, trait_sig.return_type, class_name, class_sig.return_type
+                            ),
+                            trait_name_spanned.span,
+                        ));
+                    }
+                } else if trait_info.default_methods.contains(method_name) {
+                    // Default implementation — register under mangled name
+                    let mut params = trait_sig.params.clone();
+                    // Replace the Void placeholder with the actual class type
+                    if !params.is_empty() {
+                        params[0] = PlutoType::Class(class_name.clone());
+                    }
+                    env.functions.insert(
+                        mangled,
+                        FuncSig {
+                            params,
+                            return_type: trait_sig.return_type.clone(),
+                        },
+                    );
+                    // Add method name to class info
+                    if let Some(info) = env.classes.get_mut(class_name) {
+                        info.methods.push(method_name.clone());
+                    }
+                } else {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "class '{}' does not implement required method '{}' from trait '{}'",
+                            class_name, method_name, trait_name
+                        ),
+                        trait_name_spanned.span,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    // Check function bodies
+    for func in &program.functions {
+        if !func.node.type_params.is_empty() { continue; } // Skip generic functions
+        check_function(&func.node, env, None)?;
+    }
+
+    // Check method bodies
+    for class in &program.classes {
+        let c = &class.node;
+        if !c.type_params.is_empty() { continue; } // Skip generic classes
+        for method in &c.methods {
+            check_function(&method.node, env, Some(&c.name.node))?;
+        }
+    }
+
+    // Type-check default method bodies for classes that inherit them
+    for class in &program.classes {
+        let c = &class.node;
+        if !c.type_params.is_empty() { continue; } // Skip generic classes
+        let class_name = &c.name.node;
+        let class_method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
+
+        for trait_name_spanned in &c.impl_traits {
+            let trait_name = &trait_name_spanned.node;
+            // Find the trait's default methods in the AST
+            for trait_decl in &program.traits {
+                if trait_decl.node.name.node == *trait_name {
+                    for trait_method in &trait_decl.node.methods {
+                        if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node) {
+                            // This class inherits this default method — type check it
+                            let body = trait_method.body.as_ref().unwrap();
+                            let tmp_func = Function {
+                                name: trait_method.name.clone(),
+                                type_params: vec![],
+                                params: trait_method.params.clone(),
+                                return_type: trait_method.return_type.clone(),
+                                body: body.clone(),
+                                is_pub: false,
+                            };
+                            check_function(&tmp_func, env, Some(class_name))?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Type-check app method bodies
+    if let Some(app_spanned) = &program.app {
+        let app = &app_spanned.node;
+        let app_name = &app.name.node;
+        for method in &app.methods {
+            check_function(&method.node, env, Some(app_name))?;
+        }
+    }
+    Ok(())
+}
