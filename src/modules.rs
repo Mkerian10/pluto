@@ -364,18 +364,40 @@ fn flatten_into_program(
     Ok(())
 }
 
+/// Compare two TypeExpr values ignoring source spans.
+fn type_expr_eq(a: &TypeExpr, b: &TypeExpr) -> bool {
+    match (a, b) {
+        (TypeExpr::Named(na), TypeExpr::Named(nb)) => na == nb,
+        (TypeExpr::Array(ia), TypeExpr::Array(ib)) => type_expr_eq(&ia.node, &ib.node),
+        (TypeExpr::Qualified { module: ma, name: na }, TypeExpr::Qualified { module: mb, name: nb }) => {
+            ma == mb && na == nb
+        }
+        (TypeExpr::Fn { params: pa, return_type: ra }, TypeExpr::Fn { params: pb, return_type: rb }) => {
+            pa.len() == pb.len()
+                && pa.iter().zip(pb.iter()).all(|(a, b)| type_expr_eq(&a.node, &b.node))
+                && type_expr_eq(&ra.node, &rb.node)
+        }
+        (TypeExpr::Generic { name: na, type_args: ta }, TypeExpr::Generic { name: nb, type_args: tb }) => {
+            na == nb
+                && ta.len() == tb.len()
+                && ta.iter().zip(tb.iter()).all(|(a, b)| type_expr_eq(&a.node, &b.node))
+        }
+        _ => false,
+    }
+}
+
 /// Check if two extern fn declarations have matching signatures.
 fn extern_fn_sigs_match(a: &ExternFnDecl, b: &ExternFnDecl) -> bool {
     if a.params.len() != b.params.len() {
         return false;
     }
     for (pa, pb) in a.params.iter().zip(b.params.iter()) {
-        if pa.ty.node != pb.ty.node {
+        if !type_expr_eq(&pa.ty.node, &pb.ty.node) {
             return false;
         }
     }
     match (&a.return_type, &b.return_type) {
-        (Some(ra), Some(rb)) => ra.node == rb.node,
+        (Some(ra), Some(rb)) => type_expr_eq(&ra.node, &rb.node),
         (None, None) => true,
         _ => false,
     }

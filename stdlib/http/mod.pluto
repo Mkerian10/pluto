@@ -1,0 +1,206 @@
+import std.strings
+
+pub error HttpError {
+    message: string
+}
+
+extern fn __pluto_http_read_request(fd: int) string
+extern fn __pluto_http_url_decode(s: string) string
+extern fn __pluto_socket_create(domain: int, sock_type: int, protocol: int) int
+extern fn __pluto_socket_bind(fd: int, host: string, port: int) int
+extern fn __pluto_socket_listen(fd: int, backlog: int) int
+extern fn __pluto_socket_accept(fd: int) int
+extern fn __pluto_socket_write(fd: int, data: string) int
+extern fn __pluto_socket_close(fd: int) int
+extern fn __pluto_socket_set_reuseaddr(fd: int) int
+extern fn __pluto_socket_get_port(fd: int) int
+
+pub class Request {
+    method: string
+    path: string
+    headers_raw: string
+    body: string
+
+    fn header(self, name: string) string {
+        let lines = strings.split(self.headers_raw, "\r\n")
+        let lower_name = strings.to_lower(name)
+        let i = 0
+        while i < lines.len() {
+            let line = lines[i]
+            let colon = strings.index_of(line, ":")
+            if colon >= 0 {
+                let key = strings.to_lower(strings.trim(strings.substring(line, 0, colon)))
+                if key == lower_name {
+                    return strings.trim(strings.substring(line, colon + 1, line.len() - colon - 1))
+                }
+            }
+            i = i + 1
+        }
+        return ""
+    }
+}
+
+pub class Response {
+    status: int
+    status_text: string
+    headers_raw: string
+    body: string
+
+    fn to_string(self) string {
+        let content_length = self.body.len()
+        let result = "HTTP/1.1 {self.status} {self.status_text}\r\n"
+        if self.headers_raw.len() > 0 {
+            result = result + self.headers_raw + "\r\n"
+        }
+        result = result + "Content-Length: {content_length}\r\n"
+        result = result + "\r\n"
+        result = result + self.body
+        return result
+    }
+}
+
+pub fn ok(body: string) Response {
+    return Response {
+        status: 200,
+        status_text: "OK",
+        headers_raw: "Content-Type: text/plain",
+        body: body
+    }
+}
+
+pub fn ok_json(json_string: string) Response {
+    return Response {
+        status: 200,
+        status_text: "OK",
+        headers_raw: "Content-Type: application/json",
+        body: json_string
+    }
+}
+
+pub fn not_found() Response {
+    return Response {
+        status: 404,
+        status_text: "Not Found",
+        headers_raw: "Content-Type: text/plain",
+        body: "Not Found"
+    }
+}
+
+pub fn bad_request() Response {
+    return Response {
+        status: 400,
+        status_text: "Bad Request",
+        headers_raw: "Content-Type: text/plain",
+        body: "Bad Request"
+    }
+}
+
+pub fn response(status: int, status_text: string, body: string) Response {
+    return Response {
+        status: status,
+        status_text: status_text,
+        headers_raw: "",
+        body: body
+    }
+}
+
+fn parse_request(raw: string) Request {
+    let header_end = strings.index_of(raw, "\r\n\r\n")
+    let header_section = ""
+    let body = ""
+    if header_end >= 0 {
+        header_section = strings.substring(raw, 0, header_end)
+        body = strings.substring(raw, header_end + 4, raw.len() - header_end - 4)
+    } else {
+        header_section = raw
+    }
+
+    let first_line_end = strings.index_of(header_section, "\r\n")
+    let first_line = ""
+    let rest_headers = ""
+    if first_line_end >= 0 {
+        first_line = strings.substring(header_section, 0, first_line_end)
+        rest_headers = strings.substring(header_section, first_line_end + 2, header_section.len() - first_line_end - 2)
+    } else {
+        first_line = header_section
+    }
+
+    let method = ""
+    let path = ""
+    let space1 = strings.index_of(first_line, " ")
+    if space1 >= 0 {
+        method = strings.substring(first_line, 0, space1)
+        let after_method = strings.substring(first_line, space1 + 1, first_line.len() - space1 - 1)
+        let space2 = strings.index_of(after_method, " ")
+        if space2 >= 0 {
+            path = strings.substring(after_method, 0, space2)
+        } else {
+            path = after_method
+        }
+    }
+
+    return Request {
+        method: method,
+        path: path,
+        headers_raw: rest_headers,
+        body: body
+    }
+}
+
+pub class HttpConnection {
+    fd: int
+
+    fn read_request(self) Request {
+        let raw = __pluto_http_read_request(self.fd)
+        if raw.len() == 0 {
+            raise HttpError { message: "connection closed" }
+        }
+        return parse_request(raw)
+    }
+
+    fn send_response(self, resp: Response) {
+        let data = resp.to_string()
+        __pluto_socket_write(self.fd, data)
+    }
+
+    fn close(self) {
+        __pluto_socket_close(self.fd)
+    }
+}
+
+pub class HttpServer {
+    fd: int
+
+    fn accept(self) HttpConnection {
+        let client_fd = __pluto_socket_accept(self.fd)
+        if client_fd < 0 {
+            raise HttpError { message: "accept failed" }
+        }
+        return HttpConnection { fd: client_fd }
+    }
+
+    fn port(self) int {
+        return __pluto_socket_get_port(self.fd)
+    }
+
+    fn close(self) {
+        __pluto_socket_close(self.fd)
+    }
+}
+
+pub fn listen(host: string, port: int) HttpServer {
+    let fd = __pluto_socket_create(2, 1, 0)
+    if fd < 0 {
+        raise HttpError { message: "failed to create socket" }
+    }
+    __pluto_socket_set_reuseaddr(fd)
+    if __pluto_socket_bind(fd, host, port) < 0 {
+        __pluto_socket_close(fd)
+        raise HttpError { message: "failed to bind" }
+    }
+    if __pluto_socket_listen(fd, 128) < 0 {
+        __pluto_socket_close(fd)
+        raise HttpError { message: "failed to listen" }
+    }
+    return HttpServer { fd: fd }
+}

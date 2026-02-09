@@ -1,0 +1,49 @@
+import std.http
+import std.json
+
+fn handle_request(req: http.Request) http.Response {
+    if req.path == "/hello" {
+        let resp = json.object()
+        resp.set("message", json.string("Hello, World!"))
+        return http.ok_json(resp.to_string())
+    }
+
+    if req.path == "/echo" {
+        if req.method == "POST" {
+            let body = json.parse(req.body) catch json.Json { handle: 0 }
+            if body.is_null() {
+                return http.bad_request()
+            }
+            let resp = json.object()
+            resp.set("echo", body)
+            return http.ok_json(resp.to_string())
+        }
+        return http.bad_request()
+    }
+
+    return http.not_found()
+}
+
+fn main() {
+    let server = http.listen("0.0.0.0", 8080)!
+    print("Server listening on port 8080")
+    print("Try: curl http://localhost:8080/hello")
+    print("Try: curl -X POST -d '{{\"name\":\"Alice\"}}' http://localhost:8080/echo")
+
+    while true {
+        let conn = server.accept()!
+        let req = conn.read_request() catch http.Request {
+            method: "",
+            path: "",
+            headers_raw: "",
+            body: ""
+        }
+        if req.method == "" {
+            conn.close()
+        } else {
+            let resp = handle_request(req)
+            conn.send_response(resp)
+            conn.close()
+        }
+    }
+}
