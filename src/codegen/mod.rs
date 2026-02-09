@@ -1,4 +1,5 @@
 pub mod lower;
+pub mod runtime;
 
 use std::collections::HashMap;
 
@@ -15,6 +16,7 @@ use crate::parser::ast::*;
 use crate::typeck::env::TypeEnv;
 use crate::typeck::types::PlutoType;
 use lower::{lower_function, pluto_to_cranelift, resolve_type_expr_to_pluto, POINTER_SIZE};
+use runtime::RuntimeRegistry;
 
 fn host_target_triple() -> Result<&'static str, CompileError> {
     if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
@@ -52,190 +54,8 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
     .map_err(|e| CompileError::codegen(format!("object builder error: {e}")))?;
 
     let mut module = ObjectModule::new(obj_builder);
+    let runtime = RuntimeRegistry::new(&mut module)?;
     let mut func_ids = HashMap::new();
-
-    // Declare print helper functions from the Pluto runtime (builtins.c)
-    let mut print_ids = HashMap::new();
-
-    // __pluto_print_int(long value)
-    let mut sig_int = module.make_signature();
-    sig_int.params.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_print_int", Linkage::Import, &sig_int)
-        .map_err(|e| CompileError::codegen(format!("declare print_int error: {e}")))?;
-    print_ids.insert("int", id);
-
-    // __pluto_print_float(double value)
-    let mut sig_float = module.make_signature();
-    sig_float.params.push(AbiParam::new(types::F64));
-    let id = module.declare_function("__pluto_print_float", Linkage::Import, &sig_float)
-        .map_err(|e| CompileError::codegen(format!("declare print_float error: {e}")))?;
-    print_ids.insert("float", id);
-
-    // __pluto_print_string(const char *value)
-    let mut sig_str = module.make_signature();
-    sig_str.params.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_print_string", Linkage::Import, &sig_str)
-        .map_err(|e| CompileError::codegen(format!("declare print_string error: {e}")))?;
-    print_ids.insert("string", id);
-
-    // __pluto_print_bool(int value) — we pass I8 widened to I32
-    let mut sig_bool = module.make_signature();
-    sig_bool.params.push(AbiParam::new(types::I32));
-    let id = module.declare_function("__pluto_print_bool", Linkage::Import, &sig_bool)
-        .map_err(|e| CompileError::codegen(format!("declare print_bool error: {e}")))?;
-    print_ids.insert("bool", id);
-
-    // Declare __pluto_alloc(I64) -> I64
-    let mut sig_alloc = module.make_signature();
-    sig_alloc.params.push(AbiParam::new(types::I64));
-    sig_alloc.returns.push(AbiParam::new(types::I64));
-    let alloc_id = module.declare_function("__pluto_alloc", Linkage::Import, &sig_alloc)
-        .map_err(|e| CompileError::codegen(format!("declare alloc error: {e}")))?;
-
-    // Declare __pluto_trait_wrap(I64, I64) -> I64
-    let mut sig_trait_wrap = module.make_signature();
-    sig_trait_wrap.params.push(AbiParam::new(types::I64));
-    sig_trait_wrap.params.push(AbiParam::new(types::I64));
-    sig_trait_wrap.returns.push(AbiParam::new(types::I64));
-    let trait_wrap_id = module.declare_function("__pluto_trait_wrap", Linkage::Import, &sig_trait_wrap)
-        .map_err(|e| CompileError::codegen(format!("declare trait_wrap error: {e}")))?;
-
-    // Declare string runtime functions
-    let mut string_ids = HashMap::new();
-
-    // __pluto_string_new(I64, I64) -> I64
-    let mut sig_str_new = module.make_signature();
-    sig_str_new.params.push(AbiParam::new(types::I64));
-    sig_str_new.params.push(AbiParam::new(types::I64));
-    sig_str_new.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_string_new", Linkage::Import, &sig_str_new)
-        .map_err(|e| CompileError::codegen(format!("declare string_new error: {e}")))?;
-    string_ids.insert("new", id);
-
-    // __pluto_string_concat(I64, I64) -> I64
-    let mut sig_str_concat = module.make_signature();
-    sig_str_concat.params.push(AbiParam::new(types::I64));
-    sig_str_concat.params.push(AbiParam::new(types::I64));
-    sig_str_concat.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_string_concat", Linkage::Import, &sig_str_concat)
-        .map_err(|e| CompileError::codegen(format!("declare string_concat error: {e}")))?;
-    string_ids.insert("concat", id);
-
-    // __pluto_string_eq(I64, I64) -> I32
-    let mut sig_str_eq = module.make_signature();
-    sig_str_eq.params.push(AbiParam::new(types::I64));
-    sig_str_eq.params.push(AbiParam::new(types::I64));
-    sig_str_eq.returns.push(AbiParam::new(types::I32));
-    let id = module.declare_function("__pluto_string_eq", Linkage::Import, &sig_str_eq)
-        .map_err(|e| CompileError::codegen(format!("declare string_eq error: {e}")))?;
-    string_ids.insert("eq", id);
-
-    // __pluto_string_len(I64) -> I64
-    let mut sig_str_len = module.make_signature();
-    sig_str_len.params.push(AbiParam::new(types::I64));
-    sig_str_len.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_string_len", Linkage::Import, &sig_str_len)
-        .map_err(|e| CompileError::codegen(format!("declare string_len error: {e}")))?;
-    string_ids.insert("len", id);
-
-    // __pluto_int_to_string(I64) -> I64
-    let mut sig_int_to_str = module.make_signature();
-    sig_int_to_str.params.push(AbiParam::new(types::I64));
-    sig_int_to_str.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_int_to_string", Linkage::Import, &sig_int_to_str)
-        .map_err(|e| CompileError::codegen(format!("declare int_to_string error: {e}")))?;
-    string_ids.insert("int_to_str", id);
-
-    // __pluto_float_to_string(F64) -> I64
-    let mut sig_float_to_str = module.make_signature();
-    sig_float_to_str.params.push(AbiParam::new(types::F64));
-    sig_float_to_str.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_float_to_string", Linkage::Import, &sig_float_to_str)
-        .map_err(|e| CompileError::codegen(format!("declare float_to_string error: {e}")))?;
-    string_ids.insert("float_to_str", id);
-
-    // __pluto_bool_to_string(I32) -> I64
-    let mut sig_bool_to_str = module.make_signature();
-    sig_bool_to_str.params.push(AbiParam::new(types::I32));
-    sig_bool_to_str.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_bool_to_string", Linkage::Import, &sig_bool_to_str)
-        .map_err(|e| CompileError::codegen(format!("declare bool_to_string error: {e}")))?;
-    string_ids.insert("bool_to_str", id);
-
-    // Declare error handling runtime functions
-    let mut error_ids = HashMap::new();
-
-    // __pluto_raise_error(I64)
-    let mut sig_raise_err = module.make_signature();
-    sig_raise_err.params.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_raise_error", Linkage::Import, &sig_raise_err)
-        .map_err(|e| CompileError::codegen(format!("declare raise_error error: {e}")))?;
-    error_ids.insert("raise", id);
-
-    // __pluto_has_error() -> I64
-    let mut sig_has_err = module.make_signature();
-    sig_has_err.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_has_error", Linkage::Import, &sig_has_err)
-        .map_err(|e| CompileError::codegen(format!("declare has_error error: {e}")))?;
-    error_ids.insert("has_error", id);
-
-    // __pluto_get_error() -> I64
-    let mut sig_get_err = module.make_signature();
-    sig_get_err.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_get_error", Linkage::Import, &sig_get_err)
-        .map_err(|e| CompileError::codegen(format!("declare get_error error: {e}")))?;
-    error_ids.insert("get_error", id);
-
-    // __pluto_clear_error()
-    let sig_clear_err = module.make_signature();
-    let id = module.declare_function("__pluto_clear_error", Linkage::Import, &sig_clear_err)
-        .map_err(|e| CompileError::codegen(format!("declare clear_error error: {e}")))?;
-    error_ids.insert("clear", id);
-
-    // Declare array runtime functions
-    let mut array_ids = HashMap::new();
-
-    // __pluto_array_new(I64) -> I64
-    let mut sig_arr_new = module.make_signature();
-    sig_arr_new.params.push(AbiParam::new(types::I64));
-    sig_arr_new.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_array_new", Linkage::Import, &sig_arr_new)
-        .map_err(|e| CompileError::codegen(format!("declare array_new error: {e}")))?;
-    array_ids.insert("new", id);
-
-    // __pluto_array_push(I64, I64)
-    let mut sig_arr_push = module.make_signature();
-    sig_arr_push.params.push(AbiParam::new(types::I64));
-    sig_arr_push.params.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_array_push", Linkage::Import, &sig_arr_push)
-        .map_err(|e| CompileError::codegen(format!("declare array_push error: {e}")))?;
-    array_ids.insert("push", id);
-
-    // __pluto_array_get(I64, I64) -> I64
-    let mut sig_arr_get = module.make_signature();
-    sig_arr_get.params.push(AbiParam::new(types::I64));
-    sig_arr_get.params.push(AbiParam::new(types::I64));
-    sig_arr_get.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_array_get", Linkage::Import, &sig_arr_get)
-        .map_err(|e| CompileError::codegen(format!("declare array_get error: {e}")))?;
-    array_ids.insert("get", id);
-
-    // __pluto_array_set(I64, I64, I64)
-    let mut sig_arr_set = module.make_signature();
-    sig_arr_set.params.push(AbiParam::new(types::I64));
-    sig_arr_set.params.push(AbiParam::new(types::I64));
-    sig_arr_set.params.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_array_set", Linkage::Import, &sig_arr_set)
-        .map_err(|e| CompileError::codegen(format!("declare array_set error: {e}")))?;
-    array_ids.insert("set", id);
-
-    // __pluto_array_len(I64) -> I64
-    let mut sig_arr_len = module.make_signature();
-    sig_arr_len.params.push(AbiParam::new(types::I64));
-    sig_arr_len.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("__pluto_array_len", Linkage::Import, &sig_arr_len)
-        .map_err(|e| CompileError::codegen(format!("declare array_len error: {e}")))?;
-    array_ids.insert("len", id);
 
     // Pass 0: Declare extern fns with Import linkage
     for ext in &program.extern_fns {
@@ -367,7 +187,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_function(f, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, None, &vtable_ids, trait_wrap_id, &error_ids)?;
+            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids)?;
         }
 
         module
@@ -390,7 +210,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(&c.name.node), &vtable_ids, trait_wrap_id, &error_ids)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids)?;
             }
 
             module
@@ -441,7 +261,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(class_name), &vtable_ids, trait_wrap_id, &error_ids)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids)?;
                             }
 
                             module
@@ -485,7 +305,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &print_ids, alloc_id, &string_ids, &array_ids, Some(app_name), &vtable_ids, trait_wrap_id, &error_ids)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids)?;
             }
 
             module
@@ -516,7 +336,7 @@ pub fn codegen(program: &Program, env: &TypeEnv) -> Result<Vec<u8>, CompileError
             builder.switch_to_block(entry_block);
             builder.seal_block(entry_block);
 
-            let alloc_ref = module.declare_func_in_func(alloc_id, builder.func);
+            let alloc_ref = module.declare_func_in_func(runtime.get("__pluto_alloc"), builder.func);
 
             // Create singletons in topological order
             let mut singletons: HashMap<String, Value> = HashMap::new();

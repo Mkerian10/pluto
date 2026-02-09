@@ -11,6 +11,8 @@ use crate::parser::ast::*;
 use crate::typeck::env::TypeEnv;
 use crate::typeck::types::PlutoType;
 
+use super::runtime::RuntimeRegistry;
+
 /// Size of a pointer in bytes. All heap-allocated objects use pointer-sized slots.
 pub const POINTER_SIZE: i32 = 8;
 
@@ -19,13 +21,8 @@ struct LowerContext<'a> {
     module: &'a mut dyn Module,
     env: &'a TypeEnv,
     func_ids: &'a HashMap<String, FuncId>,
-    print_ids: &'a HashMap<&'static str, FuncId>,
-    alloc_id: FuncId,
-    string_ids: &'a HashMap<&'static str, FuncId>,
-    array_ids: &'a HashMap<&'static str, FuncId>,
+    runtime: &'a RuntimeRegistry,
     vtable_ids: &'a HashMap<(String, String), DataId>,
-    trait_wrap_id: FuncId,
-    error_ids: &'a HashMap<&'static str, FuncId>,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
     var_types: HashMap<String, PlutoType>,
@@ -52,7 +49,7 @@ impl<'a> LowerContext<'a> {
             })?;
         let gv = self.module.declare_data_in_func(*vtable_data_id, self.builder.func);
         let vtable_ptr = self.builder.ins().global_value(types::I64, gv);
-        let func_ref = self.module.declare_func_in_func(self.trait_wrap_id, self.builder.func);
+        let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_trait_wrap"), self.builder.func);
         let call = self.builder.ins().call(func_ref, &[class_val, vtable_ptr]);
         Ok(self.builder.inst_results(call)[0])
     }
@@ -194,7 +191,7 @@ impl<'a> LowerContext<'a> {
                 let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
                 if let PlutoType::Array(elem) = &obj_type {
                     let slot = to_array_slot(val, elem, &mut self.builder);
-                    let func_ref = self.module.declare_func_in_func(self.array_ids["set"], self.builder.func);
+                    let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_array_set"), self.builder.func);
                     self.builder.ins().call(func_ref, &[handle, idx, slot]);
                 }
             }
@@ -287,7 +284,7 @@ impl<'a> LowerContext<'a> {
                 };
 
                 // Call len() on the array
-                let len_ref = self.module.declare_func_in_func(self.array_ids["len"], self.builder.func);
+                let len_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_array_len"), self.builder.func);
                 let len_call = self.builder.ins().call(len_ref, &[handle]);
                 let len_val = self.builder.inst_results(len_call)[0];
 
@@ -317,7 +314,7 @@ impl<'a> LowerContext<'a> {
 
                 // Get element: array_get(handle, counter)
                 let counter_for_get = self.builder.use_var(counter_var);
-                let get_ref = self.module.declare_func_in_func(self.array_ids["get"], self.builder.func);
+                let get_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_array_get"), self.builder.func);
                 let get_call = self.builder.ins().call(get_ref, &[handle, counter_for_get]);
                 let raw_slot = self.builder.inst_results(get_call)[0];
                 let elem_val = from_array_slot(raw_slot, &elem_type, &mut self.builder);
@@ -490,7 +487,7 @@ impl<'a> LowerContext<'a> {
                 let size = (num_fields as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
 
                 // Allocate error object
-                let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
+                let alloc_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_alloc"), self.builder.func);
                 let size_val = self.builder.ins().iconst(types::I64, size);
                 let call = self.builder.ins().call(alloc_ref, &[size_val]);
                 let ptr = self.builder.inst_results(call)[0];
@@ -506,7 +503,7 @@ impl<'a> LowerContext<'a> {
                 }
 
                 // Set TLS error pointer
-                let raise_ref = self.module.declare_func_in_func(self.error_ids["raise"], self.builder.func);
+                let raise_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_raise_error"), self.builder.func);
                 self.builder.ins().call(raise_ref, &[ptr]);
 
                 // Return default value (caller checks TLS)
@@ -528,7 +525,7 @@ impl<'a> LowerContext<'a> {
             Expr::StringLit(s) => {
                 let raw_ptr = self.create_data_str(s)?;
                 let len_val = self.builder.ins().iconst(types::I64, s.len() as i64);
-                let func_ref = self.module.declare_func_in_func(self.string_ids["new"], self.builder.func);
+                let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_new"), self.builder.func);
                 let call = self.builder.ins().call(func_ref, &[raw_ptr, len_val]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -540,7 +537,7 @@ impl<'a> LowerContext<'a> {
                         StringInterpPart::Lit(s) => {
                             let raw_ptr = self.create_data_str(s)?;
                             let len_val = self.builder.ins().iconst(types::I64, s.len() as i64);
-                            let func_ref = self.module.declare_func_in_func(self.string_ids["new"], self.builder.func);
+                            let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_new"), self.builder.func);
                             let call = self.builder.ins().call(func_ref, &[raw_ptr, len_val]);
                             string_vals.push(self.builder.inst_results(call)[0]);
                         }
@@ -550,18 +547,18 @@ impl<'a> LowerContext<'a> {
                             let str_val = match t {
                                 PlutoType::String => val,
                                 PlutoType::Int => {
-                                    let func_ref = self.module.declare_func_in_func(self.string_ids["int_to_str"], self.builder.func);
+                                    let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_int_to_string"), self.builder.func);
                                     let call = self.builder.ins().call(func_ref, &[val]);
                                     self.builder.inst_results(call)[0]
                                 }
                                 PlutoType::Float => {
-                                    let func_ref = self.module.declare_func_in_func(self.string_ids["float_to_str"], self.builder.func);
+                                    let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_float_to_string"), self.builder.func);
                                     let call = self.builder.ins().call(func_ref, &[val]);
                                     self.builder.inst_results(call)[0]
                                 }
                                 PlutoType::Bool => {
                                     let widened = self.builder.ins().uextend(types::I32, val);
-                                    let func_ref = self.module.declare_func_in_func(self.string_ids["bool_to_str"], self.builder.func);
+                                    let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_bool_to_string"), self.builder.func);
                                     let call = self.builder.ins().call(func_ref, &[widened]);
                                     self.builder.inst_results(call)[0]
                                 }
@@ -573,7 +570,7 @@ impl<'a> LowerContext<'a> {
                 }
                 // Concat all parts left to right
                 let mut result = string_vals[0];
-                let concat_ref = self.module.declare_func_in_func(self.string_ids["concat"], self.builder.func);
+                let concat_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_concat"), self.builder.func);
                 for part_val in &string_vals[1..] {
                     let call = self.builder.ins().call(concat_ref, &[result, *part_val]);
                     result = self.builder.inst_results(call)[0];
@@ -596,7 +593,7 @@ impl<'a> LowerContext<'a> {
 
                 let result = match op {
                     BinOp::Add if is_string => {
-                        let func_ref = self.module.declare_func_in_func(self.string_ids["concat"], self.builder.func);
+                        let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_concat"), self.builder.func);
                         let call = self.builder.ins().call(func_ref, &[l, r]);
                         self.builder.inst_results(call)[0]
                     }
@@ -610,7 +607,7 @@ impl<'a> LowerContext<'a> {
                     BinOp::Div => self.builder.ins().sdiv(l, r),
                     BinOp::Mod => self.builder.ins().srem(l, r),
                     BinOp::Eq if is_string => {
-                        let func_ref = self.module.declare_func_in_func(self.string_ids["eq"], self.builder.func);
+                        let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_eq"), self.builder.func);
                         let call = self.builder.ins().call(func_ref, &[l, r]);
                         let i32_result = self.builder.inst_results(call)[0];
                         self.builder.ins().ireduce(types::I8, i32_result)
@@ -618,7 +615,7 @@ impl<'a> LowerContext<'a> {
                     BinOp::Eq if is_float => self.builder.ins().fcmp(FloatCC::Equal, l, r),
                     BinOp::Eq => self.builder.ins().icmp(IntCC::Equal, l, r),
                     BinOp::Neq if is_string => {
-                        let func_ref = self.module.declare_func_in_func(self.string_ids["eq"], self.builder.func);
+                        let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_eq"), self.builder.func);
                         let call = self.builder.ins().call(func_ref, &[l, r]);
                         let i32_result = self.builder.inst_results(call)[0];
                         let i8_result = self.builder.ins().ireduce(types::I8, i32_result);
@@ -730,7 +727,7 @@ impl<'a> LowerContext<'a> {
                 let num_fields = class_info.fields.len() as i64;
                 let size = num_fields * POINTER_SIZE as i64;
 
-                let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
+                let alloc_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_alloc"), self.builder.func);
                 let size_val = self.builder.ins().iconst(types::I64, size);
                 let call = self.builder.ins().call(alloc_ref, &[size_val]);
                 let ptr = self.builder.inst_results(call)[0];
@@ -750,13 +747,13 @@ impl<'a> LowerContext<'a> {
             }
             Expr::ArrayLit { elements } => {
                 let n = elements.len() as i64;
-                let func_ref_new = self.module.declare_func_in_func(self.array_ids["new"], self.builder.func);
+                let func_ref_new = self.module.declare_func_in_func(self.runtime.get("__pluto_array_new"), self.builder.func);
                 let cap_val = self.builder.ins().iconst(types::I64, n);
                 let call = self.builder.ins().call(func_ref_new, &[cap_val]);
                 let handle = self.builder.inst_results(call)[0];
 
                 let elem_type = infer_type_for_expr(&elements[0].node, self.env, &self.var_types);
-                let func_ref_push = self.module.declare_func_in_func(self.array_ids["push"], self.builder.func);
+                let func_ref_push = self.module.declare_func_in_func(self.runtime.get("__pluto_array_push"), self.builder.func);
                 for elem in elements {
                     let val = self.lower_expr(&elem.node)?;
                     let slot = to_array_slot(val, &elem_type, &mut self.builder);
@@ -770,7 +767,7 @@ impl<'a> LowerContext<'a> {
                 let idx = self.lower_expr(&index.node)?;
                 let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
                 if let PlutoType::Array(elem) = &obj_type {
-                    let func_ref = self.module.declare_func_in_func(self.array_ids["get"], self.builder.func);
+                    let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_array_get"), self.builder.func);
                     let call = self.builder.ins().call(func_ref, &[handle, idx]);
                     let raw = self.builder.inst_results(call)[0];
                     Ok(from_array_slot(raw, elem, &mut self.builder))
@@ -786,7 +783,7 @@ impl<'a> LowerContext<'a> {
                 let alloc_size = (1 + max_fields) as i64 * POINTER_SIZE as i64;
                 let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
 
-                let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
+                let alloc_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_alloc"), self.builder.func);
                 let size_val = self.builder.ins().iconst(types::I64, alloc_size);
                 let call = self.builder.ins().call(alloc_ref, &[size_val]);
                 let ptr = self.builder.inst_results(call)[0];
@@ -805,7 +802,7 @@ impl<'a> LowerContext<'a> {
                 let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
                 let variant_fields = &enum_info.variants[variant_idx].1;
 
-                let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
+                let alloc_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_alloc"), self.builder.func);
                 let size_val = self.builder.ins().iconst(types::I64, alloc_size);
                 let call = self.builder.ins().call(alloc_ref, &[size_val]);
                 let ptr = self.builder.inst_results(call)[0];
@@ -849,7 +846,7 @@ impl<'a> LowerContext<'a> {
                 let val = self.lower_expr(&inner.node)?;
 
                 // Check TLS error state
-                let has_err_ref = self.module.declare_func_in_func(self.error_ids["has_error"], self.builder.func);
+                let has_err_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_has_error"), self.builder.func);
                 let has_err_call = self.builder.ins().call(has_err_ref, &[]);
                 let has_err = self.builder.inst_results(has_err_call)[0];
                 let zero = self.builder.ins().iconst(types::I64, 0);
@@ -876,7 +873,7 @@ impl<'a> LowerContext<'a> {
                 let cl_type = pluto_to_cranelift(&val_type);
 
                 // Check TLS error state
-                let has_err_ref = self.module.declare_func_in_func(self.error_ids["has_error"], self.builder.func);
+                let has_err_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_has_error"), self.builder.func);
                 let has_err_call = self.builder.ins().call(has_err_ref, &[]);
                 let has_err = self.builder.inst_results(has_err_call)[0];
                 let zero = self.builder.ins().iconst(types::I64, 0);
@@ -901,12 +898,12 @@ impl<'a> LowerContext<'a> {
                 let handler_val = match handler {
                     CatchHandler::Wildcard { var, body } => {
                         // Get error object BEFORE clearing
-                        let get_err_ref = self.module.declare_func_in_func(self.error_ids["get_error"], self.builder.func);
+                        let get_err_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_get_error"), self.builder.func);
                         let get_err_call = self.builder.ins().call(get_err_ref, &[]);
                         let err_obj = self.builder.inst_results(get_err_call)[0];
 
                         // Clear the error
-                        let clear_ref = self.module.declare_func_in_func(self.error_ids["clear"], self.builder.func);
+                        let clear_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_clear_error"), self.builder.func);
                         self.builder.ins().call(clear_ref, &[]);
 
                         // Bind the error variable
@@ -938,7 +935,7 @@ impl<'a> LowerContext<'a> {
                     }
                     CatchHandler::Shorthand(fallback) => {
                         // Clear the error
-                        let clear_ref = self.module.declare_func_in_func(self.error_ids["clear"], self.builder.func);
+                        let clear_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_clear_error"), self.builder.func);
                         self.builder.ins().call(clear_ref, &[]);
 
                         self.lower_expr(&fallback.node)?
@@ -960,7 +957,7 @@ impl<'a> LowerContext<'a> {
                 if let PlutoType::Array(elem) = &obj_type {
                     match method.node.as_str() {
                         "len" => {
-                            let func_ref = self.module.declare_func_in_func(self.array_ids["len"], self.builder.func);
+                            let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_array_len"), self.builder.func);
                             let call = self.builder.ins().call(func_ref, &[obj_ptr]);
                             return Ok(self.builder.inst_results(call)[0]);
                         }
@@ -968,7 +965,7 @@ impl<'a> LowerContext<'a> {
                             let elem = elem.clone();
                             let arg_val = self.lower_expr(&args[0].node)?;
                             let slot = to_array_slot(arg_val, &elem, &mut self.builder);
-                            let func_ref = self.module.declare_func_in_func(self.array_ids["push"], self.builder.func);
+                            let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_array_push"), self.builder.func);
                             self.builder.ins().call(func_ref, &[obj_ptr, slot]);
                             return Ok(self.builder.ins().iconst(types::I64, 0));
                         }
@@ -981,7 +978,7 @@ impl<'a> LowerContext<'a> {
                 // String methods
                 if obj_type == PlutoType::String {
                     if method.node == "len" {
-                        let func_ref = self.module.declare_func_in_func(self.string_ids["len"], self.builder.func);
+                        let func_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_string_len"), self.builder.func);
                         let call = self.builder.ins().call(func_ref, &[obj_ptr]);
                         return Ok(self.builder.inst_results(call)[0]);
                     }
@@ -1076,7 +1073,7 @@ impl<'a> LowerContext<'a> {
 
                 // 2. Allocate closure object: [fn_ptr: i64] [capture_0: i64] ...
                 let obj_size = (1 + captures.len()) as i64 * POINTER_SIZE as i64;
-                let alloc_ref = self.module.declare_func_in_func(self.alloc_id, self.builder.func);
+                let alloc_ref = self.module.declare_func_in_func(self.runtime.get("__pluto_alloc"), self.builder.func);
                 let size_val = self.builder.ins().iconst(types::I64, obj_size);
                 let call = self.builder.ins().call(alloc_ref, &[size_val]);
                 let closure_ptr = self.builder.inst_results(call)[0];
@@ -1113,22 +1110,22 @@ impl<'a> LowerContext<'a> {
 
         match arg_type {
             PlutoType::Int => {
-                let func_id = self.print_ids["int"];
+                let func_id = self.runtime.get("__pluto_print_int");
                 let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
                 self.builder.ins().call(func_ref, &[arg_val]);
             }
             PlutoType::Float => {
-                let func_id = self.print_ids["float"];
+                let func_id = self.runtime.get("__pluto_print_float");
                 let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
                 self.builder.ins().call(func_ref, &[arg_val]);
             }
             PlutoType::String => {
-                let func_id = self.print_ids["string"];
+                let func_id = self.runtime.get("__pluto_print_string");
                 let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
                 self.builder.ins().call(func_ref, &[arg_val]);
             }
             PlutoType::Bool => {
-                let func_id = self.print_ids["bool"];
+                let func_id = self.runtime.get("__pluto_print_bool");
                 let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
                 // Widen I8 bool to I32 for the C function
                 let widened = self.builder.ins().uextend(types::I32, arg_val);
@@ -1145,21 +1142,15 @@ impl<'a> LowerContext<'a> {
 }
 
 /// Lower a function body into Cranelift IR.
-#[allow(clippy::too_many_arguments)]
 pub fn lower_function(
     func: &Function,
     mut builder: FunctionBuilder<'_>,
     env: &TypeEnv,
     module: &mut dyn Module,
     func_ids: &HashMap<String, FuncId>,
-    print_ids: &HashMap<&'static str, FuncId>,
-    alloc_id: FuncId,
-    string_ids: &HashMap<&'static str, FuncId>,
-    array_ids: &HashMap<&'static str, FuncId>,
+    runtime: &RuntimeRegistry,
     class_name: Option<&str>,
     vtable_ids: &HashMap<(String, String), DataId>,
-    trait_wrap_id: FuncId,
-    error_ids: &HashMap<&'static str, FuncId>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -1232,13 +1223,8 @@ pub fn lower_function(
         module,
         env,
         func_ids,
-        print_ids,
-        alloc_id,
-        string_ids,
-        array_ids,
+        runtime,
         vtable_ids,
-        trait_wrap_id,
-        error_ids,
         variables,
         var_types,
         next_var,
