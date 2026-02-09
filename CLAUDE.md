@@ -61,7 +61,11 @@ Defined in `src/lib.rs::compile()`. Six stages:
 
 ## Git Workflow
 
-**Commit regularly** — Commit after completing each logical unit of work (a feature, a fix, a refactor). Do not accumulate large uncommitted changes.
+**Master must always be green** — The `master` branch must always build and pass all tests. Never commit incomplete work, partial features, or broken code directly to `master`. All work happens on feature branches; `master` only receives completed, tested merges.
+
+**Never work directly on master** — Always create a feature branch or worktree before making changes. Even small fixes get a branch. The only commits on `master` should be merge commits from completed feature branches.
+
+**Commit regularly on your branch** — Commit after completing each logical unit of work (a feature, a fix, a refactor). Do not accumulate large uncommitted changes. Intermediate commits on feature branches don't need to be green, but the final merge to master must be.
 
 **Use worktrees for parallel work** — When multiple agents or tasks are running concurrently, use git worktrees to avoid conflicts. Use a naming convention that identifies **you** (your session) so other agents know whose worktree is whose:
 ```bash
@@ -85,12 +89,19 @@ git branch -d <feature-name>
 
 **Branch per feature** — Each feature or task should be on its own branch. Merge to `master` when complete and tests pass.
 
-**Pull before merging** — Before merging your branch into `master`, always pull the latest changes to avoid conflicts with other agents' work:
+**Merge checklist** — Before merging to `master`, verify ALL of the following:
+1. `cargo test` passes on your branch (all unit, integration, and module tests)
+2. Pull latest `master` and resolve any conflicts
+3. `cargo test` passes again after conflict resolution
+4. Only then commit the merge to `master`
+
 ```bash
 git checkout master
 git pull                          # Get latest from other agents
 git merge <feature-name>          # Merge your branch
-# Resolve any conflicts, run cargo test, then commit
+# Resolve any conflicts
+cargo test                        # MUST pass before committing
+git commit                        # Only if tests pass
 ```
 
 **Pull when starting work** — Before beginning any new task, pull the latest `master` to start from the most up-to-date code:
