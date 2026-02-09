@@ -1,8 +1,6 @@
-use std::process::Command;
+mod common;
 
-fn plutoc() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_plutoc"))
-}
+use std::process::Command;
 
 /// Write multiple files to a temp directory, compile the entry file, and return stdout.
 fn run_project(files: &[(&str, &str)]) -> String {
@@ -19,7 +17,7 @@ fn run_project(files: &[(&str, &str)]) -> String {
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    let compile_output = plutoc()
+    let compile_output = common::plutoc()
         .arg("compile")
         .arg(&entry)
         .arg("-o")
@@ -56,7 +54,7 @@ fn compile_project_should_fail(files: &[(&str, &str)]) {
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    let output = plutoc()
+    let output = common::plutoc()
         .arg("compile")
         .arg(&entry)
         .arg("-o")
