@@ -11,6 +11,12 @@ cargo build --release
 cargo run --release -- run examples/<name>/main.pluto
 ```
 
+For examples that use the standard library, pass the `--stdlib` flag:
+
+```bash
+cargo run --release -- run --stdlib stdlib examples/<name>/main.pluto
+```
+
 Or compile to a binary and run it separately:
 
 ```bash
@@ -32,6 +38,8 @@ cargo run --release -- compile examples/add/main.pluto -o my_program
 | [closures](closures/) | closures, `fn` types, capture | Lambdas, higher-order functions, closures |
 | [traits](traits/) | traits, default methods, polymorphism | Interfaces with dynamic dispatch |
 | [app_demo](app_demo/) | `app`, dependency injection | Auto-wired services with bracket deps |
+| [stdlib](stdlib/) | `import std.strings`, `import std.math` | String utilities and math functions from the standard library |
+| [networking](networking/) | `import std.net`, `import std.socket`, TCP | TCP echo server with TcpListener and TcpConnection |
 
 ## Language Quick Reference
 
