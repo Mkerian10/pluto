@@ -597,6 +597,7 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
                             let body = trait_method.body.as_ref().unwrap();
                             let tmp_func = Function {
                                 name: trait_method.name.clone(),
+                                type_params: vec![],
                                 params: trait_method.params.clone(),
                                 return_type: trait_method.return_type.clone(),
                                 body: body.clone(),
@@ -677,6 +678,24 @@ fn resolve_type(ty: &Spanned<TypeExpr>, env: &TypeEnv) -> Result<PlutoType, Comp
                 .collect::<Result<Vec<_>, _>>()?;
             let ret = resolve_type(return_type, env)?;
             Ok(PlutoType::Fn(param_types, Box::new(ret)))
+        }
+        TypeExpr::Generic { name, type_args } => {
+            // Resolve type args
+            let resolved_args: Vec<PlutoType> = type_args.iter()
+                .map(|a| resolve_type(a, env))
+                .collect::<Result<Vec<_>, _>>()?;
+            // Build mangled name and check if already instantiated
+            let mangled = crate::typeck::env::mangle_name(name, &resolved_args);
+            if env.classes.contains_key(&mangled) {
+                Ok(PlutoType::Class(mangled))
+            } else if env.enums.contains_key(&mangled) {
+                Ok(PlutoType::Enum(mangled))
+            } else {
+                Err(CompileError::type_err(
+                    format!("unknown generic type '{name}'"),
+                    ty.span,
+                ))
+            }
         }
     }
 }
@@ -1216,7 +1235,7 @@ fn infer_expr(
 
             Ok(sig_clone.return_type)
         }
-        Expr::StructLit { name, fields: lit_fields } => {
+        Expr::StructLit { name, fields: lit_fields, .. } => {
             let class_info = env.classes.get(&name.node).ok_or_else(|| {
                 CompileError::type_err(
                     format!("unknown class '{}'", name.node),
@@ -1330,7 +1349,7 @@ fn infer_expr(
             }
             Ok(elem_type)
         }
-        Expr::EnumUnit { enum_name, variant } => {
+        Expr::EnumUnit { enum_name, variant, .. } => {
             let enum_info = env.enums.get(&enum_name.node).ok_or_else(|| {
                 CompileError::type_err(
                     format!("unknown enum '{}'", enum_name.node),
@@ -1350,7 +1369,7 @@ fn infer_expr(
                 Some(_) => Ok(PlutoType::Enum(enum_name.node.clone())),
             }
         }
-        Expr::EnumData { enum_name, variant, fields: lit_fields } => {
+        Expr::EnumData { enum_name, variant, fields: lit_fields, .. } => {
             let enum_info = env.enums.get(&enum_name.node).ok_or_else(|| {
                 CompileError::type_err(
                     format!("unknown enum '{}'", enum_name.node),
