@@ -1,2 +1,5 @@
 /target
 .claude/
+tree-sitter-pluto/
+*.wasm
+node_modules/

@@ -47,7 +47,6 @@ Areas that need further design work before implementation.
 - [ ] **Standard library** — scope and core modules
 - [ ] **Package manager** — dependency resolution for libraries
 - [ ] **Formatter / linter** — built-in code formatting (like `go fmt`)
-- [ ] **LSP** — language server for IDE support
 
 ---
 
@@ -86,3 +85,4 @@ Previously open questions that have been designed and implemented.
 - [x] **Range syntax** — `0..n` (exclusive) and `0..=n` (inclusive) for integer iteration in `for` loops
 - [x] **`loop` keyword** — rejected; use `while true` instead. No dedicated infinite loop construct needed
 - [x] **Channels** — `chan<T>()` with `Sender<T>`/`Receiver<T>`, blocking/non-blocking send/recv, for-in iteration, error integration
+- [x] **LSP** — language server (`plutoc lsp`) with diagnostics, go-to-definition, hover, and document symbols. Zed extension with tree-sitter grammar for syntax highlighting.

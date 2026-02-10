@@ -20,13 +20,15 @@
   "spawn"
   "raise"
   "catch"
-  "break"
-  "continue"
   "uses"
   "ambient"
   "impl"
   "as"
 ] @keyword
+
+; break/continue are single-token rules, use named nodes
+(break_statement) @keyword
+(continue_statement) @keyword
 
 ; Keyword modifiers
 [
@@ -138,4 +140,4 @@
 ; Punctuation
 ["(" ")" "[" "]" "{" "}"] @punctuation.bracket
 ["," ":" "."] @punctuation.delimiter
-["=>" "->"] @punctuation.special
+"=>" @punctuation.special
