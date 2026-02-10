@@ -100,6 +100,14 @@ cargo run -- emit-ast examples/binary-ast/main.pluto -o /tmp/main.pluto
 cargo run -- generate-pt /tmp/main.pluto
 ```
 
+## collections-lib
+
+Demonstrates the `std.collections` functional collections library: `map`, `filter`, `fold`, `reduce`, `any`, `all`, `count`, `flat_map`, `for_each`, `reverse`, `take`, `drop`, `zip` (with `Pair`), `enumerate`, `flatten`, `sum`, and `sum_float`. Shows function composition by chaining filter, map, and fold.
+
+```bash
+cargo run -- run examples/collections-lib/main.pluto --stdlib stdlib
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.

@@ -1,0 +1,173 @@
+pub class Pair<A, B> {
+    first: A
+    second: B
+}
+
+pub fn map<T, U>(arr: [T], f: fn(T) U) [U] {
+    let result: [U] = []
+    for item in arr {
+        result.push(f(item))
+    }
+    return result
+}
+
+pub fn filter<T>(arr: [T], f: fn(T) bool) [T] {
+    let result: [T] = []
+    for item in arr {
+        if f(item) {
+            result.push(item)
+        }
+    }
+    return result
+}
+
+pub fn fold<T, U>(arr: [T], initial: U, f: fn(U, T) U) U {
+    let acc = initial
+    for item in arr {
+        acc = f(acc, item)
+    }
+    return acc
+}
+
+pub fn reduce<T>(arr: [T], f: fn(T, T) T) T {
+    let acc = arr[0]
+    let i = 1
+    while i < arr.len() {
+        acc = f(acc, arr[i])
+        i = i + 1
+    }
+    return acc
+}
+
+pub fn any<T>(arr: [T], f: fn(T) bool) bool {
+    for item in arr {
+        if f(item) {
+            return true
+        }
+    }
+    return false
+}
+
+pub fn all<T>(arr: [T], f: fn(T) bool) bool {
+    for item in arr {
+        if !f(item) {
+            return false
+        }
+    }
+    return true
+}
+
+pub fn for_each<T>(arr: [T], f: fn(T)) {
+    for item in arr {
+        f(item)
+    }
+}
+
+pub fn flat_map<T, U>(arr: [T], f: fn(T) [U]) [U] {
+    let result: [U] = []
+    for item in arr {
+        let sub = f(item)
+        for x in sub {
+            result.push(x)
+        }
+    }
+    return result
+}
+
+pub fn count<T>(arr: [T], f: fn(T) bool) int {
+    let n = 0
+    for item in arr {
+        if f(item) {
+            n = n + 1
+        }
+    }
+    return n
+}
+
+pub fn reverse<T>(arr: [T]) [T] {
+    let result: [T] = []
+    let i = arr.len() - 1
+    while i >= 0 {
+        result.push(arr[i])
+        i = i - 1
+    }
+    return result
+}
+
+pub fn take<T>(arr: [T], n: int) [T] {
+    let result: [T] = []
+    let limit = n
+    if limit > arr.len() {
+        limit = arr.len()
+    }
+    let i = 0
+    while i < limit {
+        result.push(arr[i])
+        i = i + 1
+    }
+    return result
+}
+
+pub fn drop<T>(arr: [T], n: int) [T] {
+    let result: [T] = []
+    let start = n
+    if start > arr.len() {
+        start = arr.len()
+    }
+    let i = start
+    while i < arr.len() {
+        result.push(arr[i])
+        i = i + 1
+    }
+    return result
+}
+
+pub fn zip<A, B>(a: [A], b: [B]) [Pair<A, B>] {
+    let result: [Pair<A, B>] = []
+    let limit = a.len()
+    if b.len() < limit {
+        limit = b.len()
+    }
+    let i = 0
+    while i < limit {
+        result.push(Pair<A, B> { first: a[i], second: b[i] })
+        i = i + 1
+    }
+    return result
+}
+
+pub fn enumerate<T>(arr: [T]) [Pair<int, T>] {
+    let result: [Pair<int, T>] = []
+    let i = 0
+    while i < arr.len() {
+        result.push(Pair<int, T> { first: i, second: arr[i] })
+        i = i + 1
+    }
+    return result
+}
+
+pub fn flatten<T>(arr: [[T]]) [T] {
+    let result: [T] = []
+    for sub in arr {
+        for item in sub {
+            result.push(item)
+        }
+    }
+    return result
+}
+
+pub fn sum(arr: [int]) int {
+    let total = 0
+    for x in arr {
+        total = total + x
+    }
+    return total
+}
+
+pub fn sum_float(arr: [float]) float {
+    let total = 0.0
+    for x in arr {
+        total = total + x
+    }
+    return total
+}

@@ -1,0 +1,310 @@
+import std.collections
+
+// -- map --
+
+test "map doubles integers" {
+    let nums = [1, 2, 3]
+    let doubled = collections.map(nums, (x: int) => x * 2)
+    expect(doubled.len()).to_equal(3)
+    expect(doubled[0]).to_equal(2)
+    expect(doubled[1]).to_equal(4)
+    expect(doubled[2]).to_equal(6)
+}
+
+test "map int to string" {
+    let nums = [10, 20]
+    let strs = collections.map(nums, (x: int) => "{x}")
+    expect(strs[0]).to_equal("10")
+    expect(strs[1]).to_equal("20")
+}
+
+test "map empty array" {
+    let empty: [int] = []
+    let result = collections.map(empty, (x: int) => x + 1)
+    expect(result.len()).to_equal(0)
+}
+
+// -- filter --
+
+test "filter keeps matching elements" {
+    let nums = [1, 2, 3, 4, 5]
+    let evens = collections.filter(nums, (x: int) => x % 2 == 0)
+    expect(evens.len()).to_equal(2)
+    expect(evens[0]).to_equal(2)
+    expect(evens[1]).to_equal(4)
+}
+
+test "filter none match" {
+    let nums = [1, 3, 5]
+    let evens = collections.filter(nums, (x: int) => x % 2 == 0)
+    expect(evens.len()).to_equal(0)
+}
+
+test "filter empty array" {
+    let empty: [int] = []
+    let result = collections.filter(empty, (x: int) => x > 0)
+    expect(result.len()).to_equal(0)
+}
+
+// -- fold --
+
+test "fold sums integers" {
+    let nums = [1, 2, 3, 4]
+    let total = collections.fold(nums, 0, (acc: int, x: int) => acc + x)
+    expect(total).to_equal(10)
+}
+
+test "fold concatenates strings" {
+    let words = ["hello", " ", "world"]
+    let sentence = collections.fold(words, "", (acc: string, w: string) => acc + w)
+    expect(sentence).to_equal("hello world")
+}
+
+test "fold cross-type: count chars" {
+    let words = ["hi", "hey"]
+    let total = collections.fold(words, 0, (acc: int, w: string) => acc + w.len())
+    expect(total).to_equal(5)
+}
+
+// -- reduce --
+
+test "reduce multiplies" {
+    let nums = [2, 3, 4]
+    let product = collections.reduce(nums, (a: int, b: int) => a * b)
+    expect(product).to_equal(24)
+}
+
+test "reduce single element" {
+    let nums = [42]
+    let result = collections.reduce(nums, (a: int, b: int) => a + b)
+    expect(result).to_equal(42)
+}
+
+// -- any --
+
+test "any finds match" {
+    let nums = [1, 2, 3]
+    expect(collections.any(nums, (x: int) => x == 2)).to_be_true()
+}
+
+test "any no match" {
+    let nums = [1, 2, 3]
+    expect(collections.any(nums, (x: int) => x == 10)).to_be_false()
+}
+
+test "any empty array" {
+    let empty: [int] = []
+    expect(collections.any(empty, (x: int) => x == 1)).to_be_false()
+}
+
+// -- all --
+
+test "all true" {
+    let nums = [2, 4, 6]
+    expect(collections.all(nums, (x: int) => x % 2 == 0)).to_be_true()
+}
+
+test "all false" {
+    let nums = [2, 3, 6]
+    expect(collections.all(nums, (x: int) => x % 2 == 0)).to_be_false()
+}
+
+test "all empty array" {
+    let empty: [int] = []
+    expect(collections.all(empty, (x: int) => x > 0)).to_be_true()
+}
+
+// -- count --
+
+test "count matching" {
+    let nums = [1, 2, 3, 4, 5]
+    expect(collections.count(nums, (x: int) => x > 3)).to_equal(2)
+}
+
+test "count none" {
+    let nums = [1, 2, 3]
+    expect(collections.count(nums, (x: int) => x > 10)).to_equal(0)
+}
+
+// -- flat_map --
+
+test "flat_map expands" {
+    let nums = [1, 2, 3]
+    let expanded = collections.flat_map(nums, (x: int) => [x, x * 10])
+    expect(expanded.len()).to_equal(6)
+    expect(expanded[0]).to_equal(1)
+    expect(expanded[1]).to_equal(10)
+    expect(expanded[2]).to_equal(2)
+    expect(expanded[3]).to_equal(20)
+}
+
+// -- for_each --
+
+test "for_each runs on all elements" {
+    let nums = [10, 20, 30]
+    let seen: [int] = []
+    collections.for_each(nums, (x: int) => { seen.push(x) })
+    expect(seen.len()).to_equal(3)
+    expect(seen[0]).to_equal(10)
+    expect(seen[1]).to_equal(20)
+    expect(seen[2]).to_equal(30)
+}
+
+// -- reverse --
+
+test "reverse array" {
+    let nums = [1, 2, 3]
+    let rev = collections.reverse(nums)
+    expect(rev.len()).to_equal(3)
+    expect(rev[0]).to_equal(3)
+    expect(rev[1]).to_equal(2)
+    expect(rev[2]).to_equal(1)
+}
+
+test "reverse empty" {
+    let empty: [int] = []
+    let rev = collections.reverse(empty)
+    expect(rev.len()).to_equal(0)
+}
+
+test "reverse single" {
+    let one = [42]
+    let rev = collections.reverse(one)
+    expect(rev.len()).to_equal(1)
+    expect(rev[0]).to_equal(42)
+}
+
+// -- take --
+
+test "take first n" {
+    let nums = [10, 20, 30, 40]
+    let first = collections.take(nums, 2)
+    expect(first.len()).to_equal(2)
+    expect(first[0]).to_equal(10)
+    expect(first[1]).to_equal(20)
+}
+
+test "take more than length" {
+    let nums = [1, 2]
+    let result = collections.take(nums, 10)
+    expect(result.len()).to_equal(2)
+}
+
+test "take zero" {
+    let nums = [1, 2, 3]
+    let result = collections.take(nums, 0)
+    expect(result.len()).to_equal(0)
+}
+
+// -- drop --
+
+test "drop first n" {
+    let nums = [10, 20, 30, 40]
+    let rest = collections.drop(nums, 2)
+    expect(rest.len()).to_equal(2)
+    expect(rest[0]).to_equal(30)
+    expect(rest[1]).to_equal(40)
+}
+
+test "drop more than length" {
+    let nums = [1, 2]
+    let result = collections.drop(nums, 10)
+    expect(result.len()).to_equal(0)
+}
+
+test "drop zero" {
+    let nums = [1, 2, 3]
+    let result = collections.drop(nums, 0)
+    expect(result.len()).to_equal(3)
+}
+
+// -- zip --
+
+test "zip equal length" {
+    let a = [1, 2, 3]
+    let b = ["a", "b", "c"]
+    let zipped = collections.zip(a, b)
+    expect(zipped.len()).to_equal(3)
+    expect(zipped[0].first).to_equal(1)
+    expect(zipped[0].second).to_equal("a")
+    expect(zipped[2].first).to_equal(3)
+    expect(zipped[2].second).to_equal("c")
+}
+
+test "zip different lengths" {
+    let a = [1, 2, 3]
+    let b = [10, 20]
+    let zipped = collections.zip(a, b)
+    expect(zipped.len()).to_equal(2)
+    expect(zipped[1].first).to_equal(2)
+    expect(zipped[1].second).to_equal(20)
+}
+
+// -- enumerate --
+
+test "enumerate adds indices" {
+    let words = ["hello", "world", "!"]
+    let en = collections.enumerate(words)
+    expect(en.len()).to_equal(3)
+    expect(en[0].first).to_equal(0)
+    expect(en[0].second).to_equal("hello")
+    expect(en[1].first).to_equal(1)
+    expect(en[1].second).to_equal("world")
+    expect(en[2].first).to_equal(2)
+    expect(en[2].second).to_equal("!")
+}
+
+// -- flatten --
+
+test "flatten nested arrays" {
+    let nested = [[1, 2], [3], [4, 5, 6]]
+    let flat = collections.flatten(nested)
+    expect(flat.len()).to_equal(6)
+    expect(flat[0]).to_equal(1)
+    expect(flat[2]).to_equal(3)
+    expect(flat[5]).to_equal(6)
+}
+
+// -- sum / sum_float --
+
+test "sum integers" {
+    let nums = [1, 2, 3, 4, 5]
+    expect(collections.sum(nums)).to_equal(15)
+}
+
+test "sum empty" {
+    let empty: [int] = []
+    expect(collections.sum(empty)).to_equal(0)
+}
+
+test "sum_float" {
+    let nums = [1.5, 2.5, 3.0]
+    let result = collections.sum_float(nums)
+    expect(result > 6.9).to_be_true()
+    expect(result < 7.1).to_be_true()
+}
+
+// -- composition --
+
+test "filter then map" {
+    let nums = [1, 2, 3, 4, 5, 6]
+    let evens = collections.filter(nums, (x: int) => x % 2 == 0)
+    let doubled = collections.map(evens, (x: int) => x * 2)
+    expect(doubled.len()).to_equal(3)
+    expect(doubled[0]).to_equal(4)
+    expect(doubled[1]).to_equal(8)
+    expect(doubled[2]).to_equal(12)
+}
+
+test "map then fold" {
+    let nums = [1, 2, 3]
+    let doubled = collections.map(nums, (x: int) => x * 2)
+    let total = collections.fold(doubled, 0, (acc: int, x: int) => acc + x)
+    expect(total).to_equal(12)
+}
+
+test "filter then count" {
+    let nums = [1, 2, 3, 4, 5]
+    let big = collections.filter(nums, (x: int) => x > 2)
+    expect(collections.count(big, (x: int) => x % 2 == 0)).to_equal(1)
+}

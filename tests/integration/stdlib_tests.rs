@@ -45,3 +45,12 @@ fn stdlib_strings() {
     }
     assert!(stdout.contains("tests passed"), "Expected test summary in output:\n{stdout}");
 }
+
+#[test]
+fn stdlib_collections() {
+    let (stdout, stderr, code) = run_pluto_test_file("collections");
+    if code != 0 {
+        panic!("collections tests failed (exit {code}):\nstdout: {stdout}\nstderr: {stderr}");
+    }
+    assert!(stdout.contains("tests passed"), "Expected test summary in output:\n{stdout}");
+}
