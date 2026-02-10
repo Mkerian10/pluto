@@ -128,6 +128,10 @@ fn check_stmt(
             if let Expr::Spawn { .. } = &value.node && let Some(fn_name) = env.spawn_target_fns.get(&(value.span.start, value.span.end)) {
                 env.define_task_origin(name.node.clone(), fn_name.clone());
             }
+            // Track taint propagation: if inside a scope block and value is tainted, mark variable
+            if !env.scope_tainted_vars.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
+                env.scope_tainted_vars.last_mut().unwrap().insert(name.node.clone());
+            }
         }
         Stmt::Return(value) => {
             let actual = match value {
@@ -140,6 +144,15 @@ fn check_stmt(
                     format!("return type mismatch: expected {return_type}, found {actual}"),
                     err_span,
                 ));
+            }
+            // Reject scope-tainted closures escaping via return
+            if let Some(expr) = value {
+                if !env.scope_tainted_vars.is_empty() && is_scope_tainted_expr(&expr.node, expr.span, env) {
+                    return Err(CompileError::type_err(
+                        "closure capturing scope binding cannot escape scope block via return",
+                        expr.span,
+                    ));
+                }
             }
         }
         Stmt::Assign { target, value } => {
@@ -165,6 +178,19 @@ fn check_stmt(
             // Permanently invalidate task origin on reassignment
             if matches!(&var_type, PlutoType::Task(_)) {
                 env.invalidated_task_vars.insert(target.node.clone());
+            }
+            // Reject scope-tainted closures escaping via assignment to outer variable
+            if !env.scope_tainted_vars.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
+                if let Some(scope_depth) = env.scope_body_depths.last() {
+                    if let Some((_, var_depth)) = env.lookup_with_depth(&target.node) {
+                        if var_depth < *scope_depth {
+                            return Err(CompileError::type_err(
+                                "closure capturing scope binding cannot escape scope block via assignment to outer variable",
+                                value.span,
+                            ));
+                        }
+                    }
+                }
             }
         }
         Stmt::FieldAssign { object, field, value } => {
@@ -590,6 +616,8 @@ fn check_scope_stmt(
     );
 
     // 9. Type-check body with bindings in scope
+    env.scope_body_depths.push(env.scope_depth());
+    env.scope_tainted_vars.push(std::collections::HashSet::new());
     env.push_scope();
     let binding_name_set: std::collections::HashSet<String> = bindings.iter()
         .map(|b| b.name.node.clone())
@@ -602,8 +630,27 @@ fn check_scope_stmt(
     check_block(&body.node, env, return_type)?;
     env.scope_binding_names.pop();
     env.pop_scope();
+    env.scope_body_depths.pop();
+    env.scope_tainted_vars.pop();
 
     Ok(())
+}
+
+/// Check if an expression is a scope-tainted closure (directly or via tainted variable).
+fn is_scope_tainted_expr(expr: &Expr, span: crate::span::Span, env: &TypeEnv) -> bool {
+    // Direct closure whose span is tainted
+    if matches!(expr, Expr::Closure { .. }) && env.scope_tainted_closures.contains(&(span.start, span.end)) {
+        return true;
+    }
+    // Variable that holds a tainted closure
+    if let Expr::Ident(name) = expr {
+        for level in &env.scope_tainted_vars {
+            if level.contains(name) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Extracts the root variable name from nested field access chains.

@@ -633,3 +633,171 @@ app MyApp {
 "#);
     assert_eq!(output.trim(), "pg://db");
 }
+
+// === Phase 5e: Scope + Closures (Escape Analysis) Tests ===
+
+#[test]
+fn scope_closure_local_ok() {
+    // Closure captures scope binding, stored locally and called within scope body — OK
+    let output = compile_and_run_stdout(r#"
+scoped class Ctx {
+    value: int
+}
+
+fn apply(f: fn() int) int {
+    return f()
+}
+
+app MyApp {
+    fn main(self) {
+        scope(Ctx { value: 42 }) |c: Ctx| {
+            let f = () => c.value
+            print(f())
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "42");
+}
+
+#[test]
+fn scope_closure_no_capture_return_ok() {
+    // Closure inside scope block that does NOT capture scope bindings can be returned freely
+    let output = compile_and_run_stdout(r#"
+scoped class Ctx {
+    value: int
+}
+
+fn make_adder() fn(int) int {
+    return (x: int) => x + 1
+}
+
+app MyApp {
+    fn main(self) {
+        scope(Ctx { value: 1 }) |c: Ctx| {
+            let f = make_adder()
+            print(f(10))
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "11");
+}
+
+#[test]
+fn scope_closure_passed_to_fn_ok() {
+    // Closure capturing scope binding passed as argument to a function — OK
+    let output = compile_and_run_stdout(r#"
+scoped class Ctx {
+    value: int
+}
+
+fn apply(f: fn() int) int {
+    return f()
+}
+
+app MyApp {
+    fn main(self) {
+        scope(Ctx { value: 99 }) |c: Ctx| {
+            let result = apply(() => c.value)
+            print(result)
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "99");
+}
+
+#[test]
+fn scope_closure_return_rejected() {
+    // Closure capturing scope binding in a return statement — Error
+    compile_should_fail_with(r#"
+scoped class Ctx {
+    value: int
+}
+
+fn make_fn() fn() int {
+    return () => 1
+}
+
+app MyApp {
+    fn get_closure(self) fn() int {
+        scope(Ctx { value: 1 }) |c: Ctx| {
+            return () => c.value
+        }
+        return () => 0
+    }
+
+    fn main(self) {
+        let f = self.get_closure()
+        print(f())
+    }
+}
+"#, "closure capturing scope binding cannot escape scope block via return");
+}
+
+#[test]
+fn scope_closure_assign_outer_rejected() {
+    // Closure capturing scope binding assigned to a variable declared before the scope block — Error
+    compile_should_fail_with(r#"
+scoped class Ctx {
+    value: int
+}
+
+app MyApp {
+    fn main(self) {
+        let mut f = () => 0
+        scope(Ctx { value: 1 }) |c: Ctx| {
+            f = () => c.value
+        }
+        print(f())
+    }
+}
+"#, "closure capturing scope binding cannot escape scope block via assignment to outer variable");
+}
+
+#[test]
+fn scope_closure_taint_var_return_rejected() {
+    // let f = <tainted>; return f — taint flows through local variable — Error
+    compile_should_fail_with(r#"
+scoped class Ctx {
+    value: int
+}
+
+app MyApp {
+    fn get_closure(self) fn() int {
+        scope(Ctx { value: 1 }) |c: Ctx| {
+            let f = () => c.value
+            return f
+        }
+        return () => 0
+    }
+
+    fn main(self) {
+        let f = self.get_closure()
+        print(f())
+    }
+}
+"#, "closure capturing scope binding cannot escape scope block via return");
+}
+
+#[test]
+fn scope_closure_taint_var_assign_outer_rejected() {
+    // let f = <tainted>; outer = f — taint flows to outer variable — Error
+    compile_should_fail_with(r#"
+scoped class Ctx {
+    value: int
+}
+
+app MyApp {
+    fn main(self) {
+        let mut f = () => 0
+        scope(Ctx { value: 1 }) |c: Ctx| {
+            let g = () => c.value
+            f = g
+        }
+        print(f())
+    }
+}
+"#, "closure capturing scope binding cannot escape scope block via assignment to outer variable");
+}

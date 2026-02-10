@@ -174,6 +174,12 @@ pub struct TypeEnv {
     pub scope_binding_names: Vec<HashSet<String>>,
     /// Classes whose lifecycle was overridden by app-level directives
     pub lifecycle_overridden: HashSet<String>,
+    /// Spans of closures that capture scope bindings (tainted closures)
+    pub scope_tainted_closures: HashSet<(usize, usize)>,
+    /// Stack of sets: local vars holding tainted closures at each scope-block depth
+    pub scope_tainted_vars: Vec<HashSet<String>>,
+    /// Stack: scope_depth at each scope block entry (for detecting outer-variable assignments)
+    pub scope_body_depths: Vec<usize>,
 }
 
 impl Default for TypeEnv {
@@ -238,6 +244,9 @@ impl TypeEnv {
             scope_resolutions: HashMap::new(),
             scope_binding_names: Vec::new(),
             lifecycle_overridden: HashSet::new(),
+            scope_tainted_closures: HashSet::new(),
+            scope_tainted_vars: Vec::new(),
+            scope_body_depths: Vec::new(),
         }
     }
 

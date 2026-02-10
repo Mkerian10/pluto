@@ -51,7 +51,17 @@ pub(crate) fn infer_closure(
     collect_free_vars_block(&body.node, &param_names, outer_depth, env, &mut captures, &mut seen);
 
     // Store captures keyed by span
-    env.closure_captures.insert((span.start, span.end), captures);
+    env.closure_captures.insert((span.start, span.end), captures.clone());
+
+    // Check if any captured variable is a scope binding → mark closure as tainted
+    if !env.scope_binding_names.is_empty() {
+        let is_tainted = captures.iter().any(|(name, _)| {
+            env.scope_binding_names.iter().any(|set| set.contains(name))
+        });
+        if is_tainted {
+            env.scope_tainted_closures.insert((span.start, span.end));
+        }
+    }
 
     // Store return type for closure lifting (fixes Finding 5)
     env.closure_return_types.insert((span.start, span.end), final_ret.clone());
