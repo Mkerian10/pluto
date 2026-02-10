@@ -1015,7 +1015,7 @@ void *__pluto_string_format_float(double value) {
     return header;
 }
 
-long __pluto_string_to_int(void *s) {
+void *__pluto_string_to_int(void *s) {
     long slen = *(long *)s;
     const char *data = (const char *)s + 8;
     char *tmp = (char *)malloc(slen + 1);
@@ -1030,23 +1030,20 @@ long __pluto_string_to_int(void *s) {
     while (*end_ptr == ' ' || *end_ptr == '\t' || *end_ptr == '\n' || *end_ptr == '\r') end_ptr++;
     if (start == end_ptr || *end_ptr != '\0') {
         free(tmp);
-        const char *msg_prefix = "invalid integer: ";
-        long msg_len = (long)strlen(msg_prefix) + slen;
-        void *full_msg = gc_alloc(8 + msg_len + 1, GC_TAG_STRING, 0);
-        *(long *)full_msg = msg_len;
-        memcpy((char *)full_msg + 8, msg_prefix, strlen(msg_prefix));
-        memcpy((char *)full_msg + 8 + strlen(msg_prefix), data, slen);
-        ((char *)full_msg)[8 + msg_len] = '\0';
-        void *err_obj = __pluto_alloc(8); // 1 field: message
-        *(long *)err_obj = (long)full_msg;
-        __pluto_raise_error(err_obj);
-        return 0;
+        // Return Option.None (tag=1)
+        void *obj = gc_alloc(16, GC_TAG_OBJECT, 0);
+        *(long *)obj = 1;
+        return obj;
     }
     free(tmp);
-    return result;
+    // Return Option.Some { value } (tag=0, value at offset 8)
+    void *obj = gc_alloc(16, GC_TAG_OBJECT, 0);
+    *(long *)obj = 0;
+    *(long *)((char *)obj + 8) = result;
+    return obj;
 }
 
-double __pluto_string_to_float(void *s) {
+void *__pluto_string_to_float(void *s) {
     long slen = *(long *)s;
     const char *data = (const char *)s + 8;
     char *tmp = (char *)malloc(slen + 1);
@@ -1061,20 +1058,17 @@ double __pluto_string_to_float(void *s) {
     while (*end_ptr == ' ' || *end_ptr == '\t' || *end_ptr == '\n' || *end_ptr == '\r') end_ptr++;
     if (start == end_ptr || *end_ptr != '\0') {
         free(tmp);
-        const char *msg_prefix = "invalid float: ";
-        long msg_len = (long)strlen(msg_prefix) + slen;
-        void *full_msg = gc_alloc(8 + msg_len + 1, GC_TAG_STRING, 0);
-        *(long *)full_msg = msg_len;
-        memcpy((char *)full_msg + 8, msg_prefix, strlen(msg_prefix));
-        memcpy((char *)full_msg + 8 + strlen(msg_prefix), data, slen);
-        ((char *)full_msg)[8 + msg_len] = '\0';
-        void *err_obj = __pluto_alloc(8); // 1 field: message
-        *(long *)err_obj = (long)full_msg;
-        __pluto_raise_error(err_obj);
-        return 0.0;
+        // Return Option.None (tag=1)
+        void *obj = gc_alloc(16, GC_TAG_OBJECT, 0);
+        *(long *)obj = 1;
+        return obj;
     }
     free(tmp);
-    return result;
+    // Return Option.Some { value } (tag=0, float stored as bitcast i64 at offset 8)
+    void *obj = gc_alloc(16, GC_TAG_OBJECT, 0);
+    *(long *)obj = 0;
+    memcpy((char *)obj + 8, &result, 8);
+    return obj;
 }
 
 long __pluto_json_parse_int(void *s) {

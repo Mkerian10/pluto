@@ -3133,12 +3133,13 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
             if obj_type == PlutoType::String {
                 return match method.node.as_str() {
-                    "len" | "index_of" | "to_int" => PlutoType::Int,
+                    "len" | "index_of" => PlutoType::Int,
                     "contains" | "starts_with" | "ends_with" => PlutoType::Bool,
                     "substring" | "trim" | "to_upper" | "to_lower" | "replace" | "char_at" => PlutoType::String,
                     "split" => PlutoType::Array(Box::new(PlutoType::String)),
                     "to_bytes" => PlutoType::Bytes,
-                    "to_float" => PlutoType::Float,
+                    "to_int" => PlutoType::Enum("Option__int".to_string()),
+                    "to_float" => PlutoType::Enum("Option__float".to_string()),
                     _ => PlutoType::Void,
                 };
             }

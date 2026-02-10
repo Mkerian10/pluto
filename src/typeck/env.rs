@@ -90,8 +90,6 @@ pub enum MethodResolution {
     ChannelTrySend,
     /// Channel try_recv — fallible (ChannelClosed + ChannelEmpty)
     ChannelTryRecv,
-    /// Fallible built-in method (e.g. string.to_int raises ParseError)
-    FallibleBuiltin { error_type: String },
 }
 
 #[derive(Debug)]
@@ -278,7 +276,6 @@ impl TypeEnv {
             Some(MethodResolution::ChannelRecv) => Ok(true),
             Some(MethodResolution::ChannelTrySend) => Ok(true),
             Some(MethodResolution::ChannelTryRecv) => Ok(true),
-            Some(MethodResolution::FallibleBuiltin { .. }) => Ok(true),
             None => Err(format!(
                 "internal error: unresolved method resolution at span {} in fn '{}'",
                 span_start, current_fn

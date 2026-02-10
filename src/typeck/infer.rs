@@ -1482,13 +1482,9 @@ fn infer_method_call(
                         "to_int() expects 0 arguments".to_string(), span,
                     ));
                 }
-                if let Some(ref current) = env.current_fn {
-                    env.method_resolutions.insert(
-                        (current.clone(), method.span.start),
-                        super::env::MethodResolution::FallibleBuiltin { error_type: "ParseError".to_string() },
-                    );
-                }
-                return Ok(PlutoType::Int);
+                let mangled = ensure_generic_enum_instantiated("Option", &[PlutoType::Int], env);
+                builtin(env, method);
+                return Ok(PlutoType::Enum(mangled));
             }
             "to_float" => {
                 if !args.is_empty() {
@@ -1496,13 +1492,9 @@ fn infer_method_call(
                         "to_float() expects 0 arguments".to_string(), span,
                     ));
                 }
-                if let Some(ref current) = env.current_fn {
-                    env.method_resolutions.insert(
-                        (current.clone(), method.span.start),
-                        super::env::MethodResolution::FallibleBuiltin { error_type: "ParseError".to_string() },
-                    );
-                }
-                return Ok(PlutoType::Float);
+                let mangled = ensure_generic_enum_instantiated("Option", &[PlutoType::Float], env);
+                builtin(env, method);
+                return Ok(PlutoType::Enum(mangled));
             }
             "to_bytes" => {
                 if !args.is_empty() {

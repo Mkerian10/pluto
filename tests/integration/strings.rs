@@ -454,14 +454,20 @@ fn string_index_assign_rejected() {
     );
 }
 
-// ── to_int / to_float ────────────────────────────────────────────────────────
+// ── to_int / to_float (returns Option<int> / Option<float>) ─────────────────
 
 #[test]
 fn string_to_int_basic() {
     let out = compile_and_run_stdout(
         r#"fn main() {
-    let n = "42".to_int() catch 0
-    print(n)
+    match "42".to_int() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("fail")
+        }
+    }
 }"#,
     );
     assert_eq!(out, "42\n");
@@ -471,8 +477,14 @@ fn string_to_int_basic() {
 fn string_to_int_negative() {
     let out = compile_and_run_stdout(
         r#"fn main() {
-    let n = "-7".to_int() catch 0
-    print(n)
+    match "-7".to_int() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("fail")
+        }
+    }
 }"#,
     );
     assert_eq!(out, "-7\n");
@@ -482,80 +494,159 @@ fn string_to_int_negative() {
 fn string_to_int_whitespace() {
     let out = compile_and_run_stdout(
         r#"fn main() {
-    let n = "  123  ".to_int() catch 0
-    print(n)
+    match "  123  ".to_int() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("fail")
+        }
+    }
 }"#,
     );
     assert_eq!(out, "123\n");
 }
 
 #[test]
-fn string_to_int_invalid_catch() {
+fn string_to_int_invalid() {
     let out = compile_and_run_stdout(
         r#"fn main() {
-    let n = "abc".to_int() catch -1
-    print(n)
+    match "abc".to_int() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("none")
+        }
+    }
 }"#,
     );
-    assert_eq!(out, "-1\n");
+    assert_eq!(out, "none\n");
 }
 
 #[test]
-fn string_to_int_empty_catch() {
+fn string_to_int_empty() {
     let out = compile_and_run_stdout(
         r#"fn main() {
-    let n = "".to_int() catch -1
-    print(n)
+    match "".to_int() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("none")
+        }
+    }
 }"#,
     );
-    assert_eq!(out, "-1\n");
-}
-
-#[test]
-fn string_to_int_propagation() {
-    let out = compile_and_run_stdout(
-        r#"fn parse(s: string) int {
-    return s.to_int()!
-}
-
-fn main() {
-    let a = parse("100") catch 0
-    print(a)
-    let b = parse("nope") catch -1
-    print(b)
-}"#,
-    );
-    assert_eq!(out, "100\n-1\n");
-}
-
-#[test]
-fn string_to_int_catch_wildcard() {
-    let out = compile_and_run_stdout(
-        r#"fn main() {
-    let n = "bad".to_int() catch err { -99 }
-    print(n)
-}"#,
-    );
-    assert_eq!(out, "-99\n");
+    assert_eq!(out, "none\n");
 }
 
 #[test]
 fn string_to_int_mixed_content() {
     let out = compile_and_run_stdout(
         r#"fn main() {
-    let n = "42abc".to_int() catch -1
-    print(n)
+    match "42abc".to_int() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("none")
+        }
+    }
 }"#,
     );
-    assert_eq!(out, "-1\n");
+    assert_eq!(out, "none\n");
+}
+
+#[test]
+fn string_to_int_zero() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    match "0".to_int() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("fail")
+        }
+    }
+}"#,
+    );
+    assert_eq!(out, "0\n");
+}
+
+#[test]
+fn string_to_int_variable() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let s = "999"
+    match s.to_int() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("fail")
+        }
+    }
+}"#,
+    );
+    assert_eq!(out, "999\n");
+}
+
+#[test]
+fn string_to_int_bare_call_allowed() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let result = "42".to_int()
+    match result {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("fail")
+        }
+    }
+}"#,
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn string_to_int_default_helper() {
+    let out = compile_and_run_stdout(
+        r#"fn unwrap_or(opt: Option<int>, fallback: int) int {
+    match opt {
+        Option.Some { value } {
+            return value
+        }
+        Option.None {
+            return fallback
+        }
+    }
+}
+
+fn main() {
+    let a = unwrap_or("42".to_int(), 0)
+    let b = unwrap_or("bad".to_int(), -1)
+    print(a)
+    print(b)
+}"#,
+    );
+    assert_eq!(out, "42\n-1\n");
 }
 
 #[test]
 fn string_to_float_basic() {
     let out = compile_and_run_stdout(
         r#"fn main() {
-    let f = "3.14".to_float() catch 0.0
-    print(f)
+    match "3.14".to_float() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("fail")
+        }
+    }
 }"#,
     );
     assert_eq!(out, "3.140000\n");
@@ -565,8 +656,14 @@ fn string_to_float_basic() {
 fn string_to_float_integer_string() {
     let out = compile_and_run_stdout(
         r#"fn main() {
-    let f = "42".to_float() catch 0.0
-    print(f)
+    match "42".to_float() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("fail")
+        }
+    }
 }"#,
     );
     assert_eq!(out, "42.000000\n");
@@ -576,104 +673,128 @@ fn string_to_float_integer_string() {
 fn string_to_float_negative() {
     let out = compile_and_run_stdout(
         r#"fn main() {
-    let f = "-2.5".to_float() catch 0.0
-    print(f)
+    match "-2.5".to_float() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("fail")
+        }
+    }
 }"#,
     );
     assert_eq!(out, "-2.500000\n");
 }
 
 #[test]
-fn string_to_float_invalid_catch() {
+fn string_to_float_invalid() {
     let out = compile_and_run_stdout(
         r#"fn main() {
-    let f = "not_a_number".to_float() catch -1.0
-    print(f)
+    match "not_a_number".to_float() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("none")
+        }
+    }
 }"#,
     );
-    assert_eq!(out, "-1.000000\n");
+    assert_eq!(out, "none\n");
 }
 
 #[test]
 fn string_to_float_whitespace() {
     let out = compile_and_run_stdout(
         r#"fn main() {
-    let f = "  1.5  ".to_float() catch 0.0
-    print(f)
+    match "  1.5  ".to_float() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("fail")
+        }
+    }
 }"#,
     );
     assert_eq!(out, "1.500000\n");
 }
 
 #[test]
-fn string_to_float_propagation() {
-    let out = compile_and_run_stdout(
-        r#"fn parse_float(s: string) float {
-    return s.to_float()!
-}
-
-fn main() {
-    let a = parse_float("2.718") catch 0.0
-    print(a)
-    let b = parse_float("xyz") catch -1.0
-    print(b)
-}"#,
-    );
-    assert_eq!(out, "2.718000\n-1.000000\n");
-}
-
-#[test]
-fn string_to_int_bare_call_rejected() {
-    compile_should_fail_with(
-        r#"fn main() {
-    let n = "42".to_int()
-    print(n)
-}"#,
-        "must be handled with ! or catch",
-    );
-}
-
-#[test]
-fn string_to_float_bare_call_rejected() {
-    compile_should_fail_with(
-        r#"fn main() {
-    let f = "3.14".to_float()
-    print(f)
-}"#,
-        "must be handled with ! or catch",
-    );
-}
-
-#[test]
-fn string_to_int_variable() {
-    let out = compile_and_run_stdout(
-        r#"fn main() {
-    let s = "999"
-    let n = s.to_int() catch 0
-    print(n)
-}"#,
-    );
-    assert_eq!(out, "999\n");
-}
-
-#[test]
-fn string_to_int_zero() {
-    let out = compile_and_run_stdout(
-        r#"fn main() {
-    let n = "0".to_int() catch -1
-    print(n)
-}"#,
-    );
-    assert_eq!(out, "0\n");
-}
-
-#[test]
 fn string_to_float_scientific() {
     let out = compile_and_run_stdout(
         r#"fn main() {
-    let f = "1.5e2".to_float() catch 0.0
-    print(f)
+    match "1.5e2".to_float() {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("fail")
+        }
+    }
 }"#,
     );
     assert_eq!(out, "150.000000\n");
+}
+
+#[test]
+fn string_to_float_bare_call_allowed() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let result = "3.14".to_float()
+    match result {
+        Option.Some { value } {
+            print(value)
+        }
+        Option.None {
+            print("fail")
+        }
+    }
+}"#,
+    );
+    assert_eq!(out, "3.140000\n");
+}
+
+#[test]
+fn string_to_int_pass_option_to_function() {
+    let out = compile_and_run_stdout(
+        r#"fn describe(opt: Option<int>) {
+    match opt {
+        Option.Some { value } {
+            print("got {value}")
+        }
+        Option.None {
+            print("nothing")
+        }
+    }
+}
+
+fn main() {
+    describe("42".to_int())
+    describe("bad".to_int())
+}"#,
+    );
+    assert_eq!(out, "got 42\nnothing\n");
+}
+
+#[test]
+fn string_to_float_pass_option_to_function() {
+    let out = compile_and_run_stdout(
+        r#"fn describe(opt: Option<float>) {
+    match opt {
+        Option.Some { value } {
+            print("got {value}")
+        }
+        Option.None {
+            print("nothing")
+        }
+    }
+}
+
+fn main() {
+    describe("3.14".to_float())
+    describe("bad".to_float())
+}"#,
+    );
+    assert_eq!(out, "got 3.140000\nnothing\n");
 }
