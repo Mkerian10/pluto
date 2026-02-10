@@ -16,6 +16,7 @@ pub mod manifest;
 pub mod git_cache;
 pub mod lsp;
 pub mod binary;
+pub mod pretty;
 
 use diagnostics::CompileError;
 use std::path::{Path, PathBuf};
