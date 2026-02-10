@@ -30,6 +30,18 @@ impl<'a> Parser<'a> {
         Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names: HashSet::new() }
     }
 
+    /// Constructor with extra enum names added to the prelude set.
+    /// Used by the SDK editor to parse snippets that reference enums from the current program.
+    pub fn new_with_enum_context(
+        tokens: &'a [Spanned<Token>],
+        source: &'a str,
+        extra_enum_names: HashSet<String>,
+    ) -> Self {
+        let mut enum_names = crate::prelude::prelude_enum_names().clone();
+        enum_names.extend(extra_enum_names);
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names }
+    }
+
     fn peek(&self) -> Option<&Spanned<Token>> {
         let mut i = self.pos;
         // Skip newlines when peeking

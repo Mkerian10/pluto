@@ -24,6 +24,17 @@ use diagnostics::{CompileError, CompileWarning};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+/// Parse source for editing — no transforms (no monomorphize, no closure lift, no spawn desugar).
+/// Does NOT inject prelude (avoids serializing Option<T> etc. into user source).
+/// Resolves cross-references so xref IDs are available for user-defined declarations.
+pub fn parse_for_editing(source: &str) -> Result<parser::ast::Program, CompileError> {
+    let tokens = lexer::lex(source)?;
+    let mut parser = parser::Parser::new(&tokens, source);
+    let mut program = parser.parse_program()?;
+    xref::resolve_cross_refs(&mut program);
+    Ok(program)
+}
+
 /// Compile a source string to object bytes (lex → parse → prelude → typeck → monomorphize → closures → codegen).
 /// No file I/O or linking. Useful for compile-fail tests that only need to check errors.
 pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {

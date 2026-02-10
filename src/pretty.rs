@@ -7,6 +7,54 @@ pub fn pretty_print(program: &Program) -> String {
     pp.buf
 }
 
+/// Pretty-print a single function declaration.
+pub fn pretty_print_function(func: &Function) -> String {
+    let mut pp = PrettyPrinter::new();
+    pp.emit_function(func);
+    pp.newline();
+    pp.buf
+}
+
+/// Pretty-print a single class declaration.
+pub fn pretty_print_class(cls: &ClassDecl) -> String {
+    let mut pp = PrettyPrinter::new();
+    pp.emit_class_decl(cls);
+    pp.newline();
+    pp.buf
+}
+
+/// Pretty-print a single enum declaration.
+pub fn pretty_print_enum(en: &EnumDecl) -> String {
+    let mut pp = PrettyPrinter::new();
+    pp.emit_enum_decl(en);
+    pp.newline();
+    pp.buf
+}
+
+/// Pretty-print a single trait declaration.
+pub fn pretty_print_trait(tr: &TraitDecl) -> String {
+    let mut pp = PrettyPrinter::new();
+    pp.emit_trait_decl(tr);
+    pp.newline();
+    pp.buf
+}
+
+/// Pretty-print a single error declaration.
+pub fn pretty_print_error(err: &ErrorDecl) -> String {
+    let mut pp = PrettyPrinter::new();
+    pp.emit_error_decl(err);
+    pp.newline();
+    pp.buf
+}
+
+/// Pretty-print a single app declaration.
+pub fn pretty_print_app(app: &AppDecl) -> String {
+    let mut pp = PrettyPrinter::new();
+    pp.emit_app_decl(app);
+    pp.newline();
+    pp.buf
+}
+
 struct PrettyPrinter {
     buf: String,
     indent: usize,

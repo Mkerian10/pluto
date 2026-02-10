@@ -8,4 +8,6 @@ pub enum SdkError {
     Compile(#[from] plutoc::diagnostics::CompileError),
     #[error("Not found: {0}")]
     NotFound(String),
+    #[error("Edit error: {0}")]
+    Edit(String),
 }

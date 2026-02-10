@@ -23,7 +23,7 @@ pub fn typeenv_key(fn_name: &str, class_name: Option<&str>) -> String {
 }
 
 /// Derived analysis data for a program, indexed by AST node UUID.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct DerivedInfo {
     /// Error sets: function UUID -> list of errors it can raise (sorted by name).
     pub fn_error_sets: BTreeMap<Uuid, Vec<ErrorRef>>,

@@ -6,6 +6,7 @@ use plutoc::parser::ast::Program;
 use plutoc::span::Span;
 
 use crate::decl::{DeclKind, DeclRef};
+use crate::editor::ModuleEditor;
 use crate::error::SdkError;
 use crate::index::ModuleIndex;
 use crate::xref::{CallSite, ConstructSite, EnumUsageSite, RaiseSite};
@@ -38,6 +39,25 @@ impl Module {
         let (program, source, derived) = plutoc::analyze_file(path.as_ref(), None)?;
         let index = ModuleIndex::build(&program);
         Ok(Self { program, source, index, derived })
+    }
+
+    /// Create an edit-friendly Module from source text.
+    /// Parses without transforms (no monomorphize/closure-lift/spawn-desugar).
+    /// Does NOT inject prelude (avoids serializing Option<T> etc. into committed source).
+    pub fn from_source(source: &str) -> Result<Self, SdkError> {
+        let program = plutoc::parse_for_editing(source)?;
+        let index = ModuleIndex::build(&program);
+        Ok(Self { program, source: source.to_string(), index, derived: DerivedInfo::default() })
+    }
+
+    /// Begin editing this module. Consumes the Module.
+    pub fn edit(self) -> ModuleEditor {
+        ModuleEditor::new(self.program, self.source)
+    }
+
+    /// Construct from parts (used by ModuleEditor::commit).
+    pub(crate) fn from_parts(program: Program, source: String, index: ModuleIndex) -> Self {
+        Self { program, source, index, derived: DerivedInfo::default() }
     }
 
     // --- By-UUID lookup ---
@@ -174,7 +194,7 @@ impl Module {
     }
 
     pub fn source_slice(&self, span: Span) -> &str {
-        &self.source[span.start..span.end]
+        self.source.get(span.start..span.end).unwrap_or("")
     }
 
     // --- Raw AST access ---
