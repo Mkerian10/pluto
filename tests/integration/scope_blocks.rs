@@ -511,3 +511,88 @@ app MyApp {
 "#);
     assert_eq!(output.trim(), "postgres");
 }
+
+// === Phase 5c: Scope + Spawn Safety Tests ===
+
+#[test]
+fn scope_spawn_captures_binding_rejected() {
+    // spawn inside scope body that captures a scope binding → error
+    compile_should_fail_with(r#"
+fn do_work(x: int) int {
+    return x
+}
+
+scoped class Ctx {
+    value: int
+}
+
+app MyApp {
+    fn main(self) {
+        scope(Ctx { value: 1 }) |c: Ctx| {
+            let t = spawn do_work(c.value)
+            print(t.get())
+        }
+    }
+}
+"#, "cannot spawn inside scope block");
+}
+
+#[test]
+fn scope_spawn_no_binding_ok() {
+    // spawn in a program that also has scope blocks but spawn is outside scopes
+    // Verifies scope safety checks don't interfere with normal spawns
+    let output = compile_and_run_stdout(r#"
+fn add(a: int, b: int) int {
+    return a + b
+}
+
+fn main() {
+    let t = spawn add(10, 20)
+    print(t.get())
+}
+"#);
+    assert_eq!(output.trim(), "30");
+}
+
+#[test]
+fn scope_spawn_binding_in_expr_rejected() {
+    // spawn with binding used in a method call expression → error
+    compile_should_fail_with(r#"
+fn do_work(x: int) int {
+    return x
+}
+
+scoped class Ctx {
+    value: int
+
+    fn get_value(self) int {
+        return self.value
+    }
+}
+
+app MyApp {
+    fn main(self) {
+        scope(Ctx { value: 5 }) |c: Ctx| {
+            let t = spawn do_work(c.get_value())
+            print(t.get())
+        }
+    }
+}
+"#, "cannot spawn inside scope block");
+}
+
+#[test]
+fn scope_spawn_outside_scope_ok() {
+    // Normal spawn outside any scope → OK (regression test)
+    let output = compile_and_run_stdout(r#"
+fn double(x: int) int {
+    return x * 2
+}
+
+fn main() {
+    let t = spawn double(21)
+    print(t.get())
+}
+"#);
+    assert_eq!(output.trim(), "42");
+}

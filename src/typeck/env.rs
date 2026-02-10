@@ -169,6 +169,11 @@ pub struct TypeEnv {
     pub variable_reads: HashSet<(String, usize)>,
     /// Scope block resolutions: keyed by (span.start, span.end) of the Stmt::Scope node
     pub scope_resolutions: HashMap<(usize, usize), ScopeResolution>,
+    /// Stack of active scope binding names (for spawn-safety checks).
+    /// Each entry is the set of binding names introduced by one scope block.
+    pub scope_binding_names: Vec<HashSet<String>>,
+    /// Classes whose lifecycle was overridden by app-level directives
+    pub lifecycle_overridden: HashSet<String>,
 }
 
 impl Default for TypeEnv {
@@ -231,6 +236,8 @@ impl TypeEnv {
             variable_decls: HashMap::new(),
             variable_reads: HashSet::new(),
             scope_resolutions: HashMap::new(),
+            scope_binding_names: Vec::new(),
+            lifecycle_overridden: HashSet::new(),
         }
     }
 
