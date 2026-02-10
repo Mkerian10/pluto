@@ -199,7 +199,7 @@ fn resolve_stmt(stmt: &mut Stmt, index: &DeclIndex) {
 
 fn resolve_expr(expr: &mut Expr, index: &DeclIndex) {
     match expr {
-        Expr::Call { name, args, target_id } => {
+        Expr::Call { name, args, target_id, .. } => {
             *target_id = index.fn_index.get(&name.node).copied();
             for arg in args {
                 resolve_expr(&mut arg.node, index);
@@ -365,6 +365,7 @@ mod tests {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
                 name: sp("greet".to_string()),
                 args: vec![],
+                type_args: vec![],
                 target_id: None,
             })))],
         });
@@ -592,6 +593,7 @@ mod tests {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
                 name: sp("print".to_string()),
                 args: vec![],
+                type_args: vec![],
                 target_id: None,
             })))],
         });
@@ -650,6 +652,7 @@ mod tests {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
                 name: sp("math.add".to_string()),
                 args: vec![],
+                type_args: vec![],
                 target_id: None,
             })))],
         });
@@ -679,6 +682,7 @@ mod tests {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
                 name: sp("identity$$int".to_string()),
                 args: vec![],
+                type_args: vec![],
                 target_id: None,
             })))],
         });
@@ -729,6 +733,7 @@ mod tests {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
                 name: sp("Greeter$hello".to_string()),
                 args: vec![],
+                type_args: vec![],
                 target_id: None,
             })))],
         });

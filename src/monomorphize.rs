@@ -533,9 +533,12 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
             substitute_in_expr(&mut inner.node, bindings);
             substitute_in_type_expr(&mut target_type.node, bindings);
         }
-        Expr::Call { args, .. } => {
+        Expr::Call { args, type_args, .. } => {
             for arg in args.iter_mut() {
                 substitute_in_expr(&mut arg.node, bindings);
+            }
+            for ta in type_args.iter_mut() {
+                substitute_in_type_expr(&mut ta.node, bindings);
             }
         }
         Expr::FieldAccess { object, .. } => {
@@ -1150,10 +1153,11 @@ fn rewrite_stmt(stmt: &mut Stmt, rewrites: &HashMap<(usize, usize), String>) {
 
 fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(usize, usize), String>) {
     match expr {
-        Expr::Call { name, args, .. } => {
+        Expr::Call { name, args, type_args, .. } => {
             // Check if this call site should be rewritten
             if let Some(mangled) = rewrites.get(&(start, end)) {
                 name.node = mangled.clone();
+                type_args.clear();
             }
             for arg in args.iter_mut() {
                 rewrite_expr(&mut arg.node, arg.span.start, arg.span.end, rewrites);

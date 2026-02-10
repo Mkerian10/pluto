@@ -264,6 +264,7 @@ pub enum Expr {
     Call {
         name: Spanned<String>,
         args: Vec<Spanned<Expr>>,
+        type_args: Vec<Spanned<TypeExpr>>,
         target_id: Option<Uuid>,
     },
     FieldAccess {

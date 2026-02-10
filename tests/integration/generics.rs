@@ -530,3 +530,138 @@ fn main() {
         "does not satisfy bound",
     );
 }
+
+// ============================================================
+// Phase C: Explicit type args on function calls
+// ============================================================
+
+#[test]
+fn explicit_type_args_basic() {
+    let out = compile_and_run_stdout(r#"
+fn identity<T>(x: T) T {
+    return x
+}
+
+fn main() {
+    let val = identity<int>(42)
+    print(val)
+}
+"#);
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn explicit_type_args_multi() {
+    let out = compile_and_run_stdout(r#"
+class Pair<A, B> {
+    first: A
+    second: B
+}
+
+fn make_pair<A, B>(a: A, b: B) Pair<A, B> {
+    return Pair<A, B> { first: a, second: b }
+}
+
+fn main() {
+    let p = make_pair<int, string>(1, "hello")
+    print(p.first)
+    print(p.second)
+}
+"#);
+    assert_eq!(out.trim(), "1\nhello");
+}
+
+#[test]
+fn explicit_type_args_no_inference_needed() {
+    // Type args are explicit even though they could be inferred
+    let out = compile_and_run_stdout(r#"
+fn add<T>(x: T, y: T) T {
+    return x
+}
+
+fn main() {
+    let val = add<string>("hello", "world")
+    print(val)
+}
+"#);
+    assert_eq!(out.trim(), "hello");
+}
+
+#[test]
+fn explicit_type_args_wrong_count() {
+    compile_should_fail_with(r#"
+fn identity<T>(x: T) T {
+    return x
+}
+
+fn main() {
+    let val = identity<int, string>(42)
+}
+"#,
+        "expects 1 type arguments, got 2",
+    );
+}
+
+#[test]
+fn explicit_type_args_non_generic() {
+    compile_should_fail_with(r#"
+fn add(x: int, y: int) int {
+    return x + y
+}
+
+fn main() {
+    let val = add<int>(1, 2)
+}
+"#,
+        "is not generic and does not accept type arguments",
+    );
+}
+
+#[test]
+fn explicit_type_args_with_bounds() {
+    // Combines Phase B (bounds) with Phase C (explicit type args)
+    let out = compile_and_run_stdout(r#"
+trait Printable {
+    fn show(self) string
+}
+
+class Wrapper impl Printable {
+    label: string
+
+    fn show(self) string {
+        return self.label
+    }
+}
+
+fn display<T: Printable>(x: T) string {
+    return x.show()
+}
+
+fn main() {
+    let w = Wrapper { label: "test" }
+    let result = display<Wrapper>(w)
+    print(result)
+}
+"#);
+    assert_eq!(out.trim(), "test");
+}
+
+#[test]
+fn explicit_type_args_bounds_violation() {
+    // Explicit type args that violate bounds
+    compile_should_fail_with(r#"
+trait Printable {
+    fn show(self) string
+}
+
+fn display<T: Printable>(x: T) string {
+    return "nope"
+}
+
+fn main() {
+    let val = display<int>(42)
+}
+"#,
+        "does not satisfy bound",
+    );
+}

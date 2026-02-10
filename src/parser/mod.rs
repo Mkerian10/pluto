@@ -2328,7 +2328,7 @@ impl<'a> Parser<'a> {
                         let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
                         let close = self.expect(&Token::RParen)?;
                         let call_span = Span::new(first.span.start, close.span.end);
-                        let call = Expr::Call { name: first, args, target_id: None };
+                        let call = Expr::Call { name: first, args, type_args: vec![], target_id: None };
                         Ok(Spanned::new(
                             Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
                             Span::new(start, close.span.end),
@@ -2400,6 +2400,19 @@ impl<'a> Parser<'a> {
 
     /// Continue parsing an expression that started with an identifier (handles calls, struct literals, and plain ident).
     fn parse_expr_after_ident(&mut self, ident: Spanned<String>) -> Result<Spanned<Expr>, CompileError> {
+        // Check for explicit type args on function call: ident<type_args>(args)
+        if self.peek().is_some()
+            && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt)
+            && self.is_generic_call_ahead()
+        {
+            let type_args = self.parse_type_arg_list()?;
+            self.expect(&Token::LParen)?;
+            self.skip_newlines();
+            let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
+            let close = self.expect(&Token::RParen)?;
+            let span = Span::new(ident.span.start, close.span.end);
+            return Ok(Spanned::new(Expr::Call { name: ident, args, type_args, target_id: None }, span));
+        }
         // Check for function call
         if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LParen) {
             self.advance(); // consume '('
@@ -2407,7 +2420,7 @@ impl<'a> Parser<'a> {
             let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
             let close = self.expect(&Token::RParen)?;
             let span = Span::new(ident.span.start, close.span.end);
-            Ok(Spanned::new(Expr::Call { name: ident, args, target_id: None }, span))
+            Ok(Spanned::new(Expr::Call { name: ident, args, type_args: vec![], target_id: None }, span))
         } else if !self.restrict_struct_lit && self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace) {
             // Check if this looks like a struct literal: Ident { field: value, ... }
             // We need to distinguish from a block. A struct literal has `ident : expr` inside.
@@ -2714,6 +2727,36 @@ impl<'a> Parser<'a> {
     }
 
     /// Lookahead from current position (at `<`) to see if balanced `<...>` followed by `.`.
+    /// Lookahead to determine if `<` starts explicit type args for a function call: `ident<...>(`
+    fn is_generic_call_ahead(&self) -> bool {
+        let mut i = self.pos;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Lt) {
+            return false;
+        }
+        i += 1;
+        let mut depth = 1;
+        while i < self.tokens.len() && depth > 0 {
+            match &self.tokens[i].node {
+                Token::Lt => depth += 1,
+                Token::Gt => depth -= 1,
+                Token::GtEq => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        if depth != 0 {
+            return false;
+        }
+        // Must be followed by `(`
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        i < self.tokens.len() && matches!(self.tokens[i].node, Token::LParen)
+    }
+
     fn is_generic_enum_expr_ahead(&self) -> bool {
         let mut i = self.pos;
         while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
