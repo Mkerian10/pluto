@@ -738,6 +738,39 @@ impl PrettyPrinter {
                 }
                 self.write(")");
             }
+            Stmt::Select { arms, default } => {
+                self.write("select {");
+                self.newline();
+                self.indent();
+                for arm in arms {
+                    self.write_indent();
+                    match &arm.op {
+                        SelectOp::Recv { binding, channel } => {
+                            self.write(&binding.node);
+                            self.write(" = ");
+                            self.emit_expr(&channel.node, 25);
+                            self.write(".recv() ");
+                        }
+                        SelectOp::Send { channel, value } => {
+                            self.emit_expr(&channel.node, 25);
+                            self.write(".send(");
+                            self.emit_expr(&value.node, 0);
+                            self.write(") ");
+                        }
+                    }
+                    self.emit_block(&arm.body.node);
+                    self.newline();
+                }
+                if let Some(def) = default {
+                    self.write_indent();
+                    self.write("default ");
+                    self.emit_block(&def.node);
+                    self.newline();
+                }
+                self.dedent();
+                self.write_indent();
+                self.write("}");
+            }
             Stmt::Break => self.write("break"),
             Stmt::Continue => self.write("continue"),
             Stmt::Expr(e) => self.emit_expr(&e.node, 0),
