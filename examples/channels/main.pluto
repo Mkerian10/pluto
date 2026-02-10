@@ -12,7 +12,7 @@ fn main() {
     let (tx, rx) = chan<int>(5)
 
     // Spawn a producer that sends values 1..10
-    spawn producer(tx, 10)
+    spawn producer(tx, 10).detach()
 
     // Consume values using for-in on the receiver
     let sum = 0

@@ -281,6 +281,8 @@ fn collect_expr_effects(
                             direct_errors.insert("ChannelClosed".to_string());
                             direct_errors.insert("ChannelEmpty".to_string());
                         }
+                        Some(MethodResolution::TaskDetach) => {}
+                        Some(MethodResolution::TaskCancel) => {}
                         Some(MethodResolution::Builtin) => {}
                         None => {}
                     }

@@ -90,6 +90,10 @@ pub enum MethodResolution {
     ChannelTrySend,
     /// Channel try_recv — fallible (ChannelClosed + ChannelEmpty)
     ChannelTryRecv,
+    /// Task.detach() — infallible
+    TaskDetach,
+    /// Task.cancel() — infallible
+    TaskCancel,
 }
 
 /// How a field of a scoped class gets its value during a scope block.
@@ -329,6 +333,8 @@ impl TypeEnv {
             Some(MethodResolution::ChannelRecv) => Ok(true),
             Some(MethodResolution::ChannelTrySend) => Ok(true),
             Some(MethodResolution::ChannelTryRecv) => Ok(true),
+            Some(MethodResolution::TaskDetach) => Ok(false),
+            Some(MethodResolution::TaskCancel) => Ok(false),
             None => Err(format!(
                 "internal error: unresolved method resolution at span {} in fn '{}'",
                 span_start, current_fn

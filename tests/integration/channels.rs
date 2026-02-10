@@ -104,7 +104,7 @@ fn produce(tx: Sender<int>) {
 
 fn main() {
     let (tx, rx) = chan<int>()
-    spawn produce(tx)
+    spawn produce(tx).detach()
     let val = rx.recv()!
     print(val)
 }
@@ -123,7 +123,7 @@ fn produce(tx: Sender<int>) {
 
 fn main() {
     let (tx, rx) = chan<int>(3)
-    spawn produce(tx)
+    spawn produce(tx).detach()
     let a = rx.recv()!
     let b = rx.recv()!
     let c = rx.recv()!
@@ -144,7 +144,7 @@ fn produce(tx: Sender<int>) {
 
 fn main() {
     let (tx, rx) = chan<int>()
-    spawn produce(tx)
+    spawn produce(tx).detach()
     print(rx.recv()!)
     print(rx.recv()!)
     print(rx.recv()!)
@@ -164,7 +164,7 @@ fn produce(tx: Sender<int>) {
 
 fn main() {
     let (tx, rx) = chan<int>(5)
-    spawn produce(tx)
+    spawn produce(tx).detach()
     for i in 0..5 {
         print(rx.recv()!)
     }
@@ -209,7 +209,7 @@ fn closer(tx: Sender<int>) {
 
 fn main() {
     let (tx, rx) = chan<int>()
-    spawn closer(tx)
+    spawn closer(tx).detach()
     let val = rx.recv() catch -1
     print(val)
 }
@@ -324,7 +324,7 @@ fn produce(tx: Sender<int>) {
 
 fn main() {
     let (tx, rx) = chan<int>()
-    spawn produce(tx)
+    spawn produce(tx).detach()
     for val in rx {
         print(val)
     }
@@ -346,7 +346,7 @@ fn produce(tx: Sender<int>) {
 
 fn main() {
     let (tx, rx) = chan<int>()
-    spawn produce(tx)
+    spawn produce(tx).detach()
     for val in rx {
         if val == 2 {
             break
@@ -371,7 +371,7 @@ fn produce(tx: Sender<int>) {
 
 fn main() {
     let (tx, rx) = chan<int>()
-    spawn produce(tx)
+    spawn produce(tx).detach()
     for val in rx {
         if val == 2 {
             continue
@@ -508,9 +508,9 @@ fn send_val(tx: Sender<int>, v: int) {
 
 fn main() {
     let (tx, rx) = chan<int>(3)
-    spawn send_val(tx, 10)
-    spawn send_val(tx, 20)
-    spawn send_val(tx, 30)
+    spawn send_val(tx, 10).detach()
+    spawn send_val(tx, 20).detach()
+    spawn send_val(tx, 30).detach()
     let sum = 0
     for i in 0..3 {
         sum = sum + rx.recv()!
@@ -603,7 +603,7 @@ fn producer(tx: Sender<int>) {
 
 fn main() {
     let (tx, rx) = chan<int>(10)
-    spawn producer(tx)
+    spawn producer(tx).detach()
     tx.close()
     let sum = 0
     for val in rx {
@@ -625,8 +625,8 @@ fn worker(tx: Sender<int>, value: int) {
 
 fn main() {
     let (tx, rx) = chan<int>(10)
-    spawn worker(tx, 10)
-    spawn worker(tx, 20)
+    spawn worker(tx, 10).detach()
+    spawn worker(tx, 20).detach()
     tx.close()
     let sum = 0
     for val in rx {
@@ -804,7 +804,7 @@ fn producer(tx: Sender<int>) {
 
 fn main() {
     let (tx, rx) = chan<int>(1)
-    spawn producer(tx)
+    spawn producer(tx).detach()
     select {
         val = rx.recv() {
             print(val)
@@ -888,8 +888,8 @@ fn do_select(rx1: Receiver<int>, rx2: Receiver<int>) int {
 fn main() {
     let (tx1, rx1) = chan<int>(10)
     let (tx2, rx2) = chan<int>(10)
-    spawn producer(tx1, 10)
-    spawn producer(tx2, 20)
+    spawn producer(tx1, 10).detach()
+    spawn producer(tx2, 20).detach()
     tx1.close()
     tx2.close()
 

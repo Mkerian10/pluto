@@ -2445,6 +2445,14 @@ impl<'a> LowerContext<'a> {
                     let raw = self.call_runtime("__pluto_task_get", &[obj_ptr]);
                     return Ok(from_array_slot(raw, inner, &mut self.builder));
                 }
+                "detach" => {
+                    self.call_runtime_void("__pluto_task_detach", &[obj_ptr]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "cancel" => {
+                    self.call_runtime_void("__pluto_task_cancel", &[obj_ptr]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
                 _ => return Err(CompileError::codegen(format!("Task has no method '{}'", method.node)))
             }
         }

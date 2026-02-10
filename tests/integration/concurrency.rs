@@ -751,3 +751,201 @@ fn main() {
     // Even numbers fail and catch gives 0
     assert_eq!(out.trim(), "250");
 }
+
+// ── Must-use Task ────────────────────────────────────────────────────
+
+#[test]
+fn compile_fail_bare_spawn() {
+    compile_should_fail_with(r#"
+fn work() int {
+    return 42
+}
+
+fn main() {
+    spawn work()
+}
+"#, "Task handle must be used");
+}
+
+#[test]
+fn spawn_with_detach_compiles() {
+    let out = compile_and_run_stdout(r#"
+fn work() int {
+    return 42
+}
+
+fn main() {
+    spawn work().detach()
+    print("ok")
+}
+"#);
+    assert_eq!(out.trim(), "ok");
+}
+
+// ── Detach ───────────────────────────────────────────────────────────
+
+#[test]
+fn detach_basic() {
+    let out = compile_and_run_stdout_timeout(r#"
+fn work(x: int) int {
+    return x * 2
+}
+
+fn main() {
+    let t = spawn work(21)
+    t.detach()
+    print("detached")
+}
+"#, 5);
+    assert_eq!(out.trim(), "detached");
+}
+
+#[test]
+fn detach_with_error_does_not_crash() {
+    // A detached task that errors should print to stderr but not crash the process
+    let (stdout, stderr, code) = compile_and_run_output(r#"
+error WorkError {
+    message: string
+}
+
+fn failing_work() int {
+    raise WorkError { message: "oops" }
+    return 0
+}
+
+fn main() {
+    let t = spawn failing_work()
+    t.detach()
+    // Give the task time to run and fail
+    let i = 0
+    while i < 1000000 {
+        i = i + 1
+    }
+    print("done")
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(stdout.trim().contains("done"));
+    // Stderr should contain the error message from the detached task
+    assert!(stderr.contains("detached task"), "Expected detached task error in stderr, got: {}", stderr);
+}
+
+#[test]
+fn compile_fail_detach_with_args() {
+    compile_should_fail_with(r#"
+fn work() int {
+    return 42
+}
+
+fn main() {
+    let t = spawn work()
+    t.detach(1)
+}
+"#, "detach() expects 0 arguments");
+}
+
+// ── Cancel ───────────────────────────────────────────────────────────
+
+#[test]
+fn cancel_basic() {
+    // cancel() + get(): the spawned function must be fallible for catch to work
+    let out = compile_and_run_stdout_timeout(r#"
+error WorkError {
+    message: string
+}
+
+fn work() int {
+    // Make the function fallible so .get() allows catch
+    if false {
+        raise WorkError { message: "never" }
+    }
+    return 42
+}
+
+fn main() {
+    let t = spawn work()
+    t.cancel()
+    let result = t.get() catch -1
+    print(result)
+}
+"#, 5);
+    // Task may complete before cancel takes effect, so result is either 42 or -1
+    let val: i32 = out.trim().parse().unwrap();
+    assert!(val == 42 || val == -1, "Expected 42 or -1, got {}", val);
+}
+
+#[test]
+fn cancel_completed_task() {
+    let out = compile_and_run_stdout_timeout(r#"
+fn work() int {
+    return 99
+}
+
+fn main() {
+    let t = spawn work()
+    let result = t.get()
+    // Cancel after task is already done — get should still return result
+    t.cancel()
+    print(result)
+}
+"#, 5);
+    assert_eq!(out.trim(), "99");
+}
+
+#[test]
+fn compile_fail_cancel_with_args() {
+    compile_should_fail_with(r#"
+fn work() int {
+    return 42
+}
+
+fn main() {
+    let t = spawn work()
+    t.cancel(1)
+}
+"#, "cancel() expects 0 arguments");
+}
+
+#[test]
+fn cancel_channel_checkpoint() {
+    // A task blocked on channel recv should see cancellation when woken
+    let (stdout, _stderr, code) = compile_and_run_output(r#"
+fn worker(rx: Receiver<int>) int {
+    let val = rx.recv()!
+    return val
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let t = spawn worker(rx)
+    // Cancel the task while it's waiting on recv
+    t.cancel()
+    // Send something to unblock the condvar
+    tx.send(1) catch print("send failed")
+    let result = t.get() catch -1
+    print(result)
+}
+"#);
+    // Task should either get -1 (cancelled) or 1 (completed before cancel)
+    let val: i32 = stdout.trim().parse().unwrap_or(-99);
+    assert!(val == 1 || val == -1, "Expected 1 or -1, got {}", val);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn detach_then_cancel() {
+    // Both methods should work on the same handle
+    let out = compile_and_run_stdout(r#"
+fn work() int {
+    return 42
+}
+
+fn main() {
+    let t = spawn work()
+    t.cancel()
+    t.detach()
+    print("ok")
+}
+"#);
+    assert_eq!(out.trim(), "ok");
+}

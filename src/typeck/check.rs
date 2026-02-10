@@ -275,11 +275,18 @@ fn check_stmt(
             }
         }
         Stmt::Expr(expr) => {
-            infer_expr(&expr.node, expr.span, env)?;
+            let expr_type = infer_expr(&expr.node, expr.span, env)?;
             // Bare expect() as statement is likely a bug (forgot .to_equal() etc.)
             if let Expr::Call { name, .. } = &expr.node && name.node == "expect" {
                 return Err(CompileError::type_err(
                     "expect() must be followed by an assertion method like .to_equal(), .to_be_true(), or .to_be_false()",
+                    expr.span,
+                ));
+            }
+            // Must-use: bare spawn as statement is a compile error
+            if matches!(&expr_type, PlutoType::Task(_)) {
+                return Err(CompileError::type_err(
+                    "Task handle must be used -- call .get(), .detach(), or assign to a variable",
                     expr.span,
                 ));
             }

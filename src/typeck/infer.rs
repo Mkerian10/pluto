@@ -1416,7 +1416,7 @@ fn infer_method_call(
         }
     }
     // Task methods
-    if let PlutoType::Task(inner) = &obj_type {
+    if let PlutoType::Task(_inner) = &obj_type {
         match method.node.as_str() {
             "get" => {
                 if !args.is_empty() {
@@ -1437,7 +1437,37 @@ fn infer_method_call(
                         super::env::MethodResolution::TaskGet { spawned_fn },
                     );
                 }
-                return Ok(*inner.clone());
+                return Ok(*_inner.clone());
+            }
+            "detach" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("detach() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::TaskDetach,
+                    );
+                }
+                return Ok(PlutoType::Void);
+            }
+            "cancel" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("cancel() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::TaskCancel,
+                    );
+                }
+                return Ok(PlutoType::Void);
             }
             _ => {
                 return Err(CompileError::type_err(

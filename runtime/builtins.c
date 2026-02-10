@@ -32,7 +32,7 @@ void __pluto_raise_error(void *error_obj);
 #define GC_TAG_MAP   4   // [count][cap][keys_ptr][vals_ptr][meta_ptr]
 #define GC_TAG_SET   5   // [count][cap][keys_ptr][meta_ptr]
 #define GC_TAG_JSON  6   // (reserved, formerly JsonNode)
-#define GC_TAG_TASK    7   // [closure][result][error][done][sync_ptr]
+#define GC_TAG_TASK    7   // [closure][result][error][done][sync_ptr][detached][cancelled]
 #define GC_TAG_BYTES   8   // [len][cap][data_ptr]; 1 byte per element
 #define GC_TAG_CHANNEL 9   // [sync_ptr][buf_ptr][capacity][count][head][tail][closed]
 
@@ -80,6 +80,9 @@ void __pluto_array_push(void *handle, long value);
 
 // Error handling — thread-local so each thread has its own error state
 __thread void *__pluto_current_error = NULL;
+
+// Task handle — thread-local pointer to current task (NULL on main thread)
+__thread long *__pluto_current_task = NULL;
 
 // GC thread safety
 static pthread_mutex_t gc_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -479,7 +482,7 @@ void __pluto_gc_collect(void) {
                 if ((void *)sh[3]) free((void *)sh[3]);  // meta
             }
             // Free task sync resources
-            if (h->type_tag == GC_TAG_TASK && h->size >= 40) {
+            if (h->type_tag == GC_TAG_TASK && h->size >= 56) {
                 long *slots = (long *)((char *)h + sizeof(GCHeader));
                 void *sync = (void *)slots[4];
                 if (sync) {
@@ -2205,17 +2208,28 @@ typedef struct {
     pthread_cond_t cond;
 } TaskSync;
 
-// Task handle layout (40 bytes, 5 slots):
-//   [0] closure  (i64, GC pointer)
-//   [1] result   (i64)
-//   [2] error    (i64, GC pointer)
-//   [3] done     (i64)
-//   [4] sync_ptr (i64, raw malloc)
+// Task handle layout (56 bytes, 7 slots):
+//   [0] closure   (i64, GC pointer)
+//   [1] result    (i64)
+//   [2] error     (i64, GC pointer)
+//   [3] done      (i64)
+//   [4] sync_ptr  (i64, raw malloc)
+//   [5] detached  (i64, 0 or 1)
+//   [6] cancelled (i64, 0 or 1)
+
+static void task_raise_cancelled(void) {
+    const char *msg = "task cancelled";
+    void *msg_str = __pluto_string_new((char *)msg, (long)strlen(msg));
+    void *err_obj = __pluto_alloc(8);  // 1 field: message
+    *(long *)err_obj = (long)msg_str;
+    __pluto_raise_error(err_obj);
+}
 
 static void *__pluto_spawn_trampoline(void *arg) {
     long *task = (long *)arg;
     long closure_ptr = task[0];
     __pluto_current_error = NULL;  // clean TLS for new thread
+    __pluto_current_task = task;   // set TLS for cancellation checks
 
     long fn_ptr = *(long *)closure_ptr;
     long result = ((long(*)(long))fn_ptr)(closure_ptr);
@@ -2229,17 +2243,30 @@ static void *__pluto_spawn_trampoline(void *arg) {
         task[1] = result;
     }
     task[3] = 1;  // done
+    // If detached and errored, print to stderr
+    if (task[5] && task[2]) {
+        // Extract error message: error object has message field at slot 0
+        long *err_obj = (long *)task[2];
+        char *msg_ptr = (char *)err_obj[0];
+        if (msg_ptr) {
+            long len = *(long *)msg_ptr;
+            char *data = msg_ptr + 8;
+            fprintf(stderr, "pluto: error in detached task: %.*s\n", (int)len, data);
+        }
+    }
     pthread_cond_signal(&sync->cond);
     pthread_mutex_unlock(&sync->mutex);
 
+    __pluto_current_task = NULL;
     atomic_fetch_sub(&__pluto_active_tasks, 1);
     return NULL;
 }
 
 long __pluto_task_spawn(long closure_ptr) {
-    long *task = (long *)gc_alloc(40, GC_TAG_TASK, 3);
+    long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
     task[0] = closure_ptr;
     task[1] = 0;  task[2] = 0;  task[3] = 0;
+    task[5] = 0;  task[6] = 0;  // detached, cancelled
 
     TaskSync *sync = (TaskSync *)calloc(1, sizeof(TaskSync));
     pthread_mutex_init(&sync->mutex, NULL);
@@ -2271,11 +2298,46 @@ long __pluto_task_get(long task_ptr) {
     }
     pthread_mutex_unlock(&sync->mutex);
 
+    // If cancelled and no result, raise TaskCancelled
+    if (task[6] && !task[1] && !task[2]) {
+        task_raise_cancelled();
+        return 0;
+    }
+
     if (task[2]) {
         __pluto_current_error = (void *)task[2];
         return 0;
     }
     return task[1];
+}
+
+void __pluto_task_detach(long task_ptr) {
+    long *task = (long *)task_ptr;
+    TaskSync *sync = (TaskSync *)task[4];
+
+    pthread_mutex_lock(&sync->mutex);
+    task[5] = 1;  // mark as detached
+    // If already done + errored, print to stderr now
+    if (task[3] && task[2]) {
+        long *err_obj = (long *)task[2];
+        char *msg_ptr = (char *)err_obj[0];
+        if (msg_ptr) {
+            long len = *(long *)msg_ptr;
+            char *data = msg_ptr + 8;
+            fprintf(stderr, "pluto: error in detached task: %.*s\n", (int)len, data);
+        }
+    }
+    pthread_mutex_unlock(&sync->mutex);
+}
+
+void __pluto_task_cancel(long task_ptr) {
+    long *task = (long *)task_ptr;
+    task[6] = 1;  // set cancelled flag
+    // Wake the task thread if it's blocked on its own sync (for .get() waiters)
+    TaskSync *sync = (TaskSync *)task[4];
+    pthread_mutex_lock(&sync->mutex);
+    pthread_cond_broadcast(&sync->cond);
+    pthread_mutex_unlock(&sync->mutex);
 }
 
 // ── Deep Copy (for spawn isolation) ──────────────────────────────────────────
@@ -2545,6 +2607,12 @@ long __pluto_chan_send(long handle, long value) {
     pthread_mutex_lock(&sync->mutex);
     while (ch[3] == ch[2] && !ch[6]) {
         pthread_cond_wait(&sync->not_full, &sync->mutex);
+        // Check for task cancellation after waking from condvar
+        if (__pluto_current_task && __pluto_current_task[6]) {
+            pthread_mutex_unlock(&sync->mutex);
+            task_raise_cancelled();
+            return 0;
+        }
     }
     if (ch[6]) {
         pthread_mutex_unlock(&sync->mutex);
@@ -2567,6 +2635,12 @@ long __pluto_chan_recv(long handle) {
     pthread_mutex_lock(&sync->mutex);
     while (ch[3] == 0 && !ch[6]) {
         pthread_cond_wait(&sync->not_empty, &sync->mutex);
+        // Check for task cancellation after waking from condvar
+        if (__pluto_current_task && __pluto_current_task[6]) {
+            pthread_mutex_unlock(&sync->mutex);
+            task_raise_cancelled();
+            return 0;
+        }
     }
     if (ch[3] == 0 && ch[6]) {
         pthread_mutex_unlock(&sync->mutex);
