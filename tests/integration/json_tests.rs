@@ -295,7 +295,7 @@ fn json_parse_error() {
         r#"import std.json
 
 fn main() {
-    let j = json.parse("{{invalid}}") catch json.Json { handle: 0 }
+    let j = json.parse("{{invalid}}") catch json.null()
     print("caught")
 }
 "#,
@@ -556,7 +556,7 @@ fn json_parse_trailing_content() {
         r#"import std.json
 
 fn main() {
-    let j = json.parse("42 extra") catch json.Json { handle: 0 }
+    let j = json.parse("42 extra") catch json.null()
     print("caught")
 }
 "#,

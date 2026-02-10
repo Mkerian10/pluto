@@ -28,7 +28,7 @@
 #define GC_TAG_TRAIT  3   // [data_ptr][vtable_ptr]; trace data_ptr only
 #define GC_TAG_MAP   4   // [count][cap][keys_ptr][vals_ptr][meta_ptr]
 #define GC_TAG_SET   5   // [count][cap][keys_ptr][meta_ptr]
-#define GC_TAG_JSON  6   // JsonNode — recursive tree structure
+#define GC_TAG_JSON  6   // (reserved, formerly JsonNode)
 #define GC_TAG_TASK    7   // [closure][result][error][done][sync_ptr]
 #define GC_TAG_BYTES   8   // [len][cap][data_ptr]; 1 byte per element
 #define GC_TAG_CHANNEL 9   // [sync_ptr][buf_ptr][capacity][count][head][tail][closed]
@@ -70,32 +70,10 @@ static size_t gc_interval_count = 0;
 static GCDataInterval *gc_data_intervals = NULL;
 static size_t gc_data_interval_count = 0;
 
-// JSON node types
-#define JSON_NULL    0
-#define JSON_BOOL    1
-#define JSON_INT     2
-#define JSON_FLOAT   3
-#define JSON_STRING  4
-#define JSON_ARRAY   5
-#define JSON_OBJECT  6
-
-typedef struct JsonNode {
-    int type;
-    union {
-        int bool_val;
-        int64_t int_val;
-        double float_val;
-        char *string_val;
-        struct { struct JsonNode **items; int len; int cap; } array;
-        struct { char **keys; struct JsonNode **vals; int len; int cap; } object;
-    };
-} JsonNode;
-
 // Forward declarations
 void __pluto_gc_collect(void);
 void *__pluto_array_new(long cap);
 void __pluto_array_push(void *handle, long value);
-static void json_free_tree(JsonNode *node);
 
 // Error handling — thread-local so each thread has its own error state
 __thread void *__pluto_current_error = NULL;
@@ -496,12 +474,6 @@ void __pluto_gc_collect(void) {
                 long *sh = (long *)((char *)h + sizeof(GCHeader));
                 if ((void *)sh[2]) free((void *)sh[2]);  // keys
                 if ((void *)sh[3]) free((void *)sh[3]);  // meta
-            }
-            // Free JSON tree
-            if (h->type_tag == GC_TAG_JSON) {
-                long *slots = (long *)((char *)h + sizeof(GCHeader));
-                JsonNode *root = (JsonNode *)slots[0];
-                if (root) json_free_tree(root);
             }
             // Free task sync resources
             if (h->type_tag == GC_TAG_TASK && h->size >= 40) {
@@ -1021,6 +993,51 @@ void *__pluto_string_format_float(double value) {
     void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
     *(long *)header = len;
     snprintf((char *)header + 8, len + 1, "%g", value);
+    return header;
+}
+
+long __pluto_json_parse_int(void *s) {
+    long slen = *(long *)s;
+    const char *data = (const char *)s + 8;
+    char *tmp = (char *)malloc(slen + 1);
+    memcpy(tmp, data, slen);
+    tmp[slen] = '\0';
+    long result = strtol(tmp, NULL, 10);
+    free(tmp);
+    return result;
+}
+
+double __pluto_json_parse_float(void *s) {
+    long slen = *(long *)s;
+    const char *data = (const char *)s + 8;
+    char *tmp = (char *)malloc(slen + 1);
+    memcpy(tmp, data, slen);
+    tmp[slen] = '\0';
+    double result = strtod(tmp, NULL);
+    free(tmp);
+    return result;
+}
+
+void *__pluto_codepoint_to_string(long cp) {
+    char buf[4];
+    int len = 0;
+    if (cp < 0x80) {
+        buf[0] = (char)cp;
+        len = 1;
+    } else if (cp < 0x800) {
+        buf[0] = (char)(0xC0 | (cp >> 6));
+        buf[1] = (char)(0x80 | (cp & 0x3F));
+        len = 2;
+    } else {
+        buf[0] = (char)(0xE0 | (cp >> 12));
+        buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[2] = (char)(0x80 | (cp & 0x3F));
+        len = 3;
+    }
+    void *header = gc_alloc(8 + len + 1, GC_TAG_STRING, 0);
+    *(long *)header = len;
+    memcpy((char *)header + 8, buf, len);
+    ((char *)header + 8)[len] = '\0';
     return header;
 }
 
@@ -1839,590 +1856,6 @@ void __pluto_test_summary(long count) {
     printf("\n%ld tests passed\n", count);
 }
 
-// ── JSON runtime ──────────────────────────────────────────────────────────────
-// JsonNode is a malloc'd tree. The GC holds a handle [node_ptr] with GC_TAG_JSON.
-// When the GC handle is swept, json_free_tree recursively frees the tree.
-
-static JsonNode *json_new_node(int type) {
-    JsonNode *n = (JsonNode *)calloc(1, sizeof(JsonNode));
-    if (!n) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
-    n->type = type;
-    return n;
-}
-
-static void json_free_tree(JsonNode *node) {
-    if (!node) return;
-    switch (node->type) {
-    case JSON_STRING:
-        free(node->string_val);
-        break;
-    case JSON_ARRAY:
-        for (int i = 0; i < node->array.len; i++)
-            json_free_tree(node->array.items[i]);
-        free(node->array.items);
-        break;
-    case JSON_OBJECT:
-        for (int i = 0; i < node->object.len; i++) {
-            free(node->object.keys[i]);
-            json_free_tree(node->object.vals[i]);
-        }
-        free(node->object.keys);
-        free(node->object.vals);
-        break;
-    }
-    free(node);
-}
-
-// Wrap a JsonNode* in a GC handle (1 field = 8 bytes)
-static void *json_wrap(JsonNode *node) {
-    long *handle = (long *)gc_alloc(8, GC_TAG_JSON, 1);
-    handle[0] = (long)node;
-    return handle;
-}
-
-static JsonNode *json_unwrap(void *handle) {
-    return (JsonNode *)(((long *)handle)[0]);
-}
-
-// ── JSON constructors ─────────────────────────────────────────────────────────
-
-void *__pluto_json_new_null(void) {
-    return json_wrap(json_new_node(JSON_NULL));
-}
-
-void *__pluto_json_new_bool(long v) {
-    JsonNode *n = json_new_node(JSON_BOOL);
-    n->bool_val = v ? 1 : 0;
-    return json_wrap(n);
-}
-
-void *__pluto_json_new_int(long v) {
-    JsonNode *n = json_new_node(JSON_INT);
-    n->int_val = v;
-    return json_wrap(n);
-}
-
-void *__pluto_json_new_float(double v) {
-    JsonNode *n = json_new_node(JSON_FLOAT);
-    n->float_val = v;
-    return json_wrap(n);
-}
-
-void *__pluto_json_new_string(void *pluto_str) {
-    long slen = *(long *)pluto_str;
-    const char *data = (const char *)pluto_str + 8;
-    JsonNode *n = json_new_node(JSON_STRING);
-    n->string_val = (char *)malloc(slen + 1);
-    memcpy(n->string_val, data, slen);
-    n->string_val[slen] = '\0';
-    return json_wrap(n);
-}
-
-void *__pluto_json_new_array(void) {
-    JsonNode *n = json_new_node(JSON_ARRAY);
-    n->array.cap = 4;
-    n->array.len = 0;
-    n->array.items = (JsonNode **)calloc(4, sizeof(JsonNode *));
-    return json_wrap(n);
-}
-
-void *__pluto_json_new_object(void) {
-    JsonNode *n = json_new_node(JSON_OBJECT);
-    n->object.cap = 4;
-    n->object.len = 0;
-    n->object.keys = (char **)calloc(4, sizeof(char *));
-    n->object.vals = (JsonNode **)calloc(4, sizeof(JsonNode *));
-    return json_wrap(n);
-}
-
-// ── JSON type queries ─────────────────────────────────────────────────────────
-
-long __pluto_json_is_null(void *handle)   { return json_unwrap(handle)->type == JSON_NULL   ? 1 : 0; }
-long __pluto_json_is_bool(void *handle)   { return json_unwrap(handle)->type == JSON_BOOL   ? 1 : 0; }
-long __pluto_json_is_int(void *handle)    { return json_unwrap(handle)->type == JSON_INT    ? 1 : 0; }
-long __pluto_json_is_float(void *handle)  { return json_unwrap(handle)->type == JSON_FLOAT  ? 1 : 0; }
-long __pluto_json_is_string(void *handle) { return json_unwrap(handle)->type == JSON_STRING ? 1 : 0; }
-long __pluto_json_is_array(void *handle)  { return json_unwrap(handle)->type == JSON_ARRAY  ? 1 : 0; }
-long __pluto_json_is_object(void *handle) { return json_unwrap(handle)->type == JSON_OBJECT ? 1 : 0; }
-
-// ── JSON accessors ────────────────────────────────────────────────────────────
-
-long __pluto_json_get_bool(void *handle) {
-    JsonNode *n = json_unwrap(handle);
-    if (n->type != JSON_BOOL) { fprintf(stderr, "pluto: json: not a bool\n"); exit(1); }
-    return n->bool_val ? 1 : 0;
-}
-
-long __pluto_json_get_int(void *handle) {
-    JsonNode *n = json_unwrap(handle);
-    if (n->type == JSON_INT) return n->int_val;
-    if (n->type == JSON_FLOAT) return (long)n->float_val;
-    fprintf(stderr, "pluto: json: not a number\n"); exit(1);
-}
-
-double __pluto_json_get_float(void *handle) {
-    JsonNode *n = json_unwrap(handle);
-    if (n->type == JSON_FLOAT) return n->float_val;
-    if (n->type == JSON_INT) return (double)n->int_val;
-    fprintf(stderr, "pluto: json: not a number\n"); exit(1);
-}
-
-void *__pluto_json_get_string(void *handle) {
-    JsonNode *n = json_unwrap(handle);
-    if (n->type != JSON_STRING) { fprintf(stderr, "pluto: json: not a string\n"); exit(1); }
-    return __pluto_string_new(n->string_val, (long)strlen(n->string_val));
-}
-
-void *__pluto_json_get_field(void *handle, void *key_str) {
-    JsonNode *n = json_unwrap(handle);
-    if (n->type != JSON_OBJECT) { fprintf(stderr, "pluto: json: not an object\n"); exit(1); }
-    long klen = *(long *)key_str;
-    const char *kdata = (const char *)key_str + 8;
-    for (int i = 0; i < n->object.len; i++) {
-        if ((long)strlen(n->object.keys[i]) == klen && memcmp(n->object.keys[i], kdata, klen) == 0) {
-            return json_wrap(n->object.vals[i]);
-        }
-    }
-    // Return null json if key not found
-    return json_wrap(json_new_node(JSON_NULL));
-}
-
-void *__pluto_json_get_index(void *handle, long index) {
-    JsonNode *n = json_unwrap(handle);
-    if (n->type != JSON_ARRAY) { fprintf(stderr, "pluto: json: not an array\n"); exit(1); }
-    if (index < 0 || index >= n->array.len) {
-        fprintf(stderr, "pluto: json: array index %ld out of bounds (len %d)\n", index, n->array.len);
-        exit(1);
-    }
-    return json_wrap(n->array.items[index]);
-}
-
-long __pluto_json_len(void *handle) {
-    JsonNode *n = json_unwrap(handle);
-    if (n->type == JSON_ARRAY) return n->array.len;
-    if (n->type == JSON_OBJECT) return n->object.len;
-    return 0;
-}
-
-// ── JSON mutators ─────────────────────────────────────────────────────────────
-
-void __pluto_json_array_push(void *handle, void *item_handle) {
-    JsonNode *arr = json_unwrap(handle);
-    JsonNode *item = json_unwrap(item_handle);
-    if (arr->type != JSON_ARRAY) { fprintf(stderr, "pluto: json: not an array\n"); exit(1); }
-    if (arr->array.len >= arr->array.cap) {
-        if (arr->array.cap > INT_MAX / 2) {
-            fprintf(stderr, "pluto: json array capacity overflow\n");
-            exit(1);
-        }
-        arr->array.cap *= 2;
-        arr->array.items = (JsonNode **)realloc(arr->array.items, arr->array.cap * sizeof(JsonNode *));
-    }
-    arr->array.items[arr->array.len++] = item;
-}
-
-void __pluto_json_object_set(void *handle, void *key_str, void *val_handle) {
-    JsonNode *obj = json_unwrap(handle);
-    JsonNode *val = json_unwrap(val_handle);
-    if (obj->type != JSON_OBJECT) { fprintf(stderr, "pluto: json: not an object\n"); exit(1); }
-    long klen = *(long *)key_str;
-    const char *kdata = (const char *)key_str + 8;
-    // Check if key already exists
-    for (int i = 0; i < obj->object.len; i++) {
-        if ((long)strlen(obj->object.keys[i]) == klen && memcmp(obj->object.keys[i], kdata, klen) == 0) {
-            json_free_tree(obj->object.vals[i]);
-            obj->object.vals[i] = val;
-            return;
-        }
-    }
-    // Add new key
-    if (obj->object.len >= obj->object.cap) {
-        if (obj->object.cap > INT_MAX / 2) {
-            fprintf(stderr, "pluto: json object capacity overflow\n");
-            exit(1);
-        }
-        obj->object.cap *= 2;
-        obj->object.keys = (char **)realloc(obj->object.keys, obj->object.cap * sizeof(char *));
-        obj->object.vals = (JsonNode **)realloc(obj->object.vals, obj->object.cap * sizeof(JsonNode *));
-    }
-    char *key_copy = (char *)malloc(klen + 1);
-    memcpy(key_copy, kdata, klen);
-    key_copy[klen] = '\0';
-    obj->object.keys[obj->object.len] = key_copy;
-    obj->object.vals[obj->object.len] = val;
-    obj->object.len++;
-}
-
-// ── JSON parser ───────────────────────────────────────────────────────────────
-
-typedef struct {
-    const char *src;
-    int pos;
-    int len;
-} JsonParser;
-
-static void jp_skip_ws(JsonParser *p) {
-    while (p->pos < p->len) {
-        char c = p->src[p->pos];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') p->pos++;
-        else break;
-    }
-}
-
-static char jp_peek(JsonParser *p) {
-    jp_skip_ws(p);
-    if (p->pos >= p->len) return '\0';
-    return p->src[p->pos];
-}
-
-static char jp_next(JsonParser *p) {
-    jp_skip_ws(p);
-    if (p->pos >= p->len) return '\0';
-    return p->src[p->pos++];
-}
-
-static int jp_match(JsonParser *p, const char *word) {
-    int wlen = (int)strlen(word);
-    if (p->pos + wlen > p->len) return 0;
-    if (memcmp(p->src + p->pos, word, wlen) != 0) return 0;
-    p->pos += wlen;
-    return 1;
-}
-
-static JsonNode *jp_parse_value(JsonParser *p);
-
-static JsonNode *jp_parse_string_node(JsonParser *p) {
-    if (p->src[p->pos] != '"') return NULL;
-    p->pos++; // skip opening "
-    int start = p->pos;
-    // Estimate: string with escapes
-    int cap = 64;
-    char *buf = (char *)malloc(cap);
-    int blen = 0;
-    while (p->pos < p->len && p->src[p->pos] != '"') {
-        char c = p->src[p->pos];
-        if (c == '\\') {
-            p->pos++;
-            if (p->pos >= p->len) { free(buf); return NULL; }
-            char esc = p->src[p->pos];
-            switch (esc) {
-            case '"': c = '"'; break;
-            case '\\': c = '\\'; break;
-            case '/': c = '/'; break;
-            case 'b': c = '\b'; break;
-            case 'f': c = '\f'; break;
-            case 'n': c = '\n'; break;
-            case 'r': c = '\r'; break;
-            case 't': c = '\t'; break;
-            case 'u': {
-                // Parse 4 hex digits, emit UTF-8 (BMP only for simplicity)
-                if (p->pos + 4 >= p->len) { free(buf); return NULL; }
-                unsigned int cp = 0;
-                for (int i = 0; i < 4; i++) {
-                    p->pos++;
-                    char h = p->src[p->pos];
-                    cp <<= 4;
-                    if (h >= '0' && h <= '9') cp |= h - '0';
-                    else if (h >= 'a' && h <= 'f') cp |= 10 + h - 'a';
-                    else if (h >= 'A' && h <= 'F') cp |= 10 + h - 'A';
-                    else { free(buf); return NULL; }
-                }
-                // UTF-8 encode
-                if (blen + 4 >= cap) { cap *= 2; buf = (char *)realloc(buf, cap); }
-                if (cp < 0x80) {
-                    buf[blen++] = (char)cp;
-                } else if (cp < 0x800) {
-                    buf[blen++] = (char)(0xC0 | (cp >> 6));
-                    buf[blen++] = (char)(0x80 | (cp & 0x3F));
-                } else {
-                    buf[blen++] = (char)(0xE0 | (cp >> 12));
-                    buf[blen++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-                    buf[blen++] = (char)(0x80 | (cp & 0x3F));
-                }
-                p->pos++;
-                continue;
-            }
-            default: c = esc; break;
-            }
-        }
-        if (blen + 1 >= cap) { cap *= 2; buf = (char *)realloc(buf, cap); }
-        buf[blen++] = c;
-        p->pos++;
-    }
-    if (p->pos >= p->len) { free(buf); return NULL; } // unterminated string
-    p->pos++; // skip closing "
-    buf[blen] = '\0';
-    JsonNode *n = json_new_node(JSON_STRING);
-    n->string_val = (char *)realloc(buf, blen + 1);
-    (void)start;
-    return n;
-}
-
-static JsonNode *jp_parse_number(JsonParser *p) {
-    int start = p->pos;
-    int is_float = 0;
-    if (p->src[p->pos] == '-') p->pos++;
-    while (p->pos < p->len && p->src[p->pos] >= '0' && p->src[p->pos] <= '9') p->pos++;
-    if (p->pos < p->len && p->src[p->pos] == '.') {
-        is_float = 1;
-        p->pos++;
-        while (p->pos < p->len && p->src[p->pos] >= '0' && p->src[p->pos] <= '9') p->pos++;
-    }
-    if (p->pos < p->len && (p->src[p->pos] == 'e' || p->src[p->pos] == 'E')) {
-        is_float = 1;
-        p->pos++;
-        if (p->pos < p->len && (p->src[p->pos] == '+' || p->src[p->pos] == '-')) p->pos++;
-        while (p->pos < p->len && p->src[p->pos] >= '0' && p->src[p->pos] <= '9') p->pos++;
-    }
-    int numlen = p->pos - start;
-    char *tmp = (char *)malloc(numlen + 1);
-    memcpy(tmp, p->src + start, numlen);
-    tmp[numlen] = '\0';
-    JsonNode *n;
-    if (is_float) {
-        n = json_new_node(JSON_FLOAT);
-        n->float_val = strtod(tmp, NULL);
-    } else {
-        long v = strtol(tmp, NULL, 10);
-        n = json_new_node(JSON_INT);
-        n->int_val = v;
-    }
-    free(tmp);
-    return n;
-}
-
-static JsonNode *jp_parse_array(JsonParser *p) {
-    p->pos++; // skip [
-    JsonNode *n = json_new_node(JSON_ARRAY);
-    n->array.cap = 4;
-    n->array.items = (JsonNode **)calloc(4, sizeof(JsonNode *));
-    jp_skip_ws(p);
-    if (p->pos < p->len && p->src[p->pos] == ']') {
-        p->pos++;
-        return n;
-    }
-    while (1) {
-        JsonNode *item = jp_parse_value(p);
-        if (!item) { json_free_tree(n); return NULL; }
-        if (n->array.len >= n->array.cap) {
-            n->array.cap *= 2;
-            n->array.items = (JsonNode **)realloc(n->array.items, n->array.cap * sizeof(JsonNode *));
-        }
-        n->array.items[n->array.len++] = item;
-        jp_skip_ws(p);
-        if (p->pos < p->len && p->src[p->pos] == ',') { p->pos++; continue; }
-        if (p->pos < p->len && p->src[p->pos] == ']') { p->pos++; return n; }
-        json_free_tree(n);
-        return NULL;
-    }
-}
-
-static JsonNode *jp_parse_object(JsonParser *p) {
-    p->pos++; // skip {
-    JsonNode *n = json_new_node(JSON_OBJECT);
-    n->object.cap = 4;
-    n->object.keys = (char **)calloc(4, sizeof(char *));
-    n->object.vals = (JsonNode **)calloc(4, sizeof(JsonNode *));
-    jp_skip_ws(p);
-    if (p->pos < p->len && p->src[p->pos] == '}') {
-        p->pos++;
-        return n;
-    }
-    while (1) {
-        jp_skip_ws(p);
-        JsonNode *key_node = jp_parse_string_node(p);
-        if (!key_node) { json_free_tree(n); return NULL; }
-        jp_skip_ws(p);
-        if (p->pos >= p->len || p->src[p->pos] != ':') { json_free_tree(key_node); json_free_tree(n); return NULL; }
-        p->pos++; // skip :
-        JsonNode *val = jp_parse_value(p);
-        if (!val) { json_free_tree(key_node); json_free_tree(n); return NULL; }
-        if (n->object.len >= n->object.cap) {
-            n->object.cap *= 2;
-            n->object.keys = (char **)realloc(n->object.keys, n->object.cap * sizeof(char *));
-            n->object.vals = (JsonNode **)realloc(n->object.vals, n->object.cap * sizeof(JsonNode *));
-        }
-        n->object.keys[n->object.len] = key_node->string_val;
-        key_node->string_val = NULL; // transfer ownership
-        n->object.vals[n->object.len] = val;
-        n->object.len++;
-        free(key_node); // free node shell only (string_val transferred)
-        jp_skip_ws(p);
-        if (p->pos < p->len && p->src[p->pos] == ',') { p->pos++; continue; }
-        if (p->pos < p->len && p->src[p->pos] == '}') { p->pos++; return n; }
-        json_free_tree(n);
-        return NULL;
-    }
-}
-
-static JsonNode *jp_parse_value(JsonParser *p) {
-    jp_skip_ws(p);
-    if (p->pos >= p->len) return NULL;
-    char c = p->src[p->pos];
-    if (c == '"') return jp_parse_string_node(p);
-    if (c == '{') return jp_parse_object(p);
-    if (c == '[') return jp_parse_array(p);
-    if (c == 't') {
-        if (jp_match(p, "true")) { JsonNode *n = json_new_node(JSON_BOOL); n->bool_val = 1; return n; }
-        return NULL;
-    }
-    if (c == 'f') {
-        if (jp_match(p, "false")) { JsonNode *n = json_new_node(JSON_BOOL); n->bool_val = 0; return n; }
-        return NULL;
-    }
-    if (c == 'n') {
-        if (jp_match(p, "null")) return json_new_node(JSON_NULL);
-        return NULL;
-    }
-    if (c == '-' || (c >= '0' && c <= '9')) return jp_parse_number(p);
-    return NULL;
-}
-
-// Public parse: returns GC handle or sets error
-void *__pluto_json_parse(void *pluto_str) {
-    long slen = *(long *)pluto_str;
-    const char *data = (const char *)pluto_str + 8;
-    JsonParser parser = { data, 0, (int)slen };
-    JsonNode *root = jp_parse_value(&parser);
-    if (!root) {
-        const char *msg = "invalid JSON";
-        void *msg_str = __pluto_string_new(msg, (long)strlen(msg));
-        void *err_obj = __pluto_alloc(8);
-        *(long *)err_obj = (long)msg_str;
-        __pluto_raise_error(err_obj);
-        return json_wrap(json_new_node(JSON_NULL));
-    }
-    // Check for trailing non-whitespace
-    jp_skip_ws(&parser);
-    if (parser.pos < parser.len) {
-        json_free_tree(root);
-        const char *msg = "unexpected trailing content";
-        void *msg_str = __pluto_string_new(msg, (long)strlen(msg));
-        void *err_obj = __pluto_alloc(8);
-        *(long *)err_obj = (long)msg_str;
-        __pluto_raise_error(err_obj);
-        return json_wrap(json_new_node(JSON_NULL));
-    }
-    return json_wrap(root);
-}
-
-// ── JSON stringify ────────────────────────────────────────────────────────────
-
-typedef struct {
-    char *buf;
-    int len;
-    int cap;
-} StrBuf;
-
-static void sb_init(StrBuf *sb) {
-    sb->cap = 128;
-    sb->buf = (char *)malloc(sb->cap);
-    sb->len = 0;
-}
-
-static void sb_push(StrBuf *sb, const char *s, int slen) {
-    while (sb->len + slen >= sb->cap) {
-        sb->cap *= 2;
-        sb->buf = (char *)realloc(sb->buf, sb->cap);
-    }
-    memcpy(sb->buf + sb->len, s, slen);
-    sb->len += slen;
-}
-
-static void sb_push_char(StrBuf *sb, char c) {
-    sb_push(sb, &c, 1);
-}
-
-static void sb_push_str(StrBuf *sb, const char *s) {
-    sb_push(sb, s, (int)strlen(s));
-}
-
-static void json_stringify_node(JsonNode *n, StrBuf *sb) {
-    if (!n) { sb_push_str(sb, "null"); return; }
-    switch (n->type) {
-    case JSON_NULL:
-        sb_push_str(sb, "null");
-        break;
-    case JSON_BOOL:
-        sb_push_str(sb, n->bool_val ? "true" : "false");
-        break;
-    case JSON_INT: {
-        char tmp[32];
-        int l = snprintf(tmp, sizeof(tmp), "%ld", (long)n->int_val);
-        sb_push(sb, tmp, l);
-        break;
-    }
-    case JSON_FLOAT: {
-        char tmp[64];
-        int l = snprintf(tmp, sizeof(tmp), "%.17g", n->float_val);
-        sb_push(sb, tmp, l);
-        break;
-    }
-    case JSON_STRING: {
-        sb_push_char(sb, '"');
-        const char *s = n->string_val;
-        while (*s) {
-            switch (*s) {
-            case '"':  sb_push_str(sb, "\\\""); break;
-            case '\\': sb_push_str(sb, "\\\\"); break;
-            case '\b': sb_push_str(sb, "\\b"); break;
-            case '\f': sb_push_str(sb, "\\f"); break;
-            case '\n': sb_push_str(sb, "\\n"); break;
-            case '\r': sb_push_str(sb, "\\r"); break;
-            case '\t': sb_push_str(sb, "\\t"); break;
-            default:
-                if ((unsigned char)*s < 0x20) {
-                    char esc[8];
-                    snprintf(esc, sizeof(esc), "\\u%04x", (unsigned char)*s);
-                    sb_push_str(sb, esc);
-                } else {
-                    sb_push_char(sb, *s);
-                }
-            }
-            s++;
-        }
-        sb_push_char(sb, '"');
-        break;
-    }
-    case JSON_ARRAY:
-        sb_push_char(sb, '[');
-        for (int i = 0; i < n->array.len; i++) {
-            if (i > 0) sb_push_char(sb, ',');
-            json_stringify_node(n->array.items[i], sb);
-        }
-        sb_push_char(sb, ']');
-        break;
-    case JSON_OBJECT:
-        sb_push_char(sb, '{');
-        for (int i = 0; i < n->object.len; i++) {
-            if (i > 0) sb_push_char(sb, ',');
-            // Key
-            sb_push_char(sb, '"');
-            const char *k = n->object.keys[i];
-            while (*k) {
-                if (*k == '"') sb_push_str(sb, "\\\"");
-                else if (*k == '\\') sb_push_str(sb, "\\\\");
-                else sb_push_char(sb, *k);
-                k++;
-            }
-            sb_push_char(sb, '"');
-            sb_push_char(sb, ':');
-            json_stringify_node(n->object.vals[i], sb);
-        }
-        sb_push_char(sb, '}');
-        break;
-    }
-}
-
-void *__pluto_json_stringify(void *handle) {
-    JsonNode *n = json_unwrap(handle);
-    StrBuf sb;
-    sb_init(&sb);
-    json_stringify_node(n, &sb);
-    void *result = __pluto_string_new(sb.buf, sb.len);
-    free(sb.buf);
-    return result;
-}
 
 // ── HTTP runtime ──────────────────────────────────────────────────────────────
 
