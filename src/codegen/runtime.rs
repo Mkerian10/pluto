@@ -67,6 +67,8 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_random_float", &[], &[types::F64])?;
 
         // Math builtins
+        reg.declare(module, "__pluto_div_int", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_mod_int", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_abs_int", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_min_int", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_max_int", &[types::I64, types::I64], &[types::I64])?;

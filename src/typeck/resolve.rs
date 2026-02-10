@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::CompileError;
@@ -5,6 +6,10 @@ use crate::parser::ast::TypeExpr;
 use crate::span::Spanned;
 use super::env::{self, ClassInfo, EnumInfo, FuncSig, InstKind, Instantiation, TypeEnv};
 use super::types::{GenericKind, PlutoType};
+
+thread_local! {
+    static INSTANTIATION_STACK: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+}
 
 pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<PlutoType, CompileError> {
     match &ty.node {
@@ -485,6 +490,16 @@ pub(crate) fn ensure_generic_class_instantiated(
     if env.classes.contains_key(&mangled) {
         return mangled;
     }
+    // Cycle detection: if we're already instantiating this type, it's recursive
+    let is_cycle = INSTANTIATION_STACK.with(|stack| {
+        stack.borrow().contains(&mangled)
+    });
+    if is_cycle {
+        panic!("recursive type '{}' has infinite size", mangled);
+    }
+    INSTANTIATION_STACK.with(|stack| {
+        stack.borrow_mut().insert(mangled.clone());
+    });
     let gen_info = env.generic_classes.get(base_name)
         .unwrap_or_else(|| panic!("ICE: unknown generic class '{base_name}'"))
         .clone();
@@ -528,6 +543,9 @@ pub(crate) fn ensure_generic_class_instantiated(
         kind: InstKind::Class(base_name.to_string()),
         type_args: type_args.to_vec(),
     });
+    INSTANTIATION_STACK.with(|stack| {
+        stack.borrow_mut().remove(&mangled);
+    });
     mangled
 }
 
@@ -540,6 +558,15 @@ pub(crate) fn ensure_generic_enum_instantiated(
     if env.enums.contains_key(&mangled) {
         return mangled;
     }
+    let is_cycle = INSTANTIATION_STACK.with(|stack| {
+        stack.borrow().contains(&mangled)
+    });
+    if is_cycle {
+        panic!("recursive type '{}' has infinite size", mangled);
+    }
+    INSTANTIATION_STACK.with(|stack| {
+        stack.borrow_mut().insert(mangled.clone());
+    });
     let gen_info = env.generic_enums.get(base_name)
         .unwrap_or_else(|| panic!("ICE: unknown generic enum '{base_name}'"))
         .clone();
@@ -561,6 +588,9 @@ pub(crate) fn ensure_generic_enum_instantiated(
     env.instantiations.insert(Instantiation {
         kind: InstKind::Enum(base_name.to_string()),
         type_args: type_args.to_vec(),
+    });
+    INSTANTIATION_STACK.with(|stack| {
+        stack.borrow_mut().remove(&mangled);
     });
     mangled
 }

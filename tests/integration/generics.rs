@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail};
+use common::{compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
 
 // ── Generic Functions ────────────────────────────────────────────
 
@@ -135,5 +135,31 @@ fn generic_class_method_operates_on_t() {
 fn generic_wrong_type_arg_count_rejected() {
     compile_should_fail(
         "class Box<T> {\n    value: T\n}\n\nfn main() {\n    let b = Box<int, string> { value: 42 }\n}",
+    );
+}
+
+// ── Duplicate Type Parameter Rejection ──────────────────────────
+
+#[test]
+fn duplicate_type_param_rejected() {
+    compile_should_fail_with(
+        "fn foo<T, T>(x: T) T {\n    return x\n}\n\nfn main() {\n    print(foo(1))\n}",
+        "duplicate type parameter",
+    );
+}
+
+#[test]
+fn duplicate_type_param_class_rejected() {
+    compile_should_fail_with(
+        "class Box<T, T> {\n    value: T\n}\n\nfn main() {\n    let b = Box<int> { value: 1 }\n}",
+        "duplicate type parameter",
+    );
+}
+
+#[test]
+fn duplicate_type_param_enum_rejected() {
+    compile_should_fail_with(
+        "enum Opt<T, T> {\n    Some { v: T }\n    None\n}\n\nfn main() {\n    let o = Opt<int>.None\n}",
+        "duplicate type parameter",
     );
 }

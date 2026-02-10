@@ -159,3 +159,7 @@ path = "tests/integration/warnings.rs"
 [[test]]
 name = "nullable"
 path = "tests/integration/nullable.rs"
+
+[[test]]
+name = "interactions"
+path = "tests/integration/interactions.rs"

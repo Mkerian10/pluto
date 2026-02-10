@@ -21,8 +21,17 @@ pub fn lex(source: &str) -> Result<Vec<Spanned<Token>>, CompileError> {
                 tokens.push(Spanned::new(tok, Span::new(span.start, span.end)));
             }
             Err(()) => {
+                let slice = &source[span.start..span.end];
+                // Check if this looks like an integer literal that overflowed
+                let cleaned = slice.replace('_', "");
+                if cleaned.chars().all(|c| c.is_ascii_digit()) && !cleaned.is_empty() {
+                    return Err(CompileError::syntax(
+                        format!("integer literal '{}' is out of range (max: {})", slice, i64::MAX),
+                        Span::new(span.start, span.end),
+                    ));
+                }
                 return Err(CompileError::syntax(
-                    format!("unexpected character '{}'", &source[span.start..span.end]),
+                    format!("unexpected character '{}'", slice),
                     Span::new(span.start, span.end),
                 ));
             }

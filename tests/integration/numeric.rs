@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail_with};
+use common::{compile_and_run_stdout, compile_and_run_output, compile_should_fail, compile_should_fail_with};
 
 // ── Type casting (as) ─────────────────────────────────────────────────────────
 
@@ -130,7 +130,7 @@ fn math_pow_float() {
 
 #[test]
 fn math_sqrt() {
-    let out = compile_and_run_stdout("fn main() {\n    print(sqrt(4.0))\n    print(sqrt(9.0))\n}");
+    let out = compile_and_run_stdout("fn main() {\n    print(sqrt(4.0) catch 0.0)\n    print(sqrt(9.0) catch 0.0)\n}");
     assert_eq!(out, "2.000000\n3.000000\n");
 }
 
@@ -166,7 +166,7 @@ fn math_tan() {
 
 #[test]
 fn math_log() {
-    let out = compile_and_run_stdout("fn main() {\n    print(log(1.0))\n}");
+    let out = compile_and_run_stdout("fn main() {\n    print(log(1.0) catch 0.0)\n}");
     assert_eq!(out, "0.000000\n");
 }
 
@@ -248,4 +248,78 @@ fn pow_int_catch_wildcard() {
         "fn main() {\n    let r = pow(2, -1) catch err { 99 }\n    print(r)\n}",
     );
     assert_eq!(out, "99\n");
+}
+
+// ── Phase 2: Runtime math correctness ────────────────────────────────────────
+
+#[test]
+fn div_by_zero_abort() {
+    let (_, stderr, code) = compile_and_run_output("fn main() {\n    let x = 10 / 0\n    print(x)\n}");
+    assert_ne!(code, 0);
+    assert!(stderr.contains("division by zero"), "Expected 'division by zero' in stderr, got: {}", stderr);
+}
+
+#[test]
+fn mod_by_zero_abort() {
+    let (_, stderr, code) = compile_and_run_output("fn main() {\n    let x = 10 % 0\n    print(x)\n}");
+    assert_ne!(code, 0);
+    assert!(stderr.contains("modulo by zero"), "Expected 'modulo by zero' in stderr, got: {}", stderr);
+}
+
+#[test]
+fn div_normal_still_works() {
+    let out = compile_and_run_stdout("fn main() {\n    print(10 / 3)\n    print(100 / 10)\n    print(-7 / 2)\n}");
+    assert_eq!(out, "3\n10\n-3\n");
+}
+
+#[test]
+fn mod_normal_still_works() {
+    let out = compile_and_run_stdout("fn main() {\n    print(10 % 3)\n    print(100 % 10)\n}");
+    assert_eq!(out, "1\n0\n");
+}
+
+#[test]
+fn pow_int_overflow_catch() {
+    let out = compile_and_run_stdout("fn main() {\n    let r = pow(2, 63) catch -1\n    print(r)\n}");
+    assert_eq!(out, "-1\n");
+}
+
+#[test]
+fn sqrt_negative_catch() {
+    let out = compile_and_run_stdout("fn main() {\n    let r = sqrt(-1.0) catch 0.0\n    print(r)\n}");
+    assert_eq!(out, "0.000000\n");
+}
+
+#[test]
+fn log_zero_catch() {
+    let out = compile_and_run_stdout("fn main() {\n    let r = log(0.0) catch 0.0\n    print(r)\n}");
+    assert_eq!(out, "0.000000\n");
+}
+
+#[test]
+fn log_negative_catch() {
+    let out = compile_and_run_stdout("fn main() {\n    let r = log(-1.0) catch 0.0\n    print(r)\n}");
+    assert_eq!(out, "0.000000\n");
+}
+
+#[test]
+fn sqrt_without_error_handling_rejected() {
+    compile_should_fail("fn main() {\n    let r = sqrt(4.0)\n}");
+}
+
+#[test]
+fn log_without_error_handling_rejected() {
+    compile_should_fail("fn main() {\n    let r = log(2.0)\n}");
+}
+
+#[test]
+fn sqrt_propagate() {
+    let out = compile_and_run_stdout("fn do_sqrt(x: float) float {\n    return sqrt(x)!\n}\n\nfn main() {\n    let r = do_sqrt(-1.0) catch 99.0\n    print(r)\n}");
+    assert_eq!(out, "99.000000\n");
+}
+
+#[test]
+fn log_propagate() {
+    let out = compile_and_run_stdout("fn do_log(x: float) float {\n    return log(x)!\n}\n\nfn main() {\n    let r = do_log(0.0) catch 99.0\n    print(r)\n}");
+    assert_eq!(out, "99.000000\n");
 }

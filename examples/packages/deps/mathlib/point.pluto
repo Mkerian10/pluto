@@ -6,5 +6,5 @@ pub class Point {
 pub fn distance(p: Point) float {
     let x2 = p.x * p.x
     let y2 = p.y * p.y
-    return sqrt((x2 + y2) as float)
+    return sqrt((x2 + y2) as float) catch 0.0
 }

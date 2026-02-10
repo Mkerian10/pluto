@@ -1160,10 +1160,11 @@ void *__pluto_string_to_int(void *s) {
     char *start = tmp;
     while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r') start++;
     char *end_ptr;
+    errno = 0;
     long result = strtol(start, &end_ptr, 10);
     // Skip trailing whitespace
     while (*end_ptr == ' ' || *end_ptr == '\t' || *end_ptr == '\n' || *end_ptr == '\r') end_ptr++;
-    if (start == end_ptr || *end_ptr != '\0') {
+    if (start == end_ptr || *end_ptr != '\0' || errno == ERANGE) {
         free(tmp);
         // Return none (null pointer)
         return (void *)0;
@@ -1185,10 +1186,11 @@ void *__pluto_string_to_float(void *s) {
     char *start = tmp;
     while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r') start++;
     char *end_ptr;
+    errno = 0;
     double result = strtod(start, &end_ptr);
     // Skip trailing whitespace
     while (*end_ptr == ' ' || *end_ptr == '\t' || *end_ptr == '\n' || *end_ptr == '\r') end_ptr++;
-    if (start == end_ptr || *end_ptr != '\0') {
+    if (start == end_ptr || *end_ptr != '\0' || errno == ERANGE) {
         free(tmp);
         // Return none (null pointer)
         return (void *)0;
@@ -1984,6 +1986,16 @@ double __pluto_max_float(double a, double b) {
     return a > b ? a : b;
 }
 
+long __pluto_div_int(long a, long b) {
+    if (b == 0) { fprintf(stderr, "pluto: division by zero\n"); exit(1); }
+    return a / b;
+}
+
+long __pluto_mod_int(long a, long b) {
+    if (b == 0) { fprintf(stderr, "pluto: modulo by zero\n"); exit(1); }
+    return a % b;
+}
+
 long __pluto_pow_int(long base, long exp) {
     if (exp < 0) {
         // Raise MathError via the runtime error system
@@ -1998,8 +2010,19 @@ long __pluto_pow_int(long base, long exp) {
     long b = base;
     long e = exp;
     while (e > 0) {
-        if (e & 1) result *= b;
-        b *= b;
+        if (e & 1) {
+            if (__builtin_mul_overflow(result, b, &result)) {
+                const char *msg = "integer overflow in pow";
+                void *msg_str = __pluto_string_new(msg, (long)strlen(msg));
+                void *err_obj = __pluto_alloc(8);
+                *(long *)err_obj = (long)msg_str;
+                __pluto_raise_error(err_obj);
+                return 0;
+            }
+        }
+        if (e > 1) {
+            __builtin_mul_overflow(b, b, &b);
+        }
         e >>= 1;
     }
     return result;
@@ -2010,6 +2033,14 @@ double __pluto_pow_float(double base, double exp) {
 }
 
 double __pluto_sqrt(double x) {
+    if (x < 0.0) {
+        const char *msg = "sqrt of negative number";
+        void *msg_str = __pluto_string_new(msg, (long)strlen(msg));
+        void *err_obj = __pluto_alloc(8);
+        *(long *)err_obj = (long)msg_str;
+        __pluto_raise_error(err_obj);
+        return 0.0;
+    }
     return sqrt(x);
 }
 
@@ -2038,6 +2069,14 @@ double __pluto_tan(double x) {
 }
 
 double __pluto_log(double x) {
+    if (x <= 0.0) {
+        const char *msg = "log of non-positive number";
+        void *msg_str = __pluto_string_new(msg, (long)strlen(msg));
+        void *err_obj = __pluto_alloc(8);
+        *(long *)err_obj = (long)msg_str;
+        __pluto_raise_error(err_obj);
+        return 0.0;
+    }
     return log(x);
 }
 

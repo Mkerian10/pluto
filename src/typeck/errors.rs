@@ -216,7 +216,7 @@ fn collect_expr_effects(
         Expr::Propagate { expr: inner } => {
             match &inner.node {
                 Expr::Call { name, args, .. } => {
-                    if name.node == "pow"
+                    if matches!(name.node.as_str(), "pow" | "sqrt" | "log")
                         && env
                             .fallible_builtin_calls
                             .contains(&(current_fn.to_string(), name.span.start))
@@ -537,11 +537,11 @@ fn enforce_expr(
             for arg in args {
                 enforce_expr(&arg.node, arg.span, current_fn, env)?;
             }
-            let is_fallible_pow = name.node == "pow"
+            let is_fallible_builtin = matches!(name.node.as_str(), "pow" | "sqrt" | "log")
                 && env
                     .fallible_builtin_calls
                     .contains(&(current_fn.to_string(), name.span.start));
-            if is_fallible_pow || env.is_fn_fallible(&name.node) {
+            if is_fallible_builtin || env.is_fn_fallible(&name.node) {
                 return Err(CompileError::type_err(
                     format!(
                         "call to fallible function '{}' must be handled with ! or catch",
@@ -572,11 +572,11 @@ fn enforce_expr(
                 for arg in args {
                     enforce_expr(&arg.node, arg.span, current_fn, env)?;
                 }
-                let is_fallible_pow = name.node == "pow"
+                let is_fallible_builtin = matches!(name.node.as_str(), "pow" | "sqrt" | "log")
                     && env
                         .fallible_builtin_calls
                         .contains(&(current_fn.to_string(), name.span.start));
-                if !is_fallible_pow && !env.is_fn_fallible(&name.node) {
+                if !is_fallible_builtin && !env.is_fn_fallible(&name.node) {
                     return Err(CompileError::type_err(
                         format!("'!' applied to infallible function '{}'", name.node),
                         span,
@@ -610,11 +610,11 @@ fn enforce_expr(
                     for arg in args {
                         enforce_expr(&arg.node, arg.span, current_fn, env)?;
                     }
-                    let is_fallible_pow = name.node == "pow"
+                    let is_fallible_builtin = matches!(name.node.as_str(), "pow" | "sqrt" | "log")
                         && env
                             .fallible_builtin_calls
                             .contains(&(current_fn.to_string(), name.span.start));
-                    if !is_fallible_pow && !env.is_fn_fallible(&name.node) {
+                    if !is_fallible_builtin && !env.is_fn_fallible(&name.node) {
                         return Err(CompileError::type_err(
                             format!("catch applied to infallible function '{}'", name.node),
                             span,

@@ -142,6 +142,17 @@ pub(crate) fn register_enums(program: &Program, env: &mut TypeEnv) -> Result<(),
         if !e.type_params.is_empty() {
             // Generic enum — register in generic_enums with TypeParam types
             let tp_names: std::collections::HashSet<String> = e.type_params.iter().map(|tp| tp.node.clone()).collect();
+            if tp_names.len() != e.type_params.len() {
+                let mut seen = HashSet::new();
+                for tp in &e.type_params {
+                    if !seen.insert(&tp.node) {
+                        return Err(CompileError::type_err(
+                            format!("duplicate type parameter '{}'", tp.node),
+                            tp.span,
+                        ));
+                    }
+                }
+            }
             let mut variants = Vec::new();
             for v in &e.variants {
                 let mut fields = Vec::new();
@@ -280,6 +291,17 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                 }
             }
             let tp_names: std::collections::HashSet<String> = c.type_params.iter().map(|tp| tp.node.clone()).collect();
+            if tp_names.len() != c.type_params.len() {
+                let mut seen = HashSet::new();
+                for tp in &c.type_params {
+                    if !seen.insert(&tp.node) {
+                        return Err(CompileError::type_err(
+                            format!("duplicate type parameter '{}'", tp.node),
+                            tp.span,
+                        ));
+                    }
+                }
+            }
             let mut fields = Vec::new();
             for f in &c.fields {
                 let ty = resolve_type_with_params(&f.ty, env, &tp_names)?;
@@ -438,6 +460,18 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
         if !f.type_params.is_empty() {
             // Generic function — register in generic_functions with TypeParam types
             let tp_names: std::collections::HashSet<String> = f.type_params.iter().map(|tp| tp.node.clone()).collect();
+            if tp_names.len() != f.type_params.len() {
+                // Find the duplicate
+                let mut seen = HashSet::new();
+                for tp in &f.type_params {
+                    if !seen.insert(&tp.node) {
+                        return Err(CompileError::type_err(
+                            format!("duplicate type parameter '{}'", tp.node),
+                            tp.span,
+                        ));
+                    }
+                }
+            }
             let mut param_types = Vec::new();
             for p in &f.params {
                 param_types.push(resolve_type_with_params(&p.ty, env, &tp_names)?);
@@ -462,6 +496,13 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
             Some(t) => resolve_type(t, env)?,
             None => PlutoType::Void,
         };
+        // Check for duplicate function names (skip builtins — they're pre-registered)
+        if env.functions.contains_key(&f.name.node) && !env.builtins.contains(&f.name.node) {
+            return Err(CompileError::type_err(
+                format!("function '{}' is already defined", f.name.node),
+                f.name.span,
+            ));
+        }
         env.functions.insert(
             f.name.node.clone(),
             FuncSig { params: param_types, return_type },

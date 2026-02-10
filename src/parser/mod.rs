@@ -15,6 +15,7 @@ pub struct Parser<'a> {
     pos: usize,
     restrict_struct_lit: bool,
     enum_names: HashSet<String>,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -22,12 +23,12 @@ impl<'a> Parser<'a> {
         // Seed with prelude enum names so all parse paths (including interpolation
         // sub-parsers) know about Option, Result, etc.
         let enum_names = crate::prelude::prelude_enum_names().clone();
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, depth: 0 }
     }
 
     /// Constructor without prelude seeding — used only to parse the prelude source itself.
     pub fn new_without_prelude(tokens: &'a [Spanned<Token>], source: &'a str) -> Self {
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names: HashSet::new() }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names: HashSet::new(), depth: 0 }
     }
 
     /// Constructor with extra enum names added to the prelude set.
@@ -39,7 +40,7 @@ impl<'a> Parser<'a> {
     ) -> Self {
         let mut enum_names = crate::prelude::prelude_enum_names().clone();
         enum_names.extend(extra_enum_names);
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, depth: 0 }
     }
 
     fn peek(&self) -> Option<&Spanned<Token>> {
@@ -1674,6 +1675,20 @@ impl<'a> Parser<'a> {
 
     // Pratt parser for expressions
     fn parse_expr(&mut self, min_bp: u8) -> Result<Spanned<Expr>, CompileError> {
+        self.depth += 1;
+        if self.depth > 50 {
+            self.depth -= 1;
+            return Err(CompileError::syntax(
+                "expression nesting too deep (maximum depth exceeded)",
+                self.peek().map(|t| t.span).unwrap_or_else(|| self.eof_span()),
+            ));
+        }
+        let result = self.parse_expr_inner(min_bp);
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_expr_inner(&mut self, min_bp: u8) -> Result<Spanned<Expr>, CompileError> {
         let mut lhs = self.parse_prefix()?;
 
         loop {
@@ -2294,6 +2309,12 @@ impl<'a> Parser<'a> {
                         }
                     }
                     // Sub-parse the expression
+                    if expr_str.trim().is_empty() {
+                        return Err(CompileError::syntax(
+                            "empty expression in string interpolation",
+                            span,
+                        ));
+                    }
                     let tokens = crate::lexer::lex(&expr_str)?;
                     let mut sub_parser = Parser::new(&tokens, &expr_str);
                     let expr = sub_parser.parse_expr(0)?;

@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run, compile_batch_stdout, compile_should_fail, plutoc};
+use common::{compile_and_run, compile_batch_stdout, compile_should_fail, compile_should_fail_with, plutoc};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -398,4 +398,46 @@ fn cli_run_subcommand() {
     let output = plutoc().arg("run").arg(&src).output().unwrap();
     assert!(output.status.success(), "CLI run failed: {}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "99\n");
+}
+
+// ============================================================
+// Robustness: duplicate/overflow/malformed input rejection
+// ============================================================
+
+#[test]
+fn duplicate_function_name_rejected() {
+    compile_should_fail_with(
+        "fn foo() int {\n    return 1\n}\n\nfn foo() int {\n    return 2\n}\n\nfn main() {\n    print(foo())\n}",
+        "already defined",
+    );
+}
+
+#[test]
+fn integer_overflow_literal_error() {
+    compile_should_fail_with(
+        "fn main() {\n    let x = 99999999999999999999\n}",
+        "out of range",
+    );
+}
+
+#[test]
+fn empty_string_interpolation_error() {
+    compile_should_fail_with(
+        "fn main() {\n    let s = \"hello {}\"\n}",
+        "empty expression in string interpolation",
+    );
+}
+
+#[test]
+fn deep_nesting_rejected() {
+    let mut src = String::from("fn main() {\n    let x = ");
+    for _ in 0..60 {
+        src.push('(');
+    }
+    src.push('1');
+    for _ in 0..60 {
+        src.push(')');
+    }
+    src.push_str("\n}");
+    compile_should_fail_with(&src, "nesting too deep");
 }

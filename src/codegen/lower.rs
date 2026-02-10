@@ -1848,8 +1848,8 @@ impl<'a> LowerContext<'a> {
             BinOp::Mul if is_float => self.builder.ins().fmul(l, r),
             BinOp::Mul => self.builder.ins().imul(l, r),
             BinOp::Div if is_float => self.builder.ins().fdiv(l, r),
-            BinOp::Div => self.builder.ins().sdiv(l, r),
-            BinOp::Mod => self.builder.ins().srem(l, r),
+            BinOp::Div => self.call_runtime("__pluto_div_int", &[l, r]),
+            BinOp::Mod => self.call_runtime("__pluto_mod_int", &[l, r]),
             BinOp::Eq if is_string => {
                 let i32_result = self.call_runtime("__pluto_string_eq", &[l, r]);
                 self.builder.ins().ireduce(types::I8, i32_result)

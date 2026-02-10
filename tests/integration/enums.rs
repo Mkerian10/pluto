@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail};
+use common::{compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
 
 #[test]
 fn enum_unit_variant() {
@@ -65,4 +65,82 @@ fn match_binding_shadow_restore() {
         "enum Wrapper {\n    Val { x: int }\n    Empty\n}\n\nfn main() {\n    let x = 100\n    let w = Wrapper.Val { x: 7 }\n    match w {\n        Wrapper.Val { x } {\n            print(x)\n        }\n        Wrapper.Empty {\n            print(0)\n        }\n    }\n    print(x)\n}",
     );
     assert_eq!(out, "7\n100\n");
+}
+
+#[test]
+fn enum_single_variant() {
+    let out = compile_and_run_stdout(
+        "enum Single {\n    Only\n}\n\nfn main() {\n    let s = Single.Only\n    match s {\n        Single.Only {\n            print(1)\n        }\n    }\n}",
+    );
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn enum_many_variants() {
+    let out = compile_and_run_stdout(
+        "enum Dir {\n    N\n    S\n    E\n    W\n    NE\n}\n\nfn main() {\n    let d = Dir.NE\n    match d {\n        Dir.N { print(1) }\n        Dir.S { print(2) }\n        Dir.E { print(3) }\n        Dir.W { print(4) }\n        Dir.NE { print(5) }\n    }\n}",
+    );
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn enum_data_variant_multiple_fields() {
+    let out = compile_and_run_stdout(
+        "enum Event {\n    Move { x: int, y: int, speed: float }\n    Stop\n}\n\nfn main() {\n    let e = Event.Move { x: 10, y: 20, speed: 3.14 }\n    match e {\n        Event.Move { x, y, speed } {\n            print(x)\n            print(y)\n        }\n        Event.Stop {\n            print(0)\n        }\n    }\n}",
+    );
+    assert_eq!(out, "10\n20\n");
+}
+
+#[test]
+fn enum_nested_match() {
+    let out = compile_and_run_stdout(
+        "enum Color {\n    Red\n    Blue\n}\n\nenum Shape {\n    Circle { color: Color }\n    Square\n}\n\nfn main() {\n    let s = Shape.Circle { color: Color.Red }\n    match s {\n        Shape.Circle { color } {\n            match color {\n                Color.Red { print(\"red circle\") }\n                Color.Blue { print(\"blue circle\") }\n            }\n        }\n        Shape.Square {\n            print(\"square\")\n        }\n    }\n}",
+    );
+    assert_eq!(out, "red circle\n");
+}
+
+#[test]
+fn enum_in_array() {
+    let out = compile_and_run_stdout(
+        "enum Color {\n    Red\n    Blue\n}\n\nfn main() {\n    let colors = [Color.Red, Color.Blue, Color.Red]\n    let first = colors[0]\n    match first {\n        Color.Red { print(\"red\") }\n        Color.Blue { print(\"blue\") }\n    }\n}",
+    );
+    assert_eq!(out, "red\n");
+}
+
+#[test]
+fn enum_as_return_value() {
+    let out = compile_and_run_stdout(
+        "enum Status {\n    Ok { value: int }\n    Err { code: int }\n}\n\nfn compute(x: int) Status {\n    if x > 0 {\n        return Status.Ok { value: x * 10 }\n    }\n    return Status.Err { code: -1 }\n}\n\nfn main() {\n    let r = compute(3)\n    match r {\n        Status.Ok { value } { print(value) }\n        Status.Err { code } { print(code) }\n    }\n    let r2 = compute(-5)\n    match r2 {\n        Status.Ok { value } { print(value) }\n        Status.Err { code } { print(code) }\n    }\n}",
+    );
+    assert_eq!(out, "30\n-1\n");
+}
+
+#[test]
+fn enum_non_exhaustive_rejected_data_variant() {
+    compile_should_fail(
+        "enum Shape {\n    Circle { r: int }\n    Rect { w: int, h: int }\n}\n\nfn main() {\n    let s = Shape.Circle { r: 5 }\n    match s {\n        Shape.Circle { r } {\n            print(r)\n        }\n    }\n}",
+    );
+}
+
+#[test]
+fn enum_wrong_field_in_match_rejected() {
+    compile_should_fail(
+        "enum Wrapper {\n    Val { x: int }\n    Empty\n}\n\nfn main() {\n    let w = Wrapper.Val { x: 5 }\n    match w {\n        Wrapper.Val { wrong } {\n            print(wrong)\n        }\n        Wrapper.Empty {\n            print(0)\n        }\n    }\n}",
+    );
+}
+
+#[test]
+fn enum_in_while_loop() {
+    let out = compile_and_run_stdout(
+        "enum Toggle {\n    On\n    Off\n}\n\nfn main() {\n    let mut state = Toggle.On\n    let mut count = 0\n    while count < 3 {\n        match state {\n            Toggle.On {\n                print(\"on\")\n                state = Toggle.Off\n            }\n            Toggle.Off {\n                print(\"off\")\n                state = Toggle.On\n            }\n        }\n        count = count + 1\n    }\n}",
+    );
+    assert_eq!(out, "on\noff\non\n");
+}
+
+#[test]
+fn enum_passed_through_multiple_functions() {
+    let out = compile_and_run_stdout(
+        "enum Color {\n    Red\n    Blue\n}\n\nfn describe(c: Color) string {\n    match c {\n        Color.Red { return \"red\" }\n        Color.Blue { return \"blue\" }\n    }\n}\n\nfn print_color(c: Color) {\n    print(describe(c))\n}\n\nfn main() {\n    print_color(Color.Blue)\n}",
+    );
+    assert_eq!(out, "blue\n");
 }

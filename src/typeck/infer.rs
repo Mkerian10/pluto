@@ -558,6 +558,12 @@ fn infer_call(
                         args[0].span,
                     ));
                 }
+                if matches!(n, "sqrt" | "log") {
+                    if let Some(current_fn) = &env.current_fn {
+                        env.fallible_builtin_calls
+                            .insert((current_fn.clone(), name.span.start));
+                    }
+                }
                 Ok(PlutoType::Float)
             }
             "expect" => {
