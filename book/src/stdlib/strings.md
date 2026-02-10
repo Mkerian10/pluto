@@ -1,6 +1,6 @@
 # std.strings
 
-The `std.strings` module provides utility functions for working with strings.
+String utility functions. Pluto strings are immutable; all operations return new strings.
 
 ```
 import std.strings
@@ -14,12 +14,11 @@ import std.strings
 strings.substring(s: string, start: int, length: int) string
 ```
 
-Returns a substring starting at `start` with the given `length`:
+Returns `length` characters starting at byte offset `start`.
 
 ```
-let s = "hello, world"
-print(strings.substring(s, 0, 5))      // "hello"
-print(strings.substring(s, 7, 5))      // "world"
+strings.substring("hello, world", 0, 5)     // "hello"
+strings.substring("hello, world", 7, 5)     // "world"
 ```
 
 ### contains
@@ -28,11 +27,9 @@ print(strings.substring(s, 7, 5))      // "world"
 strings.contains(s: string, needle: string) bool
 ```
 
-Returns `true` if `s` contains `needle`:
-
 ```
-print(strings.contains("hello world", "world"))   // true
-print(strings.contains("hello world", "xyz"))      // false
+strings.contains("hello world", "world")    // true
+strings.contains("hello world", "xyz")       // false
 ```
 
 ### starts_with / ends_with
@@ -43,8 +40,8 @@ strings.ends_with(s: string, suffix: string) bool
 ```
 
 ```
-print(strings.starts_with("hello", "hel"))    // true
-print(strings.ends_with("hello", "llo"))       // true
+strings.starts_with("hello", "hel")    // true
+strings.ends_with("hello", "llo")      // true
 ```
 
 ### index_of
@@ -53,11 +50,11 @@ print(strings.ends_with("hello", "llo"))       // true
 strings.index_of(s: string, needle: string) int
 ```
 
-Returns the index of the first occurrence, or `-1` if not found:
+Returns the byte offset of the first occurrence, or `-1` if not found.
 
 ```
-print(strings.index_of("hello", "ll"))    // 2
-print(strings.index_of("hello", "xyz"))   // -1
+strings.index_of("hello", "ll")     // 2
+strings.index_of("hello", "xyz")    // -1
 ```
 
 ### trim
@@ -66,10 +63,10 @@ print(strings.index_of("hello", "xyz"))   // -1
 strings.trim(s: string) string
 ```
 
-Removes leading and trailing whitespace:
+Strips leading and trailing whitespace.
 
 ```
-print(strings.trim("  hello  "))    // "hello"
+strings.trim("  hello  ")    // "hello"
 ```
 
 ### to_upper / to_lower
@@ -80,8 +77,8 @@ strings.to_lower(s: string) string
 ```
 
 ```
-print(strings.to_upper("hello"))    // "HELLO"
-print(strings.to_lower("HELLO"))    // "hello"
+strings.to_upper("hello")    // "HELLO"
+strings.to_lower("HELLO")    // "hello"
 ```
 
 ### replace
@@ -90,11 +87,10 @@ print(strings.to_lower("HELLO"))    // "hello"
 strings.replace(s: string, old: string, new_str: string) string
 ```
 
-Replaces all occurrences of `old` with `new_str`:
+Replaces all occurrences of `old` with `new_str`.
 
 ```
-print(strings.replace("hello world", "world", "pluto"))
-// "hello pluto"
+strings.replace("hello world", "world", "pluto")    // "hello pluto"
 ```
 
 ### split
@@ -103,14 +99,23 @@ print(strings.replace("hello world", "world", "pluto"))
 strings.split(s: string, delim: string) [string]
 ```
 
-Splits a string into an array by delimiter:
+Splits into an array by delimiter.
 
 ```
 let parts = strings.split("a,b,c", ",")
-for p in parts {
-    print(p)
-}
-// prints: a, b, c
+// ["a", "b", "c"]
+```
+
+### join
+
+```
+strings.join(arr: [string], sep: string) string
+```
+
+Joins an array of strings with a separator.
+
+```
+strings.join(["a", "b", "c"], ", ")    // "a, b, c"
 ```
 
 ### char_at
@@ -119,11 +124,23 @@ for p in parts {
 strings.char_at(s: string, index: int) string
 ```
 
-Returns the character at the given index as a single-character string:
+Returns the character at byte offset `index` as a single-character string.
 
 ```
-print(strings.char_at("hello", 0))    // "h"
-print(strings.char_at("hello", 4))    // "o"
+strings.char_at("hello", 0)    // "h"
+strings.char_at("hello", 4)    // "o"
+```
+
+### byte_at
+
+```
+strings.byte_at(s: string, index: int) int
+```
+
+Returns the raw byte value at the given offset.
+
+```
+strings.byte_at("A", 0)    // 65
 ```
 
 ### len
@@ -132,8 +149,31 @@ print(strings.char_at("hello", 4))    // "o"
 strings.len(s: string) int
 ```
 
-Returns the length of the string:
+Returns the byte length of the string. Equivalent to `s.len()`.
 
 ```
-print(strings.len("hello"))    // 5
+strings.len("hello")    // 5
+```
+
+### format_float
+
+```
+strings.format_float(v: float) string
+```
+
+Formats a float as a string with decimal representation.
+
+## Example: CSV Parsing
+
+```
+import std.strings
+
+fn main() {
+    let line = "Alice,30,Engineering"
+    let fields = strings.split(line, ",")
+    let name = fields[0]
+    let dept = strings.to_upper(fields[2])
+    print("{name} works in {dept}")
+    // Alice works in ENGINEERING
+}
 ```

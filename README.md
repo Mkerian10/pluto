@@ -1,398 +1,255 @@
 <p align="center">
-  <h1 align="center">Pluto</h1>
-  <p align="center">
-    <strong>A programming language for distributed backend systems</strong>
-  </p>
-  <p align="center">
-    Native compilation &bull; Dependency injection &bull; Typed errors &bull; Whole-program analysis
-  </p>
+  <br />
+  <img src="https://img.shields.io/badge/status-v0.1-blue?style=flat-square" alt="v0.1" />
+  <img src="https://img.shields.io/badge/targets-macOS%20%7C%20Linux-brightgreen?style=flat-square" alt="macOS | Linux" />
+  <img src="https://img.shields.io/badge/arch-ARM64%20%7C%20x86__64-orange?style=flat-square" alt="ARM64 | x86_64" />
+</p>
+
+<h1 align="center">Pluto</h1>
+
+<p align="center">
+  <strong>The language for distributed backend systems.</strong>
+</p>
+
+<p align="center">
+  Native compilation &bull; Language-level DI &bull; Compiler-inferred errors &bull; Contracts &bull; AI-native tooling
 </p>
 
 ---
 
-Pluto is a compiled language designed for building backend services where distribution, dependency injection, and error handling are first-class concerns. It compiles to native code via Cranelift, uses garbage collection, and treats the `app` as its fundamental building block.
+Every backend team rebuilds the same infrastructure: dependency injection frameworks, error handling conventions, service communication layers. These are platform problems solved with library duct tape. Pluto puts them in the compiler.
 
 ```
-class OrderService[db: Database, accounts: AccountsService] uses Logger {
-    fn create(mut self, order: Order) Order {
-        if !order.validate() {
-            raise ValidationError { field: "order", message: "invalid" }
-        }
-
-        let user = accounts.get_user(order.user_id)!
-        db.insert(order)!
-        logger.info("created order {order.id} for {user.name}")
-        return order
-    }
-}
-
-app OrderApp[orders: OrderService] {
+app OrderSystem[orders: OrderService, payments: PaymentProcessor] {
     ambient Logger
 
     fn main(self) {
-        self.orders.create(some_order)!
+        let order = self.orders.create(item) catch err {
+            logger.warn("order failed: {err}")
+            return
+        }
+        self.payments.charge(order)!
     }
 }
 ```
 
-## Features
+**One declaration.** The compiler resolves the dependency graph, infers which calls can fail, wires singletons, and generates a native binary. No container. No annotations. No framework.
 
-**Compile-time dependency injection** -- Classes declare what they need with bracket deps `[db: Database]`. The compiler resolves the dependency graph, verifies it at compile time, and generates wiring code. No runtime container, no reflection.
+## Why Pluto
 
-**Compiler-inferred error handling** -- Functions don't declare what errors they throw. The compiler analyzes the entire call graph and infers error-ability automatically. You just handle them: `!` to propagate, `catch` to recover.
-
-**Whole-program compilation** -- The compiler sees all your code at once. It verifies every error is handled, every dependency is satisfiable, and every type is correct across the full program.
-
-**Native performance** -- Compiles to machine code via Cranelift. Benchmarked against C, Go, and Python across compute-heavy workloads.
-
-**Rust-like syntax, no semicolons** -- Familiar syntax for anyone coming from Rust, Go, or TypeScript. Newline-terminated statements keep things clean.
+| | Go | Java/Spring | Pluto |
+|---|---|---|---|
+| **Dependency injection** | Manual wiring or `wire` | Runtime container + reflection | Compiler-resolved, zero overhead |
+| **Error handling** | `if err != nil` (unchecked) | Checked exceptions (viral annotations) | Compiler-inferred, enforced, zero annotation |
+| **Error propagation** | Manual return | `throws` chains | `!` (one character) |
+| **Service structure** | `func main()` | `@SpringBootApplication` | `app` declaration with typed dep graph |
+| **Contracts** | Comments / hope | Bean validation annotations | `requires` / `ensures` / `invariant` — compiler-checked |
+| **Concurrency** | Goroutines (shared state) | Thread pools + `synchronized` | `spawn` with task handles, channels, select |
 
 ## Quick Start
 
 ```bash
-# Build the compiler
-git clone https://github.com/Mkerian10/pluto.git
-cd pluto
+git clone https://github.com/Mkerian10/pluto.git && cd pluto
 cargo build --release
 
-# Hello world
-echo 'fn main() { print("hello, world") }' > hello.pluto
+echo 'fn main() { print("hello, pluto") }' > hello.pluto
 ./target/release/plutoc run hello.pluto
-
-# Check the version
-./target/release/plutoc --version
 ```
 
-## Language Tour
-
-### Functions and Variables
-
-```
-fn fibonacci(n: int) int {
-    if n <= 1 {
-        return n
-    }
-    return fibonacci(n - 1) + fibonacci(n - 2)
-}
-
-fn main() {
-    let result = fibonacci(30)
-    print("fib(30) = {result}")
-}
-```
-
-### Classes and Traits
-
-```
-trait HasArea {
-    fn area(self) int
-}
-
-class Square impl HasArea {
-    side: int
-
-    fn area(self) int {
-        return self.side * self.side
-    }
-}
-
-class Rect impl HasArea {
-    w: int
-    h: int
-
-    fn area(self) int {
-        return self.w * self.h
-    }
-}
-
-fn print_area(shape: HasArea) {
-    print(shape.area())
-}
-```
-
-### Closures and Higher-Order Functions
-
-```
-fn apply(f: fn(int) int, x: int) int {
-    return f(x)
-}
-
-fn make_adder(n: int) fn(int) int {
-    return (x: int) => x + n
-}
-
-fn main() {
-    let double = (x: int) => x * 2
-    print(apply(double, 10))    // 20
-
-    let add5 = make_adder(5)
-    print(add5(100))            // 105
-}
-```
-
-### Enums and Pattern Matching
-
-```
-enum Shape {
-    Circle { radius: float }
-    Rectangle { w: float, h: float }
-    Point
-}
-
-fn describe(s: Shape) string {
-    let result = ""
-    match s {
-        Shape.Circle { radius: r } {
-            result = "circle with radius {r}"
-        }
-        Shape.Rectangle { w: w, h: h } {
-            result = "{w} x {h} rectangle"
-        }
-        Shape.Point {
-            result = "a point"
-        }
-    }
-    return result
-}
-```
-
-### Generics
-
-```
-fn identity<T>(x: T) T {
-    return x
-}
-
-class Box<T> {
-    value: T
-}
-
-fn main() {
-    let b = Box<int> { value: 42 }
-    let name = identity("pluto")
-}
-```
-
-### Nullable Types
-
-```
-fn find_user(id: int) string? {
-    if id <= 0 {
-        return none
-    }
-    return "User {id}"
-}
-
-fn main() int? {
-    let user = find_user(42)?      // unwrap or propagate none
-    print(user)
-
-    let n = "123".to_int()?        // string parsing returns int?
-    print(n * 2)
-    return none
-}
-```
-
-### Error Handling
-
-Errors are a first-class concept. The compiler infers which functions can fail -- no annotations needed.
-
-```
-error NotFoundError { id: int }
-error ValidationError { message: string }
-
-fn find_user(id: int) string {
-    if id <= 0 {
-        raise ValidationError { message: "invalid id" }
-    }
-    if id > 1000 {
-        raise NotFoundError { id: id }
-    }
-    return "User {id}"
-}
-
-fn main() {
-    // Propagate with !
-    let user = find_user(42)!
-
-    // Handle with catch
-    let result = find_user(-1) catch "unknown"
-}
-```
-
-### Dependency Injection and Apps
-
-The `app` is Pluto's entry point. Dependencies are declared, resolved at compile time, and wired automatically.
-
-```
-class Logger {
-    fn info(self, msg: string) {
-        print("[INFO] {msg}")
-    }
-}
-
-class Database {
-    fn query(self, sql: string) string {
-        return "result: {sql}"
-    }
-}
-
-class UserService[db: Database] uses Logger {
-    fn get_user(self, id: int) string {
-        logger.info("fetching user {id}")
-        return self.db.query("SELECT * FROM users WHERE id = {id}")
-    }
-}
-
-app MyApp[users: UserService] {
-    ambient Logger
-
-    fn main(self) {
-        let result = self.users.get_user(42)
-        print(result)
-    }
-}
-```
-
-### Built-in Test Framework
-
-```
-fn add(a: int, b: int) int {
-    return a + b
-}
-
-test "addition works" {
-    expect(add(1, 2)).to_equal(3)
-    expect(add(-1, 1)).to_equal(0)
-}
-
-test "boolean checks" {
-    expect(true).to_be_true()
-    expect(1 > 2).to_be_false()
-}
-```
-
-```bash
-plutoc test my_tests.pluto
-```
-
-### Collections
-
-```
-fn main() {
-    // Arrays
-    let nums = [1, 2, 3, 4, 5]
-    print(nums[0])
-    print(nums.len())
-
-    // Maps
-    let scores = Map<string, int> { "alice": 95, "bob": 87 }
-    print(scores["alice"])
-    scores["charlie"] = 91
-
-    // Sets
-    let tags = Set<string> { "fast", "compiled", "native" }
-    print(tags.contains("fast"))
-}
-```
-
-### HTTP Server (with stdlib)
+## A Real Program
 
 ```
 import std.http
 import std.json
 
-fn handle(req: http.Request) http.Response {
-    if req.path == "/hello" {
-        let body = json.object()
-        body.set("message", json.string("Hello, World!"))
-        return http.ok_json(body.to_string())
+class UserService[db: Database] {
+    fn get(self, id: int) User {
+        return self.db.query("SELECT * FROM users WHERE id = {id}")!
     }
-    return http.not_found()
+}
+
+class Database {
+    fn query(self, sql: string) string {
+        return "result"
+    }
+}
+
+app API[users: UserService] {
+    fn main(self) {
+        let user = self.users.get(42) catch err {
+            print("not found")
+            return
+        }
+        print(user)
+    }
+}
+```
+
+The compiler sees `UserService` needs `Database`, allocates both as singletons in dependency order, and wires them. `get` calls `db.query` which can fail — the compiler infers this, requires handling at every call site, and rejects the program if you forget.
+
+## Five Things That Justify a New Language
+
+### 1. Dependency injection is a language construct
+
+```
+class Cache[store: RedisStore] {
+    fn get(self, key: string) string? { ... }
+}
+```
+
+Bracket deps are resolved at compile time. The compiler topologically sorts the graph, detects cycles, and generates zero-cost wiring. Classes with injected deps cannot be manually constructed — the DI system owns their lifecycle.
+
+### 2. The compiler infers error handling
+
+```
+error NotFound { id: int }
+
+fn find(id: int) User {
+    if id <= 0 { raise NotFound { id: id } }
+    return lookup(id)
+}
+
+fn process(id: int) string {
+    let user = find(id)!           // propagate
+    return user.name
 }
 
 fn main() {
-    let server = http.listen("0.0.0.0", 8080)!
-    print("listening on :8080")
+    let name = process(42) catch "unknown"  // handle
+}
+```
 
-    while true {
-        let conn = server.accept()!
-        let req = conn.read_request()!
-        conn.send_response(handle(req))
-        conn.close()
+No `throws`. No `Result<T, E>`. No `if err != nil`. The compiler analyzes the entire call graph, determines which functions are fallible, and enforces handling at every call site. If you forget `!` or `catch`, it does not compile.
+
+### 3. `app` is a first-class construct
+
+```
+app PaymentSystem[orders: OrderService, billing: BillingService] {
+    ambient Logger
+
+    fn main(self) {
+        self.orders.process_pending()!
     }
 }
 ```
 
+The `app` is the entry point, the dependency root, and the unit of deployment. It is not `func main()` with setup code — it is a structural declaration the compiler understands.
+
+### 4. Contracts are executable specifications
+
+```
+class Account {
+    balance: int
+    invariant self.balance >= 0
+
+    fn withdraw(mut self, amount: int)
+        requires amount > 0
+        requires self.balance >= amount
+        ensures self.balance == old(self.balance) - amount
+    {
+        self.balance = self.balance - amount
+    }
+}
+```
+
+Invariants are checked after construction and every method call. Preconditions and postconditions are enforced at runtime. `old()` captures values at function entry. Violations abort — they are not catchable errors.
+
+### 5. Concurrency composes with everything
+
+```
+let t1 = spawn fetch_prices(catalog)
+let t2 = spawn fetch_inventory(warehouse)
+
+let prices = t1.get()!     // errors propagate from spawned tasks
+let stock = t2.get()!
+
+let (tx, rx) = chan<Order>(100)
+spawn produce_orders(tx)
+
+for order in rx {
+    process(order)!
+}
+```
+
+`spawn` returns `Task<T>`. Errors flow through `.get()` and are handled with the same `!` / `catch` as everything else. Channels provide typed, bounded communication between tasks.
+
+## The Language
+
+| Feature | Syntax |
+|---|---|
+| Variables | `let x = 42` / `let mut y = 0` |
+| Functions | `fn add(a: int, b: int) int { return a + b }` |
+| Strings | `"hello {name}"` with interpolation |
+| Arrays | `[1, 2, 3]` with `.len()`, `.push()`, indexing |
+| Maps | `Map<string, int> { "a": 1 }` |
+| Sets | `Set<int> { 1, 2, 3 }` |
+| Classes | `class Point { x: int, y: int }` |
+| Traits | `class Square impl HasArea { ... }` |
+| Enums | `enum Color { Red, Blue }` + `match` |
+| Closures | `(x: int) => x * 2` |
+| Generics | `fn id<T>(x: T) T` (monomorphized) |
+| Nullable | `T?` / `none` / `?` propagation |
+| For loops | `for x in items { ... }` / `for i in 0..10 { ... }` |
+| Casting | `x as float` |
+| Tests | `test "name" { expect(x).to_equal(y) }` |
+| Modules | `import math` / `pub fn` |
+| Packages | `pluto.toml` with path and git deps |
+| FFI | `extern rust "mycrate" { fn compute(x: int) int }` |
+
 ## Standard Library
 
-| Module | Description |
-|--------|-------------|
-| `std.math` | `abs`, `min`, `max`, `pow`, `clamp` |
-| `std.strings` | `substring`, `contains`, `starts_with`, `split`, `trim`, `replace`, `to_upper`, `to_lower` |
-| `std.json` | JSON parsing, building, and serialization |
-| `std.http` | HTTP server with request/response handling |
-| `std.fs` | File I/O: read, write, seek, directory operations |
-| `std.net` | TCP listener and connection wrappers |
-| `std.socket` | Low-level socket operations |
-| `std.collections` | `map`, `filter`, `fold`, `reduce`, `zip`, `enumerate`, and more |
-| `std.time` | Wall-clock time, monotonic clocks, sleep, elapsed |
-| `std.random` | Random integers, floats, coin flips, seeded RNG |
-| `std.io` | `println` and `print` |
+| Module | Highlights |
+|---|---|
+| `std.collections` | `map`, `filter`, `fold`, `reduce`, `zip`, `enumerate`, `flat_map` |
+| `std.json` | Parse, build, access nested values, stringify |
+| `std.http` | HTTP server, request/response, routing |
+| `std.fs` | Read, write, seek, directory listing, file metadata |
+| `std.net` | TCP listener, connections, read/write |
+| `std.strings` | `split`, `trim`, `replace`, `contains`, `starts_with`, `to_upper` |
+| `std.math` | `abs`, `pow`, `sqrt`, `sin`, `cos`, `log`, `clamp` |
+| `std.time` | Wall clock, monotonic, sleep, elapsed |
+| `std.random` | Integers, floats, ranges, coin flips, seeded RNG |
+| `std.io` | `read_line()` for interactive input |
 
 ## Compiler
 
-```
-plutoc compile main.pluto -o myapp    # Compile to native binary
-plutoc run main.pluto                 # Compile and run
+```bash
+plutoc compile main.pluto -o myapp    # Native binary
+plutoc run main.pluto                 # Compile + execute
 plutoc test tests.pluto               # Run test blocks
-plutoc --version                      # Print version
+plutoc run app.pluto --stdlib stdlib   # With standard library
 ```
 
-The compiler pipeline: **Lex** &#8594; **Parse** &#8594; **Module Resolve** &#8594; **Flatten** &#8594; **Closure Lift** &#8594; **Type Check** &#8594; **Monomorphize** &#8594; **Codegen** (Cranelift) &#8594; **Link**
+**Pipeline:** Lex &rarr; Parse &rarr; Module Resolve &rarr; Flatten &rarr; Closure Lift &rarr; Type Check &rarr; Monomorphize &rarr; Codegen (Cranelift) &rarr; Link
 
-Supported targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
+**Targets:** `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
 
-## Benchmarks
+## AI-Native Development
 
-Pluto ships with a benchmark suite covering fibonacci, sorting, N-body simulation, FFT, spectral norm, and more. Run them with:
+Pluto exposes its compiler as a structured API. AI agents interact with declarations, types, and cross-references — not raw text.
 
-```bash
-benchmarks/run_benchmarks.sh
-```
-
-Cross-language comparison against C (-O2), Go, and Python:
+- **MCP server** with 20+ tools: `load_module`, `inspect`, `xrefs`, `add_declaration`, `replace_declaration`, `check`, `compile`, `run`, `test`
+- **Binary AST** (`.pluto` PLTO format) with stable UUIDs per declaration
+- **SDK** for programmatic read/write at the semantic level
 
 ```bash
-benchmarks/compare.sh
+plutoc emit-ast main.pluto -o main.pluto    # Source → binary AST
+plutoc generate-pt main.pluto               # Binary AST → readable source
 ```
 
 ## Project Status
 
-Pluto is in early development (v0.1). The compiler supports a substantial set of features but the language is not yet stable. See [SPEC.md](SPEC.md) for the full language specification and [docs/design/](docs/design/) for detailed design documents.
+**Working today:** Functions, classes, traits, enums, generics, closures, DI (`app` + bracket deps + ambient deps + scoped deps), typed error handling, contracts (invariants + requires/ensures + interface guarantees), concurrency (spawn + channels + select), nullable types, modules, packages (local + git), maps, sets, bytes, test framework, Rust FFI, standard library, LSP, binary AST, MCP server, SDK.
 
-### What works today
-- Functions, classes, traits, enums, generics, closures
-- Compile-time dependency injection with `app`
-- Typed error handling with compiler inference
-- First-class nullable types (`T?`, `none`, `?` operator)
-- Concurrency (`spawn`, `Task<T>`, channels, `select`)
-- Design-by-contract (invariants, requires/ensures, interface guarantees)
-- Modules, imports, and package dependencies (local + git)
-- Maps, sets, arrays, string interpolation
-- Built-in test framework
-- Standard library (JSON, HTTP, filesystem, networking, collections, time, random)
-- LSP with diagnostics, go-to-definition, hover, and document symbols
-- Native compilation on macOS and Linux (ARM64, x86_64)
-- Binary AST format (PLTO) with stable UUIDs and cross-references
-- SDK with read API and write API (`ModuleEditor` for programmatic add/replace/rename/delete)
-- MCP server for AI agent integration (explore, query, cross-reference tools)
+**Ahead:** Distribution (cross-pod RPC), orchestration layer, LLVM backend, package registry, stages (programmable entry points), inferred synchronization.
 
-### What's ahead
-- Distribution (cross-pod RPC, geographic awareness)
-- Orchestration layer
-- LLVM backend
-- Package manager (registry)
+## Book
+
+The [Pluto Book](book/) is a comprehensive guide written for experienced developers. It covers everything from the language's differentiating features to the full standard library reference.
+
+```bash
+cd book && mdbook serve    # Read locally at http://localhost:3000
+```
 
 ## License
 
