@@ -7,8 +7,65 @@ on:
     branches: [master]
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   benchmark:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Pluto benchmarks
+        run: |
+          chmod +x benchmarks/run_benchmarks.sh
+          benchmarks/run_benchmarks.sh --json-output benchmark-results.json
+
+      - name: Write job summary
+        if: always()
+        run: |
+          echo "## Benchmark Results (${{ matrix.os }})" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat benchmark-results.json | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          for r in data:
+              print(f\"{r['name']:20s} {r['value']:>6d} {r['unit']}\")
+          " >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "No results to display" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Store benchmark result (push to master)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: customSmallerIsBetter
+          output-file-path: benchmark-results.json
+          benchmark-data-dir-path: dev/bench/${{ matrix.os }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: '150%'
+          fail-on-alert: false
+
+      - name: Compare against baseline (PRs)
+        if: github.event_name == 'pull_request'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: customSmallerIsBetter
+          output-file-path: benchmark-results.json
+          benchmark-data-dir-path: dev/bench/${{ matrix.os }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+          alert-threshold: '150%'
+          fail-on-alert: false
+          comment-on-alert: true
+          alert-comment-cc-users: '@matthewkerian'
+
+  compare:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -23,7 +80,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Run benchmark comparison
+      - name: Run cross-language comparison
         run: |
           chmod +x benchmarks/compare.sh
           benchmarks/compare.sh

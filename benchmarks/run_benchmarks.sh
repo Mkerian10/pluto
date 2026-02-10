@@ -8,6 +8,24 @@ TMP_DIR=$(mktemp -d)
 
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+# Parse arguments
+JSON_OUTPUT=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --json-output)
+            JSON_OUTPUT="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# JSON results accumulator (comma-separated entries, joined into array at the end)
+JSON_ENTRIES=""
+
 echo "=== Pluto Runtime Benchmarks ==="
 echo ""
 
@@ -78,6 +96,16 @@ for bench in "${BENCHMARKS[@]}"; do
     if [ -n "$elapsed_line" ]; then
         echo "OK    $bench  $elapsed_line"
         PASS=$((PASS + 1))
+        # Accumulate JSON result if --json-output was requested
+        if [ -n "$JSON_OUTPUT" ]; then
+            ms=$(echo "$elapsed_line" | sed 's/elapsed: \([0-9]*\) ms/\1/')
+            entry="{\"name\":\"$bench\",\"unit\":\"ms\",\"value\":$ms}"
+            if [ -n "$JSON_ENTRIES" ]; then
+                JSON_ENTRIES="$JSON_ENTRIES,$entry"
+            else
+                JSON_ENTRIES="$entry"
+            fi
+        fi
     else
         echo "FAIL  $bench (no timing output)"
         echo "      output: $output"
@@ -87,4 +115,11 @@ done
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
+
+# Write JSON output if requested
+if [ -n "$JSON_OUTPUT" ]; then
+    echo "[$JSON_ENTRIES]" > "$JSON_OUTPUT"
+    echo "JSON results written to $JSON_OUTPUT"
+fi
+
 exit $FAIL
