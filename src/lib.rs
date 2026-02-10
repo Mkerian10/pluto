@@ -60,6 +60,7 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
     contracts::validate_contracts(&program)?;
     let (mut env, _warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
+    typeck::check_trait_conformance(&program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);
     codegen::codegen(&program, &env, source)
@@ -86,6 +87,7 @@ pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<Com
     contracts::validate_contracts(&program)?;
     let (mut env, warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
+    typeck::check_trait_conformance(&program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);
     let obj = codegen::codegen(&program, &env, source)?;
@@ -128,6 +130,7 @@ pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError
     contracts::validate_contracts(&program)?;
     let (mut env, _warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
+    typeck::check_trait_conformance(&program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);
     codegen::codegen(&program, &env, source)
@@ -207,6 +210,7 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
         diagnostics::render_warning(&source, &entry_file.display().to_string(), w);
     }
     monomorphize::monomorphize(&mut program, &mut env)?;
+    typeck::check_trait_conformance(&program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);
     let object_bytes = codegen::codegen(&program, &env, &source)?;
@@ -272,6 +276,7 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
     contracts::validate_contracts(&program)?;
     let (mut env, warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
+    typeck::check_trait_conformance(&program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);
     let derived = derived::DerivedInfo::build(&env, &program);
@@ -325,6 +330,7 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
         diagnostics::render_warning(&source, &entry_file.display().to_string(), w);
     }
     monomorphize::monomorphize(&mut program, &mut env)?;
+    typeck::check_trait_conformance(&program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);
     let object_bytes = codegen::codegen(&program, &env, &source)?;

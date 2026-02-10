@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 
@@ -75,6 +76,7 @@ pub struct ClassDecl {
     pub id: Uuid,
     pub name: Spanned<String>,
     pub type_params: Vec<Spanned<String>>,
+    pub type_param_bounds: HashMap<String, Vec<Spanned<String>>>,
     pub fields: Vec<Field>,
     pub methods: Vec<Spanned<Function>>,
     pub invariants: Vec<Spanned<ContractClause>>,
@@ -122,6 +124,7 @@ pub struct Function {
     pub id: Uuid,
     pub name: Spanned<String>,
     pub type_params: Vec<Spanned<String>>,
+    pub type_param_bounds: HashMap<String, Vec<Spanned<String>>>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub contracts: Vec<Spanned<ContractClause>>,
@@ -261,6 +264,7 @@ pub enum Expr {
     Call {
         name: Spanned<String>,
         args: Vec<Spanned<Expr>>,
+        type_args: Vec<Spanned<TypeExpr>>,
         target_id: Option<Uuid>,
     },
     FieldAccess {
@@ -418,6 +422,7 @@ pub struct EnumDecl {
     pub id: Uuid,
     pub name: Spanned<String>,
     pub type_params: Vec<Spanned<String>>,
+    pub type_param_bounds: HashMap<String, Vec<Spanned<String>>>,
     pub variants: Vec<EnumVariant>,
     pub is_pub: bool,
 }

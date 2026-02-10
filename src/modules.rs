@@ -1406,6 +1406,7 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
                 *expr = Expr::Call {
                     name: Spanned::new(qualified_name, name_span),
                     args: std::mem::take(args),
+                    type_args: vec![],
                     target_id: None,
                 };
                 return;

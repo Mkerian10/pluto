@@ -404,6 +404,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                                 id: Uuid::new_v4(),
                                 name: trait_method.name.clone(),
                                 type_params: vec![],
+                                type_param_bounds: std::collections::HashMap::new(),
                                 params: trait_method.params.clone(),
                                 return_type: trait_method.return_type.clone(),
                                 contracts: trait_method.contracts.clone(),

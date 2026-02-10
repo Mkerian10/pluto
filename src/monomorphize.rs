@@ -179,7 +179,47 @@ fn instantiate_class(
                 return_type,
             });
         }
+    }
 
+    // Register default trait methods for monomorphized classes with impl_traits
+    let class_method_names: Vec<String> = class.methods.iter().map(|m| m.node.name.node.clone()).collect();
+    for trait_name_spanned in &class.impl_traits {
+        let trait_name = &trait_name_spanned.node;
+        if let Some(trait_info) = env.traits.get(trait_name).cloned() {
+            for (method_name, trait_sig) in &trait_info.methods {
+                if !class_method_names.contains(method_name) && trait_info.default_methods.contains(method_name) {
+                    let method_mangled = mangle_method(mangled, method_name);
+                    if !env.functions.contains_key(&method_mangled) {
+                        let mut params = trait_sig.params.clone();
+                        // Replace the Void placeholder self param with the concrete class type
+                        if !params.is_empty() {
+                            params[0] = PlutoType::Class(mangled.to_string());
+                        }
+                        env.functions.insert(
+                            method_mangled.clone(),
+                            crate::typeck::env::FuncSig {
+                                params,
+                                return_type: trait_sig.return_type.clone(),
+                            },
+                        );
+                        // Propagate mut self from trait default method
+                        if trait_info.mut_self_methods.contains(method_name) {
+                            env.mut_self_methods.insert(method_mangled);
+                        }
+                        // Add method name to class info
+                        if let Some(info) = env.classes.get_mut(mangled) {
+                            if !info.methods.contains(method_name) {
+                                info.methods.push(method_name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Type-check method bodies
+    for method in &class.methods {
         crate::typeck::check_function(&method.node, env, Some(mangled))?;
     }
 
@@ -493,9 +533,12 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
             substitute_in_expr(&mut inner.node, bindings);
             substitute_in_type_expr(&mut target_type.node, bindings);
         }
-        Expr::Call { args, .. } => {
+        Expr::Call { args, type_args, .. } => {
             for arg in args.iter_mut() {
                 substitute_in_expr(&mut arg.node, bindings);
+            }
+            for ta in type_args.iter_mut() {
+                substitute_in_type_expr(&mut ta.node, bindings);
             }
         }
         Expr::FieldAccess { object, .. } => {
@@ -1110,10 +1153,11 @@ fn rewrite_stmt(stmt: &mut Stmt, rewrites: &HashMap<(usize, usize), String>) {
 
 fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(usize, usize), String>) {
     match expr {
-        Expr::Call { name, args, .. } => {
+        Expr::Call { name, args, type_args, .. } => {
             // Check if this call site should be rewritten
             if let Some(mangled) = rewrites.get(&(start, end)) {
                 name.node = mangled.clone();
+                type_args.clear();
             }
             for arg in args.iter_mut() {
                 rewrite_expr(&mut arg.node, arg.span.start, arg.span.end, rewrites);

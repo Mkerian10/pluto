@@ -275,6 +275,7 @@ fn lift_in_expr(
                     id: Uuid::new_v4(),
                     name: Spanned::new(fn_name.clone(), Span::new(0, 0)),
                     type_params: vec![],
+                    type_param_bounds: std::collections::HashMap::new(),
                     params: all_params,
                     return_type: if ret_type == PlutoType::Void {
                         None

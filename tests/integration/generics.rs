@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail};
+use common::{compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
 
 // ── Generic Functions ────────────────────────────────────────────
 
@@ -163,4 +163,505 @@ fn main() {
 "#,
     );
     assert_eq!(out, "7\n");
+}
+
+// ── Generic Classes with Trait Impls (Phase A) ─────────────────
+
+#[test]
+fn generic_class_impl_trait() {
+    let out = compile_and_run_stdout(
+        r#"
+trait Printable {
+    fn show(self) string
+}
+
+class Box<T> impl Printable {
+    value: T
+
+    fn show(self) string {
+        return "box"
+    }
+}
+
+fn use_printable(p: Printable) string {
+    return p.show()
+}
+
+fn main() {
+    let b = Box<int> { value: 42 }
+    print(use_printable(b))
+}
+"#,
+    );
+    assert_eq!(out, "box\n");
+}
+
+#[test]
+fn generic_class_trait_dispatch() {
+    let out = compile_and_run_stdout(
+        r#"
+trait Describable {
+    fn describe(self) string
+}
+
+class Wrapper<T> impl Describable {
+    inner: T
+
+    fn describe(self) string {
+        return "wrapper"
+    }
+}
+
+fn print_description(d: Describable) {
+    print(d.describe())
+}
+
+fn main() {
+    let w1 = Wrapper<int> { inner: 10 }
+    let w2 = Wrapper<string> { inner: "hello" }
+    print_description(w1)
+    print_description(w2)
+}
+"#,
+    );
+    assert_eq!(out, "wrapper\nwrapper\n");
+}
+
+#[test]
+fn generic_class_multiple_traits() {
+    let out = compile_and_run_stdout(
+        r#"
+trait Showable {
+    fn show(self) string
+}
+
+trait Countable {
+    fn count(self) int
+}
+
+class Container<T> impl Showable, Countable {
+    item: T
+    size: int
+
+    fn show(self) string {
+        return "container"
+    }
+
+    fn count(self) int {
+        return self.size
+    }
+}
+
+fn display(s: Showable) {
+    print(s.show())
+}
+
+fn get_count(c: Countable) int {
+    return c.count()
+}
+
+fn main() {
+    let c = Container<string> { item: "hello", size: 3 }
+    display(c)
+    print(get_count(c))
+}
+"#,
+    );
+    assert_eq!(out, "container\n3\n");
+}
+
+#[test]
+fn generic_class_trait_default_method() {
+    let out = compile_and_run_stdout(
+        r#"
+trait Greetable {
+    fn name(self) string
+
+    fn greet(self) string {
+        return "Hello, " + self.name() + "!"
+    }
+}
+
+class Holder<T> impl Greetable {
+    value: T
+
+    fn name(self) string {
+        return "holder"
+    }
+}
+
+fn main() {
+    let h = Holder<int> { value: 42 }
+    print(h.greet())
+}
+"#,
+    );
+    assert_eq!(out, "Hello, holder!\n");
+}
+
+#[test]
+fn generic_class_trait_conformance_fail() {
+    compile_should_fail_with(
+        r#"
+trait Showable {
+    fn show(self) string
+}
+
+class Bad<T> impl Showable {
+    value: T
+
+    fn show(self) int {
+        return 42
+    }
+}
+
+fn main() {
+    let b = Bad<int> { value: 1 }
+}
+"#,
+        "return type",
+    );
+}
+
+// ── Phase B: Type Bounds ────────────────────────────────────────
+
+#[test]
+fn type_bound_basic() {
+    let out = compile_and_run_stdout(r#"
+trait Printable {
+    fn show(self) string
+}
+
+class MyBox impl Printable {
+    value: int
+
+    fn show(self) string {
+        return "box"
+    }
+}
+
+fn process<T: Printable>(x: T) string {
+    return x.show()
+}
+
+fn main() {
+    let b = MyBox { value: 42 }
+    print(process(b))
+}
+"#);
+    assert_eq!(out.trim(), "box");
+}
+
+#[test]
+fn type_bound_violation() {
+    compile_should_fail_with(r#"
+trait Printable {
+    fn show(self) string
+}
+
+fn process<T: Printable>(x: T) string {
+    return x.show()
+}
+
+fn main() {
+    process(42)
+}
+"#,
+        "does not satisfy bound",
+    );
+}
+
+#[test]
+fn type_bound_multiple() {
+    let out = compile_and_run_stdout(r#"
+trait Showable {
+    fn show(self) string
+}
+
+trait Countable {
+    fn count(self) int
+}
+
+class Item impl Showable, Countable {
+    name: string
+    n: int
+
+    fn show(self) string {
+        return self.name
+    }
+
+    fn count(self) int {
+        return self.n
+    }
+}
+
+fn display<T: Showable + Countable>(x: T) string {
+    return x.show()
+}
+
+fn main() {
+    let item = Item { name: "hello", n: 5 }
+    print(display(item))
+}
+"#);
+    assert_eq!(out.trim(), "hello");
+}
+
+#[test]
+fn type_bound_on_class() {
+    let out = compile_and_run_stdout(r#"
+trait Printable {
+    fn show(self) string
+}
+
+class Wrapper impl Printable {
+    label: string
+
+    fn show(self) string {
+        return self.label
+    }
+}
+
+class Container<T: Printable> {
+    item: T
+}
+
+fn main() {
+    let w = Wrapper { label: "hi" }
+    let c = Container<Wrapper> { item: w }
+    print(c.item.show())
+}
+"#);
+    assert_eq!(out.trim(), "hi");
+}
+
+#[test]
+fn type_bound_on_class_violation() {
+    compile_should_fail_with(r#"
+trait Printable {
+    fn show(self) string
+}
+
+class Container<T: Printable> {
+    item: T
+}
+
+fn main() {
+    let c = Container<int> { item: 42 }
+}
+"#,
+        "does not satisfy bound",
+    );
+}
+
+#[test]
+fn type_bound_with_trait_impl() {
+    let out = compile_and_run_stdout(r#"
+trait Printable {
+    fn show(self) string
+}
+
+trait Describable {
+    fn describe(self) string
+}
+
+class Inner impl Printable {
+    val: int
+
+    fn show(self) string {
+        return "inner"
+    }
+}
+
+class MyBox<T: Printable> impl Describable {
+    item: T
+
+    fn get_label(self) string {
+        return self.item.show()
+    }
+
+    fn describe(self) string {
+        return "described"
+    }
+}
+
+fn use_describable(d: Describable) string {
+    return d.describe()
+}
+
+fn main() {
+    let i = Inner { val: 1 }
+    let b = MyBox<Inner> { item: i }
+    print(b.get_label())
+    print(use_describable(b))
+}
+"#);
+    assert_eq!(out.trim(), "inner\ndescribed");
+}
+
+#[test]
+fn type_bound_multiple_violation() {
+    compile_should_fail_with(r#"
+trait Showable {
+    fn show(self) string
+}
+
+trait Countable {
+    fn count(self) int
+}
+
+class Item impl Showable {
+    name: string
+
+    fn show(self) string {
+        return self.name
+    }
+}
+
+fn display<T: Showable + Countable>(x: T) string {
+    return x.show()
+}
+
+fn main() {
+    let item = Item { name: "hello" }
+    display(item)
+}
+"#,
+        "does not satisfy bound",
+    );
+}
+
+// ============================================================
+// Phase C: Explicit type args on function calls
+// ============================================================
+
+#[test]
+fn explicit_type_args_basic() {
+    let out = compile_and_run_stdout(r#"
+fn identity<T>(x: T) T {
+    return x
+}
+
+fn main() {
+    let val = identity<int>(42)
+    print(val)
+}
+"#);
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn explicit_type_args_multi() {
+    let out = compile_and_run_stdout(r#"
+class Pair<A, B> {
+    first: A
+    second: B
+}
+
+fn make_pair<A, B>(a: A, b: B) Pair<A, B> {
+    return Pair<A, B> { first: a, second: b }
+}
+
+fn main() {
+    let p = make_pair<int, string>(1, "hello")
+    print(p.first)
+    print(p.second)
+}
+"#);
+    assert_eq!(out.trim(), "1\nhello");
+}
+
+#[test]
+fn explicit_type_args_no_inference_needed() {
+    // Type args are explicit even though they could be inferred
+    let out = compile_and_run_stdout(r#"
+fn add<T>(x: T, y: T) T {
+    return x
+}
+
+fn main() {
+    let val = add<string>("hello", "world")
+    print(val)
+}
+"#);
+    assert_eq!(out.trim(), "hello");
+}
+
+#[test]
+fn explicit_type_args_wrong_count() {
+    compile_should_fail_with(r#"
+fn identity<T>(x: T) T {
+    return x
+}
+
+fn main() {
+    let val = identity<int, string>(42)
+}
+"#,
+        "expects 1 type arguments, got 2",
+    );
+}
+
+#[test]
+fn explicit_type_args_non_generic() {
+    compile_should_fail_with(r#"
+fn add(x: int, y: int) int {
+    return x + y
+}
+
+fn main() {
+    let val = add<int>(1, 2)
+}
+"#,
+        "is not generic and does not accept type arguments",
+    );
+}
+
+#[test]
+fn explicit_type_args_with_bounds() {
+    // Combines Phase B (bounds) with Phase C (explicit type args)
+    let out = compile_and_run_stdout(r#"
+trait Printable {
+    fn show(self) string
+}
+
+class Wrapper impl Printable {
+    label: string
+
+    fn show(self) string {
+        return self.label
+    }
+}
+
+fn display<T: Printable>(x: T) string {
+    return x.show()
+}
+
+fn main() {
+    let w = Wrapper { label: "test" }
+    let result = display<Wrapper>(w)
+    print(result)
+}
+"#);
+    assert_eq!(out.trim(), "test");
+}
+
+#[test]
+fn explicit_type_args_bounds_violation() {
+    // Explicit type args that violate bounds
+    compile_should_fail_with(r#"
+trait Printable {
+    fn show(self) string
+}
+
+fn display<T: Printable>(x: T) string {
+    return "nope"
+}
+
+fn main() {
+    let val = display<int>(42)
+}
+"#,
+        "does not satisfy bound",
+    );
 }

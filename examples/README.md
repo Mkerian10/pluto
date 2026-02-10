@@ -167,6 +167,14 @@ cargo run -- compile examples/system/main.pluto -o /tmp/system_build
 /tmp/system_build/background
 ```
 
+## generics
+
+Demonstrates advanced generics: generic classes implementing traits (`class Box<T: Printable> impl Printable`), type bounds on generic parameters (`<T: Trait1 + Trait2>`), and explicit type arguments on function calls (`make_pair<string, int>(...)`).
+
+```bash
+cargo run -- run examples/generics/main.pluto
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.
