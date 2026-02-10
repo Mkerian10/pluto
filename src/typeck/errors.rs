@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use super::env::{MethodResolution, TypeEnv};
+use super::env::{mangle_method, MethodResolution, TypeEnv};
 
 pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
     let mut direct_errors: HashMap<String, HashSet<String>> = HashMap::new();
@@ -22,7 +22,7 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
         if !class.node.type_params.is_empty() { continue; }
         let class_name = &class.node.name.node;
         for method in &class.node.methods {
-            let mangled = format!("{}_{}", class_name, method.node.name.node);
+            let mangled = mangle_method(class_name, &method.node.name.node);
             let (directs, edges) = collect_block_effects(&method.node.body.node, &mangled, env);
             direct_errors.insert(mangled.clone(), directs);
             propagation_edges.insert(mangled, edges);
@@ -39,10 +39,10 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == trait_name.node {
                     for tm in &trait_decl.node.methods {
-                        if tm.body.is_some() && !class_method_names.contains(&tm.name.node) {
-                            let mangled = format!("{}_{}", class_name, tm.name.node);
+                        if let Some(body) = &tm.body && !class_method_names.contains(&tm.name.node) {
+                            let mangled = mangle_method(class_name, &tm.name.node);
                             let (directs, edges) =
-                                collect_block_effects(&tm.body.as_ref().unwrap().node, &mangled, env);
+                                collect_block_effects(&body.node, &mangled, env);
                             direct_errors.insert(mangled.clone(), directs);
                             propagation_edges.insert(mangled, edges);
                         }
@@ -56,7 +56,7 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
     if let Some(app_spanned) = &program.app {
         let app_name = &app_spanned.node.name.node;
         for method in &app_spanned.node.methods {
-            let mangled = format!("{}_{}", app_name, method.node.name.node);
+            let mangled = mangle_method(app_name, &method.node.name.node);
             let (directs, edges) = collect_block_effects(&method.node.body.node, &mangled, env);
             direct_errors.insert(mangled.clone(), directs);
             propagation_edges.insert(mangled, edges);
@@ -201,6 +201,14 @@ fn collect_stmt_effects(
                 direct_errors.insert("ChannelClosed".to_string());
             }
         }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                collect_expr_effects(&seed.node, direct_errors, edges, current_fn, env);
+            }
+            for s in &body.node.stmts {
+                collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -242,7 +250,7 @@ fn collect_expr_effects(
                         Some(MethodResolution::TraitDynamic { trait_name, method_name }) => {
                             for (class_name, info) in &env.classes {
                                 if info.impl_traits.iter().any(|t| t == trait_name) {
-                                    edges.insert(format!("{}_{}", class_name, method_name));
+                                    edges.insert(mangle_method(class_name, method_name));
                                 }
                             }
                         }
@@ -297,7 +305,9 @@ fn collect_expr_effects(
             }
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    collect_expr_effects(&body.node, direct_errors, edges, current_fn, env);
+                    for stmt in &body.node.stmts {
+                        collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
+                    }
                 }
                 CatchHandler::Shorthand(fb) => {
                     collect_expr_effects(&fb.node, direct_errors, edges, current_fn, env);
@@ -364,11 +374,9 @@ fn collect_expr_effects(
             // Only collect effects from spawn arg expressions (inside the closure's inner Call).
             if let Expr::Closure { body, .. } = &call.node {
                 for stmt in &body.node.stmts {
-                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
-                        if let Expr::Call { args, .. } = &ret_expr.node {
-                            for arg in args {
-                                collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
-                            }
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node && let Expr::Call { args, .. } = &ret_expr.node {
+                        for arg in args {
+                            collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
                         }
                     }
                 }
@@ -409,7 +417,7 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
         if !class.node.type_params.is_empty() { continue; }
         let class_name = &class.node.name.node;
         for method in &class.node.methods {
-            let current_fn = format!("{}_{}", class_name, method.node.name.node);
+            let current_fn = mangle_method(class_name, &method.node.name.node);
             enforce_block(&method.node.body.node, &current_fn, env)?;
         }
     }
@@ -422,9 +430,9 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == trait_name.node {
                     for tm in &trait_decl.node.methods {
-                        if tm.body.is_some() && !class_method_names.contains(&tm.name.node) {
-                            let current_fn = format!("{}_{}", class_name, tm.name.node);
-                            enforce_block(&tm.body.as_ref().unwrap().node, &current_fn, env)?;
+                        if let Some(body) = &tm.body && !class_method_names.contains(&tm.name.node) {
+                            let current_fn = mangle_method(class_name, &tm.name.node);
+                            enforce_block(&body.node, &current_fn, env)?;
                         }
                     }
                 }
@@ -434,7 +442,7 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
     if let Some(app_spanned) = &program.app {
         let app_name = &app_spanned.node.name.node;
         for method in &app_spanned.node.methods {
-            let current_fn = format!("{}_{}", app_name, method.node.name.node);
+            let current_fn = mangle_method(app_name, &method.node.name.node);
             enforce_block(&method.node.body.node, &current_fn, env)?;
         }
     }
@@ -520,6 +528,13 @@ fn enforce_stmt(
             if let Some(def) = default {
                 enforce_block(&def.node, current_fn, env)?;
             }
+            Ok(())
+        }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                enforce_expr(&seed.node, seed.span, current_fn, env)?;
+            }
+            enforce_block(&body.node, current_fn, env)?;
             Ok(())
         }
         Stmt::Break | Stmt::Continue => Ok(()),
@@ -643,7 +658,7 @@ fn enforce_expr(
                 }
             }
             match handler {
-                CatchHandler::Wildcard { body, .. } => enforce_expr(&body.node, body.span, current_fn, env),
+                CatchHandler::Wildcard { body, .. } => enforce_block(&body.node, current_fn, env),
                 CatchHandler::Shorthand(fb) => enforce_expr(&fb.node, fb.span, current_fn, env),
             }
         }
@@ -709,16 +724,14 @@ fn enforce_expr(
             // Do NOT enforce the inner call itself or the closure body as a whole.
             if let Expr::Closure { body, .. } = &call.node {
                 for stmt in &body.node.stmts {
-                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
-                        if let Expr::Call { args, .. } = &ret_expr.node {
-                            for arg in args {
-                                enforce_expr(&arg.node, arg.span, current_fn, env)?;
-                                if contains_propagate(&arg.node) {
-                                    return Err(CompileError::type_err(
-                                        "error propagation (!) is not allowed in spawn arguments; evaluate before spawn",
-                                        arg.span,
-                                    ));
-                                }
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node && let Expr::Call { args, .. } = &ret_expr.node {
+                        for arg in args {
+                            enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                            if contains_propagate(&arg.node) {
+                                return Err(CompileError::type_err(
+                                    "error propagation (!) is not allowed in spawn arguments; evaluate before spawn",
+                                    arg.span,
+                                ));
                             }
                         }
                     }
@@ -756,7 +769,7 @@ fn contains_propagate(expr: &Expr) -> bool {
         Expr::Closure { body, .. } => body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)),
         Expr::Catch { expr: inner, handler } => {
             contains_propagate(&inner.node) || match handler {
-                CatchHandler::Wildcard { body, .. } => contains_propagate(&body.node),
+                CatchHandler::Wildcard { body, .. } => body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)),
                 CatchHandler::Shorthand(fb) => contains_propagate(&fb.node),
             }
         }
@@ -780,7 +793,7 @@ fn stmt_contains_propagate(stmt: &Stmt) -> bool {
         Stmt::If { condition, then_block, else_block } => {
             contains_propagate(&condition.node)
                 || then_block.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
-                || else_block.as_ref().map_or(false, |eb| eb.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)))
+                || else_block.as_ref().is_some_and(|eb| eb.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)))
         }
         Stmt::While { condition, body } => {
             contains_propagate(&condition.node) || body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
@@ -796,7 +809,7 @@ fn stmt_contains_propagate(stmt: &Stmt) -> bool {
         }
         Stmt::Raise { fields, .. } => fields.iter().any(|(_, v)| contains_propagate(&v.node)),
         Stmt::LetChan { capacity, .. } => {
-            capacity.as_ref().map_or(false, |cap| contains_propagate(&cap.node))
+            capacity.as_ref().is_some_and(|cap| contains_propagate(&cap.node))
         }
         Stmt::Select { arms, default } => {
             for arm in arms {
@@ -809,10 +822,14 @@ fn stmt_contains_propagate(stmt: &Stmt) -> bool {
                 if op_has { return true; }
                 if arm.body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)) { return true; }
             }
-            if let Some(def) = default {
-                if def.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)) { return true; }
+            if let Some(def) = default && def.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)) {
+                return true;
             }
             false
+        }
+        Stmt::Scope { seeds, body, .. } => {
+            if seeds.iter().any(|s| contains_propagate(&s.node)) { return true; }
+            body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
         }
         Stmt::Break | Stmt::Continue => false,
     }

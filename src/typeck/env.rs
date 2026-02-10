@@ -92,6 +92,28 @@ pub enum MethodResolution {
     ChannelTryRecv,
 }
 
+/// How a field of a scoped class gets its value during a scope block.
+#[derive(Debug, Clone)]
+pub enum FieldWiring {
+    /// Value comes from the Nth seed expression
+    Seed(usize),
+    /// Value comes from a singleton global (class name)
+    Singleton(String),
+    /// Value comes from another scoped instance created within this scope block (class name)
+    ScopedInstance(String),
+}
+
+/// Resolved DI graph for a single scope block — computed in typeck, consumed in codegen.
+#[derive(Debug, Clone)]
+pub struct ScopeResolution {
+    /// Topologically sorted scoped classes to allocate (leaves first)
+    pub creation_order: Vec<String>,
+    /// Per-class field wirings: class_name → [(field_name, wiring_source)]
+    pub field_wirings: HashMap<String, Vec<(String, FieldWiring)>>,
+    /// How each binding variable is satisfied
+    pub binding_sources: Vec<FieldWiring>,
+}
+
 #[derive(Debug)]
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, PlutoType>>,
@@ -145,6 +167,25 @@ pub struct TypeEnv {
     pub variable_decls: HashMap<(String, usize), Span>,
     /// Variable reads: (var_name, scope_depth)
     pub variable_reads: HashSet<(String, usize)>,
+    /// Scope block resolutions: keyed by (span.start, span.end) of the Stmt::Scope node
+    pub scope_resolutions: HashMap<(usize, usize), ScopeResolution>,
+    /// Stack of active scope binding names (for spawn-safety checks).
+    /// Each entry is the set of binding names introduced by one scope block.
+    pub scope_binding_names: Vec<HashSet<String>>,
+    /// Classes whose lifecycle was overridden by app-level directives
+    pub lifecycle_overridden: HashSet<String>,
+    /// Spans of closures that capture scope bindings (tainted closures)
+    pub scope_tainted_closures: HashSet<(usize, usize)>,
+    /// Stack of sets: local vars holding tainted closures at each scope-block depth
+    pub scope_tainted_vars: Vec<HashSet<String>>,
+    /// Stack: scope_depth at each scope block entry (for detecting outer-variable assignments)
+    pub scope_body_depths: Vec<usize>,
+}
+
+impl Default for TypeEnv {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TypeEnv {
@@ -200,6 +241,12 @@ impl TypeEnv {
             immutable_bindings: vec![HashSet::new()],
             variable_decls: HashMap::new(),
             variable_reads: HashSet::new(),
+            scope_resolutions: HashMap::new(),
+            scope_binding_names: Vec::new(),
+            lifecycle_overridden: HashSet::new(),
+            scope_tainted_closures: HashSet::new(),
+            scope_tainted_vars: Vec::new(),
+            scope_body_depths: Vec::new(),
         }
     }
 
@@ -249,13 +296,13 @@ impl TypeEnv {
     }
 
     pub fn is_fn_fallible(&self, name: &str) -> bool {
-        self.fn_errors.get(name).map_or(false, |e| !e.is_empty())
+        self.fn_errors.get(name).is_some_and(|e| !e.is_empty())
     }
 
     pub fn is_trait_method_potentially_fallible(&self, trait_name: &str, method_name: &str) -> bool {
         for (class_name, info) in &self.classes {
             if info.impl_traits.iter().any(|t| t == trait_name) {
-                let mangled = format!("{}_{}", class_name, method_name);
+                let mangled = mangle_method(class_name, method_name);
                 if self.is_fn_fallible(&mangled) {
                     return true;
                 }
@@ -319,9 +366,13 @@ impl TypeEnv {
     }
 }
 
+pub fn mangle_method(class_or_app: &str, method: &str) -> String {
+    format!("{}${}", class_or_app, method)
+}
+
 pub fn mangle_name(base: &str, type_args: &[PlutoType]) -> String {
     let suffixes: Vec<String> = type_args.iter().map(mangle_type).collect();
-    format!("{}__{}", base, suffixes.join("_"))
+    format!("{}$${}", base, suffixes.join("$"))
 }
 
 fn mangle_type(ty: &PlutoType) -> String {
@@ -332,26 +383,26 @@ fn mangle_type(ty: &PlutoType) -> String {
         PlutoType::String => "string".into(),
         PlutoType::Void => "void".into(),
         PlutoType::Class(n) | PlutoType::Enum(n) => n.clone(),
-        PlutoType::Array(inner) => format!("arr_{}", mangle_type(inner)),
+        PlutoType::Array(inner) => format!("arr${}", mangle_type(inner)),
         PlutoType::Fn(ps, r) => {
             let ps: Vec<_> = ps.iter().map(mangle_type).collect();
-            format!("fn_{}_ret_{}", ps.join("_"), mangle_type(r))
+            format!("fn${}$ret${}", ps.join("$"), mangle_type(r))
         }
-        PlutoType::Map(k, v) => format!("map_{}_{}", mangle_type(k), mangle_type(v)),
-        PlutoType::Set(t) => format!("set_{}", mangle_type(t)),
+        PlutoType::Map(k, v) => format!("map${}${}", mangle_type(k), mangle_type(v)),
+        PlutoType::Set(t) => format!("set${}", mangle_type(t)),
         PlutoType::Trait(n) => n.clone(),
         PlutoType::TypeParam(n) => n.clone(),
         PlutoType::Range => "range".into(),
         PlutoType::Error => "error".into(),
-        PlutoType::Task(inner) => format!("task_{}", mangle_type(inner)),
+        PlutoType::Task(inner) => format!("task${}", mangle_type(inner)),
         PlutoType::Byte => "byte".into(),
         PlutoType::Bytes => "bytes".into(),
-        PlutoType::Sender(inner) => format!("sender_{}", mangle_type(inner)),
-        PlutoType::Receiver(inner) => format!("receiver_{}", mangle_type(inner)),
+        PlutoType::Sender(inner) => format!("sender${}", mangle_type(inner)),
+        PlutoType::Receiver(inner) => format!("receiver${}", mangle_type(inner)),
         PlutoType::GenericInstance(_, name, args) => {
             let suffixes: Vec<String> = args.iter().map(mangle_type).collect();
-            format!("{}__{}", name, suffixes.join("_"))
+            format!("{}$${}", name, suffixes.join("$"))
         }
-        PlutoType::Nullable(inner) => format!("nullable_{}", mangle_type(inner)),
+        PlutoType::Nullable(inner) => format!("nullable${}", mangle_type(inner)),
     }
 }

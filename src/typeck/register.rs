@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use super::env::{self, ClassInfo, EnumInfo, ErrorInfo, FuncSig, GenericClassInfo, GenericEnumInfo, GenericFuncSig, TraitInfo, TypeEnv};
+use super::env::{self, mangle_method, ClassInfo, EnumInfo, ErrorInfo, FuncSig, GenericClassInfo, GenericEnumInfo, GenericFuncSig, TraitInfo, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::{resolve_type, resolve_type_with_params};
 use super::check::check_function;
@@ -478,7 +478,7 @@ pub(crate) fn register_method_sigs(program: &Program, env: &mut TypeEnv) -> Resu
         let mut method_names = Vec::new();
         for method in &c.methods {
             let m = &method.node;
-            let mangled = format!("{}_{}", class_name, m.name.node);
+            let mangled = mangle_method(class_name, &m.name.node);
             method_names.push(m.name.node.clone());
 
             let mut param_types = Vec::new();
@@ -551,7 +551,7 @@ pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeE
         let mut has_main = false;
         for method in &app.methods {
             let m = &method.node;
-            let mangled = format!("{}_{}", app_name, m.name.node);
+            let mangled = mangle_method(&app_name, &m.name.node);
             method_names.push(m.name.node.clone());
 
             if m.name.node == "main" {
@@ -665,7 +665,7 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
 
     // Also add classes that are deps but have no deps themselves
     for c in &all_di_classes {
-        graph.entry(c.clone()).or_insert_with(Vec::new);
+        graph.entry(c.clone()).or_default();
     }
 
     // Verify all injected types are known classes
@@ -702,7 +702,7 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
         for c in &all_di_classes {
             in_degree.insert(c.clone(), 0);
         }
-        for (_, deps) in &graph {
+        for deps in graph.values() {
             for dep in deps {
                 *in_degree.entry(dep.clone()).or_insert(0) += 1;
             }
@@ -730,12 +730,10 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
             order.push(node.clone());
             // For each class that depends on `node`, decrement its in_degree
             for (class, deps) in &graph {
-                if deps.contains(&node) {
-                    if let Some(deg) = in_degree2.get_mut(class) {
-                        *deg -= 1;
-                        if *deg == 0 {
-                            queue.push_back(class.clone());
-                        }
+                if deps.contains(&node) && let Some(deg) = in_degree2.get_mut(class) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push_back(class.clone());
                     }
                 }
             }
@@ -785,6 +783,88 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
             .filter(|n| Some(n) != app_name_opt.as_ref())
             .collect();
     }
+
+    // Apply app-level lifecycle overrides (runs even if no DI classes in graph)
+    if let Some(app_spanned) = &program.app {
+        for (class_name, target_lifecycle) in &app_spanned.node.lifecycle_overrides {
+            // Verify class exists
+            let class_info = env.classes.get(&class_name.node).ok_or_else(|| {
+                CompileError::type_err(
+                    format!("lifecycle override: unknown class '{}'", class_name.node),
+                    class_name.span,
+                )
+            })?;
+
+            // Verify shortening only (Singleton→Scoped OK, Scoped→Transient OK; reverse is error)
+            let current = class_info.lifecycle;
+            let lifecycle_rank = |l: Lifecycle| -> u8 {
+                match l {
+                    Lifecycle::Transient => 0,
+                    Lifecycle::Scoped => 1,
+                    Lifecycle::Singleton => 2,
+                }
+            };
+            if lifecycle_rank(*target_lifecycle) > lifecycle_rank(current) {
+                return Err(CompileError::type_err(
+                    format!(
+                        "lifecycle override: cannot lengthen lifecycle of '{}' from {:?} to {:?}",
+                        class_name.node, current, *target_lifecycle
+                    ),
+                    class_name.span,
+                ));
+            }
+
+            // Apply the override
+            if let Some(info) = env.classes.get_mut(&class_name.node) {
+                info.lifecycle = *target_lifecycle;
+            }
+            env.lifecycle_overridden.insert(class_name.node.clone());
+        }
+
+        // Re-run lifecycle inference to propagate overrides to dependents
+        let di_order_snapshot = env.di_order.clone();
+        for class_name in &di_order_snapshot {
+            if let Some(class_info) = env.classes.get(class_name) {
+                let deps: Vec<String> = class_info.fields.iter()
+                    .filter(|(_, _, inj)| *inj)
+                    .filter_map(|(_, ty, _)| {
+                        if let PlutoType::Class(name) = ty { Some(name.clone()) } else { None }
+                    })
+                    .collect();
+                let mut inferred = class_info.lifecycle;
+                for dep_name in &deps {
+                    if let Some(dep_info) = env.classes.get(dep_name) {
+                        inferred = min_lifecycle(inferred, dep_info.lifecycle);
+                    }
+                }
+                if let Some(info) = env.classes.get_mut(class_name) {
+                    if inferred != info.lifecycle {
+                        info.lifecycle = inferred;
+                        env.lifecycle_overridden.insert(class_name.clone());
+                    }
+                }
+            }
+        }
+
+        // Validate app bracket deps don't reference overridden classes
+        for field in &app_spanned.node.inject_fields {
+            if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node {
+                if env.lifecycle_overridden.contains(type_name) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "app bracket dependency '{}' has overridden lifecycle; use scope blocks to access scoped/transient instances",
+                            field.name.node
+                        ),
+                        field.ty.span,
+                    ));
+                }
+            }
+        }
+
+        // Remove overridden classes from di_order
+        env.di_order.retain(|n| !env.lifecycle_overridden.contains(n));
+    }
+
     Ok(())
 }
 
@@ -841,7 +921,7 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
             })?.clone();
 
             for (method_name, trait_sig) in &trait_info.methods {
-                let mangled = format!("{}_{}", class_name, method_name);
+                let mangled = mangle_method(class_name, method_name);
 
                 if class_info.methods.contains(method_name) {
                     // Class has this method — verify signature matches
@@ -1082,9 +1162,10 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == *trait_name {
                     for trait_method in &trait_decl.node.methods {
-                        if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node) {
+                        if let Some(body) = &trait_method.body
+                            && !class_method_names.contains(&trait_method.name.node)
+                        {
                             // This class inherits this default method — type check it
-                            let body = trait_method.body.as_ref().unwrap();
                             let tmp_func = Function {
                                 id: Uuid::new_v4(),
                                 name: trait_method.name.clone(),

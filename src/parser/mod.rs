@@ -148,10 +148,8 @@ impl<'a> Parser<'a> {
 
     fn consume_statement_end(&mut self) {
         // Consume a newline if present, or we're at } or EOF
-        if let Some(tok) = self.peek_raw() {
-            if matches!(tok.node, Token::Newline) {
-                self.advance();
-            }
+        if let Some(tok) = self.peek_raw() && matches!(tok.node, Token::Newline) {
+            self.advance();
         }
     }
 
@@ -168,19 +166,19 @@ impl<'a> Parser<'a> {
     ) -> Result<Vec<T>, CompileError> {
         let mut items = Vec::new();
         while self.peek().is_some()
-            && std::mem::discriminant(&self.peek().unwrap().node) != std::mem::discriminant(close)
+            && std::mem::discriminant(&self.peek().expect("token should exist after is_some check").node) != std::mem::discriminant(close)
         {
             if !items.is_empty() {
                 if mandatory_comma {
                     self.expect(&Token::Comma)?;
                 } else if self.peek().is_some()
-                    && matches!(self.peek().unwrap().node, Token::Comma)
+                    && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma)
                 {
                     self.advance();
                 }
                 self.skip_newlines();
                 if self.peek().is_some()
-                    && std::mem::discriminant(&self.peek().unwrap().node)
+                    && std::mem::discriminant(&self.peek().expect("token should exist after is_some check").node)
                         == std::mem::discriminant(close)
                 {
                     break; // trailing comma
@@ -194,6 +192,7 @@ impl<'a> Parser<'a> {
 
     /// Parse `name: expr, ...` field list inside `{ }`. Assumes `{` already consumed.
     /// Returns fields and the closing `}` span end.
+    #[allow(clippy::type_complexity)]
     fn parse_field_list(&mut self) -> Result<(Vec<(Spanned<String>, Spanned<Expr>)>, usize), CompileError> {
         self.skip_newlines();
         let fields = self.parse_comma_list(&Token::RBrace, false, |p| {
@@ -241,7 +240,7 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         // Parse imports first
-        while self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Import) {
+        while self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Import) {
             imports.push(self.parse_import()?);
             self.skip_newlines();
         }
@@ -500,7 +499,7 @@ impl<'a> Parser<'a> {
         // Optional return type — if next raw token is not newline/EOF, parse return type
         let return_type = if !self.at_statement_boundary()
             && self.peek().is_some()
-            && !matches!(self.peek().unwrap().node, Token::LBrace)
+            && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
         {
             let ty = self.parse_type()?;
             end = ty.span.end;
@@ -543,7 +542,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_bracket_deps(&mut self) -> Result<Vec<Field>, CompileError> {
-        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBracket) {
+        if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBracket) {
             self.advance(); // consume '['
             let deps = self.parse_comma_list(&Token::RBracket, true, |p| {
                 let name = p.expect_ident()?;
@@ -568,13 +567,24 @@ impl<'a> Parser<'a> {
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
-        // Parse ambient declarations and methods
+        // Parse ambient declarations, lifecycle overrides, and methods
         let mut ambient_types = Vec::new();
+        let mut lifecycle_overrides = Vec::new();
         let mut methods = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-            if matches!(self.peek().unwrap().node, Token::Ambient) {
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+            if matches!(self.peek().expect("token should exist after is_some check").node, Token::Ambient) {
                 self.advance(); // consume 'ambient'
                 ambient_types.push(self.expect_ident()?);
+                self.consume_statement_end();
+            } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Scoped) {
+                self.advance(); // consume 'scoped'
+                let class_name = self.expect_ident()?;
+                lifecycle_overrides.push((class_name, Lifecycle::Scoped));
+                self.consume_statement_end();
+            } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Transient) {
+                self.advance(); // consume 'transient'
+                let class_name = self.expect_ident()?;
+                lifecycle_overrides.push((class_name, Lifecycle::Transient));
                 self.consume_statement_end();
             } else {
                 methods.push(self.parse_method()?);
@@ -585,7 +595,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(AppDecl { id: Uuid::new_v4(), name, inject_fields, ambient_types, methods }, Span::new(start, end)))
+        Ok(Spanned::new(AppDecl { id: Uuid::new_v4(), name, inject_fields, ambient_types, lifecycle_overrides, methods }, Span::new(start, end)))
     }
 
     fn parse_enum_decl(&mut self) -> Result<Spanned<EnumDecl>, CompileError> {
@@ -597,9 +607,9 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         let mut variants = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
             let vname = self.expect_ident()?;
-            let fields = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
+            let fields = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace) {
                 self.expect(&Token::LBrace)?;
                 self.skip_newlines();
                 let fields = self.parse_comma_list(&Token::RBrace, false, |p| {
@@ -631,13 +641,13 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         let mut fields = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
             if !fields.is_empty() {
-                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
                     self.advance();
                 }
                 self.skip_newlines();
-                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
                     break;
                 }
             }
@@ -662,7 +672,7 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         let mut methods = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
             methods.push(self.parse_trait_method()?);
             self.skip_newlines();
         }
@@ -680,17 +690,17 @@ impl<'a> Parser<'a> {
 
         let mut params = Vec::new();
         let mut first = true;
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RParen) {
             if !params.is_empty() || !first {
                 self.expect(&Token::Comma)?;
             }
             first = false;
 
-            if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Mut) {
-                let mut_tok = self.advance().unwrap();
+            if params.is_empty() && self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Mut) {
+                let mut_tok = self.advance().expect("token should exist after peek");
                 let mut_span = mut_tok.span;
-                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
-                    let self_tok = self.advance().unwrap();
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::SelfVal) {
+                    let self_tok = self.advance().expect("token should exist after peek");
                     params.push(Param {
                         id: Uuid::new_v4(),
                         name: Spanned::new("self".to_string(), self_tok.span),
@@ -703,8 +713,8 @@ impl<'a> Parser<'a> {
                         mut_span,
                     ));
                 }
-            } else if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
-                let self_tok = self.advance().unwrap();
+            } else if params.is_empty() && self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::SelfVal) {
+                let self_tok = self.advance().expect("token should exist after peek");
                 params.push(Param {
                     id: Uuid::new_v4(),
                     name: Spanned::new("self".to_string(), self_tok.span),
@@ -720,9 +730,9 @@ impl<'a> Parser<'a> {
         }
         self.expect(&Token::RParen)?;
 
-        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Newline | Token::RBrace | Token::Requires | Token::Ensures) {
+        let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Newline | Token::RBrace | Token::Requires | Token::Ensures) {
             // Check if next non-newline token is '{' — if so, no return type
-            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
+            if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace) {
                 None
             } else {
                 Some(self.parse_type()?)
@@ -735,7 +745,7 @@ impl<'a> Parser<'a> {
         let contracts = self.parse_contracts()?;
 
         // If next token is '{', parse a body (default implementation)
-        let body = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
+        let body = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace) {
             Some(self.parse_block()?)
         } else {
             if contracts.is_empty() {
@@ -754,11 +764,11 @@ impl<'a> Parser<'a> {
         let type_params = self.parse_type_params()?;
 
         // Parse optional `uses Type, Type2`
-        let uses = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Uses) {
+        let uses = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Uses) {
             self.advance(); // consume 'uses'
             let mut types = Vec::new();
             types.push(self.expect_ident()?);
-            while self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+            while self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
                 self.advance(); // consume ','
                 types.push(self.expect_ident()?);
             }
@@ -771,11 +781,11 @@ impl<'a> Parser<'a> {
         let inject_fields = self.parse_bracket_deps()?;
 
         // Check for `impl Trait1, Trait2`
-        let impl_traits = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Impl) {
+        let impl_traits = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Impl) {
             self.advance(); // consume 'impl'
             let mut traits = Vec::new();
             traits.push(self.expect_ident()?);
-            while self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+            while self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
                 self.advance(); // consume ','
                 traits.push(self.expect_ident()?);
             }
@@ -792,11 +802,11 @@ impl<'a> Parser<'a> {
         let mut methods = Vec::new();
         let mut invariants = Vec::new();
 
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-            if matches!(self.peek().unwrap().node, Token::Fn) {
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+            if matches!(self.peek().expect("token should exist after is_some check").node, Token::Fn) {
                 methods.push(self.parse_method()?);
-            } else if matches!(self.peek().unwrap().node, Token::Invariant) {
-                let inv_tok = self.advance().unwrap();
+            } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Invariant) {
+                let inv_tok = self.advance().expect("token should exist after peek");
                 let inv_start = inv_tok.span.start;
                 let expr = self.parse_expr(0)?;
                 let inv_end = expr.span.end;
@@ -829,18 +839,18 @@ impl<'a> Parser<'a> {
 
         let mut params = Vec::new();
         let mut first = true;
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RParen) {
             if !params.is_empty() || !first {
                 self.expect(&Token::Comma)?;
             }
             first = false;
 
             // Check for `mut self` or `self` as first param
-            if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Mut) {
-                let mut_tok = self.advance().unwrap();
+            if params.is_empty() && self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Mut) {
+                let mut_tok = self.advance().expect("token should exist after peek");
                 let mut_span = mut_tok.span;
-                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
-                    let self_tok = self.advance().unwrap();
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::SelfVal) {
+                    let self_tok = self.advance().expect("token should exist after peek");
                     params.push(Param {
                         id: Uuid::new_v4(),
                         name: Spanned::new("self".to_string(), self_tok.span),
@@ -853,8 +863,8 @@ impl<'a> Parser<'a> {
                         mut_span,
                     ));
                 }
-            } else if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
-                let self_tok = self.advance().unwrap();
+            } else if params.is_empty() && self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::SelfVal) {
+                let self_tok = self.advance().expect("token should exist after peek");
                 params.push(Param {
                     id: Uuid::new_v4(),
                     name: Spanned::new("self".to_string(), self_tok.span),
@@ -870,7 +880,7 @@ impl<'a> Parser<'a> {
         }
         self.expect(&Token::RParen)?;
 
-        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Requires | Token::Ensures) {
+        let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires | Token::Ensures) {
             Some(self.parse_type()?)
         } else {
             None
@@ -889,7 +899,7 @@ impl<'a> Parser<'a> {
 
     /// Parse optional type parameters: `<T>`, `<A, B>`, or empty.
     fn parse_type_params(&mut self) -> Result<Vec<Spanned<String>>, CompileError> {
-        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Lt) {
+        if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt) {
             self.advance(); // consume '<'
             let params = self.parse_comma_list(&Token::Gt, true, |p| p.expect_ident())?;
             self.expect(&Token::Gt)?;
@@ -914,7 +924,7 @@ impl<'a> Parser<'a> {
             match &tok.node {
                 Token::Requires => {
                     self.skip_newlines();
-                    let req_tok = self.advance().unwrap();
+                    let req_tok = self.advance().expect("token should exist after peek");
                     let req_start = req_tok.span.start;
                     let expr = self.parse_expr(0)?;
                     let req_end = expr.span.end;
@@ -926,7 +936,7 @@ impl<'a> Parser<'a> {
                 }
                 Token::Ensures => {
                     self.skip_newlines();
-                    let ens_tok = self.advance().unwrap();
+                    let ens_tok = self.advance().expect("token should exist after peek");
                     let ens_start = ens_tok.span.start;
                     let expr = self.parse_expr(0)?;
                     let ens_end = expr.span.end;
@@ -957,7 +967,7 @@ impl<'a> Parser<'a> {
         self.expect(&Token::RParen)?;
 
         // Return type: if next non-newline token is not '{' or a contract keyword, it's a return type
-        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Requires | Token::Ensures) {
+        let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires | Token::Ensures) {
             Some(self.parse_type()?)
         } else {
             None
@@ -976,16 +986,16 @@ impl<'a> Parser<'a> {
 
     fn parse_type(&mut self) -> Result<Spanned<TypeExpr>, CompileError> {
         self.skip_newlines();
-        let mut result = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBracket) {
-            let open = self.advance().unwrap();
+        let mut result = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBracket) {
+            let open = self.advance().expect("token should exist after peek");
             let start = open.span.start;
             let inner = self.parse_type()?;
             let close = self.expect(&Token::RBracket)?;
             let end = close.span.end;
             Ok(Spanned::new(TypeExpr::Array(Box::new(inner)), Span::new(start, end)))
-        } else if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Fn) {
+        } else if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Fn) {
             // Function type: fn(int, float) string
-            let fn_tok = self.advance().unwrap();
+            let fn_tok = self.advance().expect("token should exist after peek");
             let start = fn_tok.span.start;
             self.expect(&Token::LParen)?;
             let params = self.parse_comma_list(&Token::RParen, true, |p| {
@@ -996,7 +1006,7 @@ impl<'a> Parser<'a> {
             // Optional return type — if next token looks like a type, parse it; otherwise void
             let return_type = if !self.at_statement_boundary()
                 && self.peek().is_some()
-                && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Comma | Token::RParen | Token::FatArrow | Token::RBracket | Token::Eq)
+                && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Comma | Token::RParen | Token::FatArrow | Token::RBracket | Token::Eq)
             {
                 let ty = self.parse_type()?;
                 end = ty.span.end;
@@ -1014,7 +1024,7 @@ impl<'a> Parser<'a> {
                 let qualified_name = format!("{}.{}", ident.node, type_name.node);
                 let end_span = type_name.span.end;
                 // Check for generic type args on qualified type: module.Type<int, string>
-                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Lt) {
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt) {
                     let type_args = self.parse_type_arg_list()?;
                     let end = type_args.last().map_or(end_span, |_| self.tokens[self.pos - 1].span.end);
                     Ok(Spanned::new(TypeExpr::Generic { name: qualified_name, type_args }, Span::new(ident.span.start, end)))
@@ -1022,7 +1032,7 @@ impl<'a> Parser<'a> {
                     let span = Span::new(ident.span.start, end_span);
                     Ok(Spanned::new(TypeExpr::Qualified { module: ident.node, name: type_name.node }, span))
                 }
-            } else if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Lt) {
+            } else if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt) {
                 // Generic type: Type<int, string>
                 let start = ident.span.start;
                 let type_args = self.parse_type_arg_list()?;
@@ -1034,7 +1044,7 @@ impl<'a> Parser<'a> {
         }?;
         // Trailing ? makes this a nullable type: T?
         if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Question) {
-            let q = self.advance().unwrap();
+            let q = self.advance().expect("token should exist after peek");
             let start = result.span.start;
             result = Spanned::new(TypeExpr::Nullable(Box::new(result)), Span::new(start, q.span.end));
         }
@@ -1047,7 +1057,7 @@ impl<'a> Parser<'a> {
         let mut stmts = Vec::new();
 
         self.skip_newlines();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
             stmts.push(self.parse_stmt()?);
             self.skip_newlines();
         }
@@ -1071,14 +1081,15 @@ impl<'a> Parser<'a> {
             Token::For => self.parse_for_stmt(),
             Token::Match => self.parse_match_stmt(),
             Token::Select => self.parse_select_stmt(),
+            Token::Scope => self.parse_scope_stmt(),
             Token::Raise => self.parse_raise_stmt(),
             Token::Break => {
-                let span = self.advance().unwrap().span;
+                let span = self.advance().expect("token should exist after peek").span;
                 self.consume_statement_end();
                 Ok(Spanned::new(Stmt::Break, span))
             }
             Token::Continue => {
-                let span = self.advance().unwrap().span;
+                let span = self.advance().expect("token should exist after peek").span;
                 self.consume_statement_end();
                 Ok(Spanned::new(Stmt::Continue, span))
             }
@@ -1108,8 +1119,8 @@ impl<'a> Parser<'a> {
                 }
 
                 // Check for ++ / --
-                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::PlusPlus | Token::MinusMinus) {
-                    let inc_tok = self.advance().unwrap();
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::PlusPlus | Token::MinusMinus) {
+                    let inc_tok = self.advance().expect("token should exist after peek");
                     let op = if matches!(inc_tok.node, Token::PlusPlus) { BinOp::Add } else { BinOp::Sub };
                     let end = inc_tok.span.end;
                     self.consume_statement_end();
@@ -1118,7 +1129,7 @@ impl<'a> Parser<'a> {
                     return self.desugar_compound_assign(expr, op, one, start, end);
                 }
 
-                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Eq) {
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Eq) {
                     self.advance(); // consume '='
                     let value = self.parse_expr(0)?;
                     let end = value.span.end;
@@ -1224,7 +1235,7 @@ impl<'a> Parser<'a> {
         let start = let_tok.span.start;
 
         // Check for `mut` keyword
-        let is_mut = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Mut) {
+        let is_mut = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Mut) {
             self.advance(); // consume `mut`
             true
         } else {
@@ -1232,13 +1243,13 @@ impl<'a> Parser<'a> {
         };
 
         // Check for destructuring: let (tx, rx) = chan<T>(...)
-        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
+        if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LParen) {
             return self.parse_let_chan(start);
         }
 
         let name = self.expect_ident()?;
 
-        let ty = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Colon) {
+        let ty = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Colon) {
             self.advance(); // consume ':'
             Some(self.parse_type()?)
         } else {
@@ -1277,7 +1288,7 @@ impl<'a> Parser<'a> {
 
         // Parse ( [capacity] )
         self.expect(&Token::LParen)?;
-        let capacity = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
+        let capacity = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RParen) {
             Some(self.parse_expr(0)?)
         } else {
             None
@@ -1318,9 +1329,19 @@ impl<'a> Parser<'a> {
         self.restrict_struct_lit = old_restrict;
         let then_block = self.parse_block()?;
 
-        let else_block = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Else) {
+        let else_block = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Else) {
             self.advance(); // consume 'else'
-            Some(self.parse_block()?)
+            // Desugar `else if` into `else { if ... }`
+            if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::If) {
+                let nested_if = self.parse_if_stmt()?;
+                let span = nested_if.span;
+                Some(Spanned::new(
+                    Block { stmts: vec![nested_if] },
+                    span,
+                ))
+            } else {
+                Some(self.parse_block()?)
+            }
         } else {
             None
         };
@@ -1378,14 +1399,14 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         let mut arms = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
             let first_name = self.expect_ident()?;
             self.expect(&Token::Dot)?;
             let second_name = self.expect_ident()?;
 
             // Check if this is module.Enum.Variant (qualified) or Enum.Variant (local)
             let (enum_name, variant_name) = if self.peek().is_some()
-                && matches!(self.peek().unwrap().node, Token::Dot)
+                && matches!(self.peek().expect("token should exist after is_some check").node, Token::Dot)
             {
                 // module.Enum.Variant — consume the extra dot and variant
                 self.advance(); // consume '.'
@@ -1403,18 +1424,18 @@ impl<'a> Parser<'a> {
                 self.expect(&Token::LBrace)?;
                 self.skip_newlines();
                 let mut bindings = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+                while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
                     if !bindings.is_empty() {
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                        if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
                             self.advance();
                         }
                         self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                        if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
                             break;
                         }
                     }
                     let field_name = self.expect_ident()?;
-                    let rename = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Colon) {
+                    let rename = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Colon) {
                         self.advance();
                         Some(self.expect_ident()?)
                     } else {
@@ -1485,9 +1506,9 @@ impl<'a> Parser<'a> {
         let mut arms = Vec::new();
         let mut default_block = None;
 
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
             // Check for `default { ... }`
-            if matches!(self.peek().unwrap().node, Token::Default) {
+            if matches!(self.peek().expect("token should exist after is_some check").node, Token::Default) {
                 self.advance(); // consume 'default'
                 if default_block.is_some() {
                     return Err(CompileError::syntax(
@@ -1568,6 +1589,72 @@ impl<'a> Parser<'a> {
         Ok(Spanned::new(Stmt::Select { arms, default: default_block }, Span::new(start, end)))
     }
 
+    fn parse_scope_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let scope_tok = self.expect(&Token::Scope)?;
+        let start = scope_tok.span.start;
+        self.expect(&Token::LParen)?;
+
+        // Parse comma-separated seed expressions.
+        // No struct-lit restriction needed here since seeds are inside parentheses.
+        let old_restrict = self.restrict_struct_lit;
+        self.restrict_struct_lit = false;
+        let mut seeds = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
+                break;
+            }
+            if !seeds.is_empty() {
+                self.expect(&Token::Comma)?;
+                self.skip_newlines();
+                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
+                    break;
+                }
+            }
+            seeds.push(self.parse_expr(0)?);
+        }
+        self.restrict_struct_lit = old_restrict;
+        self.expect(&Token::RParen)?;
+
+        // Parse pipe-delimited bindings: |name: Type, name2: Type2|
+        self.expect(&Token::Pipe)?;
+        let mut bindings = Vec::new();
+        loop {
+            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Pipe) {
+                break;
+            }
+            if !bindings.is_empty() {
+                self.expect(&Token::Comma)?;
+            }
+            let name = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let ty = self.parse_type()?;
+            bindings.push(ScopeBinding { name, ty });
+        }
+        self.expect(&Token::Pipe)?;
+
+        if seeds.is_empty() {
+            return Err(CompileError::syntax(
+                "scope block requires at least one seed expression",
+                Span::new(start, start + 5),
+            ));
+        }
+        if bindings.is_empty() {
+            return Err(CompileError::syntax(
+                "scope block requires at least one binding",
+                Span::new(start, start + 5),
+            ));
+        }
+
+        let body = self.parse_block()?;
+        let end = body.span.end;
+
+        Ok(Spanned::new(
+            Stmt::Scope { seeds, bindings, body },
+            Span::new(start, end),
+        ))
+    }
+
     /// Check if the next tokens form a recv pattern: `ident = ...`
     fn is_select_recv_ahead(&self) -> bool {
         // Look for: Ident followed by `=` (not `==`)
@@ -1609,13 +1696,13 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         let mut fields = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
             if !fields.is_empty() {
-                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
                     self.advance();
                 }
                 self.skip_newlines();
-                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
                     break;
                 }
             }
@@ -1640,12 +1727,9 @@ impl<'a> Parser<'a> {
         // Lookahead: if ident followed by {, it's wildcard form
         if self.is_catch_wildcard_ahead() {
             let var = self.expect_ident()?;
-            self.expect(&Token::LBrace)?;
-            self.skip_newlines();
-            let body = self.parse_expr(0)?;
-            self.skip_newlines();
-            let close = self.expect(&Token::RBrace)?;
-            Ok((CatchHandler::Wildcard { var, body: Box::new(body) }, close.span.end))
+            let body = self.parse_block()?;
+            let end = body.span.end;
+            Ok((CatchHandler::Wildcard { var, body }, end))
         } else {
             let fallback = self.parse_expr(0)?;
             let end = fallback.span.end;
@@ -1676,8 +1760,7 @@ impl<'a> Parser<'a> {
     fn parse_expr(&mut self, min_bp: u8) -> Result<Spanned<Expr>, CompileError> {
         let mut lhs = self.parse_prefix()?;
 
-        loop {
-            let Some(tok) = self.peek().cloned() else { break };
+        while let Some(tok) = self.peek().cloned() {
 
             // Dot notation (postfix) — highest precedence
             if matches!(tok.node, Token::Dot) {
@@ -1686,7 +1769,7 @@ impl<'a> Parser<'a> {
                 let field_name = self.expect_ident()?;
 
                 // Check if it's a method call
-                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LParen) {
                     self.advance(); // consume '('
                     self.skip_newlines();
                     let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
@@ -1709,7 +1792,7 @@ impl<'a> Parser<'a> {
                     let enum_name_span = lhs.span;
                     if !self.restrict_struct_lit
                         && self.peek().is_some()
-                        && matches!(self.peek().unwrap().node, Token::LBrace)
+                        && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
                         && self.is_struct_lit_ahead()
                     {
                         // EnumName.Variant { field: value }
@@ -1744,7 +1827,7 @@ impl<'a> Parser<'a> {
                 } else if !self.restrict_struct_lit
                     && matches!(&lhs.node, Expr::Ident(_))
                     && self.peek().is_some()
-                    && matches!(self.peek().unwrap().node, Token::LBrace)
+                    && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
                     && self.is_struct_lit_ahead()
                 {
                     // Qualified struct literal: module.Type { field: value }
@@ -1783,7 +1866,7 @@ impl<'a> Parser<'a> {
 
                     if !self.restrict_struct_lit
                         && self.peek().is_some()
-                        && matches!(self.peek().unwrap().node, Token::LBrace)
+                        && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
                         && self.is_struct_lit_ahead()
                     {
                         // module.Enum.Variant { field: value }
@@ -1848,7 +1931,7 @@ impl<'a> Parser<'a> {
 
             // Postfix ? — null propagation (unwrap nullable, early-return none)
             if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Question) {
-                let q = self.advance().unwrap();
+                let q = self.advance().expect("token should exist after peek");
                 let span = Span::new(lhs.span.start, q.span.end);
                 lhs = Spanned::new(
                     Expr::NullPropagate { expr: Box::new(lhs) },
@@ -1859,7 +1942,7 @@ impl<'a> Parser<'a> {
 
             // Postfix ! — error propagation (must be on same line via peek_raw)
             if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Bang) {
-                let bang = self.advance().unwrap();
+                let bang = self.advance().expect("token should exist after peek");
                 let span = Span::new(lhs.span.start, bang.span.end);
                 lhs = Spanned::new(
                     Expr::Propagate { expr: Box::new(lhs) },
@@ -1880,8 +1963,9 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Postfix as — type cast (binds tighter than all infix operators)
-            if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::As) {
+            // Postfix as — type cast (binds tighter than all infix operators, but
+            // looser than prefix unary ops so that `-1 as byte` = `(-1) as byte`)
+            if min_bp < 21 && self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::As) {
                 self.advance(); // consume 'as'
                 let target_type = self.parse_type()?;
                 let span = Span::new(lhs.span.start, target_type.span.end);
@@ -1911,7 +1995,7 @@ impl<'a> Parser<'a> {
 
                 if !self.restrict_struct_lit
                     && self.peek().is_some()
-                    && matches!(self.peek().unwrap().node, Token::LBrace)
+                    && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
                     && self.is_struct_lit_ahead()
                 {
                     // EnumName<type_args>.Variant { field: value }
@@ -2042,25 +2126,25 @@ impl<'a> Parser<'a> {
 
         match &tok.node {
             Token::IntLit(_) => {
-                let tok = self.advance().unwrap();
+                let tok = self.advance().expect("token should exist after peek");
                 let Token::IntLit(n) = &tok.node else { unreachable!() };
                 Ok(Spanned::new(Expr::IntLit(*n), tok.span))
             }
             Token::FloatLit(_) => {
-                let tok = self.advance().unwrap();
+                let tok = self.advance().expect("token should exist after peek");
                 let Token::FloatLit(n) = &tok.node else { unreachable!() };
                 Ok(Spanned::new(Expr::FloatLit(*n), tok.span))
             }
             Token::True => {
-                let tok = self.advance().unwrap();
+                let tok = self.advance().expect("token should exist after peek");
                 Ok(Spanned::new(Expr::BoolLit(true), tok.span))
             }
             Token::False => {
-                let tok = self.advance().unwrap();
+                let tok = self.advance().expect("token should exist after peek");
                 Ok(Spanned::new(Expr::BoolLit(false), tok.span))
             }
             Token::StringLit(_) => {
-                let tok = self.advance().unwrap();
+                let tok = self.advance().expect("token should exist after peek");
                 let Token::StringLit(s) = &tok.node else { unreachable!() };
                 let s = s.clone();
                 let span = tok.span;
@@ -2075,7 +2159,7 @@ impl<'a> Parser<'a> {
                 self.parse_expr_after_ident(ident)
             }
             Token::SelfVal => {
-                let tok = self.advance().unwrap();
+                let tok = self.advance().expect("token should exist after peek");
                 Ok(Spanned::new(Expr::Ident("self".to_string()), tok.span))
             }
             Token::LParen => {
@@ -2092,9 +2176,12 @@ impl<'a> Parser<'a> {
                 }
             }
             Token::Minus => {
-                let tok = self.advance().unwrap();
+                let tok = self.advance().expect("token should exist after peek");
                 let start = tok.span.start;
-                let operand = self.parse_prefix()?;
+                // Use parse_expr(21) so that postfix ops (., [], !, ?, as, catch)
+                // bind tighter than prefix unary operators.
+                // 21 is above all infix operators (max is Mul/Div/Mod at 19-20).
+                let operand = self.parse_expr(21)?;
                 let end = operand.span.end;
                 Ok(Spanned::new(
                     Expr::UnaryOp { op: UnaryOp::Neg, operand: Box::new(operand) },
@@ -2102,9 +2189,9 @@ impl<'a> Parser<'a> {
                 ))
             }
             Token::Bang => {
-                let tok = self.advance().unwrap();
+                let tok = self.advance().expect("token should exist after peek");
                 let start = tok.span.start;
-                let operand = self.parse_prefix()?;
+                let operand = self.parse_expr(21)?;
                 let end = operand.span.end;
                 Ok(Spanned::new(
                     Expr::UnaryOp { op: UnaryOp::Not, operand: Box::new(operand) },
@@ -2112,9 +2199,9 @@ impl<'a> Parser<'a> {
                 ))
             }
             Token::Tilde => {
-                let tok = self.advance().unwrap();
+                let tok = self.advance().expect("token should exist after peek");
                 let start = tok.span.start;
-                let operand = self.parse_prefix()?;
+                let operand = self.parse_expr(21)?;
                 let end = operand.span.end;
                 Ok(Spanned::new(
                     Expr::UnaryOp { op: UnaryOp::BitNot, operand: Box::new(operand) },
@@ -2122,7 +2209,7 @@ impl<'a> Parser<'a> {
                 ))
             }
             Token::LBracket => {
-                let tok = self.advance().unwrap();
+                let tok = self.advance().expect("token should exist after peek");
                 let start = tok.span.start;
                 self.skip_newlines();
                 let elements = self.parse_comma_list(&Token::RBracket, true, |p| p.parse_expr(0))?;
@@ -2131,7 +2218,7 @@ impl<'a> Parser<'a> {
                 Ok(Spanned::new(Expr::ArrayLit { elements }, Span::new(start, end)))
             }
             Token::Spawn => {
-                let spawn_tok = self.advance().unwrap();
+                let spawn_tok = self.advance().expect("token should exist after peek");
                 let start = spawn_tok.span.start;
                 let func_name = self.expect_ident()?;
                 self.expect(&Token::LParen)?;
@@ -2146,8 +2233,8 @@ impl<'a> Parser<'a> {
                 ))
             }
             Token::None => {
-                let tok = self.advance().unwrap();
-                return Ok(Spanned::new(Expr::NoneLit, tok.span));
+                let tok = self.advance().expect("token should exist after peek");
+                Ok(Spanned::new(Expr::NoneLit, tok.span))
             }
             _ => Err(CompileError::syntax(
                 format!("unexpected token {} in expression", tok.node),
@@ -2159,14 +2246,14 @@ impl<'a> Parser<'a> {
     /// Continue parsing an expression that started with an identifier (handles calls, struct literals, and plain ident).
     fn parse_expr_after_ident(&mut self, ident: Spanned<String>) -> Result<Spanned<Expr>, CompileError> {
         // Check for function call
-        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
+        if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LParen) {
             self.advance(); // consume '('
             self.skip_newlines();
             let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
             let close = self.expect(&Token::RParen)?;
             let span = Span::new(ident.span.start, close.span.end);
             Ok(Spanned::new(Expr::Call { name: ident, args, target_id: None }, span))
-        } else if !self.restrict_struct_lit && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
+        } else if !self.restrict_struct_lit && self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace) {
             // Check if this looks like a struct literal: Ident { field: value, ... }
             // We need to distinguish from a block. A struct literal has `ident : expr` inside.
             // Use a lookahead: after `{`, if we see `ident :` it's a struct literal.
@@ -2181,7 +2268,7 @@ impl<'a> Parser<'a> {
         } else if !self.restrict_struct_lit
             && (ident.node == "Map" || ident.node == "Set")
             && self.peek().is_some()
-            && matches!(self.peek().unwrap().node, Token::Lt)
+            && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt)
         {
             // Map<K, V> { ... } or Set<T> { ... }
             let start = ident.span.start;
@@ -2223,7 +2310,7 @@ impl<'a> Parser<'a> {
             }
         } else if !self.restrict_struct_lit
             && self.peek().is_some()
-            && matches!(self.peek().unwrap().node, Token::Lt)
+            && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt)
             && self.is_generic_struct_lit_ahead()
         {
             // Generic struct literal: Ident<type_args> { field: value, ... }
@@ -2329,10 +2416,8 @@ impl<'a> Parser<'a> {
         }
 
         // Optimization: single literal → plain StringLit
-        if parts.len() == 1 {
-            if let StringInterpPart::Lit(s) = &parts[0] {
-                return Ok(Spanned::new(Expr::StringLit(s.clone()), span));
-            }
+        if parts.len() == 1 && let StringInterpPart::Lit(s) = &parts[0] {
+            return Ok(Spanned::new(Expr::StringLit(s.clone()), span));
         }
 
         Ok(Spanned::new(Expr::StringInterp { parts }, span))
@@ -2394,7 +2479,7 @@ impl<'a> Parser<'a> {
         self.expect(&Token::RParen)?;
 
         // Optional return type: if next non-newline token is NOT `=>`, parse a type first
-        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::FatArrow) {
+        let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::FatArrow) {
             Some(self.parse_type()?)
         } else {
             None
@@ -2403,7 +2488,7 @@ impl<'a> Parser<'a> {
         self.expect(&Token::FatArrow)?;
 
         // Body: either a block `{ ... }` or a single expression (desugared to return stmt)
-        let body = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
+        let body = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace) {
             self.parse_block()?
         } else {
             let expr = self.parse_expr(0)?;

@@ -51,7 +51,17 @@ pub(crate) fn infer_closure(
     collect_free_vars_block(&body.node, &param_names, outer_depth, env, &mut captures, &mut seen);
 
     // Store captures keyed by span
-    env.closure_captures.insert((span.start, span.end), captures);
+    env.closure_captures.insert((span.start, span.end), captures.clone());
+
+    // Check if any captured variable is a scope binding → mark closure as tainted
+    if !env.scope_binding_names.is_empty() {
+        let is_tainted = captures.iter().any(|(name, _)| {
+            env.scope_binding_names.iter().any(|set| set.contains(name))
+        });
+        if is_tainted {
+            env.scope_tainted_closures.insert((span.start, span.end));
+        }
+    }
 
     // Store return type for closure lifting (fixes Finding 5)
     env.closure_return_types.insert((span.start, span.end), final_ret.clone());
@@ -186,6 +196,12 @@ fn collect_free_vars_stmt(
                 collect_free_vars_block(&def.node, param_names, outer_depth, env, captures, seen);
             }
         }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                collect_free_vars_expr(&seed.node, param_names, outer_depth, env, captures, seen);
+            }
+            collect_free_vars_block(&body.node, param_names, outer_depth, env, captures, seen);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -206,11 +222,9 @@ fn collect_free_vars_expr(
             if env.builtins.contains(name) { return; }
             if seen.contains(name) { return; }
             // Check if this variable resolves from an outer scope (depth < outer_depth)
-            if let Some((ty, depth)) = env.lookup_with_depth(name) {
-                if depth < outer_depth {
-                    seen.insert(name.clone());
-                    captures.push((name.clone(), ty.clone()));
-                }
+            if let Some((ty, depth)) = env.lookup_with_depth(name) && depth < outer_depth {
+                seen.insert(name.clone());
+                captures.push((name.clone(), ty.clone()));
             }
         }
         Expr::BinOp { lhs, rhs, .. } => {
@@ -274,7 +288,7 @@ fn collect_free_vars_expr(
             collect_free_vars_expr(&inner.node, param_names, outer_depth, env, captures, seen);
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    collect_free_vars_expr(&body.node, param_names, outer_depth, env, captures, seen);
+                    collect_free_vars_block(&body.node, param_names, outer_depth, env, captures, seen);
                 }
                 CatchHandler::Shorthand(fb) => {
                     collect_free_vars_expr(&fb.node, param_names, outer_depth, env, captures, seen);

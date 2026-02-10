@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::Spanned;
-use super::env::TypeEnv;
+use super::env::{mangle_method, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::{resolve_type, unify, ensure_generic_func_instantiated, ensure_generic_class_instantiated, ensure_generic_enum_instantiated};
 use super::closures::infer_closure;
@@ -289,12 +289,27 @@ pub(crate) fn infer_expr(
             // Extract the spawned function name by peeking inside the closure body
             if let Expr::Closure { body, .. } = &call.node {
                 for stmt in &body.node.stmts {
-                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
-                        if let Expr::Call { name, .. } = &ret_expr.node {
-                            env.spawn_target_fns.insert(
-                                (span.start, span.end),
-                                name.node.clone(),
-                            );
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node && let Expr::Call { name, .. } = &ret_expr.node {
+                        env.spawn_target_fns.insert(
+                            (span.start, span.end),
+                            name.node.clone(),
+                        );
+                    }
+                }
+            }
+            // Spawn-scope safety: reject spawn if it captures scope bindings
+            if !env.scope_binding_names.is_empty() {
+                if let Expr::Closure { body, .. } = &call.node {
+                    let mut idents = std::collections::HashSet::new();
+                    super::check::collect_idents_in_block(&body.node, &mut idents);
+                    for scope_bindings in &env.scope_binding_names {
+                        for name in scope_bindings {
+                            if idents.contains(name) {
+                                return Err(CompileError::type_err(
+                                    format!("cannot spawn inside scope block: task would capture scope binding '{name}'"),
+                                    span,
+                                ));
+                            }
                         }
                     }
                 }
@@ -366,15 +381,9 @@ fn infer_binop(
                 ));
             }
             // Allow comparing nullable types with none (Nullable(Void))
-            let compatible = if lt == rt {
-                true
-            } else if matches!(&lt, PlutoType::Nullable(_)) && rt == PlutoType::Nullable(Box::new(PlutoType::Void)) {
-                true
-            } else if lt == PlutoType::Nullable(Box::new(PlutoType::Void)) && matches!(&rt, PlutoType::Nullable(_)) {
-                true
-            } else {
-                false
-            };
+            let compatible = lt == rt
+                || (matches!(&lt, PlutoType::Nullable(_)) && rt == PlutoType::Nullable(Box::new(PlutoType::Void)))
+                || (lt == PlutoType::Nullable(Box::new(PlutoType::Void)) && matches!(&rt, PlutoType::Nullable(_)));
             if !compatible {
                 return Err(CompileError::type_err(
                     format!("cannot compare {lt} with {rt}"),
@@ -607,8 +616,7 @@ fn infer_call(
     }
 
     // Check if calling a generic function — infer type args from arguments
-    if env.generic_functions.contains_key(&name.node) {
-        let gen_sig = env.generic_functions.get(&name.node).unwrap().clone();
+    if let Some(gen_sig) = env.generic_functions.get(&name.node).cloned() {
         if args.len() != gen_sig.params.len() {
             return Err(CompileError::type_err(
                 format!(
@@ -648,7 +656,9 @@ fn infer_call(
         // Store rewrite
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
         // Use the return type from the registered FuncSig — it has GenericInstance types resolved
-        let concrete_ret = env.functions.get(&mangled).unwrap().return_type.clone();
+        let concrete_ret = env.functions.get(&mangled)
+            .expect("generic function should be registered after instantiation")
+            .return_type.clone();
         return Ok(concrete_ret);
     }
 
@@ -697,13 +707,12 @@ fn infer_struct_lit(
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
     let (class_info, effective_name) = if !type_args.is_empty() {
-        if !env.generic_classes.contains_key(&name.node) {
-            return Err(CompileError::type_err(
+        let gen_info = env.generic_classes.get(&name.node).ok_or_else(|| {
+            CompileError::type_err(
                 format!("unknown generic class '{}'", name.node),
                 name.span,
-            ));
-        }
-        let gen_info = env.generic_classes.get(&name.node).unwrap().clone();
+            )
+        })?.clone();
         if type_args.len() != gen_info.type_params.len() {
             return Err(CompileError::type_err(
                 format!(
@@ -718,7 +727,9 @@ fn infer_struct_lit(
             .collect::<Result<Vec<_>, _>>()?;
         let mangled = ensure_generic_class_instantiated(&name.node, &resolved_args, env);
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
-        let ci = env.classes.get(&mangled).unwrap().clone();
+        let ci = env.classes.get(&mangled)
+            .expect("generic class should be registered after instantiation")
+            .clone();
         (ci, mangled)
     } else {
         let ci = env.classes.get(&name.node).ok_or_else(|| {
@@ -785,13 +796,12 @@ fn infer_enum_unit(
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
     let (enum_info, effective_name) = if !type_args.is_empty() {
-        if !env.generic_enums.contains_key(&enum_name.node) {
-            return Err(CompileError::type_err(
+        let gen_info = env.generic_enums.get(&enum_name.node).ok_or_else(|| {
+            CompileError::type_err(
                 format!("unknown generic enum '{}'", enum_name.node),
                 enum_name.span,
-            ));
-        }
-        let gen_info = env.generic_enums.get(&enum_name.node).unwrap().clone();
+            )
+        })?.clone();
         if type_args.len() != gen_info.type_params.len() {
             return Err(CompileError::type_err(
                 format!(
@@ -806,7 +816,9 @@ fn infer_enum_unit(
             .collect::<Result<Vec<_>, _>>()?;
         let mangled = ensure_generic_enum_instantiated(&enum_name.node, &resolved_args, env);
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
-        let ei = env.enums.get(&mangled).unwrap().clone();
+        let ei = env.enums.get(&mangled)
+            .expect("generic enum should be registered after instantiation")
+            .clone();
         (ei, mangled)
     } else {
         let ei = env.enums.get(&enum_name.node).ok_or_else(|| {
@@ -840,13 +852,12 @@ fn infer_enum_data(
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
     let (enum_info, effective_name) = if !type_args.is_empty() {
-        if !env.generic_enums.contains_key(&enum_name.node) {
-            return Err(CompileError::type_err(
+        let gen_info = env.generic_enums.get(&enum_name.node).ok_or_else(|| {
+            CompileError::type_err(
                 format!("unknown generic enum '{}'", enum_name.node),
                 enum_name.span,
-            ));
-        }
-        let gen_info = env.generic_enums.get(&enum_name.node).unwrap().clone();
+            )
+        })?.clone();
         if type_args.len() != gen_info.type_params.len() {
             return Err(CompileError::type_err(
                 format!(
@@ -861,7 +872,9 @@ fn infer_enum_data(
             .collect::<Result<Vec<_>, _>>()?;
         let mangled = ensure_generic_enum_instantiated(&enum_name.node, &resolved_args, env);
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
-        let ei = env.enums.get(&mangled).unwrap().clone();
+        let ei = env.enums.get(&mangled)
+            .expect("generic enum should be registered after instantiation")
+            .clone();
         (ei, mangled)
     } else {
         let ei = env.enums.get(&enum_name.node).ok_or_else(|| {
@@ -919,11 +932,37 @@ fn infer_catch(
 ) -> Result<PlutoType, CompileError> {
     let success_type = infer_expr(&expr.node, expr.span, env)?;
     let handler_type = match handler {
-        CatchHandler::Wildcard { body, .. } => {
-            let CatchHandler::Wildcard { var, .. } = handler else { unreachable!() };
+        CatchHandler::Wildcard { var, body } => {
             env.push_scope();
             env.define(var.node.clone(), PlutoType::Error);
-            let t = infer_expr(&body.node, body.span, env)?;
+            let stmts = &body.node.stmts;
+            // Type-check all statements except possibly the last
+            let return_type = env.current_fn.as_ref()
+                .and_then(|name| env.functions.get(name).map(|f| f.return_type.clone()))
+                .unwrap_or(PlutoType::Void);
+            for (i, stmt) in stmts.iter().enumerate() {
+                if i < stmts.len() - 1 {
+                    super::check::check_block_stmt(&stmt.node, stmt.span, env, &return_type)?;
+                }
+            }
+            // Determine result type from last statement
+            let t = if let Some(last) = stmts.last() {
+                match &last.node {
+                    Stmt::Expr(e) => infer_expr(&e.node, e.span, env)?,
+                    Stmt::Return(_) => {
+                        super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
+                        env.pop_scope();
+                        // Diverging — skip compat check
+                        return Ok(success_type);
+                    }
+                    _ => {
+                        super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
+                        PlutoType::Void
+                    }
+                }
+            } else {
+                PlutoType::Void
+            };
             env.pop_scope();
             t
         }
@@ -948,60 +987,58 @@ fn infer_method_call(
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
     // Check for expect() intrinsic pattern
-    if let Expr::Call { name, args: expect_args, .. } = &object.node {
-        if name.node == "expect" && expect_args.len() == 1 {
-            let inner_type = infer_expr(&expect_args[0].node, expect_args[0].span, env)?;
-            // Register as builtin method resolution
-            if let Some(ref current) = env.current_fn {
-                env.method_resolutions.insert(
-                    (current.clone(), method.span.start),
-                    super::env::MethodResolution::Builtin,
-                );
-            }
-            match method.node.as_str() {
-                "to_equal" => {
-                    if args.len() != 1 {
-                        return Err(CompileError::type_err(
-                            format!("to_equal() expects 1 argument, got {}", args.len()),
-                            span,
-                        ));
-                    }
-                    if inner_type == PlutoType::Bytes {
-                        return Err(CompileError::type_err(
-                            "cannot use to_equal() with bytes; compare elements individually".to_string(),
-                            span,
-                        ));
-                    }
-                    let expected_type = infer_expr(&args[0].node, args[0].span, env)?;
-                    if inner_type != expected_type {
-                        return Err(CompileError::type_err(
-                            format!("to_equal: expected type {expected_type} but expect() wraps {inner_type}"),
-                            span,
-                        ));
-                    }
-                    return Ok(PlutoType::Void);
-                }
-                "to_be_true" | "to_be_false" => {
-                    if !args.is_empty() {
-                        return Err(CompileError::type_err(
-                            format!("{}() expects 0 arguments, got {}", method.node, args.len()),
-                            span,
-                        ));
-                    }
-                    if inner_type != PlutoType::Bool {
-                        return Err(CompileError::type_err(
-                            format!("{} requires bool, found {inner_type}", method.node),
-                            span,
-                        ));
-                    }
-                    return Ok(PlutoType::Void);
-                }
-                _ => {
+    if let Expr::Call { name, args: expect_args, .. } = &object.node && name.node == "expect" && expect_args.len() == 1 {
+        let inner_type = infer_expr(&expect_args[0].node, expect_args[0].span, env)?;
+        // Register as builtin method resolution
+        if let Some(ref current) = env.current_fn {
+            env.method_resolutions.insert(
+                (current.clone(), method.span.start),
+                super::env::MethodResolution::Builtin,
+            );
+        }
+        match method.node.as_str() {
+            "to_equal" => {
+                if args.len() != 1 {
                     return Err(CompileError::type_err(
-                        format!("unknown assertion method: {}", method.node),
-                        method.span,
+                        format!("to_equal() expects 1 argument, got {}", args.len()),
+                        span,
                     ));
                 }
+                if inner_type == PlutoType::Bytes {
+                    return Err(CompileError::type_err(
+                        "cannot use to_equal() with bytes; compare elements individually".to_string(),
+                        span,
+                    ));
+                }
+                let expected_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if inner_type != expected_type {
+                    return Err(CompileError::type_err(
+                        format!("to_equal: expected type {expected_type} but expect() wraps {inner_type}"),
+                        span,
+                    ));
+                }
+                return Ok(PlutoType::Void);
+            }
+            "to_be_true" | "to_be_false" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 0 arguments, got {}", method.node, args.len()),
+                        span,
+                    ));
+                }
+                if inner_type != PlutoType::Bool {
+                    return Err(CompileError::type_err(
+                        format!("{} requires bool, found {inner_type}", method.node),
+                        span,
+                    ));
+                }
+                return Ok(PlutoType::Void);
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("unknown assertion method: {}", method.node),
+                    method.span,
+                ));
             }
         }
     }
@@ -1759,18 +1796,14 @@ fn infer_method_call(
             );
         }
         // Check caller-side mutability for trait method calls
-        if trait_info.mut_self_methods.contains(&method.node) {
-            if let Some(root) = super::check::root_variable(&object.node) {
-                if root != "self" && env.is_immutable(root) {
-                    return Err(CompileError::type_err(
-                        format!(
-                            "cannot call mutating method '{}' on immutable variable '{}'; declare with 'let mut' to allow mutation",
-                            method.node, root
-                        ),
-                        method.span,
-                    ));
-                }
-            }
+        if trait_info.mut_self_methods.contains(&method.node) && let Some(root) = super::check::root_variable(&object.node) && root != "self" && env.is_immutable(root) {
+            return Err(CompileError::type_err(
+                format!(
+                    "cannot call mutating method '{}' on immutable variable '{}'; declare with 'let mut' to allow mutation",
+                    method.node, root
+                ),
+                method.span,
+            ));
         }
         return Ok(method_sig.return_type.clone());
     }
@@ -1785,7 +1818,7 @@ fn infer_method_call(
         }
     };
 
-    let mangled = format!("{}_{}", class_name, method.node);
+    let mangled = mangle_method(&class_name, &method.node);
     if let Some(ref current) = env.current_fn {
         env.method_resolutions.insert(
             (current.clone(), method.span.start),
@@ -1793,18 +1826,14 @@ fn infer_method_call(
         );
     }
     // Check caller-side mutability: cannot call mut self method on immutable binding
-    if env.mut_self_methods.contains(&mangled) {
-        if let Some(root) = super::check::root_variable(&object.node) {
-            if root != "self" && env.is_immutable(root) {
-                return Err(CompileError::type_err(
-                    format!(
-                        "cannot call mutating method '{}' on immutable variable '{}'; declare with 'let mut' to allow mutation",
-                        method.node, root
-                    ),
-                    method.span,
-                ));
-            }
-        }
+    if env.mut_self_methods.contains(&mangled) && let Some(root) = super::check::root_variable(&object.node) && root != "self" && env.is_immutable(root) {
+        return Err(CompileError::type_err(
+            format!(
+                "cannot call mutating method '{}' on immutable variable '{}'; declare with 'let mut' to allow mutation",
+                method.node, root
+            ),
+            method.span,
+        ));
     }
     let sig = env.functions.get(&mangled).ok_or_else(|| {
         CompileError::type_err(

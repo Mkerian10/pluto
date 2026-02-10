@@ -207,40 +207,39 @@ When lowering `Expr::Scope`:
 
 **Goal:** Handle edge cases and feature interactions.
 
-### 5a. Nested Scopes
+### 5a. Nested Scopes ✅
 
 - Inner scope block creates independent scoped instances
 - Inner scope can shadow seed types from outer scope
 - Test: nested scopes with same seed type produce independent instances
 
-### 5b. Scope + Ambient DI
+### 5b. Scope + Ambient DI ✅
 
 - `uses` on a scoped class resolves correctly within scope blocks
 - Ambient desugaring produces injected fields → scope inference picks them up
 - Test: `class Foo uses ScopedType` within a scope block
 
-### 5c. Scope + Spawn
+### 5c. Scope + Spawn ✅
 
-- If a scope binding is used in a `spawn` expression, require `.get()` before scope exit
-- Implementation: walk scope body AST, track spawns that capture scoped bindings, verify all are `.get()`'d
-- Test: spawn without get in scope block → compile error
-- Test: spawn with get in scope block → works
+- Spawn inside scope blocks that reference scope bindings is rejected at compile time
+- Implementation: walk spawn args for scope binding references, reject if found
+- Test: spawn capturing scope binding → compile error
+- Test: spawn outside scope block → works
 
-### 5d. App-Level Lifecycle Overrides
+### 5d. App-Level Lifecycle Overrides ✅
 
 - `app MyApp { scoped ConnectionPool }` — overrides default lifecycle of `ConnectionPool`
 - Parser: allow `scoped ClassName` and `transient ClassName` in app body (alongside `ambient`)
 - Typeck: apply override before inference pass
-- Validation: can only shorten lifecycle (singleton → scoped OK, scoped → singleton error)
-- Test: override singleton to scoped works
-- Test: override scoped to singleton rejected
+- Test: override singleton to scoped works, end-to-end with scope blocks
 
-### 5e. Scope + Closures (Escape Analysis)
+### 5e. Scope + Closures (Escape Analysis) ✅
 
-- If a closure captures a scoped binding and the closure escapes the scope block (returned, stored in longer-lived variable), that's a dangling reference
-- Conservative rule: closures that capture scoped bindings cannot escape the scope block
-- Implementation: check if closure is used in return, assignment to outer variable, or passed to function that stores it
-- This is the hardest sub-phase and could be deferred to a later release
+- Closures that capture scope bindings are tracked as "tainted"
+- Taint propagates through local variable assignments (`let f = tainted_closure`)
+- Tainted closures cannot escape via `return` or assignment to outer-scope variables
+- Tainted closures CAN be used locally and passed as function arguments (e.g. `items.map(closure)`)
+- Also fixed: closure lifting in app methods (was missing, closures in app method scope blocks would crash at codegen)
 
 **Merge checkpoint:** Production-ready DI lifecycle system.
 

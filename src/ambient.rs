@@ -273,6 +273,16 @@ fn rewrite_stmt(stmt: &mut Spanned<Stmt>, active: &HashSet<String>) {
                 rewrite_block(&mut def.node, active);
             }
         }
+        Stmt::Scope { seeds, bindings, body } => {
+            for seed in seeds {
+                rewrite_expr(&mut seed.node, seed.span, active);
+            }
+            let mut inner = active.clone();
+            for binding in bindings {
+                inner.remove(&binding.name.node);
+            }
+            rewrite_block(&mut body.node, &inner);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -351,7 +361,7 @@ fn rewrite_expr(expr: &mut Expr, span: Span, active: &HashSet<String>) {
                 CatchHandler::Wildcard { var, body } => {
                     let mut inner_active = active.clone();
                     inner_active.remove(&var.node);
-                    rewrite_expr(&mut body.node, body.span, &inner_active);
+                    rewrite_block(&mut body.node, &inner_active);
                 }
                 CatchHandler::Shorthand(fb) => {
                     rewrite_expr(&mut fb.node, fb.span, active);

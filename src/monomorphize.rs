@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
-use crate::typeck::env::{mangle_name, InstKind, Instantiation, TypeEnv};
+use crate::typeck::env::{mangle_method, mangle_name, InstKind, Instantiation, TypeEnv};
 use crate::typeck::types::PlutoType;
 
 /// Span offset multiplier for monomorphized bodies. Each iteration gets unique
@@ -151,7 +151,7 @@ fn instantiate_class(
     // Type-check methods to discover transitive instantiations
     for method in &class.methods {
         // Register method signature if not already registered
-        let method_name = format!("{}_{}", mangled, method.node.name.node);
+        let method_name = mangle_method(&mangled, &method.node.name.node);
         if !env.functions.contains_key(&method_name) {
             // Build the FuncSig for this method
             let mut param_types = Vec::new();
@@ -445,6 +445,15 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
                 substitute_in_expr(&mut cap.node, bindings);
             }
         }
+        Stmt::Scope { seeds, bindings: scope_bindings, body } => {
+            for seed in seeds {
+                substitute_in_expr(&mut seed.node, bindings);
+            }
+            for sb in scope_bindings {
+                substitute_in_type_expr(&mut sb.ty.node, bindings);
+            }
+            substitute_in_block(&mut body.node, bindings);
+        }
         Stmt::Select { arms, default } => {
             for arm in arms {
                 match &mut arm.op {
@@ -570,7 +579,7 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
             substitute_in_expr(&mut expr.node, bindings);
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    substitute_in_expr(&mut body.node, bindings);
+                    substitute_in_block(&mut body.node, bindings);
                 }
                 CatchHandler::Shorthand(body) => {
                     substitute_in_expr(&mut body.node, bindings);
@@ -773,6 +782,19 @@ fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
                 offset_expr_spans(&mut cap.node, offset);
             }
         }
+        Stmt::Scope { seeds, bindings, body } => {
+            for seed in seeds {
+                offset_spanned(seed, offset);
+                offset_expr_spans(&mut seed.node, offset);
+            }
+            for binding in bindings {
+                offset_spanned(&mut binding.name, offset);
+                offset_spanned(&mut binding.ty, offset);
+                offset_type_expr_spans(&mut binding.ty.node, offset);
+            }
+            offset_spanned(body, offset);
+            offset_block_spans(&mut body.node, offset);
+        }
         Stmt::Select { arms, default } => {
             for arm in arms {
                 match &mut arm.op {
@@ -929,7 +951,7 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
                 CatchHandler::Wildcard { var, body } => {
                     offset_spanned(var, offset);
                     offset_spanned(body, offset);
-                    offset_expr_spans(&mut body.node, offset);
+                    offset_block_spans(&mut body.node, offset);
                 }
                 CatchHandler::Shorthand(body) => {
                     offset_spanned(body, offset);
@@ -1059,6 +1081,12 @@ fn rewrite_stmt(stmt: &mut Stmt, rewrites: &HashMap<(usize, usize), String>) {
                 rewrite_expr(&mut cap.node, cap.span.start, cap.span.end, rewrites);
             }
         }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                rewrite_expr(&mut seed.node, seed.span.start, seed.span.end, rewrites);
+            }
+            rewrite_block(&mut body.node, rewrites);
+        }
         Stmt::Select { arms, default } => {
             for arm in arms {
                 match &mut arm.op {
@@ -1165,7 +1193,7 @@ fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(u
             rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    rewrite_expr(&mut body.node, body.span.start, body.span.end, rewrites);
+                    rewrite_block(&mut body.node, rewrites);
                 }
                 CatchHandler::Shorthand(body) => {
                     rewrite_expr(&mut body.node, body.span.start, body.span.end, rewrites);
@@ -1290,6 +1318,15 @@ fn resolve_generic_te_in_stmt(stmt: &mut Stmt, env: &mut TypeEnv) -> Result<(), 
                 resolve_generic_te_in_expr(&mut cap.node, env)?;
             }
         }
+        Stmt::Scope { seeds, bindings, body } => {
+            for seed in seeds {
+                resolve_generic_te_in_expr(&mut seed.node, env)?;
+            }
+            for binding in bindings {
+                resolve_generic_te(&mut binding.ty.node, env)?;
+            }
+            resolve_generic_te_in_block(&mut body.node, env)?;
+        }
         Stmt::Select { arms, default } => {
             for arm in arms {
                 match &mut arm.op {
@@ -1384,7 +1421,7 @@ fn resolve_generic_te_in_expr(expr: &mut Expr, env: &mut TypeEnv) -> Result<(), 
         Expr::Catch { expr, handler } => {
             resolve_generic_te_in_expr(&mut expr.node, env)?;
             match handler {
-                CatchHandler::Wildcard { body, .. } => resolve_generic_te_in_expr(&mut body.node, env)?,
+                CatchHandler::Wildcard { body, .. } => resolve_generic_te_in_block(&mut body.node, env)?,
                 CatchHandler::Shorthand(body) => resolve_generic_te_in_expr(&mut body.node, env)?,
             }
         }
@@ -1420,9 +1457,9 @@ fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), Compil
                 .map(|ta| type_expr_to_pluto_type(&ta.node, env))
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let mangled = if env.generic_classes.contains_key(name.as_str()) {
-                crate::typeck::env::mangle_name(name, &resolved_args)
-            } else if env.generic_enums.contains_key(name.as_str()) {
+            let mangled = if env.generic_classes.contains_key(name.as_str())
+                || env.generic_enums.contains_key(name.as_str())
+            {
                 crate::typeck::env::mangle_name(name, &resolved_args)
             } else {
                 return Err(CompileError::type_err(

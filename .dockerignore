@@ -3,3 +3,10 @@ target/
 examples/
 docs/
 *.md
+output/
+book/
+editor/
+.mcp.json
+sdk/target/
+mcp/target/
+benchmarks/

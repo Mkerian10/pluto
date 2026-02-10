@@ -264,6 +264,40 @@ fn range_sum() {
     assert_eq!(out, "55\n");
 }
 
+// ── else if tests ──
+
+#[test]
+fn else_if_basic() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 5\n    if x > 10 {\n        print(1)\n    } else if x > 3 {\n        print(2)\n    }\n    print(99)\n}",
+    );
+    assert_eq!(out, "2\n99\n");
+}
+
+#[test]
+fn else_if_multi_branch() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 2\n    if x == 1 {\n        print(1)\n    } else if x == 2 {\n        print(2)\n    } else if x == 3 {\n        print(3)\n    } else if x == 4 {\n        print(4)\n    }\n}",
+    );
+    assert_eq!(out, "2\n");
+}
+
+#[test]
+fn else_if_with_else() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 100\n    if x < 0 {\n        print(1)\n    } else if x < 10 {\n        print(2)\n    } else if x < 50 {\n        print(3)\n    } else {\n        print(4)\n    }\n}",
+    );
+    assert_eq!(out, "4\n");
+}
+
+#[test]
+fn else_if_nested() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 5\n    let y = 10\n    if x > 10 {\n        print(1)\n    } else if x > 3 {\n        if y > 20 {\n            print(2)\n        } else if y > 5 {\n            print(3)\n        } else {\n            print(4)\n        }\n    } else {\n        print(5)\n    }\n}",
+    );
+    assert_eq!(out, "3\n");
+}
+
 // ── combined tests ──
 
 #[test]

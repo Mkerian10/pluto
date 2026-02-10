@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run_stdout, compile_and_run_output, compile_should_fail};
+use common::{compile_and_run_stdout, compile_should_fail};
 
 #[test]
 fn array_literal_and_index() {

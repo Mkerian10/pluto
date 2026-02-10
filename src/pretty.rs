@@ -495,8 +495,20 @@ impl PrettyPrinter {
             self.newline();
         }
 
-        // Blank line between ambients and methods
-        if !app.ambient_types.is_empty() && !app.methods.is_empty() {
+        // Lifecycle overrides
+        for (name, lifecycle) in &app.lifecycle_overrides {
+            self.write_indent();
+            match lifecycle {
+                crate::parser::ast::Lifecycle::Scoped => self.write("scoped "),
+                crate::parser::ast::Lifecycle::Transient => self.write("transient "),
+                crate::parser::ast::Lifecycle::Singleton => self.write("singleton "),
+            }
+            self.write(&name.node);
+            self.newline();
+        }
+
+        // Blank line between directives and methods
+        if (!app.ambient_types.is_empty() || !app.lifecycle_overrides.is_empty()) && !app.methods.is_empty() {
             self.newline();
         }
 
@@ -676,11 +688,11 @@ impl PrettyPrinter {
                 if let Some(else_blk) = else_block {
                     self.write(" else ");
                     // Check if this is an else-if (single stmt that is an If)
-                    if else_blk.node.stmts.len() == 1 {
-                        if let Stmt::If { .. } = &else_blk.node.stmts[0].node {
-                            self.emit_stmt(&else_blk.node.stmts[0].node);
-                            return;
-                        }
+                    if else_blk.node.stmts.len() == 1
+                        && let Stmt::If { .. } = &else_blk.node.stmts[0].node
+                    {
+                        self.emit_stmt(&else_blk.node.stmts[0].node);
+                        return;
                     }
                     self.emit_block(&else_blk.node);
                 }
@@ -830,6 +842,26 @@ impl PrettyPrinter {
                 self.dedent();
                 self.write_indent();
                 self.write("}");
+            }
+            Stmt::Scope { seeds, bindings, body } => {
+                self.write("scope(");
+                for (i, seed) in seeds.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(&seed.node, 0);
+                }
+                self.write(") |");
+                for (i, binding) in bindings.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(&binding.name.node);
+                    self.write(": ");
+                    self.emit_type_expr(&binding.ty.node);
+                }
+                self.write("| ");
+                self.emit_block(&body.node);
             }
             Stmt::Break => self.write("break"),
             Stmt::Continue => self.write("continue"),
@@ -1047,11 +1079,11 @@ impl PrettyPrinter {
                 }
                 self.write(" => ");
                 // Single Return(Some(expr)) body → inline expr
-                if body.node.stmts.len() == 1 {
-                    if let Stmt::Return(Some(ret_expr)) = &body.node.stmts[0].node {
-                        self.emit_expr(&ret_expr.node, 0);
-                        return;
-                    }
+                if body.node.stmts.len() == 1
+                    && let Stmt::Return(Some(ret_expr)) = &body.node.stmts[0].node
+                {
+                    self.emit_expr(&ret_expr.node, 0);
+                    return;
                 }
                 self.emit_block(&body.node);
             }
@@ -1119,9 +1151,8 @@ impl PrettyPrinter {
                     CatchHandler::Wildcard { var, body } => {
                         self.write(" catch ");
                         self.write(&var.node);
-                        self.write(" { ");
-                        self.emit_expr(&body.node, 0);
-                        self.write(" }");
+                        self.write(" ");
+                        self.emit_block(&body.node);
                     }
                 }
             }
@@ -1811,7 +1842,8 @@ fn main() {
 }
 "#;
         let result = pp(src);
-        assert!(result.contains("find() catch err { 0 }"));
+        assert!(result.contains("find() catch err {"));
+        assert!(result.contains("0"));
         assert_roundtrip_stable(src);
     }
 

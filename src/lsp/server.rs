@@ -217,11 +217,11 @@ fn run_analysis(
                         file_paths.insert(*fid, path.clone());
                     }
                 }
-                for (fid, _) in &prev.file_paths {
-                    if !line_indices.contains_key(fid) {
-                        if let Some((_, src)) = prev.source_map.files.get(*fid as usize) {
-                            line_indices.insert(*fid, super::line_index::LineIndex::new(src));
-                        }
+                for fid in prev.file_paths.keys() {
+                    if !line_indices.contains_key(fid)
+                        && let Some((_, src)) = prev.source_map.files.get(*fid as usize)
+                    {
+                        line_indices.insert(*fid, super::line_index::LineIndex::new(src));
                     }
                 }
             }
@@ -234,6 +234,7 @@ fn run_analysis(
 
             publish_clear_diagnostics(connection, &file_paths)?;
 
+            #[allow(clippy::mutable_key_type)]
             let mut by_uri: HashMap<Uri, Vec<lsp_types::Diagnostic>> = HashMap::new();
             for (diag_uri, diag) in diags {
                 by_uri.entry(diag_uri).or_default().push(diag);
@@ -271,7 +272,7 @@ fn publish_clear_diagnostics(
     connection: &Connection,
     file_paths: &HashMap<u32, PathBuf>,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
-    for (_, path) in file_paths {
+    for path in file_paths.values() {
         publish_diagnostics(connection, path_to_uri(path), vec![])?;
     }
     Ok(())

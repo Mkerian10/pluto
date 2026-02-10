@@ -1,0 +1,20 @@
+title: Exploring Pluto's Features
+date: 2026-02-01
+---
+Let's take a deeper look at what makes Pluto interesting as a language.
+
+## Error Handling
+
+Pluto uses typed errors with compiler-inferred error-ability. You don't need to annotate functions — the compiler figures out which functions can fail by analyzing the call graph.
+
+Errors propagate with the `!` operator and are caught with `catch`. It's clean and explicit without being verbose.
+
+## Dependency Injection
+
+The `app` declaration is Pluto's entry point. Classes declare their dependencies with bracket syntax like `class API[db: Database]`, and the compiler wires everything at compile time. No runtime container needed.
+
+## Generics
+
+Pluto uses monomorphization for generics — each concrete type gets its own compiled copy. This means zero runtime overhead for generic code.
+
+These features combine to make Pluto a practical language for building real backend services.

@@ -8,7 +8,7 @@ use cranelift_module::{DataDescription, DataId, FuncId, Module};
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use crate::typeck::env::TypeEnv;
+use crate::typeck::env::{mangle_method, TypeEnv};
 use crate::typeck::types::PlutoType;
 
 use super::runtime::RuntimeRegistry;
@@ -35,8 +35,7 @@ struct LowerContext<'a> {
     /// Function contracts: fn_mangled_name → FnContracts (used during function setup)
     #[allow(dead_code)]
     fn_contracts: &'a HashMap<String, FnContracts>,
-    /// Module-level globals holding DI singleton pointers (Phase 2).
-    #[allow(dead_code)]
+    /// Module-level globals holding DI singleton pointers, used by scope blocks.
     singleton_globals: &'a HashMap<String, DataId>,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
@@ -95,8 +94,7 @@ impl<'a> LowerContext<'a> {
     }
 
     /// Load a singleton pointer from its module-level global.
-    /// Used by scope block codegen (Phase 3).
-    #[allow(dead_code)]
+    /// Used by scope block codegen to wire singleton dependencies into scoped instances.
     fn load_singleton(&mut self, class_name: &str) -> Result<Value, CompileError> {
         let data_id = self.singleton_globals.get(class_name).ok_or_else(|| {
             CompileError::codegen(format!("no singleton global for '{}'", class_name))
@@ -407,13 +405,9 @@ impl<'a> LowerContext<'a> {
                         let val_type = infer_type_for_expr(&expr.node, self.env, &self.var_types);
 
                         // If returning a void expression (e.g., spawn closure wrapping a void function),
-                        // lower the expr for side effects but emit return_(&[])
+                        // lower the expr for side effects but emit default return
                         if val_type == PlutoType::Void {
-                            if let Some(bb) = target_block {
-                                self.builder.ins().jump(bb, &[]);
-                            } else {
-                                self.builder.ins().return_(&[]);
-                            }
+                            self.emit_default_return();
                         } else {
                             // If returning a class where a trait is expected, wrap it
                             // If returning T where T? is expected, box value types
@@ -435,11 +429,7 @@ impl<'a> LowerContext<'a> {
                         }
                     }
                     None => {
-                        if let Some(bb) = target_block {
-                            self.builder.ins().jump(bb, &[]);
-                        } else {
-                            self.builder.ins().return_(&[]);
-                        }
+                        self.emit_default_return();
                     }
                 }
                 *terminated = true;
@@ -468,14 +458,15 @@ impl<'a> LowerContext<'a> {
                 let ptr = self.lower_expr(&object.node)?;
                 let val = self.lower_expr(&value.node)?;
                 let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
-                if let PlutoType::Class(class_name) = &obj_type {
-                    if let Some(class_info) = self.env.classes.get(class_name) {
-                        let offset = class_info.fields.iter()
-                            .position(|(n, _, _)| *n == field.node)
-                            .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{class_name}'", field.node)))? as i32 * POINTER_SIZE;
-                        self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
-                    }
+                if let PlutoType::Class(class_name) = &obj_type
+                    && let Some(class_info) = self.env.classes.get(class_name)
+                {
+                    let offset = class_info.fields.iter()
+                        .position(|(n, _, _)| *n == field.node)
+                        .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{class_name}'", field.node)))? as i32 * POINTER_SIZE;
+                    self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
                 }
+
                 Ok(())
             }
             Stmt::IndexAssign { object, index, value } => {
@@ -525,6 +516,7 @@ impl<'a> LowerContext<'a> {
                 Ok(())
             }
             Stmt::Select { arms, default } => self.lower_select(arms, default, terminated),
+            Stmt::Scope { seeds, bindings, body } => self.lower_scope(seeds, bindings, body),
             Stmt::Expr(expr) => {
                 self.lower_expr(&expr.node)?;
                 Ok(())
@@ -1209,7 +1201,7 @@ impl<'a> LowerContext<'a> {
 
             let variant_idx = enum_info.variants.iter()
                 .position(|(n, _)| *n == arm.variant_name.node)
-                .unwrap() as i64;
+                .expect("match arm variant should exist after typeck") as i64;
             let expected_tag = self.builder.ins().iconst(types::I64, variant_idx);
             let cmp = self.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
 
@@ -1227,7 +1219,7 @@ impl<'a> LowerContext<'a> {
 
             let variant_fields = &enum_info.variants.iter()
                 .find(|(n, _)| *n == arm.variant_name.node)
-                .unwrap().1;
+                .expect("match arm variant should exist after typeck").1;
 
             // Save previous variable bindings so we can restore after this arm
             let mut prev_vars: Vec<(String, Option<Variable>, Option<PlutoType>)> = Vec::new();
@@ -1235,7 +1227,7 @@ impl<'a> LowerContext<'a> {
             for (binding_field, opt_rename) in &arm.bindings {
                 let field_idx = variant_fields.iter()
                     .position(|(n, _)| *n == binding_field.node)
-                    .unwrap();
+                    .expect("binding field should exist in variant after typeck");
                 let field_type = &variant_fields[field_idx].1;
                 let offset = ((1 + field_idx) as i32) * POINTER_SIZE;
                 let raw = self.builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(offset));
@@ -1329,6 +1321,164 @@ impl<'a> LowerContext<'a> {
 
         // Return default value (caller checks TLS)
         self.emit_default_return();
+        Ok(())
+    }
+
+    fn lower_scope(
+        &mut self,
+        seeds: &[crate::span::Spanned<Expr>],
+        bindings: &[ScopeBinding],
+        body: &crate::span::Spanned<Block>,
+    ) -> Result<(), CompileError> {
+        use crate::typeck::env::FieldWiring;
+
+        // Look up the ScopeResolution computed during typeck
+        // We need to find the Stmt::Scope span — use the first seed's start and body's end
+        // Actually, the key is (stmt span.start, stmt span.end). The stmt span encompasses
+        // everything from `scope` keyword to end of body `}`. We need to match what check.rs stored.
+        // The dispatch in lower_stmt gives us the stmt node directly, and the span is on the outer
+        // Spanned<Stmt>. We can reconstruct from seeds[0] start to body end.
+        // Better: find the resolution by scanning for one that matches our seeds/body span range.
+        let scope_key = self.env.scope_resolutions.keys()
+            .find(|&&(start, end)| {
+                // The scope stmt span starts before the first seed and ends at body end
+                seeds.first().map_or(false, |s| start <= s.span.start) &&
+                end == body.span.end
+            })
+            .copied()
+            .ok_or_else(|| {
+                CompileError::codegen("missing ScopeResolution for scope block".to_string())
+            })?;
+        let resolution = self.env.scope_resolutions.get(&scope_key).unwrap().clone();
+
+        // 1. Evaluate seed expressions and store in locals
+        let mut seed_vals: Vec<Value> = Vec::new();
+        for seed in seeds {
+            let val = self.lower_expr(&seed.node)?;
+            seed_vals.push(val);
+        }
+
+        // 2. Allocate scoped instances in topological order
+        let mut scoped_locals: HashMap<String, Value> = HashMap::new();
+
+        // Also map seed class names to their values for wiring
+        // We need to know seed class names — get from typeck env
+        // For now, infer from ScopeResolution binding_sources: Seed(idx) gives us the idx
+        // But we need the class names. Get them from the env by checking seed types.
+        // Actually we stored seed indices in FieldWiring::Seed — the class name for each seed
+        // can be recovered from FieldWiring entries. Let's just iterate all wirings.
+        // Simpler: store seed values by looking at binding_sources + field_wirings.
+        // We need a map from seed index to value (already have seed_vals), and from class_name to value.
+
+        // Build seed_name_to_val by inspecting what classes the seeds produce.
+        // We can look at the binding_sources: if a FieldWiring::Seed(idx) appears, that seed
+        // provides some class. But we need the actual class names for ScopedInstance wiring.
+        // Let's use the field_wirings: scan for Seed(idx) entries to discover which class name
+        // each seed provides. Or better: just look at the ScopeResolution field_wirings for
+        // FieldWiring::Seed values.
+        // Actually the simplest approach: any class that's NOT in creation_order but IS referenced
+        // as ScopedInstance must be a seed. But that's fragile.
+        // The cleanest: we know seed types from typeck. The ScopeResolution doesn't store them
+        // directly, but we can reconstruct: for binding_sources, Seed(idx) tells us that binding
+        // is a seed. For field_wirings, Seed(idx) tells us which seed provides a dep.
+        // We just need a map from class_name → Value for ALL scope-available classes.
+
+        for class_name in &resolution.creation_order {
+            let class_info = self.env.classes.get(class_name).ok_or_else(|| {
+                CompileError::codegen(format!("scope: unknown class '{class_name}'"))
+            })?.clone();
+            let num_fields = class_info.fields.len() as i64;
+            let size = num_fields * POINTER_SIZE as i64;
+            let size_val = self.builder.ins().iconst(types::I64, size);
+            let ptr = self.call_runtime("__pluto_alloc", &[size_val]);
+
+            // Wire fields
+            if let Some(wirings) = resolution.field_wirings.get(class_name) {
+                for (field_name, wiring) in wirings {
+                    let field_idx = class_info.fields.iter()
+                        .position(|(n, _, _)| n == field_name)
+                        .ok_or_else(|| {
+                            CompileError::codegen(format!("scope: unknown field '{field_name}' on '{class_name}'"))
+                        })?;
+                    let offset = field_idx as i32 * POINTER_SIZE;
+
+                    let dep_val = match wiring {
+                        FieldWiring::Seed(idx) => seed_vals[*idx],
+                        FieldWiring::Singleton(name) => self.load_singleton(name)?,
+                        FieldWiring::ScopedInstance(name) => {
+                            *scoped_locals.get(name).ok_or_else(|| {
+                                CompileError::codegen(format!(
+                                    "scope: scoped instance '{name}' not yet created (ordering bug)"
+                                ))
+                            })?
+                        }
+                    };
+
+                    self.builder.ins().store(
+                        MemFlags::new(),
+                        dep_val,
+                        ptr,
+                        Offset32::new(offset),
+                    );
+                }
+            }
+
+            scoped_locals.insert(class_name.clone(), ptr);
+        }
+
+        // 3. Save current variable bindings and define scope bindings
+        let mut saved_vars: Vec<(String, Option<Variable>, Option<PlutoType>)> = Vec::new();
+
+        for (i, binding) in bindings.iter().enumerate() {
+            let name = &binding.name.node;
+            let prev_var = self.variables.get(name).cloned();
+            let prev_type = self.var_types.get(name).cloned();
+            saved_vars.push((name.clone(), prev_var, prev_type));
+
+            // Get the value for this binding
+            let val = match &resolution.binding_sources[i] {
+                FieldWiring::Seed(idx) => seed_vals[*idx],
+                FieldWiring::ScopedInstance(class_name) => {
+                    *scoped_locals.get(class_name).ok_or_else(|| {
+                        CompileError::codegen(format!(
+                            "scope: binding class '{class_name}' not available"
+                        ))
+                    })?
+                }
+                FieldWiring::Singleton(class_name) => self.load_singleton(class_name)?,
+            };
+
+            // Create a new Cranelift variable for the binding
+            let var = Variable::from_u32(self.next_var);
+            self.next_var += 1;
+            self.builder.declare_var(var, types::I64);
+            self.builder.def_var(var, val);
+
+            let ty = resolve_type_expr_to_pluto(&binding.ty.node, self.env);
+            self.variables.insert(name.clone(), var);
+            self.var_types.insert(name.clone(), ty);
+        }
+
+        // 4. Lower body
+        let mut body_terminated = false;
+        for s in &body.node.stmts {
+            self.lower_stmt(&s.node, &mut body_terminated)?;
+        }
+
+        // 5. Restore previous variable bindings
+        for (name, prev_var, prev_type) in saved_vars {
+            if let Some(pv) = prev_var {
+                self.variables.insert(name.clone(), pv);
+            } else {
+                self.variables.remove(&name);
+            }
+            if let Some(pt) = prev_type {
+                self.var_types.insert(name, pt);
+            } else {
+                self.var_types.remove(&name);
+            }
+        }
+
         Ok(())
     }
 
@@ -1534,14 +1684,23 @@ impl<'a> LowerContext<'a> {
                 let continue_bb = self.builder.create_block();
                 self.builder.ins().brif(is_none, propagate_bb, &[], continue_bb, &[]);
 
-                // Propagate block: early-return none (0)
+                // Propagate block: early-return none (0), or void return for void functions
                 self.builder.switch_to_block(propagate_bb);
                 self.builder.seal_block(propagate_bb);
-                let none_val = self.builder.ins().iconst(types::I64, 0);
-                if let Some(exit_bb) = self.exit_block {
-                    self.builder.ins().jump(exit_bb, &[none_val]);
+                let is_void_return = matches!(&self.expected_return_type, Some(PlutoType::Void) | None);
+                if is_void_return {
+                    if let Some(exit_bb) = self.exit_block {
+                        self.builder.ins().jump(exit_bb, &[]);
+                    } else {
+                        self.builder.ins().return_(&[]);
+                    }
                 } else {
-                    self.builder.ins().return_(&[none_val]);
+                    let none_val = self.builder.ins().iconst(types::I64, 0);
+                    if let Some(exit_bb) = self.exit_block {
+                        self.builder.ins().jump(exit_bb, &[none_val]);
+                    } else {
+                        self.builder.ins().return_(&[none_val]);
+                    }
                 }
 
                 // Continue block: unwrap the value
@@ -1672,10 +1831,10 @@ impl<'a> LowerContext<'a> {
                     let raw = self.call_runtime("__pluto_array_get", &[handle, idx]);
                     Ok(from_array_slot(raw, elem, &mut self.builder))
                 } else if let PlutoType::Map(key_ty, val_ty) = &obj_type {
-                    let tag = self.builder.ins().iconst(types::I64, key_type_tag(&key_ty));
-                    let key_slot = to_array_slot(idx, &key_ty, &mut self.builder);
+                    let tag = self.builder.ins().iconst(types::I64, key_type_tag(key_ty));
+                    let key_slot = to_array_slot(idx, key_ty, &mut self.builder);
                     let raw = self.call_runtime("__pluto_map_get", &[handle, tag, key_slot]);
-                    Ok(from_array_slot(raw, &val_ty, &mut self.builder))
+                    Ok(from_array_slot(raw, val_ty, &mut self.builder))
                 } else if obj_type == PlutoType::Bytes {
                     let raw = self.call_runtime("__pluto_bytes_get", &[handle, idx]);
                     Ok(self.builder.ins().ireduce(types::I8, raw))
@@ -1691,7 +1850,8 @@ impl<'a> LowerContext<'a> {
                 })?;
                 let max_fields = enum_info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
                 let alloc_size = (1 + max_fields) as i64 * POINTER_SIZE as i64;
-                let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
+                let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node)
+                    .expect("variant should exist after typeck validation");
 
                 let size_val = self.builder.ins().iconst(types::I64, alloc_size);
                 let ptr = self.call_runtime("__pluto_alloc", &[size_val]);
@@ -1763,10 +1923,25 @@ impl<'a> LowerContext<'a> {
                 match &call.node {
                     Expr::ClosureCreate { fn_name, captures, .. } => {
                         let closure_ptr = self.lower_closure_create(fn_name, captures)?;
+                        // Deep-copy heap-type captures so spawned task gets isolated data
+                        for (i, cap_name) in captures.iter().enumerate() {
+                            let cap_type = self.var_types.get(cap_name).cloned().unwrap_or(PlutoType::Int);
+                            if needs_deep_copy(&cap_type) {
+                                let offset = ((1 + i) * 8) as i32;
+                                let original = self.builder.ins().load(
+                                    types::I64, MemFlags::new(), closure_ptr, Offset32::new(offset),
+                                );
+                                let copied = self.call_runtime("__pluto_deep_copy", &[original]);
+                                self.builder.ins().store(
+                                    MemFlags::new(), copied, closure_ptr, Offset32::new(offset),
+                                );
+                            }
+                        }
                         // Inc refcount for each captured Sender
                         for cap_name in captures {
                             if let Some(PlutoType::Sender(_)) = self.var_types.get(cap_name) {
-                                let var = self.variables.get(cap_name).unwrap();
+                                let var = self.variables.get(cap_name)
+                                    .expect("captured sender should have a variable in scope");
                                 let val = self.builder.use_var(*var);
                                 self.call_runtime_void("__pluto_chan_sender_inc", &[val]);
                             }
@@ -2070,7 +2245,8 @@ impl<'a> LowerContext<'a> {
         })?.clone();
         let max_fields = enum_info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
         let alloc_size = (1 + max_fields) as i64 * POINTER_SIZE as i64;
-        let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node).unwrap();
+        let variant_idx = enum_info.variants.iter().position(|(n, _)| *n == variant.node)
+            .expect("variant should exist after typeck validation");
         let variant_fields = &enum_info.variants[variant_idx].1;
 
         let size_val = self.builder.ins().iconst(types::I64, alloc_size);
@@ -2081,7 +2257,8 @@ impl<'a> LowerContext<'a> {
 
         for (lit_name, lit_val) in fields {
             let val = self.lower_expr(&lit_val.node)?;
-            let field_idx = variant_fields.iter().position(|(n, _)| *n == lit_name.node).unwrap();
+            let field_idx = variant_fields.iter().position(|(n, _)| *n == lit_name.node)
+                .expect("field should exist after typeck validation");
             let field_type = &variant_fields[field_idx].1;
             let slot = to_array_slot(val, field_type, &mut self.builder);
             let offset = ((1 + field_idx) as i32) * POINTER_SIZE;
@@ -2141,7 +2318,37 @@ impl<'a> LowerContext<'a> {
                 self.variables.insert(var.node.clone(), err_var);
                 self.var_types.insert(var.node.clone(), PlutoType::Error);
 
-                let result = self.lower_expr(&body.node)?;
+                let stmts = &body.node.stmts;
+                let mut block_terminated = false;
+
+                // Lower all statements except the last
+                for stmt in stmts.iter().take(stmts.len().saturating_sub(1)) {
+                    self.lower_stmt(&stmt.node, &mut block_terminated)?;
+                }
+
+                // Determine result from the last statement
+                let (result, did_terminate) = if block_terminated {
+                    // Already terminated (e.g., early return in non-last stmt)
+                    (None, true)
+                } else if let Some(last) = stmts.last() {
+                    match &last.node {
+                        Stmt::Expr(e) => (Some(self.lower_expr(&e.node)?), false),
+                        Stmt::Return(_) => {
+                            self.lower_stmt(&last.node, &mut block_terminated)?;
+                            (None, true)
+                        }
+                        _ => {
+                            self.lower_stmt(&last.node, &mut block_terminated)?;
+                            if block_terminated {
+                                (None, true)
+                            } else {
+                                (Some(self.builder.ins().iconst(types::I64, 0)), false)
+                            }
+                        }
+                    }
+                } else {
+                    (Some(self.builder.ins().iconst(types::I64, 0)), false)
+                };
 
                 // Restore previous binding
                 if let Some(pv) = prev_var {
@@ -2155,7 +2362,14 @@ impl<'a> LowerContext<'a> {
                     self.var_types.remove(&var.node);
                 }
 
-                result
+                if did_terminate {
+                    // Block terminated (e.g., return), don't jump to merge
+                    self.builder.switch_to_block(merge_bb);
+                    self.builder.seal_block(merge_bb);
+                    return Ok(self.builder.block_params(merge_bb)[0]);
+                }
+
+                result.expect("catch block should produce a result value")
             }
             CatchHandler::Shorthand(fallback) => {
                 // Clear the error
@@ -2180,45 +2394,45 @@ impl<'a> LowerContext<'a> {
         args: &[crate::span::Spanned<Expr>],
     ) -> Result<Value, CompileError> {
         // Check for expect() intrinsic pattern
-        if let Expr::Call { name, args: expect_args, .. } = &object.node {
-            if name.node == "expect" && expect_args.len() == 1 {
-                let actual_val = self.lower_expr(&expect_args[0].node)?;
-                let inner_type = infer_type_for_expr(&expect_args[0].node, self.env, &self.var_types);
-                let line_no = byte_to_line(self.source, object.span.start);
-                let line_val = self.builder.ins().iconst(types::I64, line_no as i64);
+        if let Expr::Call { name, args: expect_args, .. } = &object.node
+            && name.node == "expect" && expect_args.len() == 1
+        {
+            let actual_val = self.lower_expr(&expect_args[0].node)?;
+            let inner_type = infer_type_for_expr(&expect_args[0].node, self.env, &self.var_types);
+            let line_no = byte_to_line(self.source, object.span.start);
+            let line_val = self.builder.ins().iconst(types::I64, line_no as i64);
 
-                match method.node.as_str() {
-                    "to_equal" => {
-                        let expected_val = self.lower_expr(&args[0].node)?;
-                        match inner_type {
-                            PlutoType::Int => self.call_runtime_void("__pluto_expect_equal_int", &[actual_val, expected_val, line_val]),
-                            PlutoType::Float => self.call_runtime_void("__pluto_expect_equal_float", &[actual_val, expected_val, line_val]),
-                            PlutoType::Bool => {
-                                let a = self.builder.ins().uextend(types::I64, actual_val);
-                                let e = self.builder.ins().uextend(types::I64, expected_val);
-                                self.call_runtime_void("__pluto_expect_equal_bool", &[a, e, line_val]);
-                            }
-                            PlutoType::String => self.call_runtime_void("__pluto_expect_equal_string", &[actual_val, expected_val, line_val]),
-                            PlutoType::Byte => {
-                                let a = self.builder.ins().uextend(types::I64, actual_val);
-                                let e = self.builder.ins().uextend(types::I64, expected_val);
-                                self.call_runtime_void("__pluto_expect_equal_int", &[a, e, line_val]);
-                            }
-                            _ => return Err(CompileError::codegen(format!("to_equal not supported for {inner_type}"))),
+            match method.node.as_str() {
+                "to_equal" => {
+                    let expected_val = self.lower_expr(&args[0].node)?;
+                    match inner_type {
+                        PlutoType::Int => self.call_runtime_void("__pluto_expect_equal_int", &[actual_val, expected_val, line_val]),
+                        PlutoType::Float => self.call_runtime_void("__pluto_expect_equal_float", &[actual_val, expected_val, line_val]),
+                        PlutoType::Bool => {
+                            let a = self.builder.ins().uextend(types::I64, actual_val);
+                            let e = self.builder.ins().uextend(types::I64, expected_val);
+                            self.call_runtime_void("__pluto_expect_equal_bool", &[a, e, line_val]);
                         }
+                        PlutoType::String => self.call_runtime_void("__pluto_expect_equal_string", &[actual_val, expected_val, line_val]),
+                        PlutoType::Byte => {
+                            let a = self.builder.ins().uextend(types::I64, actual_val);
+                            let e = self.builder.ins().uextend(types::I64, expected_val);
+                            self.call_runtime_void("__pluto_expect_equal_int", &[a, e, line_val]);
+                        }
+                        _ => return Err(CompileError::codegen(format!("to_equal not supported for {inner_type}"))),
                     }
-                    "to_be_true" => {
-                        let a = self.builder.ins().uextend(types::I64, actual_val);
-                        self.call_runtime_void("__pluto_expect_true", &[a, line_val]);
-                    }
-                    "to_be_false" => {
-                        let a = self.builder.ins().uextend(types::I64, actual_val);
-                        self.call_runtime_void("__pluto_expect_false", &[a, line_val]);
-                    }
-                    _ => return Err(CompileError::codegen(format!("unknown assertion method: {}", method.node))),
                 }
-                return Ok(self.builder.ins().iconst(types::I64, 0)); // void
+                "to_be_true" => {
+                    let a = self.builder.ins().uextend(types::I64, actual_val);
+                    self.call_runtime_void("__pluto_expect_true", &[a, line_val]);
+                }
+                "to_be_false" => {
+                    let a = self.builder.ins().uextend(types::I64, actual_val);
+                    self.call_runtime_void("__pluto_expect_false", &[a, line_val]);
+                }
+                _ => return Err(CompileError::codegen(format!("unknown assertion method: {}", method.node))),
             }
+            return Ok(self.builder.ins().iconst(types::I64, 0)); // void
         }
 
         let obj_ptr = self.lower_expr(&object.node)?;
@@ -2229,7 +2443,7 @@ impl<'a> LowerContext<'a> {
             match method.node.as_str() {
                 "get" => {
                     let raw = self.call_runtime("__pluto_task_get", &[obj_ptr]);
-                    return Ok(from_array_slot(raw, &inner, &mut self.builder));
+                    return Ok(from_array_slot(raw, inner, &mut self.builder));
                 }
                 _ => return Err(CompileError::codegen(format!("Task has no method '{}'", method.node)))
             }
@@ -2265,11 +2479,11 @@ impl<'a> LowerContext<'a> {
             match method.node.as_str() {
                 "recv" => {
                     let raw = self.call_runtime("__pluto_chan_recv", &[obj_ptr]);
-                    return Ok(from_array_slot(raw, &inner, &mut self.builder));
+                    return Ok(from_array_slot(raw, inner, &mut self.builder));
                 }
                 "try_recv" => {
                     let raw = self.call_runtime("__pluto_chan_try_recv", &[obj_ptr]);
-                    return Ok(from_array_slot(raw, &inner, &mut self.builder));
+                    return Ok(from_array_slot(raw, inner, &mut self.builder));
                 }
                 _ => return Err(CompileError::codegen(format!("Receiver has no method '{}'", method.node)))
             }
@@ -2538,7 +2752,7 @@ impl<'a> LowerContext<'a> {
             }
         } else if let PlutoType::Class(class_name) = &obj_type {
             let class_name = class_name.clone();
-            let mangled = format!("{}_{}", class_name, method.node);
+            let mangled = mangle_method(&class_name, &method.node);
             let func_id = self.func_ids.get(&mangled).ok_or_else(|| {
                 CompileError::codegen(format!("undefined method '{}'", method.node))
             })?;
@@ -2557,8 +2771,10 @@ impl<'a> LowerContext<'a> {
                 results[0]
             };
 
-            // Emit invariant checks after method call (conservative: all methods)
-            self.emit_invariant_checks(&class_name, obj_ptr)?;
+            // Emit invariant checks only after mut self methods — only mutations can break invariants
+            if self.env.mut_self_methods.contains(&mangled) {
+                self.emit_invariant_checks(&class_name, obj_ptr)?;
+            }
 
             Ok(result)
         } else {
@@ -2683,6 +2899,7 @@ fn collect_sender_var_names_stmt(stmt: &Stmt, names: &mut Vec<String>, seen: &mu
 }
 
 /// Lower a function body into Cranelift IR.
+#[allow(clippy::too_many_arguments)]
 pub fn lower_function(
     func: &Function,
     mut builder: FunctionBuilder<'_>,
@@ -2709,8 +2926,7 @@ pub fn lower_function(
     let mut sender_cleanup_vars: Vec<Variable> = Vec::new();
 
     // Declare parameters as variables — trait params are now a single I64 handle
-    let mut cranelift_param_idx = 0usize;
-    for param in func.params.iter() {
+    for (cranelift_param_idx, param) in func.params.iter().enumerate() {
         let pty = if param.name.node == "self" {
             if let Some(cn) = class_name {
                 PlutoType::Class(cn.to_string())
@@ -2729,7 +2945,6 @@ pub fn lower_function(
         builder.def_var(var, val);
         variables.insert(param.name.node.clone(), var);
         var_types.insert(param.name.node.clone(), pty);
-        cranelift_param_idx += 1;
     }
 
     // Closure prologue: load captured variables from __env pointer
@@ -2753,10 +2968,10 @@ pub fn lower_function(
         // For spawn closure functions, register captured Sender vars for cleanup
         if spawn_closure_fns.contains(&func.name.node) {
             for (cap_name, cap_type) in captures.iter() {
-                if matches!(cap_type, PlutoType::Sender(_)) {
-                    if let Some(&var) = variables.get(cap_name) {
-                        sender_cleanup_vars.push(var);
-                    }
+                if matches!(cap_type, PlutoType::Sender(_))
+                    && let Some(&var) = variables.get(cap_name)
+                {
+                    sender_cleanup_vars.push(var);
                 }
             }
         }
@@ -2780,7 +2995,7 @@ pub fn lower_function(
         Some(PlutoType::Int)
     } else {
         let lookup_name = if let Some(cn) = class_name {
-            format!("{}_{}", cn, func.name.node)
+            mangle_method(cn, &func.name.node)
         } else {
             func.name.node.clone()
         };
@@ -2793,7 +3008,8 @@ pub fn lower_function(
         // Add return value as block param if function returns non-void
         let is_void_return = matches!(&expected_return_type, Some(PlutoType::Void) | None);
         if !is_void_return {
-            let ret_cl_type = pluto_to_cranelift(expected_return_type.as_ref().unwrap());
+            let ret_cl_type = pluto_to_cranelift(expected_return_type.as_ref()
+                .expect("non-void return type should be set"));
             builder.append_block_param(exit_bb, ret_cl_type);
         }
         Some(exit_bb)
@@ -2803,7 +3019,7 @@ pub fn lower_function(
 
     // Compute function lookup name (mangled for methods)
     let fn_lookup = if let Some(cn) = class_name {
-        format!("{}_{}", cn, func.name.node)
+        mangle_method(cn, &func.name.node)
     } else {
         func.name.node.clone()
     };
@@ -2813,11 +3029,12 @@ pub fn lower_function(
 
     // Check if this function has ensures contracts — if so, create ensures_block
     let is_void_return = matches!(&expected_return_type, Some(PlutoType::Void) | None);
-    let has_ensures = fn_contracts.get(&fn_lookup).map_or(false, |c| !c.ensures.is_empty());
+    let has_ensures = fn_contracts.get(&fn_lookup).is_some_and(|c| !c.ensures.is_empty());
     let ensures_block = if has_ensures {
         let ens_bb = builder.create_block();
         if !is_void_return {
-            let ret_cl_type = pluto_to_cranelift(expected_return_type.as_ref().unwrap());
+            let ret_cl_type = pluto_to_cranelift(expected_return_type.as_ref()
+                .expect("non-void return type should be set"));
             builder.append_block_param(ens_bb, ret_cl_type);
         }
         Some(ens_bb)
@@ -2929,7 +3146,8 @@ pub fn lower_function(
             let ret_val = ctx.builder.block_params(ens_bb)[0];
             let var = Variable::from_u32(ctx.next_var);
             ctx.next_var += 1;
-            let ret_cl_type = pluto_to_cranelift(ctx.expected_return_type.as_ref().unwrap());
+            let ret_cl_type = pluto_to_cranelift(ctx.expected_return_type.as_ref()
+                .expect("non-void return type should be set"));
             ctx.builder.declare_var(var, ret_cl_type);
             ctx.builder.def_var(var, ret_val);
             Some(var)
@@ -2937,24 +3155,24 @@ pub fn lower_function(
             None
         };
 
-        let ensures = fn_contracts.get(&fn_lookup).unwrap().ensures.clone();
+        let ensures = fn_contracts.get(&fn_lookup)
+            .expect("function should have contracts entry")
+            .ensures.clone();
         ctx.emit_ensures_checks(&ensures, result_var)?;
 
         // After ensures pass, jump to exit_block or return directly
         if let Some(exit_bb) = ctx.exit_block {
             if !is_void_return {
-                let ret_val = ctx.builder.use_var(result_var.unwrap());
+                let ret_val = ctx.builder.use_var(result_var.expect("result_var should be set for non-void returns"));
                 ctx.builder.ins().jump(exit_bb, &[ret_val]);
             } else {
                 ctx.builder.ins().jump(exit_bb, &[]);
             }
+        } else if !is_void_return {
+            let ret_val = ctx.builder.use_var(result_var.expect("result_var should be set for non-void returns"));
+            ctx.builder.ins().return_(&[ret_val]);
         } else {
-            if !is_void_return {
-                let ret_val = ctx.builder.use_var(result_var.unwrap());
-                ctx.builder.ins().return_(&[ret_val]);
-            } else {
-                ctx.builder.ins().return_(&[]);
-            }
+            ctx.builder.ins().return_(&[]);
         }
     }
 
@@ -3056,6 +3274,22 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
             let inner_ty = resolve_type_expr_to_pluto(&inner.node, env);
             PlutoType::Nullable(Box::new(inner_ty))
         }
+    }
+}
+
+/// Whether a type needs deep-copying at spawn sites.
+/// Heap-allocated mutable types need copying; primitives, immutable strings,
+/// and shared-by-reference types (tasks, channels) do not.
+fn needs_deep_copy(ty: &PlutoType) -> bool {
+    match ty {
+        PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::Byte
+        | PlutoType::Void | PlutoType::Range | PlutoType::String
+        | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Task(_)
+        | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::GenericInstance(..) => false,
+        PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Map(..)
+        | PlutoType::Set(_) | PlutoType::Enum(_) | PlutoType::Bytes
+        | PlutoType::Fn(..) | PlutoType::Trait(_) => true,
+        PlutoType::Nullable(inner) => needs_deep_copy(inner),
     }
 }
 
@@ -3240,10 +3474,10 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
         }
         Expr::MethodCall { object, method, .. } => {
             // expect() intrinsic methods always return Void
-            if let Expr::Call { name, .. } = &object.node {
-                if name.node == "expect" {
-                    return PlutoType::Void;
-                }
+            if let Expr::Call { name, .. } = &object.node
+                && name.node == "expect"
+            {
+                return PlutoType::Void;
             }
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
             if let PlutoType::Array(elem) = &obj_type {
@@ -3316,7 +3550,7 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 return PlutoType::Void;
             }
             if let PlutoType::Class(class_name) = &obj_type {
-                let mangled = format!("{}_{}", class_name, method.node);
+                let mangled = mangle_method(class_name, &method.node);
                 env.functions.get(&mangled).map(|s| s.return_type.clone()).unwrap_or(PlutoType::Void)
             } else {
                 PlutoType::Void

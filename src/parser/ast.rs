@@ -88,6 +88,7 @@ pub struct AppDecl {
     pub name: Spanned<String>,
     pub inject_fields: Vec<Field>,
     pub ambient_types: Vec<Spanned<String>>,
+    pub lifecycle_overrides: Vec<(Spanned<String>, Lifecycle)>,
     pub methods: Vec<Spanned<Function>>,
 }
 
@@ -188,9 +189,20 @@ pub enum Stmt {
         arms: Vec<SelectArm>,
         default: Option<Spanned<Block>>,
     },
+    Scope {
+        seeds: Vec<Spanned<Expr>>,
+        bindings: Vec<ScopeBinding>,
+        body: Spanned<Block>,
+    },
     Break,
     Continue,
     Expr(Spanned<Expr>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScopeBinding {
+    pub name: Spanned<String>,
+    pub ty: Spanned<TypeExpr>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -397,7 +409,7 @@ pub struct ErrorDecl {
 pub enum CatchHandler {
     Wildcard {
         var: Spanned<String>,
-        body: Box<Spanned<Expr>>,
+        body: Spanned<Block>,
     },
     Shorthand(Box<Spanned<Expr>>),
 }

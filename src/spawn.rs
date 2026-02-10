@@ -94,6 +94,12 @@ fn desugar_stmt(stmt: &mut Stmt) {
                 desugar_block(&mut def.node);
             }
         }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                desugar_expr(&mut seed.node, seed.span);
+            }
+            desugar_block(&mut body.node);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -125,7 +131,7 @@ fn desugar_expr(expr: &mut Expr, span: Span) {
                     call_span,
                 ),
             };
-            *call = Box::new(Spanned::new(closure, call_span));
+            **call = Spanned::new(closure, call_span);
         }
         Expr::BinOp { lhs, rhs, .. } => {
             desugar_expr(&mut lhs.node, lhs.span);
@@ -183,7 +189,7 @@ fn desugar_expr(expr: &mut Expr, span: Span) {
         Expr::Catch { expr: inner, handler } => {
             desugar_expr(&mut inner.node, inner.span);
             match handler {
-                CatchHandler::Wildcard { body, .. } => desugar_expr(&mut body.node, body.span),
+                CatchHandler::Wildcard { body, .. } => desugar_block(&mut body.node),
                 CatchHandler::Shorthand(fb) => desugar_expr(&mut fb.node, fb.span),
             }
         }

@@ -156,7 +156,7 @@ pub fn resolve_rust_crates(
                 let return_type = sig
                     .return_type
                     .as_ref()
-                    .map(|rt| rust_type_to_pluto(rt))
+                    .map(rust_type_to_pluto)
                     .unwrap_or(PlutoType::Void);
                 BridgedFunction {
                     pluto_name: pluto_name.clone(),
@@ -417,13 +417,11 @@ fn find_matching_package<'a>(packages_array: &'a str, manifest_str: &str) -> Opt
             b'}' => {
                 depth -= 1;
                 if depth == 1 {
-                    if let Some(start) = obj_start {
-                        let obj = &packages_array[start..=i];
-                        if let Some(mp) = extract_json_string(obj, "manifest_path") {
-                            if mp == manifest_str || mp.replace('\\', "/") == manifest_str.replace('\\', "/") {
-                                return Some(obj);
-                            }
-                        }
+                    if let Some(start) = obj_start
+                        && let Some(mp) = extract_json_string(&packages_array[start..=i], "manifest_path")
+                        && (mp == manifest_str || mp.replace('\\', "/") == manifest_str.replace('\\', "/"))
+                    {
+                        return Some(&packages_array[start..=i]);
                     }
                     obj_start = None;
                 }

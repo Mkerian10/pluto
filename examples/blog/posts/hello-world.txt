@@ -1,0 +1,19 @@
+title: Hello World
+date: 2026-01-15
+---
+Welcome to my blog! This is the very first post, built with a static site generator written in **Pluto**.
+
+## What is Pluto?
+
+Pluto is a domain-specific programming language for distributed backend systems. It features:
+
+- Garbage collection
+- Dependency injection at the language level
+- Typed error handling
+- Classes and traits (no inheritance)
+
+## Why a Blog Generator?
+
+Every language needs a "hello world" project. For Pluto, we chose a static blog generator because it exercises file I/O, string processing, and data modeling.
+
+Stay tuned for more posts!

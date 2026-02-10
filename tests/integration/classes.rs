@@ -405,3 +405,31 @@ fn main() {
         "cannot assign to field of immutable variable 'o'",
     );
 }
+
+#[test]
+fn method_name_no_collision_with_underscore_function() {
+    // Regression: top-level fn `A_b` and class `A` method `b` must not collide.
+    // With `_` separator they both mangled to `A_b`; with `$` they're distinct.
+    let out = compile_and_run_stdout(
+        r#"
+class A {
+    x: int
+
+    fn b(self) int {
+        return self.x + 1
+    }
+}
+
+fn A_b() int {
+    return 99
+}
+
+fn main() {
+    let a = A { x: 10 }
+    print(a.b())
+    print(A_b())
+}
+"#,
+    );
+    assert_eq!(out, "11\n99\n");
+}

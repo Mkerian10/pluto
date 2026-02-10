@@ -147,3 +147,157 @@ fn singleton_globals_no_app() {
     );
     assert_eq!(output.trim(), "no app");
 }
+
+// === Phase 5d: App-level lifecycle overrides ===
+
+#[test]
+fn app_override_to_scoped() {
+    // Override a default-singleton class to scoped, use in scope block
+    let output = compile_and_run_stdout(r#"
+class Pool {
+    name: string
+
+    fn query(self) string {
+        return self.name
+    }
+}
+
+scoped class ReqCtx {
+    id: string
+}
+
+scoped class Handler[pool: Pool, ctx: ReqCtx] {
+    fn handle(self) string {
+        return self.pool.query()
+    }
+}
+
+app MyApp {
+    scoped Pool
+
+    fn main(self) {
+        scope(ReqCtx { id: "r1" }, Pool { name: "db" }) |h: Handler| {
+            print(h.handle())
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "db");
+}
+
+#[test]
+fn app_override_to_transient() {
+    // Override a default-singleton class to transient via app directive
+    let output = compile_and_run_stdout(r#"
+class Logger {
+    tag: string
+
+    fn log(self) string {
+        return self.tag
+    }
+}
+
+app MyApp {
+    transient Logger
+
+    fn main(self) {
+        let l = Logger { tag: "logged" }
+        print(l.log())
+    }
+}
+"#);
+    assert_eq!(output.trim(), "logged");
+}
+
+#[test]
+fn app_override_lengthen_rejected() {
+    // Cannot lengthen: transient → singleton is an error
+    compile_should_fail_with(r#"
+transient class Foo {
+    x: int
+}
+
+app MyApp {
+    scoped Foo
+
+    fn main(self) {
+    }
+}
+"#, "cannot lengthen lifecycle");
+}
+
+#[test]
+fn app_override_unknown_class_rejected() {
+    // Override non-existent class → error
+    compile_should_fail_with(r#"
+app MyApp {
+    scoped NonExistent
+
+    fn main(self) {
+    }
+}
+"#, "unknown class");
+}
+
+#[test]
+fn app_override_bracket_dep_rejected() {
+    // App bracket dep on overridden class → error
+    compile_should_fail_with(r#"
+class Pool {
+    name: string
+
+    fn query(self) string {
+        return self.name
+    }
+}
+
+app MyApp[pool: Pool] {
+    scoped Pool
+
+    fn main(self) {
+        print(self.pool.query())
+    }
+}
+"#, "overridden lifecycle");
+}
+
+#[test]
+fn app_override_propagates() {
+    // Override B to scoped → A (depends on B) also excluded from singletons
+    let output = compile_and_run_stdout(r#"
+class B {
+    tag: string
+
+    fn val(self) string {
+        return self.tag
+    }
+}
+
+class A[b: B] {
+    fn val(self) string {
+        return self.b.val()
+    }
+}
+
+scoped class Seed {
+    id: int
+}
+
+scoped class Handler[a: A, seed: Seed] {
+    fn handle(self) string {
+        return self.a.val()
+    }
+}
+
+app MyApp {
+    scoped B
+
+    fn main(self) {
+        scope(Seed { id: 1 }, B { tag: "b" }) |h: Handler| {
+            print(h.handle())
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "b");
+}

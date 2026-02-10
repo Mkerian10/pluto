@@ -31,6 +31,13 @@ pub fn lift_closures(program: &mut Program, env: &mut TypeEnv) -> Result<(), Com
         }
     }
 
+    // Lift from app method bodies
+    if let Some(app) = &mut program.app {
+        for method in &mut app.node.methods {
+            lift_in_block(&mut method.node.body.node, env, &mut counter, &mut new_fns)?;
+        }
+    }
+
     // Append lifted functions to the program
     for f in new_fns {
         program.functions.push(f);
@@ -127,6 +134,12 @@ fn lift_in_stmt(
             if let Some(def) = default {
                 lift_in_block(&mut def.node, env, counter, new_fns)?;
             }
+        }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                lift_in_expr(&mut seed.node, seed.span, env, counter, new_fns)?;
+            }
+            lift_in_block(&mut body.node, env, counter, new_fns)?;
         }
         Stmt::Break | Stmt::Continue => {}
     }
@@ -293,7 +306,7 @@ fn lift_in_expr(
             lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    lift_in_expr(&mut body.node, body.span, env, counter, new_fns)?;
+                    lift_in_block(&mut body.node, env, counter, new_fns)?;
                 }
                 CatchHandler::Shorthand(fb) => {
                     lift_in_expr(&mut fb.node, fb.span, env, counter, new_fns)?;

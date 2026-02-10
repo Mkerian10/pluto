@@ -59,10 +59,7 @@ fn parse_result_type(s: &str) -> Option<(Option<RustType>, bool)> {
     if ok_str == "()" {
         Some((None, true)) // Result<(), E> → void, fallible
     } else {
-        match parse_rust_type(ok_str) {
-            Some(rt) => Some((Some(rt), true)),
-            None => None, // Unsupported Ok type
-        }
+        parse_rust_type(ok_str).map(|rt| (Some(rt), true))
     }
 }
 
@@ -201,7 +198,7 @@ pub fn parse_rust_source(source: &str) -> (Vec<RustFnSig>, Vec<String>) {
                 i += 1;
             }
             let word_start = i;
-            while i < len && chars[i].is_alphanumeric() || (i < len && chars[i] == '_') {
+            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
                 i += 1;
             }
             let word: String = chars[word_start..i].iter().collect();

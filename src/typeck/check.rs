@@ -1,7 +1,7 @@
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::Spanned;
-use super::env::TypeEnv;
+use super::env::{mangle_method, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::resolve_type;
 use super::infer::infer_expr;
@@ -11,7 +11,7 @@ use crate::parser::ast::Expr;
 pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
     let prev_fn = env.current_fn.take();
     env.current_fn = Some(if let Some(cn) = class_name {
-        format!("{}_{}", cn, func.name.node)
+        mangle_method(cn, &func.name.node)
     } else {
         func.name.node.clone()
     });
@@ -42,7 +42,7 @@ fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&s
     }
 
     let lookup_name = if let Some(cn) = class_name {
-        format!("{}_{}", cn, func.name.node)
+        mangle_method(cn, &func.name.node)
     } else {
         func.name.node.clone()
     };
@@ -65,6 +65,15 @@ pub(crate) fn check_block(block: &Block, env: &mut TypeEnv, return_type: &PlutoT
         check_stmt(&stmt.node, stmt.span, env, return_type)?;
     }
     Ok(())
+}
+
+pub(crate) fn check_block_stmt(
+    stmt: &Stmt,
+    span: crate::span::Span,
+    env: &mut TypeEnv,
+    return_type: &PlutoType,
+) -> Result<(), CompileError> {
+    check_stmt(stmt, span, env, return_type)
 }
 
 fn check_stmt(
@@ -116,10 +125,12 @@ fn check_stmt(
             let depth = env.scope_depth() - 1;
             env.variable_decls.insert((name.node.clone(), depth), name.span);
             // Track task origin for spawn expressions
-            if let Expr::Spawn { .. } = &value.node {
-                if let Some(fn_name) = env.spawn_target_fns.get(&(value.span.start, value.span.end)) {
-                    env.define_task_origin(name.node.clone(), fn_name.clone());
-                }
+            if let Expr::Spawn { .. } = &value.node && let Some(fn_name) = env.spawn_target_fns.get(&(value.span.start, value.span.end)) {
+                env.define_task_origin(name.node.clone(), fn_name.clone());
+            }
+            // Track taint propagation: if inside a scope block and value is tainted, mark variable
+            if !env.scope_tainted_vars.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
+                env.scope_tainted_vars.last_mut().unwrap().insert(name.node.clone());
             }
         }
         Stmt::Return(value) => {
@@ -133,6 +144,15 @@ fn check_stmt(
                     format!("return type mismatch: expected {return_type}, found {actual}"),
                     err_span,
                 ));
+            }
+            // Reject scope-tainted closures escaping via return
+            if let Some(expr) = value {
+                if !env.scope_tainted_vars.is_empty() && is_scope_tainted_expr(&expr.node, expr.span, env) {
+                    return Err(CompileError::type_err(
+                        "closure capturing scope binding cannot escape scope block via return",
+                        expr.span,
+                    ));
+                }
             }
         }
         Stmt::Assign { target, value } => {
@@ -158,6 +178,19 @@ fn check_stmt(
             // Permanently invalidate task origin on reassignment
             if matches!(&var_type, PlutoType::Task(_)) {
                 env.invalidated_task_vars.insert(target.node.clone());
+            }
+            // Reject scope-tainted closures escaping via assignment to outer variable
+            if !env.scope_tainted_vars.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
+                if let Some(scope_depth) = env.scope_body_depths.last() {
+                    if let Some((_, var_depth)) = env.lookup_with_depth(&target.node) {
+                        if var_depth < *scope_depth {
+                            return Err(CompileError::type_err(
+                                "closure capturing scope binding cannot escape scope block via assignment to outer variable",
+                                value.span,
+                            ));
+                        }
+                    }
+                }
             }
         }
         Stmt::FieldAssign { object, field, value } => {
@@ -244,13 +277,11 @@ fn check_stmt(
         Stmt::Expr(expr) => {
             infer_expr(&expr.node, expr.span, env)?;
             // Bare expect() as statement is likely a bug (forgot .to_equal() etc.)
-            if let Expr::Call { name, .. } = &expr.node {
-                if name.node == "expect" {
-                    return Err(CompileError::type_err(
-                        "expect() must be followed by an assertion method like .to_equal(), .to_be_true(), or .to_be_false()",
-                        expr.span,
-                    ));
-                }
+            if let Expr::Call { name, .. } = &expr.node && name.node == "expect" {
+                return Err(CompileError::type_err(
+                    "expect() must be followed by an assertion method like .to_equal(), .to_be_true(), or .to_be_false()",
+                    expr.span,
+                ));
             }
         }
         Stmt::LetChan { sender, receiver, elem_type, capacity } => {
@@ -315,8 +346,311 @@ fn check_stmt(
                 check_block(&def.node, env, return_type)?;
             }
         }
+        Stmt::Scope { seeds, bindings, body } => {
+            check_scope_stmt(seeds, bindings, body, span, env, return_type)?;
+        }
     }
     Ok(())
+}
+
+fn check_scope_stmt(
+    seeds: &[Spanned<Expr>],
+    bindings: &[ScopeBinding],
+    body: &Spanned<Block>,
+    span: crate::span::Span,
+    env: &mut TypeEnv,
+    return_type: &PlutoType,
+) -> Result<(), CompileError> {
+    use std::collections::{HashMap as DMap, HashSet as DSet, VecDeque};
+    use crate::parser::ast::Lifecycle;
+    use super::env::{FieldWiring, ScopeResolution};
+
+    // 1. Check seed expressions and verify each is a scoped class
+    let mut seed_types: Vec<(String, usize)> = Vec::new(); // (class_name, seed_index)
+    let mut seed_class_names: DSet<String> = DSet::new();
+
+    for (i, seed) in seeds.iter().enumerate() {
+        let ty = infer_expr(&seed.node, seed.span, env)?;
+        match &ty {
+            PlutoType::Class(name) => {
+                let info = env.classes.get(name).ok_or_else(|| {
+                    CompileError::type_err(
+                        format!("unknown class '{name}' in scope seed"),
+                        seed.span,
+                    )
+                })?;
+                if info.lifecycle != Lifecycle::Scoped {
+                    return Err(CompileError::type_err(
+                        format!("scope seed must be a scoped class, but '{name}' has lifecycle '{:?}'", info.lifecycle),
+                        seed.span,
+                    ));
+                }
+                seed_types.push((name.clone(), i));
+                seed_class_names.insert(name.clone());
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("scope seed must be a class instance, found {ty}"),
+                    seed.span,
+                ));
+            }
+        }
+    }
+
+    // 2. Resolve binding types
+    let mut binding_types: Vec<(String, PlutoType)> = Vec::new(); // (class_name, type)
+    for binding in bindings {
+        let ty = resolve_type(&binding.ty, env)?;
+        match &ty {
+            PlutoType::Class(name) => {
+                if !env.classes.contains_key(name) {
+                    return Err(CompileError::type_err(
+                        format!("unknown class '{name}' in scope binding"),
+                        binding.ty.span,
+                    ));
+                }
+                binding_types.push((name.clone(), ty));
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("scope binding must be a class type, found {ty}"),
+                    binding.ty.span,
+                ));
+            }
+        }
+    }
+
+    // 3. Build scope DI graph — BFS from bindings to discover all needed scoped classes
+    let mut needed: DSet<String> = DSet::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+
+    // Start from all binding types
+    for (name, _) in &binding_types {
+        if !needed.contains(name) {
+            needed.insert(name.clone());
+            queue.push_back(name.clone());
+        }
+    }
+    // Also include seed types (they're provided, but may have deps)
+    for (name, _) in &seed_types {
+        if !needed.contains(name) {
+            needed.insert(name.clone());
+            queue.push_back(name.clone());
+        }
+    }
+
+    // BFS: for each needed class, examine injected fields → add scoped deps
+    while let Some(class_name) = queue.pop_front() {
+        let info = match env.classes.get(&class_name) {
+            Some(i) => i.clone(),
+            None => continue,
+        };
+        for (_, field_ty, is_injected) in &info.fields {
+            if !is_injected { continue; }
+            if let PlutoType::Class(dep_name) = field_ty {
+                let dep_info = env.classes.get(dep_name);
+                if let Some(dep_info) = dep_info {
+                    // Only add scoped deps to the needed set; singletons are accessed via globals
+                    if dep_info.lifecycle == Lifecycle::Scoped && !needed.contains(dep_name) {
+                        needed.insert(dep_name.clone());
+                        queue.push_back(dep_name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Validate: scoped classes that aren't seeds must have only injected fields (auto-creatable)
+    for class_name in &needed {
+        if seed_class_names.contains(class_name) { continue; }
+        let info = env.classes.get(class_name).ok_or_else(|| {
+            CompileError::type_err(
+                format!("scope: unknown class '{class_name}'"),
+                span,
+            )
+        })?;
+        if info.lifecycle != Lifecycle::Scoped && info.lifecycle != Lifecycle::Singleton {
+            // Transient classes are not wired through scope blocks
+            continue;
+        }
+        if info.lifecycle == Lifecycle::Scoped {
+            // Check if all fields are injected (auto-creatable)
+            let has_non_injected = info.fields.iter().any(|(_, _, inj)| !*inj);
+            if has_non_injected {
+                return Err(CompileError::type_err(
+                    format!(
+                        "scoped class '{class_name}' has non-injected fields and must be provided as a seed"
+                    ),
+                    span,
+                ));
+            }
+        }
+    }
+
+    // 5. Topological sort of scoped classes to create (excluding seeds — they're already provided)
+    let classes_to_create: Vec<String> = needed.iter()
+        .filter(|n| !seed_class_names.contains(*n))
+        .filter(|n| {
+            env.classes.get(*n).map_or(false, |i| i.lifecycle == Lifecycle::Scoped)
+        })
+        .cloned()
+        .collect();
+
+    // Build dependency graph: A depends on B means A has an injected field of type B (scoped)
+    let mut graph: DMap<String, Vec<String>> = DMap::new();
+    let mut all_nodes: DSet<String> = DSet::new();
+
+    for name in &classes_to_create {
+        all_nodes.insert(name.clone());
+        let info = env.classes.get(name).unwrap();
+        let deps: Vec<String> = info.fields.iter()
+            .filter(|(_, _, inj)| *inj)
+            .filter_map(|(_, ty, _)| {
+                if let PlutoType::Class(dep_name) = ty {
+                    if classes_to_create.contains(dep_name) {
+                        return Some(dep_name.clone());
+                    }
+                }
+                None
+            })
+            .collect();
+        graph.insert(name.clone(), deps);
+    }
+    // Add seeds as nodes too (they don't need creation but are deps)
+    for (name, _) in &seed_types {
+        all_nodes.insert(name.clone());
+        graph.entry(name.clone()).or_default();
+    }
+
+    // Kahn's algorithm — edge A → B means A depends on B, B must be created first
+    let mut in_degree: DMap<String, usize> = DMap::new();
+    for c in &all_nodes {
+        in_degree.insert(c.clone(), graph.get(c).map_or(0, |v| v.len()));
+    }
+    let mut topo_queue: VecDeque<String> = VecDeque::new();
+    for (c, deg) in &in_degree {
+        if *deg == 0 {
+            topo_queue.push_back(c.clone());
+        }
+    }
+    let mut creation_order: Vec<String> = Vec::new();
+    while let Some(node) = topo_queue.pop_front() {
+        if classes_to_create.contains(&node) {
+            creation_order.push(node.clone());
+        }
+        // Decrement in-degree for dependents
+        for (class, deps) in &graph {
+            if deps.contains(&node) {
+                if let Some(deg) = in_degree.get_mut(class) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        topo_queue.push_back(class.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    if creation_order.len() != classes_to_create.len() {
+        return Err(CompileError::type_err(
+            "scope block: circular dependency detected among scoped classes".to_string(),
+            span,
+        ));
+    }
+
+    // 6. Compute field wirings for each created class
+    let mut field_wirings: DMap<String, Vec<(String, FieldWiring)>> = DMap::new();
+    for class_name in &creation_order {
+        let info = env.classes.get(class_name).unwrap();
+        let mut wirings = Vec::new();
+        for (field_name, field_ty, is_injected) in &info.fields {
+            if !is_injected { continue; }
+            if let PlutoType::Class(dep_name) = field_ty {
+                let dep_info = env.classes.get(dep_name);
+                let wiring = if let Some((_, idx)) = seed_types.iter().find(|(n, _)| n == dep_name) {
+                    FieldWiring::Seed(*idx)
+                } else if dep_info.map_or(false, |d| d.lifecycle == Lifecycle::Singleton) {
+                    FieldWiring::Singleton(dep_name.clone())
+                } else if creation_order.contains(dep_name) || seed_class_names.contains(dep_name) {
+                    FieldWiring::ScopedInstance(dep_name.clone())
+                } else {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "scope block: cannot wire field '{field_name}' of class '{class_name}': \
+                             dependency '{dep_name}' is not available as a seed, singleton, or scoped instance"
+                        ),
+                        span,
+                    ));
+                };
+                wirings.push((field_name.clone(), wiring));
+            }
+        }
+        field_wirings.insert(class_name.clone(), wirings);
+    }
+
+    // 7. Compute binding sources — how each binding gets its value
+    let mut binding_sources: Vec<FieldWiring> = Vec::new();
+    for (binding_class, _) in &binding_types {
+        if let Some((_, idx)) = seed_types.iter().find(|(n, _)| n == binding_class) {
+            binding_sources.push(FieldWiring::Seed(*idx));
+        } else if creation_order.contains(binding_class) {
+            binding_sources.push(FieldWiring::ScopedInstance(binding_class.clone()));
+        } else {
+            return Err(CompileError::type_err(
+                format!(
+                    "scope block: binding type '{binding_class}' is not reachable from seeds"
+                ),
+                span,
+            ));
+        }
+    }
+
+    // 8. Store ScopeResolution
+    env.scope_resolutions.insert(
+        (span.start, span.end),
+        ScopeResolution {
+            creation_order,
+            field_wirings,
+            binding_sources,
+        },
+    );
+
+    // 9. Type-check body with bindings in scope
+    env.scope_body_depths.push(env.scope_depth());
+    env.scope_tainted_vars.push(std::collections::HashSet::new());
+    env.push_scope();
+    let binding_name_set: std::collections::HashSet<String> = bindings.iter()
+        .map(|b| b.name.node.clone())
+        .collect();
+    env.scope_binding_names.push(binding_name_set);
+    for (i, binding) in bindings.iter().enumerate() {
+        let (_, ty) = &binding_types[i];
+        env.define(binding.name.node.clone(), ty.clone());
+    }
+    check_block(&body.node, env, return_type)?;
+    env.scope_binding_names.pop();
+    env.pop_scope();
+    env.scope_body_depths.pop();
+    env.scope_tainted_vars.pop();
+
+    Ok(())
+}
+
+/// Check if an expression is a scope-tainted closure (directly or via tainted variable).
+fn is_scope_tainted_expr(expr: &Expr, span: crate::span::Span, env: &TypeEnv) -> bool {
+    // Direct closure whose span is tainted
+    if matches!(expr, Expr::Closure { .. }) && env.scope_tainted_closures.contains(&(span.start, span.end)) {
+        return true;
+    }
+    // Variable that holds a tainted closure
+    if let Expr::Ident(name) = expr {
+        for level in &env.scope_tainted_vars {
+            if level.contains(name) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Extracts the root variable name from nested field access chains.
@@ -329,6 +663,147 @@ pub(super) fn root_variable(expr: &Expr) -> Option<&str> {
     }
 }
 
+/// Collect all `Expr::Ident` names referenced in a block.
+pub(super) fn collect_idents_in_block(block: &Block, idents: &mut std::collections::HashSet<String>) {
+    for stmt in &block.stmts {
+        collect_idents_in_stmt(&stmt.node, idents);
+    }
+}
+
+fn collect_idents_in_stmt(stmt: &Stmt, idents: &mut std::collections::HashSet<String>) {
+    match stmt {
+        Stmt::Let { value, .. } => collect_idents_in_expr(&value.node, idents),
+        Stmt::Return(Some(expr)) => collect_idents_in_expr(&expr.node, idents),
+        Stmt::Return(None) => {}
+        Stmt::Assign { value, .. } => collect_idents_in_expr(&value.node, idents),
+        Stmt::FieldAssign { object, value, .. } => {
+            collect_idents_in_expr(&object.node, idents);
+            collect_idents_in_expr(&value.node, idents);
+        }
+        Stmt::If { condition, then_block, else_block } => {
+            collect_idents_in_expr(&condition.node, idents);
+            collect_idents_in_block(&then_block.node, idents);
+            if let Some(eb) = else_block {
+                collect_idents_in_block(&eb.node, idents);
+            }
+        }
+        Stmt::While { condition, body } => {
+            collect_idents_in_expr(&condition.node, idents);
+            collect_idents_in_block(&body.node, idents);
+        }
+        Stmt::For { iterable, body, .. } => {
+            collect_idents_in_expr(&iterable.node, idents);
+            collect_idents_in_block(&body.node, idents);
+        }
+        Stmt::IndexAssign { object, index, value } => {
+            collect_idents_in_expr(&object.node, idents);
+            collect_idents_in_expr(&index.node, idents);
+            collect_idents_in_expr(&value.node, idents);
+        }
+        Stmt::Match { expr, arms } => {
+            collect_idents_in_expr(&expr.node, idents);
+            for arm in arms {
+                collect_idents_in_block(&arm.body.node, idents);
+            }
+        }
+        Stmt::Raise { fields, .. } => {
+            for (_, val) in fields {
+                collect_idents_in_expr(&val.node, idents);
+            }
+        }
+        Stmt::Expr(expr) => collect_idents_in_expr(&expr.node, idents),
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                collect_idents_in_expr(&seed.node, idents);
+            }
+            collect_idents_in_block(&body.node, idents);
+        }
+        _ => {}
+    }
+}
+
+fn collect_idents_in_expr(expr: &Expr, idents: &mut std::collections::HashSet<String>) {
+    match expr {
+        Expr::Ident(name) => { idents.insert(name.clone()); }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_idents_in_expr(&lhs.node, idents);
+            collect_idents_in_expr(&rhs.node, idents);
+        }
+        Expr::UnaryOp { operand, .. } => collect_idents_in_expr(&operand.node, idents),
+        Expr::Cast { expr: inner, .. } => collect_idents_in_expr(&inner.node, idents),
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_idents_in_expr(&arg.node, idents);
+            }
+        }
+        Expr::FieldAccess { object, .. } => collect_idents_in_expr(&object.node, idents),
+        Expr::MethodCall { object, args, .. } => {
+            collect_idents_in_expr(&object.node, idents);
+            for arg in args {
+                collect_idents_in_expr(&arg.node, idents);
+            }
+        }
+        Expr::StructLit { fields, .. } => {
+            for (_, val) in fields {
+                collect_idents_in_expr(&val.node, idents);
+            }
+        }
+        Expr::ArrayLit { elements } => {
+            for elem in elements {
+                collect_idents_in_expr(&elem.node, idents);
+            }
+        }
+        Expr::Index { object, index } => {
+            collect_idents_in_expr(&object.node, idents);
+            collect_idents_in_expr(&index.node, idents);
+        }
+        Expr::StringInterp { parts } => {
+            for part in parts {
+                if let crate::parser::ast::StringInterpPart::Expr(e) = part {
+                    collect_idents_in_expr(&e.node, idents);
+                }
+            }
+        }
+        Expr::EnumData { fields, .. } => {
+            for (_, val) in fields {
+                collect_idents_in_expr(&val.node, idents);
+            }
+        }
+        Expr::Closure { body, .. } => collect_idents_in_block(&body.node, idents),
+        Expr::Propagate { expr: inner } => collect_idents_in_expr(&inner.node, idents),
+        Expr::Catch { expr: inner, handler } => {
+            collect_idents_in_expr(&inner.node, idents);
+            match handler {
+                crate::parser::ast::CatchHandler::Wildcard { body, .. } => {
+                    collect_idents_in_block(&body.node, idents);
+                }
+                crate::parser::ast::CatchHandler::Shorthand(fb) => {
+                    collect_idents_in_expr(&fb.node, idents);
+                }
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                collect_idents_in_expr(&k.node, idents);
+                collect_idents_in_expr(&v.node, idents);
+            }
+        }
+        Expr::SetLit { elements, .. } => {
+            for elem in elements {
+                collect_idents_in_expr(&elem.node, idents);
+            }
+        }
+        Expr::Range { start, end, .. } => {
+            collect_idents_in_expr(&start.node, idents);
+            collect_idents_in_expr(&end.node, idents);
+        }
+        Expr::Spawn { call } => collect_idents_in_expr(&call.node, idents),
+        Expr::NullPropagate { expr: inner } => collect_idents_in_expr(&inner.node, idents),
+        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
+        | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
+    }
+}
+
 fn check_field_assign(
     object: &Spanned<Expr>,
     field: &Spanned<String>,
@@ -336,16 +811,14 @@ fn check_field_assign(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     // Check caller-side mutability
-    if let Some(root) = root_variable(&object.node) {
-        if root != "self" && env.is_immutable(root) {
-            return Err(CompileError::type_err(
-                format!(
-                    "cannot assign to field of immutable variable '{}'; declare with 'let mut' to allow mutation",
-                    root
-                ),
-                object.span,
-            ));
-        }
+    if let Some(root) = root_variable(&object.node) && root != "self" && env.is_immutable(root) {
+        return Err(CompileError::type_err(
+            format!(
+                "cannot assign to field of immutable variable '{}'; declare with 'let mut' to allow mutation",
+                root
+            ),
+            object.span,
+        ));
     }
     let obj_type = infer_expr(&object.node, object.span, env)?;
     let class_name = match &obj_type {
@@ -474,10 +947,10 @@ fn check_match_stmt(
 
     let mut covered = std::collections::HashSet::new();
     for arm in arms {
-        // Accept exact match, or base generic name match (e.g., "Option" matches "Option__int")
+        // Accept exact match, or base generic name match (e.g., "Option" matches "Option$$int")
         let arm_matches = arm.enum_name.node == enum_name
             || (env.generic_enums.contains_key(&arm.enum_name.node)
-                && enum_name.starts_with(&format!("{}__", arm.enum_name.node)));
+                && enum_name.starts_with(&format!("{}$$", arm.enum_name.node)));
         if !arm_matches {
             return Err(CompileError::type_err(
                 format!("match arm enum '{}' does not match scrutinee enum '{}'", arm.enum_name.node, enum_name),
@@ -673,6 +1146,9 @@ fn check_stmt_for_self_mutation(
                 check_body_for_self_mutation(&def.node, class_name, env)?;
             }
         }
+        Stmt::Scope { body, .. } => {
+            check_body_for_self_mutation(&body.node, class_name, env)?;
+        }
         Stmt::Expr(expr) => {
             check_expr_for_self_mutation(&expr.node, expr.span, class_name, env)?;
         }
@@ -696,7 +1172,7 @@ fn check_expr_for_self_mutation(
     match expr {
         Expr::MethodCall { object, method, args, .. } => {
             if matches!(&object.node, Expr::Ident(name) if name == "self") {
-                let mangled = format!("{}_{}", class_name, method.node);
+                let mangled = mangle_method(class_name, &method.node);
                 if env.mut_self_methods.contains(&mangled) {
                     return Err(CompileError::type_err(
                         format!(
@@ -724,7 +1200,7 @@ fn check_expr_for_self_mutation(
                     check_expr_for_self_mutation(&expr.node, expr.span, class_name, env)?;
                 }
                 CatchHandler::Wildcard { body, .. } => {
-                    check_expr_for_self_mutation(&body.node, body.span, class_name, env)?;
+                    check_body_for_self_mutation(&body.node, class_name, env)?;
                 }
             }
         }

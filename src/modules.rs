@@ -9,13 +9,14 @@ use crate::parser::Parser;
 use crate::span::{Span, Spanned};
 
 /// Maps file_id -> (path, source_text).
+#[derive(Default)]
 pub struct SourceMap {
     pub files: Vec<(PathBuf, String)>,
 }
 
 impl SourceMap {
     pub fn new() -> Self {
-        Self { files: Vec::new() }
+        Self::default()
     }
 
     pub fn add_file(&mut self, path: PathBuf, source: String) -> u32 {
@@ -132,6 +133,7 @@ fn load_directory_module(
 }
 
 /// Resolve a multi-segment import path to a module, with recursive sub-import resolution.
+#[allow(clippy::too_many_arguments)]
 fn resolve_module_path(
     segments: &[Spanned<String>],
     base_dir: &Path,
@@ -189,6 +191,7 @@ fn resolve_module_path(
 /// Resolve all imports within a module's Program, flattening sub-imports into it.
 /// This is the core recursive function: for each import in `program`, resolve the sub-module,
 /// then flatten its items into `program` with prefixed names.
+#[allow(clippy::too_many_arguments)]
 fn resolve_module_imports(
     program: &mut Program,
     module_dir: &Path,
@@ -1004,6 +1007,15 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
                 rewrite_block_for_module(&mut def.node, module_name, module_prog);
             }
         }
+        Stmt::Scope { seeds, bindings, body } => {
+            for seed in seeds {
+                rewrite_expr_for_module(&mut seed.node, module_name, module_prog);
+            }
+            for binding in bindings {
+                prefix_type_expr(&mut binding.ty.node, module_name, module_prog);
+            }
+            rewrite_block_for_module(&mut body.node, module_name, module_prog);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -1093,13 +1105,16 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
                 rewrite_stmt_for_module(&mut stmt.node, module_name, module_prog);
             }
         }
-        Expr::MapLit { entries, .. } => {
+        Expr::MapLit { key_type, value_type, entries } => {
+            prefix_type_expr(&mut key_type.node, module_name, module_prog);
+            prefix_type_expr(&mut value_type.node, module_name, module_prog);
             for (k, v) in entries {
                 rewrite_expr_for_module(&mut k.node, module_name, module_prog);
                 rewrite_expr_for_module(&mut v.node, module_name, module_prog);
             }
         }
-        Expr::SetLit { elements, .. } => {
+        Expr::SetLit { elem_type, elements } => {
+            prefix_type_expr(&mut elem_type.node, module_name, module_prog);
             for elem in elements {
                 rewrite_expr_for_module(&mut elem.node, module_name, module_prog);
             }
@@ -1112,7 +1127,7 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
             rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    rewrite_expr_for_module(&mut body.node, module_name, module_prog);
+                    rewrite_block_for_module(&mut body.node, module_name, module_prog);
                 }
                 CatchHandler::Shorthand(fallback) => {
                     rewrite_expr_for_module(&mut fallback.node, module_name, module_prog);
@@ -1322,6 +1337,15 @@ fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
                 rewrite_block(&mut def.node, import_names);
             }
         }
+        Stmt::Scope { seeds, bindings, body } => {
+            for seed in seeds {
+                rewrite_expr(&mut seed.node, seed.span, import_names);
+            }
+            for binding in bindings {
+                rewrite_type_expr(&mut binding.ty, import_names);
+            }
+            rewrite_block(&mut body.node, import_names);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -1330,21 +1354,21 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
     match expr {
         Expr::MethodCall { object, method, args } => {
             // Check if object is Ident matching an import name → convert to qualified call
-            if let Expr::Ident(name) = &object.node {
-                if import_names.contains(name.as_str()) {
-                    let qualified_name = format!("{}.{}", name, method.node);
-                    let name_span = Span::new(object.span.start, method.span.end);
-                    // Rewrite args first
-                    for arg in args.iter_mut() {
-                        rewrite_expr(&mut arg.node, arg.span, import_names);
-                    }
-                    *expr = Expr::Call {
-                        name: Spanned::new(qualified_name, name_span),
-                        args: std::mem::take(args),
-                        target_id: None,
-                    };
-                    return;
+            if let Expr::Ident(name) = &object.node
+                && import_names.contains(name.as_str())
+            {
+                let qualified_name = format!("{}.{}", name, method.node);
+                let name_span = Span::new(object.span.start, method.span.end);
+                // Rewrite args first
+                for arg in args.iter_mut() {
+                    rewrite_expr(&mut arg.node, arg.span, import_names);
                 }
+                *expr = Expr::Call {
+                    name: Spanned::new(qualified_name, name_span),
+                    args: std::mem::take(args),
+                    target_id: None,
+                };
+                return;
             }
             rewrite_expr(&mut object.node, object.span, import_names);
             for arg in args {
@@ -1415,13 +1439,16 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
         Expr::Closure { body, .. } => {
             rewrite_block(&mut body.node, import_names);
         }
-        Expr::MapLit { entries, .. } => {
+        Expr::MapLit { key_type, value_type, entries } => {
+            rewrite_type_expr(key_type, import_names);
+            rewrite_type_expr(value_type, import_names);
             for (k, v) in entries {
                 rewrite_expr(&mut k.node, k.span, import_names);
                 rewrite_expr(&mut v.node, v.span, import_names);
             }
         }
-        Expr::SetLit { elements, .. } => {
+        Expr::SetLit { elem_type, elements } => {
+            rewrite_type_expr(elem_type, import_names);
             for elem in elements {
                 rewrite_expr(&mut elem.node, elem.span, import_names);
             }
@@ -1434,7 +1461,7 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
             rewrite_expr(&mut expr.node, expr.span, import_names);
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    rewrite_expr(&mut body.node, body.span, import_names);
+                    rewrite_block(&mut body.node, import_names);
                 }
                 CatchHandler::Shorthand(fallback) => {
                     rewrite_expr(&mut fallback.node, fallback.span, import_names);

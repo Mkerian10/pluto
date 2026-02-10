@@ -2278,6 +2278,225 @@ long __pluto_task_get(long task_ptr) {
     return task[1];
 }
 
+// ── Deep Copy (for spawn isolation) ──────────────────────────────────────────
+
+// Visited table for cycle detection during deep copy
+typedef struct {
+    void **originals;
+    void **copies;
+    size_t count;
+    size_t cap;
+} DeepCopyVisited;
+
+static void dc_visited_init(DeepCopyVisited *v) {
+    v->count = 0;
+    v->cap = 16;
+    v->originals = (void **)malloc(v->cap * sizeof(void *));
+    v->copies    = (void **)malloc(v->cap * sizeof(void *));
+}
+
+static void dc_visited_free(DeepCopyVisited *v) {
+    free(v->originals);
+    free(v->copies);
+}
+
+static void *dc_visited_lookup(DeepCopyVisited *v, void *original) {
+    for (size_t i = 0; i < v->count; i++) {
+        if (v->originals[i] == original) return v->copies[i];
+    }
+    return NULL;
+}
+
+static void dc_visited_insert(DeepCopyVisited *v, void *original, void *copy) {
+    if (v->count >= v->cap) {
+        v->cap *= 2;
+        v->originals = (void **)realloc(v->originals, v->cap * sizeof(void *));
+        v->copies    = (void **)realloc(v->copies,    v->cap * sizeof(void *));
+    }
+    v->originals[v->count] = original;
+    v->copies[v->count]    = copy;
+    v->count++;
+}
+
+// Check if a value is a pointer to the start of a GC object's user data.
+// Linear scan of gc_head — acceptable because spawn is not a hot path.
+static GCHeader *dc_find_gc_object(void *candidate) {
+    GCHeader *h = gc_head;
+    while (h) {
+        void *user = (char *)h + sizeof(GCHeader);
+        if (user == candidate) return h;
+        h = h->next;
+    }
+    return NULL;
+}
+
+static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited);
+
+// Recursively deep-copy a slot value if it's a GC pointer
+static long dc_copy_slot(long slot_val, DeepCopyVisited *visited) {
+    if (slot_val == 0) return 0;
+    GCHeader *h = dc_find_gc_object((void *)slot_val);
+    if (!h) return slot_val;  // Not a GC pointer — primitive value
+    return dc_deep_copy_impl(slot_val, visited);
+}
+
+static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
+    if (ptr == 0) return 0;
+
+    void *orig = (void *)ptr;
+    GCHeader *h = dc_find_gc_object(orig);
+    if (!h) return ptr;  // Not a GC object — return as-is
+
+    // Check visited (cycle detection)
+    void *existing = dc_visited_lookup(visited, orig);
+    if (existing) return (long)existing;
+
+    switch (h->type_tag) {
+    case GC_TAG_STRING:
+        // Strings are immutable — no copy needed
+        return ptr;
+
+    case GC_TAG_TASK:
+    case GC_TAG_CHANNEL:
+        // Tasks and channels are shared by reference
+        return ptr;
+
+    case GC_TAG_OBJECT: {
+        // Classes, enums, closures, errors
+        // Layout: field_count * 8 bytes of slots
+        uint16_t fc = h->field_count;
+        void *copy = gc_alloc(h->size, GC_TAG_OBJECT, fc);
+        dc_visited_insert(visited, orig, copy);
+        memcpy(copy, orig, h->size);
+        // Recursively deep-copy slots that are GC pointers
+        long *src_slots = (long *)orig;
+        long *dst_slots = (long *)copy;
+        for (uint16_t i = 0; i < fc; i++) {
+            dst_slots[i] = dc_copy_slot(src_slots[i], visited);
+        }
+        return (long)copy;
+    }
+
+    case GC_TAG_ARRAY: {
+        // Handle: [len][cap][data_ptr]
+        long *src = (long *)orig;
+        long len = src[0];
+        long cap = src[1];
+        long *src_data = (long *)src[2];
+
+        long *copy = (long *)gc_alloc(24, GC_TAG_ARRAY, 3);
+        dc_visited_insert(visited, orig, copy);
+        copy[0] = len;
+        copy[1] = cap;
+        // Allocate new data buffer (raw malloc, like __pluto_array_new)
+        long *new_data = (long *)calloc((size_t)cap, sizeof(long));
+        copy[2] = (long)new_data;
+        // Deep-copy each element
+        for (long i = 0; i < len; i++) {
+            new_data[i] = dc_copy_slot(src_data[i], visited);
+        }
+        return (long)copy;
+    }
+
+    case GC_TAG_BYTES: {
+        // Handle: [len][cap][data_ptr]
+        long *src = (long *)orig;
+        long len = src[0];
+        long cap = src[1];
+        unsigned char *src_data = (unsigned char *)src[2];
+
+        long *copy = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
+        dc_visited_insert(visited, orig, copy);
+        copy[0] = len;
+        copy[1] = cap;
+        unsigned char *new_data = (unsigned char *)calloc((size_t)cap, 1);
+        memcpy(new_data, src_data, (size_t)len);
+        copy[2] = (long)new_data;
+        return (long)copy;
+    }
+
+    case GC_TAG_TRAIT: {
+        // Handle: [data_ptr][vtable_ptr]
+        long *src = (long *)orig;
+        long *copy = (long *)gc_alloc(16, GC_TAG_TRAIT, 2);
+        dc_visited_insert(visited, orig, copy);
+        copy[0] = dc_copy_slot(src[0], visited);  // deep-copy underlying data
+        copy[1] = src[1];  // vtable pointer stays the same
+        return (long)copy;
+    }
+
+    case GC_TAG_MAP: {
+        // Handle: [count][cap][keys_ptr][vals_ptr][meta_ptr]
+        long *src = (long *)orig;
+        long count = src[0];
+        long cap = src[1];
+        long *src_keys = (long *)src[2];
+        long *src_vals = (long *)src[3];
+        unsigned char *src_meta = (unsigned char *)src[4];
+
+        long *copy = (long *)gc_alloc(40, GC_TAG_MAP, 5);
+        dc_visited_insert(visited, orig, copy);
+        copy[0] = count;
+        copy[1] = cap;
+
+        long *new_keys = (long *)calloc((size_t)cap, sizeof(long));
+        long *new_vals = (long *)calloc((size_t)cap, sizeof(long));
+        unsigned char *new_meta = (unsigned char *)calloc((size_t)cap, 1);
+        memcpy(new_meta, src_meta, (size_t)cap);
+        copy[2] = (long)new_keys;
+        copy[3] = (long)new_vals;
+        copy[4] = (long)new_meta;
+
+        for (long i = 0; i < cap; i++) {
+            if (src_meta[i] >= 0x80) {
+                new_keys[i] = dc_copy_slot(src_keys[i], visited);
+                new_vals[i] = dc_copy_slot(src_vals[i], visited);
+            }
+        }
+        return (long)copy;
+    }
+
+    case GC_TAG_SET: {
+        // Handle: [count][cap][keys_ptr][meta_ptr]
+        long *src = (long *)orig;
+        long count = src[0];
+        long cap = src[1];
+        long *src_keys = (long *)src[2];
+        unsigned char *src_meta = (unsigned char *)src[3];
+
+        long *copy = (long *)gc_alloc(32, GC_TAG_SET, 4);
+        dc_visited_insert(visited, orig, copy);
+        copy[0] = count;
+        copy[1] = cap;
+
+        long *new_keys = (long *)calloc((size_t)cap, sizeof(long));
+        unsigned char *new_meta = (unsigned char *)calloc((size_t)cap, 1);
+        memcpy(new_meta, src_meta, (size_t)cap);
+        copy[2] = (long)new_keys;
+        copy[3] = (long)new_meta;
+
+        for (long i = 0; i < cap; i++) {
+            if (src_meta[i] >= 0x80) {
+                new_keys[i] = dc_copy_slot(src_keys[i], visited);
+            }
+        }
+        return (long)copy;
+    }
+
+    default:
+        // Unknown tag — return as-is
+        return ptr;
+    }
+}
+
+long __pluto_deep_copy(long ptr) {
+    DeepCopyVisited visited;
+    dc_visited_init(&visited);
+    long result = dc_deep_copy_impl(ptr, &visited);
+    dc_visited_free(&visited);
+    return result;
+}
+
 // ── Channels ────────────────────────────────────────────────────────────────
 
 // Channel handle layout (56 bytes, 7 slots):

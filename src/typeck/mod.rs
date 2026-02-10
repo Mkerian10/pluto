@@ -36,16 +36,12 @@ fn types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> 
         return types_compatible(a_ret, e_ret, env);
     }
     // T is assignable to T? (implicit nullable wrap)
-    if let PlutoType::Nullable(inner) = expected {
-        if types_compatible(actual, inner, env) {
-            return true;
-        }
+    if let PlutoType::Nullable(inner) = expected && types_compatible(actual, inner, env) {
+        return true;
     }
     // Nullable(Void) (the none literal) is assignable to any Nullable(T)
-    if actual == &PlutoType::Nullable(Box::new(PlutoType::Void)) {
-        if matches!(expected, PlutoType::Nullable(_)) {
-            return true;
-        }
+    if actual == &PlutoType::Nullable(Box::new(PlutoType::Void)) && matches!(expected, PlutoType::Nullable(_)) {
+        return true;
     }
     false
 }
@@ -531,13 +527,13 @@ mod tests {
         // The generic function should be registered
         assert!(env.generic_functions.contains_key("identity"));
         // A concrete instantiation should be eagerly registered
-        assert!(env.functions.contains_key("identity__int"));
+        assert!(env.functions.contains_key("identity$$int"));
     }
 
     #[test]
     fn generic_function_call_infers_string() {
         let env = check("fn identity<T>(x: T) T {\n    return x\n}\n\nfn main() {\n    let x: string = identity(\"hello\")\n}").unwrap();
-        assert!(env.functions.contains_key("identity__string"));
+        assert!(env.functions.contains_key("identity$$string"));
     }
 
     #[test]
@@ -550,7 +546,7 @@ mod tests {
     fn generic_class_struct_lit_accepted() {
         let env = check("class Box<T> {\n    value: T\n}\n\nfn main() {\n    let b = Box<int> { value: 42 }\n}").unwrap();
         assert!(env.generic_classes.contains_key("Box"));
-        assert!(env.classes.contains_key("Box__int"));
+        assert!(env.classes.contains_key("Box$$int"));
     }
 
     #[test]
@@ -562,26 +558,26 @@ mod tests {
     #[test]
     fn generic_class_two_params() {
         let env = check("class Pair<A, B> {\n    first: A\n    second: B\n}\n\nfn main() {\n    let p = Pair<int, string> { first: 1, second: \"hi\" }\n}").unwrap();
-        assert!(env.classes.contains_key("Pair__int_string"));
+        assert!(env.classes.contains_key("Pair$$int$string"));
     }
 
     #[test]
     fn generic_enum_data_accepted() {
         let env = check("enum Option<T> {\n    Some { value: T }\n    None\n}\n\nfn main() {\n    let o = Option<int>.Some { value: 42 }\n}").unwrap();
         assert!(env.generic_enums.contains_key("Option"));
-        assert!(env.enums.contains_key("Option__int"));
+        assert!(env.enums.contains_key("Option$$int"));
     }
 
     #[test]
     fn generic_enum_unit_accepted() {
         let env = check("enum Option<T> {\n    Some { value: T }\n    None\n}\n\nfn main() {\n    let o = Option<int>.None\n}").unwrap();
-        assert!(env.enums.contains_key("Option__int"));
+        assert!(env.enums.contains_key("Option$$int"));
     }
 
     #[test]
     fn generic_match_base_name_accepted() {
         let env = check("enum Option<T> {\n    Some { value: T }\n    None\n}\n\nfn main() {\n    let o = Option<int>.Some { value: 42 }\n    match o {\n        Option.Some { value: v } {\n            print(v)\n        }\n        Option.None {\n            print(0)\n        }\n    }\n}").unwrap();
-        assert!(env.enums.contains_key("Option__int"));
+        assert!(env.enums.contains_key("Option$$int"));
     }
 
     #[test]
@@ -599,12 +595,12 @@ mod tests {
     #[test]
     fn generic_type_in_annotation() {
         let env = check("class Box<T> {\n    value: T\n}\n\nfn main() {\n    let b: Box<int> = Box<int> { value: 42 }\n}").unwrap();
-        assert!(env.classes.contains_key("Box__int"));
+        assert!(env.classes.contains_key("Box$$int"));
     }
 
     #[test]
     fn generic_function_two_type_params() {
         let env = check("fn first<A, B>(a: A, b: B) A {\n    return a\n}\n\nfn main() {\n    let x: int = first(42, \"hello\")\n}").unwrap();
-        assert!(env.functions.contains_key("first__int_string"));
+        assert!(env.functions.contains_key("first$$int$string"));
     }
 }

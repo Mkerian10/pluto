@@ -224,6 +224,7 @@ fn transplant_program(new: &mut Program, old: &Program) -> SyncResult {
 
 /// Generic helper to transplant UUIDs for a list of declarations.
 /// Uses `name_fn` to extract names, `transplant_fn` to copy UUIDs and recurse.
+#[allow(clippy::too_many_arguments)]
 fn transplant_decls<T>(
     new_items: &mut [T],
     old_items: &[T],
@@ -237,9 +238,9 @@ fn transplant_decls<T>(
 ) {
     // Build a set of new names for removal detection
     let new_names: std::collections::HashSet<String> =
-        new_items.iter().map(|item| name_fn(item)).collect();
+        new_items.iter().map(&name_fn).collect();
     let old_names: std::collections::HashSet<String> =
-        old_items.iter().map(|item| name_fn(item)).collect();
+        old_items.iter().map(&name_fn).collect();
 
     // Transplant matching items
     for new_item in new_items.iter_mut() {

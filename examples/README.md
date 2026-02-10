@@ -56,6 +56,15 @@ Demonstrates the `std.json` module: parsing JSON strings, accessing nested value
 cargo run -- run examples/json/main.pluto --stdlib stdlib
 ```
 
+## blog
+
+A static blog generator that reads markdown-ish `.txt` posts from `posts/`, converts them to HTML with inline formatting (`**bold**`, `*italic*`, `` `code` ``, headings, lists), and writes a full site to `output/`. Demonstrates `std.fs` (file I/O, directory listing), `std.strings` (split, trim, replace, index_of), error handling, and the `app` construct.
+
+```bash
+cd examples/blog
+cargo run --manifest-path ../../Cargo.toml -- run main.pluto --stdlib ../../stdlib
+```
+
 ## bytes
 
 Demonstrates the `byte` and `bytes` types: hex literals (`0xFF`), explicit casting (`as byte`/`as int`), truncation semantics, packed byte buffers (`bytes_new`, `push`, indexing), string conversion (`to_bytes`/`to_string`), iteration, and unsigned ordering.
@@ -138,6 +147,14 @@ Demonstrates first-class nullable types: `T?` syntax for nullable types, `none` 
 
 ```bash
 cargo run -- run examples/nullable/main.pluto
+```
+
+## scope-blocks
+
+Demonstrates scoped dependency injection with `scope()` blocks: creating per-request scoped class instances from seed values, auto-wiring dependency chains (`Handler` -> `UserService` -> `RequestCtx`), mixing scoped and singleton deps, and binding multiple services from a single seed.
+
+```bash
+cargo run -- run examples/scope-blocks/main.pluto
 ```
 
 ## http-api

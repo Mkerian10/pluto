@@ -164,3 +164,7 @@ path = "tests/integration/nullable.rs"
 [[test]]
 name = "sync"
 path = "tests/integration/sync.rs"
+
+[[test]]
+name = "scope_blocks"
+path = "tests/integration/scope_blocks.rs"
