@@ -1,7 +1,7 @@
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::Spanned;
-use super::env::TypeEnv;
+use super::env::{mangle_method, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::resolve_type;
 use super::infer::infer_expr;
@@ -11,7 +11,7 @@ use crate::parser::ast::Expr;
 pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
     let prev_fn = env.current_fn.take();
     env.current_fn = Some(if let Some(cn) = class_name {
-        format!("{}_{}", cn, func.name.node)
+        mangle_method(cn, &func.name.node)
     } else {
         func.name.node.clone()
     });
@@ -42,7 +42,7 @@ fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&s
     }
 
     let lookup_name = if let Some(cn) = class_name {
-        format!("{}_{}", cn, func.name.node)
+        mangle_method(cn, &func.name.node)
     } else {
         func.name.node.clone()
     };
@@ -900,10 +900,10 @@ fn check_match_stmt(
 
     let mut covered = std::collections::HashSet::new();
     for arm in arms {
-        // Accept exact match, or base generic name match (e.g., "Option" matches "Option__int")
+        // Accept exact match, or base generic name match (e.g., "Option" matches "Option$$int")
         let arm_matches = arm.enum_name.node == enum_name
             || (env.generic_enums.contains_key(&arm.enum_name.node)
-                && enum_name.starts_with(&format!("{}__", arm.enum_name.node)));
+                && enum_name.starts_with(&format!("{}$$", arm.enum_name.node)));
         if !arm_matches {
             return Err(CompileError::type_err(
                 format!("match arm enum '{}' does not match scrutinee enum '{}'", arm.enum_name.node, enum_name),
@@ -1125,7 +1125,7 @@ fn check_expr_for_self_mutation(
     match expr {
         Expr::MethodCall { object, method, args, .. } => {
             if matches!(&object.node, Expr::Ident(name) if name == "self") {
-                let mangled = format!("{}_{}", class_name, method.node);
+                let mangled = mangle_method(class_name, &method.node);
                 if env.mut_self_methods.contains(&mangled) {
                     return Err(CompileError::type_err(
                         format!(

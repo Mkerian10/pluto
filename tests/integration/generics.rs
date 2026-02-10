@@ -137,3 +137,30 @@ fn generic_wrong_type_arg_count_rejected() {
         "class Box<T> {\n    value: T\n}\n\nfn main() {\n    let b = Box<int, string> { value: 42 }\n}",
     );
 }
+
+#[test]
+fn generic_mangling_no_collision_with_user_class() {
+    // Regression: generic id<T>(x: T) T with T=int? mangles to nullable$int,
+    // which must not collide with a user class named "nullable_int".
+    // With `_` separator both produced `id__nullable_int`; with `$` they're distinct.
+    let out = compile_and_run_stdout(
+        r#"
+class nullable_int {
+    v: int
+}
+
+fn id<T>(x: T) T {
+    return x
+}
+
+fn main() {
+    let a: int? = 42
+    let b = id(a)
+    let c = nullable_int { v: 7 }
+    let d = id(c)
+    print(d.v)
+}
+"#,
+    );
+    assert_eq!(out, "7\n");
+}

@@ -293,7 +293,7 @@ impl TypeEnv {
     pub fn is_trait_method_potentially_fallible(&self, trait_name: &str, method_name: &str) -> bool {
         for (class_name, info) in &self.classes {
             if info.impl_traits.iter().any(|t| t == trait_name) {
-                let mangled = format!("{}_{}", class_name, method_name);
+                let mangled = mangle_method(class_name, method_name);
                 if self.is_fn_fallible(&mangled) {
                     return true;
                 }
@@ -357,9 +357,13 @@ impl TypeEnv {
     }
 }
 
+pub fn mangle_method(class_or_app: &str, method: &str) -> String {
+    format!("{}${}", class_or_app, method)
+}
+
 pub fn mangle_name(base: &str, type_args: &[PlutoType]) -> String {
     let suffixes: Vec<String> = type_args.iter().map(mangle_type).collect();
-    format!("{}__{}", base, suffixes.join("_"))
+    format!("{}$${}", base, suffixes.join("$"))
 }
 
 fn mangle_type(ty: &PlutoType) -> String {
@@ -370,26 +374,26 @@ fn mangle_type(ty: &PlutoType) -> String {
         PlutoType::String => "string".into(),
         PlutoType::Void => "void".into(),
         PlutoType::Class(n) | PlutoType::Enum(n) => n.clone(),
-        PlutoType::Array(inner) => format!("arr_{}", mangle_type(inner)),
+        PlutoType::Array(inner) => format!("arr${}", mangle_type(inner)),
         PlutoType::Fn(ps, r) => {
             let ps: Vec<_> = ps.iter().map(mangle_type).collect();
-            format!("fn_{}_ret_{}", ps.join("_"), mangle_type(r))
+            format!("fn${}$ret${}", ps.join("$"), mangle_type(r))
         }
-        PlutoType::Map(k, v) => format!("map_{}_{}", mangle_type(k), mangle_type(v)),
-        PlutoType::Set(t) => format!("set_{}", mangle_type(t)),
+        PlutoType::Map(k, v) => format!("map${}${}", mangle_type(k), mangle_type(v)),
+        PlutoType::Set(t) => format!("set${}", mangle_type(t)),
         PlutoType::Trait(n) => n.clone(),
         PlutoType::TypeParam(n) => n.clone(),
         PlutoType::Range => "range".into(),
         PlutoType::Error => "error".into(),
-        PlutoType::Task(inner) => format!("task_{}", mangle_type(inner)),
+        PlutoType::Task(inner) => format!("task${}", mangle_type(inner)),
         PlutoType::Byte => "byte".into(),
         PlutoType::Bytes => "bytes".into(),
-        PlutoType::Sender(inner) => format!("sender_{}", mangle_type(inner)),
-        PlutoType::Receiver(inner) => format!("receiver_{}", mangle_type(inner)),
+        PlutoType::Sender(inner) => format!("sender${}", mangle_type(inner)),
+        PlutoType::Receiver(inner) => format!("receiver${}", mangle_type(inner)),
         PlutoType::GenericInstance(_, name, args) => {
             let suffixes: Vec<String> = args.iter().map(mangle_type).collect();
-            format!("{}__{}", name, suffixes.join("_"))
+            format!("{}$${}", name, suffixes.join("$"))
         }
-        PlutoType::Nullable(inner) => format!("nullable_{}", mangle_type(inner)),
+        PlutoType::Nullable(inner) => format!("nullable${}", mangle_type(inner)),
     }
 }

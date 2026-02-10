@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::diagnostics::CompileError;
 use crate::parser::ast::TypeExpr;
 use crate::span::Spanned;
-use super::env::{self, ClassInfo, EnumInfo, FuncSig, InstKind, Instantiation, TypeEnv};
+use super::env::{self, mangle_method, ClassInfo, EnumInfo, FuncSig, InstKind, Instantiation, TypeEnv};
 use super::types::{GenericKind, PlutoType};
 
 pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<PlutoType, CompileError> {
@@ -514,7 +514,7 @@ pub(crate) fn ensure_generic_class_instantiated(
             })
             .collect();
         let concrete_ret = substitute_pluto_type(&sig.return_type, &bindings);
-        let func_name = format!("{}_{}", mangled, method_name);
+        let func_name = mangle_method(&mangled, method_name);
         // Propagate mut self from generic class info
         if gen_info.mut_self_methods.contains(method_name) {
             env.mut_self_methods.insert(func_name.clone());

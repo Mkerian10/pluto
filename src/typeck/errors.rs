@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use super::env::{MethodResolution, TypeEnv};
+use super::env::{mangle_method, MethodResolution, TypeEnv};
 
 pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
     let mut direct_errors: HashMap<String, HashSet<String>> = HashMap::new();
@@ -22,7 +22,7 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
         if !class.node.type_params.is_empty() { continue; }
         let class_name = &class.node.name.node;
         for method in &class.node.methods {
-            let mangled = format!("{}_{}", class_name, method.node.name.node);
+            let mangled = mangle_method(class_name, &method.node.name.node);
             let (directs, edges) = collect_block_effects(&method.node.body.node, &mangled, env);
             direct_errors.insert(mangled.clone(), directs);
             propagation_edges.insert(mangled, edges);
@@ -40,7 +40,7 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
                 if trait_decl.node.name.node == trait_name.node {
                     for tm in &trait_decl.node.methods {
                         if let Some(body) = &tm.body && !class_method_names.contains(&tm.name.node) {
-                            let mangled = format!("{}_{}", class_name, tm.name.node);
+                            let mangled = mangle_method(class_name, &tm.name.node);
                             let (directs, edges) =
                                 collect_block_effects(&body.node, &mangled, env);
                             direct_errors.insert(mangled.clone(), directs);
@@ -56,7 +56,7 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
     if let Some(app_spanned) = &program.app {
         let app_name = &app_spanned.node.name.node;
         for method in &app_spanned.node.methods {
-            let mangled = format!("{}_{}", app_name, method.node.name.node);
+            let mangled = mangle_method(app_name, &method.node.name.node);
             let (directs, edges) = collect_block_effects(&method.node.body.node, &mangled, env);
             direct_errors.insert(mangled.clone(), directs);
             propagation_edges.insert(mangled, edges);
@@ -250,7 +250,7 @@ fn collect_expr_effects(
                         Some(MethodResolution::TraitDynamic { trait_name, method_name }) => {
                             for (class_name, info) in &env.classes {
                                 if info.impl_traits.iter().any(|t| t == trait_name) {
-                                    edges.insert(format!("{}_{}", class_name, method_name));
+                                    edges.insert(mangle_method(class_name, method_name));
                                 }
                             }
                         }
@@ -417,7 +417,7 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
         if !class.node.type_params.is_empty() { continue; }
         let class_name = &class.node.name.node;
         for method in &class.node.methods {
-            let current_fn = format!("{}_{}", class_name, method.node.name.node);
+            let current_fn = mangle_method(class_name, &method.node.name.node);
             enforce_block(&method.node.body.node, &current_fn, env)?;
         }
     }
@@ -431,7 +431,7 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
                 if trait_decl.node.name.node == trait_name.node {
                     for tm in &trait_decl.node.methods {
                         if let Some(body) = &tm.body && !class_method_names.contains(&tm.name.node) {
-                            let current_fn = format!("{}_{}", class_name, tm.name.node);
+                            let current_fn = mangle_method(class_name, &tm.name.node);
                             enforce_block(&body.node, &current_fn, env)?;
                         }
                     }
@@ -442,7 +442,7 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
     if let Some(app_spanned) = &program.app {
         let app_name = &app_spanned.node.name.node;
         for method in &app_spanned.node.methods {
-            let current_fn = format!("{}_{}", app_name, method.node.name.node);
+            let current_fn = mangle_method(app_name, &method.node.name.node);
             enforce_block(&method.node.body.node, &current_fn, env)?;
         }
     }

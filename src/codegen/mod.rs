@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use crate::typeck::env::TypeEnv;
+use crate::typeck::env::{mangle_method, TypeEnv};
 use crate::typeck::types::PlutoType;
 use lower::{lower_function, pluto_to_cranelift, resolve_type_expr_to_pluto, FnContracts, POINTER_SIZE};
 use runtime::RuntimeRegistry;
@@ -126,7 +126,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         let c = &class.node;
         for method in &c.methods {
             let m = &method.node;
-            let mangled = format!("{}_{}", c.name.node, m.name.node);
+            let mangled = mangle_method(&c.name.node, &m.name.node);
             let sig = build_method_signature(m, &module, &c.name.node, env);
             let func_id = module
                 .declare_function(&mangled, Linkage::Local, &sig)
@@ -146,7 +146,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             if let Some(trait_info) = env.traits.get(trait_name) {
                 for (method_name, _) in &trait_info.methods {
                     if !class_method_names.contains(method_name) && trait_info.default_methods.contains(method_name) {
-                        let mangled = format!("{}_{}", class_name, method_name);
+                        let mangled = mangle_method(class_name, method_name);
                         if let std::collections::hash_map::Entry::Vacant(entry) = func_ids.entry(mangled.clone()) {
                             // Build signature from the function signature in env
                             let func_sig = env.functions.get(&mangled).ok_or_else(|| {
@@ -185,7 +185,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                 data_desc.define(zeros.into_boxed_slice());
 
                 for (i, (method_name, _)) in trait_info.methods.iter().enumerate() {
-                    let mangled = format!("{}_{}", class_name, method_name);
+                    let mangled = mangle_method(class_name, method_name);
                     let fid = func_ids.get(&mangled).ok_or_else(|| {
                         CompileError::codegen(format!("missing func_id for vtable entry {mangled}"))
                     })?;
@@ -242,7 +242,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         for method in &c.methods {
             let m = &method.node;
             if !m.contracts.is_empty() {
-                let mangled = format!("{}_{}", c.name.node, m.name.node);
+                let mangled = mangle_method(&c.name.node, &m.name.node);
                 let requires: Vec<(Expr, String)> = m.contracts.iter()
                     .filter(|c| c.node.kind == ContractKind::Requires)
                     .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
@@ -262,7 +262,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         for method in &app.methods {
             let m = &method.node;
             if !m.contracts.is_empty() {
-                let mangled = format!("{}_{}", app.name.node, m.name.node);
+                let mangled = mangle_method(&app.name.node, &m.name.node);
                 let requires: Vec<(Expr, String)> = m.contracts.iter()
                     .filter(|c| c.node.kind == ContractKind::Requires)
                     .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
@@ -289,7 +289,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                         if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node)
                             && !trait_method.contracts.is_empty()
                         {
-                            let mangled = format!("{}_{}", c.name.node, trait_method.name.node);
+                            let mangled = mangle_method(&c.name.node, &trait_method.name.node);
                             let requires: Vec<(Expr, String)> = trait_method.contracts.iter()
                                 .filter(|c| c.node.kind == ContractKind::Requires)
                                 .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
@@ -315,7 +315,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let trait_name = &trait_name_spanned.node;
             if let Some(trait_info) = env.traits.get(trait_name) {
                 for (method_name, contracts) in &trait_info.method_contracts {
-                    let mangled = format!("{}_{}", c.name.node, method_name);
+                    let mangled = mangle_method(&c.name.node, method_name);
                     let trait_requires: Vec<(Expr, String)> = contracts.iter()
                         .filter(|c| c.node.kind == ContractKind::Requires)
                         .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
@@ -366,7 +366,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         let c = &class.node;
         for method in &c.methods {
             let m = &method.node;
-            let mangled = format!("{}_{}", c.name.node, m.name.node);
+            let mangled = mangle_method(&c.name.node, &m.name.node);
             let func_id = func_ids[&mangled];
             let sig = build_method_signature(m, &module, &c.name.node, env);
 
@@ -411,7 +411,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                                 is_pub: false,
                             };
 
-                            let mangled = format!("{}_{}", class_name, trait_method.name.node);
+                            let mangled = mangle_method(class_name, &trait_method.name.node);
                             let func_id = func_ids[&mangled];
 
                             // Build signature from env
@@ -449,7 +449,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         let app_name = &app.name.node;
         for method in &app.methods {
             let m = &method.node;
-            let mangled = format!("{}_{}", app_name, m.name.node);
+            let mangled = mangle_method(app_name, &m.name.node);
             let sig = build_method_signature(m, &module, app_name, env);
             let func_id = module
                 .declare_function(&mangled, Linkage::Local, &sig)
@@ -464,7 +464,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         let app_name = &app.name.node;
         for method in &app.methods {
             let m = &method.node;
-            let mangled = format!("{}_{}", app_name, m.name.node);
+            let mangled = mangle_method(app_name, &m.name.node);
             let func_id = func_ids[&mangled];
             let sig = build_method_signature(m, &module, app_name, env);
 
@@ -646,8 +646,8 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                 }
             }
 
-            // Call AppName_main(app_ptr)
-            let app_main_mangled = format!("{}_main", app_name);
+            // Call AppName$main(app_ptr)
+            let app_main_mangled = mangle_method(app_name, "main");
             let app_main_id = func_ids.get(&app_main_mangled).ok_or_else(|| {
                 CompileError::codegen(format!("DI: missing app main function '{}'", app_main_mangled))
             })?;

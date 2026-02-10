@@ -10,14 +10,14 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use crate::parser::ast::{Lifecycle, Program};
-use crate::typeck::env::TypeEnv;
+use crate::typeck::env::{mangle_method, TypeEnv};
 use crate::typeck::types::PlutoType;
 
 /// Map an AST function node to the key used in TypeEnv.
 /// `class_name`: `Some("Counter")` for methods, `None` for top-level fns.
 pub fn typeenv_key(fn_name: &str, class_name: Option<&str>) -> String {
     match class_name {
-        Some(cls) => format!("{}_{}", cls, fn_name),
+        Some(cls) => mangle_method(cls, fn_name),
         None => fn_name.to_string(),
     }
 }
@@ -397,8 +397,8 @@ mod tests {
 
     #[test]
     fn typeenv_key_method() {
-        assert_eq!(typeenv_key("increment", Some("Counter")), "Counter_increment");
-        assert_eq!(typeenv_key("main", Some("MyApp")), "MyApp_main");
+        assert_eq!(typeenv_key("increment", Some("Counter")), "Counter$increment");
+        assert_eq!(typeenv_key("main", Some("MyApp")), "MyApp$main");
     }
 
     #[test]

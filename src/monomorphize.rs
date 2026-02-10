@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
-use crate::typeck::env::{mangle_name, InstKind, Instantiation, TypeEnv};
+use crate::typeck::env::{mangle_method, mangle_name, InstKind, Instantiation, TypeEnv};
 use crate::typeck::types::PlutoType;
 
 /// Span offset multiplier for monomorphized bodies. Each iteration gets unique
@@ -151,7 +151,7 @@ fn instantiate_class(
     // Type-check methods to discover transitive instantiations
     for method in &class.methods {
         // Register method signature if not already registered
-        let method_name = format!("{}_{}", mangled, method.node.name.node);
+        let method_name = mangle_method(&mangled, &method.node.name.node);
         if !env.functions.contains_key(&method_name) {
             // Build the FuncSig for this method
             let mut param_types = Vec::new();

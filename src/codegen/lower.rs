@@ -8,7 +8,7 @@ use cranelift_module::{DataDescription, DataId, FuncId, Module};
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use crate::typeck::env::TypeEnv;
+use crate::typeck::env::{mangle_method, TypeEnv};
 use crate::typeck::types::PlutoType;
 
 use super::runtime::RuntimeRegistry;
@@ -2752,7 +2752,7 @@ impl<'a> LowerContext<'a> {
             }
         } else if let PlutoType::Class(class_name) = &obj_type {
             let class_name = class_name.clone();
-            let mangled = format!("{}_{}", class_name, method.node);
+            let mangled = mangle_method(&class_name, &method.node);
             let func_id = self.func_ids.get(&mangled).ok_or_else(|| {
                 CompileError::codegen(format!("undefined method '{}'", method.node))
             })?;
@@ -2995,7 +2995,7 @@ pub fn lower_function(
         Some(PlutoType::Int)
     } else {
         let lookup_name = if let Some(cn) = class_name {
-            format!("{}_{}", cn, func.name.node)
+            mangle_method(cn, &func.name.node)
         } else {
             func.name.node.clone()
         };
@@ -3019,7 +3019,7 @@ pub fn lower_function(
 
     // Compute function lookup name (mangled for methods)
     let fn_lookup = if let Some(cn) = class_name {
-        format!("{}_{}", cn, func.name.node)
+        mangle_method(cn, &func.name.node)
     } else {
         func.name.node.clone()
     };
@@ -3550,7 +3550,7 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 return PlutoType::Void;
             }
             if let PlutoType::Class(class_name) = &obj_type {
-                let mangled = format!("{}_{}", class_name, method.node);
+                let mangled = mangle_method(class_name, &method.node);
                 env.functions.get(&mangled).map(|s| s.return_type.clone()).unwrap_or(PlutoType::Void)
             } else {
                 PlutoType::Void

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::Spanned;
-use super::env::TypeEnv;
+use super::env::{mangle_method, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::{resolve_type, unify, ensure_generic_func_instantiated, ensure_generic_class_instantiated, ensure_generic_enum_instantiated};
 use super::closures::infer_closure;
@@ -1818,7 +1818,7 @@ fn infer_method_call(
         }
     };
 
-    let mangled = format!("{}_{}", class_name, method.node);
+    let mangled = mangle_method(&class_name, &method.node);
     if let Some(ref current) = env.current_fn {
         env.method_resolutions.insert(
             (current.clone(), method.span.start),

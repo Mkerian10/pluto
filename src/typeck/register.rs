@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use super::env::{self, ClassInfo, EnumInfo, ErrorInfo, FuncSig, GenericClassInfo, GenericEnumInfo, GenericFuncSig, TraitInfo, TypeEnv};
+use super::env::{self, mangle_method, ClassInfo, EnumInfo, ErrorInfo, FuncSig, GenericClassInfo, GenericEnumInfo, GenericFuncSig, TraitInfo, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::{resolve_type, resolve_type_with_params};
 use super::check::check_function;
@@ -478,7 +478,7 @@ pub(crate) fn register_method_sigs(program: &Program, env: &mut TypeEnv) -> Resu
         let mut method_names = Vec::new();
         for method in &c.methods {
             let m = &method.node;
-            let mangled = format!("{}_{}", class_name, m.name.node);
+            let mangled = mangle_method(class_name, &m.name.node);
             method_names.push(m.name.node.clone());
 
             let mut param_types = Vec::new();
@@ -551,7 +551,7 @@ pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeE
         let mut has_main = false;
         for method in &app.methods {
             let m = &method.node;
-            let mangled = format!("{}_{}", app_name, m.name.node);
+            let mangled = mangle_method(&app_name, &m.name.node);
             method_names.push(m.name.node.clone());
 
             if m.name.node == "main" {
@@ -921,7 +921,7 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
             })?.clone();
 
             for (method_name, trait_sig) in &trait_info.methods {
-                let mangled = format!("{}_{}", class_name, method_name);
+                let mangled = mangle_method(class_name, method_name);
 
                 if class_info.methods.contains(method_name) {
                     // Class has this method — verify signature matches

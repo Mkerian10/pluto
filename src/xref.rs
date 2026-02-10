@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::parser::ast::*;
+use crate::typeck::env::mangle_method;
 
 /// Index of declaration names to their UUIDs, built from the final program AST.
 struct DeclIndex {
-    /// Function name → UUID (includes top-level fns, class methods as ClassName_method, app methods as AppName_method)
+    /// Function name → UUID (includes top-level fns, class methods as ClassName$method, app methods as AppName$method)
     fn_index: HashMap<String, Uuid>,
     /// Class name → UUID
     class_index: HashMap<String, Uuid>,
@@ -32,7 +33,7 @@ impl DeclIndex {
         for c in &program.classes {
             class_index.insert(c.node.name.node.clone(), c.node.id);
             for m in &c.node.methods {
-                let mangled = format!("{}_{}", c.node.name.node, m.node.name.node);
+                let mangled = mangle_method(&c.node.name.node, &m.node.name.node);
                 fn_index.insert(mangled, m.node.id);
             }
         }
@@ -53,7 +54,7 @@ impl DeclIndex {
 
         if let Some(app) = &program.app {
             for m in &app.node.methods {
-                let mangled = format!("{}_{}", app.node.name.node, m.node.name.node);
+                let mangled = mangle_method(&app.node.name.node, &m.node.name.node);
                 fn_index.insert(mangled, m.node.id);
             }
         }
@@ -662,15 +663,15 @@ mod tests {
     #[test]
     fn test_monomorphized_names() {
         let mut program = empty_program();
-        // After monomorphization, generic functions get mangled names like "identity__int"
-        let identity_int = make_function("identity__int");
+        // After monomorphization, generic functions get mangled names like "identity$$int"
+        let identity_int = make_function("identity$$int");
         let identity_int_id = identity_int.node.id;
         program.functions.push(identity_int);
 
         let mut caller = make_function("main");
         caller.node.body = sp(Block {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
-                name: sp("identity__int".to_string()),
+                name: sp("identity$$int".to_string()),
                 args: vec![],
                 target_id: None,
             })))],
@@ -714,11 +715,11 @@ mod tests {
             lifecycle: Lifecycle::Singleton,
         }));
 
-        // After codegen method mangling, calls use "Greeter_hello"
+        // After codegen method mangling, calls use "Greeter$hello"
         let mut caller = make_function("main");
         caller.node.body = sp(Block {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
-                name: sp("Greeter_hello".to_string()),
+                name: sp("Greeter$hello".to_string()),
                 args: vec![],
                 target_id: None,
             })))],
