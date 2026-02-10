@@ -143,6 +143,57 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse a comma-separated list of items until `close` delimiter is reached.
+    /// Assumes the opening delimiter has already been consumed and `skip_newlines()` called.
+    /// If `mandatory_comma` is true, commas between items are required (function args);
+    /// otherwise commas are optional (struct fields, set elements).
+    /// Handles trailing commas in both modes.
+    fn parse_comma_list<T>(
+        &mut self,
+        close: &Token,
+        mandatory_comma: bool,
+        mut parse_item: impl FnMut(&mut Self) -> Result<T, CompileError>,
+    ) -> Result<Vec<T>, CompileError> {
+        let mut items = Vec::new();
+        while self.peek().is_some()
+            && std::mem::discriminant(&self.peek().unwrap().node) != std::mem::discriminant(close)
+        {
+            if !items.is_empty() {
+                if mandatory_comma {
+                    self.expect(&Token::Comma)?;
+                } else if self.peek().is_some()
+                    && matches!(self.peek().unwrap().node, Token::Comma)
+                {
+                    self.advance();
+                }
+                self.skip_newlines();
+                if self.peek().is_some()
+                    && std::mem::discriminant(&self.peek().unwrap().node)
+                        == std::mem::discriminant(close)
+                {
+                    break; // trailing comma
+                }
+            }
+            items.push(parse_item(self)?);
+            self.skip_newlines();
+        }
+        Ok(items)
+    }
+
+    /// Parse `name: expr, ...` field list inside `{ }`. Assumes `{` already consumed.
+    /// Returns fields and the closing `}` span end.
+    fn parse_field_list(&mut self) -> Result<(Vec<(Spanned<String>, Spanned<Expr>)>, usize), CompileError> {
+        self.skip_newlines();
+        let fields = self.parse_comma_list(&Token::RBrace, false, |p| {
+            let fname = p.expect_ident()?;
+            p.expect(&Token::Colon)?;
+            let fval = p.parse_expr(0)?;
+            Ok((fname, fval))
+        })?;
+        let close = self.expect(&Token::RBrace)?;
+        Ok((fields, close.span.end))
+    }
+
     fn pre_scan_enum_names(&mut self) {
         let saved = self.pos;
         let mut i = 0;
@@ -425,17 +476,12 @@ impl<'a> Parser<'a> {
         self.expect(&Token::Fn)?;
         let name = self.expect_ident()?;
         self.expect(&Token::LParen)?;
-
-        let mut params = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-            if !params.is_empty() {
-                self.expect(&Token::Comma)?;
-            }
-            let pname = self.expect_ident()?;
-            self.expect(&Token::Colon)?;
-            let pty = self.parse_type()?;
-            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
-        }
+        let params = self.parse_comma_list(&Token::RParen, true, |p| {
+            let pname = p.expect_ident()?;
+            p.expect(&Token::Colon)?;
+            let pty = p.parse_type()?;
+            Ok(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false })
+        })?;
         let close_paren = self.expect(&Token::RParen)?;
         let mut end = close_paren.span.end;
 
@@ -485,21 +531,19 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_bracket_deps(&mut self) -> Result<Vec<Field>, CompileError> {
-        let mut deps = Vec::new();
         if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBracket) {
             self.advance(); // consume '['
-            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBracket) {
-                if !deps.is_empty() {
-                    self.expect(&Token::Comma)?;
-                }
-                let name = self.expect_ident()?;
-                self.expect(&Token::Colon)?;
-                let ty = self.parse_type()?;
-                deps.push(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false });
-            }
+            let deps = self.parse_comma_list(&Token::RBracket, true, |p| {
+                let name = p.expect_ident()?;
+                p.expect(&Token::Colon)?;
+                let ty = p.parse_type()?;
+                Ok(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false })
+            })?;
             self.expect(&Token::RBracket)?;
+            Ok(deps)
+        } else {
+            Ok(Vec::new())
         }
-        Ok(deps)
     }
 
     fn parse_app_decl(&mut self) -> Result<Spanned<AppDecl>, CompileError> {
@@ -546,23 +590,12 @@ impl<'a> Parser<'a> {
             let fields = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
                 self.expect(&Token::LBrace)?;
                 self.skip_newlines();
-                let mut fields = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                    if !fields.is_empty() {
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                            self.advance();
-                        }
-                        self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                            break;
-                        }
-                    }
-                    let fname = self.expect_ident()?;
-                    self.expect(&Token::Colon)?;
-                    let fty = self.parse_type()?;
-                    fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false });
-                    self.skip_newlines();
-                }
+                let fields = self.parse_comma_list(&Token::RBrace, false, |p| {
+                    let fname = p.expect_ident()?;
+                    p.expect(&Token::Colon)?;
+                    let fty = p.parse_type()?;
+                    Ok(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false })
+                })?;
                 self.expect(&Token::RBrace)?;
                 fields
             } else {
@@ -846,13 +879,7 @@ impl<'a> Parser<'a> {
     fn parse_type_params(&mut self) -> Result<Vec<Spanned<String>>, CompileError> {
         if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Lt) {
             self.advance(); // consume '<'
-            let mut params = Vec::new();
-            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::Gt) {
-                if !params.is_empty() {
-                    self.expect(&Token::Comma)?;
-                }
-                params.push(self.expect_ident()?);
-            }
+            let params = self.parse_comma_list(&Token::Gt, true, |p| p.expect_ident())?;
             self.expect(&Token::Gt)?;
             Ok(params)
         } else {
@@ -863,13 +890,7 @@ impl<'a> Parser<'a> {
     /// Parse a type argument list: `<int, string>`, etc. Assumes we're positioned at `<`.
     fn parse_type_arg_list(&mut self) -> Result<Vec<Spanned<TypeExpr>>, CompileError> {
         self.expect(&Token::Lt)?;
-        let mut args = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::Gt) {
-            if !args.is_empty() {
-                self.expect(&Token::Comma)?;
-            }
-            args.push(self.parse_type()?);
-        }
+        let args = self.parse_comma_list(&Token::Gt, true, |p| p.parse_type())?;
         self.expect(&Token::Gt)?;
         Ok(args)
     }
@@ -915,17 +936,12 @@ impl<'a> Parser<'a> {
         let name = self.expect_ident()?;
         let type_params = self.parse_type_params()?;
         self.expect(&Token::LParen)?;
-
-        let mut params = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-            if !params.is_empty() {
-                self.expect(&Token::Comma)?;
-            }
-            let pname = self.expect_ident()?;
-            self.expect(&Token::Colon)?;
-            let pty = self.parse_type()?;
-            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
-        }
+        let params = self.parse_comma_list(&Token::RParen, true, |p| {
+            let pname = p.expect_ident()?;
+            p.expect(&Token::Colon)?;
+            let pty = p.parse_type()?;
+            Ok(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false })
+        })?;
         self.expect(&Token::RParen)?;
 
         // Return type: if next non-newline token is not '{' or a contract keyword, it's a return type
@@ -960,14 +976,9 @@ impl<'a> Parser<'a> {
             let fn_tok = self.advance().unwrap();
             let start = fn_tok.span.start;
             self.expect(&Token::LParen)?;
-            let mut params = Vec::new();
-            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-                if !params.is_empty() {
-                    self.expect(&Token::Comma)?;
-                }
-                let ty = self.parse_type()?;
-                params.push(Box::new(ty));
-            }
+            let params = self.parse_comma_list(&Token::RParen, true, |p| {
+                Ok(Box::new(p.parse_type()?))
+            })?;
             let close_paren = self.expect(&Token::RParen)?;
             let mut end = close_paren.span.end;
             // Optional return type — if next token looks like a type, parse it; otherwise void
@@ -1659,18 +1670,7 @@ impl<'a> Parser<'a> {
                 if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
                     self.advance(); // consume '('
                     self.skip_newlines();
-                    let mut args = Vec::new();
-                    while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-                        if !args.is_empty() {
-                            self.expect(&Token::Comma)?;
-                            self.skip_newlines();
-                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
-                                break; // trailing comma
-                            }
-                        }
-                        args.push(self.parse_expr(0)?);
-                        self.skip_newlines();
-                    }
+                    let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
                     let close = self.expect(&Token::RParen)?;
                     let span = Span::new(lhs.span.start, close.span.end);
                     lhs = Spanned::new(
@@ -1695,26 +1695,8 @@ impl<'a> Parser<'a> {
                     {
                         // EnumName.Variant { field: value }
                         self.advance(); // consume '{'
-                        self.skip_newlines();
-                        let mut fields = Vec::new();
-                        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                            if !fields.is_empty() {
-                                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                                    self.advance();
-                                }
-                                self.skip_newlines();
-                                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                                    break;
-                                }
-                            }
-                            let fname = self.expect_ident()?;
-                            self.expect(&Token::Colon)?;
-                            let fval = self.parse_expr(0)?;
-                            fields.push((fname, fval));
-                            self.skip_newlines();
-                        }
-                        let close = self.expect(&Token::RBrace)?;
-                        let span = Span::new(lhs.span.start, close.span.end);
+                        let (fields, close_end) = self.parse_field_list()?;
+                        let span = Span::new(lhs.span.start, close_end);
                         lhs = Spanned::new(
                             Expr::EnumData {
                                 enum_name: Spanned::new(enum_name_str, enum_name_span),
@@ -1755,26 +1737,8 @@ impl<'a> Parser<'a> {
                     let name_span = Span::new(lhs.span.start, field_name.span.end);
 
                     self.advance(); // consume '{'
-                    self.skip_newlines();
-                    let mut fields = Vec::new();
-                    while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                        if !fields.is_empty() {
-                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                                self.advance();
-                            }
-                            self.skip_newlines();
-                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                                break;
-                            }
-                        }
-                        let fname = self.expect_ident()?;
-                        self.expect(&Token::Colon)?;
-                        let fval = self.parse_expr(0)?;
-                        fields.push((fname, fval));
-                        self.skip_newlines();
-                    }
-                    let close = self.expect(&Token::RBrace)?;
-                    let span = Span::new(lhs.span.start, close.span.end);
+                    let (fields, close_end) = self.parse_field_list()?;
+                    let span = Span::new(lhs.span.start, close_end);
                     lhs = Spanned::new(
                         Expr::StructLit {
                             name: Spanned::new(qualified_name, name_span),
@@ -1805,26 +1769,8 @@ impl<'a> Parser<'a> {
                     {
                         // module.Enum.Variant { field: value }
                         self.advance(); // consume '{'
-                        self.skip_newlines();
-                        let mut fields = Vec::new();
-                        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                            if !fields.is_empty() {
-                                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                                    self.advance();
-                                }
-                                self.skip_newlines();
-                                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                                    break;
-                                }
-                            }
-                            let fname = self.expect_ident()?;
-                            self.expect(&Token::Colon)?;
-                            let fval = self.parse_expr(0)?;
-                            fields.push((fname, fval));
-                            self.skip_newlines();
-                        }
-                        let close = self.expect(&Token::RBrace)?;
-                        let span = Span::new(lhs.span.start, close.span.end);
+                        let (fields, close_end) = self.parse_field_list()?;
+                        let span = Span::new(lhs.span.start, close_end);
                         lhs = Spanned::new(
                             Expr::EnumData {
                                 enum_name: Spanned::new(qualified_enum_name, enum_name_span),
@@ -1948,26 +1894,8 @@ impl<'a> Parser<'a> {
                 {
                     // EnumName<type_args>.Variant { field: value }
                     self.advance(); // consume '{'
-                    self.skip_newlines();
-                    let mut fields = Vec::new();
-                    while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                        if !fields.is_empty() {
-                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                                self.advance();
-                            }
-                            self.skip_newlines();
-                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                                break;
-                            }
-                        }
-                        let fname = self.expect_ident()?;
-                        self.expect(&Token::Colon)?;
-                        let fval = self.parse_expr(0)?;
-                        fields.push((fname, fval));
-                        self.skip_newlines();
-                    }
-                    let close = self.expect(&Token::RBrace)?;
-                    let span = Span::new(lhs.span.start, close.span.end);
+                    let (fields, close_end) = self.parse_field_list()?;
+                    let span = Span::new(lhs.span.start, close_end);
                     lhs = Spanned::new(
                         Expr::EnumData {
                             enum_name: Spanned::new(enum_name_str, enum_name_span),
@@ -2175,18 +2103,7 @@ impl<'a> Parser<'a> {
                 let tok = self.advance().unwrap();
                 let start = tok.span.start;
                 self.skip_newlines();
-                let mut elements = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBracket) {
-                    if !elements.is_empty() {
-                        self.expect(&Token::Comma)?;
-                        self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBracket) {
-                            break; // trailing comma
-                        }
-                    }
-                    elements.push(self.parse_expr(0)?);
-                    self.skip_newlines();
-                }
+                let elements = self.parse_comma_list(&Token::RBracket, true, |p| p.parse_expr(0))?;
                 let close = self.expect(&Token::RBracket)?;
                 let end = close.span.end;
                 Ok(Spanned::new(Expr::ArrayLit { elements }, Span::new(start, end)))
@@ -2197,18 +2114,7 @@ impl<'a> Parser<'a> {
                 let func_name = self.expect_ident()?;
                 self.expect(&Token::LParen)?;
                 self.skip_newlines();
-                let mut args = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-                    if !args.is_empty() {
-                        self.expect(&Token::Comma)?;
-                        self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
-                            break;
-                        }
-                    }
-                    args.push(self.parse_expr(0)?);
-                    self.skip_newlines();
-                }
+                let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
                 let close = self.expect(&Token::RParen)?;
                 let call_span = Span::new(func_name.span.start, close.span.end);
                 let call = Expr::Call { name: func_name, args, target_id: None };
@@ -2236,18 +2142,7 @@ impl<'a> Parser<'a> {
         if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
             self.advance(); // consume '('
             self.skip_newlines();
-            let mut args = Vec::new();
-            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-                if !args.is_empty() {
-                    self.expect(&Token::Comma)?;
-                    self.skip_newlines();
-                    if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
-                        break; // trailing comma
-                    }
-                }
-                args.push(self.parse_expr(0)?);
-                self.skip_newlines();
-            }
+            let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
             let close = self.expect(&Token::RParen)?;
             let span = Span::new(ident.span.start, close.span.end);
             Ok(Spanned::new(Expr::Call { name: ident, args, target_id: None }, span))
@@ -2257,27 +2152,8 @@ impl<'a> Parser<'a> {
             // Use a lookahead: after `{`, if we see `ident :` it's a struct literal.
             if self.is_struct_lit_ahead() {
                 self.advance(); // consume '{'
-                self.skip_newlines();
-                let mut fields = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                    if !fields.is_empty() {
-                        // Allow comma or newline as separator
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                            self.advance();
-                        }
-                        self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                            break;
-                        }
-                    }
-                    let fname = self.expect_ident()?;
-                    self.expect(&Token::Colon)?;
-                    let fval = self.parse_expr(0)?;
-                    fields.push((fname, fval));
-                    self.skip_newlines();
-                }
-                let close = self.expect(&Token::RBrace)?;
-                let span = Span::new(ident.span.start, close.span.end);
+                let (fields, close_end) = self.parse_field_list()?;
+                let span = Span::new(ident.span.start, close_end);
                 Ok(Spanned::new(Expr::StructLit { name: ident, type_args: vec![], fields, target_id: None }, span))
             } else {
                 Ok(Spanned::new(Expr::Ident(ident.node.clone()), ident.span))
@@ -2302,23 +2178,12 @@ impl<'a> Parser<'a> {
                 }
                 let key_type = type_args[0].clone();
                 let value_type = type_args[1].clone();
-                let mut entries = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                    if !entries.is_empty() {
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                            self.advance();
-                        }
-                        self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                            break;
-                        }
-                    }
-                    let key_expr = self.parse_expr(0)?;
-                    self.expect(&Token::Colon)?;
-                    let val_expr = self.parse_expr(0)?;
-                    entries.push((key_expr, val_expr));
-                    self.skip_newlines();
-                }
+                let entries = self.parse_comma_list(&Token::RBrace, false, |p| {
+                    let key_expr = p.parse_expr(0)?;
+                    p.expect(&Token::Colon)?;
+                    let val_expr = p.parse_expr(0)?;
+                    Ok((key_expr, val_expr))
+                })?;
                 let close = self.expect(&Token::RBrace)?;
                 let span = Span::new(start, close.span.end);
                 Ok(Spanned::new(Expr::MapLit { key_type, value_type, entries }, span))
@@ -2331,20 +2196,7 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 let elem_type = type_args[0].clone();
-                let mut elements = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                    if !elements.is_empty() {
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                            self.advance();
-                        }
-                        self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                            break;
-                        }
-                    }
-                    elements.push(self.parse_expr(0)?);
-                    self.skip_newlines();
-                }
+                let elements = self.parse_comma_list(&Token::RBrace, false, |p| p.parse_expr(0))?;
                 let close = self.expect(&Token::RBrace)?;
                 let span = Span::new(start, close.span.end);
                 Ok(Spanned::new(Expr::SetLit { elem_type, elements }, span))
@@ -2358,26 +2210,8 @@ impl<'a> Parser<'a> {
             let start = ident.span.start;
             let type_args = self.parse_type_arg_list()?;
             self.advance(); // consume '{'
-            self.skip_newlines();
-            let mut fields = Vec::new();
-            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                if !fields.is_empty() {
-                    if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                        self.advance();
-                    }
-                    self.skip_newlines();
-                    if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                        break;
-                    }
-                }
-                let fname = self.expect_ident()?;
-                self.expect(&Token::Colon)?;
-                let fval = self.parse_expr(0)?;
-                fields.push((fname, fval));
-                self.skip_newlines();
-            }
-            let close = self.expect(&Token::RBrace)?;
-            let span = Span::new(start, close.span.end);
+            let (fields, close_end) = self.parse_field_list()?;
+            let span = Span::new(start, close_end);
             Ok(Spanned::new(Expr::StructLit { name: ident, type_args, fields, target_id: None }, span))
         } else {
             Ok(Spanned::new(Expr::Ident(ident.node.clone()), ident.span))
@@ -2531,16 +2365,12 @@ impl<'a> Parser<'a> {
         let start = open.span.start;
 
         // Parse params
-        let mut params = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-            if !params.is_empty() {
-                self.expect(&Token::Comma)?;
-            }
-            let pname = self.expect_ident()?;
-            self.expect(&Token::Colon)?;
-            let pty = self.parse_type()?;
-            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
-        }
+        let params = self.parse_comma_list(&Token::RParen, true, |p| {
+            let pname = p.expect_ident()?;
+            p.expect(&Token::Colon)?;
+            let pty = p.parse_type()?;
+            Ok(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false })
+        })?;
         self.expect(&Token::RParen)?;
 
         // Optional return type: if next non-newline token is NOT `=>`, parse a type first
