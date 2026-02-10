@@ -1,0 +1,32 @@
+import std.fs
+import std.strings
+
+fn main() {
+    let data_dir = "tests/data/json-testsuite"
+
+    let files = fs.list_dir(data_dir)!
+
+    let json_count = 0
+    let read_count = 0
+    let i = 0
+    while i < files.len() {
+        let name = files[i]
+        i = i + 1
+
+        let is_json = strings.ends_with(name, ".json")
+        if !is_json {
+            continue
+        }
+
+        json_count = json_count + 1
+
+        let path = data_dir + "/" + name
+        let content = fs.read_all(path)!
+        if content.len() > 0 {
+            read_count = read_count + 1
+        }
+    }
+
+    print("files: {json_count}")
+    print("read: {read_count}")
+}
