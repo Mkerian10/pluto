@@ -193,6 +193,7 @@ pub(crate) fn register_app_placeholder(program: &Program, env: &mut TypeEnv) -> 
                 fields: Vec::new(),
                 methods: Vec::new(),
                 impl_traits: Vec::new(),
+                lifecycle: Lifecycle::Singleton,
             },
         );
     }
@@ -225,6 +226,7 @@ pub(crate) fn register_class_names(program: &Program, env: &mut TypeEnv) -> Resu
                 fields: Vec::new(),
                 methods: Vec::new(),
                 impl_traits: Vec::new(),
+                lifecycle: c.lifecycle,
             },
         );
     }
@@ -247,6 +249,13 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
             if c.fields.iter().any(|f| f.is_injected) {
                 return Err(CompileError::type_err(
                     "generic classes cannot have injected dependencies (v1 restriction)".to_string(),
+                    class.span,
+                ));
+            }
+            // v1 restriction: no lifecycle annotations on generic classes
+            if c.lifecycle != Lifecycle::Singleton {
+                return Err(CompileError::type_err(
+                    "generic classes cannot have lifecycle annotations".to_string(),
                     class.span,
                 ));
             }
@@ -311,6 +320,7 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                 method_sigs,
                 impl_traits: Vec::new(),
                 mut_self_methods: generic_mut_self,
+                lifecycle: c.lifecycle,
             });
             continue;
         }
@@ -522,6 +532,7 @@ pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeE
             fields: fields.clone(),
             methods: Vec::new(),
             impl_traits: Vec::new(),
+            lifecycle: Lifecycle::Singleton,
         }));
 
         // Populate ambient_types and validate each is a known class
@@ -745,6 +756,27 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
                 format!("circular dependency detected: {}", cycle_str),
                 span,
             ));
+        }
+
+        // Lifecycle inference: propagate scoped/transient upward through dependency graph.
+        // A class's inferred lifecycle = min(its declared lifecycle, min of dep lifecycles)
+        // where Transient < Scoped < Singleton.
+        // Process in topological order so deps are resolved before dependents.
+        for class_name in &order {
+            let deps = graph.get(class_name).cloned().unwrap_or_default();
+            let mut inferred = env.classes.get(class_name)
+                .map(|ci| ci.lifecycle)
+                .unwrap_or(Lifecycle::Singleton);
+
+            for dep_name in &deps {
+                if let Some(dep_info) = env.classes.get(dep_name) {
+                    inferred = min_lifecycle(inferred, dep_info.lifecycle);
+                }
+            }
+
+            if let Some(info) = env.classes.get_mut(class_name) {
+                info.lifecycle = inferred;
+            }
         }
 
         // Filter out the app name from di_order (app is wired separately)
@@ -1081,4 +1113,14 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
         }
     }
     Ok(())
+}
+
+/// Returns the shorter of two lifecycles.
+/// Ordering: Transient < Scoped < Singleton.
+fn min_lifecycle(a: Lifecycle, b: Lifecycle) -> Lifecycle {
+    match (a, b) {
+        (Lifecycle::Transient, _) | (_, Lifecycle::Transient) => Lifecycle::Transient,
+        (Lifecycle::Scoped, _) | (_, Lifecycle::Scoped) => Lifecycle::Scoped,
+        _ => Lifecycle::Singleton,
+    }
 }

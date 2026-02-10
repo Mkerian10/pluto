@@ -193,12 +193,45 @@ impl<'a> Parser<'a> {
                 false
             };
 
+            // Parse optional lifecycle modifier: scoped | transient
+            let lifecycle = match self.peek().map(|t| &t.node) {
+                Some(Token::Scoped) => {
+                    self.advance();
+                    self.skip_newlines();
+                    Lifecycle::Scoped
+                }
+                Some(Token::Transient) => {
+                    self.advance();
+                    self.skip_newlines();
+                    Lifecycle::Transient
+                }
+                Some(_) => Lifecycle::Singleton,
+                None => {
+                    return Err(CompileError::syntax(
+                        "expected declaration after 'pub'", self.eof_span(),
+                    ));
+                }
+            };
+
             let tok = self.peek().ok_or_else(|| {
-                CompileError::syntax("expected declaration after 'pub'", self.eof_span())
+                CompileError::syntax(
+                    if lifecycle != Lifecycle::Singleton {
+                        "expected 'class' after lifecycle modifier"
+                    } else {
+                        "expected declaration"
+                    },
+                    self.eof_span(),
+                )
             })?;
 
             match &tok.node {
                 Token::App => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     if is_pub {
                         return Err(CompileError::syntax(
                             "app declarations cannot be pub",
@@ -217,29 +250,60 @@ impl<'a> Parser<'a> {
                 Token::Class => {
                     let mut class = self.parse_class()?;
                     class.node.is_pub = is_pub;
+                    class.node.lifecycle = lifecycle;
                     classes.push(class);
                 }
                 Token::Fn => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     let mut func = self.parse_function()?;
                     func.node.is_pub = is_pub;
                     functions.push(func);
                 }
                 Token::Trait => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     let mut tr = self.parse_trait()?;
                     tr.node.is_pub = is_pub;
                     traits.push(tr);
                 }
                 Token::Enum => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     let mut e = self.parse_enum_decl()?;
                     e.node.is_pub = is_pub;
                     enums.push(e);
                 }
                 Token::Error => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     let mut err_decl = self.parse_error_decl()?;
                     err_decl.node.is_pub = is_pub;
                     errors.push(err_decl);
                 }
                 Token::Extern => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     // Peek at next token to decide: extern fn vs extern rust
                     let next = self.peek_nth(1);
                     match next {
@@ -264,6 +328,12 @@ impl<'a> Parser<'a> {
                     }
                 }
                 Token::Test => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     if is_pub {
                         return Err(CompileError::syntax(
                             "tests cannot be pub",
@@ -703,7 +773,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, fields, methods, invariants, impl_traits, uses, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, fields, methods, invariants, impl_traits, uses, is_pub: false, lifecycle: Lifecycle::Singleton }, Span::new(start, end)))
     }
 
     fn parse_method(&mut self) -> Result<Spanned<Function>, CompileError> {

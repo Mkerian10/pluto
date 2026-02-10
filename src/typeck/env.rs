@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use super::types::PlutoType;
-use crate::parser::ast::ContractClause;
+use crate::parser::ast::{ContractClause, Lifecycle};
 use crate::span::Spanned;
 
 #[derive(Debug, Clone)]
@@ -14,6 +14,7 @@ pub struct ClassInfo {
     pub fields: Vec<(String, PlutoType, bool)>,  // (name, type, is_injected)
     pub methods: Vec<String>,
     pub impl_traits: Vec<String>,
+    pub lifecycle: Lifecycle,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +50,7 @@ pub struct GenericClassInfo {
     pub method_sigs: HashMap<String, FuncSig>,  // method_name → sig (may contain TypeParam)
     pub impl_traits: Vec<String>,
     pub mut_self_methods: HashSet<String>,
+    pub lifecycle: Lifecycle,
 }
 
 #[derive(Debug, Clone)]

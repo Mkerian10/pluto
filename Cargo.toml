@@ -147,3 +147,7 @@ path = "tests/integration/contracts.rs"
 [[test]]
 name = "io"
 path = "tests/integration/io.rs"
+
+[[test]]
+name = "di_lifecycle"
+path = "tests/integration/di_lifecycle.rs"

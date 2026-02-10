@@ -52,6 +52,13 @@ pub struct ExternRustDecl {
     pub alias: Spanned<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Lifecycle {
+    Singleton,  // default
+    Scoped,
+    Transient,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassDecl {
     pub id: Uuid,
@@ -63,6 +70,7 @@ pub struct ClassDecl {
     pub impl_traits: Vec<Spanned<String>>,
     pub uses: Vec<Spanned<String>>,
     pub is_pub: bool,
+    pub lifecycle: Lifecycle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

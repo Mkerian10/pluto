@@ -462,6 +462,7 @@ pub(crate) fn ensure_generic_class_instantiated(
         fields: concrete_fields,
         methods: gen_info.methods.clone(),
         impl_traits: gen_info.impl_traits.clone(),
+        lifecycle: gen_info.lifecycle,
     });
     // Also register concrete method signatures
     // Need to substitute self type as well (it references the base class name)

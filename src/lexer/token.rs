@@ -80,6 +80,10 @@ pub enum Token {
     Select,
     #[token("default")]
     Default,
+    #[token("scoped")]
+    Scoped,
+    #[token("transient")]
+    Transient,
 
     // Literals
     #[regex(r"0[xX][0-9a-fA-F_]+|[0-9][0-9_]*", |lex| {
@@ -230,7 +234,8 @@ pub fn is_keyword(s: &str) -> bool {
         | "class" | "trait" | "app" | "inject" | "error" | "raise" | "catch" | "spawn"
         | "enum" | "impl" | "self" | "pub" | "for" | "in" | "break" | "continue"
         | "match" | "import" | "as" | "extern" | "uses" | "ambient" | "test"
-        | "invariant" | "requires" | "ensures" | "select" | "default")
+        | "invariant" | "requires" | "ensures" | "select" | "default"
+        | "scoped" | "transient")
 }
 
 impl std::fmt::Display for Token {
@@ -273,6 +278,8 @@ impl std::fmt::Display for Token {
             Token::Ensures => write!(f, "ensures"),
             Token::Select => write!(f, "select"),
             Token::Default => write!(f, "default"),
+            Token::Scoped => write!(f, "scoped"),
+            Token::Transient => write!(f, "transient"),
             Token::IntLit(n) => write!(f, "{n}"),
             Token::FloatLit(n) => write!(f, "{n}"),
             Token::StringLit(s) => write!(f, "\"{s}\""),

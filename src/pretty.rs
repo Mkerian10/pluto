@@ -283,6 +283,11 @@ impl PrettyPrinter {
         if cls.is_pub {
             self.write("pub ");
         }
+        match cls.lifecycle {
+            Lifecycle::Scoped => self.write("scoped "),
+            Lifecycle::Transient => self.write("transient "),
+            Lifecycle::Singleton => {},
+        }
         self.write("class ");
         self.write(&cls.name.node);
         self.emit_type_params(&cls.type_params);
