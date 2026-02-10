@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use super::types::PlutoType;
 use crate::parser::ast::{ContractClause, Lifecycle};
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 
 #[derive(Debug, Clone)]
 pub struct FuncSig {
@@ -141,6 +141,10 @@ pub struct TypeEnv {
     pub mut_self_methods: HashSet<String>,
     /// Scope-mirrored: tracks variables declared with `let` (not `let mut`)
     pub immutable_bindings: Vec<HashSet<String>>,
+    /// Variable declarations: (var_name, scope_depth) → declaration span
+    pub variable_decls: HashMap<(String, usize), Span>,
+    /// Variable reads: (var_name, scope_depth)
+    pub variable_reads: HashSet<(String, usize)>,
 }
 
 impl TypeEnv {
@@ -194,6 +198,8 @@ impl TypeEnv {
             in_ensures_context: false,
             mut_self_methods: HashSet::new(),
             immutable_bindings: vec![HashSet::new()],
+            variable_decls: HashMap::new(),
+            variable_reads: HashSet::new(),
         }
     }
 

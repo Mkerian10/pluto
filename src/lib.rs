@@ -20,7 +20,7 @@ pub mod derived;
 pub mod pretty;
 pub mod xref;
 
-use diagnostics::CompileError;
+use diagnostics::{CompileError, CompileWarning};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -46,11 +46,38 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
     contracts::validate_contracts(&program)?;
-    let mut env = typeck::type_check(&program)?;
+    let (mut env, _warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);
     codegen::codegen(&program, &env, source)
+}
+
+/// Compile a source string and return both the object bytes and any compiler warnings.
+pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<CompileWarning>), CompileError> {
+    let tokens = lexer::lex(source)?;
+    let mut parser = parser::Parser::new(&tokens, source);
+    let mut program = parser.parse_program()?;
+    if !program.extern_rust_crates.is_empty() {
+        return Err(CompileError::syntax(
+            "extern rust declarations require file-based compilation (use compile_file instead)",
+            program.extern_rust_crates[0].span,
+        ));
+    }
+    prelude::inject_prelude(&mut program)?;
+    ambient::desugar_ambient(&mut program)?;
+    spawn::desugar_spawn(&mut program)?;
+    let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
+        .map(|(_, fn_name)| fn_name.clone()).collect();
+    program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
+    program.test_info.clear();
+    contracts::validate_contracts(&program)?;
+    let (mut env, warnings) = typeck::type_check(&program)?;
+    monomorphize::monomorphize(&mut program, &mut env)?;
+    closures::lift_closures(&mut program, &mut env)?;
+    xref::resolve_cross_refs(&mut program);
+    let obj = codegen::codegen(&program, &env, source)?;
+    Ok((obj, warnings))
 }
 
 /// Compile a source string directly (single-file, no module resolution).
@@ -87,7 +114,7 @@ pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError
     spawn::desugar_spawn(&mut program)?;
     // test_info is NOT stripped in test mode
     contracts::validate_contracts(&program)?;
-    let mut env = typeck::type_check(&program)?;
+    let (mut env, _warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);
@@ -153,7 +180,10 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
     contracts::validate_contracts(&program)?;
-    let mut env = typeck::type_check(&program)?;
+    let (mut env, warnings) = typeck::type_check(&program)?;
+    for w in &warnings {
+        diagnostics::render_warning(&source, &entry_file.display().to_string(), w);
+    }
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);
@@ -212,7 +242,7 @@ pub fn analyze_file(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Pr
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
     contracts::validate_contracts(&program)?;
-    let mut env = typeck::type_check(&program)?;
+    let (mut env, _warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);
@@ -262,7 +292,10 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
     ambient::desugar_ambient(&mut program)?;
     spawn::desugar_spawn(&mut program)?;
     contracts::validate_contracts(&program)?;
-    let mut env = typeck::type_check(&program)?;
+    let (mut env, warnings) = typeck::type_check(&program)?;
+    for w in &warnings {
+        diagnostics::render_warning(&source, &entry_file.display().to_string(), w);
+    }
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);

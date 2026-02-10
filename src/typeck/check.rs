@@ -112,6 +112,9 @@ fn check_stmt(
             if !is_mut {
                 env.mark_immutable(&name.node);
             }
+            // Track variable declaration for unused-variable warnings
+            let depth = env.scope_depth() - 1;
+            env.variable_decls.insert((name.node.clone(), depth), name.span);
             // Track task origin for spawn expressions
             if let Expr::Spawn { .. } = &value.node {
                 if let Some(fn_name) = env.spawn_target_fns.get(&(value.span.start, value.span.end)) {

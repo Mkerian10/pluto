@@ -37,6 +37,10 @@ pub(crate) fn infer_expr(
             Ok(PlutoType::String)
         }
         Expr::Ident(name) => {
+            // Track variable read for unused-variable warnings
+            if let Some((_, depth)) = env.lookup_with_depth(name) {
+                env.variable_reads.insert((name.clone(), depth));
+            }
             env.lookup(name)
                 .cloned()
                 .ok_or_else(|| CompileError::type_err(

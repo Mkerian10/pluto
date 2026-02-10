@@ -42,6 +42,33 @@ impl CompileError {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct CompileWarning {
+    pub msg: String,
+    pub span: Span,
+    pub kind: WarningKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum WarningKind {
+    UnusedVariable,
+}
+
+/// Render a CompileWarning with ariadne for nice terminal output (yellow).
+pub fn render_warning(source: &str, _filename: &str, warning: &CompileWarning) {
+    use ariadne::{Label, Report, ReportKind, Source};
+
+    Report::build(ReportKind::Warning, (), warning.span.start)
+        .with_message("warning")
+        .with_label(
+            Label::new(warning.span.start..warning.span.end)
+                .with_message(&warning.msg),
+        )
+        .finish()
+        .eprint(Source::from(source))
+        .unwrap();
+}
+
 /// Render a CompileError with ariadne for nice terminal output.
 pub fn render_error(source: &str, _filename: &str, err: &CompileError) {
     use ariadne::{Label, Report, ReportKind, Source};
