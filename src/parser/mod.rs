@@ -2286,17 +2286,81 @@ impl<'a> Parser<'a> {
             Token::Spawn => {
                 let spawn_tok = self.advance().expect("token should exist after peek");
                 let start = spawn_tok.span.start;
-                let func_name = self.expect_ident()?;
-                self.expect(&Token::LParen)?;
-                self.skip_newlines();
-                let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
-                let close = self.expect(&Token::RParen)?;
-                let call_span = Span::new(func_name.span.start, close.span.end);
-                let call = Expr::Call { name: func_name, args, target_id: None };
-                Ok(Spanned::new(
-                    Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
-                    Span::new(start, close.span.end),
-                ))
+                // Parse the first identifier (or `self`)
+                let first = match self.peek_raw() {
+                    Some(tok) if matches!(tok.node, Token::SelfVal) => {
+                        let tok = self.advance().expect("token should exist");
+                        Spanned::new("self".to_string(), tok.span)
+                    }
+                    _ => self.expect_ident()?,
+                };
+                // Check what follows: `(` means direct call, `.` means chain
+                match self.peek() {
+                    Some(tok) if matches!(tok.node, Token::LParen) => {
+                        // spawn func(args)
+                        self.advance(); // consume '('
+                        self.skip_newlines();
+                        let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
+                        let close = self.expect(&Token::RParen)?;
+                        let call_span = Span::new(first.span.start, close.span.end);
+                        let call = Expr::Call { name: first, args, target_id: None };
+                        Ok(Spanned::new(
+                            Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
+                            Span::new(start, close.span.end),
+                        ))
+                    }
+                    Some(tok) if matches!(tok.node, Token::Dot) => {
+                        // spawn obj.field...field.method(args)
+                        let mut object: Spanned<Expr> = Spanned::new(
+                            Expr::Ident(first.node.clone()),
+                            first.span,
+                        );
+                        loop {
+                            self.advance(); // consume '.'
+                            let member = self.expect_ident()?;
+                            // Check if this member is followed by `(` (method call) or `.` (field access)
+                            match self.peek() {
+                                Some(tok) if matches!(tok.node, Token::LParen) => {
+                                    // This is the terminal method call
+                                    self.advance(); // consume '('
+                                    self.skip_newlines();
+                                    let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
+                                    let close = self.expect(&Token::RParen)?;
+                                    let call_span = Span::new(first.span.start, close.span.end);
+                                    let call = Expr::MethodCall {
+                                        object: Box::new(object),
+                                        method: member,
+                                        args,
+                                    };
+                                    return Ok(Spanned::new(
+                                        Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
+                                        Span::new(start, close.span.end),
+                                    ));
+                                }
+                                Some(tok) if matches!(tok.node, Token::Dot) => {
+                                    // Field access, continue chain
+                                    let fa_span = Span::new(object.span.start, member.span.end);
+                                    object = Spanned::new(
+                                        Expr::FieldAccess { object: Box::new(object), field: member },
+                                        fa_span,
+                                    );
+                                }
+                                _ => {
+                                    return Err(CompileError::syntax(
+                                        "expected '(' or '.' after identifier in spawn expression".to_string(),
+                                        member.span,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        Err(CompileError::syntax(
+                            "expected '(' or '.' after identifier in spawn expression".to_string(),
+                            first.span,
+                        ))
+                    }
+                }
             }
             Token::None => {
                 let tok = self.advance().expect("token should exist after peek");

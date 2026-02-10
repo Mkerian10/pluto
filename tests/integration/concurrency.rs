@@ -206,19 +206,24 @@ fn main() {
 }
 
 #[test]
-fn compile_fail_spawn_method_call() {
-    compile_should_fail(r#"
+fn spawn_method_call_basic() {
+    let out = compile_and_run_stdout(r#"
 class Foo {
+    value: int
+
     fn bar(self) int {
-        return 42
+        return self.value
     }
 }
 
 fn main() {
-    let f = Foo {}
+    let f = Foo { value: 42 }
     let t = spawn f.bar()
+    let result = t.get()
+    print(result)
 }
 "#);
+    assert_eq!(out.trim(), "42");
 }
 
 // ── Spawn arg restrictions ─────────────────────────────────────────────
@@ -948,4 +953,220 @@ fn main() {
 }
 "#);
     assert_eq!(out.trim(), "ok");
+}
+
+// ── Spawn method calls ────────────────────────────────────────────────
+
+#[test]
+fn spawn_method_call_with_args() {
+    let out = compile_and_run_stdout(r#"
+class Calculator {
+    base: int
+
+    fn add(self, x: int) int {
+        return self.base + x
+    }
+}
+
+fn main() {
+    let c = Calculator { base: 10 }
+    let t = spawn c.add(32)
+    let result = t.get()
+    print(result)
+}
+"#);
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn spawn_method_call_chain() {
+    let out = compile_and_run_stdout(r#"
+class Inner {
+    value: int
+
+    fn compute(self) int {
+        return self.value * 2
+    }
+}
+
+class Outer {
+    inner: Inner
+}
+
+fn main() {
+    let inner = Inner { value: 21 }
+    let outer = Outer { inner: inner }
+    let t = spawn outer.inner.compute()
+    let result = t.get()
+    print(result)
+}
+"#);
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn spawn_method_call_detach() {
+    let out = compile_and_run_stdout(r#"
+class Worker {
+    id: int
+
+    fn work(self) int {
+        return self.id
+    }
+}
+
+fn main() {
+    let w = Worker { id: 1 }
+    let t = spawn w.work()
+    t.detach()
+    print("detached")
+}
+"#);
+    assert_eq!(out.trim(), "detached");
+}
+
+#[test]
+fn spawn_method_call_di_singleton() {
+    let out = compile_and_run_stdout(r#"
+class Counter {
+    value: int
+
+    fn get_value(self) int {
+        return self.value
+    }
+}
+
+class Service[counter: Counter] {
+    id: int
+
+    fn fetch(self) int {
+        return self.counter.get_value()
+    }
+}
+
+app MyApp[svc: Service] {
+    fn main(self) {
+        let t = spawn self.svc.fetch()
+        let result = t.get()
+        print(result)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "0");
+}
+
+#[test]
+fn spawn_method_call_error_propagation() {
+    let out = compile_and_run_stdout(r#"
+error ServiceError {
+    message: string
+}
+
+class Service {
+    fail_flag: int
+
+    fn process(self) int {
+        if self.fail_flag == 1 {
+            raise ServiceError { message: "failed" }
+        }
+        return 42
+    }
+}
+
+fn main() {
+    let s = Service { fail_flag: 0 }
+    let t = spawn s.process()
+    let result = t.get() catch err {
+        print("caught error")
+        return
+    }
+    print(result)
+}
+"#);
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn spawn_method_call_error_caught() {
+    let out = compile_and_run_stdout(r#"
+error ServiceError {
+    message: string
+}
+
+class Service {
+    fail_flag: int
+
+    fn process(self) int {
+        if self.fail_flag == 1 {
+            raise ServiceError { message: "boom" }
+        }
+        return 42
+    }
+}
+
+fn main() {
+    let s = Service { fail_flag: 1 }
+    let t = spawn s.process()
+    let result = t.get() catch err {
+        print("caught")
+        return
+    }
+    print(result)
+}
+"#);
+    assert_eq!(out.trim(), "caught");
+}
+
+#[test]
+fn compile_fail_spawn_propagate_in_method_arg() {
+    compile_should_fail_with(r#"
+error MathError {
+    message: string
+}
+
+fn fallible() int {
+    raise MathError { message: "oops" }
+    return 0
+}
+
+class Adder {
+    base: int
+
+    fn add(self, x: int) int {
+        return self.base + x
+    }
+}
+
+fn main() {
+    let a = Adder { base: 0 }
+    let t = spawn a.add(fallible()!)
+}
+"#, "error propagation (!) is not allowed in spawn arguments");
+}
+
+#[test]
+fn spawn_method_call_self() {
+    // spawn self.method() from within an app
+    let out = compile_and_run_stdout(r#"
+class Worker {
+    value: int
+
+    fn compute(self) int {
+        return self.value + 10
+    }
+}
+
+app MyApp[worker: Worker] {
+    fn run_task(self) int {
+        let t = spawn self.worker.compute()
+        return t.get()
+    }
+
+    fn main(self) {
+        let result = self.run_task()
+        print(result)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "10");
 }

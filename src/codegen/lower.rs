@@ -1923,10 +1923,17 @@ impl<'a> LowerContext<'a> {
                 match &call.node {
                     Expr::ClosureCreate { fn_name, captures, .. } => {
                         let closure_ptr = self.lower_closure_create(fn_name, captures)?;
-                        // Deep-copy heap-type captures so spawned task gets isolated data
+                        // Deep-copy heap-type captures so spawned task gets isolated data.
+                        // DI singletons and the app instance are shared by reference (not copied).
                         for (i, cap_name) in captures.iter().enumerate() {
                             let cap_type = self.var_types.get(cap_name).cloned().unwrap_or(PlutoType::Int);
-                            if needs_deep_copy(&cap_type) {
+                            let is_di_singleton = if let PlutoType::Class(name) = &cap_type {
+                                self.env.di_order.contains(name)
+                                    || self.env.app.as_ref().map_or(false, |(app_name, _)| app_name == name)
+                            } else {
+                                false
+                            };
+                            if !is_di_singleton && needs_deep_copy(&cap_type) {
                                 let offset = ((1 + i) * 8) as i32;
                                 let original = self.builder.ins().load(
                                     types::I64, MemFlags::new(), closure_ptr, Offset32::new(offset),

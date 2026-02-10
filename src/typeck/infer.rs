@@ -289,11 +289,27 @@ pub(crate) fn infer_expr(
             // Extract the spawned function name by peeking inside the closure body
             if let Expr::Closure { body, .. } = &call.node {
                 for stmt in &body.node.stmts {
-                    if let Stmt::Return(Some(ret_expr)) = &stmt.node && let Expr::Call { name, .. } = &ret_expr.node {
-                        env.spawn_target_fns.insert(
-                            (span.start, span.end),
-                            name.node.clone(),
-                        );
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
+                        match &ret_expr.node {
+                            Expr::Call { name, .. } => {
+                                env.spawn_target_fns.insert(
+                                    (span.start, span.end),
+                                    name.node.clone(),
+                                );
+                            }
+                            Expr::MethodCall { object, method, .. } => {
+                                let obj_type = infer_expr(&object.node, object.span, env)?;
+                                if let PlutoType::Class(class_name) = &obj_type {
+                                    let mangled = super::env::mangle_method(class_name, &method.node);
+                                    env.spawn_target_fns.insert(
+                                        (span.start, span.end),
+                                        mangled,
+                                    );
+                                }
+                                // Non-class targets → None → conservatively fallible
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }

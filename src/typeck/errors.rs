@@ -373,12 +373,19 @@ fn collect_expr_effects(
         }
         Expr::Spawn { call } => {
             // Spawn is opaque to the error system — do NOT recurse into the closure body.
-            // Only collect effects from spawn arg expressions (inside the closure's inner Call).
+            // Only collect effects from spawn arg expressions (inside the closure's inner Call/MethodCall).
             if let Expr::Closure { body, .. } = &call.node {
                 for stmt in &body.node.stmts {
-                    if let Stmt::Return(Some(ret_expr)) = &stmt.node && let Expr::Call { args, .. } = &ret_expr.node {
-                        for arg in args {
-                            collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
+                        let args = match &ret_expr.node {
+                            Expr::Call { args, .. } => Some(args),
+                            Expr::MethodCall { args, .. } => Some(args),
+                            _ => None,
+                        };
+                        if let Some(args) = args {
+                            for arg in args {
+                                collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                            }
                         }
                     }
                 }
@@ -726,14 +733,21 @@ fn enforce_expr(
             // Do NOT enforce the inner call itself or the closure body as a whole.
             if let Expr::Closure { body, .. } = &call.node {
                 for stmt in &body.node.stmts {
-                    if let Stmt::Return(Some(ret_expr)) = &stmt.node && let Expr::Call { args, .. } = &ret_expr.node {
-                        for arg in args {
-                            enforce_expr(&arg.node, arg.span, current_fn, env)?;
-                            if contains_propagate(&arg.node) {
-                                return Err(CompileError::type_err(
-                                    "error propagation (!) is not allowed in spawn arguments; evaluate before spawn",
-                                    arg.span,
-                                ));
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
+                        let args = match &ret_expr.node {
+                            Expr::Call { args, .. } => Some(args),
+                            Expr::MethodCall { args, .. } => Some(args),
+                            _ => None,
+                        };
+                        if let Some(args) = args {
+                            for arg in args {
+                                enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                                if contains_propagate(&arg.node) {
+                                    return Err(CompileError::type_err(
+                                        "error propagation (!) is not allowed in spawn arguments; evaluate before spawn",
+                                        arg.span,
+                                    ));
+                                }
                             }
                         }
                     }
