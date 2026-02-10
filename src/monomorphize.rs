@@ -390,6 +390,23 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
                 substitute_in_expr(&mut cap.node, bindings);
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        substitute_in_expr(&mut channel.node, bindings);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        substitute_in_expr(&mut channel.node, bindings);
+                        substitute_in_expr(&mut value.node, bindings);
+                    }
+                }
+                substitute_in_block(&mut arm.body.node, bindings);
+            }
+            if let Some(def) = default {
+                substitute_in_block(&mut def.node, bindings);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -694,6 +711,29 @@ fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
                 offset_expr_spans(&mut cap.node, offset);
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { binding, channel } => {
+                        offset_spanned(binding, offset);
+                        offset_spanned(channel, offset);
+                        offset_expr_spans(&mut channel.node, offset);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        offset_spanned(channel, offset);
+                        offset_expr_spans(&mut channel.node, offset);
+                        offset_spanned(value, offset);
+                        offset_expr_spans(&mut value.node, offset);
+                    }
+                }
+                offset_spanned(&mut arm.body, offset);
+                offset_block_spans(&mut arm.body.node, offset);
+            }
+            if let Some(def) = default {
+                offset_spanned(def, offset);
+                offset_block_spans(&mut def.node, offset);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -952,6 +992,23 @@ fn rewrite_stmt(stmt: &mut Stmt, rewrites: &HashMap<(usize, usize), String>) {
                 rewrite_expr(&mut cap.node, cap.span.start, cap.span.end, rewrites);
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        rewrite_expr(&mut channel.node, channel.span.start, channel.span.end, rewrites);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        rewrite_expr(&mut channel.node, channel.span.start, channel.span.end, rewrites);
+                        rewrite_expr(&mut value.node, value.span.start, value.span.end, rewrites);
+                    }
+                }
+                rewrite_block(&mut arm.body.node, rewrites);
+            }
+            if let Some(def) = default {
+                rewrite_block(&mut def.node, rewrites);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -1160,6 +1217,23 @@ fn resolve_generic_te_in_stmt(stmt: &mut Stmt, env: &mut TypeEnv) -> Result<(), 
             resolve_generic_te(&mut elem_type.node, env)?;
             if let Some(cap) = capacity {
                 resolve_generic_te_in_expr(&mut cap.node, env)?;
+            }
+        }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        resolve_generic_te_in_expr(&mut channel.node, env)?;
+                    }
+                    SelectOp::Send { channel, value } => {
+                        resolve_generic_te_in_expr(&mut channel.node, env)?;
+                        resolve_generic_te_in_expr(&mut value.node, env)?;
+                    }
+                }
+                resolve_generic_te_in_block(&mut arm.body.node, env)?;
+            }
+            if let Some(def) = default {
+                resolve_generic_te_in_block(&mut def.node, env)?;
             }
         }
         Stmt::Break | Stmt::Continue => {}

@@ -336,6 +336,7 @@ impl<'a> LowerContext<'a> {
                 *terminated = true;
                 Ok(())
             }
+            Stmt::Select { arms, default } => self.lower_select(arms, default, terminated),
             Stmt::Expr(expr) => {
                 self.lower_expr(&expr.node)?;
                 Ok(())
@@ -1134,6 +1135,187 @@ impl<'a> LowerContext<'a> {
 
         // Return default value (caller checks TLS)
         self.emit_default_return();
+        Ok(())
+    }
+
+    fn lower_select(
+        &mut self,
+        arms: &[SelectArm],
+        default: &Option<crate::span::Spanned<Block>>,
+        terminated: &mut bool,
+    ) -> Result<(), CompileError> {
+        let count = arms.len() as i64;
+
+        // 1. Allocate buffer: 3 * count i64 slots
+        //    [handles | ops | values]
+        let buf_size = self.builder.ins().iconst(types::I64, 3 * count * POINTER_SIZE as i64);
+        let buffer = self.call_runtime("__pluto_alloc", &[buf_size]);
+
+        // 2. Eagerly evaluate all channel exprs and send values, store into buffer
+        for (i, arm) in arms.iter().enumerate() {
+            let slot_offset = (i as i32) * POINTER_SIZE;
+            let op_offset = (count as i32 + i as i32) * POINTER_SIZE;
+            let val_offset = (2 * count as i32 + i as i32) * POINTER_SIZE;
+
+            match &arm.op {
+                SelectOp::Recv { channel, .. } => {
+                    let chan_val = self.lower_expr(&channel.node)?;
+                    self.builder.ins().store(MemFlags::new(), chan_val, buffer, Offset32::new(slot_offset));
+                    let op_val = self.builder.ins().iconst(types::I64, 0); // 0 = recv
+                    self.builder.ins().store(MemFlags::new(), op_val, buffer, Offset32::new(op_offset));
+                    // values[i] unused for recv (will be written by runtime)
+                    let zero = self.builder.ins().iconst(types::I64, 0);
+                    self.builder.ins().store(MemFlags::new(), zero, buffer, Offset32::new(val_offset));
+                }
+                SelectOp::Send { channel, value } => {
+                    let chan_val = self.lower_expr(&channel.node)?;
+                    self.builder.ins().store(MemFlags::new(), chan_val, buffer, Offset32::new(slot_offset));
+                    let op_val = self.builder.ins().iconst(types::I64, 1); // 1 = send
+                    self.builder.ins().store(MemFlags::new(), op_val, buffer, Offset32::new(op_offset));
+                    let send_val = self.lower_expr(&value.node)?;
+                    let slot = to_array_slot(send_val, &infer_type_for_expr(&value.node, self.env, &self.var_types), &mut self.builder);
+                    self.builder.ins().store(MemFlags::new(), slot, buffer, Offset32::new(val_offset));
+                }
+            }
+        }
+
+        // 3. Call __pluto_select(buffer, count, has_default)
+        let count_val = self.builder.ins().iconst(types::I64, count);
+        let has_default_val = self.builder.ins().iconst(types::I64, if default.is_some() { 1 } else { 0 });
+        let result = self.call_runtime("__pluto_select", &[buffer, count_val, has_default_val]);
+
+        // 4. If no default and result == -2 → error path (TLS already set by runtime)
+        let merge_bb = self.builder.create_block();
+
+        if default.is_none() {
+            let neg2 = self.builder.ins().iconst(types::I64, -2i64);
+            let is_err = self.builder.ins().icmp(IntCC::Equal, result, neg2);
+            let err_bb = self.builder.create_block();
+            let dispatch_bb = self.builder.create_block();
+            self.builder.ins().brif(is_err, err_bb, &[], dispatch_bb, &[]);
+
+            // Error block: propagate (error is already in TLS)
+            self.builder.switch_to_block(err_bb);
+            self.builder.seal_block(err_bb);
+            self.emit_default_return();
+
+            // Continue to dispatch
+            self.builder.switch_to_block(dispatch_bb);
+            self.builder.seal_block(dispatch_bb);
+        }
+
+        // 5. Default check: if result == -1 and default exists → jump to default block
+        let first_arm_check_bb = self.builder.create_block();
+
+        if let Some(def) = default {
+            let neg1 = self.builder.ins().iconst(types::I64, -1i64);
+            let is_default = self.builder.ins().icmp(IntCC::Equal, result, neg1);
+            let default_bb = self.builder.create_block();
+            self.builder.ins().brif(is_default, default_bb, &[], first_arm_check_bb, &[]);
+
+            // Default block
+            self.builder.switch_to_block(default_bb);
+            self.builder.seal_block(default_bb);
+            let mut default_terminated = false;
+            for s in &def.node.stmts {
+                self.lower_stmt(&s.node, &mut default_terminated)?;
+            }
+            if !default_terminated {
+                self.builder.ins().jump(merge_bb, &[]);
+            }
+
+            self.builder.switch_to_block(first_arm_check_bb);
+            self.builder.seal_block(first_arm_check_bb);
+        } else {
+            // No default — fall through directly to arm dispatch
+            self.builder.ins().jump(first_arm_check_bb, &[]);
+            self.builder.switch_to_block(first_arm_check_bb);
+            self.builder.seal_block(first_arm_check_bb);
+        }
+
+        // 6. Dispatch: sequential index checks like match codegen
+        let mut all_terminated = true;
+        for (i, arm) in arms.iter().enumerate() {
+            let body_bb = self.builder.create_block();
+            let next_bb = if i + 1 < arms.len() {
+                self.builder.create_block()
+            } else {
+                merge_bb
+            };
+
+            let idx_val = self.builder.ins().iconst(types::I64, i as i64);
+            let cmp = self.builder.ins().icmp(IntCC::Equal, result, idx_val);
+            self.builder.ins().brif(cmp, body_bb, &[], next_bb, &[]);
+
+            // Body block
+            self.builder.switch_to_block(body_bb);
+            self.builder.seal_block(body_bb);
+
+            // For recv arms, bind the received value
+            let mut prev_vars: Vec<(String, Option<Variable>, Option<PlutoType>)> = Vec::new();
+            if let SelectOp::Recv { binding, channel } = &arm.op {
+                let chan_type = infer_type_for_expr(&channel.node, self.env, &self.var_types);
+                if let PlutoType::Receiver(elem_type) = &chan_type {
+                    let val_offset = (2 * count as i32 + i as i32) * POINTER_SIZE;
+                    let raw = self.builder.ins().load(types::I64, MemFlags::new(), buffer, Offset32::new(val_offset));
+                    let val = from_array_slot(raw, elem_type, &mut self.builder);
+
+                    let cl_type = pluto_to_cranelift(elem_type);
+                    let var = Variable::from_u32(self.next_var);
+                    self.next_var += 1;
+                    self.builder.declare_var(var, cl_type);
+                    self.builder.def_var(var, val);
+
+                    prev_vars.push((
+                        binding.node.clone(),
+                        self.variables.get(&binding.node).cloned(),
+                        self.var_types.get(&binding.node).cloned(),
+                    ));
+                    self.variables.insert(binding.node.clone(), var);
+                    self.var_types.insert(binding.node.clone(), *elem_type.clone());
+                }
+            }
+
+            let mut arm_terminated = false;
+            for s in &arm.body.node.stmts {
+                self.lower_stmt(&s.node, &mut arm_terminated)?;
+            }
+
+            // Restore previous variable bindings
+            for (name, prev_var, prev_type) in prev_vars {
+                if let Some(pv) = prev_var {
+                    self.variables.insert(name.clone(), pv);
+                } else {
+                    self.variables.remove(&name);
+                }
+                if let Some(pt) = prev_type {
+                    self.var_types.insert(name, pt);
+                } else {
+                    self.var_types.remove(&name);
+                }
+            }
+
+            if !arm_terminated {
+                self.builder.ins().jump(merge_bb, &[]);
+                all_terminated = false;
+            }
+
+            // Switch to next check block (if not the last arm)
+            if i + 1 < arms.len() {
+                self.builder.switch_to_block(next_bb);
+                self.builder.seal_block(next_bb);
+            }
+        }
+
+        if all_terminated && default.is_none() {
+            *terminated = true;
+        }
+
+        self.builder.switch_to_block(merge_bb);
+        self.builder.seal_block(merge_bb);
+        if *terminated {
+            self.builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
+        }
         Ok(())
     }
 
@@ -2188,6 +2370,14 @@ fn collect_sender_var_names_stmt(stmt: &Stmt, names: &mut Vec<String>, seen: &mu
         Stmt::Match { arms, .. } => {
             for arm in arms {
                 for s in &arm.body.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
+            }
+        }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                for s in &arm.body.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
+            }
+            if let Some(def) = default {
+                for s in &def.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
             }
         }
         _ => {}

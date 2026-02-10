@@ -109,6 +109,23 @@ fn lift_in_stmt(
                 lift_in_expr(&mut cap.node, cap.span, env, counter, new_fns)?;
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        lift_in_expr(&mut channel.node, channel.span, env, counter, new_fns)?;
+                    }
+                    SelectOp::Send { channel, value } => {
+                        lift_in_expr(&mut channel.node, channel.span, env, counter, new_fns)?;
+                        lift_in_expr(&mut value.node, value.span, env, counter, new_fns)?;
+                    }
+                }
+                lift_in_block(&mut arm.body.node, env, counter, new_fns)?;
+            }
+            if let Some(def) = default {
+                lift_in_block(&mut def.node, env, counter, new_fns)?;
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
     Ok(())

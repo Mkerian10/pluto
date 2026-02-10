@@ -169,6 +169,23 @@ fn collect_free_vars_stmt(
                 collect_free_vars_expr(&cap.node, param_names, outer_depth, env, captures, seen);
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        collect_free_vars_expr(&channel.node, param_names, outer_depth, env, captures, seen);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        collect_free_vars_expr(&channel.node, param_names, outer_depth, env, captures, seen);
+                        collect_free_vars_expr(&value.node, param_names, outer_depth, env, captures, seen);
+                    }
+                }
+                collect_free_vars_block(&arm.body.node, param_names, outer_depth, env, captures, seen);
+            }
+            if let Some(def) = default {
+                collect_free_vars_block(&def.node, param_names, outer_depth, env, captures, seen);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }

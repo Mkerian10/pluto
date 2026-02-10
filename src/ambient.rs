@@ -252,6 +252,23 @@ fn rewrite_stmt(stmt: &mut Spanned<Stmt>, active: &HashSet<String>) {
                 rewrite_expr(&mut cap.node, cap.span, active);
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        rewrite_expr(&mut channel.node, channel.span, active);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        rewrite_expr(&mut channel.node, channel.span, active);
+                        rewrite_expr(&mut value.node, value.span, active);
+                    }
+                }
+                rewrite_block(&mut arm.body.node, active);
+            }
+            if let Some(def) = default {
+                rewrite_block(&mut def.node, active);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }

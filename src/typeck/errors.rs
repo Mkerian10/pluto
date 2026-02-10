@@ -175,6 +175,32 @@ fn collect_stmt_effects(
                 collect_expr_effects(&cap.node, direct_errors, edges, current_fn, env);
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        collect_expr_effects(&channel.node, direct_errors, edges, current_fn, env);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        collect_expr_effects(&channel.node, direct_errors, edges, current_fn, env);
+                        collect_expr_effects(&value.node, direct_errors, edges, current_fn, env);
+                    }
+                }
+                for s in &arm.body.node.stmts {
+                    collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
+                }
+            }
+            if let Some(def) = default {
+                for s in &def.node.stmts {
+                    collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
+                }
+            }
+            // Select without default is implicitly fallible — raises ChannelClosed
+            // when all channels are closed
+            if default.is_none() {
+                direct_errors.insert("ChannelClosed".to_string());
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -475,6 +501,24 @@ fn enforce_stmt(
             }
             Ok(())
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        enforce_expr(&channel.node, channel.span, current_fn, env)?;
+                    }
+                    SelectOp::Send { channel, value } => {
+                        enforce_expr(&channel.node, channel.span, current_fn, env)?;
+                        enforce_expr(&value.node, value.span, current_fn, env)?;
+                    }
+                }
+                enforce_block(&arm.body.node, current_fn, env)?;
+            }
+            if let Some(def) = default {
+                enforce_block(&def.node, current_fn, env)?;
+            }
+            Ok(())
+        }
         Stmt::Break | Stmt::Continue => Ok(()),
     }
 }
@@ -746,6 +790,22 @@ fn stmt_contains_propagate(stmt: &Stmt) -> bool {
         Stmt::Raise { fields, .. } => fields.iter().any(|(_, v)| contains_propagate(&v.node)),
         Stmt::LetChan { capacity, .. } => {
             capacity.as_ref().map_or(false, |cap| contains_propagate(&cap.node))
+        }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                let op_has = match &arm.op {
+                    SelectOp::Recv { channel, .. } => contains_propagate(&channel.node),
+                    SelectOp::Send { channel, value } => {
+                        contains_propagate(&channel.node) || contains_propagate(&value.node)
+                    }
+                };
+                if op_has { return true; }
+                if arm.body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)) { return true; }
+            }
+            if let Some(def) = default {
+                if def.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)) { return true; }
+            }
+            false
         }
         Stmt::Break | Stmt::Continue => false,
     }

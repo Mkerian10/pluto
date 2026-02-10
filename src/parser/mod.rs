@@ -924,6 +924,7 @@ impl<'a> Parser<'a> {
             Token::While => self.parse_while_stmt(),
             Token::For => self.parse_for_stmt(),
             Token::Match => self.parse_match_stmt(),
+            Token::Select => self.parse_select_stmt(),
             Token::Raise => self.parse_raise_stmt(),
             Token::Break => {
                 let span = self.advance().unwrap().span;
@@ -1319,6 +1320,120 @@ impl<'a> Parser<'a> {
                 _ => return false,
             }
         }
+    }
+
+    fn parse_select_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let select_tok = self.expect(&Token::Select)?;
+        let start = select_tok.span.start;
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut arms = Vec::new();
+        let mut default_block = None;
+
+        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+            // Check for `default { ... }`
+            if matches!(self.peek().unwrap().node, Token::Default) {
+                self.advance(); // consume 'default'
+                if default_block.is_some() {
+                    return Err(CompileError::syntax(
+                        "duplicate default arm in select",
+                        self.eof_span(),
+                    ));
+                }
+                default_block = Some(self.parse_block()?);
+                self.skip_newlines();
+                continue;
+            }
+
+            // Parse a select arm: either recv or send
+            // Recv: `binding = expr.recv() { body }`
+            // Send: `expr.send(value) { body }`
+            //
+            // To distinguish: peek ahead for `ident = ...` pattern
+            let is_recv = self.is_select_recv_ahead();
+
+            if is_recv {
+                // Recv arm: `binding = expr.recv() { body }`
+                let binding = self.expect_ident()?;
+                self.expect(&Token::Eq)?;
+                let channel = self.parse_expr(0)?;
+                // The expr should end with a .recv() method call — validate structure
+                // We parse the entire `rx.recv()` as an expression, then unwrap
+                match &channel.node {
+                    Expr::MethodCall { object, method, args } if method.node == "recv" && args.is_empty() => {
+                        let channel_expr = (**object).clone();
+                        let body = self.parse_block()?;
+                        arms.push(SelectArm {
+                            op: SelectOp::Recv { binding, channel: channel_expr },
+                            body,
+                        });
+                    }
+                    _ => {
+                        return Err(CompileError::syntax(
+                            "select recv arm must be: binding = channel.recv() { ... }",
+                            channel.span,
+                        ));
+                    }
+                }
+            } else {
+                // Send arm: `expr.send(value) { body }`
+                let expr = self.parse_expr(0)?;
+                match &expr.node {
+                    Expr::MethodCall { object, method, args } if method.node == "send" && args.len() == 1 => {
+                        let channel_expr = (**object).clone();
+                        let value_expr = args[0].clone();
+                        let body = self.parse_block()?;
+                        arms.push(SelectArm {
+                            op: SelectOp::Send { channel: channel_expr, value: value_expr },
+                            body,
+                        });
+                    }
+                    _ => {
+                        return Err(CompileError::syntax(
+                            "select send arm must be: channel.send(value) { ... }",
+                            expr.span,
+                        ));
+                    }
+                }
+            }
+
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+
+        if arms.is_empty() && default_block.is_none() {
+            return Err(CompileError::syntax(
+                "select must have at least one arm or a default",
+                Span::new(start, end),
+            ));
+        }
+
+        Ok(Spanned::new(Stmt::Select { arms, default: default_block }, Span::new(start, end)))
+    }
+
+    /// Check if the next tokens form a recv pattern: `ident = ...`
+    fn is_select_recv_ahead(&self) -> bool {
+        // Look for: Ident followed by `=` (not `==`)
+        let mut i = self.pos;
+        // Skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Ident) {
+            return false;
+        }
+        i += 1;
+        // Skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() {
+            return false;
+        }
+        matches!(self.tokens[i].node, Token::Eq)
     }
 
     fn parse_raise_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {

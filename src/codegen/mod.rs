@@ -649,6 +649,19 @@ fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
             Stmt::Raise { fields, .. } => {
                 for (_, v) in fields { walk_expr(&v.node, result); }
             }
+            Stmt::Select { arms, default } => {
+                for arm in arms {
+                    match &arm.op {
+                        SelectOp::Recv { channel, .. } => walk_expr(&channel.node, result),
+                        SelectOp::Send { channel, value } => {
+                            walk_expr(&channel.node, result);
+                            walk_expr(&value.node, result);
+                        }
+                    }
+                    walk_block(&arm.body.node, result);
+                }
+                if let Some(def) = default { walk_block(&def.node, result); }
+            }
             Stmt::Expr(e) => walk_expr(&e.node, result),
         }
     }

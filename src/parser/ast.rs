@@ -164,9 +164,25 @@ pub enum Stmt {
         elem_type: Spanned<TypeExpr>,
         capacity: Option<Spanned<Expr>>,
     },
+    Select {
+        arms: Vec<SelectArm>,
+        default: Option<Spanned<Block>>,
+    },
     Break,
     Continue,
     Expr(Spanned<Expr>),
+}
+
+#[derive(Debug, Clone)]
+pub enum SelectOp {
+    Recv { binding: Spanned<String>, channel: Spanned<Expr> },
+    Send { channel: Spanned<Expr>, value: Spanned<Expr> },
+}
+
+#[derive(Debug, Clone)]
+pub struct SelectArm {
+    pub op: SelectOp,
+    pub body: Spanned<Block>,
 }
 
 #[derive(Debug, Clone)]
