@@ -106,7 +106,7 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
         }
 
         // Function calls — only old(expr) in ensures clauses
-        Expr::Call { name, args } => {
+        Expr::Call { name, args, .. } => {
             if name.node == "old" && args.len() == 1 {
                 if kind == ContractKind::Ensures {
                     validate_decidable_fragment(&args[0].node, args[0].span, kind)

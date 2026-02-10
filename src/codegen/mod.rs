@@ -842,7 +842,7 @@ pub(super) fn format_invariant_expr(expr: &Expr) -> String {
             };
             format!("{}{}", op_str, format_invariant_expr(&operand.node))
         }
-        Expr::Call { name, args } if name.node == "old" && args.len() == 1 => {
+        Expr::Call { name, args, .. } if name.node == "old" && args.len() == 1 => {
             format!("old({})", format_invariant_expr(&args[0].node))
         }
         _ => "<contract>".to_string(),

@@ -973,7 +973,7 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
                 rewrite_block_for_module(&mut arm.body.node, module_name, module_prog);
             }
         }
-        Stmt::Raise { error_name, fields } => {
+        Stmt::Raise { error_name, fields, .. } => {
             if module_prog.errors.iter().any(|e| e.node.name.node == error_name.node) {
                 error_name.node = format!("{}.{}", module_name, error_name.node);
             }
@@ -1013,7 +1013,7 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
 
 fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Program) {
     match expr {
-        Expr::Call { name, args } => {
+        Expr::Call { name, args, .. } => {
             // Prefix calls to module-internal functions (but NOT extern fns — those are C symbols)
             if module_prog.functions.iter().any(|f| f.node.name.node == name.node) {
                 name.node = format!("{}.{}", module_name, name.node);
@@ -1022,7 +1022,7 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
                 rewrite_expr_for_module(&mut arg.node, module_name, module_prog);
             }
         }
-        Expr::StructLit { name, type_args, fields } => {
+        Expr::StructLit { name, type_args, fields, .. } => {
             if is_module_type(&name.node, module_prog) {
                 name.node = format!("{}.{}", module_name, name.node);
             }
@@ -1337,6 +1337,7 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
                     *expr = Expr::Call {
                         name: Spanned::new(qualified_name, name_span),
                         args: std::mem::take(args),
+                        target_id: None,
                     };
                     return;
                 }
@@ -1350,7 +1351,7 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
             rewrite_expr(&mut object.node, object.span, import_names);
             let _ = field;
         }
-        Expr::Call { name, args } => {
+        Expr::Call { name, args, .. } => {
             for arg in args {
                 rewrite_expr(&mut arg.node, arg.span, import_names);
             }

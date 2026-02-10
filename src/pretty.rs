@@ -702,6 +702,7 @@ impl PrettyPrinter {
             Stmt::Raise {
                 error_name,
                 fields,
+                ..
             } => {
                 self.write("raise ");
                 self.write(&error_name.node);
@@ -829,7 +830,7 @@ impl PrettyPrinter {
                 self.write(op_str);
                 self.emit_expr(&operand.node, 25);
             }
-            Expr::Call { name, args } => {
+            Expr::Call { name, args, .. } => {
                 self.write(&name.node);
                 self.write("(");
                 for (i, arg) in args.iter().enumerate() {
@@ -866,6 +867,7 @@ impl PrettyPrinter {
                 name,
                 type_args,
                 fields,
+                ..
             } => {
                 self.write(&name.node);
                 if !type_args.is_empty() {
@@ -909,6 +911,7 @@ impl PrettyPrinter {
                 enum_name,
                 variant,
                 type_args,
+                ..
             } => {
                 self.write(&enum_name.node);
                 if !type_args.is_empty() {
@@ -929,6 +932,7 @@ impl PrettyPrinter {
                 variant,
                 type_args,
                 fields,
+                ..
             } => {
                 self.write(&enum_name.node);
                 if !type_args.is_empty() {
