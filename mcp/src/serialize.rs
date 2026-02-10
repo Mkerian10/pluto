@@ -176,6 +176,44 @@ pub struct DisambiguationEntry {
     pub kind: String,
 }
 
+// --- Project-level output structs ---
+
+#[derive(Serialize)]
+pub struct ProjectSummary {
+    pub project_root: String,
+    pub files_found: usize,
+    pub files_loaded: usize,
+    pub files_failed: usize,
+    pub modules: Vec<ModuleBrief>,
+    pub errors: Vec<LoadError>,
+}
+
+#[derive(Serialize)]
+pub struct ModuleBrief {
+    pub path: String,
+    pub declarations: usize,
+}
+
+#[derive(Serialize)]
+pub struct LoadError {
+    pub path: String,
+    pub error: String,
+}
+
+#[derive(Serialize)]
+pub struct ModuleListEntry {
+    pub path: String,
+    pub summary: DeclCounts,
+}
+
+#[derive(Serialize)]
+pub struct CrossModuleMatch {
+    pub module_path: String,
+    pub uuid: String,
+    pub name: String,
+    pub kind: String,
+}
+
 // --- Conversion functions ---
 
 pub fn type_expr_to_string(te: &TypeExpr) -> String {
@@ -197,6 +235,9 @@ pub fn type_expr_to_string(te: &TypeExpr) -> String {
             let args_str: Vec<String> =
                 type_args.iter().map(|a| type_expr_to_string(&a.node)).collect();
             format!("{}<{}>", name, args_str.join(", "))
+        }
+        TypeExpr::Nullable(inner) => {
+            format!("{}?", type_expr_to_string(&inner.node))
         }
     }
 }

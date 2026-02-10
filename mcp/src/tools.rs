@@ -5,6 +5,8 @@ use serde::Deserialize;
 pub struct LoadModuleInput {
     #[schemars(description = "Absolute path to a .pluto source file or PLTO binary file")]
     pub path: String,
+    #[schemars(description = "Path to the stdlib root directory (needed for files that import std.* modules)")]
+    pub stdlib: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -53,4 +55,23 @@ pub struct SourceInput {
     pub start: Option<usize>,
     #[schemars(description = "End byte offset (defaults to end of source)")]
     pub end: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct LoadProjectInput {
+    #[schemars(description = "Absolute path to the project root directory to scan for .pluto files")]
+    pub path: String,
+    #[schemars(description = "Path to the stdlib root directory (needed for files that import std.* modules)")]
+    pub stdlib: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListModulesInput {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FindDeclarationInput {
+    #[schemars(description = "Name of the declaration to search for across all loaded modules")]
+    pub name: String,
+    #[schemars(description = "Optional kind filter: function, class, enum, trait, error, app")]
+    pub kind: Option<String>,
 }

@@ -36,7 +36,12 @@ impl Module {
 
     /// Analyze a .pluto source file (runs full front-end pipeline).
     pub fn from_source_file(path: impl AsRef<Path>) -> Result<Self, SdkError> {
-        let (program, source, derived) = plutoc::analyze_file(path.as_ref(), None)?;
+        Self::from_source_file_with_stdlib(path, None)
+    }
+
+    /// Analyze a .pluto source file with an explicit stdlib root path.
+    pub fn from_source_file_with_stdlib(path: impl AsRef<Path>, stdlib_root: Option<&Path>) -> Result<Self, SdkError> {
+        let (program, source, derived) = plutoc::analyze_file(path.as_ref(), stdlib_root)?;
         let index = ModuleIndex::build(&program);
         Ok(Self { program, source, index, derived })
     }
