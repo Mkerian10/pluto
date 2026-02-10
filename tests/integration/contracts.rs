@@ -1,6 +1,6 @@
 mod common;
 use common::{
-    compile_and_run_output, compile_and_run_stdout, compile_should_fail_with,
+    compile_and_run_output, compile_and_run_stdout, compile_should_fail, compile_should_fail_with,
 };
 
 // ── Parsing success: class invariants compile and run ────────────────────────
@@ -617,4 +617,551 @@ fn main() {
 "#,
     );
     assert_eq!(out, "0\n");
+}
+
+// ── Phase 2: requires runtime enforcement ──────────────────────────────────
+
+#[test]
+fn requires_satisfied_runs_ok() {
+    let out = compile_and_run_stdout(
+        r#"
+fn positive(x: int) int
+    requires x > 0
+{
+    return x * 2
+}
+
+fn main() {
+    print(positive(5))
+}
+"#,
+    );
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn requires_violated_aborts() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+fn positive(x: int) int
+    requires x > 0
+{
+    return x * 2
+}
+
+fn main() {
+    print(positive(-1))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+    assert!(stderr.contains("positive"), "stderr: {stderr}");
+    assert!(stderr.contains("x > 0"), "stderr: {stderr}");
+}
+
+#[test]
+fn requires_multiple_one_violated() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+fn bounded(x: int) int
+    requires x > 0
+    requires x < 100
+{
+    return x
+}
+
+fn main() {
+    print(bounded(200))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+    assert!(stderr.contains("x < 100"), "stderr: {stderr}");
+}
+
+#[test]
+fn requires_on_class_method() {
+    let out = compile_and_run_stdout(
+        r#"
+class Account {
+    balance: int
+
+    fn deposit(self, amount: int)
+        requires amount > 0
+    {
+        self.balance = self.balance + amount
+    }
+}
+
+fn main() {
+    let a = Account { balance: 100 }
+    a.deposit(50)
+    print(a.balance)
+}
+"#,
+    );
+    assert_eq!(out, "150\n");
+}
+
+#[test]
+fn requires_on_method_violated() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+class Account {
+    balance: int
+
+    fn deposit(self, amount: int)
+        requires amount > 0
+    {
+        self.balance = self.balance + amount
+    }
+}
+
+fn main() {
+    let a = Account { balance: 100 }
+    a.deposit(-10)
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+    assert!(stderr.contains("amount > 0"), "stderr: {stderr}");
+}
+
+#[test]
+fn requires_with_arithmetic() {
+    let out = compile_and_run_stdout(
+        r#"
+fn in_range(x: int) int
+    requires x > 0 && x < 100
+{
+    return x
+}
+
+fn main() {
+    print(in_range(50))
+}
+"#,
+    );
+    assert_eq!(out, "50\n");
+}
+
+// ── Phase 2: ensures runtime enforcement ──────────────────────────────────
+
+#[test]
+fn ensures_satisfied_runs_ok() {
+    let out = compile_and_run_stdout(
+        r#"
+fn double(x: int) int
+    ensures result > 0
+{
+    return x * 2
+}
+
+fn main() {
+    print(double(5))
+}
+"#,
+    );
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn ensures_violated_aborts() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+fn always_positive(x: int) int
+    ensures result > 0
+{
+    return x
+}
+
+fn main() {
+    print(always_positive(-5))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
+    assert!(stderr.contains("always_positive"), "stderr: {stderr}");
+    assert!(stderr.contains("result > 0"), "stderr: {stderr}");
+}
+
+#[test]
+fn ensures_result_equals_expression() {
+    let out = compile_and_run_stdout(
+        r#"
+fn double(x: int) int
+    ensures result == x * 2
+{
+    return x * 2
+}
+
+fn main() {
+    print(double(7))
+}
+"#,
+    );
+    assert_eq!(out, "14\n");
+}
+
+#[test]
+fn ensures_result_violated() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+fn double(x: int) int
+    ensures result == x * 2
+{
+    return x + 1
+}
+
+fn main() {
+    print(double(5))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
+}
+
+#[test]
+fn ensures_on_void_function() {
+    let out = compile_and_run_stdout(
+        r#"
+class Counter {
+    count: int
+
+    fn increment(self)
+        ensures self.count > 0
+    {
+        self.count = self.count + 1
+    }
+}
+
+fn main() {
+    let c = Counter { count: 0 }
+    c.increment()
+    print(c.count)
+}
+"#,
+    );
+    assert_eq!(out, "1\n");
+}
+
+// ── Phase 2: old() ──────────────────────────────────────────────────────
+
+#[test]
+fn ensures_old_satisfied() {
+    let out = compile_and_run_stdout(
+        r#"
+class Counter {
+    count: int
+
+    fn increment(self)
+        ensures self.count == old(self.count) + 1
+    {
+        self.count = self.count + 1
+    }
+}
+
+fn main() {
+    let c = Counter { count: 0 }
+    c.increment()
+    print(c.count)
+}
+"#,
+    );
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn ensures_old_violated() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+class Counter {
+    count: int
+
+    fn increment(self)
+        ensures self.count == old(self.count) + 1
+    {
+        // Bug: forgot to increment!
+    }
+}
+
+fn main() {
+    let c = Counter { count: 0 }
+    c.increment()
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
+}
+
+#[test]
+fn ensures_old_nested_field() {
+    let out = compile_and_run_stdout(
+        r#"
+class Wallet {
+    balance: int
+
+    fn withdraw(self, amount: int)
+        requires amount > 0
+        ensures self.balance == old(self.balance) - amount
+    {
+        self.balance = self.balance - amount
+    }
+}
+
+fn main() {
+    let w = Wallet { balance: 100 }
+    w.withdraw(30)
+    print(w.balance)
+}
+"#,
+    );
+    assert_eq!(out, "70\n");
+}
+
+#[test]
+fn old_in_requires_rejected() {
+    compile_should_fail_with(
+        r#"
+fn foo(x: int) int
+    requires old(x) > 0
+{
+    return x
+}
+
+fn main() {
+    print(foo(5))
+}
+"#,
+        "old() is only allowed in ensures clauses",
+    );
+}
+
+// ── Phase 2: type checking ──────────────────────────────────────────────
+
+#[test]
+fn requires_non_bool_rejected() {
+    compile_should_fail_with(
+        r#"
+fn foo(x: int) int
+    requires x + 1
+{
+    return x
+}
+
+fn main() {
+    print(foo(5))
+}
+"#,
+        "requires expression must be bool",
+    );
+}
+
+#[test]
+fn ensures_non_bool_rejected() {
+    compile_should_fail_with(
+        r#"
+fn foo(x: int) int
+    ensures result + 1
+{
+    return x
+}
+
+fn main() {
+    print(foo(5))
+}
+"#,
+        "ensures expression must be bool",
+    );
+}
+
+#[test]
+fn result_in_requires_rejected() {
+    compile_should_fail(
+        r#"
+fn foo(x: int) int
+    requires result > 0
+{
+    return x
+}
+
+fn main() {
+    print(foo(5))
+}
+"#,
+    );
+}
+
+#[test]
+fn result_type_in_ensures() {
+    let out = compile_and_run_stdout(
+        r#"
+fn negate(x: bool) bool
+    ensures result != x
+{
+    if x {
+        return false
+    }
+    return true
+}
+
+fn main() {
+    print(negate(true))
+    print(negate(false))
+}
+"#,
+    );
+    assert_eq!(out, "false\ntrue\n");
+}
+
+// ── Phase 2: edge cases ──────────────────────────────────────────────────
+
+#[test]
+fn requires_and_ensures_together() {
+    let out = compile_and_run_stdout(
+        r#"
+fn safe_div(a: int, b: int) int
+    requires b != 0
+    ensures result * b == a
+{
+    return a / b
+}
+
+fn main() {
+    print(safe_div(10, 2))
+}
+"#,
+    );
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn method_with_requires_ensures_and_invariant() {
+    let out = compile_and_run_stdout(
+        r#"
+class BoundedCounter {
+    count: int
+
+    invariant self.count >= 0
+
+    fn add(self, n: int)
+        requires n > 0
+        ensures self.count == old(self.count) + n
+    {
+        self.count = self.count + n
+    }
+}
+
+fn main() {
+    let c = BoundedCounter { count: 0 }
+    c.add(5)
+    c.add(3)
+    print(c.count)
+}
+"#,
+    );
+    assert_eq!(out, "8\n");
+}
+
+#[test]
+fn old_and_result_in_same_ensures() {
+    let out = compile_and_run_stdout(
+        r#"
+class Stack {
+    size: int
+
+    fn push(self) int
+        ensures result == old(self.size)
+        ensures self.size == old(self.size) + 1
+    {
+        let old_size = self.size
+        self.size = self.size + 1
+        return old_size
+    }
+}
+
+fn main() {
+    let s = Stack { size: 0 }
+    let idx = s.push()
+    print(idx)
+    print(s.size)
+}
+"#,
+    );
+    assert_eq!(out, "0\n1\n");
+}
+
+#[test]
+fn requires_on_multiple_params() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+fn add_positive(a: int, b: int) int
+    requires a > 0
+    requires b > 0
+{
+    return a + b
+}
+
+fn main() {
+    print(add_positive(5, -1))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+    assert!(stderr.contains("b > 0"), "stderr: {stderr}");
+}
+
+#[test]
+fn ensures_multiple_satisfied() {
+    let out = compile_and_run_stdout(
+        r#"
+fn clamp(x: int) int
+    ensures result >= 0
+    ensures result <= 100
+{
+    if x < 0 {
+        return 0
+    }
+    if x > 100 {
+        return 100
+    }
+    return x
+}
+
+fn main() {
+    print(clamp(-5))
+    print(clamp(50))
+    print(clamp(200))
+}
+"#,
+    );
+    assert_eq!(out, "0\n50\n100\n");
+}
+
+#[test]
+fn ensures_multiple_one_violated() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+fn clamp(x: int) int
+    ensures result >= 0
+    ensures result <= 100
+{
+    return x
+}
+
+fn main() {
+    print(clamp(200))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
+    assert!(stderr.contains("result <= 100"), "stderr: {stderr}");
 }
