@@ -102,6 +102,8 @@ pub struct RunInput {
     pub stdlib: Option<String>,
     #[schemars(description = "Execution timeout in milliseconds (default: 10000, max: 60000)")]
     pub timeout_ms: Option<u64>,
+    #[schemars(description = "Working directory for execution. Defaults to the source file's parent directory")]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -112,6 +114,8 @@ pub struct TestInput {
     pub stdlib: Option<String>,
     #[schemars(description = "Execution timeout in milliseconds (default: 30000, max: 60000)")]
     pub timeout_ms: Option<u64>,
+    #[schemars(description = "Working directory for execution. Defaults to the source file's parent directory")]
+    pub cwd: Option<String>,
 }
 
 // --- Write tool inputs ---
@@ -172,4 +176,18 @@ pub struct AddFieldInput {
     pub field_name: String,
     #[schemars(description = "Type of the new field (e.g. 'int', 'string', '[float]')")]
     pub field_type: String,
+}
+
+// --- Docs tool inputs ---
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DocsInput {
+    #[schemars(description = "Optional topic filter: types, operators, statements, declarations, strings, errors, closures, generics, modules, contracts, concurrency, gotchas")]
+    pub topic: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StdlibDocsInput {
+    #[schemars(description = "Optional module name (e.g. 'strings', 'fs', 'math'). If omitted, lists all available stdlib modules")]
+    pub module: Option<String>,
 }
