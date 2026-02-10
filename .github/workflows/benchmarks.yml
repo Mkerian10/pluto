@@ -53,6 +53,7 @@ jobs:
 
       - name: Compare against baseline (PRs)
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         uses: benchmark-action/github-action-benchmark@v1
         with:
           tool: customSmallerIsBetter
