@@ -1165,3 +1165,374 @@ fn main() {
     assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
     assert!(stderr.contains("result <= 100"), "stderr: {stderr}");
 }
+
+// ── Phase 3: Interface Guarantees (Trait Method Contracts) ──────────────────
+
+#[test]
+fn trait_requires_satisfied_on_impl() {
+    let out = compile_and_run_stdout(
+        r#"
+trait Validator {
+    fn validate(self, x: int) int
+        requires x > 0
+}
+
+class PositiveValidator impl Validator {
+    id: int
+
+    fn validate(self, x: int) int {
+        return x * 2
+    }
+}
+
+fn main() {
+    let v = PositiveValidator { id: 1 }
+    print(v.validate(5))
+}
+"#,
+    );
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn trait_requires_violated_on_impl() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+trait Validator {
+    fn validate(self, x: int) int
+        requires x > 0
+}
+
+class PositiveValidator impl Validator {
+    id: int
+
+    fn validate(self, x: int) int {
+        return x * 2
+    }
+}
+
+fn main() {
+    let v = PositiveValidator { id: 1 }
+    print(v.validate(-3))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+    assert!(stderr.contains("x > 0"), "stderr: {stderr}");
+}
+
+#[test]
+fn trait_ensures_satisfied_on_impl() {
+    let out = compile_and_run_stdout(
+        r#"
+trait Doubler {
+    fn double(self, x: int) int
+        ensures result > 0
+}
+
+class MyDoubler impl Doubler {
+    id: int
+
+    fn double(self, x: int) int {
+        return x * 2
+    }
+}
+
+fn main() {
+    let d = MyDoubler { id: 1 }
+    print(d.double(5))
+}
+"#,
+    );
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn trait_ensures_violated_on_impl() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+trait Doubler {
+    fn double(self, x: int) int
+        ensures result > 0
+}
+
+class MyDoubler impl Doubler {
+    id: int
+
+    fn double(self, x: int) int {
+        return x * 2
+    }
+}
+
+fn main() {
+    let d = MyDoubler { id: 1 }
+    print(d.double(-5))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
+    assert!(stderr.contains("result > 0"), "stderr: {stderr}");
+}
+
+#[test]
+fn liskov_class_cannot_add_requires() {
+    compile_should_fail_with(
+        r#"
+trait Processor {
+    fn process(self, x: int) int
+        requires x > 0
+}
+
+class MyProcessor impl Processor {
+    id: int
+
+    fn process(self, x: int) int
+        requires x > 10
+    {
+        return x
+    }
+}
+
+fn main() {
+    let p = MyProcessor { id: 1 }
+    print(p.process(5))
+}
+"#,
+        "Liskov Substitution Principle",
+    );
+}
+
+#[test]
+fn liskov_class_cannot_add_requires_even_when_trait_has_no_contracts() {
+    compile_should_fail_with(
+        r#"
+trait Processor {
+    fn process(self, x: int) int
+}
+
+class MyProcessor impl Processor {
+    id: int
+
+    fn process(self, x: int) int
+        requires x > 0
+    {
+        return x
+    }
+}
+
+fn main() {
+    let p = MyProcessor { id: 1 }
+    print(p.process(5))
+}
+"#,
+        "Liskov Substitution Principle",
+    );
+}
+
+#[test]
+fn liskov_class_can_add_ensures() {
+    let out = compile_and_run_stdout(
+        r#"
+trait Processor {
+    fn process(self, x: int) int
+        requires x > 0
+}
+
+class MyProcessor impl Processor {
+    id: int
+
+    fn process(self, x: int) int
+        ensures result > 0
+    {
+        return x * 2
+    }
+}
+
+fn main() {
+    let p = MyProcessor { id: 1 }
+    print(p.process(5))
+}
+"#,
+    );
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn trait_contract_via_dynamic_dispatch() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+trait Validator {
+    fn validate(self, x: int) int
+        requires x > 0
+}
+
+class SimpleValidator impl Validator {
+    id: int
+
+    fn validate(self, x: int) int {
+        return x
+    }
+}
+
+fn run_validation(v: Validator, x: int) int {
+    return v.validate(x)
+}
+
+fn main() {
+    let v = SimpleValidator { id: 1 }
+    print(run_validation(v, -5))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+    assert!(stderr.contains("x > 0"), "stderr: {stderr}");
+}
+
+#[test]
+fn trait_contract_non_bool_rejected() {
+    compile_should_fail_with(
+        r#"
+trait Bad {
+    fn compute(self, x: int) int
+        requires x + 1
+}
+
+class Impl impl Bad {
+    id: int
+
+    fn compute(self, x: int) int {
+        return x
+    }
+}
+
+fn main() {
+    let b = Impl { id: 1 }
+    print(b.compute(5))
+}
+"#,
+        "requires expression must be bool",
+    );
+}
+
+#[test]
+fn trait_contract_self_field_rejected() {
+    compile_should_fail(
+        r#"
+trait Bad {
+    fn check(self) bool
+        requires self.value > 0
+}
+
+class Impl impl Bad {
+    value: int
+
+    fn check(self) bool {
+        return true
+    }
+}
+
+fn main() {
+    let b = Impl { value: 5 }
+    print(b.check())
+}
+"#,
+    );
+}
+
+#[test]
+fn multi_trait_same_method_with_contracts_rejected() {
+    compile_should_fail_with(
+        r#"
+trait A {
+    fn do_thing(self, x: int) int
+        requires x > 0
+}
+
+trait B {
+    fn do_thing(self, x: int) int
+        requires x > 10
+}
+
+class MyClass impl A, B {
+    id: int
+
+    fn do_thing(self, x: int) int {
+        return x
+    }
+}
+
+fn main() {
+    let c = MyClass { id: 1 }
+    print(c.do_thing(5))
+}
+"#,
+        "both define method",
+    );
+}
+
+#[test]
+fn trait_default_method_contracts_inherited() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+trait Clamper {
+    fn clamp(self, x: int) int
+        requires x >= 0
+    {
+        if x > 100 {
+            return 100
+        }
+        return x
+    }
+}
+
+class MyClamper impl Clamper {
+    id: int
+}
+
+fn main() {
+    let c = MyClamper { id: 1 }
+    print(c.clamp(-1))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+    assert!(stderr.contains("x >= 0"), "stderr: {stderr}");
+}
+
+#[test]
+fn trait_overridden_default_method_still_has_trait_contracts() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+trait Clamper {
+    fn clamp(self, x: int) int
+        requires x >= 0
+    {
+        if x > 100 {
+            return 100
+        }
+        return x
+    }
+}
+
+class MyClamper impl Clamper {
+    id: int
+
+    fn clamp(self, x: int) int {
+        return x * 2
+    }
+}
+
+fn main() {
+    let c = MyClamper { id: 1 }
+    print(c.clamp(-1))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+    assert!(stderr.contains("x >= 0"), "stderr: {stderr}");
+}

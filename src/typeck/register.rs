@@ -122,12 +122,16 @@ pub(crate) fn register_traits(program: &Program, env: &mut TypeEnv) -> Result<()
         }
 
         let mut mut_self_methods = HashSet::new();
+        let mut method_contracts = HashMap::new();
         for m in &t.methods {
             if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
                 mut_self_methods.insert(m.name.node.clone());
             }
+            if !m.contracts.is_empty() {
+                method_contracts.insert(m.name.node.clone(), m.contracts.clone());
+            }
         }
-        env.traits.insert(t.name.node.clone(), TraitInfo { methods, default_methods, mut_self_methods });
+        env.traits.insert(t.name.node.clone(), TraitInfo { methods, default_methods, mut_self_methods, method_contracts });
     }
     Ok(())
 }
@@ -764,6 +768,37 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
             )
         })?.clone();
 
+        // Multi-trait collision guard: reject if two traits define the same method
+        // and at least one has contracts on it
+        {
+            let mut method_contract_traits: HashMap<String, Vec<String>> = HashMap::new();
+            for trait_name_spanned in &c.impl_traits {
+                let trait_name = &trait_name_spanned.node;
+                if let Some(trait_info) = env.traits.get(trait_name) {
+                    for (method_name, _) in &trait_info.methods {
+                        if trait_info.method_contracts.contains_key(method_name) {
+                            method_contract_traits.entry(method_name.clone())
+                                .or_default()
+                                .push(trait_name.clone());
+                        }
+                    }
+                }
+            }
+            for (method_name, trait_names) in &method_contract_traits {
+                if trait_names.len() > 1 {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "class '{}' implements traits {} which both define method '{}' with contracts; this is not supported",
+                            class_name,
+                            trait_names.join(" and "),
+                            method_name
+                        ),
+                        class.span,
+                    ));
+                }
+            }
+        }
+
         for trait_name_spanned in &c.impl_traits {
             let trait_name = &trait_name_spanned.node;
             let trait_info = env.traits.get(trait_name).ok_or_else(|| {
@@ -837,6 +872,25 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                             trait_name_spanned.span,
                         ));
                     }
+                    // Liskov: class methods implementing a trait MUST NOT add requires clauses
+                    // (a trait method with no requires effectively has "requires true";
+                    //  adding requires would weaken the precondition and break substitutability)
+                    let class_method_ast = c.methods.iter().find(|m| m.node.name.node == *method_name);
+                    if let Some(cm) = class_method_ast {
+                        let has_class_requires = cm.node.contracts.iter()
+                            .any(|ct| ct.node.kind == ContractKind::Requires);
+                        if has_class_requires {
+                            return Err(CompileError::type_err(
+                                format!(
+                                    "method '{}' on class '{}' cannot add 'requires' clauses: \
+                                     it implements trait '{}' and adding preconditions would \
+                                     violate the Liskov Substitution Principle",
+                                    method_name, class_name, trait_name
+                                ),
+                                cm.node.name.span,
+                            ));
+                        }
+                    }
                 } else if trait_info.default_methods.contains(method_name) {
                     // Default implementation — register under mangled name
                     let mut params = trait_sig.params.clone();
@@ -904,6 +958,82 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
                 }
             }
             env.pop_scope();
+        }
+    }
+
+    // Type-check trait method contracts (requires/ensures on abstract trait methods)
+    for trait_decl in &program.traits {
+        let t = &trait_decl.node;
+        for m in &t.methods {
+            if m.contracts.is_empty() {
+                continue;
+            }
+            // Resolve param types and return type
+            let mut param_types = Vec::new();
+            for p in &m.params {
+                if p.name.node == "self" {
+                    param_types.push(("self".to_string(), PlutoType::Void));
+                } else {
+                    let ty = resolve_type(&p.ty, env)?;
+                    param_types.push((p.name.node.clone(), ty));
+                }
+            }
+            let return_type = match &m.return_type {
+                Some(rt) => resolve_type(rt, env)?,
+                None => PlutoType::Void,
+            };
+
+            // Check requires clauses
+            let has_requires = m.contracts.iter().any(|c| c.node.kind == ContractKind::Requires);
+            if has_requires {
+                env.push_scope();
+                for (name, ty) in &param_types {
+                    env.define(name.clone(), ty.clone());
+                }
+                for contract in &m.contracts {
+                    if contract.node.kind == ContractKind::Requires {
+                        let ty = super::infer::infer_expr(&contract.node.expr.node, contract.node.expr.span, env)?;
+                        if ty != PlutoType::Bool {
+                            return Err(CompileError::type_err(
+                                format!("requires expression must be bool, found {ty}"),
+                                contract.node.expr.span,
+                            ));
+                        }
+                    }
+                }
+                env.pop_scope();
+            }
+
+            // Check ensures clauses
+            let has_ensures = m.contracts.iter().any(|c| c.node.kind == ContractKind::Ensures);
+            if has_ensures {
+                env.push_scope();
+                for (name, ty) in &param_types {
+                    env.define(name.clone(), ty.clone());
+                }
+                if return_type != PlutoType::Void {
+                    env.define("result".to_string(), return_type.clone());
+                }
+                let saved_ensures = env.in_ensures_context;
+                env.in_ensures_context = true;
+                let result = (|| {
+                    for contract in &m.contracts {
+                        if contract.node.kind == ContractKind::Ensures {
+                            let ty = super::infer::infer_expr(&contract.node.expr.node, contract.node.expr.span, env)?;
+                            if ty != PlutoType::Bool {
+                                return Err(CompileError::type_err(
+                                    format!("ensures expression must be bool, found {ty}"),
+                                    contract.node.expr.span,
+                                ));
+                            }
+                        }
+                    }
+                    Ok(())
+                })();
+                env.in_ensures_context = saved_ensures;
+                env.pop_scope();
+                result?;
+            }
         }
     }
 
