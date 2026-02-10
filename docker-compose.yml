@@ -1,0 +1,38 @@
+services:
+  test-arm64:
+    build: .
+    platform: linux/arm64
+    volumes:
+      - cargo-registry-arm64:/usr/local/cargo/registry
+      - cargo-target-arm64:/app/target
+    command: >
+      bash -c '
+        echo "=== linux/arm64 ($(uname -m)) ===" &&
+        echo "--- Clippy ---" &&
+        cargo clippy --workspace -- -D warnings 2>&1 &&
+        echo "--- Tests ---" &&
+        cargo test --workspace 2>&1 &&
+        echo "=== arm64: PASSED ==="
+      '
+
+  test-amd64:
+    build: .
+    platform: linux/amd64
+    volumes:
+      - cargo-registry-amd64:/usr/local/cargo/registry
+      - cargo-target-amd64:/app/target
+    command: >
+      bash -c '
+        echo "=== linux/amd64 ($(uname -m)) ===" &&
+        echo "--- Clippy ---" &&
+        cargo clippy --workspace -- -D warnings 2>&1 &&
+        echo "--- Tests ---" &&
+        cargo test --workspace 2>&1 &&
+        echo "=== amd64: PASSED ==="
+      '
+
+volumes:
+  cargo-registry-arm64:
+  cargo-target-arm64:
+  cargo-registry-amd64:
+  cargo-target-amd64:
