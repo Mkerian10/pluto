@@ -429,3 +429,245 @@ fn main() {
 }
 "#, "must be handled with ! or catch");
 }
+
+// ── Race conditions (demonstrating unsafety without future primitives) ──
+
+#[test]
+fn race_shared_counter_lost_updates() {
+    // Multiple tasks increment a shared class field concurrently.
+    // Without synchronization, the read-modify-write is not atomic,
+    // so updates are lost. This test validates the race exists.
+    // When future phases add move semantics or synchronization primitives,
+    // this pattern should either be rejected at compile time or produce 80000.
+    let out = compile_and_run_stdout(r#"
+class Counter {
+    value: int
+}
+
+fn increment(c: Counter, n: int) {
+    let i = 0
+    while i < n {
+        c.value = c.value + 1
+        i = i + 1
+    }
+}
+
+fn main() {
+    let c = Counter { value: 0 }
+    let t1 = spawn increment(c, 10000)
+    let t2 = spawn increment(c, 10000)
+    let t3 = spawn increment(c, 10000)
+    let t4 = spawn increment(c, 10000)
+    let t5 = spawn increment(c, 10000)
+    let t6 = spawn increment(c, 10000)
+    let t7 = spawn increment(c, 10000)
+    let t8 = spawn increment(c, 10000)
+    t1.get()
+    t2.get()
+    t3.get()
+    t4.get()
+    t5.get()
+    t6.get()
+    t7.get()
+    t8.get()
+    print(c.value)
+}
+"#);
+    let value: i64 = out.trim().parse().expect("should print a number");
+    // With 8 tasks × 10000 increments, correct value would be 80000.
+    // Due to lost updates from the data race, the actual value should be less.
+    // On a multi-core machine this is virtually guaranteed.
+    assert!(
+        value < 80000,
+        "Expected lost updates (value < 80000) but got {value} — race condition did not manifest"
+    );
+    assert!(
+        value > 0,
+        "Counter should have some increments, got {value}"
+    );
+}
+
+#[test]
+fn race_shared_class_field_write() {
+    // Two tasks write different values to the same field in a tight loop.
+    // The final value should be from one task or the other — validates
+    // concurrent field writes don't crash (just produce racy results).
+    let out = compile_and_run_stdout(r#"
+class Box {
+    value: int
+}
+
+fn write_ones(b: Box, n: int) {
+    let i = 0
+    while i < n {
+        b.value = 1
+        i = i + 1
+    }
+}
+
+fn write_twos(b: Box, n: int) {
+    let i = 0
+    while i < n {
+        b.value = 2
+        i = i + 1
+    }
+}
+
+fn main() {
+    let b = Box { value: 0 }
+    let t1 = spawn write_ones(b, 100000)
+    let t2 = spawn write_twos(b, 100000)
+    t1.get()
+    t2.get()
+    print(b.value)
+}
+"#);
+    let value: i64 = out.trim().parse().expect("should print a number");
+    // Final value must be 1 or 2 (last writer wins)
+    assert!(value == 1 || value == 2, "Expected 1 or 2, got {value}");
+}
+
+#[test]
+fn shared_heap_object_proves_aliasing() {
+    // Proves that spawned tasks share heap objects (pointer copy, not deep copy).
+    // A task modifies a class field, and the main thread sees the change.
+    // This is the root cause of data races — when move semantics are added,
+    // this pattern should be rejected at compile time.
+    let out = compile_and_run_stdout(r#"
+class Container {
+    value: int
+}
+
+fn set_value(c: Container, v: int) {
+    c.value = v
+}
+
+fn main() {
+    let c = Container { value: 0 }
+    let t = spawn set_value(c, 42)
+    t.get()
+    print(c.value)
+}
+"#);
+    assert_eq!(out.trim(), "42");
+}
+
+// ── Stress tests ─────────────────────────────────────────────────────────
+
+#[test]
+fn stress_many_concurrent_tasks() {
+    // Spawn 20 tasks and collect all results
+    let out = compile_and_run_stdout(r#"
+fn compute(x: int) int {
+    let result = 0
+    let i = 0
+    while i < 1000 {
+        result = result + x
+        i = i + 1
+    }
+    return result
+}
+
+fn main() {
+    let t1 = spawn compute(1)
+    let t2 = spawn compute(2)
+    let t3 = spawn compute(3)
+    let t4 = spawn compute(4)
+    let t5 = spawn compute(5)
+    let t6 = spawn compute(6)
+    let t7 = spawn compute(7)
+    let t8 = spawn compute(8)
+    let t9 = spawn compute(9)
+    let t10 = spawn compute(10)
+    let t11 = spawn compute(11)
+    let t12 = spawn compute(12)
+    let t13 = spawn compute(13)
+    let t14 = spawn compute(14)
+    let t15 = spawn compute(15)
+    let t16 = spawn compute(16)
+    let t17 = spawn compute(17)
+    let t18 = spawn compute(18)
+    let t19 = spawn compute(19)
+    let t20 = spawn compute(20)
+    let sum = t1.get() + t2.get() + t3.get() + t4.get() + t5.get()
+        + t6.get() + t7.get() + t8.get() + t9.get() + t10.get()
+        + t11.get() + t12.get() + t13.get() + t14.get() + t15.get()
+        + t16.get() + t17.get() + t18.get() + t19.get() + t20.get()
+    print(sum)
+}
+"#);
+    // sum = 1000 * (1+2+...+20) = 1000 * 210 = 210000
+    assert_eq!(out.trim(), "210000");
+}
+
+#[test]
+fn stress_gc_pressure_under_suppression() {
+    // Tasks allocate many strings while GC is suppressed.
+    // Validates that GC suppression + mutex doesn't crash under load.
+    let code = compile_and_run(r#"
+fn allocate_strings(n: int) {
+    let i = 0
+    while i < n {
+        let s = "item number {i}"
+        i = i + 1
+    }
+}
+
+fn main() {
+    let t1 = spawn allocate_strings(5000)
+    let t2 = spawn allocate_strings(5000)
+    let t3 = spawn allocate_strings(5000)
+    let t4 = spawn allocate_strings(5000)
+    t1.get()
+    t2.get()
+    t3.get()
+    t4.get()
+}
+"#);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn stress_tasks_with_errors() {
+    // Many tasks where some succeed and some fail.
+    // Validates error propagation works correctly under concurrent load.
+    let out = compile_and_run_stdout(r#"
+error ComputeError {
+    message: string
+}
+
+fn maybe_fail(x: int) int {
+    if x % 2 == 0 {
+        raise ComputeError { message: "even number" }
+    }
+    return x * 10
+}
+
+fn main() {
+    let t1 = spawn maybe_fail(1)
+    let t2 = spawn maybe_fail(2)
+    let t3 = spawn maybe_fail(3)
+    let t4 = spawn maybe_fail(4)
+    let t5 = spawn maybe_fail(5)
+    let t6 = spawn maybe_fail(6)
+    let t7 = spawn maybe_fail(7)
+    let t8 = spawn maybe_fail(8)
+    let t9 = spawn maybe_fail(9)
+    let t10 = spawn maybe_fail(10)
+    let sum = t1.get() catch 0
+    let sum = sum + (t2.get() catch 0)
+    let sum = sum + (t3.get() catch 0)
+    let sum = sum + (t4.get() catch 0)
+    let sum = sum + (t5.get() catch 0)
+    let sum = sum + (t6.get() catch 0)
+    let sum = sum + (t7.get() catch 0)
+    let sum = sum + (t8.get() catch 0)
+    let sum = sum + (t9.get() catch 0)
+    let sum = sum + (t10.get() catch 0)
+    print(sum)
+}
+"#);
+    // Odd numbers succeed: 1*10 + 3*10 + 5*10 + 7*10 + 9*10 = 250
+    // Even numbers fail and catch gives 0
+    assert_eq!(out.trim(), "250");
+}
