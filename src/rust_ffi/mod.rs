@@ -191,6 +191,7 @@ pub fn inject_extern_fns(program: &mut Program, artifacts: &[RustCrateArtifact])
                     id: Uuid::new_v4(),
                     name: Spanned::new(format!("p{}", i), Span::dummy()),
                     ty: Spanned::new(pluto_type_to_type_expr(ty), Span::dummy()),
+                    is_mut: false,
                 })
                 .collect();
 

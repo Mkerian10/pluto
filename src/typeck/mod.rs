@@ -69,6 +69,7 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     register::validate_di_graph(program, &mut env)?;
     register::check_trait_conformance(program, &mut env)?;
     register::check_all_bodies(program, &mut env)?;
+    check::enforce_mut_self(program, &env)?;
     // Seed Rust FFI fallible functions into fn_errors before inference
     // so that infer_error_sets can propagate RustError through callers.
     for fn_name in &program.fallible_extern_fns {

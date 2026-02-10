@@ -525,12 +525,10 @@ impl PrettyPrinter {
                 self.write(", ");
             }
             // Detect self parameter: name is "self" and type is Named("Self")
-            if p.name.node == "self" && matches!(&p.ty.node, TypeExpr::Named(n) if n == "Self") {
-                self.write("self");
-            } else if p.name.node == "mut self"
-                && matches!(&p.ty.node, TypeExpr::Named(n) if n == "Self")
-            {
+            if p.name.node == "self" && p.is_mut && matches!(&p.ty.node, TypeExpr::Named(n) if n == "Self") {
                 self.write("mut self");
+            } else if p.name.node == "self" && matches!(&p.ty.node, TypeExpr::Named(n) if n == "Self") {
+                self.write("self");
             } else {
                 self.write(&p.name.node);
                 self.write(": ");

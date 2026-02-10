@@ -214,6 +214,7 @@ fn lift_in_expr(
                     id: Uuid::new_v4(),
                     name: Spanned::new("__env".to_string(), Span::new(0, 0)),
                     ty: Spanned::new(TypeExpr::Named("int".to_string()), Span::new(0, 0)),
+                    is_mut: false,
                 };
 
                 // Build the full param list: __env + original params

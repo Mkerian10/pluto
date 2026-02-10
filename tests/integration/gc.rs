@@ -152,7 +152,7 @@ fn gc_di_app_with_pressure() {
 class Counter {
     count: int
 
-    fn increment(self) {
+    fn increment(mut self) {
         self.count = self.count + 1
     }
 

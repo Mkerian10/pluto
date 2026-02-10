@@ -366,6 +366,10 @@ pub(crate) fn ensure_generic_class_instantiated(
             .collect();
         let concrete_ret = substitute_pluto_type(&sig.return_type, &bindings);
         let func_name = format!("{}_{}", mangled, method_name);
+        // Propagate mut self from generic class info
+        if gen_info.mut_self_methods.contains(method_name) {
+            env.mut_self_methods.insert(func_name.clone());
+        }
         env.functions.insert(func_name, env::FuncSig {
             params: concrete_params,
             return_type: concrete_ret,

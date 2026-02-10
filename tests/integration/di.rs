@@ -206,7 +206,7 @@ fn ambient_shared_singleton() {
 class Counter {
     count: int
 
-    fn inc(self) {
+    fn inc(mut self) {
         self.count = self.count + 1
     }
 

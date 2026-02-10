@@ -18,6 +18,7 @@ pub struct ClassInfo {
 pub struct TraitInfo {
     pub methods: Vec<(String, FuncSig)>,
     pub default_methods: Vec<String>,
+    pub mut_self_methods: HashSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +45,7 @@ pub struct GenericClassInfo {
     pub methods: Vec<String>,
     pub method_sigs: HashMap<String, FuncSig>,  // method_name → sig (may contain TypeParam)
     pub impl_traits: Vec<String>,
+    pub mut_self_methods: HashSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +132,8 @@ pub struct TypeEnv {
     pub closure_return_types: HashMap<(usize, usize), PlutoType>,
     /// Whether we are currently type-checking an ensures clause (allows old() calls)
     pub in_ensures_context: bool,
+    /// Mangled names of methods that declare `mut self`
+    pub mut_self_methods: HashSet<String>,
 }
 
 impl TypeEnv {
@@ -181,6 +185,7 @@ impl TypeEnv {
             invalidated_task_vars: HashSet::new(),
             closure_return_types: HashMap::new(),
             in_ensures_context: false,
+            mut_self_methods: HashSet::new(),
         }
     }
 

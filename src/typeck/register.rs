@@ -121,7 +121,13 @@ pub(crate) fn register_traits(program: &Program, env: &mut TypeEnv) -> Result<()
             }
         }
 
-        env.traits.insert(t.name.node.clone(), TraitInfo { methods, default_methods });
+        let mut mut_self_methods = HashSet::new();
+        for m in &t.methods {
+            if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
+                mut_self_methods.insert(m.name.node.clone());
+            }
+        }
+        env.traits.insert(t.name.node.clone(), TraitInfo { methods, default_methods, mut_self_methods });
     }
     Ok(())
 }
@@ -288,12 +294,19 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                     return_type,
                 });
             }
+            let mut generic_mut_self = HashSet::new();
+            for m in &c.methods {
+                if !m.node.params.is_empty() && m.node.params[0].name.node == "self" && m.node.params[0].is_mut {
+                    generic_mut_self.insert(m.node.name.node.clone());
+                }
+            }
             env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
                 type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
                 fields,
                 methods: method_names,
                 method_sigs,
                 impl_traits: Vec::new(),
+                mut_self_methods: generic_mut_self,
             });
             continue;
         }
@@ -466,6 +479,10 @@ pub(crate) fn register_method_sigs(program: &Program, env: &mut TypeEnv) -> Resu
                 Some(t) => resolve_type(t, env)?,
                 None => PlutoType::Void,
             };
+            // Track mut self methods
+            if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
+                env.mut_self_methods.insert(mangled.clone());
+            }
             env.functions.insert(
                 mangled,
                 FuncSig { params: param_types, return_type },
@@ -552,6 +569,10 @@ pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeE
                 Some(t) => resolve_type(t, env)?,
                 None => PlutoType::Void,
             };
+            // Track mut self methods
+            if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
+                env.mut_self_methods.insert(mangled.clone());
+            }
             env.functions.insert(
                 mangled,
                 FuncSig { params: param_types, return_type },
@@ -795,6 +816,27 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                             trait_name_spanned.span,
                         ));
                     }
+                    // Check mut self conformance
+                    let trait_mut = trait_info.mut_self_methods.contains(method_name);
+                    let class_mut = env.mut_self_methods.contains(&mangled);
+                    if trait_mut && !class_mut {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "method '{}' in trait '{}' declares 'mut self', but class '{}' does not",
+                                method_name, trait_name, class_name
+                            ),
+                            trait_name_spanned.span,
+                        ));
+                    }
+                    if !trait_mut && class_mut {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "method '{}' in trait '{}' declares 'self', but class '{}' declares 'mut self'",
+                                method_name, trait_name, class_name
+                            ),
+                            trait_name_spanned.span,
+                        ));
+                    }
                 } else if trait_info.default_methods.contains(method_name) {
                     // Default implementation — register under mangled name
                     let mut params = trait_sig.params.clone();
@@ -803,12 +845,16 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                         params[0] = PlutoType::Class(class_name.clone());
                     }
                     env.functions.insert(
-                        mangled,
+                        mangled.clone(),
                         FuncSig {
                             params,
                             return_type: trait_sig.return_type.clone(),
                         },
                     );
+                    // Propagate mut self from trait default method
+                    if trait_info.mut_self_methods.contains(method_name) {
+                        env.mut_self_methods.insert(mangled.clone());
+                    }
                     // Add method name to class info
                     if let Some(info) = env.classes.get_mut(class_name) {
                         info.methods.push(method_name.clone());
