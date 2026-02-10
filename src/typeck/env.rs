@@ -137,6 +137,8 @@ pub struct TypeEnv {
     pub closure_fns: HashMap<String, Vec<(String, PlutoType)>>,
     pub app: Option<(String, ClassInfo)>,
     pub di_order: Vec<String>,
+    /// DI singletons that need rwlock synchronization (accessed concurrently from spawn + main)
+    pub synchronized_singletons: HashSet<String>,
     /// Per-function error sets: maps function name to set of error type names it can raise.
     /// Populated by the error inference pass.
     pub fn_errors: HashMap<String, HashSet<String>>,
@@ -228,6 +230,7 @@ impl TypeEnv {
             closure_fns: HashMap::new(),
             app: None,
             di_order: Vec::new(),
+            synchronized_singletons: HashSet::new(),
             fn_errors: HashMap::new(),
             generic_functions: HashMap::new(),
             generic_classes: HashMap::new(),

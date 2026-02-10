@@ -3191,3 +3191,25 @@ void __pluto_ensures_violation(long fn_name, long contract_desc) {
             (int)name_len, name_data, (int)desc_len, desc_data);
     exit(1);
 }
+
+// ── Rwlock synchronization ─────────────────────────────────────────────────
+
+#ifndef PLUTO_TEST_MODE
+long __pluto_rwlock_init(void) {
+    pthread_rwlock_t *lock = (pthread_rwlock_t *)malloc(sizeof(pthread_rwlock_t));
+    pthread_rwlock_init(lock, NULL);
+    return (long)lock;
+}
+
+void __pluto_rwlock_rdlock(long lock_ptr) {
+    pthread_rwlock_rdlock((pthread_rwlock_t *)lock_ptr);
+}
+
+void __pluto_rwlock_wrlock(long lock_ptr) {
+    pthread_rwlock_wrlock((pthread_rwlock_t *)lock_ptr);
+}
+
+void __pluto_rwlock_unlock(long lock_ptr) {
+    pthread_rwlock_unlock((pthread_rwlock_t *)lock_ptr);
+}
+#endif

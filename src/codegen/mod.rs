@@ -61,6 +61,27 @@ fn declare_singleton_globals(
     Ok(globals)
 }
 
+/// Declare a writable, zero-initialized 8-byte global for each synchronized singleton's rwlock.
+fn declare_rwlock_globals(
+    env: &TypeEnv,
+    module: &mut ObjectModule,
+) -> Result<HashMap<String, DataId>, CompileError> {
+    let mut globals = HashMap::new();
+    for class_name in &env.synchronized_singletons {
+        let data_name = format!("__pluto_rwlock_{}", class_name);
+        let data_id = module
+            .declare_data(&data_name, Linkage::Local, true, false)
+            .map_err(|e| CompileError::codegen(format!("declare rwlock global: {e}")))?;
+        let mut data_desc = DataDescription::new();
+        data_desc.define_zeroinit(8);
+        module
+            .define_data(data_id, &data_desc)
+            .map_err(|e| CompileError::codegen(format!("define rwlock global: {e}")))?;
+        globals.insert(class_name.clone(), data_id);
+    }
+    Ok(globals)
+}
+
 pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>, CompileError> {
     let mut flag_builder = settings::builder();
     flag_builder.set("is_pic", "true").unwrap();
@@ -84,6 +105,9 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
 
     // Declare module-level globals for DI singleton pointers (Phase 2)
     let singleton_data_ids = declare_singleton_globals(env, &mut module)?;
+
+    // Declare module-level globals for rwlock pointers (Phase 4b)
+    let rwlock_data_ids = declare_rwlock_globals(env, &mut module)?;
 
     // Pass 0: Declare extern fns with Import linkage
     for ext in &program.extern_fns {
@@ -353,7 +377,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
+            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
         }
 
         module
@@ -376,7 +400,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
             }
 
             module
@@ -431,7 +455,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
                             }
 
                             module
@@ -475,7 +499,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
             }
 
             module
@@ -620,6 +644,18 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                     let gv = module.declare_data_in_func(data_id, builder.func);
                     let addr = builder.ins().global_value(types::I64, gv);
                     builder.ins().store(MemFlags::new(), ptr, addr, Offset32::new(0));
+                }
+            }
+
+            // Initialize rwlocks for synchronized singletons (Phase 4b)
+            for class_name in &env.synchronized_singletons {
+                if let Some(&data_id) = rwlock_data_ids.get(class_name) {
+                    let rwlock_init_ref = module.declare_func_in_func(runtime.get("__pluto_rwlock_init"), builder.func);
+                    let call = builder.ins().call(rwlock_init_ref, &[]);
+                    let lock_ptr = builder.inst_results(call)[0];
+                    let gv = module.declare_data_in_func(data_id, builder.func);
+                    let addr = builder.ins().global_value(types::I64, gv);
+                    builder.ins().store(MemFlags::new(), lock_ptr, addr, Offset32::new(0));
                 }
             }
 

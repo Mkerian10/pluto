@@ -37,6 +37,8 @@ struct LowerContext<'a> {
     fn_contracts: &'a HashMap<String, FnContracts>,
     /// Module-level globals holding DI singleton pointers, used by scope blocks.
     singleton_globals: &'a HashMap<String, DataId>,
+    /// Module-level globals holding rwlock pointers for synchronized singletons.
+    rwlock_globals: &'a HashMap<String, DataId>,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
     var_types: HashMap<String, PlutoType>,
@@ -2778,6 +2780,20 @@ impl<'a> LowerContext<'a> {
                 arg_values.push(self.lower_expr(&arg.node)?);
             }
 
+            // Acquire rwlock if this singleton is synchronized (Phase 4b)
+            let needs_sync = self.rwlock_globals.contains_key(&class_name);
+            if needs_sync {
+                let data_id = self.rwlock_globals[&class_name];
+                let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+                let addr = self.builder.ins().global_value(types::I64, gv);
+                let lock_ptr = self.builder.ins().load(types::I64, MemFlags::new(), addr, Offset32::new(0));
+                if self.env.mut_self_methods.contains(&mangled) {
+                    self.call_runtime_void("__pluto_rwlock_wrlock", &[lock_ptr]);
+                } else {
+                    self.call_runtime_void("__pluto_rwlock_rdlock", &[lock_ptr]);
+                }
+            }
+
             let call = self.builder.ins().call(func_ref, &arg_values);
             let results = self.builder.inst_results(call);
             let result = if results.is_empty() {
@@ -2787,8 +2803,18 @@ impl<'a> LowerContext<'a> {
             };
 
             // Emit invariant checks only after mut self methods — only mutations can break invariants
+            // (runs inside lock scope so invariants are checked atomically)
             if self.env.mut_self_methods.contains(&mangled) {
                 self.emit_invariant_checks(&class_name, obj_ptr)?;
+            }
+
+            // Release rwlock after method call + invariant checks
+            if needs_sync {
+                let data_id = self.rwlock_globals[&class_name];
+                let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+                let addr = self.builder.ins().global_value(types::I64, gv);
+                let lock_ptr = self.builder.ins().load(types::I64, MemFlags::new(), addr, Offset32::new(0));
+                self.call_runtime_void("__pluto_rwlock_unlock", &[lock_ptr]);
             }
 
             Ok(result)
@@ -2929,6 +2955,7 @@ pub fn lower_function(
     class_invariants: &HashMap<String, Vec<(Expr, String)>>,
     fn_contracts: &HashMap<String, FnContracts>,
     singleton_globals: &HashMap<String, DataId>,
+    rwlock_globals: &HashMap<String, DataId>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -3070,6 +3097,7 @@ pub fn lower_function(
         class_invariants,
         fn_contracts,
         singleton_globals,
+        rwlock_globals,
         variables,
         var_types,
         next_var,

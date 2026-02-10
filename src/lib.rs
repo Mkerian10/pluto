@@ -12,6 +12,7 @@ pub mod ambient;
 pub mod rust_ffi;
 pub mod spawn;
 pub mod contracts;
+pub mod concurrency;
 pub mod manifest;
 pub mod git_cache;
 pub mod lsp;

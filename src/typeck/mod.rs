@@ -91,6 +91,7 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     }
     errors::infer_error_sets(program, &mut env);
     errors::enforce_error_handling(program, &env)?;
+    crate::concurrency::infer_synchronization(program, &mut env);
 
     let warnings = generate_warnings(&env, program);
     Ok((env, warnings))
