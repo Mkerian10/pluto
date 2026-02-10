@@ -5,7 +5,7 @@ use crate::parser::ast::*;
 use crate::span::Spanned;
 use super::env::{mangle_method, TypeEnv};
 use super::types::PlutoType;
-use super::resolve::{resolve_type, unify, ensure_generic_func_instantiated, ensure_generic_class_instantiated, ensure_generic_enum_instantiated};
+use super::resolve::{resolve_type, unify, ensure_generic_func_instantiated, ensure_generic_class_instantiated, ensure_generic_enum_instantiated, validate_type_bounds};
 use super::closures::infer_closure;
 use super::types_compatible;
 
@@ -668,6 +668,8 @@ fn infer_call(
         let type_args: Vec<PlutoType> = gen_sig.type_params.iter()
             .map(|tp| bindings[tp].clone())
             .collect();
+        // Validate type bounds before instantiation
+        validate_type_bounds(&gen_sig.type_params, &type_args, &gen_sig.type_param_bounds, env, span, &name.node)?;
         let mangled = ensure_generic_func_instantiated(&name.node, &type_args, env);
         // Store rewrite
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
@@ -741,6 +743,8 @@ fn infer_struct_lit(
         let resolved_args: Vec<PlutoType> = type_args.iter()
             .map(|a| resolve_type(a, env))
             .collect::<Result<Vec<_>, _>>()?;
+        // Validate type bounds
+        validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, span, &name.node)?;
         let mangled = ensure_generic_class_instantiated(&name.node, &resolved_args, env);
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
         let ci = env.classes.get(&mangled)
@@ -830,6 +834,8 @@ fn infer_enum_unit(
         let resolved_args: Vec<PlutoType> = type_args.iter()
             .map(|a| resolve_type(a, env))
             .collect::<Result<Vec<_>, _>>()?;
+        // Validate type bounds
+        validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, span, &enum_name.node)?;
         let mangled = ensure_generic_enum_instantiated(&enum_name.node, &resolved_args, env);
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
         let ei = env.enums.get(&mangled)
@@ -886,6 +892,8 @@ fn infer_enum_data(
         let resolved_args: Vec<PlutoType> = type_args.iter()
             .map(|a| resolve_type(a, env))
             .collect::<Result<Vec<_>, _>>()?;
+        // Validate type bounds
+        validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, span, &enum_name.node)?;
         let mangled = ensure_generic_enum_instantiated(&enum_name.node, &resolved_args, env);
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
         let ei = env.enums.get(&mangled)

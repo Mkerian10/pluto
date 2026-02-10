@@ -38,6 +38,7 @@ pub struct ErrorInfo {
 #[derive(Debug, Clone)]
 pub struct GenericFuncSig {
     pub type_params: Vec<String>,
+    pub type_param_bounds: HashMap<String, Vec<String>>,  // T -> [Trait1, Trait2]
     pub params: Vec<PlutoType>,      // contains TypeParam
     pub return_type: PlutoType,       // may contain TypeParam
 }
@@ -45,6 +46,7 @@ pub struct GenericFuncSig {
 #[derive(Debug, Clone)]
 pub struct GenericClassInfo {
     pub type_params: Vec<String>,
+    pub type_param_bounds: HashMap<String, Vec<String>>,  // T -> [Trait1, Trait2]
     pub fields: Vec<(String, PlutoType, bool)>,  // may contain TypeParam
     pub methods: Vec<String>,
     pub method_sigs: HashMap<String, FuncSig>,  // method_name → sig (may contain TypeParam)
@@ -56,6 +58,7 @@ pub struct GenericClassInfo {
 #[derive(Debug, Clone)]
 pub struct GenericEnumInfo {
     pub type_params: Vec<String>,
+    pub type_param_bounds: HashMap<String, Vec<String>>,  // T -> [Trait1, Trait2]
     pub variants: Vec<(String, Vec<(String, PlutoType)>)>,  // may contain TypeParam
 }
 

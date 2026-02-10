@@ -322,3 +322,211 @@ fn main() {
         "return type",
     );
 }
+
+// ── Phase B: Type Bounds ────────────────────────────────────────
+
+#[test]
+fn type_bound_basic() {
+    let out = compile_and_run_stdout(r#"
+trait Printable {
+    fn show(self) string
+}
+
+class MyBox impl Printable {
+    value: int
+
+    fn show(self) string {
+        return "box"
+    }
+}
+
+fn process<T: Printable>(x: T) string {
+    return x.show()
+}
+
+fn main() {
+    let b = MyBox { value: 42 }
+    print(process(b))
+}
+"#);
+    assert_eq!(out.trim(), "box");
+}
+
+#[test]
+fn type_bound_violation() {
+    compile_should_fail_with(r#"
+trait Printable {
+    fn show(self) string
+}
+
+fn process<T: Printable>(x: T) string {
+    return x.show()
+}
+
+fn main() {
+    process(42)
+}
+"#,
+        "does not satisfy bound",
+    );
+}
+
+#[test]
+fn type_bound_multiple() {
+    let out = compile_and_run_stdout(r#"
+trait Showable {
+    fn show(self) string
+}
+
+trait Countable {
+    fn count(self) int
+}
+
+class Item impl Showable, Countable {
+    name: string
+    n: int
+
+    fn show(self) string {
+        return self.name
+    }
+
+    fn count(self) int {
+        return self.n
+    }
+}
+
+fn display<T: Showable + Countable>(x: T) string {
+    return x.show()
+}
+
+fn main() {
+    let item = Item { name: "hello", n: 5 }
+    print(display(item))
+}
+"#);
+    assert_eq!(out.trim(), "hello");
+}
+
+#[test]
+fn type_bound_on_class() {
+    let out = compile_and_run_stdout(r#"
+trait Printable {
+    fn show(self) string
+}
+
+class Wrapper impl Printable {
+    label: string
+
+    fn show(self) string {
+        return self.label
+    }
+}
+
+class Container<T: Printable> {
+    item: T
+}
+
+fn main() {
+    let w = Wrapper { label: "hi" }
+    let c = Container<Wrapper> { item: w }
+    print(c.item.show())
+}
+"#);
+    assert_eq!(out.trim(), "hi");
+}
+
+#[test]
+fn type_bound_on_class_violation() {
+    compile_should_fail_with(r#"
+trait Printable {
+    fn show(self) string
+}
+
+class Container<T: Printable> {
+    item: T
+}
+
+fn main() {
+    let c = Container<int> { item: 42 }
+}
+"#,
+        "does not satisfy bound",
+    );
+}
+
+#[test]
+fn type_bound_with_trait_impl() {
+    let out = compile_and_run_stdout(r#"
+trait Printable {
+    fn show(self) string
+}
+
+trait Describable {
+    fn describe(self) string
+}
+
+class Inner impl Printable {
+    val: int
+
+    fn show(self) string {
+        return "inner"
+    }
+}
+
+class MyBox<T: Printable> impl Describable {
+    item: T
+
+    fn get_label(self) string {
+        return self.item.show()
+    }
+
+    fn describe(self) string {
+        return "described"
+    }
+}
+
+fn use_describable(d: Describable) string {
+    return d.describe()
+}
+
+fn main() {
+    let i = Inner { val: 1 }
+    let b = MyBox<Inner> { item: i }
+    print(b.get_label())
+    print(use_describable(b))
+}
+"#);
+    assert_eq!(out.trim(), "inner\ndescribed");
+}
+
+#[test]
+fn type_bound_multiple_violation() {
+    compile_should_fail_with(r#"
+trait Showable {
+    fn show(self) string
+}
+
+trait Countable {
+    fn count(self) int
+}
+
+class Item impl Showable {
+    name: string
+
+    fn show(self) string {
+        return self.name
+    }
+}
+
+fn display<T: Showable + Countable>(x: T) string {
+    return x.show()
+}
+
+fn main() {
+    let item = Item { name: "hello" }
+    display(item)
+}
+"#,
+        "does not satisfy bound",
+    );
+}

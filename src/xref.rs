@@ -327,6 +327,7 @@ mod tests {
             id: Uuid::new_v4(),
             name: sp(name.to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             params: vec![],
             return_type: None,
             contracts: vec![],
@@ -391,6 +392,7 @@ mod tests {
             id: class_id,
             name: sp("Point".to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             fields: vec![],
             methods: vec![],
             invariants: vec![],
@@ -431,6 +433,7 @@ mod tests {
             id: enum_id,
             name: sp("Color".to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             variants: vec![EnumVariant {
                 id: variant_id,
                 name: sp("Red".to_string()),
@@ -472,6 +475,7 @@ mod tests {
             id: enum_id,
             name: sp("Shape".to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             variants: vec![EnumVariant {
                 id: variant_id,
                 name: sp("Circle".to_string()),
@@ -544,6 +548,7 @@ mod tests {
             id: enum_id,
             name: sp("Option".to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             variants: vec![EnumVariant {
                 id: variant_id,
                 name: sp("Some".to_string()),
@@ -698,11 +703,13 @@ mod tests {
             id: Uuid::new_v4(),
             name: sp("Greeter".to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             fields: vec![],
             methods: vec![sp(Function {
                 id: method_id,
                 name: sp("hello".to_string()),
                 type_params: vec![],
+                type_param_bounds: std::collections::HashMap::new(),
                 params: vec![],
                 return_type: None,
                 contracts: vec![],

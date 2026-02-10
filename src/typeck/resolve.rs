@@ -119,9 +119,13 @@ pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<
             } else if env.enums.contains_key(&mangled) {
                 Ok(PlutoType::Enum(mangled))
             } else if env.generic_classes.contains_key(name.as_str()) {
+                let gen_info = env.generic_classes.get(name.as_str()).unwrap().clone();
+                validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, ty.span, name)?;
                 let m = ensure_generic_class_instantiated(name, &resolved_args, env);
                 Ok(PlutoType::Class(m))
             } else if env.generic_enums.contains_key(name.as_str()) {
+                let gen_info = env.generic_enums.get(name.as_str()).unwrap().clone();
+                validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, ty.span, name)?;
                 let m = ensure_generic_enum_instantiated(name, &resolved_args, env);
                 Ok(PlutoType::Enum(m))
             } else {
@@ -241,9 +245,13 @@ pub(crate) fn resolve_type_with_params(
                 } else if env.enums.contains_key(&mangled) {
                     Ok(PlutoType::Enum(mangled))
                 } else if env.generic_classes.contains_key(name.as_str()) {
+                    let gen_info = env.generic_classes.get(name.as_str()).unwrap().clone();
+                    validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, ty.span, name)?;
                     let m = ensure_generic_class_instantiated(name, &resolved_args, env);
                     Ok(PlutoType::Class(m))
                 } else if env.generic_enums.contains_key(name.as_str()) {
+                    let gen_info = env.generic_enums.get(name.as_str()).unwrap().clone();
+                    validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, ty.span, name)?;
                     let m = ensure_generic_enum_instantiated(name, &resolved_args, env);
                     Ok(PlutoType::Enum(m))
                 } else {
@@ -443,6 +451,39 @@ pub(crate) fn resolve_generic_instances(ty: &PlutoType, env: &mut TypeEnv) -> Pl
         PlutoType::Nullable(inner) => PlutoType::Nullable(Box::new(resolve_generic_instances(inner, env))),
         _ => ty.clone(),
     }
+}
+
+/// Validate that concrete type arguments satisfy their type parameter bounds.
+/// Each type parameter may have bounds like `T: Trait1 + Trait2`, meaning the
+/// concrete type must be a class that implements all the required traits.
+pub(crate) fn validate_type_bounds(
+    type_params: &[String],
+    type_args: &[PlutoType],
+    bounds: &HashMap<String, Vec<String>>,
+    env: &TypeEnv,
+    span: crate::span::Span,
+    generic_name: &str,
+) -> Result<(), CompileError> {
+    for (param, arg) in type_params.iter().zip(type_args.iter()) {
+        if let Some(required_traits) = bounds.get(param) {
+            for trait_name in required_traits {
+                let satisfies = match arg {
+                    PlutoType::Class(class_name) => env.class_implements_trait(class_name, trait_name),
+                    _ => false,
+                };
+                if !satisfies {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "type {} does not satisfy bound '{}: {}' required by '{}'",
+                            arg, param, trait_name, generic_name
+                        ),
+                        span,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn ensure_generic_func_instantiated(

@@ -151,8 +151,28 @@ pub(crate) fn register_enums(program: &Program, env: &mut TypeEnv) -> Result<(),
                 }
                 variants.push((v.name.node.clone(), fields));
             }
+            // Extract and validate type param bounds
+            let enum_bounds: HashMap<String, Vec<String>> = e.type_param_bounds.iter()
+                .map(|(tp, traits)| {
+                    (tp.clone(), traits.iter().map(|t| t.node.clone()).collect())
+                })
+                .collect();
+            for (tp, trait_names) in &e.type_param_bounds {
+                if !tp_names.contains(tp) {
+                    continue;
+                }
+                for trait_name in trait_names {
+                    if !env.traits.contains_key(&trait_name.node) {
+                        return Err(CompileError::type_err(
+                            format!("unknown trait '{}' in type bound for '{}'", trait_name.node, tp),
+                            trait_name.span,
+                        ));
+                    }
+                }
+            }
             env.generic_enums.insert(e.name.node.clone(), GenericEnumInfo {
                 type_params: e.type_params.iter().map(|tp| tp.node.clone()).collect(),
+                type_param_bounds: enum_bounds,
                 variants,
             });
             continue;
@@ -282,6 +302,25 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                 }
             }
             let tp_names: std::collections::HashSet<String> = c.type_params.iter().map(|tp| tp.node.clone()).collect();
+            // Extract and validate type param bounds
+            let bounds: HashMap<String, Vec<String>> = c.type_param_bounds.iter()
+                .map(|(tp, traits)| {
+                    (tp.clone(), traits.iter().map(|t| t.node.clone()).collect())
+                })
+                .collect();
+            for (tp, trait_names) in &c.type_param_bounds {
+                if !tp_names.contains(tp) {
+                    continue;
+                }
+                for trait_name in trait_names {
+                    if !env.traits.contains_key(&trait_name.node) {
+                        return Err(CompileError::type_err(
+                            format!("unknown trait '{}' in type bound for '{}'", trait_name.node, tp),
+                            trait_name.span,
+                        ));
+                    }
+                }
+            }
             let mut fields = Vec::new();
             for f in &c.fields {
                 let ty = resolve_type_with_params(&f.ty, env, &tp_names)?;
@@ -317,6 +356,7 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
             }
             env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
                 type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
+                type_param_bounds: bounds,
                 fields,
                 methods: method_names,
                 method_sigs,
@@ -448,8 +488,28 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
                 Some(t) => resolve_type_with_params(t, env, &tp_names)?,
                 None => PlutoType::Void,
             };
+            // Extract and validate type param bounds
+            let bounds: HashMap<String, Vec<String>> = f.type_param_bounds.iter()
+                .map(|(tp, traits)| {
+                    (tp.clone(), traits.iter().map(|t| t.node.clone()).collect())
+                })
+                .collect();
+            for (tp, trait_names) in &f.type_param_bounds {
+                if !tp_names.contains(tp) {
+                    continue; // shouldn't happen from parser, but defensive
+                }
+                for trait_name in trait_names {
+                    if !env.traits.contains_key(&trait_name.node) {
+                        return Err(CompileError::type_err(
+                            format!("unknown trait '{}' in type bound for '{}'", trait_name.node, tp),
+                            trait_name.span,
+                        ));
+                    }
+                }
+            }
             env.generic_functions.insert(f.name.node.clone(), GenericFuncSig {
                 type_params: f.type_params.iter().map(|tp| tp.node.clone()).collect(),
+                type_param_bounds: bounds,
                 params: param_types,
                 return_type,
             });
@@ -1177,6 +1237,7 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
                                 id: Uuid::new_v4(),
                                 name: trait_method.name.clone(),
                                 type_params: vec![],
+                                type_param_bounds: HashMap::new(),
                                 params: trait_method.params.clone(),
                                 return_type: trait_method.return_type.clone(),
                                 contracts: trait_method.contracts.clone(),

@@ -1,6 +1,6 @@
 pub mod ast;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
@@ -431,6 +431,7 @@ impl<'a> Parser<'a> {
                         id: Uuid::new_v4(),
                         name: Spanned::new(fn_name.clone(), name_span),
                         type_params: vec![],
+                        type_param_bounds: HashMap::new(),
                         params: vec![],
                         return_type: None,
                         contracts: vec![],
@@ -668,7 +669,7 @@ impl<'a> Parser<'a> {
         let enum_tok = self.expect(&Token::Enum)?;
         let start = enum_tok.span.start;
         let name = self.expect_ident()?;
-        let type_params = self.parse_type_params()?;
+        let (type_params, type_param_bounds) = self.parse_type_params()?;
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
@@ -696,7 +697,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(EnumDecl { id: Uuid::new_v4(), name, type_params, variants, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(EnumDecl { id: Uuid::new_v4(), name, type_params, type_param_bounds, variants, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_error_decl(&mut self) -> Result<Spanned<ErrorDecl>, CompileError> {
@@ -827,7 +828,7 @@ impl<'a> Parser<'a> {
         let class_tok = self.expect(&Token::Class)?;
         let start = class_tok.span.start;
         let name = self.expect_ident()?;
-        let type_params = self.parse_type_params()?;
+        let (type_params, type_param_bounds) = self.parse_type_params()?;
 
         // Parse optional `uses Type, Type2`
         let uses = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Uses) {
@@ -894,7 +895,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, fields, methods, invariants, impl_traits, uses, is_pub: false, lifecycle: Lifecycle::Singleton }, Span::new(start, end)))
+        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, type_param_bounds, fields, methods, invariants, impl_traits, uses, is_pub: false, lifecycle: Lifecycle::Singleton }, Span::new(start, end)))
     }
 
     fn parse_method(&mut self) -> Result<Spanned<Function>, CompileError> {
@@ -958,20 +959,44 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { id: Uuid::new_v4(), name, type_params: vec![], params, return_type, contracts, body, is_pub: false },
+            Function { id: Uuid::new_v4(), name, type_params: vec![], type_param_bounds: HashMap::new(), params, return_type, contracts, body, is_pub: false },
             Span::new(start, end),
         ))
     }
 
-    /// Parse optional type parameters: `<T>`, `<A, B>`, or empty.
-    fn parse_type_params(&mut self) -> Result<Vec<Spanned<String>>, CompileError> {
+    /// Parse optional type parameters: `<T>`, `<A, B>`, `<T: Trait1 + Trait2>`, or empty.
+    /// Returns (type_param_names, bounds_map).
+    fn parse_type_params(&mut self) -> Result<(Vec<Spanned<String>>, HashMap<String, Vec<Spanned<String>>>), CompileError> {
         if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt) {
             self.advance(); // consume '<'
-            let params = self.parse_comma_list(&Token::Gt, true, |p| p.expect_ident())?;
+            let mut params = Vec::new();
+            let mut bounds = HashMap::new();
+            let result = self.parse_comma_list(&Token::Gt, true, |p| {
+                let name = p.expect_ident()?;
+                // Check for `: Trait1 + Trait2` bounds
+                if p.peek().is_some() && matches!(p.peek().expect("token should exist after is_some check").node, Token::Colon) {
+                    p.advance(); // consume ':'
+                    let mut trait_bounds = Vec::new();
+                    trait_bounds.push(p.expect_ident()?);
+                    while p.peek().is_some() && matches!(p.peek().expect("token should exist after is_some check").node, Token::Plus) {
+                        p.advance(); // consume '+'
+                        trait_bounds.push(p.expect_ident()?);
+                    }
+                    Ok((name, trait_bounds))
+                } else {
+                    Ok((name, Vec::new()))
+                }
+            })?;
+            for (name, trait_bounds) in result {
+                if !trait_bounds.is_empty() {
+                    bounds.insert(name.node.clone(), trait_bounds);
+                }
+                params.push(name);
+            }
             self.expect(&Token::Gt)?;
-            Ok(params)
+            Ok((params, bounds))
         } else {
-            Ok(Vec::new())
+            Ok((Vec::new(), HashMap::new()))
         }
     }
 
@@ -1022,7 +1047,7 @@ impl<'a> Parser<'a> {
         let fn_tok = self.expect(&Token::Fn)?;
         let start = fn_tok.span.start;
         let name = self.expect_ident()?;
-        let type_params = self.parse_type_params()?;
+        let (type_params, type_param_bounds) = self.parse_type_params()?;
         self.expect(&Token::LParen)?;
         let params = self.parse_comma_list(&Token::RParen, true, |p| {
             let pname = p.expect_ident()?;
@@ -1045,7 +1070,7 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { id: Uuid::new_v4(), name, type_params, params, return_type, contracts, body, is_pub: false },
+            Function { id: Uuid::new_v4(), name, type_params, type_param_bounds, params, return_type, contracts, body, is_pub: false },
             Span::new(start, end),
         ))
     }
