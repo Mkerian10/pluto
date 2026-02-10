@@ -128,6 +128,12 @@ fn lift_in_stmt(
                 lift_in_block(&mut def.node, env, counter, new_fns)?;
             }
         }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                lift_in_expr(&mut seed.node, seed.span, env, counter, new_fns)?;
+            }
+            lift_in_block(&mut body.node, env, counter, new_fns)?;
+        }
         Stmt::Break | Stmt::Continue => {}
     }
     Ok(())

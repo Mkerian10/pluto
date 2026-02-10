@@ -80,6 +80,8 @@ pub enum Token {
     Select,
     #[token("default")]
     Default,
+    #[token("scope")]
+    Scope,
     #[token("scoped")]
     Scoped,
     #[token("transient")]
@@ -237,7 +239,7 @@ pub fn is_keyword(s: &str) -> bool {
         | "enum" | "impl" | "self" | "pub" | "for" | "in" | "break" | "continue"
         | "match" | "import" | "as" | "extern" | "uses" | "ambient" | "test"
         | "invariant" | "requires" | "ensures" | "select" | "default"
-        | "scoped" | "transient" | "none")
+        | "scope" | "scoped" | "transient" | "none")
 }
 
 impl std::fmt::Display for Token {
@@ -280,6 +282,7 @@ impl std::fmt::Display for Token {
             Token::Ensures => write!(f, "ensures"),
             Token::Select => write!(f, "select"),
             Token::Default => write!(f, "default"),
+            Token::Scope => write!(f, "scope"),
             Token::Scoped => write!(f, "scoped"),
             Token::Transient => write!(f, "transient"),
             Token::None => write!(f, "none"),

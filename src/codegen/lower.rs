@@ -35,8 +35,7 @@ struct LowerContext<'a> {
     /// Function contracts: fn_mangled_name → FnContracts (used during function setup)
     #[allow(dead_code)]
     fn_contracts: &'a HashMap<String, FnContracts>,
-    /// Module-level globals holding DI singleton pointers (Phase 2).
-    #[allow(dead_code)]
+    /// Module-level globals holding DI singleton pointers, used by scope blocks.
     singleton_globals: &'a HashMap<String, DataId>,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
@@ -95,8 +94,7 @@ impl<'a> LowerContext<'a> {
     }
 
     /// Load a singleton pointer from its module-level global.
-    /// Used by scope block codegen (Phase 3).
-    #[allow(dead_code)]
+    /// Used by scope block codegen to wire singleton dependencies into scoped instances.
     fn load_singleton(&mut self, class_name: &str) -> Result<Value, CompileError> {
         let data_id = self.singleton_globals.get(class_name).ok_or_else(|| {
             CompileError::codegen(format!("no singleton global for '{}'", class_name))
@@ -518,6 +516,7 @@ impl<'a> LowerContext<'a> {
                 Ok(())
             }
             Stmt::Select { arms, default } => self.lower_select(arms, default, terminated),
+            Stmt::Scope { seeds, bindings, body } => self.lower_scope(seeds, bindings, body),
             Stmt::Expr(expr) => {
                 self.lower_expr(&expr.node)?;
                 Ok(())
@@ -1322,6 +1321,164 @@ impl<'a> LowerContext<'a> {
 
         // Return default value (caller checks TLS)
         self.emit_default_return();
+        Ok(())
+    }
+
+    fn lower_scope(
+        &mut self,
+        seeds: &[crate::span::Spanned<Expr>],
+        bindings: &[ScopeBinding],
+        body: &crate::span::Spanned<Block>,
+    ) -> Result<(), CompileError> {
+        use crate::typeck::env::FieldWiring;
+
+        // Look up the ScopeResolution computed during typeck
+        // We need to find the Stmt::Scope span — use the first seed's start and body's end
+        // Actually, the key is (stmt span.start, stmt span.end). The stmt span encompasses
+        // everything from `scope` keyword to end of body `}`. We need to match what check.rs stored.
+        // The dispatch in lower_stmt gives us the stmt node directly, and the span is on the outer
+        // Spanned<Stmt>. We can reconstruct from seeds[0] start to body end.
+        // Better: find the resolution by scanning for one that matches our seeds/body span range.
+        let scope_key = self.env.scope_resolutions.keys()
+            .find(|&&(start, end)| {
+                // The scope stmt span starts before the first seed and ends at body end
+                seeds.first().map_or(false, |s| start <= s.span.start) &&
+                end == body.span.end
+            })
+            .copied()
+            .ok_or_else(|| {
+                CompileError::codegen("missing ScopeResolution for scope block".to_string())
+            })?;
+        let resolution = self.env.scope_resolutions.get(&scope_key).unwrap().clone();
+
+        // 1. Evaluate seed expressions and store in locals
+        let mut seed_vals: Vec<Value> = Vec::new();
+        for seed in seeds {
+            let val = self.lower_expr(&seed.node)?;
+            seed_vals.push(val);
+        }
+
+        // 2. Allocate scoped instances in topological order
+        let mut scoped_locals: HashMap<String, Value> = HashMap::new();
+
+        // Also map seed class names to their values for wiring
+        // We need to know seed class names — get from typeck env
+        // For now, infer from ScopeResolution binding_sources: Seed(idx) gives us the idx
+        // But we need the class names. Get them from the env by checking seed types.
+        // Actually we stored seed indices in FieldWiring::Seed — the class name for each seed
+        // can be recovered from FieldWiring entries. Let's just iterate all wirings.
+        // Simpler: store seed values by looking at binding_sources + field_wirings.
+        // We need a map from seed index to value (already have seed_vals), and from class_name to value.
+
+        // Build seed_name_to_val by inspecting what classes the seeds produce.
+        // We can look at the binding_sources: if a FieldWiring::Seed(idx) appears, that seed
+        // provides some class. But we need the actual class names for ScopedInstance wiring.
+        // Let's use the field_wirings: scan for Seed(idx) entries to discover which class name
+        // each seed provides. Or better: just look at the ScopeResolution field_wirings for
+        // FieldWiring::Seed values.
+        // Actually the simplest approach: any class that's NOT in creation_order but IS referenced
+        // as ScopedInstance must be a seed. But that's fragile.
+        // The cleanest: we know seed types from typeck. The ScopeResolution doesn't store them
+        // directly, but we can reconstruct: for binding_sources, Seed(idx) tells us that binding
+        // is a seed. For field_wirings, Seed(idx) tells us which seed provides a dep.
+        // We just need a map from class_name → Value for ALL scope-available classes.
+
+        for class_name in &resolution.creation_order {
+            let class_info = self.env.classes.get(class_name).ok_or_else(|| {
+                CompileError::codegen(format!("scope: unknown class '{class_name}'"))
+            })?.clone();
+            let num_fields = class_info.fields.len() as i64;
+            let size = num_fields * POINTER_SIZE as i64;
+            let size_val = self.builder.ins().iconst(types::I64, size);
+            let ptr = self.call_runtime("__pluto_alloc", &[size_val]);
+
+            // Wire fields
+            if let Some(wirings) = resolution.field_wirings.get(class_name) {
+                for (field_name, wiring) in wirings {
+                    let field_idx = class_info.fields.iter()
+                        .position(|(n, _, _)| n == field_name)
+                        .ok_or_else(|| {
+                            CompileError::codegen(format!("scope: unknown field '{field_name}' on '{class_name}'"))
+                        })?;
+                    let offset = field_idx as i32 * POINTER_SIZE;
+
+                    let dep_val = match wiring {
+                        FieldWiring::Seed(idx) => seed_vals[*idx],
+                        FieldWiring::Singleton(name) => self.load_singleton(name)?,
+                        FieldWiring::ScopedInstance(name) => {
+                            *scoped_locals.get(name).ok_or_else(|| {
+                                CompileError::codegen(format!(
+                                    "scope: scoped instance '{name}' not yet created (ordering bug)"
+                                ))
+                            })?
+                        }
+                    };
+
+                    self.builder.ins().store(
+                        MemFlags::new(),
+                        dep_val,
+                        ptr,
+                        Offset32::new(offset),
+                    );
+                }
+            }
+
+            scoped_locals.insert(class_name.clone(), ptr);
+        }
+
+        // 3. Save current variable bindings and define scope bindings
+        let mut saved_vars: Vec<(String, Option<Variable>, Option<PlutoType>)> = Vec::new();
+
+        for (i, binding) in bindings.iter().enumerate() {
+            let name = &binding.name.node;
+            let prev_var = self.variables.get(name).cloned();
+            let prev_type = self.var_types.get(name).cloned();
+            saved_vars.push((name.clone(), prev_var, prev_type));
+
+            // Get the value for this binding
+            let val = match &resolution.binding_sources[i] {
+                FieldWiring::Seed(idx) => seed_vals[*idx],
+                FieldWiring::ScopedInstance(class_name) => {
+                    *scoped_locals.get(class_name).ok_or_else(|| {
+                        CompileError::codegen(format!(
+                            "scope: binding class '{class_name}' not available"
+                        ))
+                    })?
+                }
+                FieldWiring::Singleton(class_name) => self.load_singleton(class_name)?,
+            };
+
+            // Create a new Cranelift variable for the binding
+            let var = Variable::from_u32(self.next_var);
+            self.next_var += 1;
+            self.builder.declare_var(var, types::I64);
+            self.builder.def_var(var, val);
+
+            let ty = resolve_type_expr_to_pluto(&binding.ty.node, self.env);
+            self.variables.insert(name.clone(), var);
+            self.var_types.insert(name.clone(), ty);
+        }
+
+        // 4. Lower body
+        let mut body_terminated = false;
+        for s in &body.node.stmts {
+            self.lower_stmt(&s.node, &mut body_terminated)?;
+        }
+
+        // 5. Restore previous variable bindings
+        for (name, prev_var, prev_type) in saved_vars {
+            if let Some(pv) = prev_var {
+                self.variables.insert(name.clone(), pv);
+            } else {
+                self.variables.remove(&name);
+            }
+            if let Some(pt) = prev_type {
+                self.var_types.insert(name, pt);
+            } else {
+                self.var_types.remove(&name);
+            }
+        }
+
         Ok(())
     }
 

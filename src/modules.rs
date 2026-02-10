@@ -1007,6 +1007,15 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
                 rewrite_block_for_module(&mut def.node, module_name, module_prog);
             }
         }
+        Stmt::Scope { seeds, bindings, body } => {
+            for seed in seeds {
+                rewrite_expr_for_module(&mut seed.node, module_name, module_prog);
+            }
+            for binding in bindings {
+                prefix_type_expr(&mut binding.ty.node, module_name, module_prog);
+            }
+            rewrite_block_for_module(&mut body.node, module_name, module_prog);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -1327,6 +1336,15 @@ fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
             if let Some(def) = default {
                 rewrite_block(&mut def.node, import_names);
             }
+        }
+        Stmt::Scope { seeds, bindings, body } => {
+            for seed in seeds {
+                rewrite_expr(&mut seed.node, seed.span, import_names);
+            }
+            for binding in bindings {
+                rewrite_type_expr(&mut binding.ty, import_names);
+            }
+            rewrite_block(&mut body.node, import_names);
         }
         Stmt::Break | Stmt::Continue => {}
     }

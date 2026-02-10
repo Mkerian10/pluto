@@ -149,6 +149,14 @@ Demonstrates first-class nullable types: `T?` syntax for nullable types, `none` 
 cargo run -- run examples/nullable/main.pluto
 ```
 
+## scope-blocks
+
+Demonstrates scoped dependency injection with `scope()` blocks: creating per-request scoped class instances from seed values, auto-wiring dependency chains (`Handler` -> `UserService` -> `RequestCtx`), mixing scoped and singleton deps, and binding multiple services from a single seed.
+
+```bash
+cargo run -- run examples/scope-blocks/main.pluto
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.

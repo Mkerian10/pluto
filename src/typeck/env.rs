@@ -92,6 +92,28 @@ pub enum MethodResolution {
     ChannelTryRecv,
 }
 
+/// How a field of a scoped class gets its value during a scope block.
+#[derive(Debug, Clone)]
+pub enum FieldWiring {
+    /// Value comes from the Nth seed expression
+    Seed(usize),
+    /// Value comes from a singleton global (class name)
+    Singleton(String),
+    /// Value comes from another scoped instance created within this scope block (class name)
+    ScopedInstance(String),
+}
+
+/// Resolved DI graph for a single scope block — computed in typeck, consumed in codegen.
+#[derive(Debug, Clone)]
+pub struct ScopeResolution {
+    /// Topologically sorted scoped classes to allocate (leaves first)
+    pub creation_order: Vec<String>,
+    /// Per-class field wirings: class_name → [(field_name, wiring_source)]
+    pub field_wirings: HashMap<String, Vec<(String, FieldWiring)>>,
+    /// How each binding variable is satisfied
+    pub binding_sources: Vec<FieldWiring>,
+}
+
 #[derive(Debug)]
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, PlutoType>>,
@@ -145,6 +167,8 @@ pub struct TypeEnv {
     pub variable_decls: HashMap<(String, usize), Span>,
     /// Variable reads: (var_name, scope_depth)
     pub variable_reads: HashSet<(String, usize)>,
+    /// Scope block resolutions: keyed by (span.start, span.end) of the Stmt::Scope node
+    pub scope_resolutions: HashMap<(usize, usize), ScopeResolution>,
 }
 
 impl Default for TypeEnv {
@@ -206,6 +230,7 @@ impl TypeEnv {
             immutable_bindings: vec![HashSet::new()],
             variable_decls: HashMap::new(),
             variable_reads: HashSet::new(),
+            scope_resolutions: HashMap::new(),
         }
     }
 

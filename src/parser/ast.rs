@@ -188,9 +188,20 @@ pub enum Stmt {
         arms: Vec<SelectArm>,
         default: Option<Spanned<Block>>,
     },
+    Scope {
+        seeds: Vec<Spanned<Expr>>,
+        bindings: Vec<ScopeBinding>,
+        body: Spanned<Block>,
+    },
     Break,
     Continue,
     Expr(Spanned<Expr>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScopeBinding {
+    pub name: Spanned<String>,
+    pub ty: Spanned<TypeExpr>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

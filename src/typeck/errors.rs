@@ -201,6 +201,14 @@ fn collect_stmt_effects(
                 direct_errors.insert("ChannelClosed".to_string());
             }
         }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                collect_expr_effects(&seed.node, direct_errors, edges, current_fn, env);
+            }
+            for s in &body.node.stmts {
+                collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -522,6 +530,13 @@ fn enforce_stmt(
             }
             Ok(())
         }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                enforce_expr(&seed.node, seed.span, current_fn, env)?;
+            }
+            enforce_block(&body.node, current_fn, env)?;
+            Ok(())
+        }
         Stmt::Break | Stmt::Continue => Ok(()),
     }
 }
@@ -811,6 +826,10 @@ fn stmt_contains_propagate(stmt: &Stmt) -> bool {
                 return true;
             }
             false
+        }
+        Stmt::Scope { seeds, body, .. } => {
+            if seeds.iter().any(|s| contains_propagate(&s.node)) { return true; }
+            body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
         }
         Stmt::Break | Stmt::Continue => false,
     }

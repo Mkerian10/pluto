@@ -186,6 +186,12 @@ fn collect_free_vars_stmt(
                 collect_free_vars_block(&def.node, param_names, outer_depth, env, captures, seen);
             }
         }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                collect_free_vars_expr(&seed.node, param_names, outer_depth, env, captures, seen);
+            }
+            collect_free_vars_block(&body.node, param_names, outer_depth, env, captures, seen);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
