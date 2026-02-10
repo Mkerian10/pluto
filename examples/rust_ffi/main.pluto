@@ -24,4 +24,11 @@ fn main() {
     for i in 1..8 {
         print("  {i}! = {math.factorial(i)}")
     }
+
+    print("")
+    print("Fallible Rust FFI (Result<T, E>):")
+    let result = math.safe_divide(10.0, 3.0)!
+    print("  10 / 3 = {result}")
+    let handled = math.safe_divide(10.0, 0.0) catch -1.0
+    print("  10 / 0 = {handled} (caught)")
 }

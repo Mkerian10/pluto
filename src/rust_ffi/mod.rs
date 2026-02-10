@@ -21,6 +21,7 @@ pub struct BridgedFunction {
     pub symbol_name: String,
     pub params: Vec<PlutoType>,
     pub return_type: PlutoType,
+    pub is_fallible: bool,
 }
 
 struct CrateMetadata {
@@ -160,6 +161,7 @@ pub fn resolve_rust_crates(
                     symbol_name: pluto_name,
                     params,
                     return_type,
+                    is_fallible: sig.is_fallible,
                 }
             })
             .collect();
@@ -175,6 +177,7 @@ pub fn resolve_rust_crates(
 }
 
 /// Inject bridged functions into the program as ExternFnDecl entries.
+/// Also populates `program.fallible_extern_fns` for functions returning `Result`.
 pub fn inject_extern_fns(program: &mut Program, artifacts: &[RustCrateArtifact]) {
     for artifact in artifacts {
         for func in &artifact.functions {
@@ -206,6 +209,10 @@ pub fn inject_extern_fns(program: &mut Program, artifacts: &[RustCrateArtifact])
                 },
                 Span::dummy(),
             ));
+
+            if func.is_fallible {
+                program.fallible_extern_fns.push(func.pluto_name.clone());
+            }
         }
     }
 }
@@ -470,10 +477,21 @@ fn generate_glue_crate(crates: &[CrateInfo], glue_dir: &Path) -> Result<(), Comp
         CompileError::codegen(format!("failed to write glue Cargo.toml: {}", e))
     })?;
 
+    // Check if any function is fallible (needs extern C decls for Pluto error runtime)
+    let has_fallible = crates.iter().any(|info| info.functions.iter().any(|sig| sig.is_fallible));
+
     // Generate src/lib.rs
     let mut lib_rs = String::from(
         "use std::panic::catch_unwind;\nuse std::process::abort;\n\n",
     );
+
+    if has_fallible {
+        lib_rs.push_str("extern \"C\" {\n");
+        lib_rs.push_str("    fn __pluto_alloc(size: i64) -> *mut u8;\n");
+        lib_rs.push_str("    fn __pluto_string_new(data: *const u8, len: i64) -> *mut u8;\n");
+        lib_rs.push_str("    fn __pluto_raise_error(error_obj: *mut u8);\n");
+        lib_rs.push_str("}\n\n");
+    }
 
     for info in crates {
         lib_rs.push_str(&format!("// --- crate: {}, alias: {} ---\n\n", info.metadata.lib_name, info.alias));
@@ -501,46 +519,113 @@ fn generate_glue_crate(crates: &[CrateInfo], glue_dir: &Path) -> Result<(), Comp
                 .collect();
             let args_str = args.join(", ");
 
-            // Return type and handling
-            let (ret_type, ok_handler, err_handler) = match &sig.return_type {
-                None => (
-                    String::new(),
-                    "Ok(()) => {}".to_string(),
-                    format!(
-                        "Err(_) => {{ eprintln!(\"fatal: panic in Rust FFI '{}'\"); abort(); }}",
-                        pluto_name
+            if sig.is_fallible {
+                // Generate wrapper that handles Result<T, E>
+                let (ret_type, ok_arm, dummy_ret) = match &sig.return_type {
+                    None => (
+                        String::new(),
+                        "Ok(Ok(())) => {}".to_string(),
+                        String::new(),
                     ),
-                ),
-                Some(RustType::Bool) => (
-                    " -> i8".to_string(),
-                    "Ok(true) => 1,\n        Ok(false) => 0,".to_string(),
-                    format!(
-                        "Err(_) => {{ eprintln!(\"fatal: panic in Rust FFI '{}'\"); abort(); }}",
-                        pluto_name
+                    Some(RustType::Bool) => (
+                        " -> i8".to_string(),
+                        "Ok(Ok(true)) => 1i8,\n            Ok(Ok(false)) => 0i8,".to_string(),
+                        "0i8".to_string(),
                     ),
-                ),
-                Some(rt) => (
-                    format!(" -> {}", rust_type_to_c_type(rt)),
-                    "Ok(v) => v,".to_string(),
-                    format!(
-                        "Err(_) => {{ eprintln!(\"fatal: panic in Rust FFI '{}'\"); abort(); }}",
-                        pluto_name
+                    Some(RustType::I64) => (
+                        " -> i64".to_string(),
+                        "Ok(Ok(v)) => v,".to_string(),
+                        "0i64".to_string(),
                     ),
-                ),
-            };
+                    Some(RustType::F64) => (
+                        " -> f64".to_string(),
+                        "Ok(Ok(v)) => v,".to_string(),
+                        "0.0f64".to_string(),
+                    ),
+                };
 
-            lib_rs.push_str(&format!(
-                "#[export_name = \"{}\"]\npub extern \"C\" fn {}({}){} {{\n    match catch_unwind(|| {}::{}({})) {{\n        {}\n        {}\n    }}\n}}\n\n",
-                pluto_name,
-                rust_fn_name,
-                params_str,
-                ret_type,
-                info.metadata.lib_name,
-                sig.name,
-                args_str,
-                ok_handler,
-                err_handler,
-            ));
+                let err_arm = if sig.return_type.is_some() {
+                    format!(
+                        "Ok(Err(e)) => unsafe {{\n\
+                         \x20               let msg = format!(\"{{}}\", e);\n\
+                         \x20               let msg_ptr = __pluto_string_new(msg.as_ptr(), msg.len() as i64);\n\
+                         \x20               let err_obj = __pluto_alloc(8);\n\
+                         \x20               *(err_obj as *mut i64) = msg_ptr as i64;\n\
+                         \x20               __pluto_raise_error(err_obj);\n\
+                         \x20               {}\n\
+                         \x20           }},",
+                        dummy_ret
+                    )
+                } else {
+                    "Ok(Err(e)) => unsafe {\n\
+                     \x20               let msg = format!(\"{}\", e);\n\
+                     \x20               let msg_ptr = __pluto_string_new(msg.as_ptr(), msg.len() as i64);\n\
+                     \x20               let err_obj = __pluto_alloc(8);\n\
+                     \x20               *(err_obj as *mut i64) = msg_ptr as i64;\n\
+                     \x20               __pluto_raise_error(err_obj);\n\
+                     \x20           },".to_string()
+                };
+
+                let panic_arm = format!(
+                    "Err(_) => {{ eprintln!(\"fatal: panic in Rust FFI '{}'\"); abort(); }}",
+                    pluto_name
+                );
+
+                lib_rs.push_str(&format!(
+                    "#[export_name = \"{}\"]\npub extern \"C\" fn {}({}){} {{\n    match catch_unwind(|| {}::{}({})) {{\n        {}\n        {}\n        {}\n    }}\n}}\n\n",
+                    pluto_name,
+                    rust_fn_name,
+                    params_str,
+                    ret_type,
+                    info.metadata.lib_name,
+                    sig.name,
+                    args_str,
+                    ok_arm,
+                    err_arm,
+                    panic_arm,
+                ));
+            } else {
+                // Non-fallible: existing codegen
+                let (ret_type, ok_handler, err_handler) = match &sig.return_type {
+                    None => (
+                        String::new(),
+                        "Ok(()) => {}".to_string(),
+                        format!(
+                            "Err(_) => {{ eprintln!(\"fatal: panic in Rust FFI '{}'\"); abort(); }}",
+                            pluto_name
+                        ),
+                    ),
+                    Some(RustType::Bool) => (
+                        " -> i8".to_string(),
+                        "Ok(true) => 1,\n        Ok(false) => 0,".to_string(),
+                        format!(
+                            "Err(_) => {{ eprintln!(\"fatal: panic in Rust FFI '{}'\"); abort(); }}",
+                            pluto_name
+                        ),
+                    ),
+                    Some(rt) => (
+                        format!(" -> {}", rust_type_to_c_type(rt)),
+                        "Ok(v) => v,".to_string(),
+                        format!(
+                            "Err(_) => {{ eprintln!(\"fatal: panic in Rust FFI '{}'\"); abort(); }}",
+                            pluto_name
+                        ),
+                    ),
+                };
+
+                lib_rs.push_str(&format!(
+                    "#[export_name = \"{}\"]\npub extern \"C\" fn {}({}){} {{\n    match catch_unwind(|| {}::{}({})) {{\n        {}\n        {}\n    }}\n}}\n\n",
+                    pluto_name,
+                    rust_fn_name,
+                    params_str,
+                    ret_type,
+                    info.metadata.lib_name,
+                    sig.name,
+                    args_str,
+                    ok_handler,
+                    err_handler,
+                ));
+            }
         }
     }
 

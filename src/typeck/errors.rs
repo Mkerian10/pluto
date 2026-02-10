@@ -63,10 +63,11 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
         }
     }
 
-    // Fixed-point iteration: propagate error sets through call edges
-    let mut fn_errors: HashMap<String, HashSet<String>> = HashMap::new();
+    // Fixed-point iteration: propagate error sets through call edges.
+    // Start from pre-existing fn_errors (e.g. seeded FFI fallible functions).
+    let mut fn_errors: HashMap<String, HashSet<String>> = env.fn_errors.clone();
     for (name, directs) in &direct_errors {
-        fn_errors.insert(name.clone(), directs.clone());
+        fn_errors.entry(name.clone()).or_default().extend(directs.iter().cloned());
     }
 
     loop {

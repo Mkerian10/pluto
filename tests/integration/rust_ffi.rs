@@ -328,3 +328,102 @@ fn extern_rust_in_single_string_fails() {
         "extern rust declarations require file-based compilation",
     );
 }
+
+// ============================================================
+// Result<T, E> — fallible FFI functions
+// ============================================================
+
+#[test]
+fn extern_rust_result_propagate() {
+    let crate_path = fixture_crate_path();
+    let source = format!(
+        "extern rust \"{}\" as math\n\nfn main() {{\n    let r = math.safe_divide(10.0, 2.0)!\n    print(r)\n}}",
+        crate_path
+    );
+    let out = run_rust_ffi_project(&[("main.pluto", &source)]);
+    assert_eq!(out, "5.000000\n");
+}
+
+#[test]
+fn extern_rust_result_catch() {
+    let crate_path = fixture_crate_path();
+    let source = format!(
+        "extern rust \"{}\" as math\n\nfn main() {{\n    let r = math.safe_divide(1.0, 0.0) catch -1.0\n    print(r)\n}}",
+        crate_path
+    );
+    let out = run_rust_ffi_project(&[("main.pluto", &source)]);
+    assert_eq!(out, "-1.000000\n");
+}
+
+#[test]
+fn extern_rust_result_catch_error_message() {
+    let crate_path = fixture_crate_path();
+    // Use a string-returning wrapper that extracts the error message
+    let source = format!(
+        "extern rust \"{}\" as math\n\nfn try_divide() string {{\n    let r = math.safe_divide(1.0, 0.0)!\n    return \"ok\"\n}}\n\nfn main() {{\n    let msg = try_divide() catch e {{ e.message }}\n    print(msg)\n}}",
+        crate_path
+    );
+    let out = run_rust_ffi_project(&[("main.pluto", &source)]);
+    assert!(out.contains("division by zero"), "Expected 'division by zero' in output, got: {}", out);
+}
+
+#[test]
+fn extern_rust_result_i64() {
+    let crate_path = fixture_crate_path();
+    let source = format!(
+        "extern rust \"{}\" as math\n\nfn main() {{\n    let r = math.checked_negate(42)!\n    print(r)\n}}",
+        crate_path
+    );
+    let out = run_rust_ffi_project(&[("main.pluto", &source)]);
+    assert_eq!(out, "-42\n");
+}
+
+#[test]
+fn extern_rust_result_bool() {
+    let crate_path = fixture_crate_path();
+    let source = format!(
+        "extern rust \"{}\" as math\n\nfn main() {{\n    let r = math.validate_positive(5)!\n    print(r)\n}}",
+        crate_path
+    );
+    let out = run_rust_ffi_project(&[("main.pluto", &source)]);
+    assert_eq!(out, "true\n");
+}
+
+#[test]
+fn extern_rust_result_void() {
+    let crate_path = fixture_crate_path();
+    let source = format!(
+        "extern rust \"{}\" as math\n\nfn main() {{\n    math.assert_nonzero(1)!\n    print(\"ok\")\n}}",
+        crate_path
+    );
+    let out = run_rust_ffi_project(&[("main.pluto", &source)]);
+    assert_eq!(out, "ok\n");
+}
+
+#[test]
+fn extern_rust_result_bare_call_fails() {
+    let crate_path = fixture_crate_path();
+    compile_rust_ffi_should_fail_with(
+        &[(
+            "main.pluto",
+            &format!(
+                "extern rust \"{}\" as math\n\nfn main() {{\n    let r = math.safe_divide(1.0, 2.0)\n}}",
+                crate_path
+            ),
+        )],
+        "must be handled",
+    );
+}
+
+#[test]
+fn extern_rust_result_propagate_makes_caller_fallible() {
+    let crate_path = fixture_crate_path();
+    // helper() propagates via !, which makes it fallible.
+    // main() must then also handle it.
+    let source = format!(
+        "extern rust \"{}\" as math\n\nfn helper() float {{\n    let r = math.safe_divide(10.0, 2.0)!\n    return r\n}}\n\nfn main() {{\n    let x = helper()!\n    print(x)\n}}",
+        crate_path
+    );
+    let out = run_rust_ffi_project(&[("main.pluto", &source)]);
+    assert_eq!(out, "5.000000\n");
+}

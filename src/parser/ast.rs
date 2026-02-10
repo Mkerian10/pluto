@@ -12,6 +12,7 @@ pub struct Program {
     pub app: Option<Spanned<AppDecl>>,
     pub errors: Vec<Spanned<ErrorDecl>>,
     pub test_info: Vec<(String, String)>,  // (display_name, fn_name)
+    pub fallible_extern_fns: Vec<String>,  // populated by rust_ffi::inject_extern_fns for Result-returning FFI fns
 }
 
 #[derive(Debug, Clone)]

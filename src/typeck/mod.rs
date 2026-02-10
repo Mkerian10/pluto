@@ -48,6 +48,9 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     env.errors.entry("MathError".to_string()).or_insert(ErrorInfo {
         fields: vec![("message".to_string(), PlutoType::String)],
     });
+    env.errors.entry("RustError".to_string()).or_insert(ErrorInfo {
+        fields: vec![("message".to_string(), PlutoType::String)],
+    });
     register::register_class_names(program, &mut env)?;
     register::resolve_class_fields(program, &mut env)?;
     register::register_extern_fns(program, &mut env)?;
@@ -57,6 +60,13 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     register::validate_di_graph(program, &mut env)?;
     register::check_trait_conformance(program, &mut env)?;
     register::check_all_bodies(program, &mut env)?;
+    // Seed Rust FFI fallible functions into fn_errors before inference
+    // so that infer_error_sets can propagate RustError through callers.
+    for fn_name in &program.fallible_extern_fns {
+        env.fn_errors.entry(fn_name.clone())
+            .or_default()
+            .insert("RustError".to_string());
+    }
     errors::infer_error_sets(program, &mut env);
     errors::enforce_error_handling(program, &env)?;
 

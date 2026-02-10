@@ -13,6 +13,7 @@ pub struct RustFnSig {
     pub name: String,
     pub params: Vec<(String, RustType)>,
     pub return_type: Option<RustType>,
+    pub is_fallible: bool,
 }
 
 fn parse_rust_type(s: &str) -> Option<RustType> {
@@ -22,6 +23,46 @@ fn parse_rust_type(s: &str) -> Option<RustType> {
         "bool" => Some(RustType::Bool),
         "()" => Some(RustType::Bool), // map () to None (void) — handled at call site
         _ => None,
+    }
+}
+
+/// Try to parse a `Result<T, E>` return type.
+/// Returns `Some((ok_type, true))` if it's a supported Result type.
+/// Returns `None` if it starts with `Result<` but the Ok type is unsupported.
+/// The E type is completely ignored.
+fn parse_result_type(s: &str) -> Option<(Option<RustType>, bool)> {
+    let trimmed = s.trim();
+    if !trimmed.starts_with("Result<") || !trimmed.ends_with('>') {
+        return None;
+    }
+    // Extract inner content between Result< and >
+    let inner = &trimmed[7..trimmed.len() - 1];
+    // Split on ',' at angle-bracket depth 0 to get T and E
+    let mut depth = 0;
+    let mut split_pos = None;
+    for (i, ch) in inner.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            ',' if depth == 0 => {
+                split_pos = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let ok_str = match split_pos {
+        Some(pos) => inner[..pos].trim(),
+        None => return None, // No comma found — malformed Result
+    };
+    // Parse the Ok type
+    if ok_str == "()" {
+        Some((None, true)) // Result<(), E> → void, fallible
+    } else {
+        match parse_rust_type(ok_str) {
+            Some(rt) => Some((Some(rt), true)),
+            None => None, // Unsupported Ok type
+        }
     }
 }
 
@@ -362,6 +403,7 @@ pub fn parse_rust_source(source: &str) -> (Vec<RustFnSig>, Vec<String>) {
                 }
 
                 // Parse optional return type
+                let mut is_fallible = false;
                 let return_type = if i + 1 < len && chars[i] == '-' && chars[i + 1] == '>' {
                     i += 2;
                     while i < len && chars[i].is_whitespace() {
@@ -374,7 +416,23 @@ pub fn parse_rust_source(source: &str) -> (Vec<RustFnSig>, Vec<String>) {
                     }
                     let ret_str: String = chars[ret_start..i].iter().collect();
                     let trimmed = ret_str.trim();
-                    if trimmed == "()" {
+                    // Try Result<T, E> first
+                    if trimmed.starts_with("Result<") {
+                        match parse_result_type(trimmed) {
+                            Some((rt, fallible)) => {
+                                is_fallible = fallible;
+                                rt
+                            }
+                            None => {
+                                warnings.push(format!(
+                                    "skipping function '{}': unsupported Ok type in '{}'",
+                                    fn_name, trimmed
+                                ));
+                                skip_to_brace_close(&chars, &mut i, &mut brace_depth);
+                                continue;
+                            }
+                        }
+                    } else if trimmed == "()" {
                         None // void return
                     } else {
                         match parse_rust_type(trimmed) {
@@ -397,6 +455,7 @@ pub fn parse_rust_source(source: &str) -> (Vec<RustFnSig>, Vec<String>) {
                     name: fn_name,
                     params,
                     return_type,
+                    is_fallible,
                 });
 
                 // Skip to end of function body
@@ -699,5 +758,83 @@ pub fn stringy() -> i64 {
         let (sigs, _) = parse_rust_source(source);
         assert_eq!(sigs.len(), 1);
         assert_eq!(sigs[0].name, "stringy");
+    }
+
+    // ── Result<T, E> tests ──────────────────────────────────────
+
+    #[test]
+    fn result_i64() {
+        let source = r#"pub fn checked(x: i64) -> Result<i64, String> { Ok(x) }"#;
+        let (sigs, warns) = parse_rust_source(source);
+        assert!(warns.is_empty());
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].name, "checked");
+        assert_eq!(sigs[0].return_type, Some(RustType::I64));
+        assert!(sigs[0].is_fallible);
+    }
+
+    #[test]
+    fn result_f64() {
+        let source = r#"pub fn divide(a: f64, b: f64) -> Result<f64, Box<dyn Error>> { Ok(a / b) }"#;
+        let (sigs, warns) = parse_rust_source(source);
+        assert!(warns.is_empty());
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].return_type, Some(RustType::F64));
+        assert!(sigs[0].is_fallible);
+    }
+
+    #[test]
+    fn result_bool() {
+        let source = r#"pub fn validate(x: i64) -> Result<bool, MyError> { Ok(true) }"#;
+        let (sigs, warns) = parse_rust_source(source);
+        assert!(warns.is_empty());
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].return_type, Some(RustType::Bool));
+        assert!(sigs[0].is_fallible);
+    }
+
+    #[test]
+    fn result_void() {
+        let source = r#"pub fn check(x: i64) -> Result<(), String> { Ok(()) }"#;
+        let (sigs, warns) = parse_rust_source(source);
+        assert!(warns.is_empty());
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].return_type, None);
+        assert!(sigs[0].is_fallible);
+    }
+
+    #[test]
+    fn result_unsupported_ok() {
+        let source = r#"pub fn bad(x: i64) -> Result<Vec<i64>, String> { Ok(vec![x]) }"#;
+        let (sigs, warns) = parse_rust_source(source);
+        assert_eq!(sigs.len(), 0);
+        assert_eq!(warns.len(), 1);
+        assert!(warns[0].contains("unsupported Ok type"));
+    }
+
+    #[test]
+    fn result_nested_generics() {
+        let source = r#"pub fn checked(x: i64) -> Result<i64, Box<dyn std::error::Error>> { Ok(x) }"#;
+        let (sigs, warns) = parse_rust_source(source);
+        assert!(warns.is_empty());
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].return_type, Some(RustType::I64));
+        assert!(sigs[0].is_fallible);
+    }
+
+    #[test]
+    fn plain_types_not_fallible() {
+        let source = "pub fn add(a: i64, b: i64) -> i64 { a + b }";
+        let (sigs, _) = parse_rust_source(source);
+        assert_eq!(sigs.len(), 1);
+        assert!(!sigs[0].is_fallible);
+    }
+
+    #[test]
+    fn void_fn_not_fallible() {
+        let source = "pub fn noop() { }";
+        let (sigs, _) = parse_rust_source(source);
+        assert_eq!(sigs.len(), 1);
+        assert!(!sigs[0].is_fallible);
     }
 }

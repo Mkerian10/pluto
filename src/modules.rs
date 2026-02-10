@@ -77,6 +77,7 @@ fn load_directory_module(
         app: None,
         errors: Vec::new(),
         test_info: Vec::new(),
+        fallible_extern_fns: Vec::new(),
     };
 
     let entries = std::fs::read_dir(dir).map_err(|e| {

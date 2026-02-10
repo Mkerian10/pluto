@@ -21,3 +21,7 @@ pub fn factorial(n: i64) -> i64 {
         n * factorial(n - 1)
     }
 }
+
+pub fn safe_divide(a: f64, b: f64) -> Result<f64, String> {
+    if b == 0.0 { Err("division by zero".to_string()) } else { Ok(a / b) }
+}

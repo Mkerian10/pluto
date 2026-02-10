@@ -312,7 +312,7 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, errors, test_info })
+        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, errors, test_info, fallible_extern_fns: Vec::new() })
     }
 
     fn parse_import(&mut self) -> Result<Spanned<ImportDecl>, CompileError> {
