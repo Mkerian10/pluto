@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770684586715,
+  "lastUpdate": 1770699270746,
   "repoUrl": "https://github.com/Mkerian10/pluto",
   "entries": {
     "Benchmark": [
@@ -158,6 +158,165 @@ window.BENCHMARK_DATA = {
           {
             "name": "lu",
             "value": 4059,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "33331268+Mkerian10@users.noreply.github.com",
+            "name": "Matthew Kerian",
+            "username": "Mkerian10"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "af3dcd2d4a28cccae546e670d6c64c211dbacbb8",
+          "message": "Merge pull request #11 from Mkerian10/fix-flaky-test\n\nFix flaky race_shared_counter_lost_updates test",
+          "timestamp": "2026-02-09T22:52:57-06:00",
+          "tree_id": "f826b019ed1be18f5d74c2c7d1541f9439b01c43",
+          "url": "https://github.com/Mkerian10/pluto/commit/af3dcd2d4a28cccae546e670d6c64c211dbacbb8"
+        },
+        "date": 1770699269795,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "fib",
+            "value": 72,
+            "unit": "ms"
+          },
+          {
+            "name": "loop_sum",
+            "value": 62,
+            "unit": "ms"
+          },
+          {
+            "name": "string_concat",
+            "value": 522,
+            "unit": "ms"
+          },
+          {
+            "name": "array_push",
+            "value": 6,
+            "unit": "ms"
+          },
+          {
+            "name": "array_iter",
+            "value": 2,
+            "unit": "ms"
+          },
+          {
+            "name": "class_method",
+            "value": 12,
+            "unit": "ms"
+          },
+          {
+            "name": "closure_call",
+            "value": 21,
+            "unit": "ms"
+          },
+          {
+            "name": "trait_dispatch",
+            "value": 1408,
+            "unit": "ms"
+          },
+          {
+            "name": "gc_churn",
+            "value": 140,
+            "unit": "ms"
+          },
+          {
+            "name": "gc_binary_trees",
+            "value": 1987,
+            "unit": "ms"
+          },
+          {
+            "name": "gc_string_pressure",
+            "value": 74,
+            "unit": "ms"
+          },
+          {
+            "name": "sieve",
+            "value": 10,
+            "unit": "ms"
+          },
+          {
+            "name": "bounce",
+            "value": 47,
+            "unit": "ms"
+          },
+          {
+            "name": "towers",
+            "value": 1801,
+            "unit": "ms"
+          },
+          {
+            "name": "permute",
+            "value": 99,
+            "unit": "ms"
+          },
+          {
+            "name": "queens",
+            "value": 151,
+            "unit": "ms"
+          },
+          {
+            "name": "fannkuch_redux",
+            "value": 1325,
+            "unit": "ms"
+          },
+          {
+            "name": "spectral_norm",
+            "value": 50,
+            "unit": "ms"
+          },
+          {
+            "name": "nbody",
+            "value": 10648,
+            "unit": "ms"
+          },
+          {
+            "name": "mandelbrot",
+            "value": 287,
+            "unit": "ms"
+          },
+          {
+            "name": "monte_carlo",
+            "value": 1433,
+            "unit": "ms"
+          },
+          {
+            "name": "storage",
+            "value": 811,
+            "unit": "ms"
+          },
+          {
+            "name": "list",
+            "value": 87,
+            "unit": "ms"
+          },
+          {
+            "name": "fft",
+            "value": 2418,
+            "unit": "ms"
+          },
+          {
+            "name": "sor",
+            "value": 584,
+            "unit": "ms"
+          },
+          {
+            "name": "sparse_matmul",
+            "value": 534,
+            "unit": "ms"
+          },
+          {
+            "name": "lu",
+            "value": 4037,
             "unit": "ms"
           }
         ]
