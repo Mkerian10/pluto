@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
+use common::{compile_and_run_stdout, compile_and_run_output, compile_should_fail, compile_should_fail_with};
 
 #[test]
 fn string_concatenation() {
@@ -189,5 +189,267 @@ fn string_interp_stray_close_rejected() {
     compile_should_fail_with(
         "fn main() {\n    let s = \"hello }\"\n}",
         "unexpected '}'",
+    );
+}
+
+// ── Built-in string methods ──
+
+#[test]
+fn string_contains() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"hello world\".contains(\"world\"))\n    print(\"hello world\".contains(\"xyz\"))\n}",
+    );
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn string_starts_with() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"hello world\".starts_with(\"hello\"))\n    print(\"hello world\".starts_with(\"world\"))\n}",
+    );
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn string_ends_with() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"hello world\".ends_with(\"world\"))\n    print(\"hello world\".ends_with(\"hello\"))\n}",
+    );
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn string_index_of() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"hello world\".index_of(\"world\"))\n    print(\"hello world\".index_of(\"xyz\"))\n}",
+    );
+    assert_eq!(out, "6\n-1\n");
+}
+
+#[test]
+fn string_substring() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"hello world\".substring(6, 5))\n}",
+    );
+    assert_eq!(out, "world\n");
+}
+
+#[test]
+fn string_substring_clamp() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"hello\".substring(3, 100))\n    print(\"hello\".substring(10, 5))\n}",
+    );
+    assert_eq!(out, "lo\n\n");
+}
+
+#[test]
+fn string_trim() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"  hello  \".trim())\n}",
+    );
+    assert_eq!(out, "hello\n");
+}
+
+#[test]
+fn string_to_upper() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"hello\".to_upper())\n}",
+    );
+    assert_eq!(out, "HELLO\n");
+}
+
+#[test]
+fn string_to_lower() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"HELLO\".to_lower())\n}",
+    );
+    assert_eq!(out, "hello\n");
+}
+
+#[test]
+fn string_replace() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"hello world\".replace(\"world\", \"pluto\"))\n}",
+    );
+    assert_eq!(out, "hello pluto\n");
+}
+
+#[test]
+fn string_split() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let parts = \"a,b,c\".split(\",\")\n    print(parts.len())\n    print(parts[0])\n    print(parts[1])\n    print(parts[2])\n}",
+    );
+    assert_eq!(out, "3\na\nb\nc\n");
+}
+
+#[test]
+fn string_split_empty_delim() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let chars = \"abc\".split(\"\")\n    print(chars.len())\n    print(chars[0])\n    print(chars[1])\n    print(chars[2])\n}",
+    );
+    assert_eq!(out, "3\na\nb\nc\n");
+}
+
+#[test]
+fn string_char_at() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"hello\".char_at(0))\n    print(\"hello\".char_at(4))\n}",
+    );
+    assert_eq!(out, "h\no\n");
+}
+
+// ── String indexing ──
+
+#[test]
+fn string_index_first() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let s = \"hello\"\n    print(s[0])\n}",
+    );
+    assert_eq!(out, "h\n");
+}
+
+#[test]
+fn string_index_last() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let s = \"hello\"\n    print(s[s.len() - 1])\n}",
+    );
+    assert_eq!(out, "o\n");
+}
+
+#[test]
+fn string_index_let_binding() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let s = \"hello\"\n    let c = s[1]\n    print(c)\n}",
+    );
+    assert_eq!(out, "e\n");
+}
+
+// ── String iteration ──
+
+#[test]
+fn string_for_loop() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    for c in \"abc\" {\n        print(c)\n    }\n}",
+    );
+    assert_eq!(out, "a\nb\nc\n");
+}
+
+#[test]
+fn string_for_loop_accumulate() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let result = \"\"\n    for c in \"hello\" {\n        result = result + c + \"-\"\n    }\n    print(result)\n}",
+    );
+    assert_eq!(out, "h-e-l-l-o-\n");
+}
+
+#[test]
+fn string_for_loop_count() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let count = 0\n    for c in \"hello world\" {\n        count = count + 1\n    }\n    print(count)\n}",
+    );
+    assert_eq!(out, "11\n");
+}
+
+#[test]
+fn string_for_loop_empty() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let count = 0\n    for c in \"\" {\n        count = count + 1\n    }\n    print(count)\n}",
+    );
+    assert_eq!(out, "0\n");
+}
+
+// ── Method chaining ──
+
+#[test]
+fn string_method_chain() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"  Hello World  \".trim().to_lower().contains(\"hello\"))\n}",
+    );
+    assert_eq!(out, "true\n");
+}
+
+#[test]
+fn string_replace_chain() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"aXbXc\".replace(\"X\", \",\").split(\",\").len())\n}",
+    );
+    assert_eq!(out, "3\n");
+}
+
+// ── Edge cases ──
+
+#[test]
+fn string_contains_empty() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"\".contains(\"\"))\n    print(\"hello\".contains(\"\"))\n}",
+    );
+    assert_eq!(out, "true\ntrue\n");
+}
+
+#[test]
+fn string_index_of_not_found() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"hello\".index_of(\"xyz\"))\n}",
+    );
+    assert_eq!(out, "-1\n");
+}
+
+#[test]
+fn string_trim_empty() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(\"   \".trim().len())\n}",
+    );
+    assert_eq!(out, "0\n");
+}
+
+// ── Runtime abort tests (OOB) ──
+
+#[test]
+fn string_index_oob_aborts() {
+    let (_, _, code) = compile_and_run_output(
+        "fn main() {\n    let s = \"hello\"\n    print(s[10])\n}",
+    );
+    assert_ne!(code, 0, "OOB index should abort");
+}
+
+#[test]
+fn string_char_at_oob_aborts() {
+    let (_, _, code) = compile_and_run_output(
+        "fn main() {\n    print(\"hello\".char_at(100))\n}",
+    );
+    assert_ne!(code, 0, "OOB char_at should abort");
+}
+
+// ── Compile error tests ──
+
+#[test]
+fn string_index_wrong_type() {
+    compile_should_fail_with(
+        "fn main() {\n    let s = \"hello\"\n    print(s[true])\n}",
+        "string index must be int",
+    );
+}
+
+#[test]
+fn string_contains_wrong_arg_type() {
+    compile_should_fail_with(
+        "fn main() {\n    print(\"hello\".contains(42))\n}",
+        "expected string, found int",
+    );
+}
+
+#[test]
+fn string_unknown_method() {
+    compile_should_fail_with(
+        "fn main() {\n    print(\"hello\".fake())\n}",
+        "string has no method 'fake'",
+    );
+}
+
+#[test]
+fn string_index_assign_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    let s = \"hello\"\n    s[0] = \"x\"\n}",
+        "index assignment on non-indexable type string",
     );
 }

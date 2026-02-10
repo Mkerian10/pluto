@@ -162,9 +162,13 @@ fn rewrite_block(block: &mut Block, active: &HashSet<String>) {
     let mut active = active.clone();
     for stmt in &mut block.stmts {
         rewrite_stmt(stmt, &active);
-        // If this is a `let` statement, remove the binding from active for subsequent stmts
+        // If this is a `let` or `let chan` statement, remove bindings from active for subsequent stmts
         if let Stmt::Let { name, .. } = &stmt.node {
             active.remove(&name.node);
+        }
+        if let Stmt::LetChan { sender, receiver, .. } = &stmt.node {
+            active.remove(&sender.node);
+            active.remove(&receiver.node);
         }
     }
 }
@@ -242,6 +246,11 @@ fn rewrite_stmt(stmt: &mut Spanned<Stmt>, active: &HashSet<String>) {
         }
         Stmt::Expr(expr) => {
             rewrite_expr(&mut expr.node, expr.span, active);
+        }
+        Stmt::LetChan { capacity, .. } => {
+            if let Some(cap) = capacity {
+                rewrite_expr(&mut cap.node, cap.span, active);
+            }
         }
         Stmt::Break | Stmt::Continue => {}
     }
@@ -345,6 +354,9 @@ fn rewrite_expr(expr: &mut Expr, span: Span, active: &HashSet<String>) {
         Expr::Range { start, end, .. } => {
             rewrite_expr(&mut start.node, start.span, active);
             rewrite_expr(&mut end.node, end.span, active);
+        }
+        Expr::Spawn { call } => {
+            rewrite_expr(&mut call.node, call.span, active);
         }
         // Literals and non-rewritable expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)

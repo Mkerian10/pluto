@@ -5,12 +5,14 @@ pub struct Program {
     pub imports: Vec<Spanned<ImportDecl>>,
     pub functions: Vec<Spanned<Function>>,
     pub extern_fns: Vec<Spanned<ExternFnDecl>>,
+    pub extern_rust_crates: Vec<Spanned<ExternRustDecl>>,
     pub classes: Vec<Spanned<ClassDecl>>,
     pub traits: Vec<Spanned<TraitDecl>>,
     pub enums: Vec<Spanned<EnumDecl>>,
     pub app: Option<Spanned<AppDecl>>,
     pub errors: Vec<Spanned<ErrorDecl>>,
     pub test_info: Vec<(String, String)>,  // (display_name, fn_name)
+    pub fallible_extern_fns: Vec<String>,  // populated by rust_ffi::inject_extern_fns for Result-returning FFI fns
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +41,12 @@ pub struct ExternFnDecl {
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub is_pub: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternRustDecl {
+    pub crate_path: Spanned<String>,
+    pub alias: Spanned<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +156,12 @@ pub enum Stmt {
         error_name: Spanned<String>,
         fields: Vec<(Spanned<String>, Spanned<Expr>)>,
     },
+    LetChan {
+        sender: Spanned<String>,
+        receiver: Spanned<String>,
+        elem_type: Spanned<TypeExpr>,
+        capacity: Option<Spanned<Expr>>,
+    },
     Break,
     Continue,
     Expr(Spanned<Expr>),
@@ -241,6 +255,9 @@ pub enum Expr {
         start: Box<Spanned<Expr>>,
         end: Box<Spanned<Expr>>,
         inclusive: bool,
+    },
+    Spawn {
+        call: Box<Spanned<Expr>>,
     },
 }
 

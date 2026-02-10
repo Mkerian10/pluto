@@ -1,8 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::diagnostics::CompileError;
 use crate::lexer;
+use crate::manifest::{DependencyScope, PackageGraph};
 use crate::parser::ast::*;
 use crate::parser::Parser;
 use crate::span::{Span, Spanned};
@@ -28,10 +29,17 @@ impl SourceMap {
     }
 }
 
+/// Tracks whether an import came from a local module or a package dependency.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ImportOrigin {
+    Local,
+    PackageDep,
+}
+
 /// Result of module resolution before flattening.
 pub struct ModuleGraph {
     pub root: Program,
-    pub imports: Vec<(String, Program)>, // (binding_name, parsed program)
+    pub imports: Vec<(String, Program, ImportOrigin)>,
     pub source_map: SourceMap,
 }
 
@@ -55,66 +63,79 @@ fn load_directory_module(
     source_map: &mut SourceMap,
     visited: &mut HashSet<PathBuf>,
     effective_stdlib: Option<&Path>,
+    current_deps: &DependencyScope,
+    pkg_graph: &PackageGraph,
+    parent_origin: ImportOrigin,
 ) -> Result<Program, CompileError> {
-    let mod_file = dir.join("mod.pluto");
-    if mod_file.is_file() {
-        // mod.pluto exists — load only that file
-        let (mut program, _) = load_and_parse(&mod_file, source_map)?;
-        // Recursively resolve any imports within mod.pluto
-        resolve_module_imports(&mut program, dir, source_map, visited, effective_stdlib)?;
-        return Ok(program);
+    // Directory cycle detection with closure cleanup pattern
+    let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    if visited.contains(&canonical_dir) {
+        return Err(CompileError::codegen(format!(
+            "circular import detected: '{}'", dir.display()
+        )));
     }
-
-    // No mod.pluto — auto-merge all .pluto files
-    let mut merged = Program {
-        imports: Vec::new(),
-        functions: Vec::new(),
-        extern_fns: Vec::new(),
-        classes: Vec::new(),
-        traits: Vec::new(),
-        enums: Vec::new(),
-        app: None,
-        errors: Vec::new(),
-        test_info: Vec::new(),
-    };
-
-    let entries = std::fs::read_dir(dir).map_err(|e| {
-        CompileError::codegen(format!("could not read directory '{}': {e}", dir.display()))
-    })?;
-
-    let mut pluto_files: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "pluto"))
-        .collect();
-    pluto_files.sort();
-
-    for file_path in pluto_files {
-        let (program, _file_id) = load_and_parse(&file_path, source_map)?;
-        merged.functions.extend(program.functions);
-        merged.extern_fns.extend(program.extern_fns);
-        merged.classes.extend(program.classes);
-        merged.traits.extend(program.traits);
-        merged.enums.extend(program.enums);
-        if let Some(app_decl) = program.app {
-            if merged.app.is_some() {
-                return Err(CompileError::codegen(format!(
-                    "multiple app declarations in module directory '{}'",
-                    dir.display()
-                )));
-            }
-            merged.app = Some(app_decl);
+    visited.insert(canonical_dir.clone());
+    let result = (|| {
+        let mod_file = dir.join("mod.pluto");
+        if mod_file.is_file() {
+            let (mut program, _) = load_and_parse(&mod_file, source_map)?;
+            resolve_module_imports(&mut program, dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
+            return Ok(program);
         }
-        merged.errors.extend(program.errors);
-        merged.test_info.extend(program.test_info);
-        // Collect imports from auto-merged files
-        merged.imports.extend(program.imports);
-    }
 
-    // Recursively resolve any imports within the merged module
-    resolve_module_imports(&mut merged, dir, source_map, visited, effective_stdlib)?;
+        let mut merged = Program {
+            imports: Vec::new(),
+            functions: Vec::new(),
+            extern_fns: Vec::new(),
+            extern_rust_crates: Vec::new(),
+            classes: Vec::new(),
+            traits: Vec::new(),
+            enums: Vec::new(),
+            app: None,
+            errors: Vec::new(),
+            test_info: Vec::new(),
+            fallible_extern_fns: Vec::new(),
+        };
 
-    Ok(merged)
+        let entries = std::fs::read_dir(dir).map_err(|e| {
+            CompileError::codegen(format!("could not read directory '{}': {e}", dir.display()))
+        })?;
+
+        let mut pluto_files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "pluto"))
+            .collect();
+        pluto_files.sort();
+
+        for file_path in pluto_files {
+            let (program, _file_id) = load_and_parse(&file_path, source_map)?;
+            merged.functions.extend(program.functions);
+            merged.extern_fns.extend(program.extern_fns);
+            merged.extern_rust_crates.extend(program.extern_rust_crates);
+            merged.classes.extend(program.classes);
+            merged.traits.extend(program.traits);
+            merged.enums.extend(program.enums);
+            if let Some(app_decl) = program.app {
+                if merged.app.is_some() {
+                    return Err(CompileError::codegen(format!(
+                        "multiple app declarations in module directory '{}'",
+                        dir.display()
+                    )));
+                }
+                merged.app = Some(app_decl);
+            }
+            merged.errors.extend(program.errors);
+            merged.test_info.extend(program.test_info);
+            merged.imports.extend(program.imports);
+        }
+
+        resolve_module_imports(&mut merged, dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
+
+        Ok(merged)
+    })();
+    visited.remove(&canonical_dir);
+    result
 }
 
 /// Resolve a multi-segment import path to a module, with recursive sub-import resolution.
@@ -125,6 +146,9 @@ fn resolve_module_path(
     import_span: Span,
     visited: &mut HashSet<PathBuf>,
     effective_stdlib: Option<&Path>,
+    current_deps: &DependencyScope,
+    pkg_graph: &PackageGraph,
+    parent_origin: ImportOrigin,
 ) -> Result<Program, CompileError> {
     let mut current_dir = base_dir.to_path_buf();
 
@@ -155,12 +179,11 @@ fn resolve_module_path(
         }
         visited.insert(canonical.clone());
         let (mut module_prog, _) = load_and_parse(&file_path, source_map)?;
-        // Recursively resolve sub-imports
-        resolve_module_imports(&mut module_prog, &current_dir, source_map, visited, effective_stdlib)?;
+        resolve_module_imports(&mut module_prog, &current_dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
         visited.remove(&canonical);
         Ok(module_prog)
     } else if dir_path.is_dir() {
-        load_directory_module(&dir_path, source_map, visited, effective_stdlib)
+        load_directory_module(&dir_path, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)
     } else {
         let full_path: Vec<&str> = segments.iter().map(|s| s.node.as_str()).collect();
         Err(CompileError::syntax(
@@ -179,32 +202,63 @@ fn resolve_module_imports(
     source_map: &mut SourceMap,
     visited: &mut HashSet<PathBuf>,
     effective_stdlib: Option<&Path>,
+    current_deps: &DependencyScope,
+    pkg_graph: &PackageGraph,
+    parent_origin: ImportOrigin,
 ) -> Result<(), CompileError> {
     if program.imports.is_empty() {
         return Ok(());
     }
 
     let imports_to_resolve: Vec<Spanned<ImportDecl>> = std::mem::take(&mut program.imports);
-    let mut imported_names = HashSet::new();
-    let mut resolved_imports: Vec<(String, Program)> = Vec::new();
+    let mut imported_names: HashMap<String, String> = HashMap::new();
+    let mut resolved_imports: Vec<(String, Program, ImportOrigin)> = Vec::new();
 
     for import in &imports_to_resolve {
         let binding_name = import.node.binding_name().to_string();
         let full_path = import.node.full_path();
-        if !imported_names.insert(binding_name.clone()) {
-            continue; // skip duplicate imports
+
+        // Duplicate import handling: allow exact duplicates, error on conflicts
+        if let Some(prev_path) = imported_names.get(&binding_name) {
+            if *prev_path == full_path {
+                continue; // Exact duplicate — deduplicate silently
+            } else {
+                return Err(CompileError::syntax(
+                    format!("conflicting import binding '{}': imports '{}' and '{}'", binding_name, prev_path, full_path),
+                    import.span,
+                ));
+            }
         }
+        imported_names.insert(binding_name.clone(), full_path.clone());
 
         let first_segment = &import.node.path[0].node;
 
         if import.node.path.len() == 1 {
             // Single-segment import
+            let is_dep = current_deps.contains_key(first_segment);
             let dir_path = module_dir.join(first_segment);
             let file_path_candidate = module_dir.join(format!("{}.pluto", first_segment));
+            let is_local = dir_path.is_dir() || file_path_candidate.is_file();
 
-            if dir_path.is_dir() {
-                let module_prog = load_directory_module(&dir_path, source_map, visited, effective_stdlib)?;
-                resolved_imports.push((binding_name, module_prog));
+            if is_dep && is_local {
+                return Err(CompileError::syntax(
+                    format!("import '{}' is ambiguous: declared as dependency and also exists locally", first_segment),
+                    import.node.path[0].span,
+                ));
+            }
+
+            if is_dep {
+                let dep_path = &current_deps[first_segment];
+                let dep_canonical = dep_path.canonicalize().map_err(|e| {
+                    CompileError::codegen(format!("cannot resolve dep path '{}': {e}", dep_path.display()))
+                })?;
+                let dep_scope = pkg_graph.deps_for(&dep_canonical);
+                let module_prog = load_directory_module(dep_path, source_map, visited, effective_stdlib, dep_scope, pkg_graph, ImportOrigin::PackageDep)?;
+                resolved_imports.push((binding_name, module_prog, ImportOrigin::PackageDep));
+            } else if dir_path.is_dir() {
+                let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
+                let module_prog = load_directory_module(&dir_path, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
+                resolved_imports.push((binding_name, module_prog, origin));
             } else if file_path_candidate.is_file() {
                 let canonical = file_path_candidate.canonicalize().unwrap_or_else(|_| file_path_candidate.clone());
                 if visited.contains(&canonical) {
@@ -215,9 +269,10 @@ fn resolve_module_imports(
                 }
                 visited.insert(canonical.clone());
                 let (mut module_prog, _) = load_and_parse(&file_path_candidate, source_map)?;
-                resolve_module_imports(&mut module_prog, module_dir, source_map, visited, effective_stdlib)?;
+                resolve_module_imports(&mut module_prog, module_dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
                 visited.remove(&canonical);
-                resolved_imports.push((binding_name, module_prog));
+                let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
+                resolved_imports.push((binding_name, module_prog, origin));
             } else {
                 return Err(CompileError::syntax(
                     format!("cannot find module '{}': no directory or file found", full_path),
@@ -229,8 +284,9 @@ fn resolve_module_imports(
             match effective_stdlib {
                 Some(root) => {
                     let remaining = &import.node.path[1..];
-                    let module_prog = resolve_module_path(remaining, root, source_map, import.span, visited, effective_stdlib)?;
-                    resolved_imports.push((binding_name, module_prog));
+                    let module_prog = resolve_module_path(remaining, root, source_map, import.span, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
+                    let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
+                    resolved_imports.push((binding_name, module_prog, origin));
                 }
                 None => {
                     return Err(CompileError::syntax(
@@ -243,9 +299,34 @@ fn resolve_module_imports(
                 }
             }
         } else {
-            // Multi-segment import from project
-            let module_prog = resolve_module_path(&import.node.path, module_dir, source_map, import.span, visited, effective_stdlib)?;
-            resolved_imports.push((binding_name, module_prog));
+            // Multi-segment import
+            let is_dep = current_deps.contains_key(first_segment);
+            let dir_path = module_dir.join(first_segment);
+            let is_local = dir_path.is_dir();
+
+            if is_dep && is_local {
+                return Err(CompileError::syntax(
+                    format!("import '{}' is ambiguous: declared as dependency and also exists locally", full_path),
+                    import.node.path[0].span,
+                ));
+            }
+
+            if is_dep {
+                // Resolve remaining segments from dep path
+                let dep_path = &current_deps[first_segment];
+                let dep_canonical = dep_path.canonicalize().map_err(|e| {
+                    CompileError::codegen(format!("cannot resolve dep path '{}': {e}", dep_path.display()))
+                })?;
+                let dep_scope = pkg_graph.deps_for(&dep_canonical);
+                let remaining = &import.node.path[1..];
+                let module_prog = resolve_module_path(remaining, dep_path, source_map, import.span, visited, effective_stdlib, dep_scope, pkg_graph, ImportOrigin::PackageDep)?;
+                resolved_imports.push((binding_name, module_prog, ImportOrigin::PackageDep));
+            } else {
+                // Multi-segment import from project
+                let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
+                let module_prog = resolve_module_path(&import.node.path, module_dir, source_map, import.span, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
+                resolved_imports.push((binding_name, module_prog, origin));
+            }
         }
     }
 
@@ -260,21 +341,34 @@ fn resolve_module_imports(
 /// Adds ALL items (not just pub) since visibility is deferred.
 fn flatten_into_program(
     program: &mut Program,
-    imports: Vec<(String, Program)>,
+    imports: Vec<(String, Program, ImportOrigin)>,
 ) -> Result<(), CompileError> {
-    let import_names: HashSet<String> = imports.iter().map(|(n, _)| n.clone()).collect();
+    let import_names: HashSet<String> = imports.iter().map(|(n, _, _)| n.clone()).collect();
 
     // Reject app declarations in imported modules
-    for (module_name, module_prog) in &imports {
+    for (module_name, module_prog, origin) in &imports {
         if module_prog.app.is_some() {
             return Err(CompileError::codegen(format!(
                 "app declarations are not allowed in imported modules (found in '{}')",
                 module_name
             )));
         }
+        if !module_prog.extern_rust_crates.is_empty() {
+            let msg = match origin {
+                ImportOrigin::PackageDep => format!(
+                    "extern rust declarations are not supported in package dependencies (found in '{}')",
+                    module_name
+                ),
+                ImportOrigin::Local => format!(
+                    "extern rust declarations are only allowed in the root program (found in '{}')",
+                    module_name
+                ),
+            };
+            return Err(CompileError::codegen(msg));
+        }
     }
 
-    for (module_name, module_prog) in &imports {
+    for (module_name, module_prog, _origin) in &imports {
         // Add ALL functions with prefixed names (no pub filter — visibility deferred)
         for func in &module_prog.functions {
             let mut prefixed_func = func.clone();
@@ -410,7 +504,11 @@ fn extern_fn_sigs_match(a: &ExternFnDecl, b: &ExternFnDecl) -> bool {
 /// 3. For each import, find `<name>/` directory or `<name>.pluto` and load as a separate module
 ///
 /// `stdlib_root`: if set, `import std.x` resolves `x` from this path instead of entry_dir.
-pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<ModuleGraph, CompileError> {
+pub fn resolve_modules(
+    entry_file: &Path,
+    stdlib_root: Option<&Path>,
+    pkg_graph: &PackageGraph,
+) -> Result<ModuleGraph, CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e| {
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display()))
     })?;
@@ -430,6 +528,8 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
         None
     };
 
+    let current_deps = pkg_graph.root_deps();
+
     // Circular import detection: track canonical paths in resolution stack
     let mut visited = HashSet::new();
     visited.insert(entry_file.clone());
@@ -441,6 +541,10 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
     let import_first_segments: HashSet<String> = entry_prog.imports.iter()
         .map(|i| i.node.path[0].node.clone())
         .collect();
+
+    // Also collect dep names — sibling files matching dep names should be skipped
+    // (they would cause ambiguity errors later if imported)
+    let dep_names: HashSet<&String> = current_deps.keys().collect();
 
     // Start root with the entry file's contents
     let mut root = entry_prog;
@@ -468,11 +572,16 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
         if import_first_segments.contains(stem) {
             continue;
         }
+        // Skip files that match a dep name
+        if dep_names.contains(&stem.to_string()) {
+            continue;
+        }
         let (program, _file_id) = load_and_parse(file_path, &mut source_map)?;
         // Merge sibling's imports into root (they might also have imports)
         root.imports.extend(program.imports);
         root.functions.extend(program.functions);
         root.extern_fns.extend(program.extern_fns);
+        root.extern_rust_crates.extend(program.extern_rust_crates);
         root.classes.extend(program.classes);
         root.traits.extend(program.traits);
         root.enums.extend(program.enums);
@@ -488,26 +597,53 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
     }
 
     // Resolve each import (now with recursive sub-import support)
-    let mut imports = Vec::new();
-    let mut imported_names = HashSet::new();
+    let mut imports: Vec<(String, Program, ImportOrigin)> = Vec::new();
+    let mut imported_names: HashMap<String, String> = HashMap::new();
 
     for import in &root.imports {
         let binding_name = import.node.binding_name().to_string();
         let full_path = import.node.full_path();
-        if !imported_names.insert(binding_name.clone()) {
-            continue; // skip duplicate imports
+
+        // Duplicate import handling: allow exact duplicates, error on conflicts
+        if let Some(prev_path) = imported_names.get(&binding_name) {
+            if *prev_path == full_path {
+                continue; // Exact duplicate — deduplicate silently
+            } else {
+                return Err(CompileError::syntax(
+                    format!("conflicting import binding '{}': imports '{}' and '{}'", binding_name, prev_path, full_path),
+                    import.span,
+                ));
+            }
         }
+        imported_names.insert(binding_name.clone(), full_path.clone());
 
         let first_segment = &import.node.path[0].node;
 
         if import.node.path.len() == 1 {
             // Single-segment import (e.g., `import math`) — resolve from entry_dir
+            let is_dep = current_deps.contains_key(first_segment);
             let dir_path = entry_dir.join(first_segment);
             let file_path_candidate = entry_dir.join(format!("{}.pluto", first_segment));
+            let is_local = dir_path.is_dir() || file_path_candidate.is_file();
 
-            if dir_path.is_dir() {
-                let module_prog = load_directory_module(&dir_path, &mut source_map, &mut visited, effective_stdlib)?;
-                imports.push((binding_name, module_prog));
+            if is_dep && is_local {
+                return Err(CompileError::syntax(
+                    format!("import '{}' is ambiguous: declared as dependency and also exists locally", first_segment),
+                    import.node.path[0].span,
+                ));
+            }
+
+            if is_dep {
+                let dep_path = &current_deps[first_segment];
+                let dep_canonical = dep_path.canonicalize().map_err(|e| {
+                    CompileError::codegen(format!("cannot resolve dep path '{}': {e}", dep_path.display()))
+                })?;
+                let dep_scope = pkg_graph.deps_for(&dep_canonical);
+                let module_prog = load_directory_module(dep_path, &mut source_map, &mut visited, effective_stdlib, dep_scope, pkg_graph, ImportOrigin::PackageDep)?;
+                imports.push((binding_name, module_prog, ImportOrigin::PackageDep));
+            } else if dir_path.is_dir() {
+                let module_prog = load_directory_module(&dir_path, &mut source_map, &mut visited, effective_stdlib, current_deps, pkg_graph, ImportOrigin::Local)?;
+                imports.push((binding_name, module_prog, ImportOrigin::Local));
             } else if file_path_candidate.is_file() {
                 let canonical = file_path_candidate.canonicalize().unwrap_or_else(|_| file_path_candidate.clone());
                 if visited.contains(&canonical) {
@@ -519,9 +655,9 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
                 visited.insert(canonical.clone());
                 let (mut module_prog, _) = load_and_parse(&file_path_candidate, &mut source_map)?;
                 // Recursively resolve sub-imports
-                resolve_module_imports(&mut module_prog, entry_dir, &mut source_map, &mut visited, effective_stdlib)?;
+                resolve_module_imports(&mut module_prog, entry_dir, &mut source_map, &mut visited, effective_stdlib, current_deps, pkg_graph, ImportOrigin::Local)?;
                 visited.remove(&canonical);
-                imports.push((binding_name, module_prog));
+                imports.push((binding_name, module_prog, ImportOrigin::Local));
             } else {
                 return Err(CompileError::syntax(
                     format!("cannot find module '{}': no directory or file found", full_path),
@@ -534,8 +670,8 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
                 Some(root) => {
                     // Skip the "std" prefix, resolve remaining segments from stdlib root
                     let remaining = &import.node.path[1..];
-                    let module_prog = resolve_module_path(remaining, root, &mut source_map, import.span, &mut visited, effective_stdlib)?;
-                    imports.push((binding_name, module_prog));
+                    let module_prog = resolve_module_path(remaining, root, &mut source_map, import.span, &mut visited, effective_stdlib, current_deps, pkg_graph, ImportOrigin::Local)?;
+                    imports.push((binding_name, module_prog, ImportOrigin::Local));
                 }
                 None => {
                     return Err(CompileError::syntax(
@@ -548,9 +684,32 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
                 }
             }
         } else {
-            // Multi-segment import from project (e.g., `import utils.math`) — resolve from entry_dir
-            let module_prog = resolve_module_path(&import.node.path, entry_dir, &mut source_map, import.span, &mut visited, effective_stdlib)?;
-            imports.push((binding_name, module_prog));
+            // Multi-segment import
+            let is_dep = current_deps.contains_key(first_segment);
+            let dir_path = entry_dir.join(first_segment);
+            let is_local = dir_path.is_dir();
+
+            if is_dep && is_local {
+                return Err(CompileError::syntax(
+                    format!("import '{}' is ambiguous: declared as dependency and also exists locally", full_path),
+                    import.node.path[0].span,
+                ));
+            }
+
+            if is_dep {
+                let dep_path = &current_deps[first_segment];
+                let dep_canonical = dep_path.canonicalize().map_err(|e| {
+                    CompileError::codegen(format!("cannot resolve dep path '{}': {e}", dep_path.display()))
+                })?;
+                let dep_scope = pkg_graph.deps_for(&dep_canonical);
+                let remaining = &import.node.path[1..];
+                let module_prog = resolve_module_path(remaining, dep_path, &mut source_map, import.span, &mut visited, effective_stdlib, dep_scope, pkg_graph, ImportOrigin::PackageDep)?;
+                imports.push((binding_name, module_prog, ImportOrigin::PackageDep));
+            } else {
+                // Multi-segment import from project (e.g., `import utils.math`) — resolve from entry_dir
+                let module_prog = resolve_module_path(&import.node.path, entry_dir, &mut source_map, import.span, &mut visited, effective_stdlib, current_deps, pkg_graph, ImportOrigin::Local)?;
+                imports.push((binding_name, module_prog, ImportOrigin::Local));
+            }
         }
     }
 
@@ -563,20 +722,38 @@ pub fn resolve_modules(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<
 /// - Add ALL items with prefixed names (visibility deferred)
 /// - Rewrite qualified references in the root program's AST
 pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), CompileError> {
-    let import_names: HashSet<String> = graph.imports.iter().map(|(n, _)| n.clone()).collect();
+    let mut import_names: HashSet<String> = graph.imports.iter().map(|(n, _, _)| n.clone()).collect();
 
-    // Reject app declarations in imported modules
-    for (module_name, module_prog) in &graph.imports {
+    // Add extern rust aliases so the rewrite pass converts alias.fn() → Call { name: "alias.fn" }
+    for ext_rust in &graph.root.extern_rust_crates {
+        import_names.insert(ext_rust.node.alias.node.clone());
+    }
+
+    // Reject app declarations and extern rust in imported modules
+    for (module_name, module_prog, origin) in &graph.imports {
         if module_prog.app.is_some() {
             return Err(CompileError::codegen(format!(
                 "app declarations are not allowed in imported modules (found in '{}')",
                 module_name
             )));
         }
+        if !module_prog.extern_rust_crates.is_empty() {
+            let msg = match origin {
+                ImportOrigin::PackageDep => format!(
+                    "extern rust declarations are not supported in package dependencies (found in '{}')",
+                    module_name
+                ),
+                ImportOrigin::Local => format!(
+                    "extern rust declarations are only allowed in the root program (found in '{}')",
+                    module_name
+                ),
+            };
+            return Err(CompileError::codegen(msg));
+        }
     }
 
     // Filter out test functions from imported modules before merging
-    for (_module_name, module_prog) in &mut graph.imports {
+    for (_module_name, module_prog, _origin) in &mut graph.imports {
         let test_fn_names: HashSet<String> = module_prog.test_info.iter()
             .map(|(_, fn_name)| fn_name.clone()).collect();
         module_prog.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
@@ -584,7 +761,7 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
     }
 
     // Add prefixed items from imports
-    for (module_name, module_prog) in &graph.imports {
+    for (module_name, module_prog, _origin) in &graph.imports {
         // Add ALL functions with prefixed names (no pub filter — visibility deferred)
         for func in &module_prog.functions {
             let mut prefixed_func = func.clone();
@@ -807,6 +984,12 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
         Stmt::Expr(expr) => {
             rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
         }
+        Stmt::LetChan { elem_type, capacity, .. } => {
+            prefix_type_expr(&mut elem_type.node, module_name, module_prog);
+            if let Some(cap) = capacity {
+                rewrite_expr_for_module(&mut cap.node, module_name, module_prog);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -925,6 +1108,9 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
         Expr::Range { start, end, .. } => {
             rewrite_expr_for_module(&mut start.node, module_name, module_prog);
             rewrite_expr_for_module(&mut end.node, module_name, module_prog);
+        }
+        Expr::Spawn { call } => {
+            rewrite_expr_for_module(&mut call.node, module_name, module_prog);
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
     }
@@ -1092,6 +1278,12 @@ fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
         Stmt::Expr(expr) => {
             rewrite_expr(&mut expr.node, expr.span, import_names);
         }
+        Stmt::LetChan { elem_type, capacity, .. } => {
+            rewrite_type_expr(elem_type, import_names);
+            if let Some(cap) = capacity {
+                rewrite_expr(&mut cap.node, cap.span, import_names);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -1213,6 +1405,9 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
         Expr::Range { start, end, .. } => {
             rewrite_expr(&mut start.node, start.span, import_names);
             rewrite_expr(&mut end.node, end.span, import_names);
+        }
+        Expr::Spawn { call } => {
+            rewrite_expr(&mut call.node, call.span, import_names);
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
     }

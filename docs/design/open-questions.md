@@ -10,7 +10,6 @@ Areas that need further design work before implementation.
 
 - [ ] **Geographic annotations** — syntax for region/locality constraints
 - [ ] **Service discovery** — how do apps find each other?
-- [ ] **Channels** — `chan<T>()`, directional types, backpressure strategies
 - [ ] **Cross-pod calls** — compiler-generated RPC code, serialization format
 
 ## Runtime
@@ -86,3 +85,4 @@ Previously open questions that have been designed and implemented.
 - [x] **`break` / `continue`** — loop control flow with `break` to exit and `continue` to skip to next iteration. Validated at compile time (must be inside loop, cannot escape closures)
 - [x] **Range syntax** — `0..n` (exclusive) and `0..=n` (inclusive) for integer iteration in `for` loops
 - [x] **`loop` keyword** — rejected; use `while true` instead. No dedicated infinite loop construct needed
+- [x] **Channels** — `chan<T>()` with `Sender<T>`/`Receiver<T>`, blocking/non-blocking send/recv, for-in iteration, error integration

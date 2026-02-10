@@ -24,7 +24,7 @@ pub(crate) fn infer_expr(
                 if let StringInterpPart::Expr(e) = part {
                     let t = infer_expr(&e.node, e.span, env)?;
                     match t {
-                        PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String => {}
+                        PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Byte => {}
                         _ => {
                             return Err(CompileError::type_err(
                                 format!("cannot interpolate {} into string", t),
@@ -84,7 +84,9 @@ pub(crate) fn infer_expr(
                 (PlutoType::Int, PlutoType::Float)
                 | (PlutoType::Float, PlutoType::Int)
                 | (PlutoType::Int, PlutoType::Bool)
-                | (PlutoType::Bool, PlutoType::Int) => Ok(target),
+                | (PlutoType::Bool, PlutoType::Int)
+                | (PlutoType::Int, PlutoType::Byte)
+                | (PlutoType::Byte, PlutoType::Int) => Ok(target),
                 _ => Err(CompileError::type_err(
                     format!("cannot cast from {source} to {target}"),
                     span,
@@ -159,6 +161,26 @@ pub(crate) fn infer_expr(
                         ));
                     }
                     Ok(*val_ty.clone())
+                }
+                PlutoType::String => {
+                    let idx_type = infer_expr(&index.node, index.span, env)?;
+                    if idx_type != PlutoType::Int {
+                        return Err(CompileError::type_err(
+                            format!("string index must be int, found {idx_type}"),
+                            index.span,
+                        ));
+                    }
+                    Ok(PlutoType::String)
+                }
+                PlutoType::Bytes => {
+                    let idx_type = infer_expr(&index.node, index.span, env)?;
+                    if idx_type != PlutoType::Int {
+                        return Err(CompileError::type_err(
+                            format!("bytes index must be int, found {idx_type}"),
+                            index.span,
+                        ));
+                    }
+                    Ok(PlutoType::Byte)
                 }
                 _ => {
                     Err(CompileError::type_err(
@@ -241,14 +263,42 @@ pub(crate) fn infer_expr(
             }
             Ok(PlutoType::Set(Box::new(et)))
         }
+        Expr::Spawn { call } => {
+            // After desugaring, call is a Closure wrapping the original function call.
+            // Infer the closure type to get the return type.
+            let closure_type = infer_expr(&call.node, call.span, env)?;
+            let inner_type = match &closure_type {
+                PlutoType::Fn(_, ret) => *ret.clone(),
+                _ => {
+                    return Err(CompileError::type_err(
+                        "spawn requires a function call".to_string(),
+                        span,
+                    ));
+                }
+            };
+            // Extract the spawned function name by peeking inside the closure body
+            if let Expr::Closure { body, .. } = &call.node {
+                for stmt in &body.node.stmts {
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
+                        if let Expr::Call { name, .. } = &ret_expr.node {
+                            env.spawn_target_fns.insert(
+                                (span.start, span.end),
+                                name.node.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(PlutoType::Task(Box::new(inner_type)))
+        }
     }
 }
 
 fn validate_hashable_key(ty: &PlutoType, span: crate::span::Span) -> Result<(), CompileError> {
     match ty {
-        PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Enum(_) => Ok(()),
+        PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Enum(_) | PlutoType::Byte => Ok(()),
         _ => Err(CompileError::type_err(
-            format!("type {ty} cannot be used as a map/set key (must be int, float, bool, string, or enum)"),
+            format!("type {ty} cannot be used as a map/set key (must be int, float, bool, string, byte, or enum)"),
             span,
         )),
     }
@@ -284,6 +334,12 @@ fn infer_binop(
             }
         }
         BinOp::Eq | BinOp::Neq => {
+            if lt == PlutoType::Bytes || rt == PlutoType::Bytes {
+                return Err(CompileError::type_err(
+                    "cannot compare bytes with ==; use element-wise comparison".to_string(),
+                    span,
+                ));
+            }
             if lt != rt {
                 return Err(CompileError::type_err(
                     format!("cannot compare {lt} with {rt}"),
@@ -300,7 +356,7 @@ fn infer_binop(
                 ));
             }
             match &lt {
-                PlutoType::Int | PlutoType::Float => Ok(PlutoType::Bool),
+                PlutoType::Int | PlutoType::Float | PlutoType::Byte => Ok(PlutoType::Bool),
                 _ => Err(CompileError::type_err(
                     format!("comparison not supported for type {lt}"),
                     span,
@@ -346,7 +402,7 @@ fn infer_call(
                 }
                 let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
                 match arg_type {
-                    PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String => {}
+                    PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Byte => {}
                     _ => {
                         return Err(CompileError::type_err(
                             format!("print() does not support type {arg_type}"),
@@ -458,6 +514,15 @@ fn infer_call(
                     ));
                 }
                 Ok(PlutoType::Int)
+            }
+            "bytes_new" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("bytes_new() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                Ok(PlutoType::Bytes)
             }
             "expect" => {
                 if args.len() != 1 {
@@ -864,6 +929,12 @@ fn infer_method_call(
                             span,
                         ));
                     }
+                    if inner_type == PlutoType::Bytes {
+                        return Err(CompileError::type_err(
+                            "cannot use to_equal() with bytes; compare elements individually".to_string(),
+                            span,
+                        ));
+                    }
                     let expected_type = infer_expr(&args[0].node, args[0].span, env)?;
                     if inner_type != expected_type {
                         return Err(CompileError::type_err(
@@ -1101,20 +1172,314 @@ fn infer_method_call(
             }
         }
     }
-    if obj_type == PlutoType::String {
-        if method.node == "len" && args.is_empty() {
+    // Task methods
+    if let PlutoType::Task(inner) = &obj_type {
+        match method.node.as_str() {
+            "get" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("get() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                // Determine spawned function for error tracking
+                let spawned_fn = if let Expr::Ident(var) = &object.node {
+                    env.lookup_task_origin(var).cloned()
+                } else {
+                    None // conservatively fallible for non-ident objects
+                };
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::TaskGet { spawned_fn },
+                    );
+                }
+                return Ok(*inner.clone());
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("Task has no method '{}'", method.node),
+                    method.span,
+                ));
+            }
+        }
+    }
+    // Bytes methods
+    if obj_type == PlutoType::Bytes {
+        let builtin = |env: &mut TypeEnv, method: &Spanned<String>| {
             if let Some(ref current) = env.current_fn {
                 env.method_resolutions.insert(
                     (current.clone(), method.span.start),
                     super::env::MethodResolution::Builtin,
                 );
             }
-            return Ok(PlutoType::Int);
+        };
+        match method.node.as_str() {
+            "len" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err("len() expects 0 arguments".to_string(), span));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Int);
+            }
+            "push" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err("push() expects 1 argument".to_string(), span));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != PlutoType::Byte {
+                    return Err(CompileError::type_err(
+                        format!("push(): expected byte, found {arg_type}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Void);
+            }
+            "to_string" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err("to_string() expects 0 arguments".to_string(), span));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::String);
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("bytes has no method '{}'", method.node), method.span,
+                ));
+            }
         }
-        return Err(CompileError::type_err(
-            format!("string has no method '{}'", method.node),
-            method.span,
-        ));
+    }
+    // Sender methods
+    if let PlutoType::Sender(inner) = &obj_type {
+        match method.node.as_str() {
+            "send" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("send() expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **inner {
+                    return Err(CompileError::type_err(
+                        format!("send() expects {}, found {}", inner, arg_type),
+                        args[0].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::ChannelSend,
+                    );
+                }
+                return Ok(PlutoType::Void);
+            }
+            "try_send" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("try_send() expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **inner {
+                    return Err(CompileError::type_err(
+                        format!("try_send() expects {}, found {}", inner, arg_type),
+                        args[0].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::ChannelTrySend,
+                    );
+                }
+                return Ok(PlutoType::Void);
+            }
+            "close" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("close() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Void);
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("Sender has no method '{}'", method.node),
+                    method.span,
+                ));
+            }
+        }
+    }
+    // Receiver methods
+    if let PlutoType::Receiver(inner) = &obj_type {
+        match method.node.as_str() {
+            "recv" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("recv() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::ChannelRecv,
+                    );
+                }
+                return Ok(*inner.clone());
+            }
+            "try_recv" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("try_recv() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::ChannelTryRecv,
+                    );
+                }
+                return Ok(*inner.clone());
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("Receiver has no method '{}'", method.node),
+                    method.span,
+                ));
+            }
+        }
+    }
+    if obj_type == PlutoType::String {
+        let builtin = |env: &mut TypeEnv, method: &Spanned<String>| {
+            if let Some(ref current) = env.current_fn {
+                env.method_resolutions.insert(
+                    (current.clone(), method.span.start),
+                    super::env::MethodResolution::Builtin,
+                );
+            }
+        };
+        match method.node.as_str() {
+            "len" | "trim" | "to_upper" | "to_lower" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 0 arguments", method.node), span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(match method.node.as_str() {
+                    "len" => PlutoType::Int,
+                    _ => PlutoType::String,
+                });
+            }
+            "contains" | "starts_with" | "ends_with" | "index_of" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 1 argument", method.node), span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != PlutoType::String {
+                    return Err(CompileError::type_err(
+                        format!("{}(): expected string, found {arg_type}", method.node), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(match method.node.as_str() {
+                    "index_of" => PlutoType::Int,
+                    _ => PlutoType::Bool,
+                });
+            }
+            "char_at" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        "char_at() expects 1 argument".to_string(), span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("char_at(): expected int, found {arg_type}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::String);
+            }
+            "substring" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        "substring() expects 2 arguments".to_string(), span,
+                    ));
+                }
+                for arg in &args[..2] {
+                    let arg_type = infer_expr(&arg.node, arg.span, env)?;
+                    if arg_type != PlutoType::Int {
+                        return Err(CompileError::type_err(
+                            format!("substring(): expected int, found {arg_type}"), arg.span,
+                        ));
+                    }
+                }
+                builtin(env, method);
+                return Ok(PlutoType::String);
+            }
+            "replace" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        "replace() expects 2 arguments".to_string(), span,
+                    ));
+                }
+                for arg in &args[..2] {
+                    let arg_type = infer_expr(&arg.node, arg.span, env)?;
+                    if arg_type != PlutoType::String {
+                        return Err(CompileError::type_err(
+                            format!("replace(): expected string, found {arg_type}"), arg.span,
+                        ));
+                    }
+                }
+                builtin(env, method);
+                return Ok(PlutoType::String);
+            }
+            "split" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        "split() expects 1 argument".to_string(), span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != PlutoType::String {
+                    return Err(CompileError::type_err(
+                        format!("split(): expected string, found {arg_type}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Array(Box::new(PlutoType::String)));
+            }
+            "to_bytes" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        "to_bytes() expects 0 arguments".to_string(), span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Bytes);
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("string has no method '{}'", method.node),
+                    method.span,
+                ));
+            }
+        }
     }
 
     // Trait method calls

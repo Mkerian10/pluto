@@ -1,0 +1,58 @@
+// Bytes & byte type demo
+
+fn main() int {
+    // Hex literals
+    let hex_val = 0xFF
+    print("Hex 0xFF = {hex_val}")
+
+    // Byte type — explicit cast required
+    let b = 65 as byte
+    print("Byte value: {b}")
+    print("As int: {b as int}")
+
+    // Casting semantics: truncation and unsigned
+    let truncated = 256 as byte
+    print("256 as byte = {truncated}")
+    let neg = -1 as byte
+    print("-1 as byte = {neg}")
+
+    // Bytes buffer
+    let buf = bytes_new()
+    buf.push(72 as byte)
+    buf.push(101 as byte)
+    buf.push(108 as byte)
+    buf.push(108 as byte)
+    buf.push(111 as byte)
+    print("Buffer length: {buf.len()}")
+
+    // Convert to string
+    let greeting = buf.to_string()
+    print(greeting)
+
+    // String to bytes and back
+    let original = "Pluto"
+    let raw = original.to_bytes()
+    print("'{original}' is {raw.len()} bytes")
+    print("First byte: {raw[0] as int}")
+
+    // Iterate over bytes
+    let sum = 0
+    for b in raw {
+        sum = sum + (b as int)
+    }
+    print("Sum of byte values: {sum}")
+
+    // Index read and write
+    raw[0] = 112 as byte
+    let modified = raw.to_string()
+    print("Modified: {modified}")
+
+    // Byte ordering (unsigned)
+    let high = 0xFF as byte
+    let low = 0x00 as byte
+    if high > low {
+        print("0xFF > 0x00: correct unsigned ordering")
+    }
+
+    return 0
+}

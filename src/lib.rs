@@ -9,6 +9,10 @@ pub mod closures;
 pub mod monomorphize;
 pub mod prelude;
 pub mod ambient;
+pub mod rust_ffi;
+pub mod spawn;
+pub mod manifest;
+pub mod git_cache;
 
 use diagnostics::CompileError;
 use std::path::{Path, PathBuf};
@@ -20,8 +24,16 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
     let tokens = lexer::lex(source)?;
     let mut parser = parser::Parser::new(&tokens, source);
     let mut program = parser.parse_program()?;
+    // Reject extern rust in single-string compilation
+    if !program.extern_rust_crates.is_empty() {
+        return Err(CompileError::syntax(
+            "extern rust declarations require file-based compilation (use compile_file instead)",
+            program.extern_rust_crates[0].span,
+        ));
+    }
     prelude::inject_prelude(&mut program)?;
     ambient::desugar_ambient(&mut program)?;
+    spawn::desugar_spawn(&mut program)?;
     // Strip test functions in non-test mode
     let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
         .map(|(_, fn_name)| fn_name.clone()).collect();
@@ -55,8 +67,16 @@ pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError
     let tokens = lexer::lex(source)?;
     let mut parser = parser::Parser::new(&tokens, source);
     let mut program = parser.parse_program()?;
+    // Reject extern rust in single-string compilation
+    if !program.extern_rust_crates.is_empty() {
+        return Err(CompileError::syntax(
+            "extern rust declarations require file-based compilation (use compile_file instead)",
+            program.extern_rust_crates[0].span,
+        ));
+    }
     prelude::inject_prelude(&mut program)?;
     ambient::desugar_ambient(&mut program)?;
+    spawn::desugar_spawn(&mut program)?;
     // test_info is NOT stripped in test mode
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
@@ -90,15 +110,33 @@ pub fn compile_file(entry_file: &Path, output_path: &Path) -> Result<(), Compile
 
 /// Compile with an explicit stdlib root path.
 pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<(), CompileError> {
-    let source = std::fs::read_to_string(entry_file)
+    let entry_file = entry_file.canonicalize().map_err(|e|
+        CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
+    let source = std::fs::read_to_string(&entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
     let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
     let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
 
-    let graph = modules::resolve_modules(entry_file, effective_stdlib.as_deref())?;
+    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
+    let pkg_graph = manifest::find_and_resolve(entry_dir)?;
+    let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
+
+    // Check extern rust aliases don't collide with import aliases
+    check_extern_rust_import_collisions(&graph)?;
+
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
+
+    // Resolve extern rust crates (build glue, extract signatures)
+    let rust_artifacts = if program.extern_rust_crates.is_empty() {
+        vec![]
+    } else {
+        rust_ffi::resolve_rust_crates(&program, entry_dir)?
+    };
+    rust_ffi::inject_extern_fns(&mut program, &rust_artifacts);
+
     prelude::inject_prelude(&mut program)?;
     ambient::desugar_ambient(&mut program)?;
+    spawn::desugar_spawn(&mut program)?;
     // Strip test functions in non-test mode
     let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
         .map(|(_, fn_name)| fn_name.clone()).collect();
@@ -113,7 +151,12 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
     std::fs::write(&obj_path, &object_bytes)
         .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
 
-    link(&obj_path, output_path)?;
+    let mut config = LinkConfig::default_config(&obj_path)?;
+    for artifact in &rust_artifacts {
+        config.static_libs.push(artifact.static_lib.clone());
+        config.flags.extend(artifact.native_libs.clone());
+    }
+    link_from_config(&config, output_path)?;
 
     let _ = std::fs::remove_file(&obj_path);
 
@@ -122,12 +165,20 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
 
 /// Compile a file in test mode. Tests are preserved and a test runner main is generated.
 pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<(), CompileError> {
-    let source = std::fs::read_to_string(entry_file)
+    let entry_file = entry_file.canonicalize().map_err(|e|
+        CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
+    let source = std::fs::read_to_string(&entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
     let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
     let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
 
-    let graph = modules::resolve_modules(entry_file, effective_stdlib.as_deref())?;
+    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
+    let pkg_graph = manifest::find_and_resolve(entry_dir)?;
+    let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
+
+    // Check extern rust aliases don't collide with import aliases
+    check_extern_rust_import_collisions(&graph)?;
+
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
 
     if program.test_info.is_empty() {
@@ -141,8 +192,17 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
         ));
     }
 
+    // Resolve extern rust crates
+    let rust_artifacts = if program.extern_rust_crates.is_empty() {
+        vec![]
+    } else {
+        rust_ffi::resolve_rust_crates(&program, entry_dir)?
+    };
+    rust_ffi::inject_extern_fns(&mut program, &rust_artifacts);
+
     prelude::inject_prelude(&mut program)?;
     ambient::desugar_ambient(&mut program)?;
+    spawn::desugar_spawn(&mut program)?;
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
@@ -152,7 +212,12 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
     std::fs::write(&obj_path, &object_bytes)
         .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
 
-    link(&obj_path, output_path)?;
+    let mut config = LinkConfig::default_config(&obj_path)?;
+    for artifact in &rust_artifacts {
+        config.static_libs.push(artifact.static_lib.clone());
+        config.flags.extend(artifact.native_libs.clone());
+    }
+    link_from_config(&config, output_path)?;
 
     let _ = std::fs::remove_file(&obj_path);
 
@@ -172,12 +237,11 @@ fn cached_runtime_object() -> Result<&'static Path, CompileError> {
             let runtime_o = dir.join("builtins.o");
             std::fs::write(&runtime_c, runtime_src)
                 .map_err(|e| CompileError::link(format!("failed to write runtime source: {e}")))?;
-            let status = std::process::Command::new("cc")
-                .arg("-c")
-                .arg(&runtime_c)
-                .arg("-o")
-                .arg(&runtime_o)
-                .status()
+            let mut cmd = std::process::Command::new("cc");
+            cmd.arg("-c").arg(&runtime_c).arg("-o").arg(&runtime_o);
+            #[cfg(target_os = "linux")]
+            cmd.arg("-pthread");
+            let status = cmd.status()
                 .map_err(|e| CompileError::link(format!("failed to compile runtime: {e}")))?;
             let _ = std::fs::remove_file(&runtime_c);
             if !status.success() {
@@ -193,15 +257,40 @@ fn cached_runtime_object() -> Result<&'static Path, CompileError> {
     }
 }
 
-fn link(obj_path: &Path, output_path: &Path) -> Result<(), CompileError> {
-    let runtime_o = cached_runtime_object()?;
+struct LinkConfig {
+    objects: Vec<PathBuf>,
+    static_libs: Vec<PathBuf>,
+    flags: Vec<String>,
+}
 
-    let status = std::process::Command::new("cc")
-        .arg(obj_path)
-        .arg(runtime_o)
-        .arg("-lm")
-        .arg("-o")
-        .arg(output_path)
+impl LinkConfig {
+    fn default_config(pluto_obj: &Path) -> Result<Self, CompileError> {
+        let runtime_o = cached_runtime_object()?;
+        let mut flags = vec!["-lm".to_string()];
+        #[cfg(target_os = "linux")]
+        flags.push("-pthread".to_string());
+        Ok(Self {
+            objects: vec![pluto_obj.to_path_buf(), runtime_o.to_path_buf()],
+            static_libs: vec![],
+            flags,
+        })
+    }
+}
+
+fn link_from_config(config: &LinkConfig, output: &Path) -> Result<(), CompileError> {
+    let mut cmd = std::process::Command::new("cc");
+    for obj in &config.objects {
+        cmd.arg(obj);
+    }
+    for lib in &config.static_libs {
+        cmd.arg(lib);
+    }
+    cmd.arg("-o").arg(output);
+    for flag in &config.flags {
+        cmd.arg(flag);
+    }
+
+    let status = cmd
         .status()
         .map_err(|e| CompileError::link(format!("failed to invoke linker: {e}")))?;
 
@@ -209,5 +298,47 @@ fn link(obj_path: &Path, output_path: &Path) -> Result<(), CompileError> {
         return Err(CompileError::link("linker failed"));
     }
 
+    Ok(())
+}
+
+fn link(obj_path: &Path, output_path: &Path) -> Result<(), CompileError> {
+    let config = LinkConfig::default_config(obj_path)?;
+    link_from_config(&config, output_path)
+}
+
+/// Fetch latest versions of all git dependencies declared in pluto.toml.
+pub fn update_git_deps(dir: &Path) -> Result<(), CompileError> {
+    let updated = manifest::update_git_deps(dir)?;
+    if updated.is_empty() {
+        eprintln!("no git dependencies to update");
+    } else {
+        for name in &updated {
+            eprintln!("updated: {name}");
+        }
+    }
+    Ok(())
+}
+
+/// Check that extern rust aliases don't collide with import aliases.
+/// Must be called before flatten_modules (which clears import data).
+fn check_extern_rust_import_collisions(graph: &modules::ModuleGraph) -> Result<(), CompileError> {
+    let import_aliases: std::collections::HashSet<&str> = graph
+        .imports
+        .iter()
+        .map(|(name, _, _)| name.as_str())
+        .collect();
+
+    for ext_rust in &graph.root.extern_rust_crates {
+        let alias = &ext_rust.node.alias.node;
+        if import_aliases.contains(alias.as_str()) {
+            return Err(CompileError::syntax(
+                format!(
+                    "extern rust alias '{}' conflicts with import alias of the same name",
+                    alias
+                ),
+                ext_rust.node.alias.span,
+            ));
+        }
+    }
     Ok(())
 }

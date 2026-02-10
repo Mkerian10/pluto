@@ -72,7 +72,20 @@ pub enum Token {
     Test,
 
     // Literals
-    #[regex(r"[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<i64>().ok())]
+    #[regex(r"0[xX][0-9a-fA-F_]+|[0-9][0-9_]*", |lex| {
+        let s = lex.slice();
+        if s.starts_with("0x") || s.starts_with("0X") {
+            let hex_part = &s[2..];
+            let cleaned = hex_part.replace('_', "");
+            // Reject empty hex, leading/trailing underscore
+            if cleaned.is_empty() {
+                return None;
+            }
+            i64::from_str_radix(&cleaned, 16).ok()
+        } else {
+            s.replace('_', "").parse::<i64>().ok()
+        }
+    })]
     IntLit(i64),
 
     #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<f64>().ok())]
@@ -199,6 +212,14 @@ pub enum Token {
     // Comments (skip)
     #[regex(r"//[^\n]*")]
     Comment,
+}
+
+/// Returns true if the given string is a Pluto keyword.
+pub fn is_keyword(s: &str) -> bool {
+    matches!(s, "fn" | "let" | "mut" | "return" | "if" | "else" | "while" | "true" | "false"
+        | "class" | "trait" | "app" | "inject" | "error" | "raise" | "catch" | "spawn"
+        | "enum" | "impl" | "self" | "pub" | "for" | "in" | "break" | "continue"
+        | "match" | "import" | "as" | "extern" | "uses" | "ambient" | "test")
 }
 
 impl std::fmt::Display for Token {

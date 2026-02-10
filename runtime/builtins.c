@@ -15,6 +15,8 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <math.h>
+#include <pthread.h>
+#include <stdatomic.h>
 
 // ── GC Infrastructure ─────────────────────────────────────────────────────────
 
@@ -26,6 +28,15 @@
 #define GC_TAG_MAP   4   // [count][cap][keys_ptr][vals_ptr][meta_ptr]
 #define GC_TAG_SET   5   // [count][cap][keys_ptr][meta_ptr]
 #define GC_TAG_JSON  6   // JsonNode — recursive tree structure
+#define GC_TAG_TASK    7   // [closure][result][error][done][sync_ptr]
+#define GC_TAG_BYTES   8   // [len][cap][data_ptr]; 1 byte per element
+#define GC_TAG_CHANNEL 9   // [sync_ptr][buf_ptr][capacity][count][head][tail][closed]
+
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t not_empty;
+    pthread_cond_t not_full;
+} ChannelSync;
 
 typedef struct GCHeader {
     struct GCHeader *next;    // 8B: linked list of all GC objects
@@ -85,21 +96,36 @@ void *__pluto_array_new(long cap);
 void __pluto_array_push(void *handle, long value);
 static void json_free_tree(JsonNode *node);
 
-// Error handling — non-static so GC can access as root
-void *__pluto_current_error = NULL;
+// Error handling — thread-local so each thread has its own error state
+__thread void *__pluto_current_error = NULL;
+
+// GC thread safety
+static pthread_mutex_t gc_mutex = PTHREAD_MUTEX_INITIALIZER;
+static atomic_int __pluto_active_tasks = 0;
+#define PLUTO_MAX_HEAP_BYTES (1024L * 1024L * 1024L)  // 1 GB
 
 static inline GCHeader *gc_get_header(void *user_ptr) {
     return (GCHeader *)((char *)user_ptr - sizeof(GCHeader));
 }
 
 static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
+    pthread_mutex_lock(&gc_mutex);
     if (gc_stack_bottom && !gc_collecting
-        && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold) {
+        && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold
+        && atomic_load(&__pluto_active_tasks) == 0) {
         __pluto_gc_collect();
+    }
+    // Heap ceiling guardrail when GC is suppressed
+    if (atomic_load(&__pluto_active_tasks) > 0
+        && gc_bytes_allocated + user_size + sizeof(GCHeader) > PLUTO_MAX_HEAP_BYTES) {
+        pthread_mutex_unlock(&gc_mutex);
+        fprintf(stderr, "pluto: heap exceeded %ld bytes while GC suppressed by active tasks\n",
+                (long)PLUTO_MAX_HEAP_BYTES);
+        exit(1);
     }
     size_t total = sizeof(GCHeader) + user_size;
     GCHeader *h = (GCHeader *)calloc(1, total);
-    if (!h) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    if (!h) { pthread_mutex_unlock(&gc_mutex); fprintf(stderr, "pluto: out of memory\n"); exit(1); }
     h->next = gc_head;
     gc_head = h;
     h->size = (uint32_t)user_size;
@@ -107,6 +133,7 @@ static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) 
     h->field_count = field_count;
     h->mark = 0;
     gc_bytes_allocated += total;
+    pthread_mutex_unlock(&gc_mutex);
     return (char *)h + sizeof(GCHeader);
 }
 
@@ -135,6 +162,7 @@ static void gc_build_intervals(void) {
     for (GCHeader *h = gc_head; h; h = h->next) {
         count++;
         if (h->type_tag == GC_TAG_ARRAY) data_buf_count++;
+        else if (h->type_tag == GC_TAG_BYTES) data_buf_count++;
         else if (h->type_tag == GC_TAG_MAP) data_buf_count += 3;  // keys, vals, meta
         else if (h->type_tag == GC_TAG_SET) data_buf_count += 2;  // keys, meta
     }
@@ -159,6 +187,18 @@ static void gc_build_intervals(void) {
             if (data_ptr && cap > 0) {
                 gc_data_intervals[gc_data_interval_count].start = data_ptr;
                 gc_data_intervals[gc_data_interval_count].end = (char *)data_ptr + cap * 8;
+                gc_data_intervals[gc_data_interval_count].array_handle = user;
+                gc_data_interval_count++;
+            }
+        }
+        // Bytes handle: [len][cap][data_ptr]
+        if (h->type_tag == GC_TAG_BYTES && h->size >= 24) {
+            long *handle = (long *)user;
+            long cap = handle[1];
+            void *data_ptr = (void *)handle[2];
+            if (data_ptr && cap > 0) {
+                gc_data_intervals[gc_data_interval_count].start = data_ptr;
+                gc_data_intervals[gc_data_interval_count].end = (char *)data_ptr + cap * 1;
                 gc_data_intervals[gc_data_interval_count].array_handle = user;
                 gc_data_interval_count++;
             }
@@ -247,7 +287,8 @@ static void gc_trace_object(void *user_ptr) {
     GCHeader *h = gc_get_header(user_ptr);
     switch (h->type_tag) {
     case GC_TAG_STRING:
-        // No child pointers
+    case GC_TAG_BYTES:
+        // No child pointers (bytes data is raw u8 values, not GC pointers)
         break;
     case GC_TAG_ARRAY: {
         // Array handle: [len][cap][data_ptr]
@@ -308,6 +349,24 @@ static void gc_trace_object(void *user_ptr) {
             }
         }
         (void)count;
+        break;
+    }
+    case GC_TAG_CHANNEL: {
+        // Channel handle: [sync_ptr][buf_ptr][capacity][count][head][tail][closed]
+        long *ch = (long *)user_ptr;
+        long *buf = (long *)ch[1];
+        long count = ch[3];
+        long head = ch[4];
+        long capacity = ch[2];
+        // Trace live buffer slots (they may hold GC pointers like strings/objects)
+        for (long i = 0; i < count; i++) {
+            long idx = (head + i) % capacity;
+            void *candidate = (void *)buf[idx];
+            GCHeader *child = gc_find_object(candidate);
+            if (child && !child->mark) {
+                gc_mark_object((char *)child + sizeof(GCHeader));
+            }
+        }
         break;
     }
     case GC_TAG_OBJECT:
@@ -418,6 +477,12 @@ void __pluto_gc_collect(void) {
                 void *data_ptr = (void *)handle[2];
                 if (data_ptr) free(data_ptr);
             }
+            // Free bytes data buffer
+            if (h->type_tag == GC_TAG_BYTES && h->size >= 24) {
+                long *handle = (long *)((char *)h + sizeof(GCHeader));
+                void *data_ptr = (void *)handle[2];
+                if (data_ptr) free(data_ptr);
+            }
             // Free map buffers
             if (h->type_tag == GC_TAG_MAP && h->size >= 40) {
                 long *mh = (long *)((char *)h + sizeof(GCHeader));
@@ -436,6 +501,30 @@ void __pluto_gc_collect(void) {
                 long *slots = (long *)((char *)h + sizeof(GCHeader));
                 JsonNode *root = (JsonNode *)slots[0];
                 if (root) json_free_tree(root);
+            }
+            // Free task sync resources
+            if (h->type_tag == GC_TAG_TASK && h->size >= 40) {
+                long *slots = (long *)((char *)h + sizeof(GCHeader));
+                void *sync = (void *)slots[4];
+                if (sync) {
+                    pthread_mutex_destroy((pthread_mutex_t *)sync);
+                    pthread_cond_destroy((pthread_cond_t *)((char *)sync + sizeof(pthread_mutex_t)));
+                    free(sync);
+                }
+            }
+            // Free channel sync + buffer
+            if (h->type_tag == GC_TAG_CHANNEL && h->size >= 56) {
+                long *ch = (long *)((char *)h + sizeof(GCHeader));
+                void *sync = (void *)ch[0];
+                void *buf  = (void *)ch[1];
+                if (sync) {
+                    ChannelSync *cs = (ChannelSync *)sync;
+                    pthread_mutex_destroy(&cs->mutex);
+                    pthread_cond_destroy(&cs->not_empty);
+                    pthread_cond_destroy(&cs->not_full);
+                    free(cs);
+                }
+                if (buf) free(buf);
             }
             free(h);
             freed_bytes += total;
@@ -600,6 +689,89 @@ void __pluto_array_set(void *handle, long index, long value) {
 
 long __pluto_array_len(void *handle) {
     return ((long *)handle)[0];
+}
+
+// ── Bytes runtime functions ───────────────────────────────────────────────────
+// Handle layout (24 bytes): [len: long] [cap: long] [data_ptr: unsigned char*]
+
+long __pluto_bytes_new(void) {
+    long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
+    handle[0] = 0;   // len
+    handle[1] = 16;  // cap (initial)
+    unsigned char *data = (unsigned char *)malloc(16);
+    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    handle[2] = (long)data;
+    return (long)handle;
+}
+
+void __pluto_bytes_push(long handle, long value) {
+    long *h = (long *)handle;
+    long len = h[0];
+    long cap = h[1];
+    unsigned char *data = (unsigned char *)h[2];
+    if (len == cap) {
+        cap = cap * 2;
+        if (cap == 0) cap = 16;
+        data = (unsigned char *)realloc(data, cap);
+        if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+        h[1] = cap;
+        h[2] = (long)data;
+    }
+    data[len] = (unsigned char)(value & 0xFF);
+    h[0] = len + 1;
+}
+
+long __pluto_bytes_get(long handle, long index) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (index < 0 || index >= len) {
+        fprintf(stderr, "pluto: bytes index out of bounds: index %ld, length %ld\n", index, len);
+        exit(1);
+    }
+    unsigned char *data = (unsigned char *)h[2];
+    return (long)data[index];
+}
+
+void __pluto_bytes_set(long handle, long index, long value) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (index < 0 || index >= len) {
+        fprintf(stderr, "pluto: bytes index out of bounds: index %ld, length %ld\n", index, len);
+        exit(1);
+    }
+    unsigned char *data = (unsigned char *)h[2];
+    data[index] = (unsigned char)(value & 0xFF);
+}
+
+long __pluto_bytes_len(long handle) {
+    return ((long *)handle)[0];
+}
+
+long __pluto_bytes_to_string(long handle) {
+    long *h = (long *)handle;
+    long len = h[0];
+    unsigned char *data = (unsigned char *)h[2];
+    size_t alloc_size = 8 + len + 1;
+    void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
+    *(long *)header = len;
+    memcpy((char *)header + 8, data, len);
+    ((char *)header)[8 + len] = '\0';
+    return (long)header;
+}
+
+long __pluto_string_to_bytes(long str_handle) {
+    void *s = (void *)str_handle;
+    long len = *(long *)s;
+    const char *str_data = (const char *)s + 8;
+    long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
+    long cap = len > 16 ? len : 16;
+    handle[0] = len;
+    handle[1] = cap;
+    unsigned char *data = (unsigned char *)malloc(cap);
+    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    memcpy(data, str_data, len);
+    handle[2] = (long)data;
+    return (long)handle;
 }
 
 // ── String utility functions ──────────────────────────────────────────────────
@@ -2286,4 +2458,248 @@ void *__pluto_http_url_decode(void *pluto_str) {
     void *result = __pluto_string_new(out, olen);
     free(out);
     return result;
+}
+
+// ── Concurrency ─────────────────────────────────────────────────────────────
+
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+} TaskSync;
+
+// Task handle layout (40 bytes, 5 slots):
+//   [0] closure  (i64, GC pointer)
+//   [1] result   (i64)
+//   [2] error    (i64, GC pointer)
+//   [3] done     (i64)
+//   [4] sync_ptr (i64, raw malloc)
+
+static void *__pluto_spawn_trampoline(void *arg) {
+    long *task = (long *)arg;
+    long closure_ptr = task[0];
+    __pluto_current_error = NULL;  // clean TLS for new thread
+
+    long fn_ptr = *(long *)closure_ptr;
+    long result = ((long(*)(long))fn_ptr)(closure_ptr);
+
+    TaskSync *sync = (TaskSync *)task[4];
+    pthread_mutex_lock(&sync->mutex);
+    if (__pluto_current_error) {
+        task[2] = (long)__pluto_current_error;
+        __pluto_current_error = NULL;
+    } else {
+        task[1] = result;
+    }
+    task[3] = 1;  // done
+    pthread_cond_signal(&sync->cond);
+    pthread_mutex_unlock(&sync->mutex);
+
+    atomic_fetch_sub(&__pluto_active_tasks, 1);
+    return NULL;
+}
+
+long __pluto_task_spawn(long closure_ptr) {
+    long *task = (long *)gc_alloc(40, GC_TAG_TASK, 3);
+    task[0] = closure_ptr;
+    task[1] = 0;  task[2] = 0;  task[3] = 0;
+
+    TaskSync *sync = (TaskSync *)calloc(1, sizeof(TaskSync));
+    pthread_mutex_init(&sync->mutex, NULL);
+    pthread_cond_init(&sync->cond, NULL);
+    task[4] = (long)sync;
+
+    atomic_fetch_add(&__pluto_active_tasks, 1);
+
+    pthread_t tid;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    int ret = pthread_create(&tid, &attr, __pluto_spawn_trampoline, task);
+    pthread_attr_destroy(&attr);
+    if (ret != 0) {
+        fprintf(stderr, "pluto: failed to create thread: %d\n", ret);
+        exit(1);
+    }
+    return (long)task;
+}
+
+long __pluto_task_get(long task_ptr) {
+    long *task = (long *)task_ptr;
+    TaskSync *sync = (TaskSync *)task[4];
+
+    pthread_mutex_lock(&sync->mutex);
+    while (!task[3]) {
+        pthread_cond_wait(&sync->cond, &sync->mutex);
+    }
+    pthread_mutex_unlock(&sync->mutex);
+
+    if (task[2]) {
+        __pluto_current_error = (void *)task[2];
+        return 0;
+    }
+    return task[1];
+}
+
+// ── Channels ────────────────────────────────────────────────────────────────
+
+// Channel handle layout (56 bytes, 7 slots):
+//   [0] sync_ptr   (raw malloc'd ChannelSync)
+//   [1] buf_ptr    (raw malloc'd circular buffer of i64)
+//   [2] capacity   (int, always >= 1)
+//   [3] count      (int, items in buffer)
+//   [4] head       (int, read position)
+//   [5] tail       (int, write position)
+//   [6] closed     (int, 0 or 1)
+
+static void chan_raise_error(const char *msg) {
+    void *msg_str = __pluto_string_new((char *)msg, (long)strlen(msg));
+    void *err_obj = __pluto_alloc(8);  // 1 field: message
+    *(long *)err_obj = (long)msg_str;
+    __pluto_raise_error(err_obj);
+}
+
+long __pluto_chan_create(long capacity) {
+    long actual_cap = capacity > 0 ? capacity : 1;
+    // field_count=0: slots 0-1 are raw malloc ptrs, 2-7 are ints; GC_TAG_CHANNEL traces buffer
+    long *ch = (long *)gc_alloc(64, GC_TAG_CHANNEL, 0);
+
+    ChannelSync *sync = (ChannelSync *)calloc(1, sizeof(ChannelSync));
+    pthread_mutex_init(&sync->mutex, NULL);
+    pthread_cond_init(&sync->not_empty, NULL);
+    pthread_cond_init(&sync->not_full, NULL);
+
+    long *buf = (long *)calloc((size_t)actual_cap, sizeof(long));
+
+    ch[0] = (long)sync;
+    ch[1] = (long)buf;
+    ch[2] = actual_cap;
+    ch[3] = 0;  // count
+    ch[4] = 0;  // head
+    ch[5] = 0;  // tail
+    ch[6] = 0;  // closed
+    ch[7] = 1;  // sender_count (starts at 1 for the initial LetChan sender)
+    return (long)ch;
+}
+
+long __pluto_chan_send(long handle, long value) {
+    long *ch = (long *)handle;
+    ChannelSync *sync = (ChannelSync *)ch[0];
+
+    pthread_mutex_lock(&sync->mutex);
+    while (ch[3] == ch[2] && !ch[6]) {
+        pthread_cond_wait(&sync->not_full, &sync->mutex);
+    }
+    if (ch[6]) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error("channel closed");
+        return 0;
+    }
+    long *buf = (long *)ch[1];
+    buf[ch[5]] = value;
+    ch[5] = (ch[5] + 1) % ch[2];
+    ch[3]++;
+    pthread_cond_signal(&sync->not_empty);
+    pthread_mutex_unlock(&sync->mutex);
+    return value;
+}
+
+long __pluto_chan_recv(long handle) {
+    long *ch = (long *)handle;
+    ChannelSync *sync = (ChannelSync *)ch[0];
+
+    pthread_mutex_lock(&sync->mutex);
+    while (ch[3] == 0 && !ch[6]) {
+        pthread_cond_wait(&sync->not_empty, &sync->mutex);
+    }
+    if (ch[3] == 0 && ch[6]) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error("channel closed");
+        return 0;
+    }
+    long *buf = (long *)ch[1];
+    long val = buf[ch[4]];
+    ch[4] = (ch[4] + 1) % ch[2];
+    ch[3]--;
+    pthread_cond_signal(&sync->not_full);
+    pthread_mutex_unlock(&sync->mutex);
+    return val;
+}
+
+long __pluto_chan_try_send(long handle, long value) {
+    long *ch = (long *)handle;
+    ChannelSync *sync = (ChannelSync *)ch[0];
+
+    pthread_mutex_lock(&sync->mutex);
+    if (ch[6]) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error("channel closed");
+        return 0;
+    }
+    if (ch[3] == ch[2]) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error("channel full");
+        return 0;
+    }
+    long *buf = (long *)ch[1];
+    buf[ch[5]] = value;
+    ch[5] = (ch[5] + 1) % ch[2];
+    ch[3]++;
+    pthread_cond_signal(&sync->not_empty);
+    pthread_mutex_unlock(&sync->mutex);
+    return value;
+}
+
+long __pluto_chan_try_recv(long handle) {
+    long *ch = (long *)handle;
+    ChannelSync *sync = (ChannelSync *)ch[0];
+
+    pthread_mutex_lock(&sync->mutex);
+    if (ch[3] == 0 && ch[6]) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error("channel closed");
+        return 0;
+    }
+    if (ch[3] == 0) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error("channel empty");
+        return 0;
+    }
+    long *buf = (long *)ch[1];
+    long val = buf[ch[4]];
+    ch[4] = (ch[4] + 1) % ch[2];
+    ch[3]--;
+    pthread_cond_signal(&sync->not_full);
+    pthread_mutex_unlock(&sync->mutex);
+    return val;
+}
+
+void __pluto_chan_close(long handle) {
+    long *ch = (long *)handle;
+    ChannelSync *sync = (ChannelSync *)ch[0];
+
+    pthread_mutex_lock(&sync->mutex);
+    ch[6] = 1;
+    pthread_cond_broadcast(&sync->not_empty);
+    pthread_cond_broadcast(&sync->not_full);
+    pthread_mutex_unlock(&sync->mutex);
+}
+
+void __pluto_chan_sender_inc(long handle) {
+    long *ch = (long *)handle;
+    if (!ch) return;  // null guard for pre-declared vars
+    __atomic_fetch_add(&ch[7], 1, __ATOMIC_SEQ_CST);
+}
+
+void __pluto_chan_sender_dec(long handle) {
+    long *ch = (long *)handle;
+    if (!ch) return;  // null guard for pre-declared vars
+    long old = __atomic_fetch_sub(&ch[7], 1, __ATOMIC_SEQ_CST);
+    if (old <= 0) {
+        // Underflow guard: undo dec, fail safe
+        __atomic_fetch_add(&ch[7], 1, __ATOMIC_SEQ_CST);
+        return;
+    }
+    if (old == 1) {
+        __pluto_chan_close(handle);  // last sender -> auto-close
+    }
 }

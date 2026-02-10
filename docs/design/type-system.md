@@ -11,10 +11,10 @@ Pluto uses a **nominal** type system by default, with **structural** typing for 
 | `int`    | I64  | 64-bit signed integer    | Implemented |
 | `float`  | F64  | 64-bit floating point    | Implemented |
 | `bool`   | I8   | `true` / `false`         | Implemented |
-| `string` | ptr  | Heap-allocated UTF-8     | Implemented |
+| `string` | ptr  | Heap-allocated byte string (no UTF-8 enforcement) | Implemented |
 | `void`   | —    | No value                 | Implemented |
-| `byte`   | —    | Single byte              | Not implemented |
-| `bytes`  | —    | Byte array               | Not implemented |
+| `byte`   | I8   | Unsigned 8-bit value (0-255) | Implemented |
+| `bytes`  | ptr  | Packed byte array (`[len][cap][data_ptr]`) | Implemented |
 
 ## Arrays
 

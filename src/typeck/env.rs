@@ -73,6 +73,16 @@ pub enum MethodResolution {
     TraitDynamic { trait_name: String, method_name: String },
     /// Built-in method (array.push, array.len, string.len) — always infallible
     Builtin,
+    /// Task.get() — spawned_fn tracks origin for error propagation
+    TaskGet { spawned_fn: Option<String> },
+    /// Channel send — fallible (ChannelClosed)
+    ChannelSend,
+    /// Channel recv — fallible (ChannelClosed)
+    ChannelRecv,
+    /// Channel try_send — fallible (ChannelClosed + ChannelFull)
+    ChannelTrySend,
+    /// Channel try_recv — fallible (ChannelClosed + ChannelEmpty)
+    ChannelTryRecv,
 }
 
 #[derive(Debug)]
@@ -110,6 +120,14 @@ pub struct TypeEnv {
     pub ambient_types: HashSet<String>,
     /// Nesting depth of loops (for validating break/continue)
     pub loop_depth: u32,
+    /// Spawn span → target function name
+    pub spawn_target_fns: HashMap<(usize, usize), String>,
+    /// Scope-mirrored: variable name → spawned function name (for let bindings only)
+    pub task_spawn_scopes: Vec<HashMap<String, String>>,
+    /// Function-level: task variable names whose origin is permanently unknown due to Stmt::Assign
+    pub invalidated_task_vars: HashSet<String>,
+    /// Closure span → return type (set during typeck, used during closure lifting)
+    pub closure_return_types: HashMap<(usize, usize), PlutoType>,
 }
 
 impl TypeEnv {
@@ -131,6 +149,7 @@ impl TypeEnv {
         builtins.insert("log".to_string());
         builtins.insert("gc_heap_size".to_string());
         builtins.insert("expect".to_string());
+        builtins.insert("bytes_new".to_string());
         Self {
             scopes: vec![HashMap::new()],
             functions: HashMap::new(),
@@ -155,15 +174,21 @@ impl TypeEnv {
             current_fn: None,
             ambient_types: HashSet::new(),
             loop_depth: 0,
+            spawn_target_fns: HashMap::new(),
+            task_spawn_scopes: vec![HashMap::new()],
+            invalidated_task_vars: HashSet::new(),
+            closure_return_types: HashMap::new(),
         }
     }
 
     pub fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.task_spawn_scopes.push(HashMap::new());
     }
 
     pub fn pop_scope(&mut self) {
         self.scopes.pop();
+        self.task_spawn_scopes.pop();
     }
 
     pub fn define(&mut self, name: String, ty: PlutoType) {
@@ -223,11 +248,37 @@ impl TypeEnv {
                 Ok(self.is_trait_method_potentially_fallible(trait_name, method_name))
             }
             Some(MethodResolution::Builtin) => Ok(false),
+            Some(MethodResolution::TaskGet { spawned_fn }) => {
+                match spawned_fn {
+                    Some(fn_name) => Ok(self.is_fn_fallible(fn_name)),
+                    None => Ok(true), // conservatively fallible
+                }
+            }
+            Some(MethodResolution::ChannelSend) => Ok(true),
+            Some(MethodResolution::ChannelRecv) => Ok(true),
+            Some(MethodResolution::ChannelTrySend) => Ok(true),
+            Some(MethodResolution::ChannelTryRecv) => Ok(true),
             None => Err(format!(
                 "internal error: unresolved method resolution at span {} in fn '{}'",
                 span_start, current_fn
             )),
         }
+    }
+
+    pub fn define_task_origin(&mut self, name: String, fn_name: String) {
+        self.task_spawn_scopes.last_mut().unwrap().insert(name, fn_name);
+    }
+
+    pub fn lookup_task_origin(&self, name: &str) -> Option<&String> {
+        if self.invalidated_task_vars.contains(name) {
+            return None;
+        }
+        for scope in self.task_spawn_scopes.iter().rev() {
+            if let Some(fn_name) = scope.get(name) {
+                return Some(fn_name);
+            }
+        }
+        None
     }
 }
 
@@ -255,5 +306,10 @@ fn mangle_type(ty: &PlutoType) -> String {
         PlutoType::TypeParam(n) => n.clone(),
         PlutoType::Range => "range".into(),
         PlutoType::Error => "error".into(),
+        PlutoType::Task(inner) => format!("task_{}", mangle_type(inner)),
+        PlutoType::Byte => "byte".into(),
+        PlutoType::Bytes => "bytes".into(),
+        PlutoType::Sender(inner) => format!("sender_{}", mangle_type(inner)),
+        PlutoType::Receiver(inner) => format!("receiver_{}", mangle_type(inner)),
     }
 }

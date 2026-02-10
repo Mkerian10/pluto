@@ -6,6 +6,7 @@ use super::types::PlutoType;
 use super::resolve::resolve_type;
 use super::infer::infer_expr;
 use super::types_compatible;
+use crate::parser::ast::Expr;
 
 pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
     let prev_fn = env.current_fn.take();
@@ -20,6 +21,7 @@ pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Opt
 }
 
 fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
+    env.invalidated_task_vars.clear();
     env.push_scope();
 
     // Add parameters to scope
@@ -84,7 +86,13 @@ fn check_stmt(
                 }
                 env.define(name.node.clone(), expected);
             } else {
-                env.define(name.node.clone(), val_type);
+                env.define(name.node.clone(), val_type.clone());
+            }
+            // Track task origin for spawn expressions
+            if let Expr::Spawn { .. } = &value.node {
+                if let Some(fn_name) = env.spawn_target_fns.get(&(value.span.start, value.span.end)) {
+                    env.define_task_origin(name.node.clone(), fn_name.clone());
+                }
             }
         }
         Stmt::Return(value) => {
@@ -107,12 +115,22 @@ fn check_stmt(
                     target.span,
                 )
             })?.clone();
+            if matches!(&var_type, PlutoType::Sender(_) | PlutoType::Receiver(_)) {
+                return Err(CompileError::type_err(
+                    "cannot reassign channel sender/receiver variable".to_string(),
+                    target.span,
+                ));
+            }
             let val_type = infer_expr(&value.node, value.span, env)?;
             if !types_compatible(&val_type, &var_type, env) {
                 return Err(CompileError::type_err(
                     format!("type mismatch in assignment: expected {var_type}, found {val_type}"),
                     value.span,
                 ));
+            }
+            // Permanently invalidate task origin on reassignment
+            if matches!(&var_type, PlutoType::Task(_)) {
+                env.invalidated_task_vars.insert(target.node.clone());
             }
         }
         Stmt::FieldAssign { object, field, value } => {
@@ -154,9 +172,12 @@ fn check_stmt(
             let elem_type = match iter_type {
                 PlutoType::Array(elem) => *elem,
                 PlutoType::Range => PlutoType::Int,
+                PlutoType::String => PlutoType::String,
+                PlutoType::Bytes => PlutoType::Byte,
+                PlutoType::Receiver(elem) => *elem,
                 _ => {
                     return Err(CompileError::type_err(
-                        format!("for loop requires array or range, found {iter_type}"),
+                        format!("for loop requires array, range, string, bytes, or receiver, found {iter_type}"),
                         iterable.span,
                     ));
                 }
@@ -204,6 +225,20 @@ fn check_stmt(
                     ));
                 }
             }
+        }
+        Stmt::LetChan { sender, receiver, elem_type, capacity } => {
+            let elem = resolve_type(elem_type, env)?;
+            if let Some(cap) = capacity {
+                let cap_type = infer_expr(&cap.node, cap.span, env)?;
+                if cap_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("channel capacity must be int, found {cap_type}"),
+                        cap.span,
+                    ));
+                }
+            }
+            env.define(sender.node.clone(), PlutoType::Sender(Box::new(elem.clone())));
+            env.define(receiver.node.clone(), PlutoType::Receiver(Box::new(elem)));
         }
     }
     Ok(())
@@ -286,6 +321,22 @@ fn check_index_assign(
             if val_type != **val_ty {
                 return Err(CompileError::type_err(
                     format!("map value type mismatch: expected {val_ty}, found {val_type}"),
+                    value.span,
+                ));
+            }
+        }
+        PlutoType::Bytes => {
+            let idx_type = infer_expr(&index.node, index.span, env)?;
+            if idx_type != PlutoType::Int {
+                return Err(CompileError::type_err(
+                    format!("bytes index must be int, found {idx_type}"),
+                    index.span,
+                ));
+            }
+            let val_type = infer_expr(&value.node, value.span, env)?;
+            if val_type != PlutoType::Byte {
+                return Err(CompileError::type_err(
+                    format!("bytes index assignment: expected byte, found {val_type}"),
                     value.span,
                 ));
             }

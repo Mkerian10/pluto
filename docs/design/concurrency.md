@@ -288,3 +288,36 @@ fn fetch_with_timeout(url: string) string {
 - [ ] **Task priority** — should tasks have priority levels?
 - [ ] **Select/race** — a `select` construct for waiting on the first of multiple tasks/channels to complete
 - [ ] **Spawn block syntax** — should `spawn { ... }` work (spawn an anonymous block) in addition to `spawn func()`?
+
+## Phase 1 Implementation Notes
+
+Phase 1 implements `spawn func(args)`, `Task<T>`, and `.get()` with OS threads (pthreads). The full design above (M:N tasks, structured concurrency, cancellation, detach, channels, move semantics) is future work.
+
+### What's implemented
+
+- `spawn func(args)` — direct function calls only (no method calls, no closures, no `spawn { block }`)
+- `Task<T>` — built-in type, GC-allocated handle
+- `.get()` — blocks until task completes, returns result or propagates error
+- Error propagation: `.get()!` propagates, `.get() catch val` handles. Compiler infers fallibility from the spawned function.
+- Spawn arg restrictions: no `!` propagation in args, no bare fallible calls in args. Users must evaluate fallible args before spawn.
+
+### Not yet implemented
+
+- `.cancel()`, `.detach()`, `TaskCancelled` error type
+- Structured concurrency (must-use handles)
+- `Thread.spawn()` (OS thread API)
+- Move semantics / ownership transfer
+- Channels
+- M:N task scheduler
+
+### GC suppression tradeoff
+
+GC collection is suppressed while any spawned task is active (`atomic_load(&__pluto_active_tasks) > 0`). This prevents the GC from scanning only the main thread's stack while worker threads hold live references. Consequence: long-running or stuck tasks cause unbounded heap growth (capped at 1 GB, then fail-fast abort). Phase 2 will address this with per-thread root registration or a concurrent GC.
+
+### Shared mutable state (data race risk)
+
+Spawn captures variables by value, which for heap types (arrays, maps, sets, classes) means copying the pointer. Both the spawning function and the spawned task share the same underlying heap object. Runtime mutators (`array.push`, `map.insert`, field assignment, etc.) are not thread-safe. Mutating shared heap objects from multiple threads is undefined behavior. This is the programmer's responsibility in phase 1. Phase 2 will add move semantics or deep-copy.
+
+### Conservative fallibility
+
+When the compiler cannot statically determine which function was spawned (aliased/reassigned task handles, non-identifier `.get()` targets), `.get()` is treated as conservatively fallible. Users must handle with `!` or `catch` even if the underlying function is infallible.

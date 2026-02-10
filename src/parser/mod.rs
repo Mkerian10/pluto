@@ -41,6 +41,24 @@ impl<'a> Parser<'a> {
         None
     }
 
+    /// Peek at the nth token ahead (0-indexed, skipping newlines).
+    fn peek_nth(&self, n: usize) -> Option<&Spanned<Token>> {
+        let mut i = self.pos;
+        let mut count = 0;
+        while i < self.tokens.len() {
+            if matches!(self.tokens[i].node, Token::Newline) {
+                i += 1;
+                continue;
+            }
+            if count == n {
+                return Some(&self.tokens[i]);
+            }
+            count += 1;
+            i += 1;
+        }
+        None
+    }
+
     fn peek_raw(&self) -> Option<&Spanned<Token>> {
         self.tokens.get(self.pos)
     }
@@ -148,6 +166,7 @@ impl<'a> Parser<'a> {
         let mut imports = Vec::new();
         let mut functions = Vec::new();
         let mut extern_fns = Vec::new();
+        let mut extern_rust_crates = Vec::new();
         let mut classes = Vec::new();
         let mut traits = Vec::new();
         let mut enums = Vec::new();
@@ -219,7 +238,28 @@ impl<'a> Parser<'a> {
                     errors.push(err_decl);
                 }
                 Token::Extern => {
-                    extern_fns.push(self.parse_extern_fn(is_pub)?);
+                    // Peek at next token to decide: extern fn vs extern rust
+                    let next = self.peek_nth(1);
+                    match next {
+                        Some(t) if matches!(t.node, Token::Fn) => {
+                            extern_fns.push(self.parse_extern_fn(is_pub)?);
+                        }
+                        Some(t) if matches!(t.node, Token::Ident) && self.source[t.span.start..t.span.end] == *"rust" => {
+                            if is_pub {
+                                return Err(CompileError::syntax(
+                                    "extern rust declarations cannot be pub",
+                                    tok.span,
+                                ));
+                            }
+                            extern_rust_crates.push(self.parse_extern_rust()?);
+                        }
+                        _ => {
+                            return Err(CompileError::syntax(
+                                "expected 'fn' or 'rust' after 'extern'",
+                                tok.span,
+                            ));
+                        }
+                    }
                 }
                 Token::Test => {
                     if is_pub {
@@ -264,7 +304,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     return Err(CompileError::syntax(
-                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'test', or 'extern', found {}", tok.node),
+                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'test', 'extern fn', or 'extern rust', found {}", tok.node),
                         tok.span,
                     ));
                 }
@@ -272,7 +312,7 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        Ok(Program { imports, functions, extern_fns, classes, traits, enums, app, errors, test_info })
+        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, errors, test_info, fallible_extern_fns: Vec::new() })
     }
 
     fn parse_import(&mut self) -> Result<Spanned<ImportDecl>, CompileError> {
@@ -339,6 +379,35 @@ impl<'a> Parser<'a> {
 
         self.consume_statement_end();
         Ok(Spanned::new(ExternFnDecl { name, params, return_type, is_pub }, Span::new(start, end)))
+    }
+
+    fn parse_extern_rust(&mut self) -> Result<Spanned<ExternRustDecl>, CompileError> {
+        let extern_tok = self.expect(&Token::Extern)?;
+        let start = extern_tok.span.start;
+
+        // Consume contextual keyword "rust"
+        let rust_tok = self.expect_ident()?;
+        if rust_tok.node != "rust" {
+            return Err(CompileError::syntax(
+                format!("expected 'rust' after 'extern', found '{}'", rust_tok.node),
+                rust_tok.span,
+            ));
+        }
+
+        // Expect string literal for crate path
+        let path_tok = self.expect(&Token::StringLit(String::new()))?;
+        let crate_path = match &path_tok.node {
+            Token::StringLit(s) => Spanned::new(s.clone(), path_tok.span),
+            _ => unreachable!(),
+        };
+
+        // Expect `as alias`
+        self.expect(&Token::As)?;
+        let alias = self.expect_ident()?;
+        let end = alias.span.end;
+
+        self.consume_statement_end();
+        Ok(Spanned::new(ExternRustDecl { crate_path, alias }, Span::new(start, end)))
     }
 
     fn parse_bracket_deps(&mut self) -> Result<Vec<Field>, CompileError> {
@@ -955,6 +1024,12 @@ impl<'a> Parser<'a> {
     fn parse_let_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
         let let_tok = self.expect(&Token::Let)?;
         let start = let_tok.span.start;
+
+        // Check for destructuring: let (tx, rx) = chan<T>(...)
+        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
+            return self.parse_let_chan(start);
+        }
+
         let name = self.expect_ident()?;
 
         let ty = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Colon) {
@@ -970,6 +1045,45 @@ impl<'a> Parser<'a> {
         self.consume_statement_end();
 
         Ok(Spanned::new(Stmt::Let { name, ty, value }, Span::new(start, end)))
+    }
+
+    fn parse_let_chan(&mut self, start: usize) -> Result<Spanned<Stmt>, CompileError> {
+        self.expect(&Token::LParen)?;
+        let sender = self.expect_ident()?;
+        self.expect(&Token::Comma)?;
+        let receiver = self.expect_ident()?;
+        self.expect(&Token::RParen)?;
+        self.expect(&Token::Eq)?;
+
+        // Expect `chan`
+        let chan_ident = self.expect_ident()?;
+        if chan_ident.node != "chan" {
+            return Err(CompileError::syntax(
+                "expected `chan<T>()` after `let (tx, rx) =`".to_string(),
+                chan_ident.span,
+            ));
+        }
+
+        // Parse <T>
+        self.expect(&Token::Lt)?;
+        let elem_type = self.parse_type()?;
+        self.expect(&Token::Gt)?;
+
+        // Parse ( [capacity] )
+        self.expect(&Token::LParen)?;
+        let capacity = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
+            Some(self.parse_expr(0)?)
+        } else {
+            None
+        };
+        let close = self.expect(&Token::RParen)?;
+        let end = close.span.end;
+        self.consume_statement_end();
+
+        Ok(Spanned::new(
+            Stmt::LetChan { sender, receiver, elem_type, capacity },
+            Span::new(start, end),
+        ))
     }
 
     fn parse_return_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
@@ -1779,6 +1893,32 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 Ok(Spanned::new(Expr::ArrayLit { elements }, Span::new(start, end)))
+            }
+            Token::Spawn => {
+                let spawn_tok = self.advance().unwrap();
+                let start = spawn_tok.span.start;
+                let func_name = self.expect_ident()?;
+                self.expect(&Token::LParen)?;
+                self.skip_newlines();
+                let mut args = Vec::new();
+                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
+                    if !args.is_empty() {
+                        self.expect(&Token::Comma)?;
+                        self.skip_newlines();
+                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
+                            break;
+                        }
+                    }
+                    args.push(self.parse_expr(0)?);
+                    self.skip_newlines();
+                }
+                let close = self.expect(&Token::RParen)?;
+                let call_span = Span::new(func_name.span.start, close.span.end);
+                let call = Expr::Call { name: func_name, args };
+                Ok(Spanned::new(
+                    Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
+                    Span::new(start, close.span.end),
+                ))
             }
             Token::Question => {
                 return Err(CompileError::syntax(

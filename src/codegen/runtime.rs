@@ -33,6 +33,17 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_string_concat", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_string_eq", &[types::I64, types::I64], &[types::I32])?; // I32 for C ABI
         reg.declare(module, "__pluto_string_len", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_contains", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_starts_with", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_ends_with", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_index_of", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_substring", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_trim", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_to_upper", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_to_lower", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_replace", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_split", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_char_at", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_int_to_string", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_float_to_string", &[types::F64], &[types::I64])?;
         reg.declare(module, "__pluto_bool_to_string", &[types::I32], &[types::I64])?; // I32 for C ABI
@@ -71,6 +82,15 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_array_set", &[types::I64, types::I64, types::I64], &[])?;
         reg.declare(module, "__pluto_array_len", &[types::I64], &[types::I64])?;
 
+        // Bytes functions
+        reg.declare(module, "__pluto_bytes_new", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_push", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_get", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_set", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_len", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_to_string", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_to_bytes", &[types::I64], &[types::I64])?;
+
         // Map functions
         reg.declare(module, "__pluto_map_new", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_map_insert", &[types::I64, types::I64, types::I64, types::I64], &[])?;
@@ -92,6 +112,20 @@ impl RuntimeRegistry {
         // GC
         reg.declare(module, "__pluto_gc_init", &[], &[])?;
         reg.declare(module, "__pluto_gc_heap_size", &[], &[types::I64])?;
+
+        // Concurrency
+        reg.declare(module, "__pluto_task_spawn", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_task_get", &[types::I64], &[types::I64])?;
+
+        // Channels
+        reg.declare(module, "__pluto_chan_create", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_chan_send", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_chan_recv", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_chan_try_send", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_chan_try_recv", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_chan_close", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_chan_sender_inc", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_chan_sender_dec", &[types::I64], &[])?;
 
         // Test framework
         reg.declare(module, "__pluto_expect_equal_int", &[types::I64, types::I64, types::I64], &[])?;

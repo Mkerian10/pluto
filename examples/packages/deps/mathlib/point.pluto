@@ -1,0 +1,10 @@
+pub class Point {
+    x: int
+    y: int
+}
+
+pub fn distance(p: Point) float {
+    let x2 = p.x * p.x
+    let y2 = p.y * p.y
+    return sqrt((x2 + y2) as float)
+}
