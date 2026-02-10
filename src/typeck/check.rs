@@ -240,6 +240,54 @@ fn check_stmt(
             env.define(sender.node.clone(), PlutoType::Sender(Box::new(elem.clone())));
             env.define(receiver.node.clone(), PlutoType::Receiver(Box::new(elem)));
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &arm.op {
+                    SelectOp::Recv { binding, channel } => {
+                        let chan_type = infer_expr(&channel.node, channel.span, env)?;
+                        match &chan_type {
+                            PlutoType::Receiver(elem_type) => {
+                                // Bind the received value in the arm body's scope
+                                env.push_scope();
+                                env.define(binding.node.clone(), *elem_type.clone());
+                                check_block(&arm.body.node, env, return_type)?;
+                                env.pop_scope();
+                            }
+                            _ => {
+                                return Err(CompileError::type_err(
+                                    format!("select recv arm requires a Receiver, found {chan_type}"),
+                                    channel.span,
+                                ));
+                            }
+                        }
+                    }
+                    SelectOp::Send { channel, value } => {
+                        let chan_type = infer_expr(&channel.node, channel.span, env)?;
+                        match &chan_type {
+                            PlutoType::Sender(elem_type) => {
+                                let val_type = infer_expr(&value.node, value.span, env)?;
+                                if val_type != **elem_type {
+                                    return Err(CompileError::type_err(
+                                        format!("select send expects {}, found {val_type}", elem_type),
+                                        value.span,
+                                    ));
+                                }
+                                check_block(&arm.body.node, env, return_type)?;
+                            }
+                            _ => {
+                                return Err(CompileError::type_err(
+                                    format!("select send arm requires a Sender, found {chan_type}"),
+                                    channel.span,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(def) = default {
+                check_block(&def.node, env, return_type)?;
+            }
+        }
     }
     Ok(())
 }

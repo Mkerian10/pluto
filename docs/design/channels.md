@@ -213,7 +213,7 @@ Both `Sender<T>` and `Receiver<T>` are I64 pointers to the same underlying chann
 - **Reference counting / implicit close-on-drop** — Auto-close when last sender goes out of scope. Needs scope-exit hooks. Phase 2.
 - **True rendezvous (capacity 0)** — Sender blocks until receiver is ready. Phase 2.
 - **Stdlib channel methods** (`.connections()`, `.lines()`, `.stream()`) — Expose I/O as channels.
-- **Select/race** — Multiplexing across multiple channels. Needs a runtime primitive.
+- ~~**Select/race** — Multiplexing across multiple channels.~~ Implemented: `select { val = rx.recv() { ... } tx.send(v) { ... } default { ... } }`
 - **Timeouts** (`rx.recv_timeout(duration)`) — Needs a `Duration` type.
 - **Move semantics** — Send copies the pointer for heap types (shared reference). Real ownership transfer is future work.
 - **Cross-pod channels** — Compiler-synthesized serialization for channels across pod boundaries.

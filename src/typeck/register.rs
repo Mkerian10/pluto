@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+use uuid::Uuid;
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
@@ -151,6 +153,26 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                     class.span,
                 ));
             }
+            // Check for duplicate field names
+            let mut seen_fields = HashSet::new();
+            for f in &c.fields {
+                if !seen_fields.insert(&f.name.node) {
+                    return Err(CompileError::type_err(
+                        format!("duplicate field '{}' in class '{}'", f.name.node, c.name.node),
+                        f.name.span,
+                    ));
+                }
+            }
+            // Check for duplicate method names
+            let mut seen_methods = HashSet::new();
+            for m in &c.methods {
+                if !seen_methods.insert(&m.node.name.node) {
+                    return Err(CompileError::type_err(
+                        format!("duplicate method '{}' in class '{}'", m.node.name.node, c.name.node),
+                        m.node.name.span,
+                    ));
+                }
+            }
             let tp_names: std::collections::HashSet<String> = c.type_params.iter().map(|tp| tp.node.clone()).collect();
             let mut fields = Vec::new();
             for f in &c.fields {
@@ -187,6 +209,26 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                 impl_traits: Vec::new(),
             });
             continue;
+        }
+        // Check for duplicate field names
+        let mut seen_fields = HashSet::new();
+        for f in &c.fields {
+            if !seen_fields.insert(&f.name.node) {
+                return Err(CompileError::type_err(
+                    format!("duplicate field '{}' in class '{}'", f.name.node, c.name.node),
+                    f.name.span,
+                ));
+            }
+        }
+        // Check for duplicate method names
+        let mut seen_methods = HashSet::new();
+        for m in &c.methods {
+            if !seen_methods.insert(&m.node.name.node) {
+                return Err(CompileError::type_err(
+                    format!("duplicate method '{}' in class '{}'", m.node.name.node, c.name.node),
+                    m.node.name.span,
+                ));
+            }
         }
         let mut fields = Vec::new();
         for f in &c.fields {
@@ -713,6 +755,21 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
         for method in &c.methods {
             check_function(&method.node, env, Some(&c.name.node))?;
         }
+        // Type-check class invariants
+        if !c.invariants.is_empty() {
+            env.push_scope();
+            env.define("self".to_string(), PlutoType::Class(c.name.node.clone()));
+            for inv in &c.invariants {
+                let inv_type = super::infer::infer_expr(&inv.node.expr.node, inv.node.expr.span, env)?;
+                if inv_type != PlutoType::Bool {
+                    return Err(CompileError::type_err(
+                        format!("invariant expression must be bool, found {inv_type}"),
+                        inv.node.expr.span,
+                    ));
+                }
+            }
+            env.pop_scope();
+        }
     }
 
     // Type-check default method bodies for classes that inherit them
@@ -732,10 +789,12 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
                             // This class inherits this default method — type check it
                             let body = trait_method.body.as_ref().unwrap();
                             let tmp_func = Function {
+                                id: Uuid::new_v4(),
                                 name: trait_method.name.clone(),
                                 type_params: vec![],
                                 params: trait_method.params.clone(),
                                 return_type: trait_method.return_type.clone(),
+                                contracts: trait_method.contracts.clone(),
                                 body: body.clone(),
                                 is_pub: false,
                             };

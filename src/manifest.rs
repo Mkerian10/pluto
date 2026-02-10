@@ -335,7 +335,13 @@ fn resolve_package_node(
     resolving_stack.push(canonical_dir.clone());
 
     let (manifest, manifest_dir) = parse_manifest(manifest_path)?;
-    let pkg_name = manifest.package.as_ref().unwrap().name.as_ref().unwrap().clone();
+    let pkg_name = manifest.package.as_ref()
+        .and_then(|p| p.name.as_ref())
+        .ok_or_else(|| CompileError::manifest(
+            "pluto.toml: missing [package] section or 'name' field",
+            manifest_path.to_path_buf(),
+        ))?
+        .clone();
 
     let mut dep_scope: DependencyScope = BTreeMap::new();
 

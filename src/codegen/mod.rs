@@ -11,6 +11,8 @@ use cranelift_frontend::FunctionBuilderContext;
 use cranelift_module::{DataDescription, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
+use uuid::Uuid;
+
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::typeck::env::TypeEnv;
@@ -178,6 +180,19 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
     // Pre-pass: collect spawn closure function names for sender cleanup
     let spawn_closure_fns = collect_spawn_closure_names(program);
 
+    // Build class invariants map for codegen
+    let class_invariants: HashMap<String, Vec<(Expr, String)>> = program.classes.iter()
+        .filter(|c| !c.node.invariants.is_empty())
+        .map(|c| {
+            let name = c.node.name.node.clone();
+            let invs = c.node.invariants.iter().map(|inv| {
+                let desc = format_invariant_expr(&inv.node.expr.node);
+                (inv.node.expr.node.clone(), desc)
+            }).collect();
+            (name, invs)
+        })
+        .collect();
+
     // Pass 2: Define all top-level functions
     for func in &program.functions {
         let f = &func.node;
@@ -190,7 +205,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns)?;
+            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants)?;
         }
 
         module
@@ -213,7 +228,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants)?;
             }
 
             module
@@ -237,10 +252,12 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                         if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node) {
                             let body = trait_method.body.as_ref().unwrap();
                             let tmp_func = Function {
+                                id: Uuid::new_v4(),
                                 name: trait_method.name.clone(),
                                 type_params: vec![],
                                 params: trait_method.params.clone(),
                                 return_type: trait_method.return_type.clone(),
+                                contracts: trait_method.contracts.clone(),
                                 body: body.clone(),
                                 is_pub: false,
                             };
@@ -264,7 +281,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants)?;
                             }
 
                             module
@@ -308,7 +325,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants)?;
             }
 
             module
@@ -635,6 +652,19 @@ fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
             Stmt::Raise { fields, .. } => {
                 for (_, v) in fields { walk_expr(&v.node, result); }
             }
+            Stmt::Select { arms, default } => {
+                for arm in arms {
+                    match &arm.op {
+                        SelectOp::Recv { channel, .. } => walk_expr(&channel.node, result),
+                        SelectOp::Send { channel, value } => {
+                            walk_expr(&channel.node, result);
+                            walk_expr(&value.node, result);
+                        }
+                    }
+                    walk_block(&arm.body.node, result);
+                }
+                if let Some(def) = default { walk_block(&def.node, result); }
+            }
             Stmt::Expr(e) => walk_expr(&e.node, result),
         }
     }
@@ -687,4 +717,42 @@ fn build_method_signature(func: &Function, module: &impl Module, class_name: &st
     let _ = class_name;
 
     sig
+}
+
+/// Format an invariant expression as a human-readable string for error messages.
+fn format_invariant_expr(expr: &Expr) -> String {
+    match expr {
+        Expr::IntLit(n) => n.to_string(),
+        Expr::FloatLit(f) => f.to_string(),
+        Expr::BoolLit(b) => b.to_string(),
+        Expr::Ident(name) => name.clone(),
+        Expr::FieldAccess { object, field } => {
+            format!("{}.{}", format_invariant_expr(&object.node), field.node)
+        }
+        Expr::MethodCall { object, method, .. } => {
+            format!("{}.{}()", format_invariant_expr(&object.node), method.node)
+        }
+        Expr::BinOp { op, lhs, rhs } => {
+            let op_str = match op {
+                BinOp::Add => "+", BinOp::Sub => "-", BinOp::Mul => "*",
+                BinOp::Div => "/", BinOp::Mod => "%",
+                BinOp::Eq => "==", BinOp::Neq => "!=",
+                BinOp::Lt => "<", BinOp::Gt => ">",
+                BinOp::LtEq => "<=", BinOp::GtEq => ">=",
+                BinOp::And => "&&", BinOp::Or => "||",
+                BinOp::BitAnd => "&", BinOp::BitOr => "|", BinOp::BitXor => "^",
+                BinOp::Shl => "<<", BinOp::Shr => ">>",
+            };
+            format!("{} {} {}", format_invariant_expr(&lhs.node), op_str, format_invariant_expr(&rhs.node))
+        }
+        Expr::UnaryOp { op, operand } => {
+            let op_str = match op {
+                UnaryOp::Neg => "-",
+                UnaryOp::Not => "!",
+                UnaryOp::BitNot => "~",
+            };
+            format!("{}{}", op_str, format_invariant_expr(&operand.node))
+        }
+        _ => "<contract>".to_string(),
+    }
 }

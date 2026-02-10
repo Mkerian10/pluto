@@ -1,0 +1,18 @@
+id = "pluto"
+name = "Pluto"
+version = "0.1.0"
+schema_version = 1
+authors = ["Matthew Kerian"]
+description = "Pluto language support for Zed"
+
+[language_servers.plutoc]
+name = "plutoc"
+languages = ["Pluto"]
+
+[language_servers.plutoc.binary]
+path = "plutoc"
+arguments = ["lsp"]
+
+[grammars.pluto]
+repository = "https://github.com/matthewkerian/tree-sitter-pluto"
+rev = "main"

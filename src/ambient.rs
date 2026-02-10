@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use uuid::Uuid;
+
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
@@ -64,6 +66,7 @@ pub fn desugar_ambient(program: &mut Program) -> Result<(), CompileError> {
             }
 
             fields_to_insert.push(Field {
+                id: Uuid::new_v4(),
                 name: Spanned::new(var_name, type_name.span),
                 ty: Spanned::new(TypeExpr::Named(type_name.node.clone()), type_name.span),
                 is_injected: true,
@@ -122,6 +125,7 @@ pub fn desugar_ambient(program: &mut Program) -> Result<(), CompileError> {
                 }
 
                 fields_to_add.push(Field {
+                    id: Uuid::new_v4(),
                     name: Spanned::new(var_name, type_name.span),
                     ty: Spanned::new(TypeExpr::Named(type_name.node.clone()), type_name.span),
                     is_injected: true,
@@ -250,6 +254,23 @@ fn rewrite_stmt(stmt: &mut Spanned<Stmt>, active: &HashSet<String>) {
         Stmt::LetChan { capacity, .. } => {
             if let Some(cap) = capacity {
                 rewrite_expr(&mut cap.node, cap.span, active);
+            }
+        }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        rewrite_expr(&mut channel.node, channel.span, active);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        rewrite_expr(&mut channel.node, channel.span, active);
+                        rewrite_expr(&mut value.node, value.span, active);
+                    }
+                }
+                rewrite_block(&mut arm.body.node, active);
+            }
+            if let Some(def) = default {
+                rewrite_block(&mut def.node, active);
             }
         }
         Stmt::Break | Stmt::Continue => {}

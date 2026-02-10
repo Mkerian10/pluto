@@ -1,0 +1,7 @@
+(block "{" @indent "}" @outdent)
+(class_definition "{" @indent "}" @outdent)
+(trait_definition "{" @indent "}" @outdent)
+(enum_definition "{" @indent "}" @outdent)
+(error_definition "{" @indent "}" @outdent)
+(app_definition "{" @indent "}" @outdent)
+(match_statement "{" @indent "}" @outdent)

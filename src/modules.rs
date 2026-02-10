@@ -990,6 +990,23 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
                 rewrite_expr_for_module(&mut cap.node, module_name, module_prog);
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        rewrite_expr_for_module(&mut channel.node, module_name, module_prog);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        rewrite_expr_for_module(&mut channel.node, module_name, module_prog);
+                        rewrite_expr_for_module(&mut value.node, module_name, module_prog);
+                    }
+                }
+                rewrite_block_for_module(&mut arm.body.node, module_name, module_prog);
+            }
+            if let Some(def) = default {
+                rewrite_block_for_module(&mut def.node, module_name, module_prog);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -1282,6 +1299,23 @@ fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
             rewrite_type_expr(elem_type, import_names);
             if let Some(cap) = capacity {
                 rewrite_expr(&mut cap.node, cap.span, import_names);
+            }
+        }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        rewrite_expr(&mut channel.node, channel.span, import_names);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        rewrite_expr(&mut channel.node, channel.span, import_names);
+                        rewrite_expr(&mut value.node, value.span, import_names);
+                    }
+                }
+                rewrite_block(&mut arm.body.node, import_names);
+            }
+            if let Some(def) = default {
+                rewrite_block(&mut def.node, import_names);
             }
         }
         Stmt::Break | Stmt::Continue => {}

@@ -31,6 +31,7 @@
 - [Concurrency](./advanced/concurrency.md)
 - [Channels](./advanced/channels.md)
 - [Testing](./advanced/testing.md)
+- [Contracts](./advanced/contracts.md)
 - [Rust FFI](./advanced/rust-ffi.md)
 
 # The App Model

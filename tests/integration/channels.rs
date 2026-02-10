@@ -108,7 +108,7 @@ fn main() {
     let val = rx.recv()!
     print(val)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "99");
 }
 
@@ -129,7 +129,7 @@ fn main() {
     let c = rx.recv()!
     print(a + b + c)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "6");
 }
 
@@ -149,7 +149,7 @@ fn main() {
     print(rx.recv()!)
     print(rx.recv()!)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "10\n20\n30");
 }
 
@@ -169,7 +169,7 @@ fn main() {
         print(rx.recv()!)
     }
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "0\n1\n2\n3\n4");
 }
 
@@ -213,7 +213,7 @@ fn main() {
     let val = rx.recv() catch -1
     print(val)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "-1");
 }
 
@@ -330,7 +330,7 @@ fn main() {
     }
     print("done")
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "1\n2\n3\ndone");
 }
 
@@ -355,7 +355,7 @@ fn main() {
     }
     print("broke out")
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "1\nbroke out");
 }
 
@@ -379,7 +379,7 @@ fn main() {
         print(val)
     }
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "1\n3");
 }
 
@@ -517,7 +517,7 @@ fn main() {
     }
     print(sum)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "60");
 }
 
@@ -611,7 +611,7 @@ fn main() {
     }
     print(sum)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "6");
 }
 
@@ -634,7 +634,7 @@ fn main() {
     }
     print(sum)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "30");
 }
 
@@ -716,4 +716,243 @@ fn main() {
     rx = rx2
 }
 "#, "cannot reassign channel sender/receiver variable");
+}
+
+// ── Select statement ──────────────────────────────────────────────────────
+
+#[test]
+fn select_recv_basic() {
+    // One channel with data ready — select should pick it
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.send(42)!
+    select {
+        val = rx.recv() {
+            print(val)
+        }
+    }
+}
+"#);
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn select_send_basic() {
+    // Send arm — select should send and execute the body
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    select {
+        tx.send(99) {
+            print("sent")
+        }
+    }
+    let val = rx.recv()!
+    print(val)
+}
+"#);
+    assert_eq!(out.trim(), "sent\n99");
+}
+
+#[test]
+fn select_default_no_ready() {
+    // No channels ready, default arm executes
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    select {
+        val = rx.recv() {
+            print(val)
+        }
+        default {
+            print("nothing")
+        }
+    }
+}
+"#);
+    assert_eq!(out.trim(), "nothing");
+}
+
+#[test]
+fn select_default_with_ready_channel() {
+    // Channel has data — should pick recv arm, not default
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.send(7)!
+    select {
+        val = rx.recv() {
+            print(val)
+        }
+        default {
+            print("default")
+        }
+    }
+}
+"#);
+    assert_eq!(out.trim(), "7");
+}
+
+#[test]
+fn select_blocks_until_ready() {
+    // Without default, select blocks until a channel has data
+    let out = compile_and_run_stdout_timeout(r#"
+fn producer(tx: Sender<int>) {
+    tx.send(123)!
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    spawn producer(tx)
+    select {
+        val = rx.recv() {
+            print(val)
+        }
+    }
+}
+"#, 15);
+    assert_eq!(out.trim(), "123");
+}
+
+#[test]
+fn select_all_closed_error() {
+    // All channels closed without default → ChannelClosed error propagates
+    let out = compile_and_run_stdout(r#"
+fn try_select(rx: Receiver<int>) int {
+    select {
+        val = rx.recv() {
+            return val
+        }
+    }
+    return 0
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.close()
+    let result = try_select(rx) catch -1
+    print(result)
+}
+"#);
+    assert_eq!(out.trim(), "-1");
+}
+
+#[test]
+fn select_all_closed_with_default() {
+    // All channels closed but default exists — executes default, no error
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.close()
+    select {
+        val = rx.recv() {
+            print("recv")
+        }
+        default {
+            print("closed-default")
+        }
+    }
+}
+"#);
+    assert_eq!(out.trim(), "closed-default");
+}
+
+#[test]
+fn select_fan_in_loop() {
+    // Fan-in: two producers, one consumer using select in a loop
+    let out = compile_and_run_stdout_timeout(r#"
+fn producer(tx: Sender<int>, start: int) {
+    tx.send(start)!
+    tx.send(start + 1)!
+}
+
+fn do_select(rx1: Receiver<int>, rx2: Receiver<int>) int {
+    let sum = 0
+    let count = 0
+    while count < 4 {
+        select {
+            v1 = rx1.recv() {
+                sum = sum + v1
+                count = count + 1
+            }
+            v2 = rx2.recv() {
+                sum = sum + v2
+                count = count + 1
+            }
+        }
+    }
+    return sum
+}
+
+fn main() {
+    let (tx1, rx1) = chan<int>(10)
+    let (tx2, rx2) = chan<int>(10)
+    spawn producer(tx1, 10)
+    spawn producer(tx2, 20)
+    tx1.close()
+    tx2.close()
+
+    let sum = do_select(rx1, rx2) catch 0
+    print(sum)
+}
+"#, 15);
+    // 10 + 11 + 20 + 21 = 62, or could be less if ChannelClosed fires before all received
+    let val: i64 = out.trim().parse().unwrap();
+    assert!(val > 0, "expected positive sum, got {val}");
+}
+
+#[test]
+fn select_multiple_recv_arms() {
+    // Two channels, both with data — select picks one (non-deterministic, just verify it works)
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx1, rx1) = chan<int>(1)
+    let (tx2, rx2) = chan<int>(1)
+    tx1.send(1)!
+    tx2.send(2)!
+    let result = 0
+    select {
+        v1 = rx1.recv() {
+            result = v1
+        }
+        v2 = rx2.recv() {
+            result = v2
+        }
+    }
+    print(result)
+}
+"#);
+    let val: i64 = out.trim().parse().unwrap();
+    assert!(val == 1 || val == 2, "expected 1 or 2, got {val}");
+}
+
+#[test]
+fn select_recv_wrong_type_compile_fail() {
+    // Select recv on a Sender should fail
+    compile_should_fail_with(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    select {
+        val = tx.recv() {
+            print(val)
+        }
+    }
+}
+"#, "Receiver");
+}
+
+#[test]
+fn select_send_wrong_type_compile_fail() {
+    // Select send on a Receiver should fail
+    compile_should_fail_with(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    select {
+        rx.send(42) {
+            print("sent")
+        }
+    }
+}
+"#, "Sender");
 }

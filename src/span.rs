@@ -1,5 +1,7 @@
+use serde::{Serialize, Deserialize};
+
 /// Byte-offset span in source code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
@@ -21,7 +23,7 @@ impl Span {
 }
 
 /// A value annotated with its source span.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Spanned<T> {
     pub node: T,
     pub span: Span,

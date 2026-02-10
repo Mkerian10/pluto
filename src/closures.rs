@@ -1,3 +1,5 @@
+use uuid::Uuid;
+
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
@@ -109,6 +111,23 @@ fn lift_in_stmt(
                 lift_in_expr(&mut cap.node, cap.span, env, counter, new_fns)?;
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        lift_in_expr(&mut channel.node, channel.span, env, counter, new_fns)?;
+                    }
+                    SelectOp::Send { channel, value } => {
+                        lift_in_expr(&mut channel.node, channel.span, env, counter, new_fns)?;
+                        lift_in_expr(&mut value.node, value.span, env, counter, new_fns)?;
+                    }
+                }
+                lift_in_block(&mut arm.body.node, env, counter, new_fns)?;
+            }
+            if let Some(def) = default {
+                lift_in_block(&mut def.node, env, counter, new_fns)?;
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
     Ok(())
@@ -192,6 +211,7 @@ fn lift_in_expr(
 
                 // Build the __env param (typed as int, since it's a raw pointer)
                 let env_param = Param {
+                    id: Uuid::new_v4(),
                     name: Spanned::new("__env".to_string(), Span::new(0, 0)),
                     ty: Spanned::new(TypeExpr::Named("int".to_string()), Span::new(0, 0)),
                 };
@@ -238,6 +258,7 @@ fn lift_in_expr(
 
                 // Create the lifted Function
                 let lifted = Function {
+                    id: Uuid::new_v4(),
                     name: Spanned::new(fn_name.clone(), Span::new(0, 0)),
                     type_params: vec![],
                     params: all_params,
@@ -246,6 +267,7 @@ fn lift_in_expr(
                     } else {
                         Some(Spanned::new(ret_type_expr, Span::new(0, 0)))
                     },
+                    contracts: vec![],
                     body,
                     is_pub: false,
                 };

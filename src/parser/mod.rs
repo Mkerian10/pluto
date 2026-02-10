@@ -2,6 +2,8 @@ pub mod ast;
 
 use std::collections::HashSet;
 
+use uuid::Uuid;
+
 use crate::diagnostics::CompileError;
 use crate::lexer::token::Token;
 use crate::span::{Span, Spanned};
@@ -293,10 +295,12 @@ impl<'a> Parser<'a> {
                     let body = self.parse_block()?;
                     let end = body.span.end;
                     functions.push(Spanned::new(Function {
+                        id: Uuid::new_v4(),
                         name: Spanned::new(fn_name.clone(), name_span),
                         type_params: vec![],
                         params: vec![],
                         return_type: None,
+                        contracts: vec![],
                         body,
                         is_pub: false,
                     }, Span::new(test_start, end)));
@@ -360,7 +364,7 @@ impl<'a> Parser<'a> {
             let pname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let pty = self.parse_type()?;
-            params.push(Param { name: pname, ty: pty });
+            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
         }
         let close_paren = self.expect(&Token::RParen)?;
         let mut end = close_paren.span.end;
@@ -421,7 +425,7 @@ impl<'a> Parser<'a> {
                 let name = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let ty = self.parse_type()?;
-                deps.push(Field { name, ty, is_injected: true, is_ambient: false });
+                deps.push(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false });
             }
             self.expect(&Token::RBracket)?;
         }
@@ -455,7 +459,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(AppDecl { name, inject_fields, ambient_types, methods }, Span::new(start, end)))
+        Ok(Spanned::new(AppDecl { id: Uuid::new_v4(), name, inject_fields, ambient_types, methods }, Span::new(start, end)))
     }
 
     fn parse_enum_decl(&mut self) -> Result<Spanned<EnumDecl>, CompileError> {
@@ -486,7 +490,7 @@ impl<'a> Parser<'a> {
                     let fname = self.expect_ident()?;
                     self.expect(&Token::Colon)?;
                     let fty = self.parse_type()?;
-                    fields.push(Field { name: fname, ty: fty, is_injected: false, is_ambient: false });
+                    fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false });
                     self.skip_newlines();
                 }
                 self.expect(&Token::RBrace)?;
@@ -494,14 +498,14 @@ impl<'a> Parser<'a> {
             } else {
                 Vec::new()
             };
-            variants.push(EnumVariant { name: vname, fields });
+            variants.push(EnumVariant { id: Uuid::new_v4(), name: vname, fields });
             self.skip_newlines();
         }
 
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(EnumDecl { name, type_params, variants, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(EnumDecl { id: Uuid::new_v4(), name, type_params, variants, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_error_decl(&mut self) -> Result<Spanned<ErrorDecl>, CompileError> {
@@ -525,14 +529,14 @@ impl<'a> Parser<'a> {
             let fname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type()?;
-            fields.push(Field { name: fname, ty: fty, is_injected: false, is_ambient: false });
+            fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false });
             self.skip_newlines();
         }
 
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ErrorDecl { name, fields, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(ErrorDecl { id: Uuid::new_v4(), name, fields, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_trait(&mut self) -> Result<Spanned<TraitDecl>, CompileError> {
@@ -551,7 +555,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(TraitDecl { name, methods, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(TraitDecl { id: Uuid::new_v4(), name, methods, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_trait_method(&mut self) -> Result<TraitMethod, CompileError> {
@@ -570,6 +574,7 @@ impl<'a> Parser<'a> {
             if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
                 let self_tok = self.advance().unwrap();
                 params.push(Param {
+                    id: Uuid::new_v4(),
                     name: Spanned::new("self".to_string(), self_tok.span),
                     ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
                 });
@@ -577,7 +582,7 @@ impl<'a> Parser<'a> {
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let pty = self.parse_type()?;
-                params.push(Param { name: pname, ty: pty });
+                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
             }
         }
         self.expect(&Token::RParen)?;
@@ -601,7 +606,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(TraitMethod { name, params, return_type, body })
+        Ok(TraitMethod { id: Uuid::new_v4(), name, params, return_type, contracts: vec![], body })
     }
 
     fn parse_class(&mut self) -> Result<Spanned<ClassDecl>, CompileError> {
@@ -647,15 +652,26 @@ impl<'a> Parser<'a> {
         // Injected fields come first, then regular body fields
         let mut fields: Vec<Field> = inject_fields;
         let mut methods = Vec::new();
+        let mut invariants = Vec::new();
 
         while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
             if matches!(self.peek().unwrap().node, Token::Fn) {
                 methods.push(self.parse_method()?);
+            } else if matches!(self.peek().unwrap().node, Token::Invariant) {
+                let inv_tok = self.advance().unwrap();
+                let inv_start = inv_tok.span.start;
+                let expr = self.parse_expr(0)?;
+                let inv_end = expr.span.end;
+                invariants.push(Spanned::new(
+                    ContractClause { kind: ContractKind::Invariant, expr },
+                    Span::new(inv_start, inv_end),
+                ));
+                self.consume_statement_end();
             } else {
                 let fname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
-                fields.push(Field { name: fname, ty: fty, is_injected: false, is_ambient: false });
+                fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false });
                 self.consume_statement_end();
             }
             self.skip_newlines();
@@ -664,7 +680,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ClassDecl { name, type_params, fields, methods, impl_traits, uses, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, fields, methods, invariants, impl_traits, uses, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_method(&mut self) -> Result<Spanned<Function>, CompileError> {
@@ -685,6 +701,7 @@ impl<'a> Parser<'a> {
             if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
                 let self_tok = self.advance().unwrap();
                 params.push(Param {
+                    id: Uuid::new_v4(),
                     name: Spanned::new("self".to_string(), self_tok.span),
                     ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
                 });
@@ -692,22 +709,24 @@ impl<'a> Parser<'a> {
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let pty = self.parse_type()?;
-                params.push(Param { name: pname, ty: pty });
+                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
             }
         }
         self.expect(&Token::RParen)?;
 
-        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace) {
+        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Requires | Token::Ensures) {
             Some(self.parse_type()?)
         } else {
             None
         };
 
+        let contracts = self.parse_contracts()?;
+
         let body = self.parse_block()?;
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { name, type_params: vec![], params, return_type, body, is_pub: false },
+            Function { id: Uuid::new_v4(), name, type_params: vec![], params, return_type, contracts, body, is_pub: false },
             Span::new(start, end),
         ))
     }
@@ -744,6 +763,41 @@ impl<'a> Parser<'a> {
         Ok(args)
     }
 
+    /// Parse optional requires/ensures clauses before a function body.
+    fn parse_contracts(&mut self) -> Result<Vec<Spanned<ContractClause>>, CompileError> {
+        let mut contracts = Vec::new();
+        while let Some(tok) = self.peek() {
+            match &tok.node {
+                Token::Requires => {
+                    self.skip_newlines();
+                    let req_tok = self.advance().unwrap();
+                    let req_start = req_tok.span.start;
+                    let expr = self.parse_expr(0)?;
+                    let req_end = expr.span.end;
+                    contracts.push(Spanned::new(
+                        ContractClause { kind: ContractKind::Requires, expr },
+                        Span::new(req_start, req_end),
+                    ));
+                    self.consume_statement_end();
+                }
+                Token::Ensures => {
+                    self.skip_newlines();
+                    let ens_tok = self.advance().unwrap();
+                    let ens_start = ens_tok.span.start;
+                    let expr = self.parse_expr(0)?;
+                    let ens_end = expr.span.end;
+                    contracts.push(Spanned::new(
+                        ContractClause { kind: ContractKind::Ensures, expr },
+                        Span::new(ens_start, ens_end),
+                    ));
+                    self.consume_statement_end();
+                }
+                _ => break,
+            }
+        }
+        Ok(contracts)
+    }
+
     fn parse_function(&mut self) -> Result<Spanned<Function>, CompileError> {
         let fn_tok = self.expect(&Token::Fn)?;
         let start = fn_tok.span.start;
@@ -759,22 +813,24 @@ impl<'a> Parser<'a> {
             let pname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let pty = self.parse_type()?;
-            params.push(Param { name: pname, ty: pty });
+            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
         }
         self.expect(&Token::RParen)?;
 
-        // Return type: if next non-newline token is not '{', it's a return type
-        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace) {
+        // Return type: if next non-newline token is not '{' or a contract keyword, it's a return type
+        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Requires | Token::Ensures) {
             Some(self.parse_type()?)
         } else {
             None
         };
 
+        let contracts = self.parse_contracts()?;
+
         let body = self.parse_block()?;
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { name, type_params, params, return_type, body, is_pub: false },
+            Function { id: Uuid::new_v4(), name, type_params, params, return_type, contracts, body, is_pub: false },
             Span::new(start, end),
         ))
     }
@@ -873,6 +929,7 @@ impl<'a> Parser<'a> {
             Token::While => self.parse_while_stmt(),
             Token::For => self.parse_for_stmt(),
             Token::Match => self.parse_match_stmt(),
+            Token::Select => self.parse_select_stmt(),
             Token::Raise => self.parse_raise_stmt(),
             Token::Break => {
                 let span = self.advance().unwrap().span;
@@ -1268,6 +1325,120 @@ impl<'a> Parser<'a> {
                 _ => return false,
             }
         }
+    }
+
+    fn parse_select_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let select_tok = self.expect(&Token::Select)?;
+        let start = select_tok.span.start;
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut arms = Vec::new();
+        let mut default_block = None;
+
+        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+            // Check for `default { ... }`
+            if matches!(self.peek().unwrap().node, Token::Default) {
+                self.advance(); // consume 'default'
+                if default_block.is_some() {
+                    return Err(CompileError::syntax(
+                        "duplicate default arm in select",
+                        self.eof_span(),
+                    ));
+                }
+                default_block = Some(self.parse_block()?);
+                self.skip_newlines();
+                continue;
+            }
+
+            // Parse a select arm: either recv or send
+            // Recv: `binding = expr.recv() { body }`
+            // Send: `expr.send(value) { body }`
+            //
+            // To distinguish: peek ahead for `ident = ...` pattern
+            let is_recv = self.is_select_recv_ahead();
+
+            if is_recv {
+                // Recv arm: `binding = expr.recv() { body }`
+                let binding = self.expect_ident()?;
+                self.expect(&Token::Eq)?;
+                let channel = self.parse_expr(0)?;
+                // The expr should end with a .recv() method call — validate structure
+                // We parse the entire `rx.recv()` as an expression, then unwrap
+                match &channel.node {
+                    Expr::MethodCall { object, method, args } if method.node == "recv" && args.is_empty() => {
+                        let channel_expr = (**object).clone();
+                        let body = self.parse_block()?;
+                        arms.push(SelectArm {
+                            op: SelectOp::Recv { binding, channel: channel_expr },
+                            body,
+                        });
+                    }
+                    _ => {
+                        return Err(CompileError::syntax(
+                            "select recv arm must be: binding = channel.recv() { ... }",
+                            channel.span,
+                        ));
+                    }
+                }
+            } else {
+                // Send arm: `expr.send(value) { body }`
+                let expr = self.parse_expr(0)?;
+                match &expr.node {
+                    Expr::MethodCall { object, method, args } if method.node == "send" && args.len() == 1 => {
+                        let channel_expr = (**object).clone();
+                        let value_expr = args[0].clone();
+                        let body = self.parse_block()?;
+                        arms.push(SelectArm {
+                            op: SelectOp::Send { channel: channel_expr, value: value_expr },
+                            body,
+                        });
+                    }
+                    _ => {
+                        return Err(CompileError::syntax(
+                            "select send arm must be: channel.send(value) { ... }",
+                            expr.span,
+                        ));
+                    }
+                }
+            }
+
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+
+        if arms.is_empty() && default_block.is_none() {
+            return Err(CompileError::syntax(
+                "select must have at least one arm or a default",
+                Span::new(start, end),
+            ));
+        }
+
+        Ok(Spanned::new(Stmt::Select { arms, default: default_block }, Span::new(start, end)))
+    }
+
+    /// Check if the next tokens form a recv pattern: `ident = ...`
+    fn is_select_recv_ahead(&self) -> bool {
+        // Look for: Ident followed by `=` (not `==`)
+        let mut i = self.pos;
+        // Skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Ident) {
+            return false;
+        }
+        i += 1;
+        // Skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() {
+            return false;
+        }
+        matches!(self.tokens[i].node, Token::Eq)
     }
 
     fn parse_raise_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
@@ -2242,7 +2413,7 @@ impl<'a> Parser<'a> {
             let pname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let pty = self.parse_type()?;
-            params.push(Param { name: pname, ty: pty });
+            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
         }
         self.expect(&Token::RParen)?;
 

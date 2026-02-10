@@ -126,6 +126,10 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_chan_close", &[types::I64], &[])?;
         reg.declare(module, "__pluto_chan_sender_inc", &[types::I64], &[])?;
         reg.declare(module, "__pluto_chan_sender_dec", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_select", &[types::I64, types::I64, types::I64], &[types::I64])?;
+
+        // Contracts
+        reg.declare(module, "__pluto_invariant_violation", &[types::I64, types::I64], &[])?;
 
         // Test framework
         reg.declare(module, "__pluto_expect_equal_int", &[types::I64, types::I64, types::I64], &[])?;

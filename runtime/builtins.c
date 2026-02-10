@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -613,6 +614,10 @@ void *__pluto_string_new(const char *data, long len) {
 void *__pluto_string_concat(void *a, void *b) {
     long len_a = *(long *)a;
     long len_b = *(long *)b;
+    if (len_a > LONG_MAX - len_b) {
+        fprintf(stderr, "pluto: string concatenation overflow\n");
+        exit(1);
+    }
     long total = len_a + len_b;
     size_t alloc_size = 8 + total + 1;
     void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
@@ -654,6 +659,10 @@ void __pluto_array_push(void *handle, long value) {
     long cap = h[1];
     long *data = (long *)h[2];
     if (len == cap) {
+        if (cap > LONG_MAX / 2) {
+            fprintf(stderr, "pluto: array capacity overflow\n");
+            exit(1);
+        }
         cap = cap * 2;
         if (cap == 0) cap = 4;
         data = (long *)realloc(data, cap * 8);
@@ -710,6 +719,10 @@ void __pluto_bytes_push(long handle, long value) {
     long cap = h[1];
     unsigned char *data = (unsigned char *)h[2];
     if (len == cap) {
+        if (cap > LONG_MAX / 2) {
+            fprintf(stderr, "pluto: bytes capacity overflow\n");
+            exit(1);
+        }
         cap = cap * 2;
         if (cap == 0) cap = 16;
         data = (unsigned char *)realloc(data, cap);
@@ -897,6 +910,12 @@ void *__pluto_string_replace(void *s, void *old, void *new_str) {
         count++;
         remaining -= (found - p) + olen;
         p = found + olen;
+    }
+    if (nlen > olen && count > 0) {
+        if (count > (LONG_MAX - slen) / (nlen - olen)) {
+            fprintf(stderr, "pluto: string replace overflow\n");
+            exit(1);
+        }
     }
     long newlen = slen + count * (nlen - olen);
     size_t alloc_size = 8 + newlen + 1;
@@ -1304,6 +1323,10 @@ void *__pluto_map_values(void *handle) {
 
 static void map_grow(long *h, long key_type) {
     long old_cap = h[1];
+    if (old_cap > LONG_MAX / 2) {
+        fprintf(stderr, "pluto: map capacity overflow\n");
+        exit(1);
+    }
     long new_cap = old_cap * 2;
     long *old_keys = (long *)h[2]; long *old_vals = (long *)h[3];
     unsigned char *old_meta = (unsigned char *)h[4];
@@ -1417,6 +1440,10 @@ void *__pluto_set_to_array(void *handle) {
 
 static void set_grow(long *h, long key_type) {
     long old_cap = h[1];
+    if (old_cap > LONG_MAX / 2) {
+        fprintf(stderr, "pluto: set capacity overflow\n");
+        exit(1);
+    }
     long new_cap = old_cap * 2;
     long *old_keys = (long *)h[2];
     unsigned char *old_meta = (unsigned char *)h[3];
@@ -1965,6 +1992,10 @@ void __pluto_json_array_push(void *handle, void *item_handle) {
     JsonNode *item = json_unwrap(item_handle);
     if (arr->type != JSON_ARRAY) { fprintf(stderr, "pluto: json: not an array\n"); exit(1); }
     if (arr->array.len >= arr->array.cap) {
+        if (arr->array.cap > INT_MAX / 2) {
+            fprintf(stderr, "pluto: json array capacity overflow\n");
+            exit(1);
+        }
         arr->array.cap *= 2;
         arr->array.items = (JsonNode **)realloc(arr->array.items, arr->array.cap * sizeof(JsonNode *));
     }
@@ -1987,6 +2018,10 @@ void __pluto_json_object_set(void *handle, void *key_str, void *val_handle) {
     }
     // Add new key
     if (obj->object.len >= obj->object.cap) {
+        if (obj->object.cap > INT_MAX / 2) {
+            fprintf(stderr, "pluto: json object capacity overflow\n");
+            exit(1);
+        }
         obj->object.cap *= 2;
         obj->object.keys = (char **)realloc(obj->object.keys, obj->object.cap * sizeof(char *));
         obj->object.vals = (JsonNode **)realloc(obj->object.vals, obj->object.cap * sizeof(JsonNode *));
@@ -2702,4 +2737,121 @@ void __pluto_chan_sender_dec(long handle) {
     if (old == 1) {
         __pluto_chan_close(handle);  // last sender -> auto-close
     }
+}
+
+// ── Select (channel multiplexing) ──────────────────────────
+
+/*
+ * __pluto_select(buffer, count, has_default) -> case index
+ *
+ * Buffer layout (3 * count i64 slots):
+ *   buffer[0..count)          = channel handles
+ *   buffer[count..2*count)    = ops (0 = recv, 1 = send)
+ *   buffer[2*count..3*count)  = values (send values in, recv values out)
+ *
+ * Returns:
+ *   >= 0  : index of the case that completed
+ *   -1    : default case (only when has_default)
+ *   -2    : all channels closed (error raised via TLS)
+ */
+long __pluto_select(long buffer_ptr, long count, long has_default) {
+    long *buf = (long *)buffer_ptr;
+    long *handles = &buf[0];
+    long *ops     = &buf[count];
+    long *values  = &buf[2 * count];
+
+    /* Fisher-Yates shuffle for fairness */
+    int indices[64]; /* max 64 arms should be plenty */
+    int n = (int)count;
+    if (n > 64) n = 64;
+    for (int i = 0; i < n; i++) indices[i] = i;
+    /* simple LCG seeded from time + address entropy */
+    unsigned long seed = (unsigned long)buffer_ptr ^ (unsigned long)__pluto_time_ns();
+
+    for (int i = n - 1; i > 0; i--) {
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        int j = (int)((seed >> 33) % (unsigned long)(i + 1));
+        int tmp = indices[i]; indices[i] = indices[j]; indices[j] = tmp;
+    }
+
+    /* Spin-poll loop */
+    long spin_us = 100;  /* start at 100 microseconds */
+    for (;;) {
+        int all_closed = 1;
+
+        for (int si = 0; si < n; si++) {
+            int i = indices[si];
+            long *ch = (long *)handles[i];
+            ChannelSync *sync = (ChannelSync *)ch[0];
+
+            pthread_mutex_lock(&sync->mutex);
+
+            if (ops[i] == 0) {
+                /* recv */
+                if (ch[3] > 0) {
+                    /* data available */
+                    long *cbuf = (long *)ch[1];
+                    long val = cbuf[ch[4]];
+                    ch[4] = (ch[4] + 1) % ch[2];
+                    ch[3]--;
+                    pthread_cond_signal(&sync->not_full);
+                    pthread_mutex_unlock(&sync->mutex);
+                    values[i] = val;
+                    return (long)i;
+                }
+                if (!ch[6]) {
+                    all_closed = 0;
+                }
+            } else {
+                /* send */
+                if (!ch[6] && ch[3] < ch[2]) {
+                    /* space available */
+                    long *cbuf = (long *)ch[1];
+                    cbuf[ch[5]] = values[i];
+                    ch[5] = (ch[5] + 1) % ch[2];
+                    ch[3]++;
+                    pthread_cond_signal(&sync->not_empty);
+                    pthread_mutex_unlock(&sync->mutex);
+                    return (long)i;
+                }
+                if (!ch[6]) {
+                    all_closed = 0;
+                }
+            }
+
+            pthread_mutex_unlock(&sync->mutex);
+        }
+
+        if (has_default) {
+            return -1;
+        }
+
+        if (all_closed) {
+            /* Raise ChannelClosed error */
+            chan_raise_error("channel closed");
+            return -2;
+        }
+
+        /* Adaptive sleep: 100us -> 200us -> ... -> 1ms max */
+        usleep((useconds_t)spin_us);
+        if (spin_us < 1000) spin_us = spin_us * 2;
+        if (spin_us > 1000) spin_us = 1000;
+    }
+}
+
+// ── Contracts ──────────────────────────────────────────────
+
+void __pluto_invariant_violation(long class_name, long invariant_desc) {
+    // class_name and invariant_desc are Pluto strings (length-prefixed)
+    long *name_ptr = (long *)class_name;
+    long name_len = name_ptr[0];
+    char *name_data = (char *)&name_ptr[1];
+
+    long *desc_ptr = (long *)invariant_desc;
+    long desc_len = desc_ptr[0];
+    char *desc_data = (char *)&desc_ptr[1];
+
+    fprintf(stderr, "invariant violation on %.*s: %.*s\n",
+            (int)name_len, name_data, (int)desc_len, desc_data);
+    exit(1);
 }

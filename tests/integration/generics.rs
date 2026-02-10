@@ -104,3 +104,36 @@ fn generic_fn_with_generic_class() {
     );
     assert_eq!(out, "42\n");
 }
+
+// ── Additional Generic Tests ─────────────────────────────────────
+
+#[test]
+fn generic_nested_box() {
+    let out = compile_and_run_stdout(
+        "class Box<T> {\n    value: T\n}\n\nfn main() {\n    let inner = Box<int> { value: 99 }\n    let outer = Box<Box<int>> { value: inner }\n    let unwrapped = outer.value\n    print(unwrapped.value)\n}",
+    );
+    assert_eq!(out, "99\n");
+}
+
+#[test]
+fn generic_enum_data_variant_match() {
+    let out = compile_and_run_stdout(
+        "enum Result<T> {\n    Ok { value: T }\n    Err { msg: string }\n}\n\nfn main() {\n    let r = Result<int>.Ok { value: 42 }\n    match r {\n        Result.Ok { value: v } {\n            print(v)\n        }\n        Result.Err { msg: m } {\n            print(m)\n        }\n    }\n}",
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn generic_class_method_operates_on_t() {
+    let out = compile_and_run_stdout(
+        "class Wrapper<T> {\n    value: T\n\n    fn get(self) T {\n        return self.value\n    }\n\n    fn set(self, v: T) {\n        self.value = v\n    }\n}\n\nfn main() {\n    let w = Wrapper<string> { value: \"hello\" }\n    print(w.get())\n    w.set(\"world\")\n    print(w.get())\n}",
+    );
+    assert_eq!(out, "hello\nworld\n");
+}
+
+#[test]
+fn generic_wrong_type_arg_count_rejected() {
+    compile_should_fail(
+        "class Box<T> {\n    value: T\n}\n\nfn main() {\n    let b = Box<int, string> { value: 42 }\n}",
+    );
+}

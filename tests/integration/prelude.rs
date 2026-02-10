@@ -32,7 +32,7 @@ fn prelude_option_string() {
 #[test]
 fn prelude_option_as_param() {
     let out = compile_and_run_stdout(
-        "fn unwrap_or(o: Option<int>, default: int) int {\n    match o {\n        Option.Some { value: v } {\n            return v\n        }\n        Option.None {\n            return default\n        }\n    }\n}\n\nfn main() {\n    let a = Option<int>.Some { value: 10 }\n    let b = Option<int>.None\n    print(unwrap_or(a, 0))\n    print(unwrap_or(b, 99))\n}",
+        "fn unwrap_or(o: Option<int>, fallback: int) int {\n    match o {\n        Option.Some { value: v } {\n            return v\n        }\n        Option.None {\n            return fallback\n        }\n    }\n}\n\nfn main() {\n    let a = Option<int>.Some { value: 10 }\n    let b = Option<int>.None\n    print(unwrap_or(a, 0))\n    print(unwrap_or(b, 99))\n}",
     );
     assert_eq!(out, "10\n99\n");
 }

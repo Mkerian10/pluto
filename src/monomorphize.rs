@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use uuid::Uuid;
+
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
@@ -93,6 +95,8 @@ fn instantiate_function(
 
     // Clone and substitute
     let mut func = template.node.clone();
+    func.id = Uuid::new_v4();
+    reassign_function_uuids(&mut func);
     func.name = Spanned::new(mangled.to_string(), template.node.name.span);
     func.type_params.clear();
     substitute_in_function(&mut func, &bindings);
@@ -130,6 +134,8 @@ fn instantiate_class(
     let bindings = build_type_expr_bindings(&type_params, type_args);
 
     let mut class = template.node.clone();
+    class.id = Uuid::new_v4();
+    reassign_class_uuids(&mut class);
     class.name = Spanned::new(mangled.to_string(), template.node.name.span);
     class.type_params.clear();
     substitute_in_class(&mut class, &bindings);
@@ -193,6 +199,8 @@ fn instantiate_enum(
     let bindings = build_type_expr_bindings(&type_params, _type_args);
 
     let mut edecl = template.node.clone();
+    edecl.id = Uuid::new_v4();
+    reassign_enum_uuids(&mut edecl);
     edecl.name = Spanned::new(mangled.to_string(), template.node.name.span);
     edecl.type_params.clear();
     substitute_in_enum(&mut edecl, &bindings);
@@ -288,6 +296,34 @@ fn substitute_in_type_expr(te: &mut TypeExpr, bindings: &HashMap<String, TypeExp
             for arg in type_args.iter_mut() {
                 substitute_in_type_expr(&mut arg.node, bindings);
             }
+        }
+    }
+}
+
+/// Reassign UUIDs for all nested declarations within a Function (params).
+fn reassign_function_uuids(func: &mut Function) {
+    for p in &mut func.params {
+        p.id = Uuid::new_v4();
+    }
+}
+
+/// Reassign UUIDs for all nested declarations within a ClassDecl (fields, methods, params).
+fn reassign_class_uuids(class: &mut ClassDecl) {
+    for f in &mut class.fields {
+        f.id = Uuid::new_v4();
+    }
+    for method in &mut class.methods {
+        method.node.id = Uuid::new_v4();
+        reassign_function_uuids(&mut method.node);
+    }
+}
+
+/// Reassign UUIDs for all nested declarations within an EnumDecl (variants, fields).
+fn reassign_enum_uuids(edecl: &mut EnumDecl) {
+    for variant in &mut edecl.variants {
+        variant.id = Uuid::new_v4();
+        for f in &mut variant.fields {
+            f.id = Uuid::new_v4();
         }
     }
 }
@@ -388,6 +424,23 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
             substitute_in_type_expr(&mut elem_type.node, bindings);
             if let Some(cap) = capacity {
                 substitute_in_expr(&mut cap.node, bindings);
+            }
+        }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        substitute_in_expr(&mut channel.node, bindings);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        substitute_in_expr(&mut channel.node, bindings);
+                        substitute_in_expr(&mut value.node, bindings);
+                    }
+                }
+                substitute_in_block(&mut arm.body.node, bindings);
+            }
+            if let Some(def) = default {
+                substitute_in_block(&mut def.node, bindings);
             }
         }
         Stmt::Break | Stmt::Continue => {}
@@ -694,6 +747,29 @@ fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
                 offset_expr_spans(&mut cap.node, offset);
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { binding, channel } => {
+                        offset_spanned(binding, offset);
+                        offset_spanned(channel, offset);
+                        offset_expr_spans(&mut channel.node, offset);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        offset_spanned(channel, offset);
+                        offset_expr_spans(&mut channel.node, offset);
+                        offset_spanned(value, offset);
+                        offset_expr_spans(&mut value.node, offset);
+                    }
+                }
+                offset_spanned(&mut arm.body, offset);
+                offset_block_spans(&mut arm.body.node, offset);
+            }
+            if let Some(def) = default {
+                offset_spanned(def, offset);
+                offset_block_spans(&mut def.node, offset);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -952,6 +1028,23 @@ fn rewrite_stmt(stmt: &mut Stmt, rewrites: &HashMap<(usize, usize), String>) {
                 rewrite_expr(&mut cap.node, cap.span.start, cap.span.end, rewrites);
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        rewrite_expr(&mut channel.node, channel.span.start, channel.span.end, rewrites);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        rewrite_expr(&mut channel.node, channel.span.start, channel.span.end, rewrites);
+                        rewrite_expr(&mut value.node, value.span.start, value.span.end, rewrites);
+                    }
+                }
+                rewrite_block(&mut arm.body.node, rewrites);
+            }
+            if let Some(def) = default {
+                rewrite_block(&mut def.node, rewrites);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -1160,6 +1253,23 @@ fn resolve_generic_te_in_stmt(stmt: &mut Stmt, env: &mut TypeEnv) -> Result<(), 
             resolve_generic_te(&mut elem_type.node, env)?;
             if let Some(cap) = capacity {
                 resolve_generic_te_in_expr(&mut cap.node, env)?;
+            }
+        }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        resolve_generic_te_in_expr(&mut channel.node, env)?;
+                    }
+                    SelectOp::Send { channel, value } => {
+                        resolve_generic_te_in_expr(&mut channel.node, env)?;
+                        resolve_generic_te_in_expr(&mut value.node, env)?;
+                    }
+                }
+                resolve_generic_te_in_block(&mut arm.body.node, env)?;
+            }
+            if let Some(def) = default {
+                resolve_generic_te_in_block(&mut def.node, env)?;
             }
         }
         Stmt::Break | Stmt::Continue => {}

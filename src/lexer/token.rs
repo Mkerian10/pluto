@@ -70,6 +70,16 @@ pub enum Token {
     Ambient,
     #[token("test")]
     Test,
+    #[token("invariant")]
+    Invariant,
+    #[token("requires")]
+    Requires,
+    #[token("ensures")]
+    Ensures,
+    #[token("select")]
+    Select,
+    #[token("default")]
+    Default,
 
     // Literals
     #[regex(r"0[xX][0-9a-fA-F_]+|[0-9][0-9_]*", |lex| {
@@ -219,7 +229,8 @@ pub fn is_keyword(s: &str) -> bool {
     matches!(s, "fn" | "let" | "mut" | "return" | "if" | "else" | "while" | "true" | "false"
         | "class" | "trait" | "app" | "inject" | "error" | "raise" | "catch" | "spawn"
         | "enum" | "impl" | "self" | "pub" | "for" | "in" | "break" | "continue"
-        | "match" | "import" | "as" | "extern" | "uses" | "ambient" | "test")
+        | "match" | "import" | "as" | "extern" | "uses" | "ambient" | "test"
+        | "invariant" | "requires" | "ensures" | "select" | "default")
 }
 
 impl std::fmt::Display for Token {
@@ -257,6 +268,11 @@ impl std::fmt::Display for Token {
             Token::Uses => write!(f, "uses"),
             Token::Ambient => write!(f, "ambient"),
             Token::Test => write!(f, "test"),
+            Token::Invariant => write!(f, "invariant"),
+            Token::Requires => write!(f, "requires"),
+            Token::Ensures => write!(f, "ensures"),
+            Token::Select => write!(f, "select"),
+            Token::Default => write!(f, "default"),
             Token::IntLit(n) => write!(f, "{n}"),
             Token::FloatLit(n) => write!(f, "{n}"),
             Token::StringLit(s) => write!(f, "\"{s}\""),

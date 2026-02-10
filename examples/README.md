@@ -16,6 +16,14 @@ Demonstrates channels for inter-task communication: `let (tx, rx) = chan<T>(capa
 cargo run -- run examples/channels/main.pluto
 ```
 
+## select
+
+Demonstrates `select` for channel multiplexing: waiting on multiple channels simultaneously, fan-in patterns with two producers, non-blocking select with `default`, and error handling when all channels close.
+
+```bash
+cargo run -- run examples/select/main.pluto
+```
+
 ## concurrency
 
 Demonstrates `spawn` for concurrent execution: spawning functions on separate threads, collecting results with `.get()`, error handling with `catch`, and void tasks.
@@ -62,6 +70,14 @@ Demonstrates local path dependencies via `pluto.toml`. A project declares a `mat
 
 ```bash
 cargo run -- run examples/packages/main.pluto
+```
+
+## git-packages
+
+Demonstrates git-based dependencies via `pluto.toml`. A project declares a `strutils` dependency pointing to a git repository, then imports and uses string utility functions from it.
+
+```bash
+cargo run -- run examples/git-packages/main.pluto
 ```
 
 ## http-api

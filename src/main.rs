@@ -38,6 +38,8 @@ enum Commands {
         #[arg(default_value = ".")]
         dir: PathBuf,
     },
+    /// Start the LSP server (communicates over stdin/stdout)
+    Lsp,
 }
 
 fn main() {
@@ -74,6 +76,12 @@ fn main() {
 
             if !status.success() {
                 std::process::exit(status.code().unwrap_or(1));
+            }
+        }
+        Commands::Lsp => {
+            if let Err(err) = plutoc::lsp::run_lsp_server() {
+                eprintln!("LSP server error: {err}");
+                std::process::exit(1);
             }
         }
         Commands::Test { file } => {

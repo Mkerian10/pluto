@@ -24,6 +24,8 @@ struct LowerContext<'a> {
     runtime: &'a RuntimeRegistry,
     vtable_ids: &'a HashMap<(String, String), DataId>,
     source: &'a str,
+    /// Class invariants: class_name → Vec<(expr, description_string)>
+    class_invariants: &'a HashMap<String, Vec<(Expr, String)>>,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
     var_types: HashMap<String, PlutoType>,
@@ -129,6 +131,76 @@ impl<'a> LowerContext<'a> {
 
         let gv = self.module.declare_data_in_func(data_id, self.builder.func);
         Ok(self.builder.ins().global_value(types::I64, gv))
+    }
+
+    /// Emit runtime invariant checks for a class after construction or mutation.
+    /// `class_name` is the class to check, `obj_ptr` is the pointer to the struct.
+    fn emit_invariant_checks(
+        &mut self,
+        class_name: &str,
+        obj_ptr: Value,
+    ) -> Result<(), CompileError> {
+        let invariants = match self.class_invariants.get(class_name) {
+            Some(invs) if !invs.is_empty() => invs.clone(),
+            _ => return Ok(()),
+        };
+
+        // Temporarily bind `self` to obj_ptr so invariant expressions resolve self.field
+        let prev_self_var = self.variables.get("self").cloned();
+        let prev_self_type = self.var_types.get("self").cloned();
+
+        let self_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        self.builder.declare_var(self_var, types::I64);
+        self.builder.def_var(self_var, obj_ptr);
+        self.variables.insert("self".to_string(), self_var);
+        self.var_types.insert("self".to_string(), PlutoType::Class(class_name.to_string()));
+
+        for (inv_expr, inv_desc) in &invariants {
+            let result = self.lower_expr(inv_expr)?;
+
+            // Branch: if result is false (0), call violation handler
+            let violation_bb = self.builder.create_block();
+            let ok_bb = self.builder.create_block();
+
+            self.builder.ins().brif(result, ok_bb, &[], violation_bb, &[]);
+
+            // Violation block: create strings and call __pluto_invariant_violation
+            self.builder.switch_to_block(violation_bb);
+            self.builder.seal_block(violation_bb);
+
+            // Create class name Pluto string
+            let name_raw = self.create_data_str(class_name)?;
+            let name_len = self.builder.ins().iconst(types::I64, class_name.len() as i64);
+            let name_str = self.call_runtime("__pluto_string_new", &[name_raw, name_len]);
+
+            // Create invariant description Pluto string
+            let desc_raw = self.create_data_str(inv_desc)?;
+            let desc_len = self.builder.ins().iconst(types::I64, inv_desc.len() as i64);
+            let desc_str = self.call_runtime("__pluto_string_new", &[desc_raw, desc_len]);
+
+            self.call_runtime_void("__pluto_invariant_violation", &[name_str, desc_str]);
+            // __pluto_invariant_violation calls exit(), but Cranelift needs a terminator
+            self.builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+
+            // OK block: continue
+            self.builder.switch_to_block(ok_bb);
+            self.builder.seal_block(ok_bb);
+        }
+
+        // Restore previous self binding
+        if let Some(pv) = prev_self_var {
+            self.variables.insert("self".to_string(), pv);
+        } else {
+            self.variables.remove("self");
+        }
+        if let Some(pt) = prev_self_type {
+            self.var_types.insert("self".to_string(), pt);
+        } else {
+            self.var_types.remove("self");
+        }
+
+        Ok(())
     }
 
     // ── lower_stmt dispatch ──────────────────────────────────────────────
@@ -264,6 +336,7 @@ impl<'a> LowerContext<'a> {
                 *terminated = true;
                 Ok(())
             }
+            Stmt::Select { arms, default } => self.lower_select(arms, default, terminated),
             Stmt::Expr(expr) => {
                 self.lower_expr(&expr.node)?;
                 Ok(())
@@ -1065,6 +1138,187 @@ impl<'a> LowerContext<'a> {
         Ok(())
     }
 
+    fn lower_select(
+        &mut self,
+        arms: &[SelectArm],
+        default: &Option<crate::span::Spanned<Block>>,
+        terminated: &mut bool,
+    ) -> Result<(), CompileError> {
+        let count = arms.len() as i64;
+
+        // 1. Allocate buffer: 3 * count i64 slots
+        //    [handles | ops | values]
+        let buf_size = self.builder.ins().iconst(types::I64, 3 * count * POINTER_SIZE as i64);
+        let buffer = self.call_runtime("__pluto_alloc", &[buf_size]);
+
+        // 2. Eagerly evaluate all channel exprs and send values, store into buffer
+        for (i, arm) in arms.iter().enumerate() {
+            let slot_offset = (i as i32) * POINTER_SIZE;
+            let op_offset = (count as i32 + i as i32) * POINTER_SIZE;
+            let val_offset = (2 * count as i32 + i as i32) * POINTER_SIZE;
+
+            match &arm.op {
+                SelectOp::Recv { channel, .. } => {
+                    let chan_val = self.lower_expr(&channel.node)?;
+                    self.builder.ins().store(MemFlags::new(), chan_val, buffer, Offset32::new(slot_offset));
+                    let op_val = self.builder.ins().iconst(types::I64, 0); // 0 = recv
+                    self.builder.ins().store(MemFlags::new(), op_val, buffer, Offset32::new(op_offset));
+                    // values[i] unused for recv (will be written by runtime)
+                    let zero = self.builder.ins().iconst(types::I64, 0);
+                    self.builder.ins().store(MemFlags::new(), zero, buffer, Offset32::new(val_offset));
+                }
+                SelectOp::Send { channel, value } => {
+                    let chan_val = self.lower_expr(&channel.node)?;
+                    self.builder.ins().store(MemFlags::new(), chan_val, buffer, Offset32::new(slot_offset));
+                    let op_val = self.builder.ins().iconst(types::I64, 1); // 1 = send
+                    self.builder.ins().store(MemFlags::new(), op_val, buffer, Offset32::new(op_offset));
+                    let send_val = self.lower_expr(&value.node)?;
+                    let slot = to_array_slot(send_val, &infer_type_for_expr(&value.node, self.env, &self.var_types), &mut self.builder);
+                    self.builder.ins().store(MemFlags::new(), slot, buffer, Offset32::new(val_offset));
+                }
+            }
+        }
+
+        // 3. Call __pluto_select(buffer, count, has_default)
+        let count_val = self.builder.ins().iconst(types::I64, count);
+        let has_default_val = self.builder.ins().iconst(types::I64, if default.is_some() { 1 } else { 0 });
+        let result = self.call_runtime("__pluto_select", &[buffer, count_val, has_default_val]);
+
+        // 4. If no default and result == -2 → error path (TLS already set by runtime)
+        let merge_bb = self.builder.create_block();
+
+        if default.is_none() {
+            let neg2 = self.builder.ins().iconst(types::I64, -2i64);
+            let is_err = self.builder.ins().icmp(IntCC::Equal, result, neg2);
+            let err_bb = self.builder.create_block();
+            let dispatch_bb = self.builder.create_block();
+            self.builder.ins().brif(is_err, err_bb, &[], dispatch_bb, &[]);
+
+            // Error block: propagate (error is already in TLS)
+            self.builder.switch_to_block(err_bb);
+            self.builder.seal_block(err_bb);
+            self.emit_default_return();
+
+            // Continue to dispatch
+            self.builder.switch_to_block(dispatch_bb);
+            self.builder.seal_block(dispatch_bb);
+        }
+
+        // 5. Default check: if result == -1 and default exists → jump to default block
+        let first_arm_check_bb = self.builder.create_block();
+
+        if let Some(def) = default {
+            let neg1 = self.builder.ins().iconst(types::I64, -1i64);
+            let is_default = self.builder.ins().icmp(IntCC::Equal, result, neg1);
+            let default_bb = self.builder.create_block();
+            self.builder.ins().brif(is_default, default_bb, &[], first_arm_check_bb, &[]);
+
+            // Default block
+            self.builder.switch_to_block(default_bb);
+            self.builder.seal_block(default_bb);
+            let mut default_terminated = false;
+            for s in &def.node.stmts {
+                self.lower_stmt(&s.node, &mut default_terminated)?;
+            }
+            if !default_terminated {
+                self.builder.ins().jump(merge_bb, &[]);
+            }
+
+            self.builder.switch_to_block(first_arm_check_bb);
+            self.builder.seal_block(first_arm_check_bb);
+        } else {
+            // No default — fall through directly to arm dispatch
+            self.builder.ins().jump(first_arm_check_bb, &[]);
+            self.builder.switch_to_block(first_arm_check_bb);
+            self.builder.seal_block(first_arm_check_bb);
+        }
+
+        // 6. Dispatch: sequential index checks like match codegen
+        let mut all_terminated = true;
+        for (i, arm) in arms.iter().enumerate() {
+            let body_bb = self.builder.create_block();
+            let next_bb = if i + 1 < arms.len() {
+                self.builder.create_block()
+            } else {
+                merge_bb
+            };
+
+            let idx_val = self.builder.ins().iconst(types::I64, i as i64);
+            let cmp = self.builder.ins().icmp(IntCC::Equal, result, idx_val);
+            self.builder.ins().brif(cmp, body_bb, &[], next_bb, &[]);
+
+            // Body block
+            self.builder.switch_to_block(body_bb);
+            self.builder.seal_block(body_bb);
+
+            // For recv arms, bind the received value
+            let mut prev_vars: Vec<(String, Option<Variable>, Option<PlutoType>)> = Vec::new();
+            if let SelectOp::Recv { binding, channel } = &arm.op {
+                let chan_type = infer_type_for_expr(&channel.node, self.env, &self.var_types);
+                if let PlutoType::Receiver(elem_type) = &chan_type {
+                    let val_offset = (2 * count as i32 + i as i32) * POINTER_SIZE;
+                    let raw = self.builder.ins().load(types::I64, MemFlags::new(), buffer, Offset32::new(val_offset));
+                    let val = from_array_slot(raw, elem_type, &mut self.builder);
+
+                    let cl_type = pluto_to_cranelift(elem_type);
+                    let var = Variable::from_u32(self.next_var);
+                    self.next_var += 1;
+                    self.builder.declare_var(var, cl_type);
+                    self.builder.def_var(var, val);
+
+                    prev_vars.push((
+                        binding.node.clone(),
+                        self.variables.get(&binding.node).cloned(),
+                        self.var_types.get(&binding.node).cloned(),
+                    ));
+                    self.variables.insert(binding.node.clone(), var);
+                    self.var_types.insert(binding.node.clone(), *elem_type.clone());
+                }
+            }
+
+            let mut arm_terminated = false;
+            for s in &arm.body.node.stmts {
+                self.lower_stmt(&s.node, &mut arm_terminated)?;
+            }
+
+            // Restore previous variable bindings
+            for (name, prev_var, prev_type) in prev_vars {
+                if let Some(pv) = prev_var {
+                    self.variables.insert(name.clone(), pv);
+                } else {
+                    self.variables.remove(&name);
+                }
+                if let Some(pt) = prev_type {
+                    self.var_types.insert(name, pt);
+                } else {
+                    self.var_types.remove(&name);
+                }
+            }
+
+            if !arm_terminated {
+                self.builder.ins().jump(merge_bb, &[]);
+                all_terminated = false;
+            }
+
+            // Switch to next check block (if not the last arm)
+            if i + 1 < arms.len() {
+                self.builder.switch_to_block(next_bb);
+                self.builder.seal_block(next_bb);
+            }
+        }
+
+        if all_terminated && default.is_none() {
+            *terminated = true;
+        }
+
+        self.builder.switch_to_block(merge_bb);
+        self.builder.seal_block(merge_bb);
+        if *terminated {
+            self.builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
+        }
+        Ok(())
+    }
+
     // ── lower_expr dispatch ──────────────────────────────────────────────
 
     fn lower_expr(&mut self, expr: &Expr) -> Result<Value, CompileError> {
@@ -1566,6 +1820,9 @@ impl<'a> LowerContext<'a> {
             self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
         }
 
+        // Emit invariant checks after struct construction
+        self.emit_invariant_checks(&name.node, ptr)?;
+
         Ok(ptr)
     }
 
@@ -1982,6 +2239,7 @@ impl<'a> LowerContext<'a> {
                 Ok(results[0])
             }
         } else if let PlutoType::Class(class_name) = &obj_type {
+            let class_name = class_name.clone();
             let mangled = format!("{}_{}", class_name, method.node);
             let func_id = self.func_ids.get(&mangled).ok_or_else(|| {
                 CompileError::codegen(format!("undefined method '{}'", method.node))
@@ -1995,11 +2253,16 @@ impl<'a> LowerContext<'a> {
 
             let call = self.builder.ins().call(func_ref, &arg_values);
             let results = self.builder.inst_results(call);
-            if results.is_empty() {
-                Ok(self.builder.ins().iconst(types::I64, 0))
+            let result = if results.is_empty() {
+                self.builder.ins().iconst(types::I64, 0)
             } else {
-                Ok(results[0])
-            }
+                results[0]
+            };
+
+            // Emit invariant checks after method call (conservative: all methods)
+            self.emit_invariant_checks(&class_name, obj_ptr)?;
+
+            Ok(result)
         } else {
             Err(CompileError::codegen(format!("method call on non-class type {obj_type}")))
         }
@@ -2109,6 +2372,14 @@ fn collect_sender_var_names_stmt(stmt: &Stmt, names: &mut Vec<String>, seen: &mu
                 for s in &arm.body.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                for s in &arm.body.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
+            }
+            if let Some(def) = default {
+                for s in &def.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
+            }
+        }
         _ => {}
     }
 }
@@ -2125,6 +2396,7 @@ pub fn lower_function(
     vtable_ids: &HashMap<(String, String), DataId>,
     source: &str,
     spawn_closure_fns: &HashSet<String>,
+    class_invariants: &HashMap<String, Vec<(Expr, String)>>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -2239,6 +2511,7 @@ pub fn lower_function(
         runtime,
         vtable_ids,
         source,
+        class_invariants,
         variables,
         var_types,
         next_var,
@@ -2425,7 +2698,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Receiver(_) => types::I64,  // pointer to channel handle
         PlutoType::Error => types::I64,        // pointer to error object
         PlutoType::Range => types::I64,           // not used as a value type
-        PlutoType::TypeParam(_) => panic!("TypeParam should not reach codegen"),
+        PlutoType::TypeParam(name) => panic!("ICE: generic type parameter '{name}' reached codegen unresolved"),
         PlutoType::Byte => types::I8,          // unsigned 8-bit value
         PlutoType::Bytes => types::I64,        // pointer to bytes handle
     }

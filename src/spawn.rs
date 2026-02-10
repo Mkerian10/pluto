@@ -77,6 +77,23 @@ fn desugar_stmt(stmt: &mut Stmt) {
                 desugar_expr(&mut cap.node, cap.span);
             }
         }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        desugar_expr(&mut channel.node, channel.span);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        desugar_expr(&mut channel.node, channel.span);
+                        desugar_expr(&mut value.node, value.span);
+                    }
+                }
+                desugar_block(&mut arm.body.node);
+            }
+            if let Some(def) = default {
+                desugar_block(&mut def.node);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
