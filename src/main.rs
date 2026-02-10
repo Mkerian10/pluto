@@ -32,6 +32,12 @@ enum Commands {
         /// Source file path
         file: PathBuf,
     },
+    /// Fetch latest versions of all git dependencies
+    Update {
+        /// Directory to search for pluto.toml (defaults to current dir)
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+    },
 }
 
 fn main() {
@@ -89,6 +95,12 @@ fn main() {
 
             if !status.success() {
                 std::process::exit(status.code().unwrap_or(1));
+            }
+        }
+        Commands::Update { dir } => {
+            if let Err(err) = plutoc::update_git_deps(&dir) {
+                eprintln!("error: {err}");
+                std::process::exit(1);
             }
         }
     }

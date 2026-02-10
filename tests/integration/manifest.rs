@@ -716,3 +716,413 @@ fn two_aliases_same_canonical_path() {
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n7\n");
 }
+
+// ============================================================
+// Git dependency helpers
+// ============================================================
+
+/// Run a git command in an isolated environment (no parent repo interference).
+fn git_cmd(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_CEILING_DIRECTORIES")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .unwrap()
+}
+
+/// Create a local git repo with files and return (TempDir, file:// URL).
+/// Uses `file://` URLs to avoid network access.
+fn create_git_dep(files: &[(&str, &str)]) -> (tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap();
+
+    let status = git_cmd(dir.path(), &["init"]);
+    assert!(status.status.success(), "git init failed: {}", String::from_utf8_lossy(&status.stderr));
+
+    git_cmd(dir.path(), &["config", "user.email", "test@test.com"]);
+    git_cmd(dir.path(), &["config", "user.name", "Test"]);
+
+    // Write files
+    for (name, content) in files {
+        let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+    }
+
+    git_cmd(dir.path(), &["add", "."]);
+    let commit = git_cmd(dir.path(), &["commit", "-m", "initial"]);
+    assert!(commit.status.success(), "git commit failed: {}", String::from_utf8_lossy(&commit.stderr));
+
+    let url = format!("file://{}", dir.path().display());
+    (dir, url)
+}
+
+/// Get the HEAD commit SHA of a git repo.
+fn git_head_sha(dir: &std::path::Path) -> String {
+    let output = git_cmd(dir, &["rev-parse", "HEAD"]);
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// Run a project with a raw pluto.toml string and project files, using a custom cache dir.
+/// Returns stdout on success.
+fn run_git_dep_project(
+    toml_content: &str,
+    project_files: &[(&str, &str)],
+    cache_dir: &std::path::Path,
+) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("pluto.toml"), toml_content).unwrap();
+
+    for (name, content) in project_files {
+        let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+    }
+
+    let entry = dir.path().join("main.pluto");
+    let bin_path = dir.path().join("test_bin");
+
+    // Set PLUTO_CACHE_DIR so tests don't pollute the real cache
+    unsafe { std::env::set_var("PLUTO_CACHE_DIR", cache_dir); }
+    let result = plutoc::compile_file(&entry, &bin_path);
+    unsafe { std::env::remove_var("PLUTO_CACHE_DIR"); }
+
+    result.unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+
+    let output = Command::new(&bin_path).output().unwrap();
+    assert!(output.status.success(), "Binary exited with non-zero status. stderr: {}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+/// Same but expect compilation failure. Returns the error message.
+fn compile_git_dep_should_fail(
+    toml_content: &str,
+    project_files: &[(&str, &str)],
+    cache_dir: &std::path::Path,
+) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("pluto.toml"), toml_content).unwrap();
+
+    for (name, content) in project_files {
+        let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+    }
+
+    let entry = dir.path().join("main.pluto");
+    let bin_path = dir.path().join("test_bin");
+
+    unsafe { std::env::set_var("PLUTO_CACHE_DIR", cache_dir); }
+    let result = plutoc::compile_file(&entry, &bin_path);
+    unsafe { std::env::remove_var("PLUTO_CACHE_DIR"); }
+
+    match result {
+        Err(e) => e.to_string(),
+        Ok(()) => panic!("Compilation should have failed"),
+    }
+}
+
+// ============================================================
+// Git dependency tests — happy paths
+// ============================================================
+
+#[test]
+fn git_dep_basic() {
+    let cache = tempfile::tempdir().unwrap();
+    let (_dep, dep_url) = create_git_dep(&[
+        ("add.pluto", "pub fn add(a: int, b: int) int {\n    return a + b\n}"),
+    ]);
+
+    let toml = format!(
+        "[package]\nname = \"test\"\n\n[dependencies]\nmylib = {{ git = \"{}\" }}\n",
+        dep_url
+    );
+    let out = run_git_dep_project(
+        &toml,
+        &[("main.pluto", "import mylib\n\nfn main() {\n    print(mylib.add(1, 2))\n}")],
+        cache.path(),
+    );
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn git_dep_with_branch() {
+    let cache = tempfile::tempdir().unwrap();
+    let (dep_dir, dep_url) = create_git_dep(&[
+        ("val.pluto", "pub fn val() int {\n    return 1\n}"),
+    ]);
+
+    // Create a new branch with different content
+    git_cmd(dep_dir.path(), &["checkout", "-b", "dev"]);
+    std::fs::write(dep_dir.path().join("val.pluto"), "pub fn val() int {\n    return 99\n}").unwrap();
+    git_cmd(dep_dir.path(), &["add", "."]);
+    git_cmd(dep_dir.path(), &["commit", "-m", "dev branch"]);
+    // Go back to main so clone gets the default branch
+    git_cmd(dep_dir.path(), &["checkout", "master"]);
+
+    let toml = format!(
+        "[package]\nname = \"test\"\n\n[dependencies]\nmylib = {{ git = \"{}\", branch = \"dev\" }}\n",
+        dep_url
+    );
+    let out = run_git_dep_project(
+        &toml,
+        &[("main.pluto", "import mylib\n\nfn main() {\n    print(mylib.val())\n}")],
+        cache.path(),
+    );
+    assert_eq!(out, "99\n");
+}
+
+#[test]
+fn git_dep_with_tag() {
+    let cache = tempfile::tempdir().unwrap();
+    let (dep_dir, dep_url) = create_git_dep(&[
+        ("val.pluto", "pub fn val() int {\n    return 42\n}"),
+    ]);
+
+    // Tag the current commit
+    git_cmd(dep_dir.path(), &["tag", "v1.0"]);
+
+    // Make a new commit after the tag
+    std::fs::write(dep_dir.path().join("val.pluto"), "pub fn val() int {\n    return 999\n}").unwrap();
+    git_cmd(dep_dir.path(), &["add", "."]);
+    git_cmd(dep_dir.path(), &["commit", "-m", "after tag"]);
+
+    let toml = format!(
+        "[package]\nname = \"test\"\n\n[dependencies]\nmylib = {{ git = \"{}\", tag = \"v1.0\" }}\n",
+        dep_url
+    );
+    let out = run_git_dep_project(
+        &toml,
+        &[("main.pluto", "import mylib\n\nfn main() {\n    print(mylib.val())\n}")],
+        cache.path(),
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn git_dep_with_rev() {
+    let cache = tempfile::tempdir().unwrap();
+    let (dep_dir, dep_url) = create_git_dep(&[
+        ("val.pluto", "pub fn val() int {\n    return 7\n}"),
+    ]);
+
+    let sha = git_head_sha(dep_dir.path());
+
+    // Make a new commit
+    std::fs::write(dep_dir.path().join("val.pluto"), "pub fn val() int {\n    return 999\n}").unwrap();
+    git_cmd(dep_dir.path(), &["add", "."]);
+    git_cmd(dep_dir.path(), &["commit", "-m", "newer"]);
+
+    let toml = format!(
+        "[package]\nname = \"test\"\n\n[dependencies]\nmylib = {{ git = \"{}\", rev = \"{}\" }}\n",
+        dep_url, sha
+    );
+    let out = run_git_dep_project(
+        &toml,
+        &[("main.pluto", "import mylib\n\nfn main() {\n    print(mylib.val())\n}")],
+        cache.path(),
+    );
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn git_dep_transitive() {
+    // Git dep A has its own pluto.toml with a path dep B (B is in a deps/ subdirectory, not at the root)
+    let cache = tempfile::tempdir().unwrap();
+    let (_dep, dep_url) = create_git_dep(&[
+        ("pluto.toml", "[package]\nname = \"liba\"\n\n[dependencies]\nlibb = { path = \"deps/libb\" }\n"),
+        ("compute.pluto", "import libb\n\npub fn compute(x: int) int {\n    return libb.double(x)\n}"),
+        ("deps/libb/double.pluto", "pub fn double(x: int) int {\n    return x * 2\n}"),
+    ]);
+
+    let toml = format!(
+        "[package]\nname = \"test\"\n\n[dependencies]\nliba = {{ git = \"{}\" }}\n",
+        dep_url
+    );
+    let out = run_git_dep_project(
+        &toml,
+        &[("main.pluto", "import liba\n\nfn main() {\n    print(liba.compute(5))\n}")],
+        cache.path(),
+    );
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn git_dep_transitive_git() {
+    // Git dep A has its own pluto.toml with a git dep B
+    let cache = tempfile::tempdir().unwrap();
+    let (_dep_b, dep_b_url) = create_git_dep(&[
+        ("double.pluto", "pub fn double(x: int) int {\n    return x * 2\n}"),
+    ]);
+
+    let (_dep_a, dep_a_url) = create_git_dep(&[
+        ("pluto.toml", &format!("[package]\nname = \"liba\"\n\n[dependencies]\nlibb = {{ git = \"{}\" }}\n", dep_b_url)),
+        ("compute.pluto", "import libb\n\npub fn compute(x: int) int {\n    return libb.double(x)\n}"),
+    ]);
+
+    let toml = format!(
+        "[package]\nname = \"test\"\n\n[dependencies]\nliba = {{ git = \"{}\" }}\n",
+        dep_a_url
+    );
+    let out = run_git_dep_project(
+        &toml,
+        &[("main.pluto", "import liba\n\nfn main() {\n    print(liba.compute(7))\n}")],
+        cache.path(),
+    );
+    assert_eq!(out, "14\n");
+}
+
+#[test]
+fn git_dep_cached() {
+    // Compile twice, verify cache dir exists and second compile succeeds
+    let cache = tempfile::tempdir().unwrap();
+    let (_dep, dep_url) = create_git_dep(&[
+        ("val.pluto", "pub fn val() int {\n    return 42\n}"),
+    ]);
+
+    let toml = format!(
+        "[package]\nname = \"test\"\n\n[dependencies]\nmylib = {{ git = \"{}\" }}\n",
+        dep_url
+    );
+    let files = &[("main.pluto", "import mylib\n\nfn main() {\n    print(mylib.val())\n}")];
+
+    // First compile
+    let out1 = run_git_dep_project(&toml, files, cache.path());
+    assert_eq!(out1, "42\n");
+
+    // Verify cache dir was created
+    let git_cache_dir = cache.path().join("git");
+    assert!(git_cache_dir.exists(), "git cache dir should exist");
+
+    // Second compile — should use cache
+    let out2 = run_git_dep_project(&toml, files, cache.path());
+    assert_eq!(out2, "42\n");
+}
+
+#[test]
+fn git_dep_mixed_with_path() {
+    // Project has both path and git deps
+    let cache = tempfile::tempdir().unwrap();
+    let (_dep, dep_url) = create_git_dep(&[
+        ("add.pluto", "pub fn add(a: int, b: int) int {\n    return a + b\n}"),
+    ]);
+
+    let dir = tempfile::tempdir().unwrap();
+
+    // Path dep
+    let path_dep_dir = dir.path().join("deps/utils");
+    std::fs::create_dir_all(&path_dep_dir).unwrap();
+    std::fs::write(path_dep_dir.join("greet.pluto"),
+        "pub fn greet() string {\n    return \"hello\"\n}").unwrap();
+
+    let toml = format!(
+        "[package]\nname = \"test\"\n\n[dependencies]\nmylib = {{ git = \"{}\" }}\nutils = {{ path = \"deps/utils\" }}\n",
+        dep_url
+    );
+    std::fs::write(dir.path().join("pluto.toml"), &toml).unwrap();
+    std::fs::write(dir.path().join("main.pluto"),
+        "import mylib\nimport utils\n\nfn main() {\n    print(mylib.add(1, 2))\n    print(utils.greet())\n}").unwrap();
+
+    let entry = dir.path().join("main.pluto");
+    let bin_path = dir.path().join("test_bin");
+
+    unsafe { std::env::set_var("PLUTO_CACHE_DIR", cache.path()); }
+    plutoc::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    unsafe { std::env::remove_var("PLUTO_CACHE_DIR"); }
+
+    let output = Command::new(&bin_path).output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\nhello\n");
+}
+
+// ============================================================
+// Git dependency tests — error cases
+// ============================================================
+
+#[test]
+fn git_dep_bad_url() {
+    let cache = tempfile::tempdir().unwrap();
+    let err = compile_git_dep_should_fail(
+        "[package]\nname = \"test\"\n\n[dependencies]\nmylib = { git = \"file:///nonexistent/repo\" }\n",
+        &[("main.pluto", "fn main() {\n    print(1)\n}")],
+        cache.path(),
+    );
+    assert!(err.contains("git clone failed"), "Expected git clone failure, got: {}", err);
+}
+
+#[test]
+fn git_dep_bad_ref() {
+    let cache = tempfile::tempdir().unwrap();
+    let (_dep, dep_url) = create_git_dep(&[
+        ("val.pluto", "pub fn val() int {\n    return 1\n}"),
+    ]);
+
+    let toml = format!(
+        "[package]\nname = \"test\"\n\n[dependencies]\nmylib = {{ git = \"{}\", rev = \"deadbeef1234567890\" }}\n",
+        dep_url
+    );
+    let err = compile_git_dep_should_fail(
+        &toml,
+        &[("main.pluto", "fn main() {\n    print(1)\n}")],
+        cache.path(),
+    );
+    assert!(err.contains("git checkout") && err.contains("failed"), "Expected checkout failure, got: {}", err);
+}
+
+#[test]
+fn git_dep_both_path_and_git() {
+    let cache = tempfile::tempdir().unwrap();
+    let err = compile_git_dep_should_fail(
+        "[package]\nname = \"test\"\n\n[dependencies]\nmylib = { path = \"./dep\", git = \"file:///foo\" }\n",
+        &[("main.pluto", "fn main() {\n    print(1)\n}"), ("dep/mod.pluto", "pub fn x() int { return 1 }")],
+        cache.path(),
+    );
+    assert!(err.contains("specify either 'path' or 'git', not both"), "Expected both error, got: {}", err);
+}
+
+#[test]
+fn git_dep_multiple_refs() {
+    let cache = tempfile::tempdir().unwrap();
+    let err = compile_git_dep_should_fail(
+        "[package]\nname = \"test\"\n\n[dependencies]\nmylib = { git = \"file:///foo\", tag = \"v1\", branch = \"dev\" }\n",
+        &[("main.pluto", "fn main() {\n    print(1)\n}")],
+        cache.path(),
+    );
+    assert!(err.contains("specify at most one of 'rev', 'tag', 'branch'"), "Expected multiple refs error, got: {}", err);
+}
+
+#[test]
+fn git_dep_ref_with_path() {
+    let cache = tempfile::tempdir().unwrap();
+    let err = compile_git_dep_should_fail(
+        "[package]\nname = \"test\"\n\n[dependencies]\nmylib = { path = \"./dep\", branch = \"dev\" }\n",
+        &[("main.pluto", "fn main() {\n    print(1)\n}"), ("dep/mod.pluto", "pub fn x() int { return 1 }")],
+        cache.path(),
+    );
+    // This will hit "both path and git" first since path is present but git is not
+    // Actually: path + branch, no git → should get "rev/tag/branch only valid with git"
+    // But wait: has_path && has_git is false, so we pass that check.
+    // Then: has_path && (has_branch) → "only valid with git dependencies"
+    assert!(err.contains("only valid with git dependencies"), "Expected ref with path error, got: {}", err);
+}
+
+#[test]
+fn git_dep_neither() {
+    let cache = tempfile::tempdir().unwrap();
+    let err = compile_git_dep_should_fail(
+        "[package]\nname = \"test\"\n\n[dependencies]\nmylib = { rev = \"abc123\" }\n",
+        &[("main.pluto", "fn main() {\n    print(1)\n}")],
+        cache.path(),
+    );
+    assert!(err.contains("must specify 'path' or 'git'"), "Expected neither error, got: {}", err);
+}

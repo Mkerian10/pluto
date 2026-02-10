@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::diagnostics::CompileError;
+use crate::git_cache::{self, GitRef};
 use crate::lexer;
 
 /// Per-package dependency scope: maps dep_name -> resolved absolute path.
@@ -61,6 +62,7 @@ struct TomlManifest {
 struct TomlPackage {
     name: Option<String>,
     #[serde(default = "default_version")]
+    #[allow(dead_code)]
     version: String,
 }
 
@@ -70,7 +72,79 @@ fn default_version() -> String {
 
 #[derive(Deserialize)]
 struct TomlDep {
-    path: String,
+    path: Option<String>,
+    git: Option<String>,
+    rev: Option<String>,
+    tag: Option<String>,
+    branch: Option<String>,
+}
+
+// ---- Dependency spec validation ----
+
+/// Validate a single dependency spec from pluto.toml.
+/// Returns either a path string or (git_url, GitRef) pair.
+fn validate_dep_spec(
+    dep_name: &str,
+    dep: &TomlDep,
+    manifest_path: &Path,
+) -> Result<DepKind, CompileError> {
+    let has_path = dep.path.is_some();
+    let has_git = dep.git.is_some();
+    let has_rev = dep.rev.is_some();
+    let has_tag = dep.tag.is_some();
+    let has_branch = dep.branch.is_some();
+
+    // Must have exactly one of path or git
+    if has_path && has_git {
+        return Err(CompileError::manifest(
+            format!("dependency '{}': specify either 'path' or 'git', not both", dep_name),
+            manifest_path.to_path_buf(),
+        ));
+    }
+    if !has_path && !has_git {
+        return Err(CompileError::manifest(
+            format!("dependency '{}': must specify 'path' or 'git'", dep_name),
+            manifest_path.to_path_buf(),
+        ));
+    }
+
+    // rev/tag/branch only valid with git
+    if has_path && (has_rev || has_tag || has_branch) {
+        return Err(CompileError::manifest(
+            format!("dependency '{}': 'rev'/'tag'/'branch' are only valid with git dependencies", dep_name),
+            manifest_path.to_path_buf(),
+        ));
+    }
+
+    // At most one of rev/tag/branch
+    let ref_count = [has_rev, has_tag, has_branch].iter().filter(|&&x| x).count();
+    if ref_count > 1 {
+        return Err(CompileError::manifest(
+            format!("dependency '{}': specify at most one of 'rev', 'tag', 'branch'", dep_name),
+            manifest_path.to_path_buf(),
+        ));
+    }
+
+    if has_path {
+        Ok(DepKind::Path(dep.path.clone().unwrap()))
+    } else {
+        let url = dep.git.clone().unwrap();
+        let git_ref = if let Some(rev) = &dep.rev {
+            GitRef::Rev(rev.clone())
+        } else if let Some(tag) = &dep.tag {
+            GitRef::Tag(tag.clone())
+        } else if let Some(branch) = &dep.branch {
+            GitRef::Branch(branch.clone())
+        } else {
+            GitRef::DefaultBranch
+        };
+        Ok(DepKind::Git(url, git_ref))
+    }
+}
+
+enum DepKind {
+    Path(String),
+    Git(String, GitRef),
 }
 
 // ---- Manifest discovery ----
@@ -268,8 +342,18 @@ fn resolve_package_node(
     for (dep_name, dep_spec) in &manifest.dependencies {
         validate_dep_name(dep_name, manifest_path)?;
 
-        let dep_path = manifest_dir.join(&dep_spec.path);
-        validate_dep_path(dep_name, &dep_path, manifest_path)?;
+        let dep_kind = validate_dep_spec(dep_name, dep_spec, manifest_path)?;
+
+        let dep_path = match dep_kind {
+            DepKind::Path(ref p) => manifest_dir.join(p),
+            DepKind::Git(ref url, ref git_ref) => {
+                git_cache::ensure_cached(url, git_ref, manifest_path)?
+            }
+        };
+
+        if let DepKind::Path(_) = dep_kind {
+            validate_dep_path(dep_name, &dep_path, manifest_path)?;
+        }
 
         let dep_canonical = dep_path.canonicalize().map_err(|e| {
             CompileError::manifest(
@@ -304,4 +388,31 @@ fn resolve_package_node(
     resolved_cache.insert(canonical_dir.clone());
 
     Ok(())
+}
+
+// ---- Update command ----
+
+/// Find the manifest and re-fetch all git dependencies (direct deps only for v1).
+pub fn update_git_deps(start_dir: &Path) -> Result<Vec<String>, CompileError> {
+    let manifest_path = match find_manifest_walk(start_dir) {
+        Some(p) => p,
+        None => return Err(CompileError::manifest(
+            "no pluto.toml found",
+            start_dir.to_path_buf(),
+        )),
+    };
+
+    let (manifest, _manifest_dir) = parse_manifest(&manifest_path)?;
+
+    let mut updated = Vec::new();
+
+    for (dep_name, dep_spec) in &manifest.dependencies {
+        let dep_kind = validate_dep_spec(dep_name, dep_spec, &manifest_path)?;
+        if let DepKind::Git(url, git_ref) = dep_kind {
+            git_cache::fetch_and_update(&url, &git_ref, &manifest_path)?;
+            updated.push(dep_name.clone());
+        }
+    }
+
+    Ok(updated)
 }

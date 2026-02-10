@@ -12,6 +12,7 @@ pub mod ambient;
 pub mod rust_ffi;
 pub mod spawn;
 pub mod manifest;
+pub mod git_cache;
 
 use diagnostics::CompileError;
 use std::path::{Path, PathBuf};
@@ -303,6 +304,19 @@ fn link_from_config(config: &LinkConfig, output: &Path) -> Result<(), CompileErr
 fn link(obj_path: &Path, output_path: &Path) -> Result<(), CompileError> {
     let config = LinkConfig::default_config(obj_path)?;
     link_from_config(&config, output_path)
+}
+
+/// Fetch latest versions of all git dependencies declared in pluto.toml.
+pub fn update_git_deps(dir: &Path) -> Result<(), CompileError> {
+    let updated = manifest::update_git_deps(dir)?;
+    if updated.is_empty() {
+        eprintln!("no git dependencies to update");
+    } else {
+        for name in &updated {
+            eprintln!("updated: {name}");
+        }
+    }
+    Ok(())
 }
 
 /// Check that extern rust aliases don't collide with import aliases.
