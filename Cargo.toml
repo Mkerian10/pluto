@@ -111,3 +111,7 @@ path = "tests/integration/http_tests.rs"
 [[test]]
 name = "rust_ffi"
 path = "tests/integration/rust_ffi.rs"
+
+[[test]]
+name = "concurrency"
+path = "tests/integration/concurrency.rs"

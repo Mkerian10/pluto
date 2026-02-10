@@ -247,6 +247,10 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
             name: "Set".to_string(),
             type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
         },
+        PlutoType::Task(t) => TypeExpr::Generic {
+            name: "Task".to_string(),
+            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
+        },
         PlutoType::Error => TypeExpr::Named("error".to_string()),
         PlutoType::TypeParam(name) => TypeExpr::Named(name.clone()),
         PlutoType::Range => TypeExpr::Named("range".to_string()),
@@ -481,6 +485,9 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
                     substitute_in_expr(&mut body.node, bindings);
                 }
             }
+        }
+        Expr::Spawn { call } => {
+            substitute_in_expr(&mut call.node, bindings);
         }
     }
 }
@@ -817,6 +824,10 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
                 offset_expr_spans(&mut el.node, offset);
             }
         }
+        Expr::Spawn { call } => {
+            offset_spanned(call, offset);
+            offset_expr_spans(&mut call.node, offset);
+        }
     }
 }
 
@@ -1017,6 +1028,9 @@ fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(u
                 rewrite_expr(&mut el.node, el.span.start, el.span.end, rewrites);
             }
         }
+        Expr::Spawn { call } => {
+            rewrite_expr(&mut call.node, call.span.start, call.span.end, rewrites);
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
         | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. } => {}
     }
@@ -1191,6 +1205,9 @@ fn resolve_generic_te_in_expr(expr: &mut Expr, env: &mut TypeEnv) -> Result<(), 
                 CatchHandler::Wildcard { body, .. } => resolve_generic_te_in_expr(&mut body.node, env)?,
                 CatchHandler::Shorthand(body) => resolve_generic_te_in_expr(&mut body.node, env)?,
             }
+        }
+        Expr::Spawn { call } => {
+            resolve_generic_te_in_expr(&mut call.node, env)?;
         }
         _ => {}
     }

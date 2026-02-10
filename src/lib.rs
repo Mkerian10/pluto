@@ -10,6 +10,7 @@ pub mod monomorphize;
 pub mod prelude;
 pub mod ambient;
 pub mod rust_ffi;
+pub mod spawn;
 
 use diagnostics::CompileError;
 use std::path::{Path, PathBuf};
@@ -30,6 +31,7 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
     }
     prelude::inject_prelude(&mut program)?;
     ambient::desugar_ambient(&mut program)?;
+    spawn::desugar_spawn(&mut program)?;
     // Strip test functions in non-test mode
     let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
         .map(|(_, fn_name)| fn_name.clone()).collect();
@@ -72,6 +74,7 @@ pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError
     }
     prelude::inject_prelude(&mut program)?;
     ambient::desugar_ambient(&mut program)?;
+    spawn::desugar_spawn(&mut program)?;
     // test_info is NOT stripped in test mode
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
@@ -128,6 +131,7 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
 
     prelude::inject_prelude(&mut program)?;
     ambient::desugar_ambient(&mut program)?;
+    spawn::desugar_spawn(&mut program)?;
     // Strip test functions in non-test mode
     let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
         .map(|(_, fn_name)| fn_name.clone()).collect();
@@ -190,6 +194,7 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
 
     prelude::inject_prelude(&mut program)?;
     ambient::desugar_ambient(&mut program)?;
+    spawn::desugar_spawn(&mut program)?;
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
@@ -224,12 +229,11 @@ fn cached_runtime_object() -> Result<&'static Path, CompileError> {
             let runtime_o = dir.join("builtins.o");
             std::fs::write(&runtime_c, runtime_src)
                 .map_err(|e| CompileError::link(format!("failed to write runtime source: {e}")))?;
-            let status = std::process::Command::new("cc")
-                .arg("-c")
-                .arg(&runtime_c)
-                .arg("-o")
-                .arg(&runtime_o)
-                .status()
+            let mut cmd = std::process::Command::new("cc");
+            cmd.arg("-c").arg(&runtime_c).arg("-o").arg(&runtime_o);
+            #[cfg(target_os = "linux")]
+            cmd.arg("-pthread");
+            let status = cmd.status()
                 .map_err(|e| CompileError::link(format!("failed to compile runtime: {e}")))?;
             let _ = std::fs::remove_file(&runtime_c);
             if !status.success() {
@@ -254,10 +258,13 @@ struct LinkConfig {
 impl LinkConfig {
     fn default_config(pluto_obj: &Path) -> Result<Self, CompileError> {
         let runtime_o = cached_runtime_object()?;
+        let mut flags = vec!["-lm".to_string()];
+        #[cfg(target_os = "linux")]
+        flags.push("-pthread".to_string());
         Ok(Self {
             objects: vec![pluto_obj.to_path_buf(), runtime_o.to_path_buf()],
             static_libs: vec![],
-            flags: vec!["-lm".to_string()],
+            flags,
         })
     }
 }

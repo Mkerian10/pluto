@@ -1,5 +1,13 @@
 # Pluto Examples
 
+## concurrency
+
+Demonstrates `spawn` for concurrent execution: spawning functions on separate threads, collecting results with `.get()`, error handling with `catch`, and void tasks.
+
+```bash
+cargo run -- run examples/concurrency/main.pluto
+```
+
 ## rust_ffi
 
 Demonstrates calling plain Rust functions from Pluto via `extern rust`. A normal Rust crate with `pub fn` functions is imported with zero boilerplate — supported types (`i64`, `f64`, `bool`) are bridged automatically.

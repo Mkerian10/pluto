@@ -214,6 +214,19 @@ fn collect_expr_effects(
                                 }
                             }
                         }
+                        Some(MethodResolution::TaskGet { spawned_fn }) => {
+                            match spawned_fn {
+                                Some(fn_name) => {
+                                    edges.insert(fn_name.clone());
+                                }
+                                None => {
+                                    // Unknown origin — conservatively add all declared error types
+                                    for err_name in env.errors.keys() {
+                                        direct_errors.insert(err_name.clone());
+                                    }
+                                }
+                            }
+                        }
                         Some(MethodResolution::Builtin) => {}
                         None => {}
                     }
@@ -298,6 +311,21 @@ fn collect_expr_effects(
         Expr::Closure { body, .. } => {
             for stmt in &body.node.stmts {
                 collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
+            }
+        }
+        Expr::Spawn { call } => {
+            // Spawn is opaque to the error system — do NOT recurse into the closure body.
+            // Only collect effects from spawn arg expressions (inside the closure's inner Call).
+            if let Expr::Closure { body, .. } = &call.node {
+                for stmt in &body.node.stmts {
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
+                        if let Expr::Call { args, .. } = &ret_expr.node {
+                            for arg in args {
+                                collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                            }
+                        }
+                    }
+                }
             }
         }
         Expr::MapLit { entries, .. } => {
@@ -603,7 +631,93 @@ fn enforce_expr(
             enforce_expr(&start.node, start.span, current_fn, env)?;
             enforce_expr(&end.node, end.span, current_fn, env)
         }
+        Expr::Spawn { call } => {
+            // Enforce spawn arg expressions + reject Propagate in args.
+            // Do NOT enforce the inner call itself or the closure body as a whole.
+            if let Expr::Closure { body, .. } = &call.node {
+                for stmt in &body.node.stmts {
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
+                        if let Expr::Call { args, .. } = &ret_expr.node {
+                            for arg in args {
+                                enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                                if contains_propagate(&arg.node) {
+                                    return Err(CompileError::type_err(
+                                        "error propagation (!) is not allowed in spawn arguments; evaluate before spawn",
+                                        arg.span,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => Ok(()),
+    }
+}
+
+/// Check if an expression tree contains any Expr::Propagate node.
+fn contains_propagate(expr: &Expr) -> bool {
+    match expr {
+        Expr::Propagate { .. } => true,
+        Expr::BinOp { lhs, rhs, .. } => contains_propagate(&lhs.node) || contains_propagate(&rhs.node),
+        Expr::UnaryOp { operand, .. } => contains_propagate(&operand.node),
+        Expr::Cast { expr: inner, .. } => contains_propagate(&inner.node),
+        Expr::Call { args, .. } => args.iter().any(|a| contains_propagate(&a.node)),
+        Expr::MethodCall { object, args, .. } => {
+            contains_propagate(&object.node) || args.iter().any(|a| contains_propagate(&a.node))
+        }
+        Expr::FieldAccess { object, .. } => contains_propagate(&object.node),
+        Expr::StructLit { fields, .. } => fields.iter().any(|(_, v)| contains_propagate(&v.node)),
+        Expr::ArrayLit { elements } => elements.iter().any(|e| contains_propagate(&e.node)),
+        Expr::Index { object, index } => contains_propagate(&object.node) || contains_propagate(&index.node),
+        Expr::StringInterp { parts } => parts.iter().any(|p| {
+            if let StringInterpPart::Expr(e) = p { contains_propagate(&e.node) } else { false }
+        }),
+        Expr::EnumData { fields, .. } => fields.iter().any(|(_, v)| contains_propagate(&v.node)),
+        Expr::Closure { body, .. } => body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)),
+        Expr::Catch { expr: inner, handler } => {
+            contains_propagate(&inner.node) || match handler {
+                CatchHandler::Wildcard { body, .. } => contains_propagate(&body.node),
+                CatchHandler::Shorthand(fb) => contains_propagate(&fb.node),
+            }
+        }
+        Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| contains_propagate(&k.node) || contains_propagate(&v.node)),
+        Expr::SetLit { elements, .. } => elements.iter().any(|e| contains_propagate(&e.node)),
+        Expr::Range { start, end, .. } => contains_propagate(&start.node) || contains_propagate(&end.node),
+        Expr::Spawn { call } => contains_propagate(&call.node),
+        _ => false,
+    }
+}
+
+fn stmt_contains_propagate(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Let { value, .. } => contains_propagate(&value.node),
+        Stmt::Return(Some(expr)) => contains_propagate(&expr.node),
+        Stmt::Return(None) => false,
+        Stmt::Assign { value, .. } => contains_propagate(&value.node),
+        Stmt::FieldAssign { object, value, .. } => contains_propagate(&object.node) || contains_propagate(&value.node),
+        Stmt::Expr(expr) => contains_propagate(&expr.node),
+        Stmt::If { condition, then_block, else_block } => {
+            contains_propagate(&condition.node)
+                || then_block.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
+                || else_block.as_ref().map_or(false, |eb| eb.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)))
+        }
+        Stmt::While { condition, body } => {
+            contains_propagate(&condition.node) || body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
+        }
+        Stmt::For { iterable, body, .. } => {
+            contains_propagate(&iterable.node) || body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
+        }
+        Stmt::IndexAssign { object, index, value } => {
+            contains_propagate(&object.node) || contains_propagate(&index.node) || contains_propagate(&value.node)
+        }
+        Stmt::Match { expr, arms } => {
+            contains_propagate(&expr.node) || arms.iter().any(|a| a.body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)))
+        }
+        Stmt::Raise { fields, .. } => fields.iter().any(|(_, v)| contains_propagate(&v.node)),
+        Stmt::Break | Stmt::Continue => false,
     }
 }

@@ -346,6 +346,9 @@ fn rewrite_expr(expr: &mut Expr, span: Span, active: &HashSet<String>) {
             rewrite_expr(&mut start.node, start.span, active);
             rewrite_expr(&mut end.node, end.span, active);
         }
+        Expr::Spawn { call } => {
+            rewrite_expr(&mut call.node, call.span, active);
+        }
         // Literals and non-rewritable expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => {}

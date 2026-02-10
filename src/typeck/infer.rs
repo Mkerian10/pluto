@@ -241,6 +241,34 @@ pub(crate) fn infer_expr(
             }
             Ok(PlutoType::Set(Box::new(et)))
         }
+        Expr::Spawn { call } => {
+            // After desugaring, call is a Closure wrapping the original function call.
+            // Infer the closure type to get the return type.
+            let closure_type = infer_expr(&call.node, call.span, env)?;
+            let inner_type = match &closure_type {
+                PlutoType::Fn(_, ret) => *ret.clone(),
+                _ => {
+                    return Err(CompileError::type_err(
+                        "spawn requires a function call".to_string(),
+                        span,
+                    ));
+                }
+            };
+            // Extract the spawned function name by peeking inside the closure body
+            if let Expr::Closure { body, .. } = &call.node {
+                for stmt in &body.node.stmts {
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
+                        if let Expr::Call { name, .. } = &ret_expr.node {
+                            env.spawn_target_fns.insert(
+                                (span.start, span.end),
+                                name.node.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(PlutoType::Task(Box::new(inner_type)))
+        }
     }
 }
 
@@ -1097,6 +1125,38 @@ fn infer_method_call(
             _ => {
                 return Err(CompileError::type_err(
                     format!("Set has no method '{}'", method.node), method.span,
+                ));
+            }
+        }
+    }
+    // Task methods
+    if let PlutoType::Task(inner) = &obj_type {
+        match method.node.as_str() {
+            "get" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("get() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                // Determine spawned function for error tracking
+                let spawned_fn = if let Expr::Ident(var) = &object.node {
+                    env.lookup_task_origin(var).cloned()
+                } else {
+                    None // conservatively fallible for non-ident objects
+                };
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::TaskGet { spawned_fn },
+                    );
+                }
+                return Ok(*inner.clone());
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("Task has no method '{}'", method.node),
+                    method.span,
                 ));
             }
         }

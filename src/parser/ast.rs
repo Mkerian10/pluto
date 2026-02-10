@@ -249,6 +249,9 @@ pub enum Expr {
         end: Box<Spanned<Expr>>,
         inclusive: bool,
     },
+    Spawn {
+        call: Box<Spanned<Expr>>,
+    },
 }
 
 #[derive(Debug, Clone)]

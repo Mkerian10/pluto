@@ -15,6 +15,7 @@ pub enum PlutoType {
     Range,
     Error,
     TypeParam(std::string::String),
+    Task(Box<PlutoType>),
 }
 
 impl std::fmt::Display for PlutoType {
@@ -42,6 +43,7 @@ impl std::fmt::Display for PlutoType {
             PlutoType::Range => write!(f, "range"),
             PlutoType::Error => write!(f, "error"),
             PlutoType::TypeParam(name) => write!(f, "{name}"),
+            PlutoType::Task(inner) => write!(f, "Task<{inner}>"),
         }
     }
 }

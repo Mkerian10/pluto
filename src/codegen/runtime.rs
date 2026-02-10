@@ -93,6 +93,10 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_gc_init", &[], &[])?;
         reg.declare(module, "__pluto_gc_heap_size", &[], &[types::I64])?;
 
+        // Concurrency
+        reg.declare(module, "__pluto_task_spawn", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_task_get", &[types::I64], &[types::I64])?;
+
         // Test framework
         reg.declare(module, "__pluto_expect_equal_int", &[types::I64, types::I64, types::I64], &[])?;
         reg.declare(module, "__pluto_expect_equal_float", &[types::F64, types::F64, types::I64], &[])?;

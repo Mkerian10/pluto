@@ -129,15 +129,21 @@ impl<'a> LowerContext<'a> {
                         let val = self.lower_expr(&expr.node)?;
                         let val_type = infer_type_for_expr(&expr.node, self.env, &self.var_types);
 
-                        // If returning a class where a trait is expected, wrap it
-                        let expected = self.expected_return_type.clone();
-                        let final_val = match (&val_type, &expected) {
-                            (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
-                                self.wrap_class_as_trait(val, cn, tn)?
-                            }
-                            _ => val,
-                        };
-                        self.builder.ins().return_(&[final_val]);
+                        // If returning a void expression (e.g., spawn closure wrapping a void function),
+                        // lower the expr for side effects but emit return_(&[])
+                        if val_type == PlutoType::Void {
+                            self.builder.ins().return_(&[]);
+                        } else {
+                            // If returning a class where a trait is expected, wrap it
+                            let expected = self.expected_return_type.clone();
+                            let final_val = match (&val_type, &expected) {
+                                (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
+                                    self.wrap_class_as_trait(val, cn, tn)?
+                                }
+                                _ => val,
+                            };
+                            self.builder.ins().return_(&[final_val]);
+                        }
                     }
                     None => {
                         self.builder.ins().return_(&[]);
@@ -905,6 +911,15 @@ impl<'a> LowerContext<'a> {
             Expr::ClosureCreate { fn_name, captures } => {
                 self.lower_closure_create(fn_name, captures)
             }
+            Expr::Spawn { call } => {
+                match &call.node {
+                    Expr::ClosureCreate { fn_name, captures } => {
+                        let closure_ptr = self.lower_closure_create(fn_name, captures)?;
+                        Ok(self.call_runtime("__pluto_task_spawn", &[closure_ptr]))
+                    }
+                    _ => Err(CompileError::codegen("spawn should contain ClosureCreate after lifting"))
+                }
+            }
             Expr::Range { .. } => {
                 Err(CompileError::codegen("range expressions can only be used as for loop iterables".to_string()))
             }
@@ -1352,6 +1367,17 @@ impl<'a> LowerContext<'a> {
         let obj_ptr = self.lower_expr(&object.node)?;
         let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
 
+        // Task methods
+        if let PlutoType::Task(inner) = &obj_type {
+            match method.node.as_str() {
+                "get" => {
+                    let raw = self.call_runtime("__pluto_task_get", &[obj_ptr]);
+                    return Ok(from_array_slot(raw, &inner, &mut self.builder));
+                }
+                _ => return Err(CompileError::codegen(format!("Task has no method '{}'", method.node)))
+            }
+        }
+
         // Array methods
         if let PlutoType::Array(elem) = &obj_type {
             match method.node.as_str() {
@@ -1574,7 +1600,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I32, arg_val);
                 self.call_runtime_void("__pluto_print_bool", &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -1769,6 +1795,9 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
             } else if name == "Set" && type_args.len() == 1 {
                 let t = resolve_type_expr_to_pluto(&type_args[0].node, env);
                 PlutoType::Set(Box::new(t))
+            } else if name == "Task" && type_args.len() == 1 {
+                let t = resolve_type_expr_to_pluto(&type_args[0].node, env);
+                PlutoType::Task(Box::new(t))
             } else {
                 panic!("Generic TypeExpr should not reach codegen — monomorphize should have resolved it")
             }
@@ -1808,6 +1837,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Fn(_, _) => types::I64,     // pointer to closure object
         PlutoType::Map(_, _) => types::I64,    // pointer to map handle
         PlutoType::Set(_) => types::I64,       // pointer to set handle
+        PlutoType::Task(_) => types::I64,      // pointer to task handle
         PlutoType::Error => types::I64,        // pointer to error object
         PlutoType::Range => types::I64,           // not used as a value type
         PlutoType::TypeParam(_) => panic!("TypeParam should not reach codegen"),
@@ -1962,6 +1992,12 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                     _ => PlutoType::Void, // insert, remove
                 };
             }
+            if let PlutoType::Task(inner) = &obj_type {
+                return match method.node.as_str() {
+                    "get" => *inner.clone(),
+                    _ => PlutoType::Void,
+                };
+            }
             if obj_type == PlutoType::String && method.node == "len" {
                 return PlutoType::Int;
             }
@@ -1998,6 +2034,13 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 PlutoType::Fn(param_types, Box::new(sig.return_type.clone()))
             } else {
                 PlutoType::Void
+            }
+        }
+        Expr::Spawn { call } => {
+            let closure_type = infer_type_for_expr(&call.node, env, var_types);
+            match closure_type {
+                PlutoType::Fn(_, ret) => PlutoType::Task(ret),
+                _ => PlutoType::Void,
             }
         }
         Expr::Range { .. } => PlutoType::Range,

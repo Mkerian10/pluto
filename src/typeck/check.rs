@@ -6,6 +6,7 @@ use super::types::PlutoType;
 use super::resolve::resolve_type;
 use super::infer::infer_expr;
 use super::types_compatible;
+use crate::parser::ast::Expr;
 
 pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
     let prev_fn = env.current_fn.take();
@@ -20,6 +21,7 @@ pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Opt
 }
 
 fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
+    env.invalidated_task_vars.clear();
     env.push_scope();
 
     // Add parameters to scope
@@ -84,7 +86,13 @@ fn check_stmt(
                 }
                 env.define(name.node.clone(), expected);
             } else {
-                env.define(name.node.clone(), val_type);
+                env.define(name.node.clone(), val_type.clone());
+            }
+            // Track task origin for spawn expressions
+            if let Expr::Spawn { .. } = &value.node {
+                if let Some(fn_name) = env.spawn_target_fns.get(&(value.span.start, value.span.end)) {
+                    env.define_task_origin(name.node.clone(), fn_name.clone());
+                }
             }
         }
         Stmt::Return(value) => {
@@ -113,6 +121,10 @@ fn check_stmt(
                     format!("type mismatch in assignment: expected {var_type}, found {val_type}"),
                     value.span,
                 ));
+            }
+            // Permanently invalidate task origin on reassignment
+            if matches!(&var_type, PlutoType::Task(_)) {
+                env.invalidated_task_vars.insert(target.node.clone());
             }
         }
         Stmt::FieldAssign { object, field, value } => {

@@ -213,8 +213,11 @@ fn lift_in_expr(
                     sig_params.push(pty);
                 }
 
-                // For return type, look at the closure's body — find the return statement
-                let ret_type = infer_return_type_from_body(&body.node);
+                // For return type, use the correct type from typeck when available
+                let ret_type = env.closure_return_types
+                    .get(&(span.start, span.end))
+                    .cloned()
+                    .unwrap_or_else(|| infer_return_type_from_body(&body.node));
 
                 // Register the FuncSig in env.functions
                 env.functions.insert(fn_name.clone(), FuncSig {
@@ -250,6 +253,9 @@ fn lift_in_expr(
                     captures: capture_names,
                 };
             }
+        }
+        Expr::Spawn { call } => {
+            lift_in_expr(&mut call.node, call.span, env, counter, new_fns)?;
         }
         Expr::Propagate { expr: inner } => {
             lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
@@ -313,6 +319,9 @@ fn resolve_type_for_lift(ty: &TypeExpr) -> PlutoType {
             } else if name == "Set" && type_args.len() == 1 {
                 let t = resolve_type_for_lift(&type_args[0].node);
                 PlutoType::Set(Box::new(t))
+            } else if name == "Task" && type_args.len() == 1 {
+                let t = resolve_type_for_lift(&type_args[0].node);
+                PlutoType::Task(Box::new(t))
             } else {
                 PlutoType::Class(name.clone())
             }
@@ -386,6 +395,10 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         },
         PlutoType::Set(t) => TypeExpr::Generic {
             name: "Set".to_string(),
+            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
+        },
+        PlutoType::Task(t) => TypeExpr::Generic {
+            name: "Task".to_string(),
             type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
         },
         PlutoType::Error => TypeExpr::Named("error".to_string()),

@@ -1,0 +1,48 @@
+error ComputeError {
+    message: string
+}
+
+fn fib(n: int) int {
+    if n <= 1 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn checked_fib(n: int) int {
+    if n < 0 {
+        raise ComputeError { message: "negative input" }
+    }
+    return fib(n)
+}
+
+fn main() {
+    // Spawn three computations concurrently
+    let t1 = spawn fib(30)
+    let t2 = spawn fib(25)
+    let t3 = spawn fib(20)
+
+    // .get() blocks until the result is ready
+    let r1 = t1.get()
+    let r2 = t2.get()
+    let r3 = t3.get()
+
+    print("fib(30) = {r1}")
+    print("fib(25) = {r2}")
+    print("fib(20) = {r3}")
+    print("sum     = {r1 + r2 + r3}")
+
+    // Error handling: spawned function raises, .get() catch handles it
+    let t4 = spawn checked_fib(-1)
+    let result = t4.get() catch -1
+    print("checked_fib(-1) caught: {result}")
+
+    // Void spawn: fire and forget, .get() just waits
+    let t5 = spawn do_work()
+    t5.get()
+    print("done")
+}
+
+fn do_work() {
+    let x = fib(10)
+}

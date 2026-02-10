@@ -1849,6 +1849,32 @@ impl<'a> Parser<'a> {
                 }
                 Ok(Spanned::new(Expr::ArrayLit { elements }, Span::new(start, end)))
             }
+            Token::Spawn => {
+                let spawn_tok = self.advance().unwrap();
+                let start = spawn_tok.span.start;
+                let func_name = self.expect_ident()?;
+                self.expect(&Token::LParen)?;
+                self.skip_newlines();
+                let mut args = Vec::new();
+                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
+                    if !args.is_empty() {
+                        self.expect(&Token::Comma)?;
+                        self.skip_newlines();
+                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
+                            break;
+                        }
+                    }
+                    args.push(self.parse_expr(0)?);
+                    self.skip_newlines();
+                }
+                let close = self.expect(&Token::RParen)?;
+                let call_span = Span::new(func_name.span.start, close.span.end);
+                let call = Expr::Call { name: func_name, args };
+                Ok(Spanned::new(
+                    Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
+                    Span::new(start, close.span.end),
+                ))
+            }
             Token::Question => {
                 return Err(CompileError::syntax(
                     "? is reserved for future Option/null handling; use ! for error propagation",

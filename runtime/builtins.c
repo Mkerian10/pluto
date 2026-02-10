@@ -15,6 +15,8 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <math.h>
+#include <pthread.h>
+#include <stdatomic.h>
 
 // ── GC Infrastructure ─────────────────────────────────────────────────────────
 
@@ -26,6 +28,7 @@
 #define GC_TAG_MAP   4   // [count][cap][keys_ptr][vals_ptr][meta_ptr]
 #define GC_TAG_SET   5   // [count][cap][keys_ptr][meta_ptr]
 #define GC_TAG_JSON  6   // JsonNode — recursive tree structure
+#define GC_TAG_TASK  7   // [closure][result][error][done][sync_ptr]
 
 typedef struct GCHeader {
     struct GCHeader *next;    // 8B: linked list of all GC objects
@@ -85,21 +88,36 @@ void *__pluto_array_new(long cap);
 void __pluto_array_push(void *handle, long value);
 static void json_free_tree(JsonNode *node);
 
-// Error handling — non-static so GC can access as root
-void *__pluto_current_error = NULL;
+// Error handling — thread-local so each thread has its own error state
+__thread void *__pluto_current_error = NULL;
+
+// GC thread safety
+static pthread_mutex_t gc_mutex = PTHREAD_MUTEX_INITIALIZER;
+static atomic_int __pluto_active_tasks = 0;
+#define PLUTO_MAX_HEAP_BYTES (1024L * 1024L * 1024L)  // 1 GB
 
 static inline GCHeader *gc_get_header(void *user_ptr) {
     return (GCHeader *)((char *)user_ptr - sizeof(GCHeader));
 }
 
 static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
+    pthread_mutex_lock(&gc_mutex);
     if (gc_stack_bottom && !gc_collecting
-        && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold) {
+        && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold
+        && atomic_load(&__pluto_active_tasks) == 0) {
         __pluto_gc_collect();
+    }
+    // Heap ceiling guardrail when GC is suppressed
+    if (atomic_load(&__pluto_active_tasks) > 0
+        && gc_bytes_allocated + user_size + sizeof(GCHeader) > PLUTO_MAX_HEAP_BYTES) {
+        pthread_mutex_unlock(&gc_mutex);
+        fprintf(stderr, "pluto: heap exceeded %ld bytes while GC suppressed by active tasks\n",
+                (long)PLUTO_MAX_HEAP_BYTES);
+        exit(1);
     }
     size_t total = sizeof(GCHeader) + user_size;
     GCHeader *h = (GCHeader *)calloc(1, total);
-    if (!h) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    if (!h) { pthread_mutex_unlock(&gc_mutex); fprintf(stderr, "pluto: out of memory\n"); exit(1); }
     h->next = gc_head;
     gc_head = h;
     h->size = (uint32_t)user_size;
@@ -107,6 +125,7 @@ static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) 
     h->field_count = field_count;
     h->mark = 0;
     gc_bytes_allocated += total;
+    pthread_mutex_unlock(&gc_mutex);
     return (char *)h + sizeof(GCHeader);
 }
 
@@ -436,6 +455,16 @@ void __pluto_gc_collect(void) {
                 long *slots = (long *)((char *)h + sizeof(GCHeader));
                 JsonNode *root = (JsonNode *)slots[0];
                 if (root) json_free_tree(root);
+            }
+            // Free task sync resources
+            if (h->type_tag == GC_TAG_TASK && h->size >= 40) {
+                long *slots = (long *)((char *)h + sizeof(GCHeader));
+                void *sync = (void *)slots[4];
+                if (sync) {
+                    pthread_mutex_destroy((pthread_mutex_t *)sync);
+                    pthread_cond_destroy((pthread_cond_t *)((char *)sync + sizeof(pthread_mutex_t)));
+                    free(sync);
+                }
             }
             free(h);
             freed_bytes += total;
@@ -2286,4 +2315,84 @@ void *__pluto_http_url_decode(void *pluto_str) {
     void *result = __pluto_string_new(out, olen);
     free(out);
     return result;
+}
+
+// ── Concurrency ─────────────────────────────────────────────────────────────
+
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+} TaskSync;
+
+// Task handle layout (40 bytes, 5 slots):
+//   [0] closure  (i64, GC pointer)
+//   [1] result   (i64)
+//   [2] error    (i64, GC pointer)
+//   [3] done     (i64)
+//   [4] sync_ptr (i64, raw malloc)
+
+static void *__pluto_spawn_trampoline(void *arg) {
+    long *task = (long *)arg;
+    long closure_ptr = task[0];
+    __pluto_current_error = NULL;  // clean TLS for new thread
+
+    long fn_ptr = *(long *)closure_ptr;
+    long result = ((long(*)(long))fn_ptr)(closure_ptr);
+
+    TaskSync *sync = (TaskSync *)task[4];
+    pthread_mutex_lock(&sync->mutex);
+    if (__pluto_current_error) {
+        task[2] = (long)__pluto_current_error;
+        __pluto_current_error = NULL;
+    } else {
+        task[1] = result;
+    }
+    task[3] = 1;  // done
+    pthread_cond_signal(&sync->cond);
+    pthread_mutex_unlock(&sync->mutex);
+
+    atomic_fetch_sub(&__pluto_active_tasks, 1);
+    return NULL;
+}
+
+long __pluto_task_spawn(long closure_ptr) {
+    long *task = (long *)gc_alloc(40, GC_TAG_TASK, 3);
+    task[0] = closure_ptr;
+    task[1] = 0;  task[2] = 0;  task[3] = 0;
+
+    TaskSync *sync = (TaskSync *)calloc(1, sizeof(TaskSync));
+    pthread_mutex_init(&sync->mutex, NULL);
+    pthread_cond_init(&sync->cond, NULL);
+    task[4] = (long)sync;
+
+    atomic_fetch_add(&__pluto_active_tasks, 1);
+
+    pthread_t tid;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    int ret = pthread_create(&tid, &attr, __pluto_spawn_trampoline, task);
+    pthread_attr_destroy(&attr);
+    if (ret != 0) {
+        fprintf(stderr, "pluto: failed to create thread: %d\n", ret);
+        exit(1);
+    }
+    return (long)task;
+}
+
+long __pluto_task_get(long task_ptr) {
+    long *task = (long *)task_ptr;
+    TaskSync *sync = (TaskSync *)task[4];
+
+    pthread_mutex_lock(&sync->mutex);
+    while (!task[3]) {
+        pthread_cond_wait(&sync->cond, &sync->mutex);
+    }
+    pthread_mutex_unlock(&sync->mutex);
+
+    if (task[2]) {
+        __pluto_current_error = (void *)task[2];
+        return 0;
+    }
+    return task[1];
 }

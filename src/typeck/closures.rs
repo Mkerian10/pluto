@@ -53,6 +53,9 @@ pub(crate) fn infer_closure(
     // Store captures keyed by span
     env.closure_captures.insert((span.start, span.end), captures);
 
+    // Store return type for closure lifting (fixes Finding 5)
+    env.closure_return_types.insert((span.start, span.end), final_ret.clone());
+
     env.pop_scope();
 
     Ok(PlutoType::Fn(param_types, Box::new(final_ret)))
@@ -265,6 +268,9 @@ fn collect_free_vars_expr(
         Expr::Range { start, end, .. } => {
             collect_free_vars_expr(&start.node, param_names, outer_depth, env, captures, seen);
             collect_free_vars_expr(&end.node, param_names, outer_depth, env, captures, seen);
+        }
+        Expr::Spawn { call } => {
+            collect_free_vars_expr(&call.node, param_names, outer_depth, env, captures, seen);
         }
         // Literals and other non-capturing expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
