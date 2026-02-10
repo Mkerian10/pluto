@@ -108,6 +108,39 @@ fn main() {
 }
 ```
 
+## Timeouts
+
+Use `.get_timeout(ms)` to wait for a result with a time limit. If the task doesn't complete in time, a `Timeout` error is raised:
+
+```
+fn slow_compute() int {
+    sleep(5000)
+    return 42
+}
+
+fn main() {
+    let t = spawn slow_compute()
+    let result = t.get_timeout(100) catch -1
+    print(result)  // -1 (timed out)
+}
+```
+
+The timeout is specified in milliseconds as a plain `int`.
+
+## Sleep
+
+`sleep(ms)` pauses the current thread for the given number of milliseconds:
+
+```
+fn main() {
+    print("starting")
+    sleep(1000)   // wait 1 second
+    print("done")
+}
+```
+
+`sleep` is not fallible -- it always succeeds. `sleep(0)` is a no-op.
+
 ## Limitations
 
 - `spawn` only works with direct function calls (`spawn foo(args)`), not method calls or closures
