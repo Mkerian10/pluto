@@ -123,7 +123,7 @@ class Counter {
 }
 
 fn main() {
-    let c = Counter { value: 0 }
+    let mut c = Counter { value: 0 }
     c.increment()
     c.increment()
     c.increment()
@@ -227,7 +227,7 @@ class Account {
 }
 
 fn main() {
-    let a = Account { balance: 100.0 }
+    let mut a = Account { balance: 100.0 }
     print(a.withdraw(30.0))
 }
 "#,
@@ -474,7 +474,7 @@ class Counter {
 }
 
 fn main() {
-    let c = Counter { value: 0 }
+    let mut c = Counter { value: 0 }
     c.decrement()
     print(c.value)
 }
@@ -530,7 +530,7 @@ class Range {
 }
 
 fn main() {
-    let r = Range { lo: 0, hi: 10 }
+    let mut r = Range { lo: 0, hi: 10 }
     r.widen(5)
     print(r.get_hi())
 }
@@ -696,7 +696,7 @@ class Account {
 }
 
 fn main() {
-    let a = Account { balance: 100 }
+    let mut a = Account { balance: 100 }
     a.deposit(50)
     print(a.balance)
 }
@@ -720,7 +720,7 @@ class Account {
 }
 
 fn main() {
-    let a = Account { balance: 100 }
+    let mut a = Account { balance: 100 }
     a.deposit(-10)
 }
 "#,
@@ -841,7 +841,7 @@ class Counter {
 }
 
 fn main() {
-    let c = Counter { count: 0 }
+    let mut c = Counter { count: 0 }
     c.increment()
     print(c.count)
 }
@@ -867,7 +867,7 @@ class Counter {
 }
 
 fn main() {
-    let c = Counter { count: 0 }
+    let mut c = Counter { count: 0 }
     c.increment()
     print(c.count)
 }
@@ -916,7 +916,7 @@ class Wallet {
 }
 
 fn main() {
-    let w = Wallet { balance: 100 }
+    let mut w = Wallet { balance: 100 }
     w.withdraw(30)
     print(w.balance)
 }
@@ -1059,7 +1059,7 @@ class BoundedCounter {
 }
 
 fn main() {
-    let c = BoundedCounter { count: 0 }
+    let mut c = BoundedCounter { count: 0 }
     c.add(5)
     c.add(3)
     print(c.count)
@@ -1087,7 +1087,7 @@ class Stack {
 }
 
 fn main() {
-    let s = Stack { size: 0 }
+    let mut s = Stack { size: 0 }
     let idx = s.push()
     print(idx)
     print(s.size)

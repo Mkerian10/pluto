@@ -11,7 +11,7 @@ class BankAccount {
 
     // requires: amount must be positive
     // ensures: balance increases by exactly the deposited amount
-    fn deposit(self, amount: int) int
+    fn deposit(mut self, amount: int) int
         requires amount > 0
         ensures self.balance == old(self.balance) + amount
     {
@@ -21,7 +21,7 @@ class BankAccount {
 
     // requires: amount positive and sufficient balance
     // ensures: balance decreases by exactly the withdrawn amount
-    fn withdraw(self, amount: int) int
+    fn withdraw(mut self, amount: int) int
         requires amount > 0
         requires self.balance >= amount
         ensures self.balance == old(self.balance) - amount
@@ -58,7 +58,7 @@ fn absolute(x: int) int
 
 fn main() int {
     // Create account (invariant checked: balance >= 0)
-    let account = BankAccount { name: "Alice", balance: 100 }
+    let mut account = BankAccount { name: "Alice", balance: 100 }
 
     // Deposit (requires amount > 0, ensures balance correct)
     let after_deposit = account.deposit(50)

@@ -570,8 +570,12 @@ impl PrettyPrinter {
 
     fn emit_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { name, ty, value } => {
-                self.write("let ");
+            Stmt::Let { name, ty, value, is_mut } => {
+                if *is_mut {
+                    self.write("let mut ");
+                } else {
+                    self.write("let ");
+                }
                 self.write(&name.node);
                 if let Some(ty) = ty {
                     self.write(": ");

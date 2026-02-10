@@ -344,7 +344,7 @@ impl<'a> LowerContext<'a> {
             return Ok(());
         }
         match stmt {
-            Stmt::Let { name, ty, value } => self.lower_let(name, ty, value),
+            Stmt::Let { name, ty, value, .. } => self.lower_let(name, ty, value),
             Stmt::LetChan { sender, receiver, elem_type, capacity } => self.lower_let_chan(sender, receiver, elem_type, capacity),
             Stmt::Return(value) => {
                 // Return target priority: ensures_block > exit_block > direct return

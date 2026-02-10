@@ -1546,6 +1546,20 @@ fn infer_method_call(
                 },
             );
         }
+        // Check caller-side mutability for trait method calls
+        if trait_info.mut_self_methods.contains(&method.node) {
+            if let Some(root) = super::check::root_variable(&object.node) {
+                if root != "self" && env.is_immutable(root) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "cannot call mutating method '{}' on immutable variable '{}'; declare with 'let mut' to allow mutation",
+                            method.node, root
+                        ),
+                        method.span,
+                    ));
+                }
+            }
+        }
         return Ok(method_sig.return_type.clone());
     }
 
@@ -1565,6 +1579,20 @@ fn infer_method_call(
             (current.clone(), method.span.start),
             super::env::MethodResolution::Class { mangled_name: mangled.clone() },
         );
+    }
+    // Check caller-side mutability: cannot call mut self method on immutable binding
+    if env.mut_self_methods.contains(&mangled) {
+        if let Some(root) = super::check::root_variable(&object.node) {
+            if root != "self" && env.is_immutable(root) {
+                return Err(CompileError::type_err(
+                    format!(
+                        "cannot call mutating method '{}' on immutable variable '{}'; declare with 'let mut' to allow mutation",
+                        method.node, root
+                    ),
+                    method.span,
+                ));
+            }
+        }
     }
     let sig = env.functions.get(&mangled).ok_or_else(|| {
         CompileError::type_err(

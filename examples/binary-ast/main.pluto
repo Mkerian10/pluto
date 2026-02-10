@@ -35,7 +35,7 @@ fn opposite(d: Direction) Direction {
 }
 
 fn main() {
-    let c = Counter { value: 0 }
+    let mut c = Counter { value: 0 }
     c.increment()
     c.increment()
     print(c.get())

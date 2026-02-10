@@ -685,7 +685,7 @@ fn parse_float_value(s: string) float {
 }
 
 pub fn parse(s: string) Json {
-    let p = Parser { src: s, pos: 0, src_len: s.len() }
+    let mut p = Parser { src: s, pos: 0, src_len: s.len() }
     let result = p.parse_value()!
     p.skip_whitespace()
     if p.pos < p.src_len {

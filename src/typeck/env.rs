@@ -134,6 +134,8 @@ pub struct TypeEnv {
     pub in_ensures_context: bool,
     /// Mangled names of methods that declare `mut self`
     pub mut_self_methods: HashSet<String>,
+    /// Scope-mirrored: tracks variables declared with `let` (not `let mut`)
+    pub immutable_bindings: Vec<HashSet<String>>,
 }
 
 impl TypeEnv {
@@ -186,17 +188,20 @@ impl TypeEnv {
             closure_return_types: HashMap::new(),
             in_ensures_context: false,
             mut_self_methods: HashSet::new(),
+            immutable_bindings: vec![HashSet::new()],
         }
     }
 
     pub fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
         self.task_spawn_scopes.push(HashMap::new());
+        self.immutable_bindings.push(HashSet::new());
     }
 
     pub fn pop_scope(&mut self) {
         self.scopes.pop();
         self.task_spawn_scopes.pop();
+        self.immutable_bindings.pop();
     }
 
     pub fn define(&mut self, name: String, ty: PlutoType) {
@@ -287,6 +292,19 @@ impl TypeEnv {
             }
         }
         None
+    }
+
+    pub fn mark_immutable(&mut self, name: &str) {
+        self.immutable_bindings.last_mut().unwrap().insert(name.to_string());
+    }
+
+    pub fn is_immutable(&self, name: &str) -> bool {
+        for scope in self.immutable_bindings.iter().rev() {
+            if scope.contains(name) {
+                return true;
+            }
+        }
+        false
     }
 }
 

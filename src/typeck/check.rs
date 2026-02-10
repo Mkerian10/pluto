@@ -74,7 +74,7 @@ fn check_stmt(
     return_type: &PlutoType,
 ) -> Result<(), CompileError> {
     match stmt {
-        Stmt::Let { name, ty, value } => {
+        Stmt::Let { name, ty, value, is_mut } => {
             // Handle empty array literals with type annotations: `let x: [int] = []`
             let is_empty_array = matches!(&value.node, Expr::ArrayLit { elements } if elements.is_empty());
             let val_type = if is_empty_array {
@@ -107,6 +107,10 @@ fn check_stmt(
                 env.define(name.node.clone(), expected);
             } else {
                 env.define(name.node.clone(), val_type.clone());
+            }
+            // Track immutable bindings (let without mut)
+            if !is_mut {
+                env.mark_immutable(&name.node);
             }
             // Track task origin for spawn expressions
             if let Expr::Spawn { .. } = &value.node {
@@ -312,12 +316,34 @@ fn check_stmt(
     Ok(())
 }
 
+/// Extracts the root variable name from nested field access chains.
+/// e.g. `x.inner.val` → Some("x"), `get_thing().field` → None
+pub(super) fn root_variable(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name) => Some(name),
+        Expr::FieldAccess { object, .. } => root_variable(&object.node),
+        _ => None,
+    }
+}
+
 fn check_field_assign(
     object: &Spanned<Expr>,
     field: &Spanned<String>,
     value: &Spanned<Expr>,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    // Check caller-side mutability
+    if let Some(root) = root_variable(&object.node) {
+        if root != "self" && env.is_immutable(root) {
+            return Err(CompileError::type_err(
+                format!(
+                    "cannot assign to field of immutable variable '{}'; declare with 'let mut' to allow mutation",
+                    root
+                ),
+                object.span,
+            ));
+        }
+    }
     let obj_type = infer_expr(&object.node, object.span, env)?;
     let class_name = match &obj_type {
         PlutoType::Class(name) => name.clone(),

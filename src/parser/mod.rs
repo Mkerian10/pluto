@@ -1118,6 +1118,14 @@ impl<'a> Parser<'a> {
         let let_tok = self.expect(&Token::Let)?;
         let start = let_tok.span.start;
 
+        // Check for `mut` keyword
+        let is_mut = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Mut) {
+            self.advance(); // consume `mut`
+            true
+        } else {
+            false
+        };
+
         // Check for destructuring: let (tx, rx) = chan<T>(...)
         if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
             return self.parse_let_chan(start);
@@ -1137,7 +1145,7 @@ impl<'a> Parser<'a> {
         let end = value.span.end;
         self.consume_statement_end();
 
-        Ok(Spanned::new(Stmt::Let { name, ty, value }, Span::new(start, end)))
+        Ok(Spanned::new(Stmt::Let { name, ty, value, is_mut }, Span::new(start, end)))
     }
 
     fn parse_let_chan(&mut self, start: usize) -> Result<Spanned<Stmt>, CompileError> {

@@ -69,7 +69,7 @@ fn infer_closure_return_type(block: &Block, env: &mut TypeEnv) -> Result<PlutoTy
     // variables are in scope when we encounter a return statement.
     for stmt in &block.stmts {
         match &stmt.node {
-            Stmt::Let { name, ty, value } => {
+            Stmt::Let { name, ty, value, .. } => {
                 let val_type = infer_expr(&value.node, value.span, env)?;
                 if let Some(declared_ty) = ty {
                     let expected = resolve_type(declared_ty, env)?;

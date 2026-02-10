@@ -661,7 +661,7 @@ fn offset_block_spans(block: &mut Block, offset: usize) {
 
 fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
     match stmt {
-        Stmt::Let { name, ty, value } => {
+        Stmt::Let { name, ty, value, .. } => {
             offset_spanned(name, offset);
             if let Some(t) = ty {
                 offset_spanned(t, offset);

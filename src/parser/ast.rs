@@ -129,6 +129,7 @@ pub enum Stmt {
         name: Spanned<String>,
         ty: Option<Spanned<TypeExpr>>,
         value: Spanned<Expr>,
+        is_mut: bool,
     },
     Return(Option<Spanned<Expr>>),
     Assign {
