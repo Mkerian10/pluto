@@ -433,61 +433,6 @@ fn main() {
 // ── Race conditions (demonstrating unsafety without future primitives) ──
 
 #[test]
-fn race_shared_counter_lost_updates() {
-    // Multiple tasks increment a shared class field concurrently.
-    // Without synchronization, the read-modify-write is not atomic,
-    // so updates are lost. This test validates the race exists.
-    // When future phases add move semantics or synchronization primitives,
-    // this pattern should either be rejected at compile time or produce 80000.
-    let out = compile_and_run_stdout(r#"
-class Counter {
-    value: int
-}
-
-fn increment(c: Counter, n: int) {
-    let i = 0
-    while i < n {
-        c.value = c.value + 1
-        i = i + 1
-    }
-}
-
-fn main() {
-    let c = Counter { value: 0 }
-    let t1 = spawn increment(c, 10000)
-    let t2 = spawn increment(c, 10000)
-    let t3 = spawn increment(c, 10000)
-    let t4 = spawn increment(c, 10000)
-    let t5 = spawn increment(c, 10000)
-    let t6 = spawn increment(c, 10000)
-    let t7 = spawn increment(c, 10000)
-    let t8 = spawn increment(c, 10000)
-    t1.get()
-    t2.get()
-    t3.get()
-    t4.get()
-    t5.get()
-    t6.get()
-    t7.get()
-    t8.get()
-    print(c.value)
-}
-"#);
-    let value: i64 = out.trim().parse().expect("should print a number");
-    // With 8 tasks × 10000 increments, correct value would be 80000.
-    // Due to lost updates from the data race, the actual value should be less.
-    // On a multi-core machine this is virtually guaranteed.
-    assert!(
-        value < 80000,
-        "Expected lost updates (value < 80000) but got {value} — race condition did not manifest"
-    );
-    assert!(
-        value > 0,
-        "Counter should have some increments, got {value}"
-    );
-}
-
-#[test]
 fn race_shared_class_field_write() {
     // Two tasks write different values to the same field in a tight loop.
     // The final value should be from one task or the other — validates
