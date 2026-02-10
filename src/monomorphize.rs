@@ -254,6 +254,8 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         PlutoType::Error => TypeExpr::Named("error".to_string()),
         PlutoType::TypeParam(name) => TypeExpr::Named(name.clone()),
         PlutoType::Range => TypeExpr::Named("range".to_string()),
+        PlutoType::Byte => TypeExpr::Named("byte".to_string()),
+        PlutoType::Bytes => TypeExpr::Named("bytes".to_string()),
     }
 }
 
@@ -1268,6 +1270,8 @@ fn type_expr_to_pluto_type(te: &TypeExpr, env: &TypeEnv) -> Result<PlutoType, Co
             "bool" => Ok(PlutoType::Bool),
             "string" => Ok(PlutoType::String),
             "void" => Ok(PlutoType::Void),
+            "byte" => Ok(PlutoType::Byte),
+            "bytes" => Ok(PlutoType::Bytes),
             _ => {
                 if env.classes.contains_key(name) || env.generic_classes.contains_key(name) {
                     Ok(PlutoType::Class(name.clone()))

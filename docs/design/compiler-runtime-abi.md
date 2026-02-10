@@ -16,6 +16,8 @@ The compiler lowers Pluto values to native values as follows:
 - `array` -> pointer to a GC-managed array handle
 - `Map<K,V>` -> pointer to a GC-managed hash table
 - `Set<T>` -> pointer to a GC-managed hash table
+- `byte` -> `i8` (unsigned 8-bit value, zero-extended to `i64` at C boundaries)
+- `bytes` -> pointer to a GC-managed bytes handle
 - `fn(...)` -> pointer to a GC-managed closure object `[fn_ptr, captures...]`
 - `trait` -> currently passed as a fat pointer (data + vtable) at parameter
   boundaries only
@@ -62,6 +64,7 @@ Runtime functions:
 - `__pluto_string_replace(void *s, void *old, void *new) -> void *`
 - `__pluto_string_split(void *s, void *delim) -> void *` (returns array handle)
 - `__pluto_string_char_at(void *s, long index) -> void *` (aborts on OOB)
+- `__pluto_string_to_bytes(void *s) -> void *` (returns bytes handle)
 
 ## Array Runtime
 
@@ -81,6 +84,32 @@ Runtime functions:
 
 The compiler stores array elements as `i64` slots. Floats are bitcast and bools
 are zero-extended before storage.
+
+## Bytes Runtime
+
+Bytes handle layout (24 bytes):
+
+- `len: long`
+- `cap: long`
+- `data_ptr: unsigned char *` (points to packed byte storage, 1 byte per element)
+
+Runtime functions:
+
+- `__pluto_bytes_new() -> void *`
+- `__pluto_bytes_push(void *handle, long value)` — stores `(unsigned char)(value & 0xFF)`, grows 2x when full
+- `__pluto_bytes_get(void *handle, long index) -> long` — zero-extends u8 to i64, aborts on OOB
+- `__pluto_bytes_set(void *handle, long index, long value)` — stores `(unsigned char)(value & 0xFF)`, aborts on OOB
+- `__pluto_bytes_len(void *handle) -> long`
+- `__pluto_bytes_to_string(void *handle) -> void *` — raw byte copy, no UTF-8 validation
+- `__pluto_string_to_bytes(void *str) -> void *` — copies string bytes into new bytes buffer
+
+Unlike arrays (which store `i64` slots), bytes store packed `unsigned char` values
+(1 byte per element). This is 8x more memory-efficient for binary data.
+
+**Platform assumption:** All runtime functions use `long` parameters/returns.
+On LP64 platforms (aarch64-apple-darwin, x86_64-linux), `long` = 64 bits = matches
+Cranelift I64. Portability to LLP64 platforms (Windows) would require switching to
+fixed-width `int64_t`.
 
 ## Map Runtime
 
@@ -137,6 +166,9 @@ GC tags identify allocation types for tracing:
 | 3 | Closure | Traces captured variable slots |
 | 4 | Map | Traces key/value slots |
 | 5 | Set | Traces element slots |
+| 6 | JSON | Traces child value slots |
+| 7 | Task | Traces result/error/closure slots |
+| 8 | Bytes | No internal references to trace |
 
 GC functions:
 

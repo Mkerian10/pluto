@@ -141,6 +141,7 @@ impl TypeEnv {
         builtins.insert("log".to_string());
         builtins.insert("gc_heap_size".to_string());
         builtins.insert("expect".to_string());
+        builtins.insert("bytes_new".to_string());
         Self {
             scopes: vec![HashMap::new()],
             functions: HashMap::new(),
@@ -294,5 +295,7 @@ fn mangle_type(ty: &PlutoType) -> String {
         PlutoType::Range => "range".into(),
         PlutoType::Error => "error".into(),
         PlutoType::Task(inner) => format!("task_{}", mangle_type(inner)),
+        PlutoType::Byte => "byte".into(),
+        PlutoType::Bytes => "bytes".into(),
     }
 }

@@ -40,6 +40,14 @@ Demonstrates the `std.json` module: parsing JSON strings, accessing nested value
 cargo run -- run examples/json/main.pluto --stdlib stdlib
 ```
 
+## bytes
+
+Demonstrates the `byte` and `bytes` types: hex literals (`0xFF`), explicit casting (`as byte`/`as int`), truncation semantics, packed byte buffers (`bytes_new`, `push`, indexing), string conversion (`to_bytes`/`to_string`), iteration, and unsigned ordering.
+
+```bash
+cargo run -- run examples/bytes/main.pluto
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.

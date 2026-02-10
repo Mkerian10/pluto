@@ -82,6 +82,15 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_array_set", &[types::I64, types::I64, types::I64], &[])?;
         reg.declare(module, "__pluto_array_len", &[types::I64], &[types::I64])?;
 
+        // Bytes functions
+        reg.declare(module, "__pluto_bytes_new", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_push", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_get", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_set", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_len", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_to_string", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_to_bytes", &[types::I64], &[types::I64])?;
+
         // Map functions
         reg.declare(module, "__pluto_map_new", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_map_insert", &[types::I64, types::I64, types::I64, types::I64], &[])?;

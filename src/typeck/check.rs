@@ -167,9 +167,10 @@ fn check_stmt(
                 PlutoType::Array(elem) => *elem,
                 PlutoType::Range => PlutoType::Int,
                 PlutoType::String => PlutoType::String,
+                PlutoType::Bytes => PlutoType::Byte,
                 _ => {
                     return Err(CompileError::type_err(
-                        format!("for loop requires array, range, or string, found {iter_type}"),
+                        format!("for loop requires array, range, string, or bytes, found {iter_type}"),
                         iterable.span,
                     ));
                 }
@@ -299,6 +300,22 @@ fn check_index_assign(
             if val_type != **val_ty {
                 return Err(CompileError::type_err(
                     format!("map value type mismatch: expected {val_ty}, found {val_type}"),
+                    value.span,
+                ));
+            }
+        }
+        PlutoType::Bytes => {
+            let idx_type = infer_expr(&index.node, index.span, env)?;
+            if idx_type != PlutoType::Int {
+                return Err(CompileError::type_err(
+                    format!("bytes index must be int, found {idx_type}"),
+                    index.span,
+                ));
+            }
+            let val_type = infer_expr(&value.node, value.span, env)?;
+            if val_type != PlutoType::Byte {
+                return Err(CompileError::type_err(
+                    format!("bytes index assignment: expected byte, found {val_type}"),
                     value.span,
                 ));
             }

@@ -302,6 +302,8 @@ fn resolve_type_for_lift(ty: &TypeExpr) -> PlutoType {
             "bool" => PlutoType::Bool,
             "string" => PlutoType::String,
             "void" => PlutoType::Void,
+            "byte" => PlutoType::Byte,
+            "bytes" => PlutoType::Bytes,
             _ => PlutoType::Class(name.clone()),
         },
         TypeExpr::Array(inner) => PlutoType::Array(Box::new(resolve_type_for_lift(&inner.node))),
@@ -404,5 +406,7 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         PlutoType::Error => TypeExpr::Named("error".to_string()),
         PlutoType::Range => TypeExpr::Named("range".to_string()),
         PlutoType::TypeParam(name) => TypeExpr::Named(name.clone()),
+        PlutoType::Byte => TypeExpr::Named("byte".to_string()),
+        PlutoType::Bytes => TypeExpr::Named("bytes".to_string()),
     }
 }

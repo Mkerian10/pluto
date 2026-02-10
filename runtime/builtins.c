@@ -29,6 +29,7 @@
 #define GC_TAG_SET   5   // [count][cap][keys_ptr][meta_ptr]
 #define GC_TAG_JSON  6   // JsonNode — recursive tree structure
 #define GC_TAG_TASK  7   // [closure][result][error][done][sync_ptr]
+#define GC_TAG_BYTES 8   // [len][cap][data_ptr]; 1 byte per element
 
 typedef struct GCHeader {
     struct GCHeader *next;    // 8B: linked list of all GC objects
@@ -154,6 +155,7 @@ static void gc_build_intervals(void) {
     for (GCHeader *h = gc_head; h; h = h->next) {
         count++;
         if (h->type_tag == GC_TAG_ARRAY) data_buf_count++;
+        else if (h->type_tag == GC_TAG_BYTES) data_buf_count++;
         else if (h->type_tag == GC_TAG_MAP) data_buf_count += 3;  // keys, vals, meta
         else if (h->type_tag == GC_TAG_SET) data_buf_count += 2;  // keys, meta
     }
@@ -178,6 +180,18 @@ static void gc_build_intervals(void) {
             if (data_ptr && cap > 0) {
                 gc_data_intervals[gc_data_interval_count].start = data_ptr;
                 gc_data_intervals[gc_data_interval_count].end = (char *)data_ptr + cap * 8;
+                gc_data_intervals[gc_data_interval_count].array_handle = user;
+                gc_data_interval_count++;
+            }
+        }
+        // Bytes handle: [len][cap][data_ptr]
+        if (h->type_tag == GC_TAG_BYTES && h->size >= 24) {
+            long *handle = (long *)user;
+            long cap = handle[1];
+            void *data_ptr = (void *)handle[2];
+            if (data_ptr && cap > 0) {
+                gc_data_intervals[gc_data_interval_count].start = data_ptr;
+                gc_data_intervals[gc_data_interval_count].end = (char *)data_ptr + cap * 1;
                 gc_data_intervals[gc_data_interval_count].array_handle = user;
                 gc_data_interval_count++;
             }
@@ -266,7 +280,8 @@ static void gc_trace_object(void *user_ptr) {
     GCHeader *h = gc_get_header(user_ptr);
     switch (h->type_tag) {
     case GC_TAG_STRING:
-        // No child pointers
+    case GC_TAG_BYTES:
+        // No child pointers (bytes data is raw u8 values, not GC pointers)
         break;
     case GC_TAG_ARRAY: {
         // Array handle: [len][cap][data_ptr]
@@ -433,6 +448,12 @@ void __pluto_gc_collect(void) {
             size_t total = sizeof(GCHeader) + h->size;
             // Free array data buffer if applicable
             if (h->type_tag == GC_TAG_ARRAY && h->size >= 24) {
+                long *handle = (long *)((char *)h + sizeof(GCHeader));
+                void *data_ptr = (void *)handle[2];
+                if (data_ptr) free(data_ptr);
+            }
+            // Free bytes data buffer
+            if (h->type_tag == GC_TAG_BYTES && h->size >= 24) {
                 long *handle = (long *)((char *)h + sizeof(GCHeader));
                 void *data_ptr = (void *)handle[2];
                 if (data_ptr) free(data_ptr);
@@ -629,6 +650,89 @@ void __pluto_array_set(void *handle, long index, long value) {
 
 long __pluto_array_len(void *handle) {
     return ((long *)handle)[0];
+}
+
+// ── Bytes runtime functions ───────────────────────────────────────────────────
+// Handle layout (24 bytes): [len: long] [cap: long] [data_ptr: unsigned char*]
+
+long __pluto_bytes_new(void) {
+    long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
+    handle[0] = 0;   // len
+    handle[1] = 16;  // cap (initial)
+    unsigned char *data = (unsigned char *)malloc(16);
+    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    handle[2] = (long)data;
+    return (long)handle;
+}
+
+void __pluto_bytes_push(long handle, long value) {
+    long *h = (long *)handle;
+    long len = h[0];
+    long cap = h[1];
+    unsigned char *data = (unsigned char *)h[2];
+    if (len == cap) {
+        cap = cap * 2;
+        if (cap == 0) cap = 16;
+        data = (unsigned char *)realloc(data, cap);
+        if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+        h[1] = cap;
+        h[2] = (long)data;
+    }
+    data[len] = (unsigned char)(value & 0xFF);
+    h[0] = len + 1;
+}
+
+long __pluto_bytes_get(long handle, long index) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (index < 0 || index >= len) {
+        fprintf(stderr, "pluto: bytes index out of bounds: index %ld, length %ld\n", index, len);
+        exit(1);
+    }
+    unsigned char *data = (unsigned char *)h[2];
+    return (long)data[index];
+}
+
+void __pluto_bytes_set(long handle, long index, long value) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (index < 0 || index >= len) {
+        fprintf(stderr, "pluto: bytes index out of bounds: index %ld, length %ld\n", index, len);
+        exit(1);
+    }
+    unsigned char *data = (unsigned char *)h[2];
+    data[index] = (unsigned char)(value & 0xFF);
+}
+
+long __pluto_bytes_len(long handle) {
+    return ((long *)handle)[0];
+}
+
+long __pluto_bytes_to_string(long handle) {
+    long *h = (long *)handle;
+    long len = h[0];
+    unsigned char *data = (unsigned char *)h[2];
+    size_t alloc_size = 8 + len + 1;
+    void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
+    *(long *)header = len;
+    memcpy((char *)header + 8, data, len);
+    ((char *)header)[8 + len] = '\0';
+    return (long)header;
+}
+
+long __pluto_string_to_bytes(long str_handle) {
+    void *s = (void *)str_handle;
+    long len = *(long *)s;
+    const char *str_data = (const char *)s + 8;
+    long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
+    long cap = len > 16 ? len : 16;
+    handle[0] = len;
+    handle[1] = cap;
+    unsigned char *data = (unsigned char *)malloc(cap);
+    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    memcpy(data, str_data, len);
+    handle[2] = (long)data;
+    return (long)handle;
 }
 
 // ── String utility functions ──────────────────────────────────────────────────

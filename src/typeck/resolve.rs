@@ -14,6 +14,8 @@ pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<
             "bool" => Ok(PlutoType::Bool),
             "string" => Ok(PlutoType::String),
             "void" => Ok(PlutoType::Void),
+            "byte" => Ok(PlutoType::Byte),
+            "bytes" => Ok(PlutoType::Bytes),
             _ => {
                 if env.classes.contains_key(name) {
                     Ok(PlutoType::Class(name.clone()))

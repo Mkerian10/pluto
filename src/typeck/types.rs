@@ -16,6 +16,8 @@ pub enum PlutoType {
     Error,
     TypeParam(std::string::String),
     Task(Box<PlutoType>),
+    Byte,
+    Bytes,
 }
 
 impl std::fmt::Display for PlutoType {
@@ -44,6 +46,8 @@ impl std::fmt::Display for PlutoType {
             PlutoType::Error => write!(f, "error"),
             PlutoType::TypeParam(name) => write!(f, "{name}"),
             PlutoType::Task(inner) => write!(f, "Task<{inner}>"),
+            PlutoType::Byte => write!(f, "byte"),
+            PlutoType::Bytes => write!(f, "bytes"),
         }
     }
 }

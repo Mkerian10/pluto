@@ -81,12 +81,12 @@ impl<'a> LowerContext<'a> {
                 let val = self.builder.ins().f64const(0.0);
                 self.builder.ins().return_(&[val]);
             }
-            Some(PlutoType::Bool) => {
+            Some(PlutoType::Bool) | Some(PlutoType::Byte) => {
                 let val = self.builder.ins().iconst(types::I8, 0);
                 self.builder.ins().return_(&[val]);
             }
             Some(_) => {
-                // Int, String, Class, Array, Enum, Map, Set, Error — all I64
+                // Int, String, Class, Array, Enum, Map, Set, Bytes, Error — all I64
                 let val = self.builder.ins().iconst(types::I64, 0);
                 self.builder.ins().return_(&[val]);
             }
@@ -193,6 +193,9 @@ impl<'a> LowerContext<'a> {
                 if let PlutoType::Array(elem) = &obj_type {
                     let slot = to_array_slot(val, elem, &mut self.builder);
                     self.call_runtime_void("__pluto_array_set", &[handle, idx, slot]);
+                } else if obj_type == PlutoType::Bytes {
+                    let val_wide = self.builder.ins().uextend(types::I64, val);
+                    self.call_runtime_void("__pluto_bytes_set", &[handle, idx, val_wide]);
                 } else if let PlutoType::Map(key_ty, val_ty) = &obj_type {
                     let tag = self.builder.ins().iconst(types::I64, key_type_tag(key_ty));
                     let key_slot = to_array_slot(idx, key_ty, &mut self.builder);
@@ -374,6 +377,7 @@ impl<'a> LowerContext<'a> {
         match &iter_type {
             PlutoType::Range => self.lower_for_range(var, iterable, body),
             PlutoType::Array(_) => self.lower_for_array(var, iterable, body),
+            PlutoType::Bytes => self.lower_for_bytes(var, iterable, body),
             PlutoType::String => self.lower_for_string(var, iterable, body),
             _ => Err(CompileError::codegen("for loop requires array, range, or string".to_string())),
         }
@@ -556,6 +560,89 @@ impl<'a> LowerContext<'a> {
         }
 
         // Increment block
+        self.builder.switch_to_block(increment_bb);
+        self.builder.seal_block(increment_bb);
+        let counter_inc = self.builder.use_var(counter_var);
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let new_counter = self.builder.ins().iadd(counter_inc, one);
+        self.builder.def_var(counter_var, new_counter);
+        self.builder.ins().jump(header_bb, &[]);
+
+        self.builder.seal_block(header_bb);
+        self.builder.switch_to_block(exit_bb);
+        self.builder.seal_block(exit_bb);
+        Ok(())
+    }
+
+    fn lower_for_bytes(
+        &mut self,
+        var: &crate::span::Spanned<String>,
+        iterable: &crate::span::Spanned<Expr>,
+        body: &crate::span::Spanned<Block>,
+    ) -> Result<(), CompileError> {
+        let handle = self.lower_expr(&iterable.node)?;
+        let len_val = self.call_runtime("__pluto_bytes_len", &[handle]);
+
+        // Counter variable
+        let counter_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        self.builder.declare_var(counter_var, types::I64);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.def_var(counter_var, zero);
+
+        let header_bb = self.builder.create_block();
+        let body_bb = self.builder.create_block();
+        let increment_bb = self.builder.create_block();
+        let exit_bb = self.builder.create_block();
+
+        self.builder.ins().jump(header_bb, &[]);
+
+        // Header: check counter < len
+        self.builder.switch_to_block(header_bb);
+        let counter = self.builder.use_var(counter_var);
+        let cond = self.builder.ins().icmp(IntCC::SignedLessThan, counter, len_val);
+        self.builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
+
+        // Body
+        self.builder.switch_to_block(body_bb);
+        self.builder.seal_block(body_bb);
+
+        let counter_for_get = self.builder.use_var(counter_var);
+        let raw = self.call_runtime("__pluto_bytes_get", &[handle, counter_for_get]);
+        let elem_val = self.builder.ins().ireduce(types::I8, raw);
+
+        let prev_var = self.variables.get(&var.node).cloned();
+        let prev_type = self.var_types.get(&var.node).cloned();
+
+        let loop_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        self.builder.declare_var(loop_var, types::I8);
+        self.builder.def_var(loop_var, elem_val);
+        self.variables.insert(var.node.clone(), loop_var);
+        self.var_types.insert(var.node.clone(), PlutoType::Byte);
+
+        self.loop_stack.push((increment_bb, exit_bb));
+        let mut body_terminated = false;
+        for s in &body.node.stmts {
+            self.lower_stmt(&s.node, &mut body_terminated)?;
+        }
+        self.loop_stack.pop();
+
+        if let Some(pv) = prev_var {
+            self.variables.insert(var.node.clone(), pv);
+        } else {
+            self.variables.remove(&var.node);
+        }
+        if let Some(pt) = prev_type {
+            self.var_types.insert(var.node.clone(), pt);
+        } else {
+            self.var_types.remove(&var.node);
+        }
+
+        if !body_terminated {
+            self.builder.ins().jump(increment_bb, &[]);
+        }
+
         self.builder.switch_to_block(increment_bb);
         self.builder.seal_block(increment_bb);
         let counter_inc = self.builder.use_var(counter_var);
@@ -866,6 +953,8 @@ impl<'a> LowerContext<'a> {
                         Ok(self.builder.ins().icmp(IntCC::NotEqual, val, zero))
                     }
                     (PlutoType::Bool, PlutoType::Int) => Ok(self.builder.ins().uextend(types::I64, val)),
+                    (PlutoType::Int, PlutoType::Byte) => Ok(self.builder.ins().ireduce(types::I8, val)),
+                    (PlutoType::Byte, PlutoType::Int) => Ok(self.builder.ins().uextend(types::I64, val)),
                     _ => Err(CompileError::codegen("invalid cast in lowered AST".to_string())),
                 }
             }
@@ -924,6 +1013,9 @@ impl<'a> LowerContext<'a> {
                     let key_slot = to_array_slot(idx, &key_ty, &mut self.builder);
                     let raw = self.call_runtime("__pluto_map_get", &[handle, tag, key_slot]);
                     Ok(from_array_slot(raw, &val_ty, &mut self.builder))
+                } else if obj_type == PlutoType::Bytes {
+                    let raw = self.call_runtime("__pluto_bytes_get", &[handle, idx]);
+                    Ok(self.builder.ins().ireduce(types::I8, raw))
                 } else if obj_type == PlutoType::String {
                     Ok(self.call_runtime("__pluto_string_char_at", &[handle, idx]))
                 } else {
@@ -1042,6 +1134,10 @@ impl<'a> LowerContext<'a> {
                             let widened = self.builder.ins().uextend(types::I32, val);
                             self.call_runtime("__pluto_bool_to_string", &[widened])
                         }
+                        PlutoType::Byte => {
+                            let widened = self.builder.ins().uextend(types::I64, val);
+                            self.call_runtime("__pluto_int_to_string", &[widened])
+                        }
                         _ => return Err(CompileError::codegen(format!("cannot interpolate {t}"))),
                     };
                     string_vals.push(str_val);
@@ -1070,6 +1166,7 @@ impl<'a> LowerContext<'a> {
         let lhs_type = infer_type_for_expr(&lhs.node, self.env, &self.var_types);
         let is_float = lhs_type == PlutoType::Float;
         let is_string = lhs_type == PlutoType::String;
+        let is_byte = lhs_type == PlutoType::Byte;
 
         let result = match op {
             BinOp::Add if is_string => self.call_runtime("__pluto_string_concat", &[l, r]),
@@ -1097,12 +1194,16 @@ impl<'a> LowerContext<'a> {
             BinOp::Neq if is_float => self.builder.ins().fcmp(FloatCC::NotEqual, l, r),
             BinOp::Neq => self.builder.ins().icmp(IntCC::NotEqual, l, r),
             BinOp::Lt if is_float => self.builder.ins().fcmp(FloatCC::LessThan, l, r),
+            BinOp::Lt if is_byte => self.builder.ins().icmp(IntCC::UnsignedLessThan, l, r),
             BinOp::Lt => self.builder.ins().icmp(IntCC::SignedLessThan, l, r),
             BinOp::Gt if is_float => self.builder.ins().fcmp(FloatCC::GreaterThan, l, r),
+            BinOp::Gt if is_byte => self.builder.ins().icmp(IntCC::UnsignedGreaterThan, l, r),
             BinOp::Gt => self.builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
             BinOp::LtEq if is_float => self.builder.ins().fcmp(FloatCC::LessThanOrEqual, l, r),
+            BinOp::LtEq if is_byte => self.builder.ins().icmp(IntCC::UnsignedLessThanOrEqual, l, r),
             BinOp::LtEq => self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r),
             BinOp::GtEq if is_float => self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, l, r),
+            BinOp::GtEq if is_byte => self.builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, l, r),
             BinOp::GtEq => self.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r),
             BinOp::And => self.builder.ins().band(l, r),
             BinOp::Or => self.builder.ins().bor(l, r),
@@ -1203,6 +1304,9 @@ impl<'a> LowerContext<'a> {
         }
         if name.node == "gc_heap_size" {
             return Ok(self.call_runtime("__pluto_gc_heap_size", &[]));
+        }
+        if name.node == "bytes_new" {
+            return Ok(self.call_runtime("__pluto_bytes_new", &[]));
         }
 
         // Check if calling a closure variable
@@ -1440,6 +1544,11 @@ impl<'a> LowerContext<'a> {
                                 self.call_runtime_void("__pluto_expect_equal_bool", &[a, e, line_val]);
                             }
                             PlutoType::String => self.call_runtime_void("__pluto_expect_equal_string", &[actual_val, expected_val, line_val]),
+                            PlutoType::Byte => {
+                                let a = self.builder.ins().uextend(types::I64, actual_val);
+                                let e = self.builder.ins().uextend(types::I64, expected_val);
+                                self.call_runtime_void("__pluto_expect_equal_int", &[a, e, line_val]);
+                            }
                             _ => return Err(CompileError::codegen(format!("to_equal not supported for {inner_type}"))),
                         }
                     }
@@ -1549,6 +1658,21 @@ impl<'a> LowerContext<'a> {
             }
         }
 
+        // Bytes methods
+        if obj_type == PlutoType::Bytes {
+            return match method.node.as_str() {
+                "len" => Ok(self.call_runtime("__pluto_bytes_len", &[obj_ptr])),
+                "push" => {
+                    let arg_val = self.lower_expr(&args[0].node)?;
+                    let widened = self.builder.ins().uextend(types::I64, arg_val);
+                    self.call_runtime_void("__pluto_bytes_push", &[obj_ptr, widened]);
+                    Ok(self.builder.ins().iconst(types::I64, 0))
+                }
+                "to_string" => Ok(self.call_runtime("__pluto_bytes_to_string", &[obj_ptr])),
+                _ => Err(CompileError::codegen(format!("bytes has no method '{}'", method.node))),
+            };
+        }
+
         // String methods
         if obj_type == PlutoType::String {
             return match method.node.as_str() {
@@ -1593,6 +1717,7 @@ impl<'a> LowerContext<'a> {
                     let idx = self.lower_expr(&args[0].node)?;
                     Ok(self.call_runtime("__pluto_string_char_at", &[obj_ptr, idx]))
                 }
+                "to_bytes" => Ok(self.call_runtime("__pluto_string_to_bytes", &[obj_ptr])),
                 _ => Err(CompileError::codegen(format!("string has no method '{}'", method.node))),
             };
         }
@@ -1733,7 +1858,12 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I32, arg_val);
                 self.call_runtime_void("__pluto_print_bool", &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) => {
+            PlutoType::Byte => {
+                // Widen I8 byte to I64 and print as int
+                let widened = self.builder.ins().uextend(types::I64, arg_val);
+                self.call_runtime_void("__pluto_print_int", &[widened]);
+            }
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -1885,6 +2015,8 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
             "float" => PlutoType::Float,
             "bool" => PlutoType::Bool,
             "string" => PlutoType::String,
+            "byte" => PlutoType::Byte,
+            "bytes" => PlutoType::Bytes,
             _ => {
                 if env.classes.contains_key(name) {
                     PlutoType::Class(name.clone())
@@ -1942,7 +2074,7 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
 fn to_array_slot(val: Value, ty: &PlutoType, builder: &mut FunctionBuilder<'_>) -> Value {
     match ty {
         PlutoType::Float => builder.ins().bitcast(types::I64, MemFlags::new(), val),
-        PlutoType::Bool => builder.ins().uextend(types::I64, val),
+        PlutoType::Bool | PlutoType::Byte => builder.ins().uextend(types::I64, val),
         _ => val, // int, string, class, array are already I64
     }
 }
@@ -1951,7 +2083,7 @@ fn to_array_slot(val: Value, ty: &PlutoType, builder: &mut FunctionBuilder<'_>) 
 fn from_array_slot(val: Value, ty: &PlutoType, builder: &mut FunctionBuilder<'_>) -> Value {
     match ty {
         PlutoType::Float => builder.ins().bitcast(types::F64, MemFlags::new(), val),
-        PlutoType::Bool => builder.ins().ireduce(types::I8, val),
+        PlutoType::Bool | PlutoType::Byte => builder.ins().ireduce(types::I8, val),
         _ => val,
     }
 }
@@ -1974,6 +2106,8 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Error => types::I64,        // pointer to error object
         PlutoType::Range => types::I64,           // not used as a value type
         PlutoType::TypeParam(_) => panic!("TypeParam should not reach codegen"),
+        PlutoType::Byte => types::I8,          // unsigned 8-bit value
+        PlutoType::Bytes => types::I64,        // pointer to bytes handle
     }
 }
 
@@ -1985,6 +2119,7 @@ fn key_type_tag(ty: &PlutoType) -> i64 {
         PlutoType::Float => 1,
         PlutoType::Bool => 2,
         PlutoType::String => 3,
+        PlutoType::Byte => 0, // hashes as integer value
         PlutoType::Enum(_) => 4,
         _ => 0, // fallback
     }
@@ -2040,6 +2175,9 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             if name.node == "gc_heap_size" {
                 return PlutoType::Int;
             }
+            if name.node == "bytes_new" {
+                return PlutoType::Bytes;
+            }
             env.functions.get(&name.node).map(|s| s.return_type.clone()).unwrap_or(PlutoType::Void)
         }
         Expr::StructLit { name, .. } => PlutoType::Class(name.node.clone()),
@@ -2070,6 +2208,8 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 *elem
             } else if let PlutoType::Map(_, v) = obj_type {
                 *v
+            } else if obj_type == PlutoType::Bytes {
+                PlutoType::Byte
             } else if obj_type == PlutoType::String {
                 PlutoType::String
             } else {
@@ -2133,12 +2273,20 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                     _ => PlutoType::Void,
                 };
             }
+            if obj_type == PlutoType::Bytes {
+                return match method.node.as_str() {
+                    "len" => PlutoType::Int,
+                    "to_string" => PlutoType::String,
+                    _ => PlutoType::Void, // push
+                };
+            }
             if obj_type == PlutoType::String {
                 return match method.node.as_str() {
                     "len" | "index_of" => PlutoType::Int,
                     "contains" | "starts_with" | "ends_with" => PlutoType::Bool,
                     "substring" | "trim" | "to_upper" | "to_lower" | "replace" | "char_at" => PlutoType::String,
                     "split" => PlutoType::Array(Box::new(PlutoType::String)),
+                    "to_bytes" => PlutoType::Bytes,
                     _ => PlutoType::Void,
                 };
             }
