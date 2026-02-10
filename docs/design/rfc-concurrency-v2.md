@@ -1,6 +1,6 @@
 # RFC: Concurrency Model v2
 
-**Status:** Draft
+**Status:** Accepted
 **Author:** Matt Kerian
 **Date:** 2026-02-10
 
@@ -467,25 +467,25 @@ When the compiler generates RPC for cross-pod function calls, it serializes argu
 
 ---
 
-## Open Questions
+## Resolved Questions
 
-1. **Deep copy performance.** Should there be an opt-out for copy-on-spawn? e.g., `spawn func(ref x)` to explicitly share a reference? This reintroduces the race risk but gives an escape hatch for performance-critical paths.
+1. **Deep copy performance opt-out.** No `ref` escape hatch. Sharing references across spawn boundaries reintroduces data races and breaks the safety guarantee. If you need shared state, use DI singletons (auto-synchronized) or channels — those are the two blessed paths. If profiling shows copy overhead matters, the compiler can later elide copies when it proves the caller doesn't use the value after spawn.
 
-2. **Analysis precision.** The concurrency analysis determines which singletons are concurrently accessed. How precise does this need to be? Conservative (any singleton reachable from any spawn = synchronized) is simple but may add unnecessary locks. Precise (track exact call paths) is better but more complex. Start conservative, refine later?
+2. **Analysis precision.** Start conservative — if a singleton is reachable from any spawn site, synchronize it. rwlock overhead on an uncontended lock is negligible (~25ns). False positives cost almost nothing; false negatives are data races. Correctness over efficiency at this stage. Refine precision later only if diagnostics show noise.
 
-3. **Consistency configuration.** How does the orchestration layer specify replication consistency for singletons? Per-class? Per-deployment? This is probably outside the language spec.
+3. **Consistency configuration.** Out of scope for the language spec. This is orchestration layer configuration, not Pluto syntax. The language provides the `mut self` / `self` distinction; the orchestration layer decides consistency models for replicated singletons.
 
-4. **Reentrant access.** If a `mut self` method on a synchronized singleton calls another method on the same instance, that's a lock-inside-lock situation. Need reentrant rwlocks, or the compiler could detect and prevent this pattern.
+4. **Reentrant access.** Not an issue. Synchronization is injected at *call sites* where external code calls a synchronized singleton's method, not inside the method body itself. A `mut self` method calling another method on `self` is already inside the lock scope — it's a regular method call with no additional locking.
 
-5. **Scoped + concurrent.** If a scope block spawns tasks that access scoped singletons, those scoped singletons also need synchronization. The analysis should handle scoped instances the same way — if concurrently accessed, synchronize.
+5. **Scoped + concurrent.** Same analysis applies uniformly. If a scoped instance is reachable from multiple spawn sites within its scope, synchronize it. The analysis doesn't distinguish scoped from singleton — it's the same "is this reachable from concurrent contexts?" question.
 
-6. **Spawn block syntax.** Should `spawn { ... }` (anonymous block) be supported in addition to `spawn func(args)`? This affects how copy-on-spawn works — a block captures variables from the enclosing scope rather than taking explicit arguments.
+6. **Spawn block syntax.** Yes — `spawn { ... }` is supported as spawning a closure. Closures capture by value (snapshot at creation), and spawn deep-copies the closure including its captures. This is consistent with copy-on-spawn for explicit function args. The captures are the implicit "args" that get deep-copied. No special-casing needed.
 
-7. **GC implications of copy-on-spawn.** Each spawned task creates its own copies of data. With many tasks, this could increase memory pressure. The GC should handle this (copies become garbage when tasks complete), but the working set is larger.
+7. **GC implications of copy-on-spawn.** Not a language design issue. Copies become garbage when tasks complete; the GC already handles this. If memory pressure is a concern, that's a runtime tuning problem (GC heuristics, heap sizing), not a language design problem.
 
-8. **Non-DI concurrently accessed objects.** The inference works for DI singletons because the compiler sees the full graph. What about objects created manually and passed to spawn? Copy-on-spawn handles most cases (the task gets its own copy), but what about objects passed through channels that multiple tasks then access? Channels transfer ownership (send gives up the value), so this may not be an issue.
+8. **Non-DI concurrently accessed objects.** The design already handles this through two mechanisms: (a) copy-on-spawn — objects passed as spawn arguments are deep-copied, so the task gets its own independent copy with no sharing; (b) channels — sending through a channel transfers ownership semantically, so only one task has the value at a time. The only objects that can be shared across concurrent tasks are DI singletons, which the compiler fully analyzes. There is no mechanism to create shared mutable state outside of these paths.
 
-9. **Compiler diagnostics.** Should the compiler tell you which singletons it decided to synchronize? A warning or info diagnostic ("SessionCache will be synchronized: accessed from spawn sites at lines 42, 67") would help developers understand the generated code.
+9. **Compiler diagnostics.** Yes. An info-level diagnostic reports which singletons the compiler decided to synchronize and which spawn sites triggered the decision (e.g., "SessionCache synchronized: concurrent access from lines 42, 67"). Visible via `--show-sync` flag or verbose mode.
 
 ## Alternatives Considered
 
