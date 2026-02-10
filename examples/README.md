@@ -1,5 +1,13 @@
 # Pluto Examples
 
+## rust_ffi
+
+Demonstrates calling plain Rust functions from Pluto via `extern rust`. A normal Rust crate with `pub fn` functions is imported with zero boilerplate — supported types (`i64`, `f64`, `bool`) are bridged automatically.
+
+```bash
+cargo run -- run examples/rust_ffi/main.pluto
+```
+
 ## testing
 
 Demonstrates Pluto's built-in test framework with `test` blocks, `expect()` assertions, and multiple assertion methods (`to_equal`, `to_be_true`, `to_be_false`).

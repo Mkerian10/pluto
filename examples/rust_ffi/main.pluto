@@ -1,0 +1,27 @@
+extern rust "./my_math" as math
+
+fn main() {
+    print("Fibonacci sequence:")
+    for i in 0..10 {
+        print("  fib({i}) = {math.fibonacci(i)}")
+    }
+
+    print("")
+    print("Float addition: {math.add(1.5, 2.5)}")
+    print("")
+
+    print("Even/odd check:")
+    for i in 1..6 {
+        if math.is_even(i) {
+            print("  {i} is even")
+        } else {
+            print("  {i} is odd")
+        }
+    }
+
+    print("")
+    print("Factorials:")
+    for i in 1..8 {
+        print("  {i}! = {math.factorial(i)}")
+    }
+}
