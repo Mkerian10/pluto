@@ -254,5 +254,44 @@ Key properties:
 - `void?` is rejected
 - String methods `to_int()` and `to_float()` return `int?` and `float?`
 
+## Secret<T>
+
+`Secret<T>` is a built-in generic class that wraps a value and prevents accidental leakage. The compiler enforces the protection — this is a guarantee, not a convention.
+
+```
+let password: Secret<string> = get_password()
+let api_key: Secret<string> = load_key()
+
+// Compiler prevents leaking
+print(password)                    // COMPILE ERROR: cannot print Secret<string>
+"{password}"                       // COMPILE ERROR: cannot interpolate Secret<string>
+channel.send(password)             // COMPILE ERROR: cannot serialize Secret<string>
+
+// Explicit unwrap — auditable
+let raw = password.expose()        // string
+
+// Comparison allowed
+password == other_secret           // OK
+```
+
+Key properties:
+- **Generic** — wraps any type: `Secret<string>`, `Secret<bytes>`, `Secret<ApiKey>`
+- **Compiler-enforced** — no printing, no string interpolation, no serialization. Accidentally logging a password is a compile-time error.
+- **Explicit unwrap** — `.expose()` returns the inner value. Every secret access point is auditable: grep for `.expose()` and you have a complete list.
+- **Composable** — works with DI, contracts, classes. A config class with `Secret<string>` fields is just a class.
+
+Primary use case is configuration (see [Dependency Injection — Configuration](dependency-injection.md)):
+
+```
+class DatabaseConfig {
+    host: string
+    port: int
+    password: Secret<string>
+
+    invariant self.port > 0
+    invariant self.host.len() > 0
+}
+```
+
 ## Not Yet Implemented
 
