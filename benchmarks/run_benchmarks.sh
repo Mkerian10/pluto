@@ -63,7 +63,10 @@ BENCHMARKS=(
     sor
     sparse_matmul
     lu
+    json_parse
 )
+
+STDLIB_DIR="$PROJECT_DIR/stdlib"
 
 PASS=0
 FAIL=0
@@ -82,8 +85,14 @@ for bench in "${BENCHMARKS[@]}"; do
     mkdir -p "$bench_dir"
     cp "$src" "$bench_dir/"
 
+    # Detect stdlib usage and build compile command
+    COMPILE_FLAGS=()
+    if grep -q "^import std\." "$src" 2>/dev/null; then
+        COMPILE_FLAGS+=(--stdlib "$STDLIB_DIR")
+    fi
+
     # Compile
-    if ! "$PLUTOC" compile "$bench_dir/${bench}.pluto" -o "$bin" 2>/dev/null; then
+    if ! "$PLUTOC" compile "$bench_dir/${bench}.pluto" -o "$bin" "${COMPILE_FLAGS[@]}" 2>/dev/null; then
         echo "FAIL  $bench (compilation error)"
         FAIL=$((FAIL + 1))
         continue
