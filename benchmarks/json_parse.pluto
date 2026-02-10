@@ -1,0 +1,37 @@
+import std.json
+
+fn build_payload() string {
+    let ob = __pluto_codepoint_to_string(123)
+    let cb = __pluto_codepoint_to_string(125)
+
+    let p = ob + "\"name\":\"Alice\",\"age\":30,\"active\":true,"
+    p = p + "\"address\":" + ob + "\"street\":\"123 Main St\",\"city\":\"Springfield\",\"state\":\"IL\",\"zip\":\"62701\"" + cb + ","
+    p = p + "\"scores\":[98,87,93,76,88],"
+    p = p + "\"friends\":["
+    p = p + ob + "\"name\":\"Bob\",\"age\":28" + cb + ","
+    p = p + ob + "\"name\":\"Carol\",\"age\":32" + cb + ","
+    p = p + ob + "\"name\":\"Dave\",\"age\":29" + cb
+    p = p + "],"
+    p = p + "\"metadata\":" + ob + "\"created\":\"2024-01-15\",\"updated\":\"2024-06-20\","
+    p = p + "\"tags\":[\"user\",\"premium\",\"verified\"],"
+    p = p + "\"settings\":" + ob + "\"theme\":\"dark\",\"notifications\":true,\"language\":\"en\"" + cb
+    p = p + cb + cb
+    return p
+}
+
+fn main() {
+    let payload = build_payload()
+    let iterations = 10000
+    let start = time_ns()
+
+    let i = 0
+    while i < iterations {
+        json.parse(payload) catch json.null()
+        i = i + 1
+    }
+
+    let elapsed = time_ns() - start
+    let ms = elapsed / 1000000
+    print("json_parse: {iterations} iterations")
+    print("elapsed: {ms} ms")
+}

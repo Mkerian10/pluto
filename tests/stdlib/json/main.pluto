@@ -1,0 +1,93 @@
+import std.json
+import std.fs
+import std.strings
+
+// Returns 1 if json.parse(content) succeeds, raises if it fails
+fn do_parse(content: string) int {
+    json.parse(content)!
+    return 1
+}
+
+fn is_skipped(name: string) bool {
+    // Non-UTF-8 files (Pluto strings are UTF-8 only)
+    if name == "n_array_a_invalid_utf8.json" { return true }
+    if name == "n_array_invalid_utf8.json" { return true }
+    if name == "n_number_invalid-utf-8-in-bigger-int.json" { return true }
+    if name == "n_number_invalid-utf-8-in-exponent.json" { return true }
+    if name == "n_number_invalid-utf-8-in-int.json" { return true }
+    if name == "n_number_real_with_invalid_utf8_after_e.json" { return true }
+    if name == "n_object_lone_continuation_byte_in_key_and_trailing_comma.json" { return true }
+    if name == "n_string_invalid_utf8_after_escape.json" { return true }
+    if name == "n_string_invalid-utf-8-in-escape.json" { return true }
+    if name == "n_structure_incomplete_UTF8_BOM.json" { return true }
+    if name == "n_structure_lone-invalid-utf-8.json" { return true }
+    if name == "n_structure_single_eacute.json" { return true }
+    // Huge files (would cause stack overflow from deep recursion)
+    if name == "n_structure_100000_opening_arrays.json" { return true }
+    if name == "n_structure_open_array_object.json" { return true }
+    return false
+}
+
+fn main() {
+    let data_dir = "tests/data/json-testsuite"
+
+    let files = fs.list_dir(data_dir)!
+
+    let pass = 0
+    let fail = 0
+    let skip = 0
+    let total = 0
+
+    let i = 0
+    while i < files.len() {
+        let name = files[i]
+        i = i + 1
+
+        // Note: use temp variable for negation to avoid !strings.X() parser ambiguity
+        let is_json = strings.ends_with(name, ".json")
+        if !is_json {
+            continue
+        }
+
+        total = total + 1
+
+        if is_skipped(name) {
+            skip = skip + 1
+            continue
+        }
+
+        let path = data_dir + "/" + name
+        let content = fs.read_all(path)!
+
+        let is_y = strings.starts_with(name, "y_")
+        let is_n = strings.starts_with(name, "n_")
+
+        if is_y {
+            // Must parse successfully
+            let parsed = do_parse(content) catch 0
+            if parsed == 1 {
+                pass = pass + 1
+            } else {
+                print("FAIL (should parse): {name}")
+                fail = fail + 1
+            }
+        } else {
+            if is_n {
+                // Must reject
+                let parsed = do_parse(content) catch 0
+                if parsed == 0 {
+                    pass = pass + 1
+                } else {
+                    print("FAIL (should reject): {name}")
+                    fail = fail + 1
+                }
+            } else {
+                skip = skip + 1
+            }
+        }
+    }
+
+    print("")
+    print("JSON Conformance: {pass} passed, {fail} failed, {skip} skipped ({total} total)")
+
+}

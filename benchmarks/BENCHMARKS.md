@@ -81,7 +81,7 @@ Java, JavaScript, Smalltalk, Ruby, and others.
 | **mandelbrot** | ✅ | Mandelbrot computation. (Same as CLBG version — compute only, no I/O.) |
 | **richards** | 🟡 | OS task scheduler simulation (12 classes). Tests polymorphic dispatch + state machines. |
 | **CD** | 🟡 | Collision detection via kd-tree (16 classes). Complex spatial OOP. |
-| **json** | 🟡 | Recursive-descent JSON parser. Character-by-character string processing. Needs string indexing. |
+| **json** | ✅ | Recursive-descent JSON parser. Character-by-character string processing. |
 | **deltablue** | 🔴 | Incremental constraint solver (20 classes, 99 methods). Needs inheritance-like dispatch. |
 | **havlak** | 🔴 | Loop detection on control-flow graphs. Needs complex OOP + collections. |
 
@@ -130,15 +130,15 @@ comparison.
 
 | Status | Count | Description |
 |--------|-------|-------------|
-| ✅ Implemented | 26 | In the suite today |
+| ✅ Implemented | 27 | In the suite today |
 | 🟢 Ready | 0 | Can implement with current Pluto features |
-| 🟡 Stretch | 3 | Needs workarounds (string indexing, complex trait mapping) |
+| 🟡 Stretch | 2 | Needs workarounds (complex trait mapping) |
 | 🔴 Blocked | 7 | Needs language features not yet available |
 | **Total** | **36** | |
 
 All benchmarks implementable with current language features are now complete.
 
-**From published suites:** 26 (CLBG: 10, AWFY: 14, SciMark: 5) — note: n-body and mandelbrot appear in both CLBG and AWFY but are counted once
+**From published suites:** 27 (CLBG: 10, AWFY: 14, SciMark: 5) — note: n-body and mandelbrot appear in both CLBG and AWFY but are counted once; json uses stdlib
 **Custom/Pluto-specific:** 10
 
 ---
@@ -164,6 +164,6 @@ they're valid **relative comparisons on the same machine in the same run**.
 ## Implementation Priorities
 
 **Needs language work first:**
-richards (complex trait dispatch), CD (kd-tree OOP), json (string indexing),
+richards (complex trait dispatch), CD (kd-tree OOP),
 deltablue (inheritance), havlak (complex OOP + collections),
 k-nucleotide / fasta / reverse-complement / pidigits / regex-redux (I/O, stdlib)
