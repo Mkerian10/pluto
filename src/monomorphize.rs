@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use uuid::Uuid;
+
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
@@ -93,6 +95,8 @@ fn instantiate_function(
 
     // Clone and substitute
     let mut func = template.node.clone();
+    func.id = Uuid::new_v4();
+    reassign_function_uuids(&mut func);
     func.name = Spanned::new(mangled.to_string(), template.node.name.span);
     func.type_params.clear();
     substitute_in_function(&mut func, &bindings);
@@ -130,6 +134,8 @@ fn instantiate_class(
     let bindings = build_type_expr_bindings(&type_params, type_args);
 
     let mut class = template.node.clone();
+    class.id = Uuid::new_v4();
+    reassign_class_uuids(&mut class);
     class.name = Spanned::new(mangled.to_string(), template.node.name.span);
     class.type_params.clear();
     substitute_in_class(&mut class, &bindings);
@@ -193,6 +199,8 @@ fn instantiate_enum(
     let bindings = build_type_expr_bindings(&type_params, _type_args);
 
     let mut edecl = template.node.clone();
+    edecl.id = Uuid::new_v4();
+    reassign_enum_uuids(&mut edecl);
     edecl.name = Spanned::new(mangled.to_string(), template.node.name.span);
     edecl.type_params.clear();
     substitute_in_enum(&mut edecl, &bindings);
@@ -288,6 +296,34 @@ fn substitute_in_type_expr(te: &mut TypeExpr, bindings: &HashMap<String, TypeExp
             for arg in type_args.iter_mut() {
                 substitute_in_type_expr(&mut arg.node, bindings);
             }
+        }
+    }
+}
+
+/// Reassign UUIDs for all nested declarations within a Function (params).
+fn reassign_function_uuids(func: &mut Function) {
+    for p in &mut func.params {
+        p.id = Uuid::new_v4();
+    }
+}
+
+/// Reassign UUIDs for all nested declarations within a ClassDecl (fields, methods, params).
+fn reassign_class_uuids(class: &mut ClassDecl) {
+    for f in &mut class.fields {
+        f.id = Uuid::new_v4();
+    }
+    for method in &mut class.methods {
+        method.node.id = Uuid::new_v4();
+        reassign_function_uuids(&mut method.node);
+    }
+}
+
+/// Reassign UUIDs for all nested declarations within an EnumDecl (variants, fields).
+fn reassign_enum_uuids(edecl: &mut EnumDecl) {
+    for variant in &mut edecl.variants {
+        variant.id = Uuid::new_v4();
+        for f in &mut variant.fields {
+            f.id = Uuid::new_v4();
         }
     }
 }

@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use uuid::Uuid;
+
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use super::env::{self, ClassInfo, EnumInfo, ErrorInfo, FuncSig, GenericClassInfo, GenericEnumInfo, GenericFuncSig, TraitInfo, TypeEnv};
@@ -787,6 +789,7 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
                             // This class inherits this default method — type check it
                             let body = trait_method.body.as_ref().unwrap();
                             let tmp_func = Function {
+                                id: Uuid::new_v4(),
                                 name: trait_method.name.clone(),
                                 type_params: vec![],
                                 params: trait_method.params.clone(),

@@ -1,3 +1,5 @@
+use uuid::Uuid;
+
 use crate::span::Spanned;
 
 #[derive(Debug)]
@@ -51,6 +53,7 @@ pub struct ExternRustDecl {
 
 #[derive(Debug, Clone)]
 pub struct ClassDecl {
+    pub id: Uuid,
     pub name: Spanned<String>,
     pub type_params: Vec<Spanned<String>>,
     pub fields: Vec<Field>,
@@ -63,6 +66,7 @@ pub struct ClassDecl {
 
 #[derive(Debug, Clone)]
 pub struct Field {
+    pub id: Uuid,
     pub name: Spanned<String>,
     pub ty: Spanned<TypeExpr>,
     pub is_injected: bool,
@@ -71,6 +75,7 @@ pub struct Field {
 
 #[derive(Debug, Clone)]
 pub struct AppDecl {
+    pub id: Uuid,
     pub name: Spanned<String>,
     pub inject_fields: Vec<Field>,
     pub ambient_types: Vec<Spanned<String>>,
@@ -79,6 +84,7 @@ pub struct AppDecl {
 
 #[derive(Debug, Clone)]
 pub struct Function {
+    pub id: Uuid,
     pub name: Spanned<String>,
     pub type_params: Vec<Spanned<String>>,
     pub params: Vec<Param>,
@@ -90,6 +96,7 @@ pub struct Function {
 
 #[derive(Debug, Clone)]
 pub struct Param {
+    pub id: Uuid,
     pub name: Spanned<String>,
     pub ty: Spanned<TypeExpr>,
 }
@@ -329,6 +336,7 @@ pub enum ContractKind {
 
 #[derive(Debug, Clone)]
 pub struct TraitDecl {
+    pub id: Uuid,
     pub name: Spanned<String>,
     pub methods: Vec<TraitMethod>,
     pub is_pub: bool,
@@ -336,6 +344,7 @@ pub struct TraitDecl {
 
 #[derive(Debug, Clone)]
 pub struct TraitMethod {
+    pub id: Uuid,
     pub name: Spanned<String>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
@@ -345,6 +354,7 @@ pub struct TraitMethod {
 
 #[derive(Debug, Clone)]
 pub struct EnumDecl {
+    pub id: Uuid,
     pub name: Spanned<String>,
     pub type_params: Vec<Spanned<String>>,
     pub variants: Vec<EnumVariant>,
@@ -353,6 +363,7 @@ pub struct EnumDecl {
 
 #[derive(Debug, Clone)]
 pub struct ErrorDecl {
+    pub id: Uuid,
     pub name: Spanned<String>,
     pub fields: Vec<Field>,
     pub is_pub: bool,
@@ -369,6 +380,7 @@ pub enum CatchHandler {
 
 #[derive(Debug, Clone)]
 pub struct EnumVariant {
+    pub id: Uuid,
     pub name: Spanned<String>,
     pub fields: Vec<Field>,
 }

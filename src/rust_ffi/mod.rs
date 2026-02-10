@@ -3,6 +3,8 @@ pub mod parser;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use uuid::Uuid;
+
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
@@ -186,6 +188,7 @@ pub fn inject_extern_fns(program: &mut Program, artifacts: &[RustCrateArtifact])
                 .iter()
                 .enumerate()
                 .map(|(i, ty)| Param {
+                    id: Uuid::new_v4(),
                     name: Spanned::new(format!("p{}", i), Span::dummy()),
                     ty: Spanned::new(pluto_type_to_type_expr(ty), Span::dummy()),
                 })

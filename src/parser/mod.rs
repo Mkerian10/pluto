@@ -2,6 +2,8 @@ pub mod ast;
 
 use std::collections::HashSet;
 
+use uuid::Uuid;
+
 use crate::diagnostics::CompileError;
 use crate::lexer::token::Token;
 use crate::span::{Span, Spanned};
@@ -293,6 +295,7 @@ impl<'a> Parser<'a> {
                     let body = self.parse_block()?;
                     let end = body.span.end;
                     functions.push(Spanned::new(Function {
+                        id: Uuid::new_v4(),
                         name: Spanned::new(fn_name.clone(), name_span),
                         type_params: vec![],
                         params: vec![],
@@ -361,7 +364,7 @@ impl<'a> Parser<'a> {
             let pname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let pty = self.parse_type()?;
-            params.push(Param { name: pname, ty: pty });
+            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
         }
         let close_paren = self.expect(&Token::RParen)?;
         let mut end = close_paren.span.end;
@@ -422,7 +425,7 @@ impl<'a> Parser<'a> {
                 let name = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let ty = self.parse_type()?;
-                deps.push(Field { name, ty, is_injected: true, is_ambient: false });
+                deps.push(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false });
             }
             self.expect(&Token::RBracket)?;
         }
@@ -456,7 +459,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(AppDecl { name, inject_fields, ambient_types, methods }, Span::new(start, end)))
+        Ok(Spanned::new(AppDecl { id: Uuid::new_v4(), name, inject_fields, ambient_types, methods }, Span::new(start, end)))
     }
 
     fn parse_enum_decl(&mut self) -> Result<Spanned<EnumDecl>, CompileError> {
@@ -487,7 +490,7 @@ impl<'a> Parser<'a> {
                     let fname = self.expect_ident()?;
                     self.expect(&Token::Colon)?;
                     let fty = self.parse_type()?;
-                    fields.push(Field { name: fname, ty: fty, is_injected: false, is_ambient: false });
+                    fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false });
                     self.skip_newlines();
                 }
                 self.expect(&Token::RBrace)?;
@@ -495,14 +498,14 @@ impl<'a> Parser<'a> {
             } else {
                 Vec::new()
             };
-            variants.push(EnumVariant { name: vname, fields });
+            variants.push(EnumVariant { id: Uuid::new_v4(), name: vname, fields });
             self.skip_newlines();
         }
 
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(EnumDecl { name, type_params, variants, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(EnumDecl { id: Uuid::new_v4(), name, type_params, variants, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_error_decl(&mut self) -> Result<Spanned<ErrorDecl>, CompileError> {
@@ -526,14 +529,14 @@ impl<'a> Parser<'a> {
             let fname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type()?;
-            fields.push(Field { name: fname, ty: fty, is_injected: false, is_ambient: false });
+            fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false });
             self.skip_newlines();
         }
 
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ErrorDecl { name, fields, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(ErrorDecl { id: Uuid::new_v4(), name, fields, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_trait(&mut self) -> Result<Spanned<TraitDecl>, CompileError> {
@@ -552,7 +555,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(TraitDecl { name, methods, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(TraitDecl { id: Uuid::new_v4(), name, methods, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_trait_method(&mut self) -> Result<TraitMethod, CompileError> {
@@ -571,6 +574,7 @@ impl<'a> Parser<'a> {
             if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
                 let self_tok = self.advance().unwrap();
                 params.push(Param {
+                    id: Uuid::new_v4(),
                     name: Spanned::new("self".to_string(), self_tok.span),
                     ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
                 });
@@ -578,7 +582,7 @@ impl<'a> Parser<'a> {
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let pty = self.parse_type()?;
-                params.push(Param { name: pname, ty: pty });
+                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
             }
         }
         self.expect(&Token::RParen)?;
@@ -602,7 +606,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(TraitMethod { name, params, return_type, contracts: vec![], body })
+        Ok(TraitMethod { id: Uuid::new_v4(), name, params, return_type, contracts: vec![], body })
     }
 
     fn parse_class(&mut self) -> Result<Spanned<ClassDecl>, CompileError> {
@@ -667,7 +671,7 @@ impl<'a> Parser<'a> {
                 let fname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
-                fields.push(Field { name: fname, ty: fty, is_injected: false, is_ambient: false });
+                fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false });
                 self.consume_statement_end();
             }
             self.skip_newlines();
@@ -676,7 +680,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ClassDecl { name, type_params, fields, methods, invariants, impl_traits, uses, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, fields, methods, invariants, impl_traits, uses, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_method(&mut self) -> Result<Spanned<Function>, CompileError> {
@@ -697,6 +701,7 @@ impl<'a> Parser<'a> {
             if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
                 let self_tok = self.advance().unwrap();
                 params.push(Param {
+                    id: Uuid::new_v4(),
                     name: Spanned::new("self".to_string(), self_tok.span),
                     ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
                 });
@@ -704,7 +709,7 @@ impl<'a> Parser<'a> {
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let pty = self.parse_type()?;
-                params.push(Param { name: pname, ty: pty });
+                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
             }
         }
         self.expect(&Token::RParen)?;
@@ -721,7 +726,7 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { name, type_params: vec![], params, return_type, contracts, body, is_pub: false },
+            Function { id: Uuid::new_v4(), name, type_params: vec![], params, return_type, contracts, body, is_pub: false },
             Span::new(start, end),
         ))
     }
@@ -808,7 +813,7 @@ impl<'a> Parser<'a> {
             let pname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let pty = self.parse_type()?;
-            params.push(Param { name: pname, ty: pty });
+            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
         }
         self.expect(&Token::RParen)?;
 
@@ -825,7 +830,7 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { name, type_params, params, return_type, contracts, body, is_pub: false },
+            Function { id: Uuid::new_v4(), name, type_params, params, return_type, contracts, body, is_pub: false },
             Span::new(start, end),
         ))
     }
@@ -2408,7 +2413,7 @@ impl<'a> Parser<'a> {
             let pname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let pty = self.parse_type()?;
-            params.push(Param { name: pname, ty: pty });
+            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
         }
         self.expect(&Token::RParen)?;
 

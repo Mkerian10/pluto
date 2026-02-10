@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use uuid::Uuid;
+
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
@@ -64,6 +66,7 @@ pub fn desugar_ambient(program: &mut Program) -> Result<(), CompileError> {
             }
 
             fields_to_insert.push(Field {
+                id: Uuid::new_v4(),
                 name: Spanned::new(var_name, type_name.span),
                 ty: Spanned::new(TypeExpr::Named(type_name.node.clone()), type_name.span),
                 is_injected: true,
@@ -122,6 +125,7 @@ pub fn desugar_ambient(program: &mut Program) -> Result<(), CompileError> {
                 }
 
                 fields_to_add.push(Field {
+                    id: Uuid::new_v4(),
                     name: Spanned::new(var_name, type_name.span),
                     ty: Spanned::new(TypeExpr::Named(type_name.node.clone()), type_name.span),
                     is_injected: true,

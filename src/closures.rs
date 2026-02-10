@@ -1,3 +1,5 @@
+use uuid::Uuid;
+
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
@@ -209,6 +211,7 @@ fn lift_in_expr(
 
                 // Build the __env param (typed as int, since it's a raw pointer)
                 let env_param = Param {
+                    id: Uuid::new_v4(),
                     name: Spanned::new("__env".to_string(), Span::new(0, 0)),
                     ty: Spanned::new(TypeExpr::Named("int".to_string()), Span::new(0, 0)),
                 };
@@ -255,6 +258,7 @@ fn lift_in_expr(
 
                 // Create the lifted Function
                 let lifted = Function {
+                    id: Uuid::new_v4(),
                     name: Spanned::new(fn_name.clone(), Span::new(0, 0)),
                     type_params: vec![],
                     params: all_params,

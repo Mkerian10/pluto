@@ -11,6 +11,8 @@ use cranelift_frontend::FunctionBuilderContext;
 use cranelift_module::{DataDescription, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
+use uuid::Uuid;
+
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::typeck::env::TypeEnv;
@@ -250,6 +252,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                         if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node) {
                             let body = trait_method.body.as_ref().unwrap();
                             let tmp_func = Function {
+                                id: Uuid::new_v4(),
                                 name: trait_method.name.clone(),
                                 type_params: vec![],
                                 params: trait_method.params.clone(),
