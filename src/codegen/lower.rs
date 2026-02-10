@@ -1914,6 +1914,20 @@ impl<'a> LowerContext<'a> {
                 match &call.node {
                     Expr::ClosureCreate { fn_name, captures, .. } => {
                         let closure_ptr = self.lower_closure_create(fn_name, captures)?;
+                        // Deep-copy heap-type captures so spawned task gets isolated data
+                        for (i, cap_name) in captures.iter().enumerate() {
+                            let cap_type = self.var_types.get(cap_name).cloned().unwrap_or(PlutoType::Int);
+                            if needs_deep_copy(&cap_type) {
+                                let offset = ((1 + i) * 8) as i32;
+                                let original = self.builder.ins().load(
+                                    types::I64, MemFlags::new(), closure_ptr, Offset32::new(offset),
+                                );
+                                let copied = self.call_runtime("__pluto_deep_copy", &[original]);
+                                self.builder.ins().store(
+                                    MemFlags::new(), copied, closure_ptr, Offset32::new(offset),
+                                );
+                            }
+                        }
                         // Inc refcount for each captured Sender
                         for cap_name in captures {
                             if let Some(PlutoType::Sender(_)) = self.var_types.get(cap_name) {
@@ -2748,8 +2762,10 @@ impl<'a> LowerContext<'a> {
                 results[0]
             };
 
-            // Emit invariant checks after method call (conservative: all methods)
-            self.emit_invariant_checks(&class_name, obj_ptr)?;
+            // Emit invariant checks only after mut self methods — only mutations can break invariants
+            if self.env.mut_self_methods.contains(&mangled) {
+                self.emit_invariant_checks(&class_name, obj_ptr)?;
+            }
 
             Ok(result)
         } else {
@@ -3249,6 +3265,22 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
             let inner_ty = resolve_type_expr_to_pluto(&inner.node, env);
             PlutoType::Nullable(Box::new(inner_ty))
         }
+    }
+}
+
+/// Whether a type needs deep-copying at spawn sites.
+/// Heap-allocated mutable types need copying; primitives, immutable strings,
+/// and shared-by-reference types (tasks, channels) do not.
+fn needs_deep_copy(ty: &PlutoType) -> bool {
+    match ty {
+        PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::Byte
+        | PlutoType::Void | PlutoType::Range | PlutoType::String
+        | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Task(_)
+        | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::GenericInstance(..) => false,
+        PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Map(..)
+        | PlutoType::Set(_) | PlutoType::Enum(_) | PlutoType::Bytes
+        | PlutoType::Fn(..) | PlutoType::Trait(_) => true,
+        PlutoType::Nullable(inner) => needs_deep_copy(inner),
     }
 }
 

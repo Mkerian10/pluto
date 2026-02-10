@@ -135,6 +135,7 @@ impl RuntimeRegistry {
         // Concurrency
         reg.declare(module, "__pluto_task_spawn", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_task_get", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_deep_copy", &[types::I64], &[types::I64])?;
 
         // Channels
         reg.declare(module, "__pluto_chan_create", &[types::I64], &[types::I64])?;

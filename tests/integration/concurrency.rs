@@ -1,6 +1,5 @@
 mod common;
 use common::*;
-use std::time::{Duration, Instant};
 
 // ── Basic functionality ────────────────────────────────────────────────
 
@@ -431,18 +430,13 @@ fn main() {
 "#, "must be handled with ! or catch");
 }
 
-// ── Race conditions (demonstrating unsafety without future primitives) ──
+// ── Copy-on-spawn isolation tests ───────────────────────────────────────
 
 #[test]
-fn race_shared_counter_lost_updates() {
-    // Multiple tasks increment a shared class field concurrently.
-    // Without synchronization, the read-modify-write is not atomic,
-    // so updates are lost. This test validates the race exists.
-    // Retry until the race manifests or timeout (race may not show on every run).
-    let timeout = Duration::from_secs(10);
-    let start = Instant::now();
-    loop {
-        let out = compile_and_run_stdout(r#"
+fn spawn_isolates_counter() {
+    // With copy-on-spawn, each task gets its own Counter copy.
+    // The parent's counter stays at 0.
+    let out = compile_and_run_stdout(r#"
 class Counter {
     value: int
 }
@@ -457,84 +451,44 @@ fn increment(c: Counter, n: int) {
 
 fn main() {
     let c = Counter { value: 0 }
-    let t1 = spawn increment(c, 10000)
-    let t2 = spawn increment(c, 10000)
-    let t3 = spawn increment(c, 10000)
-    let t4 = spawn increment(c, 10000)
-    let t5 = spawn increment(c, 10000)
-    let t6 = spawn increment(c, 10000)
-    let t7 = spawn increment(c, 10000)
-    let t8 = spawn increment(c, 10000)
+    let t1 = spawn increment(c, 1000)
+    let t2 = spawn increment(c, 1000)
     t1.get()
     t2.get()
-    t3.get()
-    t4.get()
-    t5.get()
-    t6.get()
-    t7.get()
-    t8.get()
     print(c.value)
 }
 "#);
-        let value: i64 = out.trim().parse().expect("should print a number");
-        assert!(value > 0, "Counter should have some increments, got {value}");
-        // Race manifested — lost updates detected
-        if value < 80000 {
-            return;
-        }
-        // No race this time; retry unless we've timed out
-        if start.elapsed() > timeout {
-            panic!("Race condition did not manifest after {timeout:?} — got {value} every time");
-        }
-    }
+    assert_eq!(out.trim(), "0");
 }
 
 #[test]
-fn race_shared_class_field_write() {
-    // Two tasks write different values to the same field in a tight loop.
-    // The final value should be from one task or the other — validates
-    // concurrent field writes don't crash (just produce racy results).
+fn spawn_isolates_class_field_write() {
+    // With copy-on-spawn, tasks write to their own copies.
+    // Parent's value stays at the original.
     let out = compile_and_run_stdout(r#"
 class Box {
     value: int
 }
 
-fn write_ones(b: Box, n: int) {
-    let i = 0
-    while i < n {
-        b.value = 1
-        i = i + 1
-    }
-}
-
-fn write_twos(b: Box, n: int) {
-    let i = 0
-    while i < n {
-        b.value = 2
-        i = i + 1
-    }
+fn write_value(b: Box, v: int) {
+    b.value = v
 }
 
 fn main() {
     let b = Box { value: 0 }
-    let t1 = spawn write_ones(b, 100000)
-    let t2 = spawn write_twos(b, 100000)
+    let t1 = spawn write_value(b, 1)
+    let t2 = spawn write_value(b, 2)
     t1.get()
     t2.get()
     print(b.value)
 }
 "#);
-    let value: i64 = out.trim().parse().expect("should print a number");
-    // Final value must be 1 or 2 (last writer wins)
-    assert!(value == 1 || value == 2, "Expected 1 or 2, got {value}");
+    assert_eq!(out.trim(), "0");
 }
 
 #[test]
-fn shared_heap_object_proves_aliasing() {
-    // Proves that spawned tasks share heap objects (pointer copy, not deep copy).
-    // A task modifies a class field, and the main thread sees the change.
-    // This is the root cause of data races — when move semantics are added,
-    // this pattern should be rejected at compile time.
+fn spawn_deep_copy_class_isolation() {
+    // Copy-on-spawn: task gets a deep copy, parent unchanged.
     let out = compile_and_run_stdout(r#"
 class Container {
     value: int
@@ -551,7 +505,131 @@ fn main() {
     print(c.value)
 }
 "#);
+    assert_eq!(out.trim(), "0");
+}
+
+#[test]
+fn spawn_deep_copy_array_isolation() {
+    // Task gets a deep copy of an array — parent's array unchanged.
+    let out = compile_and_run_stdout(r#"
+fn modify_array(arr: [int]) {
+    arr.push(999)
+}
+
+fn main() {
+    let arr = [1, 2, 3]
+    let t = spawn modify_array(arr)
+    t.get()
+    print(arr.len())
+}
+"#);
+    assert_eq!(out.trim(), "3");
+}
+
+#[test]
+fn spawn_deep_copy_nested_object() {
+    // Task gets a deep copy of nested objects — parent's inner object unchanged.
+    let out = compile_and_run_stdout(r#"
+class Inner {
+    value: int
+}
+
+class Outer {
+    inner: Inner
+}
+
+fn modify_inner(o: Outer) {
+    let mut i = o.inner
+    i.value = 999
+}
+
+fn main() {
+    let inner = Inner { value: 42 }
+    let outer = Outer { inner: inner }
+    let t = spawn modify_inner(outer)
+    t.get()
+    let result = outer.inner
+    print(result.value)
+}
+"#);
     assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn spawn_deep_copy_map_isolation() {
+    // Task gets a deep copy of a map — parent's map unchanged.
+    let out = compile_and_run_stdout(r#"
+fn modify_map(m: Map<string, int>) {
+    m["new_key"] = 999
+}
+
+fn main() {
+    let m = Map<string, int> { "a": 1, "b": 2 }
+    let t = spawn modify_map(m)
+    t.get()
+    print(m.len())
+}
+"#);
+    assert_eq!(out.trim(), "2");
+}
+
+#[test]
+fn spawn_deep_copy_set_isolation() {
+    // Task gets a deep copy of a set — parent's set unchanged.
+    let out = compile_and_run_stdout(r#"
+fn modify_set(s: Set<int>) {
+    s.insert(999)
+}
+
+fn main() {
+    let s = Set<int> { 1, 2, 3 }
+    let t = spawn modify_set(s)
+    t.get()
+    print(s.len())
+}
+"#);
+    assert_eq!(out.trim(), "3");
+}
+
+#[test]
+fn spawn_strings_safe_without_deep_copy() {
+    // Strings are immutable — no deep copy needed, still safe.
+    let out = compile_and_run_stdout(r#"
+fn use_string(s: string) string {
+    return s + " world"
+}
+
+fn main() {
+    let s = "hello"
+    let t = spawn use_string(s)
+    let result = t.get()
+    print(s)
+    print(result)
+}
+"#);
+    assert_eq!(out.trim(), "hello\nhello world");
+}
+
+#[test]
+fn spawn_deep_copy_class_with_array_field() {
+    // Deep copy of a class that contains an array field.
+    let out = compile_and_run_stdout(r#"
+class Container {
+    items: [int]
+}
+
+fn modify_container(c: Container) {
+    c.items.push(999)
+}
+
+fn main() {
+    let c = Container { items: [1, 2, 3] }
+    let t = spawn modify_container(c)
+    t.get()
+    print(c.items.len())
+}
+"#);
+    assert_eq!(out.trim(), "3");
 }
 
 // ── Stress tests ─────────────────────────────────────────────────────────
