@@ -110,7 +110,7 @@ cargo run -- run examples/collections-lib/main.pluto --stdlib stdlib
 
 ## stdin
 
-Demonstrates interactive I/O with `std.io`: reading input with `io.read_line()`, parsing strings to numbers with `.to_int()` and `.to_float()` (both fallible — use `catch` to handle invalid input), and string interpolation for output.
+Demonstrates interactive I/O with `std.io`: reading input with `io.read_line()`, parsing strings to numbers with `.to_int()` and `.to_float()` (both return nullable types — use `?` to propagate none on invalid input), and string interpolation for output.
 
 ```bash
 echo -e "Alice\n21\n72" | cargo run -- run examples/stdin/main.pluto --stdlib stdlib

@@ -1676,9 +1676,8 @@ fn infer_method_call(
                         "to_int() expects 0 arguments".to_string(), span,
                     ));
                 }
-                let mangled = ensure_generic_enum_instantiated("Option", &[PlutoType::Int], env);
                 builtin(env, method);
-                return Ok(PlutoType::Enum(mangled));
+                return Ok(PlutoType::Nullable(Box::new(PlutoType::Int)));
             }
             "to_float" => {
                 if !args.is_empty() {
@@ -1686,9 +1685,8 @@ fn infer_method_call(
                         "to_float() expects 0 arguments".to_string(), span,
                     ));
                 }
-                let mangled = ensure_generic_enum_instantiated("Option", &[PlutoType::Float], env);
                 builtin(env, method);
-                return Ok(PlutoType::Enum(mangled));
+                return Ok(PlutoType::Nullable(Box::new(PlutoType::Float)));
             }
             "to_bytes" => {
                 if !args.is_empty() {

@@ -3301,8 +3301,8 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                     "substring" | "trim" | "to_upper" | "to_lower" | "replace" | "char_at" => PlutoType::String,
                     "split" => PlutoType::Array(Box::new(PlutoType::String)),
                     "to_bytes" => PlutoType::Bytes,
-                    "to_int" => PlutoType::Enum("Option__int".to_string()),
-                    "to_float" => PlutoType::Enum("Option__float".to_string()),
+                    "to_int" => PlutoType::Nullable(Box::new(PlutoType::Int)),
+                    "to_float" => PlutoType::Nullable(Box::new(PlutoType::Float)),
                     _ => PlutoType::Void,
                 };
             }

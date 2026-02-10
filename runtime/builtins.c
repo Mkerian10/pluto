@@ -1165,16 +1165,13 @@ void *__pluto_string_to_int(void *s) {
     while (*end_ptr == ' ' || *end_ptr == '\t' || *end_ptr == '\n' || *end_ptr == '\r') end_ptr++;
     if (start == end_ptr || *end_ptr != '\0') {
         free(tmp);
-        // Return Option.None (tag=1)
-        void *obj = gc_alloc(16, GC_TAG_OBJECT, 0);
-        *(long *)obj = 1;
-        return obj;
+        // Return none (null pointer)
+        return (void *)0;
     }
     free(tmp);
-    // Return Option.Some { value } (tag=0, value at offset 8)
-    void *obj = gc_alloc(16, GC_TAG_OBJECT, 0);
-    *(long *)obj = 0;
-    *(long *)((char *)obj + 8) = result;
+    // Return boxed int value (nullable representation)
+    void *obj = gc_alloc(8, GC_TAG_OBJECT, 0);
+    *(long *)obj = result;
     return obj;
 }
 
@@ -1193,16 +1190,13 @@ void *__pluto_string_to_float(void *s) {
     while (*end_ptr == ' ' || *end_ptr == '\t' || *end_ptr == '\n' || *end_ptr == '\r') end_ptr++;
     if (start == end_ptr || *end_ptr != '\0') {
         free(tmp);
-        // Return Option.None (tag=1)
-        void *obj = gc_alloc(16, GC_TAG_OBJECT, 0);
-        *(long *)obj = 1;
-        return obj;
+        // Return none (null pointer)
+        return (void *)0;
     }
     free(tmp);
-    // Return Option.Some { value } (tag=0, float stored as bitcast i64 at offset 8)
-    void *obj = gc_alloc(16, GC_TAG_OBJECT, 0);
-    *(long *)obj = 0;
-    memcpy((char *)obj + 8, &result, 8);
+    // Return boxed float value (nullable representation: float stored as bitcast i64)
+    void *obj = gc_alloc(8, GC_TAG_OBJECT, 0);
+    memcpy(obj, &result, 8);
     return obj;
 }
 
