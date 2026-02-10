@@ -1,0 +1,12 @@
+[package]
+name = "plutoc-sdk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+plutoc = { path = ".." }
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
