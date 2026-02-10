@@ -76,13 +76,6 @@ fn load_directory_module(
     }
     visited.insert(canonical_dir.clone());
     let result = (|| {
-        let mod_file = dir.join("mod.pluto");
-        if mod_file.is_file() {
-            let (mut program, _) = load_and_parse(&mod_file, source_map)?;
-            resolve_module_imports(&mut program, dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
-            return Ok(program);
-        }
-
         let mut merged = Program {
             imports: Vec::new(),
             functions: Vec::new(),

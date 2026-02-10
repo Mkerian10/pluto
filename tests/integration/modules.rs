@@ -428,28 +428,29 @@ fn hierarchical_import_alias() {
 }
 
 // ============================================================
-// mod.pluto — directory with mod.pluto loads only that file
+// mod.pluto — all .pluto files in directory are merged
 // ============================================================
 
 #[test]
-fn mod_pluto_only_loads_mod_file() {
+fn mod_pluto_merges_with_siblings() {
+    // mod.pluto AND extra.pluto are both loaded — all files merged
     let out = run_project(&[
-        ("main.pluto", "import math\n\nfn main() {\n    print(math.add(1, 2))\n}"),
+        ("main.pluto", "import math\n\nfn main() {\n    print(math.add(1, 2))\n    print(math.mul(2, 3))\n}"),
         ("math/mod.pluto", "pub fn add(a: int, b: int) int {\n    return a + b\n}"),
         ("math/extra.pluto", "pub fn mul(a: int, b: int) int {\n    return a * b\n}"),
     ]);
-    // Only mod.pluto is loaded, so math.mul should not be available
-    assert_eq!(out, "3\n");
+    assert_eq!(out, "3\n6\n");
 }
 
 #[test]
-fn mod_pluto_extra_not_visible() {
-    // math/extra.pluto defines mul(), but with mod.pluto present, only mod.pluto is loaded
-    compile_project_should_fail(&[
+fn mod_pluto_extra_is_visible() {
+    // With mod.pluto present, extra.pluto is still merged — mul() is visible
+    let out = run_project(&[
         ("main.pluto", "import math\n\nfn main() {\n    print(math.mul(2, 3))\n}"),
         ("math/mod.pluto", "pub fn add(a: int, b: int) int {\n    return a + b\n}"),
         ("math/extra.pluto", "pub fn mul(a: int, b: int) int {\n    return a * b\n}"),
     ]);
+    assert_eq!(out, "6\n");
 }
 
 // ============================================================
@@ -703,7 +704,7 @@ pub fn make_circle(r: int) geo.Circle {
 
 #[test]
 fn transitive_import_mod_pluto() {
-    // mod.pluto file that imports another module (relative to its own directory)
+    // mod.pluto and helper.pluto are auto-merged as siblings — no explicit import needed
     let out = run_project(&[
         ("main.pluto", r#"import lib
 
@@ -711,13 +712,11 @@ fn main() {
     print(lib.combined())
 }
 "#),
-        ("lib/mod.pluto", r#"import helper
-
-pub fn combined() int {
-    return helper.base() * 2
+        ("lib/mod.pluto", r#"pub fn combined() int {
+    return base() * 2
 }
 "#),
-        ("lib/helper.pluto", r#"pub fn base() int {
+        ("lib/helper.pluto", r#"fn base() int {
     return 21
 }
 "#),
