@@ -1320,7 +1320,17 @@ impl<'a> Parser<'a> {
 
         let else_block = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Else) {
             self.advance(); // consume 'else'
-            Some(self.parse_block()?)
+            // Desugar `else if` into `else { if ... }`
+            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::If) {
+                let nested_if = self.parse_if_stmt()?;
+                let span = nested_if.span;
+                Some(Spanned::new(
+                    Block { stmts: vec![nested_if] },
+                    span,
+                ))
+            } else {
+                Some(self.parse_block()?)
+            }
         } else {
             None
         };

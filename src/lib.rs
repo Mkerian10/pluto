@@ -377,6 +377,7 @@ struct LinkConfig {
 impl LinkConfig {
     fn default_config(pluto_obj: &Path) -> Result<Self, CompileError> {
         let runtime_o = cached_runtime_object()?;
+        #[allow(unused_mut)]
         let mut flags = vec!["-lm".to_string()];
         #[cfg(target_os = "linux")]
         flags.push("-pthread".to_string());

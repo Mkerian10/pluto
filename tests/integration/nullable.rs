@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run, compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
+use common::{compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
 
 // ── Positive tests ─────────────────────────────────────────────────────
 
