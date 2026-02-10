@@ -2698,7 +2698,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Receiver(_) => types::I64,  // pointer to channel handle
         PlutoType::Error => types::I64,        // pointer to error object
         PlutoType::Range => types::I64,           // not used as a value type
-        PlutoType::TypeParam(_) => panic!("TypeParam should not reach codegen"),
+        PlutoType::TypeParam(name) => panic!("ICE: generic type parameter '{name}' reached codegen unresolved"),
         PlutoType::Byte => types::I8,          // unsigned 8-bit value
         PlutoType::Bytes => types::I64,        // pointer to bytes handle
     }

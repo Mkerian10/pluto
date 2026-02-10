@@ -48,11 +48,7 @@ pub fn render_error(source: &str, _filename: &str, err: &CompileError) {
 
     match err {
         CompileError::Syntax { msg, span } | CompileError::Type { msg, span } => {
-            let kind_str = match err {
-                CompileError::Syntax { .. } => "syntax",
-                CompileError::Type { .. } => "type",
-                _ => unreachable!(),
-            };
+            let kind_str = if matches!(err, CompileError::Syntax { .. }) { "syntax" } else { "type" };
             Report::build(ReportKind::Error, (), span.start)
                 .with_message(format!("{kind_str} error"))
                 .with_label(

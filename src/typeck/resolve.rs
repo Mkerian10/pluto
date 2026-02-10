@@ -306,7 +306,9 @@ pub(crate) fn ensure_generic_func_instantiated(
     if env.functions.contains_key(&mangled) {
         return mangled;
     }
-    let gen_sig = env.generic_functions.get(base_name).unwrap().clone();
+    let gen_sig = env.generic_functions.get(base_name)
+        .unwrap_or_else(|| panic!("ICE: unknown generic function '{base_name}'"))
+        .clone();
     let bindings: HashMap<String, PlutoType> = gen_sig.type_params.iter()
         .zip(type_args.iter())
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -335,7 +337,9 @@ pub(crate) fn ensure_generic_class_instantiated(
     if env.classes.contains_key(&mangled) {
         return mangled;
     }
-    let gen_info = env.generic_classes.get(base_name).unwrap().clone();
+    let gen_info = env.generic_classes.get(base_name)
+        .unwrap_or_else(|| panic!("ICE: unknown generic class '{base_name}'"))
+        .clone();
     let bindings: HashMap<String, PlutoType> = gen_info.type_params.iter()
         .zip(type_args.iter())
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -383,7 +387,9 @@ pub(crate) fn ensure_generic_enum_instantiated(
     if env.enums.contains_key(&mangled) {
         return mangled;
     }
-    let gen_info = env.generic_enums.get(base_name).unwrap().clone();
+    let gen_info = env.generic_enums.get(base_name)
+        .unwrap_or_else(|| panic!("ICE: unknown generic enum '{base_name}'"))
+        .clone();
     let bindings: HashMap<String, PlutoType> = gen_info.type_params.iter()
         .zip(type_args.iter())
         .map(|(k, v)| (k.clone(), v.clone()))
