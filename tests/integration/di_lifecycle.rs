@@ -101,3 +101,49 @@ fn transient_class_in_di() {
     );
     assert_eq!(output.trim(), "hello");
 }
+
+// === Phase 2: Singleton globals ===
+
+#[test]
+fn singleton_globals_app_with_deps() {
+    // App with a 3-class DI chain: C -> B -> A. Verifies wiring still works
+    // after singleton pointers are stored to module-level globals.
+    let output = compile_and_run_stdout(
+        r#"class Config {
+    fn db_url(self) string {
+        return "postgres://localhost"
+    }
+}
+
+class Database[config: Config] {
+    fn url(self) string {
+        return self.config.db_url()
+    }
+}
+
+class UserService[db: Database] {
+    fn get_url(self) string {
+        return self.db.url()
+    }
+}
+
+app MyApp[users: UserService] {
+    fn main(self) {
+        print(self.users.get_url())
+    }
+}"#,
+    );
+    assert_eq!(output.trim(), "postgres://localhost");
+}
+
+#[test]
+fn singleton_globals_no_app() {
+    // Program with no app — empty singleton_data_ids map, no globals stored.
+    // Should compile and run without issue.
+    let output = compile_and_run_stdout(
+        r#"fn main() {
+    print("no app")
+}"#,
+    );
+    assert_eq!(output.trim(), "no app");
+}
