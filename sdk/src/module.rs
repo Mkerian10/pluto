@@ -110,6 +110,7 @@ impl Module {
                 caller,
                 call_expr,
                 target_id: info.target_id,
+                span: info.span,
             })
         }).collect()
     }
@@ -126,6 +127,7 @@ impl Module {
                 function,
                 struct_lit,
                 target_id: info.target_id,
+                span: info.span,
             })
         }).collect()
     }
@@ -143,6 +145,7 @@ impl Module {
                 expr,
                 enum_id: info.enum_id,
                 variant_id: info.variant_id,
+                span: info.span,
             })
         }).collect()
     }
@@ -159,6 +162,7 @@ impl Module {
                 function,
                 stmt,
                 error_id: info.error_id,
+                span: info.span,
             })
         }).collect()
     }

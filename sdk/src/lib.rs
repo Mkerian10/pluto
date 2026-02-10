@@ -249,6 +249,7 @@ fn main() {
             impl_traits: vec![],
             uses: vec![],
             is_pub: false,
+            lifecycle: Lifecycle::Singleton,
         }));
 
         let lit_span = PlutoSpan::new(200, 220);
