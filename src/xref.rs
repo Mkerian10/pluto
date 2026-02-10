@@ -345,6 +345,7 @@ mod tests {
             traits: vec![],
             enums: vec![],
             app: None,
+            system: None,
             errors: vec![],
             test_info: vec![],
             fallible_extern_fns: vec![],

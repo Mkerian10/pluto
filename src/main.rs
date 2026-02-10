@@ -73,15 +73,54 @@ fn main() {
 
     match cli.command {
         Commands::Compile { file, output } => {
-            if let Err(err) = plutoc::compile_file_with_stdlib(&file, &output, stdlib) {
-                let filename = file.to_string_lossy().to_string();
-                // For file-based compilation, we don't have a single source string for rendering.
-                // Fall back to basic error display.
-                eprintln!("error [{}]: {err}", filename);
-                std::process::exit(1);
+            // Check if this is a system file (contains a `system` declaration)
+            match plutoc::detect_system_file(&file) {
+                Ok(Some(_program)) => {
+                    // System file: compile each member app to its own binary
+                    match plutoc::compile_system_file_with_stdlib(&file, &output, stdlib) {
+                        Ok(members) => {
+                            for (name, path) in &members {
+                                eprintln!("  compiled {} → {}", name, path.display());
+                            }
+                            eprintln!("system: {} member(s) compiled", members.len());
+                        }
+                        Err(err) => {
+                            let filename = file.to_string_lossy().to_string();
+                            eprintln!("error [{}]: {err}", filename);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    // Regular file: compile to a single binary
+                    if let Err(err) = plutoc::compile_file_with_stdlib(&file, &output, stdlib) {
+                        let filename = file.to_string_lossy().to_string();
+                        eprintln!("error [{}]: {err}", filename);
+                        std::process::exit(1);
+                    }
+                }
+                Err(err) => {
+                    let filename = file.to_string_lossy().to_string();
+                    eprintln!("error [{}]: {err}", filename);
+                    std::process::exit(1);
+                }
             }
         }
         Commands::Run { file } => {
+            // Reject system files — they produce multiple binaries
+            match plutoc::detect_system_file(&file) {
+                Ok(Some(_)) => {
+                    eprintln!("error: cannot run a system file directly; use `plutoc compile` to produce individual binaries");
+                    std::process::exit(1);
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    let filename = file.to_string_lossy().to_string();
+                    eprintln!("error [{}]: {err}", filename);
+                    std::process::exit(1);
+                }
+            }
+
             let tmp = std::env::temp_dir().join("pluto_run");
             if let Err(err) = plutoc::compile_file_with_stdlib(&file, &tmp, stdlib) {
                 let filename = file.to_string_lossy().to_string();

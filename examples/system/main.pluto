@@ -1,0 +1,7 @@
+import api
+import worker
+
+system OrderPlatform {
+    api_server: api
+    background: worker
+}

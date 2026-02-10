@@ -13,6 +13,7 @@ pub struct Program {
     pub traits: Vec<Spanned<TraitDecl>>,
     pub enums: Vec<Spanned<EnumDecl>>,
     pub app: Option<Spanned<AppDecl>>,
+    pub system: Option<Spanned<SystemDecl>>,
     pub errors: Vec<Spanned<ErrorDecl>>,
     pub test_info: Vec<(String, String)>,  // (display_name, fn_name)
     pub fallible_extern_fns: Vec<String>,  // populated by rust_ffi::inject_extern_fns for Result-returning FFI fns
@@ -90,6 +91,20 @@ pub struct AppDecl {
     pub ambient_types: Vec<Spanned<String>>,
     pub lifecycle_overrides: Vec<(Spanned<String>, Lifecycle)>,
     pub methods: Vec<Spanned<Function>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemMember {
+    pub id: Uuid,
+    pub name: Spanned<String>,         // deployment name (e.g., "api_server")
+    pub module_name: Spanned<String>,   // imported module name (e.g., "api")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemDecl {
+    pub id: Uuid,
+    pub name: Spanned<String>,          // system name (e.g., "OrderPlatform")
+    pub members: Vec<SystemMember>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

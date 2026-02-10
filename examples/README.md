@@ -157,6 +157,16 @@ Demonstrates scoped dependency injection with `scope()` blocks: creating per-req
 cargo run -- run examples/scope-blocks/main.pluto
 ```
 
+## system
+
+Demonstrates the `system` declaration for multi-app distributed systems. A system file composes multiple app modules (each with their own `app` declaration and DI graph) into named deployment members. The compiler produces one binary per member.
+
+```bash
+cargo run -- compile examples/system/main.pluto -o /tmp/system_build
+/tmp/system_build/api_server
+/tmp/system_build/background
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.

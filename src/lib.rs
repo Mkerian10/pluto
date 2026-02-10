@@ -159,6 +159,10 @@ pub fn compile_file(entry_file: &Path, output_path: &Path) -> Result<(), Compile
 
 /// Compile with an explicit stdlib root path.
 pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<(), CompileError> {
+    compile_file_impl(entry_file, output_path, stdlib_root, false)
+}
+
+fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, skip_siblings: bool) -> Result<(), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)
@@ -168,7 +172,11 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
 
     let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
     let pkg_graph = manifest::find_and_resolve(entry_dir)?;
-    let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
+    let graph = if skip_siblings {
+        modules::resolve_modules_no_siblings(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?
+    } else {
+        modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?
+    };
 
     // Check extern rust aliases don't collide with import aliases
     check_extern_rust_import_collisions(&graph)?;
@@ -416,6 +424,146 @@ fn link_from_config(config: &LinkConfig, output: &Path) -> Result<(), CompileErr
 fn link(obj_path: &Path, output_path: &Path) -> Result<(), CompileError> {
     let config = LinkConfig::default_config(obj_path)?;
     link_from_config(&config, output_path)
+}
+
+/// Quick-parse a file to check if it contains a system declaration.
+/// Returns the parsed program if it does, None if it doesn't.
+pub fn detect_system_file(entry_file: &Path) -> Result<Option<parser::ast::Program>, CompileError> {
+    let source = std::fs::read_to_string(entry_file)
+        .map_err(|e| CompileError::codegen(format!("failed to read file: {e}")))?;
+    let tokens = lexer::lex(&source)?;
+    let mut parser = parser::Parser::new(&tokens, &source);
+    let program = parser.parse_program()?;
+    if program.system.is_some() {
+        Ok(Some(program))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Compile a system file: parse the system declaration, validate members,
+/// and compile each member app as a standalone binary.
+///
+/// Returns a list of (member_name, binary_path) on success.
+pub fn compile_system_file_with_stdlib(
+    system_file: &Path,
+    output_dir: &Path,
+    stdlib_root: Option<&Path>,
+) -> Result<Vec<(String, PathBuf)>, CompileError> {
+    let system_file = system_file.canonicalize().map_err(|e|
+        CompileError::codegen(format!("could not resolve path '{}': {e}", system_file.display())))?;
+    let system_dir = system_file.parent().ok_or_else(||
+        CompileError::codegen("system file has no parent directory"))?;
+
+    let source = std::fs::read_to_string(&system_file)
+        .map_err(|e| CompileError::codegen(format!("failed to read system file: {e}")))?;
+    let tokens = lexer::lex(&source)?;
+    let mut parser = parser::Parser::new(&tokens, &source);
+    let program = parser.parse_program()?;
+
+    let system_decl = program.system.as_ref().ok_or_else(||
+        CompileError::codegen("file does not contain a system declaration"))?;
+
+    // Validate: no top-level fn main() in system file
+    for func in &program.functions {
+        if func.node.name.node == "main" {
+            return Err(CompileError::syntax(
+                "system files must not contain a top-level fn main()",
+                func.node.name.span,
+            ));
+        }
+    }
+
+    // Validate each member references an imported module
+    let import_names: std::collections::HashSet<String> = program.imports.iter()
+        .map(|i| i.node.binding_name().to_string())
+        .collect();
+
+    for member in &system_decl.node.members {
+        if !import_names.contains(&member.module_name.node) {
+            return Err(CompileError::syntax(
+                format!("system member '{}' references module '{}' which is not imported",
+                    member.name.node, member.module_name.node),
+                member.module_name.span,
+            ));
+        }
+    }
+
+    // Resolve modules to validate that member modules contain apps
+    let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
+    let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
+
+    let pkg_graph = manifest::find_and_resolve(system_dir)?;
+    let graph = modules::resolve_modules(&system_file, effective_stdlib.as_deref(), &pkg_graph)?;
+
+    for member in &system_decl.node.members {
+        let module_name = &member.module_name.node;
+        let module_prog = graph.imports.iter()
+            .find(|(name, _, _)| name == module_name)
+            .map(|(_, prog, _)| prog);
+        match module_prog {
+            Some(prog) if prog.app.is_none() => {
+                return Err(CompileError::syntax(
+                    format!("system member '{}' references module '{}' which does not contain an app declaration",
+                        member.name.node, module_name),
+                    member.module_name.span,
+                ));
+            }
+            None => {
+                return Err(CompileError::syntax(
+                    format!("system member '{}' references module '{}' which could not be resolved",
+                        member.name.node, module_name),
+                    member.module_name.span,
+                ));
+            }
+            _ => {} // Has app, valid
+        }
+    }
+
+    // Create output directory
+    std::fs::create_dir_all(output_dir)
+        .map_err(|e| CompileError::codegen(format!("failed to create output directory: {e}")))?;
+
+    // Compile each member as a standalone program
+    let mut results = Vec::new();
+    for member in &system_decl.node.members {
+        let module_name = &member.module_name.node;
+        let member_name = &member.name.node;
+
+        // Find the module's entry point
+        let dir_path = system_dir.join(module_name);
+        let file_path = system_dir.join(format!("{}.pluto", module_name));
+
+        let entry_file = if dir_path.is_dir() {
+            // Directory module: use main.pluto if it exists, otherwise first .pluto file
+            let main_pluto = dir_path.join("main.pluto");
+            if main_pluto.is_file() {
+                main_pluto
+            } else {
+                let mut files: Vec<PathBuf> = std::fs::read_dir(&dir_path)
+                    .map_err(|e| CompileError::codegen(format!("could not read directory '{}': {e}", dir_path.display())))?
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|ext| ext == "pluto"))
+                    .collect();
+                files.sort();
+                files.into_iter().next().ok_or_else(||
+                    CompileError::codegen(format!("no .pluto files found in module directory '{}'", dir_path.display())))?
+            }
+        } else if file_path.is_file() {
+            file_path
+        } else {
+            return Err(CompileError::codegen(format!(
+                "cannot find module '{}': no directory or file found", module_name
+            )));
+        };
+
+        let output_path = output_dir.join(member_name);
+        compile_file_impl(&entry_file, &output_path, stdlib_root, true)?;
+        results.push((member_name.clone(), output_path));
+    }
+
+    Ok(results)
 }
 
 /// Fetch latest versions of all git dependencies declared in pluto.toml.

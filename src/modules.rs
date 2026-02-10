@@ -86,6 +86,7 @@ fn load_directory_module(
             traits: Vec::new(),
             enums: Vec::new(),
             app: None,
+            system: None,
             errors: Vec::new(),
             test_info: Vec::new(),
             fallible_extern_fns: Vec::new(),
@@ -118,6 +119,15 @@ fn load_directory_module(
                     )));
                 }
                 merged.app = Some(app_decl);
+            }
+            if let Some(system_decl) = program.system {
+                if merged.system.is_some() {
+                    return Err(CompileError::codegen(format!(
+                        "multiple system declarations in module directory '{}'",
+                        dir.display()
+                    )));
+                }
+                merged.system = Some(system_decl);
             }
             merged.errors.extend(program.errors);
             merged.test_info.extend(program.test_info);
@@ -506,6 +516,25 @@ pub fn resolve_modules(
     stdlib_root: Option<&Path>,
     pkg_graph: &PackageGraph,
 ) -> Result<ModuleGraph, CompileError> {
+    resolve_modules_inner(entry_file, stdlib_root, pkg_graph, false)
+}
+
+/// Like resolve_modules but skips sibling .pluto file auto-merging.
+/// Used for system member compilation where each member is compiled in isolation.
+pub fn resolve_modules_no_siblings(
+    entry_file: &Path,
+    stdlib_root: Option<&Path>,
+    pkg_graph: &PackageGraph,
+) -> Result<ModuleGraph, CompileError> {
+    resolve_modules_inner(entry_file, stdlib_root, pkg_graph, true)
+}
+
+fn resolve_modules_inner(
+    entry_file: &Path,
+    stdlib_root: Option<&Path>,
+    pkg_graph: &PackageGraph,
+    skip_siblings: bool,
+) -> Result<ModuleGraph, CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e| {
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display()))
     })?;
@@ -547,50 +576,61 @@ pub fn resolve_modules(
     let mut root = entry_prog;
 
     // Load sibling .pluto files (excluding the entry file and imported single-file modules)
-    let entries = std::fs::read_dir(entry_dir).map_err(|e| {
-        CompileError::codegen(format!("could not read directory '{}': {e}", entry_dir.display()))
-    })?;
+    // Skip this step when compiling system members in isolation
+    if !skip_siblings {
+        let entries = std::fs::read_dir(entry_dir).map_err(|e| {
+            CompileError::codegen(format!("could not read directory '{}': {e}", entry_dir.display()))
+        })?;
 
-    let mut sibling_files: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension().is_some_and(|ext| ext == "pluto")
-                && p.canonicalize().unwrap_or(p.clone()) != entry_file
-        })
-        .collect();
-    sibling_files.sort();
+        let mut sibling_files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension().is_some_and(|ext| ext == "pluto")
+                    && p.canonicalize().unwrap_or(p.clone()) != entry_file
+            })
+            .collect();
+        sibling_files.sort();
 
-    for file_path in &sibling_files {
-        let stem = file_path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-        // Skip files that match an import first segment (they'll be loaded as modules)
-        if import_first_segments.contains(stem) {
-            continue;
-        }
-        // Skip files that match a dep name
-        if dep_names.contains(&stem.to_string()) {
-            continue;
-        }
-        let (program, _file_id) = load_and_parse(file_path, &mut source_map)?;
-        // Merge sibling's imports into root (they might also have imports)
-        root.imports.extend(program.imports);
-        root.functions.extend(program.functions);
-        root.extern_fns.extend(program.extern_fns);
-        root.extern_rust_crates.extend(program.extern_rust_crates);
-        root.classes.extend(program.classes);
-        root.traits.extend(program.traits);
-        root.enums.extend(program.enums);
-        if let Some(app_decl) = program.app {
-            if root.app.is_some() {
-                return Err(CompileError::codegen(
-                    "multiple app declarations in project".to_string(),
-                ));
+        for file_path in &sibling_files {
+            let stem = file_path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            // Skip files that match an import first segment (they'll be loaded as modules)
+            if import_first_segments.contains(stem) {
+                continue;
             }
-            root.app = Some(app_decl);
+            // Skip files that match a dep name
+            if dep_names.contains(&stem.to_string()) {
+                continue;
+            }
+            let (program, _file_id) = load_and_parse(file_path, &mut source_map)?;
+            // Merge sibling's imports into root (they might also have imports)
+            root.imports.extend(program.imports);
+            root.functions.extend(program.functions);
+            root.extern_fns.extend(program.extern_fns);
+            root.extern_rust_crates.extend(program.extern_rust_crates);
+            root.classes.extend(program.classes);
+            root.traits.extend(program.traits);
+            root.enums.extend(program.enums);
+            if let Some(app_decl) = program.app {
+                if root.app.is_some() {
+                    return Err(CompileError::codegen(
+                        "multiple app declarations in project".to_string(),
+                    ));
+                }
+                root.app = Some(app_decl);
+            }
+            if let Some(system_decl) = program.system {
+                if root.system.is_some() {
+                    return Err(CompileError::codegen(
+                        "multiple system declarations in project".to_string(),
+                    ));
+                }
+                root.system = Some(system_decl);
+            }
+            root.errors.extend(program.errors);
         }
-        root.errors.extend(program.errors);
     }
 
     // Resolve each import (now with recursive sub-import support)

@@ -235,6 +235,7 @@ impl<'a> Parser<'a> {
         let mut traits = Vec::new();
         let mut enums = Vec::new();
         let mut app = None;
+        let mut system = None;
         let mut errors = Vec::new();
         let mut test_info: Vec<(String, String)> = Vec::new();
         self.skip_newlines();
@@ -438,9 +439,31 @@ impl<'a> Parser<'a> {
                     }, Span::new(test_start, end)));
                     test_info.push((display_name, fn_name));
                 }
+                Token::System => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
+                    if is_pub {
+                        return Err(CompileError::syntax(
+                            "system declarations cannot be pub",
+                            tok.span,
+                        ));
+                    }
+                    let system_decl = self.parse_system_decl()?;
+                    if system.is_some() {
+                        return Err(CompileError::syntax(
+                            "duplicate system declaration",
+                            system_decl.span,
+                        ));
+                    }
+                    system = Some(system_decl);
+                }
                 _ => {
                     return Err(CompileError::syntax(
-                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'test', 'extern fn', or 'extern rust', found {}", tok.node),
+                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'system', 'test', 'extern fn', or 'extern rust', found {}", tok.node),
                         tok.span,
                     ));
                 }
@@ -448,7 +471,16 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, errors, test_info, fallible_extern_fns: Vec::new() })
+        // Reject system + app in same file
+        if system.is_some() && app.is_some() {
+            let app_span = app.as_ref().unwrap().span;
+            return Err(CompileError::syntax(
+                "a file cannot contain both 'system' and 'app' declarations",
+                app_span,
+            ));
+        }
+
+        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, system, errors, test_info, fallible_extern_fns: Vec::new() })
     }
 
     fn parse_import(&mut self) -> Result<Spanned<ImportDecl>, CompileError> {
@@ -596,6 +628,40 @@ impl<'a> Parser<'a> {
         let end = close.span.end;
 
         Ok(Spanned::new(AppDecl { id: Uuid::new_v4(), name, inject_fields, ambient_types, lifecycle_overrides, methods }, Span::new(start, end)))
+    }
+
+    fn parse_system_decl(&mut self) -> Result<Spanned<SystemDecl>, CompileError> {
+        let system_tok = self.expect(&Token::System)?;
+        let start = system_tok.span.start;
+        let name = self.expect_ident()?;
+
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut members = Vec::new();
+        let mut seen_names = HashSet::new();
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+            let member_name = self.expect_ident()?;
+            if !seen_names.insert(member_name.node.clone()) {
+                return Err(CompileError::syntax(
+                    format!("duplicate system member name: '{}'", member_name.node),
+                    member_name.span,
+                ));
+            }
+            self.expect(&Token::Colon)?;
+            let module_name = self.expect_ident()?;
+            members.push(SystemMember {
+                id: Uuid::new_v4(),
+                name: member_name,
+                module_name,
+            });
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+
+        Ok(Spanned::new(SystemDecl { id: Uuid::new_v4(), name, members }, Span::new(start, end)))
     }
 
     fn parse_enum_decl(&mut self) -> Result<Spanned<EnumDecl>, CompileError> {

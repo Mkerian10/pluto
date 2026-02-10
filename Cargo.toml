@@ -168,3 +168,7 @@ path = "tests/integration/sync.rs"
 [[test]]
 name = "scope_blocks"
 path = "tests/integration/scope_blocks.rs"
+
+[[test]]
+name = "system"
+path = "tests/integration/system.rs"
