@@ -1170,3 +1170,234 @@ app MyApp[worker: Worker] {
 "#);
     assert_eq!(out.trim(), "10");
 }
+
+// ── Inferred synchronization (Phase 4b) ──────────────────────────────
+
+#[test]
+fn sync_basic_counter() {
+    // Main + spawn both call increment on the same singleton 1000 times each.
+    // With rwlock synchronization, the final count must be exactly 2000.
+    let out = compile_and_run_stdout(r#"
+class Counter {
+    value: int
+
+    fn increment(mut self) {
+        self.value = self.value + 1
+    }
+
+    fn do_increments(mut self) {
+        let i = 0
+        while i < 1000 {
+            self.value = self.value + 1
+            i = i + 1
+        }
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+app MyApp[counter: Counter] {
+    fn main(self) {
+        let t = spawn self.counter.do_increments()
+        let i = 0
+        while i < 1000 {
+            self.counter.increment()
+            i = i + 1
+        }
+        t.get()
+        print(self.counter.get())
+    }
+}
+"#);
+    assert_eq!(out.trim(), "2000");
+}
+
+#[test]
+fn sync_concurrent_readers() {
+    // Multiple spawned readers calling a self (read) method. Should not deadlock
+    // because rdlock is shared.
+    let out = compile_and_run_stdout(r#"
+class Store {
+    value: int
+
+    fn get(self) int {
+        return self.value
+    }
+
+    fn set(mut self, v: int) {
+        self.value = v
+    }
+}
+
+app MyApp[store: Store] {
+    fn main(self) {
+        self.store.set(42)
+        let t1 = spawn self.store.get()
+        let t2 = spawn self.store.get()
+        let t3 = spawn self.store.get()
+        let a = t1.get()
+        let b = t2.get()
+        let c = t3.get()
+        print(a + b + c)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "126");
+}
+
+#[test]
+fn sync_no_sync_when_not_concurrent() {
+    // Singleton only used from main thread (spawn does unrelated work).
+    // Should compile and run correctly with zero overhead.
+    let out = compile_and_run_stdout(r#"
+class Config {
+    value: int
+
+    fn get(self) int {
+        return self.value
+    }
+
+    fn set(mut self, v: int) {
+        self.value = v
+    }
+}
+
+fn unrelated_work() int {
+    return 100
+}
+
+app MyApp[config: Config] {
+    fn main(self) {
+        let t = spawn unrelated_work()
+        self.config.set(42)
+        let result = t.get()
+        print(self.config.get() + result)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "142");
+}
+
+#[test]
+fn sync_error_in_synchronized_method() {
+    // Synchronized method raises an error. Verify lock is released and error
+    // propagates correctly through .get() catch.
+    let out = compile_and_run_stdout(r#"
+error ServiceError {
+    message: string
+}
+
+class Service {
+    count: int
+
+    fn process(mut self) int {
+        self.count = self.count + 1
+        raise ServiceError { message: "boom" }
+        return 0
+    }
+
+    fn get_count(self) int {
+        return self.count
+    }
+}
+
+fn call_process(svc: Service) int {
+    return svc.process()!
+}
+
+app MyApp[svc: Service] {
+    fn main(self) {
+        let t = spawn call_process(self.svc)
+        let result = t.get() catch err {
+            print("caught")
+            0
+        }
+        print(self.svc.get_count())
+    }
+}
+"#);
+    let lines: Vec<&str> = out.trim().lines().collect();
+    assert_eq!(lines[0], "caught");
+    assert_eq!(lines[1], "1");
+}
+
+#[test]
+fn sync_with_invariants() {
+    // Synchronized singleton with class invariants.
+    // Invariants should be checked inside the lock.
+    let out = compile_and_run_stdout(r#"
+class Balance {
+    amount: int
+    invariant self.amount >= 0
+
+    fn deposit(mut self, n: int) {
+        self.amount = self.amount + n
+    }
+
+    fn do_deposits(mut self) {
+        let i = 0
+        while i < 100 {
+            self.amount = self.amount + 1
+            i = i + 1
+        }
+    }
+
+    fn get(self) int {
+        return self.amount
+    }
+}
+
+app MyApp[bal: Balance] {
+    fn main(self) {
+        let t = spawn self.bal.do_deposits()
+        let i = 0
+        while i < 100 {
+            self.bal.deposit(1)
+            i = i + 1
+        }
+        t.get()
+        print(self.bal.get())
+    }
+}
+"#);
+    assert_eq!(out.trim(), "200");
+}
+
+#[test]
+fn sync_transitive_access() {
+    // Singleton accessed indirectly through a free function called from both
+    // main and spawn. The analysis should detect transitive access and synchronize.
+    let out = compile_and_run_stdout(r#"
+class Counter {
+    value: int
+
+    fn increment(mut self) {
+        self.value = self.value + 1
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+fn do_increments(c: Counter) {
+    let i = 0
+    while i < 500 {
+        c.increment()
+        i = i + 1
+    }
+}
+
+app MyApp[counter: Counter] {
+    fn main(self) {
+        let t = spawn do_increments(self.counter)
+        do_increments(self.counter)
+        t.get()
+        print(self.counter.get())
+    }
+}
+"#);
+    assert_eq!(out.trim(), "1000");
+}
