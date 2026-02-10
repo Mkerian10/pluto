@@ -1,5 +1,6 @@
 mod common;
 use common::*;
+use std::time::{Duration, Instant};
 
 // ── Basic functionality ────────────────────────────────────────────────
 
@@ -431,6 +432,62 @@ fn main() {
 }
 
 // ── Race conditions (demonstrating unsafety without future primitives) ──
+
+#[test]
+fn race_shared_counter_lost_updates() {
+    // Multiple tasks increment a shared class field concurrently.
+    // Without synchronization, the read-modify-write is not atomic,
+    // so updates are lost. This test validates the race exists.
+    // Retry until the race manifests or timeout (race may not show on every run).
+    let timeout = Duration::from_secs(10);
+    let start = Instant::now();
+    loop {
+        let out = compile_and_run_stdout(r#"
+class Counter {
+    value: int
+}
+
+fn increment(c: Counter, n: int) {
+    let i = 0
+    while i < n {
+        c.value = c.value + 1
+        i = i + 1
+    }
+}
+
+fn main() {
+    let c = Counter { value: 0 }
+    let t1 = spawn increment(c, 10000)
+    let t2 = spawn increment(c, 10000)
+    let t3 = spawn increment(c, 10000)
+    let t4 = spawn increment(c, 10000)
+    let t5 = spawn increment(c, 10000)
+    let t6 = spawn increment(c, 10000)
+    let t7 = spawn increment(c, 10000)
+    let t8 = spawn increment(c, 10000)
+    t1.get()
+    t2.get()
+    t3.get()
+    t4.get()
+    t5.get()
+    t6.get()
+    t7.get()
+    t8.get()
+    print(c.value)
+}
+"#);
+        let value: i64 = out.trim().parse().expect("should print a number");
+        assert!(value > 0, "Counter should have some increments, got {value}");
+        // Race manifested — lost updates detected
+        if value < 80000 {
+            return;
+        }
+        // No race this time; retry unless we've timed out
+        if start.elapsed() > timeout {
+            panic!("Race condition did not manifest after {timeout:?} — got {value} every time");
+        }
+    }
+}
 
 #[test]
 fn race_shared_class_field_write() {
