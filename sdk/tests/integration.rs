@@ -63,7 +63,7 @@ fn binary_round_trip() {
     let module = Module::from_source_file(&path).unwrap();
 
     // Serialize to binary and reload
-    let bytes = plutoc::binary::serialize_program(module.program(), module.source()).unwrap();
+    let bytes = plutoc::binary::serialize_program(module.program(), module.source(), module.derived()).unwrap();
     let module2 = Module::from_bytes(&bytes).unwrap();
 
     assert_eq!(module.source(), module2.source());

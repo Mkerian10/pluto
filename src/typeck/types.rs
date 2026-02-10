@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PlutoType {
     Int,
     Float,
@@ -27,7 +27,7 @@ pub enum PlutoType {
     GenericInstance(GenericKind, std::string::String, Vec<PlutoType>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum GenericKind {
     Class,
     Enum,

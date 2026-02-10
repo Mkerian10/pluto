@@ -16,6 +16,7 @@ pub mod manifest;
 pub mod git_cache;
 pub mod lsp;
 pub mod binary;
+pub mod derived;
 pub mod pretty;
 pub mod xref;
 
@@ -178,8 +179,8 @@ use parser::ast::Program;
 
 /// Analyze a source file: run the full front-end pipeline (parse → modules → desugar →
 /// typeck → monomorphize → closures → xref) but stop before codegen.
-/// Returns the fully resolved Program and the entry file's source text.
-pub fn analyze_file(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String), CompileError> {
+/// Returns the fully resolved Program, the entry file's source text, and derived analysis data.
+pub fn analyze_file(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String, derived::DerivedInfo), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)
@@ -215,8 +216,9 @@ pub fn analyze_file(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Pr
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);
+    let derived = derived::DerivedInfo::build(&env, &program);
 
-    Ok((program, source))
+    Ok((program, source, derived))
 }
 
 /// Compile a file in test mode. Tests are preserved and a test runner main is generated.

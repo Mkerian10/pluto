@@ -125,8 +125,8 @@ fn main() {
             let output = output.unwrap_or_else(|| file.with_extension("pluto"));
 
             match plutoc::analyze_file(&file, stdlib) {
-                Ok((program, source)) => {
-                    match plutoc::binary::serialize_program(&program, &source) {
+                Ok((program, source, derived)) => {
+                    match plutoc::binary::serialize_program(&program, &source, &derived) {
                         Ok(bytes) => {
                             if let Err(e) = std::fs::write(&output, &bytes) {
                                 eprintln!("error: failed to write {}: {e}", output.display());
@@ -160,7 +160,7 @@ fn main() {
                 std::process::exit(1);
             }
 
-            let (program, _source) = match plutoc::binary::deserialize_program(&data) {
+            let (program, _source, _derived) = match plutoc::binary::deserialize_program(&data) {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("error: failed to deserialize {}: {e}", file.display());

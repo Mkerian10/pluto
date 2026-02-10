@@ -1,6 +1,7 @@
 use std::path::Path;
 use uuid::Uuid;
 
+use plutoc::derived::{DerivedInfo, ErrorRef, ResolvedSignature};
 use plutoc::parser::ast::Program;
 use plutoc::span::Span;
 
@@ -10,19 +11,20 @@ use crate::index::ModuleIndex;
 use crate::xref::{CallSite, ConstructSite, EnumUsageSite, RaiseSite};
 
 /// Primary entry point for querying a Pluto program.
-/// Owns the deserialized Program and source text, with pre-built indexes.
+/// Owns the deserialized Program and source text, with pre-built indexes and derived type data.
 pub struct Module {
     program: Program,
     source: String,
     index: ModuleIndex,
+    derived: DerivedInfo,
 }
 
 impl Module {
     /// Load from PLTO binary bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SdkError> {
-        let (program, source) = plutoc::binary::deserialize_program(bytes)?;
+        let (program, source, derived) = plutoc::binary::deserialize_program(bytes)?;
         let index = ModuleIndex::build(&program);
-        Ok(Self { program, source, index })
+        Ok(Self { program, source, index, derived })
     }
 
     /// Load from a PLTO file on disk.
@@ -33,9 +35,9 @@ impl Module {
 
     /// Analyze a .pluto source file (runs full front-end pipeline).
     pub fn from_source_file(path: impl AsRef<Path>) -> Result<Self, SdkError> {
-        let (program, source) = plutoc::analyze_file(path.as_ref(), None)?;
+        let (program, source, derived) = plutoc::analyze_file(path.as_ref(), None)?;
         let index = ModuleIndex::build(&program);
-        Ok(Self { program, source, index })
+        Ok(Self { program, source, index, derived })
     }
 
     // --- By-UUID lookup ---
@@ -175,6 +177,36 @@ impl Module {
 
     pub fn program(&self) -> &Program {
         &self.program
+    }
+
+    // --- Derived type data queries ---
+
+    /// Get the error set for a function by its UUID.
+    /// Returns an empty slice for unknown UUIDs or infallible functions.
+    pub fn error_set_of(&self, id: Uuid) -> &[ErrorRef] {
+        self.derived
+            .fn_error_sets
+            .get(&id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Check whether a function is fallible (can raise errors).
+    pub fn is_fallible(&self, id: Uuid) -> bool {
+        self.derived
+            .fn_error_sets
+            .get(&id)
+            .is_some_and(|errs| !errs.is_empty())
+    }
+
+    /// Get the resolved signature for a function by its UUID.
+    pub fn signature_of(&self, id: Uuid) -> Option<&ResolvedSignature> {
+        self.derived.fn_signatures.get(&id)
+    }
+
+    /// Access the raw derived info.
+    pub fn derived(&self) -> &DerivedInfo {
+        &self.derived
     }
 
     // --- Internal helpers ---

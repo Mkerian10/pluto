@@ -9,13 +9,16 @@ pub use error::SdkError;
 pub use module::Module;
 
 // Re-export key plutoc types for convenience
+pub use plutoc::derived::{DerivedInfo, ErrorRef, ResolvedSignature};
 pub use plutoc::parser::ast::Program;
 pub use plutoc::span::{Span, Spanned};
+pub use plutoc::typeck::types::PlutoType;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use plutoc::binary::serialize_program;
+    use plutoc::derived::DerivedInfo;
     use plutoc::lexer;
     use plutoc::parser::Parser;
     use plutoc::span::{Span as PlutoSpan, Spanned as PlutoSpanned};
@@ -59,6 +62,13 @@ mod tests {
         }
     }
 
+    fn empty_derived() -> DerivedInfo {
+        DerivedInfo {
+            fn_error_sets: Default::default(),
+            fn_signatures: Default::default(),
+        }
+    }
+
     /// Parse a source string into a Program (no typeck).
     fn parse(source: &str) -> Program {
         let tokens = lexer::lex(source).expect("lex failed");
@@ -70,7 +80,8 @@ mod tests {
     fn from_bytes_round_trip() {
         let source = "fn main() {\n}\n";
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
         assert_eq!(module.source(), source);
         assert_eq!(module.functions().len(), 1);
@@ -82,7 +93,8 @@ mod tests {
         let source = "fn foo() {\n}\n\nfn main() {\n}\n";
         let program = parse(source);
         let foo_id = program.functions[0].node.id;
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         let decl = module.get(foo_id).unwrap();
@@ -95,7 +107,8 @@ mod tests {
     fn find_by_name() {
         let source = "fn foo() {\n}\n\nfn main() {\n}\n";
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         let results = module.find("foo");
@@ -122,7 +135,8 @@ fn main() {
 }
 "#;
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         assert_eq!(module.classes().len(), 1);
@@ -145,7 +159,8 @@ fn main() {
 }
 "#;
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         assert_eq!(module.traits().len(), 1);
@@ -158,7 +173,8 @@ fn main() {
     fn source_slice_extracts_correct_text() {
         let source = "fn foo() {\n}\n\nfn main() {\n}\n";
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         let foo_decl = module.find("foo")[0].span();
@@ -179,7 +195,8 @@ fn main() {
 "#;
         let program = parse(source);
         let red_id = program.enums[0].node.variants[0].id;
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         let red = module.get(red_id).unwrap();
@@ -208,7 +225,8 @@ fn main() {
         program.functions.push(caller);
 
         let source = "";
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         let sites = module.callers_of(target_id);
@@ -246,7 +264,8 @@ fn main() {
         program.functions.push(caller);
 
         let source = "";
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         let sites = module.constructors_of(class_id);
@@ -286,7 +305,8 @@ fn main() {
         program.functions.push(caller);
 
         let source = "";
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         let sites = module.enum_usages_of(enum_id);
@@ -318,7 +338,8 @@ fn main() {
         program.functions.push(caller);
 
         let source = "";
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         let sites = module.raise_sites_of(err_id);
@@ -341,7 +362,8 @@ fn main() {
         program.functions.push(caller);
 
         let source = "";
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         // No function should have callers (print has no target_id)
@@ -362,7 +384,8 @@ fn main() {
         }));
 
         let source = "";
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         let app = module.app().unwrap();
@@ -374,7 +397,8 @@ fn main() {
     fn raw_program_access() {
         let source = "fn main() {\n}\n";
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let module = Module::from_bytes(&bytes).unwrap();
 
         let prog = module.program();
