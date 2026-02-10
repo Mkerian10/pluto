@@ -257,16 +257,12 @@ fn parse_cargo_metadata_json(
     manifest_path: &Path,
     alias: &str,
 ) -> Result<CrateMetadata, CompileError> {
-    // cargo metadata JSON has a "packages" array. Each package has "manifest_path" and "targets".
-    // We need to find the package whose manifest_path matches ours, then find the lib target.
-
     let canonical_manifest = manifest_path
         .canonicalize()
         .unwrap_or_else(|_| manifest_path.to_path_buf());
     let manifest_str = canonical_manifest.to_string_lossy();
 
-    // Find the package section matching our manifest path
-    // Strategy: find "manifest_path":"<our_path>" and then extract targets from that package
+    // Find the "packages" array start
     let packages_start = json.find("\"packages\"").ok_or_else(|| {
         CompileError::codegen(format!(
             "extern rust '{}': cargo metadata output missing 'packages' field",
@@ -274,24 +270,15 @@ fn parse_cargo_metadata_json(
         ))
     })?;
 
-    // Find the array start
-    let _arr_start = json[packages_start..].find('[').map(|p| packages_start + p).ok_or_else(|| {
+    let arr_start = json[packages_start..].find('[').map(|p| packages_start + p).ok_or_else(|| {
         CompileError::codegen(format!(
             "extern rust '{}': malformed cargo metadata output",
             alias
         ))
     })?;
 
-    // Find our package by manifest_path
-    // Look for the manifest_path that matches
-    let search_pattern = format!("\"manifest_path\":\"{}\"", manifest_str.replace('\\', "\\\\"));
-    let search_pattern_normalized = format!(
-        "\"manifest_path\":\"{}\"",
-        manifest_str.replace('\\', "/")
-    );
-
-    let pkg_pos = json.find(&search_pattern)
-        .or_else(|| json.find(&search_pattern_normalized))
+    // Extract each package object from the packages array using brace depth tracking
+    let pkg_object = find_matching_package(&json[arr_start..], &manifest_str)
         .ok_or_else(|| {
             CompileError::codegen(format!(
                 "extern rust '{}': could not find package in cargo metadata (looking for manifest_path: {})",
@@ -299,22 +286,15 @@ fn parse_cargo_metadata_json(
             ))
         })?;
 
-    // Find the targets array for this package
-    // We need to find "targets":[ within this package object
-    // First find the package object boundaries
-    let pkg_obj_start = json[..pkg_pos].rfind('{').unwrap_or(0);
-
-    // Find "targets" within this package region
-    let targets_search = &json[pkg_obj_start..];
-    let targets_pos = targets_search.find("\"targets\"").ok_or_else(|| {
+    // Now find "targets" within this specific package object
+    let targets_pos = pkg_object.find("\"targets\"").ok_or_else(|| {
         CompileError::codegen(format!(
             "extern rust '{}': package has no 'targets' field",
             alias
         ))
     })?;
 
-    let targets_abs = pkg_obj_start + targets_pos;
-    let targets_arr_start = json[targets_abs..].find('[').map(|p| targets_abs + p).ok_or_else(|| {
+    let targets_arr_start = pkg_object[targets_pos..].find('[').map(|p| targets_pos + p).ok_or_else(|| {
         CompileError::codegen(format!(
             "extern rust '{}': malformed targets in cargo metadata",
             alias
@@ -322,10 +302,8 @@ fn parse_cargo_metadata_json(
     })?;
 
     // Find the lib target within the targets array
-    // Look for "kind":["lib"] or "kind":["staticlib","lib"] etc.
-    let targets_region = &json[targets_arr_start..];
+    let targets_region = &pkg_object[targets_arr_start..];
 
-    // Find each target object and check if it's a lib
     let mut lib_name = None;
     let mut lib_src_path = None;
 
@@ -345,11 +323,9 @@ fn parse_cargo_metadata_json(
         } else if ch == '}' {
             depth -= 1;
             if depth == 1 {
-                // End of a target object
                 if let Some(start) = obj_start {
                     let obj = &targets_region[start..=ci];
                     if obj.contains("\"lib\"") {
-                        // Extract name
                         if let Some(name) = extract_json_string(obj, "name") {
                             lib_name = Some(name);
                         }
@@ -389,6 +365,63 @@ fn parse_cargo_metadata_json(
         lib_source_path,
         manifest_dir,
     })
+}
+
+/// Find the package object in the packages JSON array whose manifest_path matches.
+/// Returns the full JSON text of the matching package object `{...}`.
+fn find_matching_package<'a>(packages_array: &'a str, manifest_str: &str) -> Option<&'a str> {
+    let bytes = packages_array.as_bytes();
+    let mut i = 0;
+    let mut depth: i32 = 0;
+    let mut obj_start = None;
+
+    while i < bytes.len() {
+        let ch = bytes[i];
+        match ch {
+            b'"' => {
+                // Skip over string content (handles escapes)
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' {
+                        i += 2; // skip escape sequence
+                    } else if bytes[i] == b'"' {
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'[' if depth == 0 => { depth = 1; }
+            b'[' => { depth += 1; }
+            b']' => {
+                if depth == 1 { break; }
+                depth -= 1;
+            }
+            b'{' => {
+                if depth == 1 {
+                    obj_start = Some(i);
+                }
+                depth += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                if depth == 1 {
+                    if let Some(start) = obj_start {
+                        let obj = &packages_array[start..=i];
+                        if let Some(mp) = extract_json_string(obj, "manifest_path") {
+                            if mp == manifest_str || mp.replace('\\', "/") == manifest_str.replace('\\', "/") {
+                                return Some(obj);
+                            }
+                        }
+                    }
+                    obj_start = None;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Extract a string value from a JSON object for a given key.
