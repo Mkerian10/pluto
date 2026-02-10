@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770722301839,
+  "lastUpdate": 1770724968067,
   "repoUrl": "https://github.com/Mkerian10/pluto",
   "entries": {
     "Benchmark": [
@@ -57,6 +57,35 @@ window.BENCHMARK_DATA = {
           {
             "name": "cargo_test",
             "value": 139520,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "33331268+Mkerian10@users.noreply.github.com",
+            "name": "Matthew Kerian",
+            "username": "Mkerian10"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e80f5fd49faecd687052608773f337d4627a3b13",
+          "message": "Merge pull request #15 from Mkerian10/mcp-friction\n\nFix 4 MCP friction points for AI agent ergonomics",
+          "timestamp": "2026-02-10T05:59:21-06:00",
+          "tree_id": "810cb82ef7fe1e15a2e813f48282a40a587fae56",
+          "url": "https://github.com/Mkerian10/pluto/commit/e80f5fd49faecd687052608773f337d4627a3b13"
+        },
+        "date": 1770724966886,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cargo_test",
+            "value": 185468,
             "unit": "ms"
           }
         ]
