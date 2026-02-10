@@ -736,6 +736,7 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
                                 type_params: vec![],
                                 params: trait_method.params.clone(),
                                 return_type: trait_method.return_type.clone(),
+                                contracts: trait_method.contracts.clone(),
                                 body: body.clone(),
                                 is_pub: false,
                             };

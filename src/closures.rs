@@ -246,6 +246,7 @@ fn lift_in_expr(
                     } else {
                         Some(Spanned::new(ret_type_expr, Span::new(0, 0)))
                     },
+                    contracts: vec![],
                     body,
                     is_pub: false,
                 };

@@ -241,6 +241,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                                 type_params: vec![],
                                 params: trait_method.params.clone(),
                                 return_type: trait_method.return_type.clone(),
+                                contracts: trait_method.contracts.clone(),
                                 body: body.clone(),
                                 is_pub: false,
                             };

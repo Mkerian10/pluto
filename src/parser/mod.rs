@@ -297,6 +297,7 @@ impl<'a> Parser<'a> {
                         type_params: vec![],
                         params: vec![],
                         return_type: None,
+                        contracts: vec![],
                         body,
                         is_pub: false,
                     }, Span::new(test_start, end)));
@@ -601,7 +602,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(TraitMethod { name, params, return_type, body })
+        Ok(TraitMethod { name, params, return_type, contracts: vec![], body })
     }
 
     fn parse_class(&mut self) -> Result<Spanned<ClassDecl>, CompileError> {
@@ -647,10 +648,21 @@ impl<'a> Parser<'a> {
         // Injected fields come first, then regular body fields
         let mut fields: Vec<Field> = inject_fields;
         let mut methods = Vec::new();
+        let mut invariants = Vec::new();
 
         while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
             if matches!(self.peek().unwrap().node, Token::Fn) {
                 methods.push(self.parse_method()?);
+            } else if matches!(self.peek().unwrap().node, Token::Invariant) {
+                let inv_tok = self.advance().unwrap();
+                let inv_start = inv_tok.span.start;
+                let expr = self.parse_expr(0)?;
+                let inv_end = expr.span.end;
+                invariants.push(Spanned::new(
+                    ContractClause { kind: ContractKind::Invariant, expr },
+                    Span::new(inv_start, inv_end),
+                ));
+                self.consume_statement_end();
             } else {
                 let fname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
@@ -664,7 +676,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ClassDecl { name, type_params, fields, methods, impl_traits, uses, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(ClassDecl { name, type_params, fields, methods, invariants, impl_traits, uses, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_method(&mut self) -> Result<Spanned<Function>, CompileError> {
@@ -697,17 +709,19 @@ impl<'a> Parser<'a> {
         }
         self.expect(&Token::RParen)?;
 
-        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace) {
+        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Requires | Token::Ensures) {
             Some(self.parse_type()?)
         } else {
             None
         };
 
+        let contracts = self.parse_contracts()?;
+
         let body = self.parse_block()?;
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { name, type_params: vec![], params, return_type, body, is_pub: false },
+            Function { name, type_params: vec![], params, return_type, contracts, body, is_pub: false },
             Span::new(start, end),
         ))
     }
@@ -744,6 +758,39 @@ impl<'a> Parser<'a> {
         Ok(args)
     }
 
+    /// Parse optional requires/ensures clauses before a function body.
+    fn parse_contracts(&mut self) -> Result<Vec<Spanned<ContractClause>>, CompileError> {
+        let mut contracts = Vec::new();
+        while let Some(tok) = self.peek() {
+            match &tok.node {
+                Token::Requires => {
+                    let req_tok = self.advance().unwrap();
+                    let req_start = req_tok.span.start;
+                    let expr = self.parse_expr(0)?;
+                    let req_end = expr.span.end;
+                    contracts.push(Spanned::new(
+                        ContractClause { kind: ContractKind::Requires, expr },
+                        Span::new(req_start, req_end),
+                    ));
+                    self.consume_statement_end();
+                }
+                Token::Ensures => {
+                    let ens_tok = self.advance().unwrap();
+                    let ens_start = ens_tok.span.start;
+                    let expr = self.parse_expr(0)?;
+                    let ens_end = expr.span.end;
+                    contracts.push(Spanned::new(
+                        ContractClause { kind: ContractKind::Ensures, expr },
+                        Span::new(ens_start, ens_end),
+                    ));
+                    self.consume_statement_end();
+                }
+                _ => break,
+            }
+        }
+        Ok(contracts)
+    }
+
     fn parse_function(&mut self) -> Result<Spanned<Function>, CompileError> {
         let fn_tok = self.expect(&Token::Fn)?;
         let start = fn_tok.span.start;
@@ -763,18 +810,20 @@ impl<'a> Parser<'a> {
         }
         self.expect(&Token::RParen)?;
 
-        // Return type: if next non-newline token is not '{', it's a return type
-        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace) {
+        // Return type: if next non-newline token is not '{' or a contract keyword, it's a return type
+        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Requires | Token::Ensures) {
             Some(self.parse_type()?)
         } else {
             None
         };
 
+        let contracts = self.parse_contracts()?;
+
         let body = self.parse_block()?;
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { name, type_params, params, return_type, body, is_pub: false },
+            Function { name, type_params, params, return_type, contracts, body, is_pub: false },
             Span::new(start, end),
         ))
     }
