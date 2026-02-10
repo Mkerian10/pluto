@@ -19,11 +19,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
 
       - name: Run tests with timing
         run: |
           start_ns=$(date +%s%N)
-          cargo test
+          cargo nextest run
           end_ns=$(date +%s%N)
           duration_ms=$(( (end_ns - start_ns) / 1000000 ))
           echo '[{"name": "cargo_test", "unit": "ms", "value": '"$duration_ms"'}]' > test-duration.json
