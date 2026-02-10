@@ -479,3 +479,69 @@ test "bad" @random {
 }
 "#, "expected (");
 }
+
+// ── GC safety under fiber scheduling ──────────────────────────────────
+
+#[test]
+fn round_robin_gc_fiber_stack_safety() {
+    // This test exercises GC while multiple fibers hold heap objects (strings, arrays)
+    // on their stacks. Without fiber stack scanning, the GC could collect live objects
+    // that are only referenced from suspended fibers' stacks.
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn build_strings(prefix: string) string {
+    // Build enough heap pressure to trigger GC
+    let mut result = ""
+    for i in 0..50 {
+        result = result + prefix + "_item_"
+    }
+    return result
+}
+
+fn allocate_arrays() [int] {
+    let mut arr = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    for i in 0..50 {
+        arr = [i, i+1, i+2, i+3, i+4, i+5, i+6, i+7, i+8, i+9]
+    }
+    return arr
+}
+
+test "gc safety with fiber stacks" @round_robin {
+    let t1 = spawn build_strings("alpha")
+    let t2 = spawn build_strings("beta")
+    let t3 = spawn allocate_arrays()
+    let s1 = t1.get()
+    let s2 = t2.get()
+    let a = t3.get()
+    expect(s1.len() > 0).to_be_true()
+    expect(s2.len() > 0).to_be_true()
+    expect(a.len()).to_equal(10)
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn random_gc_fiber_stack_safety() {
+    // Same as above but with random scheduling to exercise different interleavings
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn build_large_string(n: int) string {
+    let mut s = "start"
+    for i in 0..n {
+        s = s + "_x"
+    }
+    return s
+}
+
+test "gc safety random scheduling" @random(iterations: 10, seed: 12345) {
+    let t1 = spawn build_large_string(30)
+    let t2 = spawn build_large_string(40)
+    let r1 = t1.get()
+    let r2 = t2.get()
+    expect(r1.len() > 0).to_be_true()
+    expect(r2.len() > 0).to_be_true()
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
+    assert_eq!(code, 0);
+}

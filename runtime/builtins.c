@@ -95,6 +95,23 @@ __thread void *__pluto_current_error = NULL;
 // Task handle — thread-local pointer to current task (NULL on main thread)
 __thread long *__pluto_current_task = NULL;
 
+// Fiber stack registry for GC scanning (test mode only).
+// The fiber scheduler populates this so __pluto_gc_collect can scan fiber stacks.
+#ifdef PLUTO_TEST_MODE
+#define GC_MAX_FIBER_STACKS 256
+typedef struct {
+    char *base;        // malloc'd stack base
+    size_t size;       // stack allocation size
+    int active;        // 1 if fiber is not completed
+} GCFiberStack;
+static struct {
+    GCFiberStack stacks[GC_MAX_FIBER_STACKS];
+    int count;
+    int current_fiber;  // index of currently running fiber (-1 if none)
+    int enabled;        // 1 when scheduler is active
+} gc_fiber_stacks = { .current_fiber = -1, .enabled = 0 };
+#endif
+
 // GC thread safety
 #ifndef PLUTO_TEST_MODE
 static pthread_mutex_t gc_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -470,6 +487,28 @@ void __pluto_gc_collect(void) {
             gc_mark_candidate((void *)*p);
         }
     }
+
+#ifdef PLUTO_TEST_MODE
+    // 3b. Scan all fiber stacks as additional GC roots.
+    // When a fiber triggers GC, the main stack scan above covers the scheduler's
+    // stack frames. But other suspended fibers hold live references on their own
+    // malloc'd stacks that the GC would miss, potentially collecting live objects.
+    if (gc_fiber_stacks.enabled) {
+        for (int fi = 0; fi < gc_fiber_stacks.count; fi++) {
+            if (!gc_fiber_stacks.stacks[fi].active) continue;
+            if (fi == gc_fiber_stacks.current_fiber) continue;  // current fiber's stack was scanned above via anchor
+            char *base = gc_fiber_stacks.stacks[fi].base;
+            if (!base) continue;
+            size_t sz = gc_fiber_stacks.stacks[fi].size;
+            // Scan the entire fiber stack allocation
+            void *flo = (void *)(((size_t)base) & ~7UL);
+            void *fhi = (void *)(base + sz);
+            for (long *p = (long *)flo; (void *)p < fhi; p++) {
+                gc_mark_candidate((void *)*p);
+            }
+        }
+    }
+#endif
 
     // 4. Scan error TLS as explicit root
     if (__pluto_current_error) {
@@ -2462,12 +2501,15 @@ static void scheduler_run(void) {
 
         // Restore next fiber's TLS state
         g_scheduler->current_fiber = next;
+        gc_fiber_stacks.current_fiber = next;  // Tell GC which fiber is running
         Fiber *f = &g_scheduler->fibers[next];
         __pluto_current_error = f->saved_error;
         __pluto_current_task = f->saved_current_task;
         f->state = FIBER_RUNNING;
 
         swapcontext(&g_scheduler->scheduler_ctx, &f->context);
+
+        gc_fiber_stacks.current_fiber = -1;  // Back in scheduler context
 
         // Fiber yielded or completed — state already saved in fiber_yield_to_scheduler
         // (or fiber completed and returned via uc_link)
@@ -2478,6 +2520,7 @@ static void scheduler_run(void) {
         } else {
             yielded->saved_error = __pluto_current_error;
             yielded->saved_current_task = __pluto_current_task;
+            gc_fiber_stacks.stacks[g_scheduler->current_fiber].active = 0;
         }
     }
 }
@@ -2522,7 +2565,19 @@ void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations) {
         makecontext(&f->context, (void(*)(void))test_main_fiber_entry, 0);
         g_scheduler->fiber_count = 1;
 
+        // Register fiber 0 with GC fiber stack scanner
+        memset(&gc_fiber_stacks, 0, sizeof(gc_fiber_stacks));
+        gc_fiber_stacks.stacks[0].base = f->stack;
+        gc_fiber_stacks.stacks[0].size = FIBER_STACK_SIZE;
+        gc_fiber_stacks.stacks[0].active = 1;
+        gc_fiber_stacks.count = 1;
+        gc_fiber_stacks.current_fiber = -1;
+        gc_fiber_stacks.enabled = 1;
+
         scheduler_run();
+
+        // Disable GC fiber scanning before cleanup
+        gc_fiber_stacks.enabled = 0;
 
         int had_deadlock = g_scheduler->deadlock;
 
@@ -2609,6 +2664,12 @@ static long task_spawn_fiber(long closure_ptr) {
     f->context.uc_link = &g_scheduler->scheduler_ctx;
     makecontext(&f->context, (void(*)(void))fiber_entry_fn, 1, fid);
     g_scheduler->fiber_count++;
+
+    // Register with GC fiber stack scanner
+    gc_fiber_stacks.stacks[fid].base = f->stack;
+    gc_fiber_stacks.stacks[fid].size = FIBER_STACK_SIZE;
+    gc_fiber_stacks.stacks[fid].active = 1;
+    gc_fiber_stacks.count = g_scheduler->fiber_count;
 
     // Store fiber_id in task[4] for cross-referencing
     task[4] = (long)fid;
