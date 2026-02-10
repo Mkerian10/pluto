@@ -110,10 +110,10 @@ cargo run -- run examples/collections-lib/main.pluto --stdlib stdlib
 
 ## stdin
 
-Demonstrates reading from stdin with `std.io`: `io.read_line()` reads a line of input, stripping the trailing newline.
+Demonstrates interactive I/O with `std.io`: reading input with `io.read_line()`, parsing strings to numbers with `.to_int()` and `.to_float()` (both fallible — use `catch` to handle invalid input), and string interpolation for output.
 
 ```bash
-echo "World" | cargo run -- run examples/stdin/main.pluto --stdlib stdlib
+echo -e "Alice\n21\n72" | cargo run -- run examples/stdin/main.pluto --stdlib stdlib
 ```
 
 ## http-api

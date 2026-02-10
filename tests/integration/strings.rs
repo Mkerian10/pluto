@@ -453,3 +453,227 @@ fn string_index_assign_rejected() {
         "index assignment on non-indexable type string",
     );
 }
+
+// ── to_int / to_float ────────────────────────────────────────────────────────
+
+#[test]
+fn string_to_int_basic() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let n = "42".to_int() catch 0
+    print(n)
+}"#,
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn string_to_int_negative() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let n = "-7".to_int() catch 0
+    print(n)
+}"#,
+    );
+    assert_eq!(out, "-7\n");
+}
+
+#[test]
+fn string_to_int_whitespace() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let n = "  123  ".to_int() catch 0
+    print(n)
+}"#,
+    );
+    assert_eq!(out, "123\n");
+}
+
+#[test]
+fn string_to_int_invalid_catch() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let n = "abc".to_int() catch -1
+    print(n)
+}"#,
+    );
+    assert_eq!(out, "-1\n");
+}
+
+#[test]
+fn string_to_int_empty_catch() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let n = "".to_int() catch -1
+    print(n)
+}"#,
+    );
+    assert_eq!(out, "-1\n");
+}
+
+#[test]
+fn string_to_int_propagation() {
+    let out = compile_and_run_stdout(
+        r#"fn parse(s: string) int {
+    return s.to_int()!
+}
+
+fn main() {
+    let a = parse("100") catch 0
+    print(a)
+    let b = parse("nope") catch -1
+    print(b)
+}"#,
+    );
+    assert_eq!(out, "100\n-1\n");
+}
+
+#[test]
+fn string_to_int_catch_wildcard() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let n = "bad".to_int() catch err { -99 }
+    print(n)
+}"#,
+    );
+    assert_eq!(out, "-99\n");
+}
+
+#[test]
+fn string_to_int_mixed_content() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let n = "42abc".to_int() catch -1
+    print(n)
+}"#,
+    );
+    assert_eq!(out, "-1\n");
+}
+
+#[test]
+fn string_to_float_basic() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let f = "3.14".to_float() catch 0.0
+    print(f)
+}"#,
+    );
+    assert_eq!(out, "3.140000\n");
+}
+
+#[test]
+fn string_to_float_integer_string() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let f = "42".to_float() catch 0.0
+    print(f)
+}"#,
+    );
+    assert_eq!(out, "42.000000\n");
+}
+
+#[test]
+fn string_to_float_negative() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let f = "-2.5".to_float() catch 0.0
+    print(f)
+}"#,
+    );
+    assert_eq!(out, "-2.500000\n");
+}
+
+#[test]
+fn string_to_float_invalid_catch() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let f = "not_a_number".to_float() catch -1.0
+    print(f)
+}"#,
+    );
+    assert_eq!(out, "-1.000000\n");
+}
+
+#[test]
+fn string_to_float_whitespace() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let f = "  1.5  ".to_float() catch 0.0
+    print(f)
+}"#,
+    );
+    assert_eq!(out, "1.500000\n");
+}
+
+#[test]
+fn string_to_float_propagation() {
+    let out = compile_and_run_stdout(
+        r#"fn parse_float(s: string) float {
+    return s.to_float()!
+}
+
+fn main() {
+    let a = parse_float("2.718") catch 0.0
+    print(a)
+    let b = parse_float("xyz") catch -1.0
+    print(b)
+}"#,
+    );
+    assert_eq!(out, "2.718000\n-1.000000\n");
+}
+
+#[test]
+fn string_to_int_bare_call_rejected() {
+    compile_should_fail_with(
+        r#"fn main() {
+    let n = "42".to_int()
+    print(n)
+}"#,
+        "must be handled with ! or catch",
+    );
+}
+
+#[test]
+fn string_to_float_bare_call_rejected() {
+    compile_should_fail_with(
+        r#"fn main() {
+    let f = "3.14".to_float()
+    print(f)
+}"#,
+        "must be handled with ! or catch",
+    );
+}
+
+#[test]
+fn string_to_int_variable() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let s = "999"
+    let n = s.to_int() catch 0
+    print(n)
+}"#,
+    );
+    assert_eq!(out, "999\n");
+}
+
+#[test]
+fn string_to_int_zero() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let n = "0".to_int() catch -1
+    print(n)
+}"#,
+    );
+    assert_eq!(out, "0\n");
+}
+
+#[test]
+fn string_to_float_scientific() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let f = "1.5e2".to_float() catch 0.0
+    print(f)
+}"#,
+    );
+    assert_eq!(out, "150.000000\n");
+}

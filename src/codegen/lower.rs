@@ -2323,6 +2323,8 @@ impl<'a> LowerContext<'a> {
                     Ok(self.call_runtime("__pluto_string_char_at", &[obj_ptr, idx]))
                 }
                 "to_bytes" => Ok(self.call_runtime("__pluto_string_to_bytes", &[obj_ptr])),
+                "to_int" => Ok(self.call_runtime("__pluto_string_to_int", &[obj_ptr])),
+                "to_float" => Ok(self.call_runtime("__pluto_string_to_float", &[obj_ptr])),
                 _ => Err(CompileError::codegen(format!("string has no method '{}'", method.node))),
             };
         }
@@ -3131,11 +3133,12 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
             if obj_type == PlutoType::String {
                 return match method.node.as_str() {
-                    "len" | "index_of" => PlutoType::Int,
+                    "len" | "index_of" | "to_int" => PlutoType::Int,
                     "contains" | "starts_with" | "ends_with" => PlutoType::Bool,
                     "substring" | "trim" | "to_upper" | "to_lower" | "replace" | "char_at" => PlutoType::String,
                     "split" => PlutoType::Array(Box::new(PlutoType::String)),
                     "to_bytes" => PlutoType::Bytes,
+                    "to_float" => PlutoType::Float,
                     _ => PlutoType::Void,
                 };
             }

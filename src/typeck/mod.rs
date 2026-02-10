@@ -60,6 +60,9 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     env.errors.entry("ChannelEmpty".to_string()).or_insert(ErrorInfo {
         fields: vec![("message".to_string(), PlutoType::String)],
     });
+    env.errors.entry("ParseError".to_string()).or_insert(ErrorInfo {
+        fields: vec![("message".to_string(), PlutoType::String)],
+    });
     register::register_class_names(program, &mut env)?;
     register::resolve_class_fields(program, &mut env)?;
     register::register_extern_fns(program, &mut env)?;

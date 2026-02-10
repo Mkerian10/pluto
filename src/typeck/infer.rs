@@ -1476,6 +1476,34 @@ fn infer_method_call(
                 builtin(env, method);
                 return Ok(PlutoType::Array(Box::new(PlutoType::String)));
             }
+            "to_int" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        "to_int() expects 0 arguments".to_string(), span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::FallibleBuiltin { error_type: "ParseError".to_string() },
+                    );
+                }
+                return Ok(PlutoType::Int);
+            }
+            "to_float" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        "to_float() expects 0 arguments".to_string(), span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::FallibleBuiltin { error_type: "ParseError".to_string() },
+                    );
+                }
+                return Ok(PlutoType::Float);
+            }
             "to_bytes" => {
                 if !args.is_empty() {
                     return Err(CompileError::type_err(

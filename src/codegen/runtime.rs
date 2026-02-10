@@ -47,6 +47,8 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_int_to_string", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_float_to_string", &[types::F64], &[types::I64])?;
         reg.declare(module, "__pluto_bool_to_string", &[types::I32], &[types::I64])?; // I32 for C ABI
+        reg.declare(module, "__pluto_string_to_int", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_to_float", &[types::I64], &[types::F64])?;
 
         // Error handling
         reg.declare(module, "__pluto_raise_error", &[types::I64], &[])?;

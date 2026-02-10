@@ -273,6 +273,9 @@ fn collect_expr_effects(
                             direct_errors.insert("ChannelClosed".to_string());
                             direct_errors.insert("ChannelEmpty".to_string());
                         }
+                        Some(MethodResolution::FallibleBuiltin { error_type }) => {
+                            direct_errors.insert(error_type.clone());
+                        }
                         Some(MethodResolution::Builtin) => {}
                         None => {}
                     }
