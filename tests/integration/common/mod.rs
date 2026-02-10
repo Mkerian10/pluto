@@ -75,6 +75,19 @@ pub fn compile_test_and_run(source: &str) -> (String, String, i32) {
     (stdout, stderr, code)
 }
 
+/// Compile source in test mode, run, and capture stdout. Asserts success.
+/// Uses the test runtime (sequential task execution, no-mutex channels).
+pub fn compile_test_and_run_stdout(source: &str) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let bin_path = dir.path().join("test_bin");
+
+    plutoc::compile_test(source, &bin_path).unwrap_or_else(|e| panic!("Test compilation failed: {e}"));
+
+    let output = Command::new(&bin_path).output().unwrap();
+    assert!(output.status.success(), "Test binary exited with non-zero status.\nstderr: {}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
 /// Compile source and run, returning (stdout, stderr, exit_code).
 /// Does NOT assert success — use for testing runtime aborts.
 pub fn compile_and_run_output(source: &str) -> (String, String, i32) {

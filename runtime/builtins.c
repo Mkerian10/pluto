@@ -16,8 +16,10 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <math.h>
+#ifndef PLUTO_TEST_MODE
 #include <pthread.h>
 #include <stdatomic.h>
+#endif
 
 // ── Forward declarations ─────────────────────────────────────────────────────
 void __pluto_raise_error(void *error_obj);
@@ -36,11 +38,13 @@ void __pluto_raise_error(void *error_obj);
 #define GC_TAG_BYTES   8   // [len][cap][data_ptr]; 1 byte per element
 #define GC_TAG_CHANNEL 9   // [sync_ptr][buf_ptr][capacity][count][head][tail][closed]
 
+#ifndef PLUTO_TEST_MODE
 typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t not_empty;
     pthread_cond_t not_full;
 } ChannelSync;
+#endif
 
 typedef struct GCHeader {
     struct GCHeader *next;    // 8B: linked list of all GC objects
@@ -85,14 +89,36 @@ __thread void *__pluto_current_error = NULL;
 __thread long *__pluto_current_task = NULL;
 
 // GC thread safety
+#ifndef PLUTO_TEST_MODE
 static pthread_mutex_t gc_mutex = PTHREAD_MUTEX_INITIALIZER;
 static atomic_int __pluto_active_tasks = 0;
+#endif
 #define PLUTO_MAX_HEAP_BYTES (1024L * 1024L * 1024L)  // 1 GB
 
 static inline GCHeader *gc_get_header(void *user_ptr) {
     return (GCHeader *)((char *)user_ptr - sizeof(GCHeader));
 }
 
+#ifdef PLUTO_TEST_MODE
+static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
+    // Test mode: single-threaded, no mutex needed
+    if (gc_stack_bottom && !gc_collecting
+        && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold) {
+        __pluto_gc_collect();
+    }
+    size_t total = sizeof(GCHeader) + user_size;
+    GCHeader *h = (GCHeader *)calloc(1, total);
+    if (!h) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    h->next = gc_head;
+    gc_head = h;
+    h->size = (uint32_t)user_size;
+    h->type_tag = type_tag;
+    h->field_count = field_count;
+    h->mark = 0;
+    gc_bytes_allocated += total;
+    return (char *)h + sizeof(GCHeader);
+}
+#else
 static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
     pthread_mutex_lock(&gc_mutex);
     if (gc_stack_bottom && !gc_collecting
@@ -121,6 +147,7 @@ static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) 
     pthread_mutex_unlock(&gc_mutex);
     return (char *)h + sizeof(GCHeader);
 }
+#endif
 
 // ── Interval table for pointer lookup ─────────────────────────────────────────
 
@@ -486,8 +513,10 @@ void __pluto_gc_collect(void) {
                 long *slots = (long *)((char *)h + sizeof(GCHeader));
                 void *sync = (void *)slots[4];
                 if (sync) {
+#ifndef PLUTO_TEST_MODE
                     pthread_mutex_destroy((pthread_mutex_t *)sync);
                     pthread_cond_destroy((pthread_cond_t *)((char *)sync + sizeof(pthread_mutex_t)));
+#endif
                     free(sync);
                 }
             }
@@ -497,11 +526,13 @@ void __pluto_gc_collect(void) {
                 void *sync = (void *)ch[0];
                 void *buf  = (void *)ch[1];
                 if (sync) {
+#ifndef PLUTO_TEST_MODE
                     ChannelSync *cs = (ChannelSync *)sync;
                     pthread_mutex_destroy(&cs->mutex);
                     pthread_cond_destroy(&cs->not_empty);
                     pthread_cond_destroy(&cs->not_full);
-                    free(cs);
+#endif
+                    free(sync);
                 }
                 if (buf) free(buf);
             }
@@ -2203,17 +2234,12 @@ void *__pluto_http_url_decode(void *pluto_str) {
 
 // ── Concurrency ─────────────────────────────────────────────────────────────
 
-typedef struct {
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-} TaskSync;
-
 // Task handle layout (56 bytes, 7 slots):
 //   [0] closure   (i64, GC pointer)
 //   [1] result    (i64)
 //   [2] error     (i64, GC pointer)
 //   [3] done      (i64)
-//   [4] sync_ptr  (i64, raw malloc)
+//   [4] sync_ptr  (i64, raw malloc — NULL in test mode)
 //   [5] detached  (i64, 0 or 1)
 //   [6] cancelled (i64, 0 or 1)
 
@@ -2224,6 +2250,98 @@ static void task_raise_cancelled(void) {
     *(long *)err_obj = (long)msg_str;
     __pluto_raise_error(err_obj);
 }
+
+#ifdef PLUTO_TEST_MODE
+
+// ── Test mode: sequential execution (tasks run inline) ──
+
+long __pluto_task_spawn(long closure_ptr) {
+    long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
+    task[0] = closure_ptr;
+    task[1] = 0;  task[2] = 0;  task[3] = 0;
+    task[4] = 0;  // no sync — single-threaded
+    task[5] = 0;  task[6] = 0;  // detached, cancelled
+
+    // Save/restore current task (tasks can nest in sequential mode)
+    long *prev_task = __pluto_current_task;
+    void *prev_error = __pluto_current_error;
+    __pluto_current_error = NULL;
+    __pluto_current_task = task;
+
+    // Execute the closure inline
+    long fn_ptr = *(long *)closure_ptr;
+    long result = ((long(*)(long))fn_ptr)(closure_ptr);
+
+    if (__pluto_current_error) {
+        task[2] = (long)__pluto_current_error;
+        __pluto_current_error = NULL;
+    } else {
+        task[1] = result;
+    }
+    task[3] = 1;  // done
+
+    // If detached and errored, print to stderr
+    if (task[5] && task[2]) {
+        long *err_obj = (long *)task[2];
+        char *msg_ptr = (char *)err_obj[0];
+        if (msg_ptr) {
+            long len = *(long *)msg_ptr;
+            char *data = msg_ptr + 8;
+            fprintf(stderr, "pluto: error in detached task: %.*s\n", (int)len, data);
+        }
+    }
+
+    // Restore previous task context
+    __pluto_current_task = prev_task;
+    __pluto_current_error = prev_error;
+
+    return (long)task;
+}
+
+long __pluto_task_get(long task_ptr) {
+    long *task = (long *)task_ptr;
+    // Task already completed (ran inline) — no blocking needed
+
+    if (task[6] && !task[1] && !task[2]) {
+        task_raise_cancelled();
+        return 0;
+    }
+
+    if (task[2]) {
+        __pluto_current_error = (void *)task[2];
+        return 0;
+    }
+    return task[1];
+}
+
+void __pluto_task_detach(long task_ptr) {
+    long *task = (long *)task_ptr;
+    task[5] = 1;  // mark as detached
+    // If already done + errored, print to stderr now
+    if (task[3] && task[2]) {
+        long *err_obj = (long *)task[2];
+        char *msg_ptr = (char *)err_obj[0];
+        if (msg_ptr) {
+            long len = *(long *)msg_ptr;
+            char *data = msg_ptr + 8;
+            fprintf(stderr, "pluto: error in detached task: %.*s\n", (int)len, data);
+        }
+    }
+}
+
+void __pluto_task_cancel(long task_ptr) {
+    long *task = (long *)task_ptr;
+    task[6] = 1;  // set cancelled flag (task already completed)
+}
+
+#else
+
+// ── Production mode: pthread-based concurrency ──
+
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+} TaskSync;
 
 static void *__pluto_spawn_trampoline(void *arg) {
     long *task = (long *)arg;
@@ -2339,6 +2457,8 @@ void __pluto_task_cancel(long task_ptr) {
     pthread_cond_broadcast(&sync->cond);
     pthread_mutex_unlock(&sync->mutex);
 }
+
+#endif
 
 // ── Deep Copy (for spawn isolation) ──────────────────────────────────────────
 
@@ -2577,6 +2697,124 @@ static void chan_raise_error(const char *msg) {
     __pluto_raise_error(err_obj);
 }
 
+#ifdef PLUTO_TEST_MODE
+
+// ── Test mode: no-mutex channel operations ──
+
+long __pluto_chan_create(long capacity) {
+    long actual_cap = capacity > 0 ? capacity : 1;
+    long *ch = (long *)gc_alloc(64, GC_TAG_CHANNEL, 0);
+    ch[0] = 0;  // no sync — single-threaded
+    long *buf = (long *)calloc((size_t)actual_cap, sizeof(long));
+    ch[1] = (long)buf;
+    ch[2] = actual_cap;
+    ch[3] = 0;  // count
+    ch[4] = 0;  // head
+    ch[5] = 0;  // tail
+    ch[6] = 0;  // closed
+    ch[7] = 1;  // sender_count
+    return (long)ch;
+}
+
+long __pluto_chan_send(long handle, long value) {
+    long *ch = (long *)handle;
+    if (ch[6]) {
+        chan_raise_error("channel closed");
+        return 0;
+    }
+    if (ch[3] == ch[2]) {
+        // Buffer full — in sequential mode, no other task will drain it
+        fprintf(stderr, "pluto: deadlock detected — channel send on full buffer in sequential test mode\n");
+        exit(1);
+    }
+    long *buf = (long *)ch[1];
+    buf[ch[5]] = value;
+    ch[5] = (ch[5] + 1) % ch[2];
+    ch[3]++;
+    return value;
+}
+
+long __pluto_chan_recv(long handle) {
+    long *ch = (long *)handle;
+    if (ch[3] == 0 && ch[6]) {
+        chan_raise_error("channel closed");
+        return 0;
+    }
+    if (ch[3] == 0) {
+        // Buffer empty — in sequential mode, no other task will produce
+        fprintf(stderr, "pluto: deadlock detected — channel recv on empty buffer in sequential test mode\n");
+        exit(1);
+    }
+    long *buf = (long *)ch[1];
+    long val = buf[ch[4]];
+    ch[4] = (ch[4] + 1) % ch[2];
+    ch[3]--;
+    return val;
+}
+
+long __pluto_chan_try_send(long handle, long value) {
+    long *ch = (long *)handle;
+    if (ch[6]) {
+        chan_raise_error("channel closed");
+        return 0;
+    }
+    if (ch[3] == ch[2]) {
+        chan_raise_error("channel full");
+        return 0;
+    }
+    long *buf = (long *)ch[1];
+    buf[ch[5]] = value;
+    ch[5] = (ch[5] + 1) % ch[2];
+    ch[3]++;
+    return value;
+}
+
+long __pluto_chan_try_recv(long handle) {
+    long *ch = (long *)handle;
+    if (ch[3] == 0 && ch[6]) {
+        chan_raise_error("channel closed");
+        return 0;
+    }
+    if (ch[3] == 0) {
+        chan_raise_error("channel empty");
+        return 0;
+    }
+    long *buf = (long *)ch[1];
+    long val = buf[ch[4]];
+    ch[4] = (ch[4] + 1) % ch[2];
+    ch[3]--;
+    return val;
+}
+
+void __pluto_chan_close(long handle) {
+    long *ch = (long *)handle;
+    ch[6] = 1;
+}
+
+void __pluto_chan_sender_inc(long handle) {
+    long *ch = (long *)handle;
+    if (!ch) return;
+    ch[7]++;
+}
+
+void __pluto_chan_sender_dec(long handle) {
+    long *ch = (long *)handle;
+    if (!ch) return;
+    long old = ch[7];
+    ch[7]--;
+    if (old <= 0) {
+        ch[7]++;
+        return;
+    }
+    if (old == 1) {
+        __pluto_chan_close(handle);
+    }
+}
+
+#else
+
+// ── Production mode: mutex-protected channel operations ──
+
 long __pluto_chan_create(long capacity) {
     long actual_cap = capacity > 0 ? capacity : 1;
     // field_count=0: slots 0-1 are raw malloc ptrs, 2-7 are ints; GC_TAG_CHANNEL traces buffer
@@ -2735,6 +2973,8 @@ void __pluto_chan_sender_dec(long handle) {
     }
 }
 
+#endif
+
 // ── Select (channel multiplexing) ──────────────────────────
 
 /*
@@ -2750,6 +2990,76 @@ void __pluto_chan_sender_dec(long handle) {
  *   -1    : default case (only when has_default)
  *   -2    : all channels closed (error raised via TLS)
  */
+#ifdef PLUTO_TEST_MODE
+
+// ── Test mode: single-pass select (no polling loop) ──
+
+long __pluto_select(long buffer_ptr, long count, long has_default) {
+    long *buf = (long *)buffer_ptr;
+    long *handles = &buf[0];
+    long *ops     = &buf[count];
+    long *values  = &buf[2 * count];
+
+    /* Fisher-Yates shuffle for fairness */
+    int indices[64];
+    int n = (int)count;
+    if (n > 64) n = 64;
+    for (int i = 0; i < n; i++) indices[i] = i;
+    unsigned long seed = (unsigned long)buffer_ptr ^ (unsigned long)__pluto_time_ns();
+    for (int i = n - 1; i > 0; i--) {
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        int j = (int)((seed >> 33) % (unsigned long)(i + 1));
+        int tmp = indices[i]; indices[i] = indices[j]; indices[j] = tmp;
+    }
+
+    int all_closed = 1;
+
+    for (int si = 0; si < n; si++) {
+        int i = indices[si];
+        long *ch = (long *)handles[i];
+
+        if (ops[i] == 0) {
+            /* recv */
+            if (ch[3] > 0) {
+                long *cbuf = (long *)ch[1];
+                long val = cbuf[ch[4]];
+                ch[4] = (ch[4] + 1) % ch[2];
+                ch[3]--;
+                values[i] = val;
+                return (long)i;
+            }
+            if (!ch[6]) all_closed = 0;
+        } else {
+            /* send */
+            if (!ch[6] && ch[3] < ch[2]) {
+                long *cbuf = (long *)ch[1];
+                cbuf[ch[5]] = values[i];
+                ch[5] = (ch[5] + 1) % ch[2];
+                ch[3]++;
+                return (long)i;
+            }
+            if (!ch[6]) all_closed = 0;
+        }
+    }
+
+    if (has_default) {
+        return -1;
+    }
+
+    if (all_closed) {
+        chan_raise_error("channel closed");
+        return -2;
+    }
+
+    /* No ready arm and no default — deadlock in sequential mode */
+    fprintf(stderr, "pluto: deadlock detected — select with no ready channels in sequential test mode\n");
+    exit(1);
+}
+
+#else
+
+// ── Production mode: spin-poll select ──
+
 long __pluto_select(long buffer_ptr, long count, long has_default) {
     long *buf = (long *)buffer_ptr;
     long *handles = &buf[0];
@@ -2834,6 +3144,8 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
         if (spin_us > 1000) spin_us = 1000;
     }
 }
+
+#endif
 
 // ── Contracts ──────────────────────────────────────────────
 

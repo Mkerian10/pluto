@@ -134,6 +134,7 @@ pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError
 }
 
 /// Compile a source string in test mode directly (single-file, no module resolution).
+/// Links against the test runtime (sequential task execution, no-mutex channels).
 pub fn compile_test(source: &str, output_path: &Path) -> Result<(), CompileError> {
     let object_bytes = compile_to_object_test_mode(source)?;
 
@@ -141,7 +142,8 @@ pub fn compile_test(source: &str, output_path: &Path) -> Result<(), CompileError
     std::fs::write(&obj_path, &object_bytes)
         .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
 
-    link(&obj_path, output_path)?;
+    let config = LinkConfig::test_config(&obj_path)?;
+    link_from_config(&config, output_path)?;
 
     let _ = std::fs::remove_file(&obj_path);
 
@@ -331,7 +333,7 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
     std::fs::write(&obj_path, &object_bytes)
         .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
 
-    let mut config = LinkConfig::default_config(&obj_path)?;
+    let mut config = LinkConfig::test_config(&obj_path)?;
     for artifact in &rust_artifacts {
         config.static_libs.push(artifact.static_lib.clone());
         config.flags.extend(artifact.native_libs.clone());
@@ -376,6 +378,39 @@ fn cached_runtime_object() -> Result<&'static Path, CompileError> {
     }
 }
 
+/// Compile builtins.c with -DPLUTO_TEST_MODE once per process and cache the resulting .o path.
+/// The test runtime uses sequential task execution and no-mutex channels.
+fn cached_test_runtime_object() -> Result<&'static Path, CompileError> {
+    static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+    let result = CACHE.get_or_init(|| {
+        (|| -> Result<PathBuf, CompileError> {
+            let runtime_src = include_str!("../runtime/builtins.c");
+            let dir = std::env::temp_dir().join(format!("pluto_test_runtime_{}", std::process::id()));
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| CompileError::link(format!("failed to create test runtime cache dir: {e}")))?;
+            let runtime_c = dir.join("builtins.c");
+            let runtime_o = dir.join("builtins_test.o");
+            std::fs::write(&runtime_c, runtime_src)
+                .map_err(|e| CompileError::link(format!("failed to write test runtime source: {e}")))?;
+            let mut cmd = std::process::Command::new("cc");
+            cmd.arg("-c").arg("-DPLUTO_TEST_MODE").arg(&runtime_c).arg("-o").arg(&runtime_o);
+            // No -pthread in test mode (single-threaded)
+            let status = cmd.status()
+                .map_err(|e| CompileError::link(format!("failed to compile test runtime: {e}")))?;
+            let _ = std::fs::remove_file(&runtime_c);
+            if !status.success() {
+                return Err(CompileError::link("failed to compile test runtime"));
+            }
+            Ok(runtime_o)
+        })()
+        .map_err(|e| e.to_string())
+    });
+    match result {
+        Ok(path) => Ok(path.as_path()),
+        Err(msg) => Err(CompileError::link(msg.clone())),
+    }
+}
+
 struct LinkConfig {
     objects: Vec<PathBuf>,
     static_libs: Vec<PathBuf>,
@@ -389,6 +424,17 @@ impl LinkConfig {
         let mut flags = vec!["-lm".to_string()];
         #[cfg(target_os = "linux")]
         flags.push("-pthread".to_string());
+        Ok(Self {
+            objects: vec![pluto_obj.to_path_buf(), runtime_o.to_path_buf()],
+            static_libs: vec![],
+            flags,
+        })
+    }
+
+    fn test_config(pluto_obj: &Path) -> Result<Self, CompileError> {
+        let runtime_o = cached_test_runtime_object()?;
+        let flags = vec!["-lm".to_string()];
+        // No -pthread in test mode (single-threaded)
         Ok(Self {
             objects: vec![pluto_obj.to_path_buf(), runtime_o.to_path_buf()],
             static_libs: vec![],
