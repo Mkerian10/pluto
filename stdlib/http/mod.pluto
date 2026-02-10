@@ -1,5 +1,3 @@
-import std.strings
-
 pub error HttpError {
     message: string
 }
@@ -22,16 +20,16 @@ pub class Request {
     body: string
 
     fn header(self, name: string) string {
-        let lines = strings.split(self.headers_raw, "\r\n")
-        let lower_name = strings.to_lower(name)
+        let lines = self.headers_raw.split("\r\n")
+        let lower_name = name.to_lower()
         let i = 0
         while i < lines.len() {
             let line = lines[i]
-            let colon = strings.index_of(line, ":")
+            let colon = line.index_of(":")
             if colon >= 0 {
-                let key = strings.to_lower(strings.trim(strings.substring(line, 0, colon)))
+                let key = line.substring(0, colon).trim().to_lower()
                 if key == lower_name {
-                    return strings.trim(strings.substring(line, colon + 1, line.len() - colon - 1))
+                    return line.substring(colon + 1, line.len() - colon - 1).trim()
                 }
             }
             i = i + 1
@@ -105,35 +103,35 @@ pub fn response(status: int, status_text: string, body: string) Response {
 }
 
 fn parse_request(raw: string) Request {
-    let header_end = strings.index_of(raw, "\r\n\r\n")
+    let header_end = raw.index_of("\r\n\r\n")
     let header_section = ""
     let body = ""
     if header_end >= 0 {
-        header_section = strings.substring(raw, 0, header_end)
-        body = strings.substring(raw, header_end + 4, raw.len() - header_end - 4)
+        header_section = raw.substring(0, header_end)
+        body = raw.substring(header_end + 4, raw.len() - header_end - 4)
     } else {
         header_section = raw
     }
 
-    let first_line_end = strings.index_of(header_section, "\r\n")
+    let first_line_end = header_section.index_of("\r\n")
     let first_line = ""
     let rest_headers = ""
     if first_line_end >= 0 {
-        first_line = strings.substring(header_section, 0, first_line_end)
-        rest_headers = strings.substring(header_section, first_line_end + 2, header_section.len() - first_line_end - 2)
+        first_line = header_section.substring(0, first_line_end)
+        rest_headers = header_section.substring(first_line_end + 2, header_section.len() - first_line_end - 2)
     } else {
         first_line = header_section
     }
 
     let method = ""
     let path = ""
-    let space1 = strings.index_of(first_line, " ")
+    let space1 = first_line.index_of(" ")
     if space1 >= 0 {
-        method = strings.substring(first_line, 0, space1)
-        let after_method = strings.substring(first_line, space1 + 1, first_line.len() - space1 - 1)
-        let space2 = strings.index_of(after_method, " ")
+        method = first_line.substring(0, space1)
+        let after_method = first_line.substring(space1 + 1, first_line.len() - space1 - 1)
+        let space2 = after_method.index_of(" ")
         if space2 >= 0 {
-            path = strings.substring(after_method, 0, space2)
+            path = after_method.substring(0, space2)
         } else {
             path = after_method
         }

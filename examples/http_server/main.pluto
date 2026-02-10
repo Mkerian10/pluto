@@ -1,6 +1,5 @@
 import std.net
 import std.fs
-import std.strings
 
 // A static file HTTP server written in Pluto.
 //
@@ -11,31 +10,31 @@ import std.strings
 // Serves files from examples/http_server/public/
 
 fn content_type(path: string) string {
-    if strings.ends_with(path, ".html") {
+    if path.ends_with(".html") {
         return "text/html"
     }
-    if strings.ends_with(path, ".css") {
+    if path.ends_with(".css") {
         return "text/css"
     }
-    if strings.ends_with(path, ".js") {
+    if path.ends_with(".js") {
         return "application/javascript"
     }
-    if strings.ends_with(path, ".json") {
+    if path.ends_with(".json") {
         return "application/json"
     }
-    if strings.ends_with(path, ".png") {
+    if path.ends_with(".png") {
         return "image/png"
     }
-    if strings.ends_with(path, ".jpg") {
+    if path.ends_with(".jpg") {
         return "image/jpeg"
     }
-    if strings.ends_with(path, ".svg") {
+    if path.ends_with(".svg") {
         return "image/svg+xml"
     }
-    if strings.ends_with(path, ".ico") {
+    if path.ends_with(".ico") {
         return "image/x-icon"
     }
-    if strings.ends_with(path, ".txt") {
+    if path.ends_with(".txt") {
         return "text/plain"
     }
     return "application/octet-stream"
@@ -55,7 +54,7 @@ fn respond_404(conn: net.TcpConnection, path: string) {
 
 fn parse_request_path(request: string) string {
     // Parse "GET /path HTTP/1.1\r\n..."
-    let parts = strings.split(request, " ")
+    let parts = request.split(" ")
     if parts.len() < 2 {
         return "/"
     }
@@ -66,7 +65,7 @@ fn serve_file(conn: net.TcpConnection, root: string, url_path: string) {
     let file_path = root + url_path
 
     // Serve index.html for directory requests
-    if strings.ends_with(file_path, "/") {
+    if file_path.ends_with("/") {
         file_path = file_path + "index.html"
     }
 
