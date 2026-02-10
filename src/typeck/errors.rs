@@ -39,10 +39,10 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == trait_name.node {
                     for tm in &trait_decl.node.methods {
-                        if tm.body.is_some() && !class_method_names.contains(&tm.name.node) {
+                        if let Some(body) = &tm.body && !class_method_names.contains(&tm.name.node) {
                             let mangled = format!("{}_{}", class_name, tm.name.node);
                             let (directs, edges) =
-                                collect_block_effects(&tm.body.as_ref().unwrap().node, &mangled, env);
+                                collect_block_effects(&body.node, &mangled, env);
                             direct_errors.insert(mangled.clone(), directs);
                             propagation_edges.insert(mangled, edges);
                         }
@@ -366,11 +366,9 @@ fn collect_expr_effects(
             // Only collect effects from spawn arg expressions (inside the closure's inner Call).
             if let Expr::Closure { body, .. } = &call.node {
                 for stmt in &body.node.stmts {
-                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
-                        if let Expr::Call { args, .. } = &ret_expr.node {
-                            for arg in args {
-                                collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
-                            }
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node && let Expr::Call { args, .. } = &ret_expr.node {
+                        for arg in args {
+                            collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
                         }
                     }
                 }
@@ -424,9 +422,9 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == trait_name.node {
                     for tm in &trait_decl.node.methods {
-                        if tm.body.is_some() && !class_method_names.contains(&tm.name.node) {
+                        if let Some(body) = &tm.body && !class_method_names.contains(&tm.name.node) {
                             let current_fn = format!("{}_{}", class_name, tm.name.node);
-                            enforce_block(&tm.body.as_ref().unwrap().node, &current_fn, env)?;
+                            enforce_block(&body.node, &current_fn, env)?;
                         }
                     }
                 }
@@ -711,16 +709,14 @@ fn enforce_expr(
             // Do NOT enforce the inner call itself or the closure body as a whole.
             if let Expr::Closure { body, .. } = &call.node {
                 for stmt in &body.node.stmts {
-                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
-                        if let Expr::Call { args, .. } = &ret_expr.node {
-                            for arg in args {
-                                enforce_expr(&arg.node, arg.span, current_fn, env)?;
-                                if contains_propagate(&arg.node) {
-                                    return Err(CompileError::type_err(
-                                        "error propagation (!) is not allowed in spawn arguments; evaluate before spawn",
-                                        arg.span,
-                                    ));
-                                }
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node && let Expr::Call { args, .. } = &ret_expr.node {
+                        for arg in args {
+                            enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                            if contains_propagate(&arg.node) {
+                                return Err(CompileError::type_err(
+                                    "error propagation (!) is not allowed in spawn arguments; evaluate before spawn",
+                                    arg.span,
+                                ));
                             }
                         }
                     }
@@ -782,7 +778,7 @@ fn stmt_contains_propagate(stmt: &Stmt) -> bool {
         Stmt::If { condition, then_block, else_block } => {
             contains_propagate(&condition.node)
                 || then_block.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
-                || else_block.as_ref().map_or(false, |eb| eb.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)))
+                || else_block.as_ref().is_some_and(|eb| eb.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)))
         }
         Stmt::While { condition, body } => {
             contains_propagate(&condition.node) || body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
@@ -798,7 +794,7 @@ fn stmt_contains_propagate(stmt: &Stmt) -> bool {
         }
         Stmt::Raise { fields, .. } => fields.iter().any(|(_, v)| contains_propagate(&v.node)),
         Stmt::LetChan { capacity, .. } => {
-            capacity.as_ref().map_or(false, |cap| contains_propagate(&cap.node))
+            capacity.as_ref().is_some_and(|cap| contains_propagate(&cap.node))
         }
         Stmt::Select { arms, default } => {
             for arm in arms {
@@ -811,8 +807,8 @@ fn stmt_contains_propagate(stmt: &Stmt) -> bool {
                 if op_has { return true; }
                 if arm.body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)) { return true; }
             }
-            if let Some(def) = default {
-                if def.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)) { return true; }
+            if let Some(def) = default && def.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)) {
+                return true;
             }
             false
         }

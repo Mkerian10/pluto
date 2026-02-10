@@ -1420,9 +1420,9 @@ fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), Compil
                 .map(|ta| type_expr_to_pluto_type(&ta.node, env))
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let mangled = if env.generic_classes.contains_key(name.as_str()) {
-                crate::typeck::env::mangle_name(name, &resolved_args)
-            } else if env.generic_enums.contains_key(name.as_str()) {
+            let mangled = if env.generic_classes.contains_key(name.as_str())
+                || env.generic_enums.contains_key(name.as_str())
+            {
                 crate::typeck::env::mangle_name(name, &resolved_args)
             } else {
                 return Err(CompileError::type_err(

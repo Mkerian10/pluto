@@ -156,21 +156,21 @@ pub fn document_symbols(
         });
     }
 
-    if let Some(app) = &program.app {
-        if app.node.name.span.file_id == file_id {
-            let range = span_to_range(&app.span, line_index);
-            let selection_range = span_to_range(&app.node.name.span, line_index);
-            symbols.push(DocumentSymbol {
-                name: app.node.name.node.clone(),
-                detail: Some("app".to_string()),
-                kind: SymbolKind::MODULE,
-                tags: None,
-                deprecated: None,
-                range,
-                selection_range,
-                children: None,
-            });
-        }
+    if let Some(app) = &program.app
+        && app.node.name.span.file_id == file_id
+    {
+        let range = span_to_range(&app.span, line_index);
+        let selection_range = span_to_range(&app.node.name.span, line_index);
+        symbols.push(DocumentSymbol {
+            name: app.node.name.node.clone(),
+            detail: Some("app".to_string()),
+            kind: SymbolKind::MODULE,
+            tags: None,
+            deprecated: None,
+            range,
+            selection_range,
+            children: None,
+        });
     }
 
     symbols

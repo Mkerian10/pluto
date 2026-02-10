@@ -30,9 +30,5 @@ fn path_to_uri(path: &Path) -> Uri {
 /// Convert an LSP Uri to a file path. Returns None if not a file:// URI.
 fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
     let s = uri.as_str();
-    if let Some(rest) = s.strip_prefix("file://") {
-        Some(PathBuf::from(rest))
-    } else {
-        None
-    }
+    s.strip_prefix("file://").map(PathBuf::from)
 }

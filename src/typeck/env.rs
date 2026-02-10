@@ -147,6 +147,12 @@ pub struct TypeEnv {
     pub variable_reads: HashSet<(String, usize)>,
 }
 
+impl Default for TypeEnv {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeEnv {
     pub fn new() -> Self {
         let mut builtins = HashSet::new();
@@ -249,7 +255,7 @@ impl TypeEnv {
     }
 
     pub fn is_fn_fallible(&self, name: &str) -> bool {
-        self.fn_errors.get(name).map_or(false, |e| !e.is_empty())
+        self.fn_errors.get(name).is_some_and(|e| !e.is_empty())
     }
 
     pub fn is_trait_method_potentially_fallible(&self, trait_name: &str, method_name: &str) -> bool {

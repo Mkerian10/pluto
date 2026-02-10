@@ -147,7 +147,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                 for (method_name, _) in &trait_info.methods {
                     if !class_method_names.contains(method_name) && trait_info.default_methods.contains(method_name) {
                         let mangled = format!("{}_{}", class_name, method_name);
-                        if !func_ids.contains_key(&mangled) {
+                        if let std::collections::hash_map::Entry::Vacant(entry) = func_ids.entry(mangled.clone()) {
                             // Build signature from the function signature in env
                             let func_sig = env.functions.get(&mangled).ok_or_else(|| {
                                 CompileError::codegen(format!("missing sig for default method {mangled}"))
@@ -162,7 +162,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                             let func_id = module
                                 .declare_function(&mangled, Linkage::Local, &sig)
                                 .map_err(|e| CompileError::codegen(format!("declare default method error: {e}")))?;
-                            func_ids.insert(mangled, func_id);
+                            entry.insert(func_id);
                         }
                     }
                 }
@@ -286,20 +286,20 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == *trait_name {
                     for trait_method in &trait_decl.node.methods {
-                        if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node) {
-                            if !trait_method.contracts.is_empty() {
-                                let mangled = format!("{}_{}", c.name.node, trait_method.name.node);
-                                let requires: Vec<(Expr, String)> = trait_method.contracts.iter()
-                                    .filter(|c| c.node.kind == ContractKind::Requires)
-                                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                                    .collect();
-                                let ensures: Vec<(Expr, String)> = trait_method.contracts.iter()
-                                    .filter(|c| c.node.kind == ContractKind::Ensures)
-                                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                                    .collect();
-                                if !requires.is_empty() || !ensures.is_empty() {
-                                    fn_contracts.insert(mangled, FnContracts { requires, ensures });
-                                }
+                        if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node)
+                            && !trait_method.contracts.is_empty()
+                        {
+                            let mangled = format!("{}_{}", c.name.node, trait_method.name.node);
+                            let requires: Vec<(Expr, String)> = trait_method.contracts.iter()
+                                .filter(|c| c.node.kind == ContractKind::Requires)
+                                .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                                .collect();
+                            let ensures: Vec<(Expr, String)> = trait_method.contracts.iter()
+                                .filter(|c| c.node.kind == ContractKind::Ensures)
+                                .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                                .collect();
+                            if !requires.is_empty() || !ensures.is_empty() {
+                                fn_contracts.insert(mangled, FnContracts { requires, ensures });
                             }
                         }
                     }
@@ -397,8 +397,9 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == *trait_name {
                     for trait_method in &trait_decl.node.methods {
-                        if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node) {
-                            let body = trait_method.body.as_ref().unwrap();
+                        if let Some(body) = &trait_method.body
+                            && !class_method_names.contains(&trait_method.name.node)
+                        {
                             let tmp_func = Function {
                                 id: Uuid::new_v4(),
                                 name: trait_method.name.clone(),
@@ -596,18 +597,17 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
 
                 // Wire injected fields
                 for (i, (_, field_ty, is_injected)) in class_info.fields.iter().enumerate() {
-                    if *is_injected {
-                        if let PlutoType::Class(dep_name) = field_ty {
-                            if let Some(&dep_ptr) = singletons.get(dep_name) {
-                                let offset = (i as i32) * POINTER_SIZE;
-                                builder.ins().store(
-                                    MemFlags::new(),
-                                    dep_ptr,
-                                    ptr,
-                                    Offset32::new(offset),
-                                );
-                            }
-                        }
+                    if *is_injected
+                        && let PlutoType::Class(dep_name) = field_ty
+                        && let Some(&dep_ptr) = singletons.get(dep_name)
+                    {
+                        let offset = (i as i32) * POINTER_SIZE;
+                        builder.ins().store(
+                            MemFlags::new(),
+                            dep_ptr,
+                            ptr,
+                            Offset32::new(offset),
+                        );
                     }
                     // Non-injected fields are zero-initialized by calloc
                 }
@@ -632,18 +632,17 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let app_ptr = builder.inst_results(app_call)[0];
 
             for (i, (_, field_ty, is_injected)) in app_info.fields.iter().enumerate() {
-                if *is_injected {
-                    if let PlutoType::Class(dep_name) = field_ty {
-                        if let Some(&dep_ptr) = singletons.get(dep_name) {
-                            let offset = (i as i32) * POINTER_SIZE;
-                            builder.ins().store(
-                                MemFlags::new(),
-                                dep_ptr,
-                                app_ptr,
-                                Offset32::new(offset),
-                            );
-                        }
-                    }
+                if *is_injected
+                    && let PlutoType::Class(dep_name) = field_ty
+                    && let Some(&dep_ptr) = singletons.get(dep_name)
+                {
+                    let offset = (i as i32) * POINTER_SIZE;
+                    builder.ins().store(
+                        MemFlags::new(),
+                        dep_ptr,
+                        app_ptr,
+                        Offset32::new(offset),
+                    );
                 }
             }
 
@@ -691,10 +690,10 @@ fn build_signature(func: &Function, module: &impl Module, env: &TypeEnv) -> cran
         func.return_type.as_ref().map(|t| resolve_type_expr_to_pluto(&t.node, env))
     };
 
-    if let Some(ty) = ret_type {
-        if ty != PlutoType::Void {
-            sig.returns.push(AbiParam::new(pluto_to_cranelift(&ty)));
-        }
+    if let Some(ty) = ret_type
+        && ty != PlutoType::Void
+    {
+        sig.returns.push(AbiParam::new(pluto_to_cranelift(&ty)));
     }
 
     sig
@@ -865,10 +864,10 @@ fn build_method_signature(func: &Function, module: &impl Module, class_name: &st
 
     let ret_type = func.return_type.as_ref().map(|t| resolve_type_expr_to_pluto(&t.node, env));
 
-    if let Some(ty) = ret_type {
-        if ty != PlutoType::Void {
-            sig.returns.push(AbiParam::new(pluto_to_cranelift(&ty)));
-        }
+    if let Some(ty) = ret_type
+        && ty != PlutoType::Void
+    {
+        sig.returns.push(AbiParam::new(pluto_to_cranelift(&ty)));
     }
 
     let _ = class_name;

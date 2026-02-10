@@ -220,7 +220,7 @@ pub(crate) fn resolve_type_with_params(
             let resolved_args: Vec<PlutoType> = type_args.iter()
                 .map(|a| resolve_type_with_params(a, env, type_param_names))
                 .collect::<Result<Vec<_>, _>>()?;
-            if resolved_args.iter().any(|a| contains_type_param(a)) {
+            if resolved_args.iter().any(contains_type_param) {
                 // Still has unresolved type params — store as GenericInstance
                 // substitute_pluto_type will resolve when concrete types are bound
                 if env.generic_classes.contains_key(name.as_str()) {
@@ -412,7 +412,7 @@ pub(crate) fn resolve_generic_instances(ty: &PlutoType, env: &mut TypeEnv) -> Pl
             let resolved_args: Vec<PlutoType> = args.iter()
                 .map(|a| resolve_generic_instances(a, env))
                 .collect();
-            if resolved_args.iter().any(|a| contains_type_param(a)) {
+            if resolved_args.iter().any(contains_type_param) {
                 PlutoType::GenericInstance(kind.clone(), name.clone(), resolved_args)
             } else {
                 match kind {

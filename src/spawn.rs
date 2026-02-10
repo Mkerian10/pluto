@@ -125,7 +125,7 @@ fn desugar_expr(expr: &mut Expr, span: Span) {
                     call_span,
                 ),
             };
-            *call = Box::new(Spanned::new(closure, call_span));
+            **call = Spanned::new(closure, call_span);
         }
         Expr::BinOp { lhs, rhs, .. } => {
             desugar_expr(&mut lhs.node, lhs.span);

@@ -676,11 +676,11 @@ impl PrettyPrinter {
                 if let Some(else_blk) = else_block {
                     self.write(" else ");
                     // Check if this is an else-if (single stmt that is an If)
-                    if else_blk.node.stmts.len() == 1 {
-                        if let Stmt::If { .. } = &else_blk.node.stmts[0].node {
-                            self.emit_stmt(&else_blk.node.stmts[0].node);
-                            return;
-                        }
+                    if else_blk.node.stmts.len() == 1
+                        && let Stmt::If { .. } = &else_blk.node.stmts[0].node
+                    {
+                        self.emit_stmt(&else_blk.node.stmts[0].node);
+                        return;
                     }
                     self.emit_block(&else_blk.node);
                 }
@@ -1047,11 +1047,11 @@ impl PrettyPrinter {
                 }
                 self.write(" => ");
                 // Single Return(Some(expr)) body → inline expr
-                if body.node.stmts.len() == 1 {
-                    if let Stmt::Return(Some(ret_expr)) = &body.node.stmts[0].node {
-                        self.emit_expr(&ret_expr.node, 0);
-                        return;
-                    }
+                if body.node.stmts.len() == 1
+                    && let Stmt::Return(Some(ret_expr)) = &body.node.stmts[0].node
+                {
+                    self.emit_expr(&ret_expr.node, 0);
+                    return;
                 }
                 self.emit_block(&body.node);
             }

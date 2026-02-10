@@ -125,10 +125,8 @@ fn check_stmt(
             let depth = env.scope_depth() - 1;
             env.variable_decls.insert((name.node.clone(), depth), name.span);
             // Track task origin for spawn expressions
-            if let Expr::Spawn { .. } = &value.node {
-                if let Some(fn_name) = env.spawn_target_fns.get(&(value.span.start, value.span.end)) {
-                    env.define_task_origin(name.node.clone(), fn_name.clone());
-                }
+            if let Expr::Spawn { .. } = &value.node && let Some(fn_name) = env.spawn_target_fns.get(&(value.span.start, value.span.end)) {
+                env.define_task_origin(name.node.clone(), fn_name.clone());
             }
         }
         Stmt::Return(value) => {
@@ -253,13 +251,11 @@ fn check_stmt(
         Stmt::Expr(expr) => {
             infer_expr(&expr.node, expr.span, env)?;
             // Bare expect() as statement is likely a bug (forgot .to_equal() etc.)
-            if let Expr::Call { name, .. } = &expr.node {
-                if name.node == "expect" {
-                    return Err(CompileError::type_err(
-                        "expect() must be followed by an assertion method like .to_equal(), .to_be_true(), or .to_be_false()",
-                        expr.span,
-                    ));
-                }
+            if let Expr::Call { name, .. } = &expr.node && name.node == "expect" {
+                return Err(CompileError::type_err(
+                    "expect() must be followed by an assertion method like .to_equal(), .to_be_true(), or .to_be_false()",
+                    expr.span,
+                ));
             }
         }
         Stmt::LetChan { sender, receiver, elem_type, capacity } => {
@@ -345,16 +341,14 @@ fn check_field_assign(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     // Check caller-side mutability
-    if let Some(root) = root_variable(&object.node) {
-        if root != "self" && env.is_immutable(root) {
-            return Err(CompileError::type_err(
-                format!(
-                    "cannot assign to field of immutable variable '{}'; declare with 'let mut' to allow mutation",
-                    root
-                ),
-                object.span,
-            ));
-        }
+    if let Some(root) = root_variable(&object.node) && root != "self" && env.is_immutable(root) {
+        return Err(CompileError::type_err(
+            format!(
+                "cannot assign to field of immutable variable '{}'; declare with 'let mut' to allow mutation",
+                root
+            ),
+            object.span,
+        ));
     }
     let obj_type = infer_expr(&object.node, object.span, env)?;
     let class_name = match &obj_type {

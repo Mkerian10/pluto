@@ -9,13 +9,14 @@ use crate::parser::Parser;
 use crate::span::{Span, Spanned};
 
 /// Maps file_id -> (path, source_text).
+#[derive(Default)]
 pub struct SourceMap {
     pub files: Vec<(PathBuf, String)>,
 }
 
 impl SourceMap {
     pub fn new() -> Self {
-        Self { files: Vec::new() }
+        Self::default()
     }
 
     pub fn add_file(&mut self, path: PathBuf, source: String) -> u32 {
@@ -132,6 +133,7 @@ fn load_directory_module(
 }
 
 /// Resolve a multi-segment import path to a module, with recursive sub-import resolution.
+#[allow(clippy::too_many_arguments)]
 fn resolve_module_path(
     segments: &[Spanned<String>],
     base_dir: &Path,
@@ -189,6 +191,7 @@ fn resolve_module_path(
 /// Resolve all imports within a module's Program, flattening sub-imports into it.
 /// This is the core recursive function: for each import in `program`, resolve the sub-module,
 /// then flatten its items into `program` with prefixed names.
+#[allow(clippy::too_many_arguments)]
 fn resolve_module_imports(
     program: &mut Program,
     module_dir: &Path,
@@ -1333,21 +1336,21 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
     match expr {
         Expr::MethodCall { object, method, args } => {
             // Check if object is Ident matching an import name → convert to qualified call
-            if let Expr::Ident(name) = &object.node {
-                if import_names.contains(name.as_str()) {
-                    let qualified_name = format!("{}.{}", name, method.node);
-                    let name_span = Span::new(object.span.start, method.span.end);
-                    // Rewrite args first
-                    for arg in args.iter_mut() {
-                        rewrite_expr(&mut arg.node, arg.span, import_names);
-                    }
-                    *expr = Expr::Call {
-                        name: Spanned::new(qualified_name, name_span),
-                        args: std::mem::take(args),
-                        target_id: None,
-                    };
-                    return;
+            if let Expr::Ident(name) = &object.node
+                && import_names.contains(name.as_str())
+            {
+                let qualified_name = format!("{}.{}", name, method.node);
+                let name_span = Span::new(object.span.start, method.span.end);
+                // Rewrite args first
+                for arg in args.iter_mut() {
+                    rewrite_expr(&mut arg.node, arg.span, import_names);
                 }
+                *expr = Expr::Call {
+                    name: Spanned::new(qualified_name, name_span),
+                    args: std::mem::take(args),
+                    target_id: None,
+                };
+                return;
             }
             rewrite_expr(&mut object.node, object.span, import_names);
             for arg in args {

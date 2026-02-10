@@ -665,7 +665,7 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
 
     // Also add classes that are deps but have no deps themselves
     for c in &all_di_classes {
-        graph.entry(c.clone()).or_insert_with(Vec::new);
+        graph.entry(c.clone()).or_default();
     }
 
     // Verify all injected types are known classes
@@ -702,7 +702,7 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
         for c in &all_di_classes {
             in_degree.insert(c.clone(), 0);
         }
-        for (_, deps) in &graph {
+        for deps in graph.values() {
             for dep in deps {
                 *in_degree.entry(dep.clone()).or_insert(0) += 1;
             }
@@ -730,12 +730,10 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
             order.push(node.clone());
             // For each class that depends on `node`, decrement its in_degree
             for (class, deps) in &graph {
-                if deps.contains(&node) {
-                    if let Some(deg) = in_degree2.get_mut(class) {
-                        *deg -= 1;
-                        if *deg == 0 {
-                            queue.push_back(class.clone());
-                        }
+                if deps.contains(&node) && let Some(deg) = in_degree2.get_mut(class) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push_back(class.clone());
                     }
                 }
             }
@@ -1082,9 +1080,10 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == *trait_name {
                     for trait_method in &trait_decl.node.methods {
-                        if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node) {
+                        if let Some(body) = &trait_method.body
+                            && !class_method_names.contains(&trait_method.name.node)
+                        {
                             // This class inherits this default method — type check it
-                            let body = trait_method.body.as_ref().unwrap();
                             let tmp_func = Function {
                                 id: Uuid::new_v4(),
                                 name: trait_method.name.clone(),

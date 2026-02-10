@@ -206,11 +206,9 @@ fn collect_free_vars_expr(
             if env.builtins.contains(name) { return; }
             if seen.contains(name) { return; }
             // Check if this variable resolves from an outer scope (depth < outer_depth)
-            if let Some((ty, depth)) = env.lookup_with_depth(name) {
-                if depth < outer_depth {
-                    seen.insert(name.clone());
-                    captures.push((name.clone(), ty.clone()));
-                }
+            if let Some((ty, depth)) = env.lookup_with_depth(name) && depth < outer_depth {
+                seen.insert(name.clone());
+                captures.push((name.clone(), ty.clone()));
             }
         }
         Expr::BinOp { lhs, rhs, .. } => {
