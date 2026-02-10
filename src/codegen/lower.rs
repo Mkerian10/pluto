@@ -2474,7 +2474,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I64, arg_val);
                 self.call_runtime_void("__pluto_print_int", &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes | PlutoType::GenericInstance(_, _, _) => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -2938,6 +2938,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::TypeParam(name) => panic!("ICE: generic type parameter '{name}' reached codegen unresolved"),
         PlutoType::Byte => types::I8,          // unsigned 8-bit value
         PlutoType::Bytes => types::I64,        // pointer to bytes handle
+        PlutoType::GenericInstance(_, name, _) => panic!("ICE: generic instance '{name}' reached codegen unresolved"),
     }
 }
 

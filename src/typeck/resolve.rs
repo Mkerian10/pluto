@@ -4,7 +4,7 @@ use crate::diagnostics::CompileError;
 use crate::parser::ast::TypeExpr;
 use crate::span::Spanned;
 use super::env::{self, ClassInfo, EnumInfo, FuncSig, InstKind, Instantiation, TypeEnv};
-use super::types::PlutoType;
+use super::types::{GenericKind, PlutoType};
 
 pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<PlutoType, CompileError> {
     match &ty.node {
@@ -201,7 +201,58 @@ pub(crate) fn resolve_type_with_params(
                 Ok(PlutoType::Receiver(Box::new(resolved_args[0].clone())))
             }
         }
+        TypeExpr::Generic { name, type_args } => {
+            // User-defined generic types (e.g., Pair<A, B>) — resolve args with params context
+            let resolved_args: Vec<PlutoType> = type_args.iter()
+                .map(|a| resolve_type_with_params(a, env, type_param_names))
+                .collect::<Result<Vec<_>, _>>()?;
+            if resolved_args.iter().any(|a| contains_type_param(a)) {
+                // Still has unresolved type params — store as GenericInstance
+                // substitute_pluto_type will resolve when concrete types are bound
+                if env.generic_classes.contains_key(name.as_str()) {
+                    Ok(PlutoType::GenericInstance(GenericKind::Class, name.clone(), resolved_args))
+                } else if env.generic_enums.contains_key(name.as_str()) {
+                    Ok(PlutoType::GenericInstance(GenericKind::Enum, name.clone(), resolved_args))
+                } else {
+                    Err(CompileError::type_err(
+                        format!("unknown generic type '{name}'"),
+                        ty.span,
+                    ))
+                }
+            } else {
+                // All args are concrete — instantiate now
+                let mangled = env::mangle_name(name, &resolved_args);
+                if env.classes.contains_key(&mangled) {
+                    Ok(PlutoType::Class(mangled))
+                } else if env.enums.contains_key(&mangled) {
+                    Ok(PlutoType::Enum(mangled))
+                } else if env.generic_classes.contains_key(name.as_str()) {
+                    let m = ensure_generic_class_instantiated(name, &resolved_args, env);
+                    Ok(PlutoType::Class(m))
+                } else if env.generic_enums.contains_key(name.as_str()) {
+                    let m = ensure_generic_enum_instantiated(name, &resolved_args, env);
+                    Ok(PlutoType::Enum(m))
+                } else {
+                    Err(CompileError::type_err(
+                        format!("unknown generic type '{name}'"),
+                        ty.span,
+                    ))
+                }
+            }
+        }
         _ => resolve_type(ty, env),
+    }
+}
+
+fn contains_type_param(ty: &PlutoType) -> bool {
+    match ty {
+        PlutoType::TypeParam(_) => true,
+        PlutoType::Array(inner) => contains_type_param(inner),
+        PlutoType::Fn(params, ret) => params.iter().any(contains_type_param) || contains_type_param(ret),
+        PlutoType::Map(k, v) => contains_type_param(k) || contains_type_param(v),
+        PlutoType::Set(t) | PlutoType::Task(t) | PlutoType::Sender(t) | PlutoType::Receiver(t) => contains_type_param(t),
+        PlutoType::GenericInstance(_, _, args) => args.iter().any(contains_type_param),
+        _ => false,
     }
 }
 
@@ -226,6 +277,14 @@ pub(crate) fn substitute_pluto_type(ty: &PlutoType, bindings: &HashMap<String, P
         PlutoType::Task(t) => PlutoType::Task(Box::new(substitute_pluto_type(t, bindings))),
         PlutoType::Sender(t) => PlutoType::Sender(Box::new(substitute_pluto_type(t, bindings))),
         PlutoType::Receiver(t) => PlutoType::Receiver(Box::new(substitute_pluto_type(t, bindings))),
+        PlutoType::GenericInstance(kind, name, args) => {
+            let substituted_args: Vec<PlutoType> = args.iter()
+                .map(|a| substitute_pluto_type(a, bindings))
+                .collect();
+            // Always keep as GenericInstance — resolve_generic_instances will
+            // instantiate concrete types when env is available
+            PlutoType::GenericInstance(kind.clone(), name.clone(), substituted_args)
+        }
         _ => ty.clone(),
     }
 }
@@ -293,7 +352,59 @@ pub(crate) fn unify(pattern: &PlutoType, concrete: &PlutoType, bindings: &mut Ha
                 false
             }
         }
+        PlutoType::GenericInstance(pk, pn, pargs) => {
+            if let PlutoType::GenericInstance(ck, cn, cargs) = concrete {
+                if pk != ck || pn != cn || pargs.len() != cargs.len() { return false; }
+                for (p, c) in pargs.iter().zip(cargs.iter()) {
+                    if !unify(p, c, bindings) { return false; }
+                }
+                true
+            } else {
+                false
+            }
+        }
         _ => pattern == concrete,
+    }
+}
+
+/// Walk a PlutoType and resolve any fully-concrete GenericInstance types
+/// by instantiating the corresponding generic class/enum in env.
+pub(crate) fn resolve_generic_instances(ty: &PlutoType, env: &mut TypeEnv) -> PlutoType {
+    match ty {
+        PlutoType::GenericInstance(kind, name, args) => {
+            // Recursively resolve args first
+            let resolved_args: Vec<PlutoType> = args.iter()
+                .map(|a| resolve_generic_instances(a, env))
+                .collect();
+            if resolved_args.iter().any(|a| contains_type_param(a)) {
+                PlutoType::GenericInstance(kind.clone(), name.clone(), resolved_args)
+            } else {
+                match kind {
+                    GenericKind::Class => {
+                        let m = ensure_generic_class_instantiated(name, &resolved_args, env);
+                        PlutoType::Class(m)
+                    }
+                    GenericKind::Enum => {
+                        let m = ensure_generic_enum_instantiated(name, &resolved_args, env);
+                        PlutoType::Enum(m)
+                    }
+                }
+            }
+        }
+        PlutoType::Array(inner) => PlutoType::Array(Box::new(resolve_generic_instances(inner, env))),
+        PlutoType::Fn(ps, r) => PlutoType::Fn(
+            ps.iter().map(|p| resolve_generic_instances(p, env)).collect(),
+            Box::new(resolve_generic_instances(r, env)),
+        ),
+        PlutoType::Map(k, v) => PlutoType::Map(
+            Box::new(resolve_generic_instances(k, env)),
+            Box::new(resolve_generic_instances(v, env)),
+        ),
+        PlutoType::Set(t) => PlutoType::Set(Box::new(resolve_generic_instances(t, env))),
+        PlutoType::Task(t) => PlutoType::Task(Box::new(resolve_generic_instances(t, env))),
+        PlutoType::Sender(t) => PlutoType::Sender(Box::new(resolve_generic_instances(t, env))),
+        PlutoType::Receiver(t) => PlutoType::Receiver(Box::new(resolve_generic_instances(t, env))),
+        _ => ty.clone(),
     }
 }
 
@@ -314,9 +425,9 @@ pub(crate) fn ensure_generic_func_instantiated(
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let concrete_params: Vec<PlutoType> = gen_sig.params.iter()
-        .map(|p| substitute_pluto_type(p, &bindings))
+        .map(|p| resolve_generic_instances(&substitute_pluto_type(p, &bindings), env))
         .collect();
-    let concrete_ret = substitute_pluto_type(&gen_sig.return_type, &bindings);
+    let concrete_ret = resolve_generic_instances(&substitute_pluto_type(&gen_sig.return_type, &bindings), env);
     env.functions.insert(mangled.clone(), FuncSig {
         params: concrete_params,
         return_type: concrete_ret,
@@ -345,7 +456,7 @@ pub(crate) fn ensure_generic_class_instantiated(
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let concrete_fields: Vec<(String, PlutoType, bool)> = gen_info.fields.iter()
-        .map(|(n, t, inj)| (n.clone(), substitute_pluto_type(t, &bindings), *inj))
+        .map(|(n, t, inj)| (n.clone(), resolve_generic_instances(&substitute_pluto_type(t, &bindings), env), *inj))
         .collect();
     env.classes.insert(mangled.clone(), ClassInfo {
         fields: concrete_fields,

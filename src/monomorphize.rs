@@ -279,6 +279,12 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         PlutoType::Range => TypeExpr::Named("range".to_string()),
         PlutoType::Byte => TypeExpr::Named("byte".to_string()),
         PlutoType::Bytes => TypeExpr::Named("bytes".to_string()),
+        PlutoType::GenericInstance(_, name, args) => TypeExpr::Generic {
+            name: name.clone(),
+            type_args: args.iter()
+                .map(|a| Spanned::new(pluto_type_to_type_expr(a), Span::new(0, 0)))
+                .collect(),
+        },
     }
 }
 

@@ -20,6 +20,17 @@ pub enum PlutoType {
     Bytes,
     Sender(Box<PlutoType>),
     Receiver(Box<PlutoType>),
+    /// A user-defined generic type with unresolved type parameters.
+    /// Stored as (kind, base_name, type_args) — e.g., GenericInstance(Class, "Pair", [TypeParam("A"), TypeParam("B")]).
+    /// Used during generic function signature registration when the type args include TypeParams.
+    /// substitute_pluto_type resolves these to concrete Class/Enum types when all args become concrete.
+    GenericInstance(GenericKind, std::string::String, Vec<PlutoType>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GenericKind {
+    Class,
+    Enum,
 }
 
 impl std::fmt::Display for PlutoType {
@@ -52,6 +63,14 @@ impl std::fmt::Display for PlutoType {
             PlutoType::Bytes => write!(f, "bytes"),
             PlutoType::Sender(inner) => write!(f, "Sender<{inner}>"),
             PlutoType::Receiver(inner) => write!(f, "Receiver<{inner}>"),
+            PlutoType::GenericInstance(_, name, args) => {
+                write!(f, "{name}<")?;
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{a}")?;
+                }
+                write!(f, ">")
+            }
         }
     }
 }

@@ -319,5 +319,9 @@ fn mangle_type(ty: &PlutoType) -> String {
         PlutoType::Bytes => "bytes".into(),
         PlutoType::Sender(inner) => format!("sender_{}", mangle_type(inner)),
         PlutoType::Receiver(inner) => format!("receiver_{}", mangle_type(inner)),
+        PlutoType::GenericInstance(_, name, args) => {
+            let suffixes: Vec<String> = args.iter().map(mangle_type).collect();
+            format!("{}__{}", name, suffixes.join("_"))
+        }
     }
 }

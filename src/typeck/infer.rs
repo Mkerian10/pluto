@@ -5,7 +5,7 @@ use crate::parser::ast::*;
 use crate::span::Spanned;
 use super::env::TypeEnv;
 use super::types::PlutoType;
-use super::resolve::{resolve_type, unify, substitute_pluto_type, ensure_generic_func_instantiated, ensure_generic_class_instantiated, ensure_generic_enum_instantiated};
+use super::resolve::{resolve_type, unify, ensure_generic_func_instantiated, ensure_generic_class_instantiated, ensure_generic_enum_instantiated};
 use super::closures::infer_closure;
 use super::types_compatible;
 
@@ -622,7 +622,8 @@ fn infer_call(
         let mangled = ensure_generic_func_instantiated(&name.node, &type_args, env);
         // Store rewrite
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
-        let concrete_ret = substitute_pluto_type(&gen_sig.return_type, &bindings);
+        // Use the return type from the registered FuncSig — it has GenericInstance types resolved
+        let concrete_ret = env.functions.get(&mangled).unwrap().return_type.clone();
         return Ok(concrete_ret);
     }
 
