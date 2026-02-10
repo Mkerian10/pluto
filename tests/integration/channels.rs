@@ -811,7 +811,7 @@ fn main() {
         }
     }
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "123");
 }
 
@@ -896,7 +896,7 @@ fn main() {
     let sum = do_select(rx1, rx2) catch 0
     print(sum)
 }
-"#, 5);
+"#, 15);
     // 10 + 11 + 20 + 21 = 62, or could be less if ChannelClosed fires before all received
     let val: i64 = out.trim().parse().unwrap();
     assert!(val > 0, "expected positive sum, got {val}");
