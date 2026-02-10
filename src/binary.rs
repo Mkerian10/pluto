@@ -222,10 +222,7 @@ mod tests {
     }
 
     fn empty_derived() -> DerivedInfo {
-        DerivedInfo {
-            fn_error_sets: Default::default(),
-            fn_signatures: Default::default(),
-        }
+        DerivedInfo::default()
     }
 
     #[test]
@@ -463,6 +460,7 @@ fn main() {
         let derived = DerivedInfo {
             fn_error_sets,
             fn_signatures,
+            ..DerivedInfo::default()
         };
 
         let bytes = serialize_program(&program, source, &derived).unwrap();

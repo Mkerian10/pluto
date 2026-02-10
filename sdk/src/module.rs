@@ -1,7 +1,10 @@
 use std::path::Path;
 use uuid::Uuid;
 
-use plutoc::derived::{DerivedInfo, ErrorRef, ResolvedSignature};
+use plutoc::derived::{
+    DerivedInfo, ErrorRef, ResolvedClassInfo, ResolvedEnumInfo, ResolvedErrorInfo,
+    ResolvedSignature, ResolvedTraitInfo,
+};
 use plutoc::parser::ast::Program;
 use plutoc::span::Span;
 
@@ -236,6 +239,40 @@ impl Module {
     /// Access the raw derived info.
     pub fn derived(&self) -> &DerivedInfo {
         &self.derived
+    }
+
+    /// Get resolved class info by UUID.
+    pub fn class_info_of(&self, id: Uuid) -> Option<&ResolvedClassInfo> {
+        self.derived.class_infos.get(&id)
+    }
+
+    /// Get resolved trait info by UUID.
+    pub fn trait_info_of(&self, id: Uuid) -> Option<&ResolvedTraitInfo> {
+        self.derived.trait_infos.get(&id)
+    }
+
+    /// Get resolved enum info by UUID.
+    pub fn enum_info_of(&self, id: Uuid) -> Option<&ResolvedEnumInfo> {
+        self.derived.enum_infos.get(&id)
+    }
+
+    /// Get resolved error info by UUID.
+    pub fn error_info_of(&self, id: Uuid) -> Option<&ResolvedErrorInfo> {
+        self.derived.error_infos.get(&id)
+    }
+
+    /// Get DI instantiation order (class UUIDs in topological order).
+    pub fn di_order(&self) -> &[Uuid] {
+        &self.derived.di_order
+    }
+
+    /// Get the list of class UUIDs that implement a given trait.
+    pub fn trait_implementors_of(&self, trait_id: Uuid) -> &[Uuid] {
+        self.derived
+            .trait_implementors
+            .get(&trait_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     // --- Internal helpers ---
