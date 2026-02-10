@@ -88,6 +88,18 @@ Demonstrates Pluto's contract system: `requires` (preconditions), `ensures` (pos
 cargo run -- run examples/contracts/main.pluto
 ```
 
+## binary-ast
+
+Demonstrates the binary AST commands: `emit-ast` serializes a Pluto source file into a binary `.pluto` AST (with UUIDs and cross-references), and `generate-pt` reads a binary AST back into human-readable Pluto source.
+
+```bash
+# Serialize source to binary AST
+cargo run -- emit-ast examples/binary-ast/main.pluto -o /tmp/main.pluto
+
+# Read binary AST back to text
+cargo run -- generate-pt /tmp/main.pluto
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.

@@ -174,6 +174,51 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
     Ok(())
 }
 
+use parser::ast::Program;
+
+/// Analyze a source file: run the full front-end pipeline (parse → modules → desugar →
+/// typeck → monomorphize → closures → xref) but stop before codegen.
+/// Returns the fully resolved Program and the entry file's source text.
+pub fn analyze_file(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String), CompileError> {
+    let entry_file = entry_file.canonicalize().map_err(|e|
+        CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
+    let source = std::fs::read_to_string(&entry_file)
+        .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
+    let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
+    let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
+
+    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
+    let pkg_graph = manifest::find_and_resolve(entry_dir)?;
+    let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
+
+    check_extern_rust_import_collisions(&graph)?;
+
+    let (mut program, _source_map) = modules::flatten_modules(graph)?;
+
+    let rust_artifacts = if program.extern_rust_crates.is_empty() {
+        vec![]
+    } else {
+        rust_ffi::resolve_rust_crates(&program, entry_dir)?
+    };
+    rust_ffi::inject_extern_fns(&mut program, &rust_artifacts);
+
+    prelude::inject_prelude(&mut program)?;
+    ambient::desugar_ambient(&mut program)?;
+    spawn::desugar_spawn(&mut program)?;
+    // Strip test functions in non-test mode
+    let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
+        .map(|(_, fn_name)| fn_name.clone()).collect();
+    program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
+    program.test_info.clear();
+    contracts::validate_contracts(&program)?;
+    let mut env = typeck::type_check(&program)?;
+    monomorphize::monomorphize(&mut program, &mut env)?;
+    closures::lift_closures(&mut program, &mut env)?;
+    xref::resolve_cross_refs(&mut program);
+
+    Ok((program, source))
+}
+
 /// Compile a file in test mode. Tests are preserved and a test runner main is generated.
 pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<(), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|

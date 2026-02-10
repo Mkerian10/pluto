@@ -32,6 +32,22 @@ enum Commands {
         /// Source file path
         file: PathBuf,
     },
+    /// Analyze a .pt source file and emit a .pluto binary AST
+    EmitAst {
+        /// Source file path (.pt)
+        file: PathBuf,
+        /// Output binary path (.pluto)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Read a .pluto binary AST and emit human-readable .pt source
+    GeneratePt {
+        /// Binary AST file path (.pluto)
+        file: PathBuf,
+        /// Output text path (.pt). If omitted, prints to stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Fetch latest versions of all git dependencies
     Update {
         /// Directory to search for pluto.toml (defaults to current dir)
@@ -103,6 +119,67 @@ fn main() {
 
             if !status.success() {
                 std::process::exit(status.code().unwrap_or(1));
+            }
+        }
+        Commands::EmitAst { file, output } => {
+            let output = output.unwrap_or_else(|| file.with_extension("pluto"));
+
+            match plutoc::analyze_file(&file, stdlib) {
+                Ok((program, source)) => {
+                    match plutoc::binary::serialize_program(&program, &source) {
+                        Ok(bytes) => {
+                            if let Err(e) = std::fs::write(&output, &bytes) {
+                                eprintln!("error: failed to write {}: {e}", output.display());
+                                std::process::exit(1);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("error: serialization failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                Err(err) => {
+                    let filename = file.to_string_lossy().to_string();
+                    eprintln!("error [{}]: {err}", filename);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::GeneratePt { file, output } => {
+            let data = match std::fs::read(&file) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("error: failed to read {}: {e}", file.display());
+                    std::process::exit(1);
+                }
+            };
+
+            if !plutoc::binary::is_binary_format(&data) {
+                eprintln!("error: {} is not a valid .pluto binary file", file.display());
+                std::process::exit(1);
+            }
+
+            let (program, _source) = match plutoc::binary::deserialize_program(&data) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("error: failed to deserialize {}: {e}", file.display());
+                    std::process::exit(1);
+                }
+            };
+
+            let text = plutoc::pretty::pretty_print(&program);
+
+            match output {
+                Some(path) => {
+                    if let Err(e) = std::fs::write(&path, &text) {
+                        eprintln!("error: failed to write {}: {e}", path.display());
+                        std::process::exit(1);
+                    }
+                }
+                None => {
+                    print!("{}", text);
+                }
             }
         }
         Commands::Update { dir } => {
