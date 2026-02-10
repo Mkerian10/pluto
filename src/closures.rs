@@ -278,6 +278,7 @@ fn lift_in_expr(
                 *expr = Expr::ClosureCreate {
                     fn_name,
                     captures: capture_names,
+                    target_id: None,
                 };
             }
         }

@@ -1282,7 +1282,7 @@ impl<'a> Parser<'a> {
                 (Vec::new(), body)
             };
 
-            arms.push(MatchArm { enum_name, variant_name, type_args: vec![], bindings, body });
+            arms.push(MatchArm { enum_name, variant_name, type_args: vec![], bindings, body, enum_id: None, variant_id: None });
             self.skip_newlines();
         }
 
@@ -1482,7 +1482,7 @@ impl<'a> Parser<'a> {
         self.consume_statement_end();
 
         Ok(Spanned::new(
-            Stmt::Raise { error_name, fields },
+            Stmt::Raise { error_name, fields, error_id: None },
             Span::new(start, end),
         ))
     }
@@ -1602,6 +1602,8 @@ impl<'a> Parser<'a> {
                                 variant: field_name,
                                 type_args: vec![],
                                 fields,
+                                enum_id: None,
+                                variant_id: None,
                             },
                             span,
                         );
@@ -1613,6 +1615,8 @@ impl<'a> Parser<'a> {
                                 enum_name: Spanned::new(enum_name_str, enum_name_span),
                                 variant: field_name,
                                 type_args: vec![],
+                                enum_id: None,
+                                variant_id: None,
                             },
                             span,
                         );
@@ -1657,6 +1661,7 @@ impl<'a> Parser<'a> {
                             name: Spanned::new(qualified_name, name_span),
                             type_args: vec![],
                             fields,
+                            target_id: None,
                         },
                         span,
                     );
@@ -1707,6 +1712,8 @@ impl<'a> Parser<'a> {
                                 variant: field_name,
                                 type_args: vec![],
                                 fields,
+                                enum_id: None,
+                                variant_id: None,
                             },
                             span,
                         );
@@ -1719,6 +1726,8 @@ impl<'a> Parser<'a> {
                                 enum_name: Spanned::new(qualified_enum_name, enum_name_span),
                                 variant: field_name,
                                 type_args: vec![],
+                                enum_id: None,
+                                variant_id: None,
                             },
                             span,
                         );
@@ -1846,6 +1855,8 @@ impl<'a> Parser<'a> {
                             variant,
                             type_args,
                             fields,
+                            enum_id: None,
+                            variant_id: None,
                         },
                         span,
                     );
@@ -1856,6 +1867,8 @@ impl<'a> Parser<'a> {
                             enum_name: Spanned::new(enum_name_str, enum_name_span),
                             variant,
                             type_args,
+                            enum_id: None,
+                            variant_id: None,
                         },
                         span,
                     );
@@ -2079,7 +2092,7 @@ impl<'a> Parser<'a> {
                 }
                 let close = self.expect(&Token::RParen)?;
                 let call_span = Span::new(func_name.span.start, close.span.end);
-                let call = Expr::Call { name: func_name, args };
+                let call = Expr::Call { name: func_name, args, target_id: None };
                 Ok(Spanned::new(
                     Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
                     Span::new(start, close.span.end),
@@ -2118,7 +2131,7 @@ impl<'a> Parser<'a> {
             }
             let close = self.expect(&Token::RParen)?;
             let span = Span::new(ident.span.start, close.span.end);
-            Ok(Spanned::new(Expr::Call { name: ident, args }, span))
+            Ok(Spanned::new(Expr::Call { name: ident, args, target_id: None }, span))
         } else if !self.restrict_struct_lit && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
             // Check if this looks like a struct literal: Ident { field: value, ... }
             // We need to distinguish from a block. A struct literal has `ident : expr` inside.
@@ -2146,7 +2159,7 @@ impl<'a> Parser<'a> {
                 }
                 let close = self.expect(&Token::RBrace)?;
                 let span = Span::new(ident.span.start, close.span.end);
-                Ok(Spanned::new(Expr::StructLit { name: ident, type_args: vec![], fields }, span))
+                Ok(Spanned::new(Expr::StructLit { name: ident, type_args: vec![], fields, target_id: None }, span))
             } else {
                 Ok(Spanned::new(Expr::Ident(ident.node.clone()), ident.span))
             }
@@ -2246,7 +2259,7 @@ impl<'a> Parser<'a> {
             }
             let close = self.expect(&Token::RBrace)?;
             let span = Span::new(start, close.span.end);
-            Ok(Spanned::new(Expr::StructLit { name: ident, type_args, fields }, span))
+            Ok(Spanned::new(Expr::StructLit { name: ident, type_args, fields, target_id: None }, span))
         } else {
             Ok(Spanned::new(Expr::Ident(ident.node.clone()), ident.span))
         }
@@ -3225,7 +3238,7 @@ mod tests {
         let body = &prog.functions[0].node.body.node;
         if let Stmt::Let { value, .. } = &body.stmts[0].node {
             match &value.node {
-                Expr::StructLit { name, type_args, fields } => {
+                Expr::StructLit { name, type_args, fields, .. } => {
                     assert_eq!(name.node, "Pair");
                     assert_eq!(type_args.len(), 2);
                     assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
@@ -3245,7 +3258,7 @@ mod tests {
         let body = &prog.functions[0].node.body.node;
         if let Stmt::Let { value, .. } = &body.stmts[0].node {
             match &value.node {
-                Expr::EnumUnit { enum_name, variant, type_args } => {
+                Expr::EnumUnit { enum_name, variant, type_args, .. } => {
                     assert_eq!(enum_name.node, "Option");
                     assert_eq!(variant.node, "None");
                     assert_eq!(type_args.len(), 1);
@@ -3264,7 +3277,7 @@ mod tests {
         let body = &prog.functions[0].node.body.node;
         if let Stmt::Let { value, .. } = &body.stmts[0].node {
             match &value.node {
-                Expr::EnumData { enum_name, variant, fields, type_args } => {
+                Expr::EnumData { enum_name, variant, fields, type_args, .. } => {
                     assert_eq!(enum_name.node, "Option");
                     assert_eq!(variant.node, "Some");
                     assert_eq!(type_args.len(), 1);

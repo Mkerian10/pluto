@@ -111,7 +111,7 @@ fn collect_stmt_effects(
     env: &TypeEnv,
 ) {
     match stmt {
-        Stmt::Raise { error_name, fields } => {
+        Stmt::Raise { error_name, fields, .. } => {
             direct_errors.insert(error_name.node.clone());
             for (_, val) in fields {
                 collect_expr_effects(&val.node, direct_errors, edges, current_fn, env);
@@ -215,7 +215,7 @@ fn collect_expr_effects(
     match expr {
         Expr::Propagate { expr: inner } => {
             match &inner.node {
-                Expr::Call { name, args } => {
+                Expr::Call { name, args, .. } => {
                     if name.node == "pow"
                         && env
                             .fallible_builtin_calls
@@ -530,7 +530,7 @@ fn enforce_expr(
     env: &TypeEnv,
 ) -> Result<(), CompileError> {
     match expr {
-        Expr::Call { name, args } => {
+        Expr::Call { name, args, .. } => {
             for arg in args {
                 enforce_expr(&arg.node, arg.span, current_fn, env)?;
             }
@@ -565,7 +565,7 @@ fn enforce_expr(
             Ok(())
         }
         Expr::Propagate { expr: inner } => match &inner.node {
-            Expr::Call { name, args } => {
+            Expr::Call { name, args, .. } => {
                 for arg in args {
                     enforce_expr(&arg.node, arg.span, current_fn, env)?;
                 }
@@ -603,7 +603,7 @@ fn enforce_expr(
         },
         Expr::Catch { expr: inner, handler } => {
             match &inner.node {
-                Expr::Call { name, args } => {
+                Expr::Call { name, args, .. } => {
                     for arg in args {
                         enforce_expr(&arg.node, arg.span, current_fn, env)?;
                     }

@@ -165,6 +165,7 @@ pub enum Stmt {
     Raise {
         error_name: Spanned<String>,
         fields: Vec<(Spanned<String>, Spanned<Expr>)>,
+        error_id: Option<Uuid>,
     },
     LetChan {
         sender: Spanned<String>,
@@ -212,6 +213,7 @@ pub enum Expr {
     Call {
         name: Spanned<String>,
         args: Vec<Spanned<Expr>>,
+        target_id: Option<Uuid>,
     },
     FieldAccess {
         object: Box<Spanned<Expr>>,
@@ -226,6 +228,7 @@ pub enum Expr {
         name: Spanned<String>,
         type_args: Vec<Spanned<TypeExpr>>,
         fields: Vec<(Spanned<String>, Spanned<Expr>)>,
+        target_id: Option<Uuid>,
     },
     ArrayLit {
         elements: Vec<Spanned<Expr>>,
@@ -238,12 +241,16 @@ pub enum Expr {
         enum_name: Spanned<String>,
         variant: Spanned<String>,
         type_args: Vec<Spanned<TypeExpr>>,
+        enum_id: Option<Uuid>,
+        variant_id: Option<Uuid>,
     },
     EnumData {
         enum_name: Spanned<String>,
         variant: Spanned<String>,
         type_args: Vec<Spanned<TypeExpr>>,
         fields: Vec<(Spanned<String>, Spanned<Expr>)>,
+        enum_id: Option<Uuid>,
+        variant_id: Option<Uuid>,
     },
     StringInterp {
         parts: Vec<StringInterpPart>,
@@ -265,6 +272,7 @@ pub enum Expr {
     ClosureCreate {
         fn_name: String,
         captures: Vec<String>,
+        target_id: Option<Uuid>,
     },
     Propagate {
         expr: Box<Spanned<Expr>>,
@@ -393,4 +401,6 @@ pub struct MatchArm {
     pub type_args: Vec<Spanned<TypeExpr>>,
     pub bindings: Vec<(Spanned<String>, Option<Spanned<String>>)>,
     pub body: Spanned<Block>,
+    pub enum_id: Option<Uuid>,
+    pub variant_id: Option<Uuid>,
 }

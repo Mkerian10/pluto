@@ -17,6 +17,7 @@ pub mod git_cache;
 pub mod lsp;
 pub mod binary;
 pub mod pretty;
+pub mod xref;
 
 use diagnostics::CompileError;
 use std::path::{Path, PathBuf};
@@ -47,6 +48,7 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
+    xref::resolve_cross_refs(&mut program);
     codegen::codegen(&program, &env, source)
 }
 
@@ -87,6 +89,7 @@ pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
+    xref::resolve_cross_refs(&mut program);
     codegen::codegen(&program, &env, source)
 }
 
@@ -152,6 +155,7 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
+    xref::resolve_cross_refs(&mut program);
     let object_bytes = codegen::codegen(&program, &env, &source)?;
 
     let obj_path = output_path.with_extension("o");
@@ -214,6 +218,7 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
+    xref::resolve_cross_refs(&mut program);
     let object_bytes = codegen::codegen(&program, &env, &source)?;
 
     let obj_path = output_path.with_extension("o");

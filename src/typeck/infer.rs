@@ -93,7 +93,7 @@ pub(crate) fn infer_expr(
                 )),
             }
         }
-        Expr::Call { name, args } => infer_call(name, args, span, env),
+        Expr::Call { name, args, .. } => infer_call(name, args, span, env),
         Expr::StructLit { name, fields: lit_fields, type_args, .. } => {
             infer_struct_lit(name, lit_fields, type_args, span, env)
         }
@@ -196,10 +196,10 @@ pub(crate) fn infer_expr(
                 }
             }
         }
-        Expr::EnumUnit { enum_name, variant, type_args } => {
+        Expr::EnumUnit { enum_name, variant, type_args, .. } => {
             infer_enum_unit(enum_name, variant, type_args, span, env)
         }
-        Expr::EnumData { enum_name, variant, fields: lit_fields, type_args } => {
+        Expr::EnumData { enum_name, variant, fields: lit_fields, type_args, .. } => {
             infer_enum_data(enum_name, variant, lit_fields, type_args, span, env)
         }
         Expr::Propagate { expr } => {

@@ -725,7 +725,7 @@ fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
                 offset_block_spans(&mut arm.body.node, offset);
             }
         }
-        Stmt::Raise { error_name, fields } => {
+        Stmt::Raise { error_name, fields, .. } => {
             offset_spanned(error_name, offset);
             for (fname, fexpr) in fields.iter_mut() {
                 offset_spanned(fname, offset);
@@ -800,7 +800,7 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
             offset_spanned(target_type, offset);
             offset_type_expr_spans(&mut target_type.node, offset);
         }
-        Expr::Call { name, args } => {
+        Expr::Call { name, args, .. } => {
             offset_spanned(name, offset);
             for arg in args.iter_mut() {
                 offset_spanned(arg, offset);
@@ -821,7 +821,7 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
                 offset_expr_spans(&mut arg.node, offset);
             }
         }
-        Expr::StructLit { name, type_args, fields } => {
+        Expr::StructLit { name, type_args, fields, .. } => {
             offset_spanned(name, offset);
             for ta in type_args.iter_mut() {
                 offset_spanned(ta, offset);
@@ -845,7 +845,7 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
             offset_spanned(index, offset);
             offset_expr_spans(&mut index.node, offset);
         }
-        Expr::EnumUnit { enum_name, variant, type_args } => {
+        Expr::EnumUnit { enum_name, variant, type_args, .. } => {
             offset_spanned(enum_name, offset);
             offset_spanned(variant, offset);
             for ta in type_args.iter_mut() {
@@ -853,7 +853,7 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
                 offset_type_expr_spans(&mut ta.node, offset);
             }
         }
-        Expr::EnumData { enum_name, variant, type_args, fields } => {
+        Expr::EnumData { enum_name, variant, type_args, fields, .. } => {
             offset_spanned(enum_name, offset);
             offset_spanned(variant, offset);
             for ta in type_args.iter_mut() {

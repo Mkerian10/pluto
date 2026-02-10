@@ -215,7 +215,7 @@ fn check_stmt(
         Stmt::Match { expr, arms } => {
             check_match_stmt(expr, arms, span, env, return_type)?;
         }
-        Stmt::Raise { error_name, fields } => {
+        Stmt::Raise { error_name, fields, .. } => {
             check_raise(error_name, fields, span, env)?;
         }
         Stmt::Break => {

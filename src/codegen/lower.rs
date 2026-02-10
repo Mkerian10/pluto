@@ -309,7 +309,7 @@ impl<'a> LowerContext<'a> {
     /// Recursively collect all old(expr) descriptions from an expression.
     fn collect_old_exprs(expr: &Expr, out: &mut Vec<(Expr, String)>) {
         match expr {
-            Expr::Call { name, args } if name.node == "old" && args.len() == 1 => {
+            Expr::Call { name, args, .. } if name.node == "old" && args.len() == 1 => {
                 let desc = super::format_invariant_expr(&args[0].node);
                 out.push((args[0].node.clone(), desc));
             }
@@ -447,7 +447,7 @@ impl<'a> LowerContext<'a> {
             Stmt::While { condition, body } => self.lower_while(condition, body),
             Stmt::For { var, iterable, body } => self.lower_for(var, iterable, body),
             Stmt::Match { expr, arms } => self.lower_match_stmt(expr, arms, terminated),
-            Stmt::Raise { error_name, fields } => {
+            Stmt::Raise { error_name, fields, .. } => {
                 self.lower_raise(error_name, fields)?;
                 *terminated = true;
                 Ok(())
@@ -1501,7 +1501,7 @@ impl<'a> LowerContext<'a> {
                     _ => Err(CompileError::codegen("invalid cast in lowered AST".to_string())),
                 }
             }
-            Expr::Call { name, args } => self.lower_call(name, args),
+            Expr::Call { name, args, .. } => self.lower_call(name, args),
             Expr::StructLit { name, fields, .. } => self.lower_struct_lit(name, fields),
             Expr::ArrayLit { elements } => {
                 let n = elements.len() as i64;
@@ -1638,12 +1638,12 @@ impl<'a> LowerContext<'a> {
             Expr::Closure { .. } => {
                 Err(CompileError::codegen("closures should be lifted before codegen"))
             }
-            Expr::ClosureCreate { fn_name, captures } => {
+            Expr::ClosureCreate { fn_name, captures, .. } => {
                 self.lower_closure_create(fn_name, captures)
             }
             Expr::Spawn { call } => {
                 match &call.node {
-                    Expr::ClosureCreate { fn_name, captures } => {
+                    Expr::ClosureCreate { fn_name, captures, .. } => {
                         let closure_ptr = self.lower_closure_create(fn_name, captures)?;
                         // Inc refcount for each captured Sender
                         for cap_name in captures {
@@ -2978,7 +2978,7 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
         }
         Expr::Cast { target_type, .. } => resolve_type_expr_to_pluto(&target_type.node, env),
-        Expr::Call { name, args } => {
+        Expr::Call { name, args, .. } => {
             // old(expr) has same type as expr
             if name.node == "old" && args.len() == 1 {
                 return infer_type_for_expr(&args[0].node, env, var_types);
