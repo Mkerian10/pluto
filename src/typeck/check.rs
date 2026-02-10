@@ -67,6 +67,15 @@ pub(crate) fn check_block(block: &Block, env: &mut TypeEnv, return_type: &PlutoT
     Ok(())
 }
 
+pub(crate) fn check_block_stmt(
+    stmt: &Stmt,
+    span: crate::span::Span,
+    env: &mut TypeEnv,
+    return_type: &PlutoType,
+) -> Result<(), CompileError> {
+    check_stmt(stmt, span, env, return_type)
+}
+
 fn check_stmt(
     stmt: &Stmt,
     span: crate::span::Span,
@@ -724,7 +733,7 @@ fn check_expr_for_self_mutation(
                     check_expr_for_self_mutation(&expr.node, expr.span, class_name, env)?;
                 }
                 CatchHandler::Wildcard { body, .. } => {
-                    check_expr_for_self_mutation(&body.node, body.span, class_name, env)?;
+                    check_body_for_self_mutation(&body.node, class_name, env)?;
                 }
             }
         }

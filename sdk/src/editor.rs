@@ -737,7 +737,7 @@ fn collect_dangling_in_expr(expr: &Expr, span: Span, target: Uuid, out: &mut Vec
         Expr::Catch { expr: inner, handler } => {
             collect_dangling_in_expr(&inner.node, inner.span, target, out);
             match handler {
-                CatchHandler::Wildcard { body, .. } => collect_dangling_in_expr(&body.node, body.span, target, out),
+                CatchHandler::Wildcard { body, .. } => collect_dangling_in_block(&body.node, target, out),
                 CatchHandler::Shorthand(body) => collect_dangling_in_expr(&body.node, body.span, target, out),
             }
         }
@@ -1039,7 +1039,7 @@ fn rename_in_expr(expr: &mut Expr, id: Uuid, kind: DeclKindSimple, old_name: &st
         Expr::Catch { expr: inner, handler } => {
             rename_in_expr(&mut inner.node, id, kind, old_name, new_name);
             match handler {
-                CatchHandler::Wildcard { body, .. } => rename_in_expr(&mut body.node, id, kind, old_name, new_name),
+                CatchHandler::Wildcard { body, .. } => rename_in_block(&mut body.node, id, kind, old_name, new_name),
                 CatchHandler::Shorthand(body) => rename_in_expr(&mut body.node, id, kind, old_name, new_name),
             }
         }

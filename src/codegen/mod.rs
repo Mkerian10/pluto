@@ -358,7 +358,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
 
         module
             .define_function(func_id, &mut fn_ctx)
-            .map_err(|e| CompileError::codegen(format!("define function error: {e}")))?;
+            .map_err(|e| CompileError::codegen(format!("define function error for '{}': {e}", f.name.node)))?;
     }
 
     // Pass 2b: Define all methods
@@ -754,7 +754,7 @@ fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
             Expr::Catch { expr, handler } => {
                 walk_expr(&expr.node, result);
                 match handler {
-                    CatchHandler::Wildcard { body, .. } => walk_expr(&body.node, result),
+                    CatchHandler::Wildcard { body, .. } => walk_block(&body.node, result),
                     CatchHandler::Shorthand(e) => walk_expr(&e.node, result),
                 }
             }

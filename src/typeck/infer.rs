@@ -919,11 +919,37 @@ fn infer_catch(
 ) -> Result<PlutoType, CompileError> {
     let success_type = infer_expr(&expr.node, expr.span, env)?;
     let handler_type = match handler {
-        CatchHandler::Wildcard { body, .. } => {
-            let CatchHandler::Wildcard { var, .. } = handler else { unreachable!() };
+        CatchHandler::Wildcard { var, body } => {
             env.push_scope();
             env.define(var.node.clone(), PlutoType::Error);
-            let t = infer_expr(&body.node, body.span, env)?;
+            let stmts = &body.node.stmts;
+            // Type-check all statements except possibly the last
+            let return_type = env.current_fn.as_ref()
+                .and_then(|name| env.functions.get(name).map(|f| f.return_type.clone()))
+                .unwrap_or(PlutoType::Void);
+            for (i, stmt) in stmts.iter().enumerate() {
+                if i < stmts.len() - 1 {
+                    super::check::check_block_stmt(&stmt.node, stmt.span, env, &return_type)?;
+                }
+            }
+            // Determine result type from last statement
+            let t = if let Some(last) = stmts.last() {
+                match &last.node {
+                    Stmt::Expr(e) => infer_expr(&e.node, e.span, env)?,
+                    Stmt::Return(_) => {
+                        super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
+                        env.pop_scope();
+                        // Diverging — skip compat check
+                        return Ok(success_type);
+                    }
+                    _ => {
+                        super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
+                        PlutoType::Void
+                    }
+                }
+            } else {
+                PlutoType::Void
+            };
             env.pop_scope();
             t
         }

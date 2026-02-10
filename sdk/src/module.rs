@@ -654,7 +654,7 @@ fn find_expr_recursive<'a>(expr: &'a Expr, span: Span, target: Span) -> Option<&
         Expr::Catch { expr: inner, handler } => {
             find_expr_recursive(&inner.node, inner.span, target)
                 .or_else(|| match handler {
-                    CatchHandler::Wildcard { body, .. } => find_expr_recursive(&body.node, body.span, target),
+                    CatchHandler::Wildcard { body, .. } => find_expr_in_block(&body.node, target),
                     CatchHandler::Shorthand(body) => find_expr_recursive(&body.node, body.span, target),
                 })
         }

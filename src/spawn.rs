@@ -183,7 +183,7 @@ fn desugar_expr(expr: &mut Expr, span: Span) {
         Expr::Catch { expr: inner, handler } => {
             desugar_expr(&mut inner.node, inner.span);
             match handler {
-                CatchHandler::Wildcard { body, .. } => desugar_expr(&mut body.node, body.span),
+                CatchHandler::Wildcard { body, .. } => desugar_block(&mut body.node),
                 CatchHandler::Shorthand(fb) => desugar_expr(&mut fb.node, fb.span),
             }
         }

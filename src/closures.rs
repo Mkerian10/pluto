@@ -293,7 +293,7 @@ fn lift_in_expr(
             lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    lift_in_expr(&mut body.node, body.span, env, counter, new_fns)?;
+                    lift_in_block(&mut body.node, env, counter, new_fns)?;
                 }
                 CatchHandler::Shorthand(fb) => {
                     lift_in_expr(&mut fb.node, fb.span, env, counter, new_fns)?;

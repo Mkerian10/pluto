@@ -397,7 +397,7 @@ pub struct ErrorDecl {
 pub enum CatchHandler {
     Wildcard {
         var: Spanned<String>,
-        body: Box<Spanned<Expr>>,
+        body: Spanned<Block>,
     },
     Shorthand(Box<Spanned<Expr>>),
 }

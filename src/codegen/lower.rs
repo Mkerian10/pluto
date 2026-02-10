@@ -407,13 +407,9 @@ impl<'a> LowerContext<'a> {
                         let val_type = infer_type_for_expr(&expr.node, self.env, &self.var_types);
 
                         // If returning a void expression (e.g., spawn closure wrapping a void function),
-                        // lower the expr for side effects but emit return_(&[])
+                        // lower the expr for side effects but emit default return
                         if val_type == PlutoType::Void {
-                            if let Some(bb) = target_block {
-                                self.builder.ins().jump(bb, &[]);
-                            } else {
-                                self.builder.ins().return_(&[]);
-                            }
+                            self.emit_default_return();
                         } else {
                             // If returning a class where a trait is expected, wrap it
                             // If returning T where T? is expected, box value types
@@ -435,11 +431,7 @@ impl<'a> LowerContext<'a> {
                         }
                     }
                     None => {
-                        if let Some(bb) = target_block {
-                            self.builder.ins().jump(bb, &[]);
-                        } else {
-                            self.builder.ins().return_(&[]);
-                        }
+                        self.emit_default_return();
                     }
                 }
                 *terminated = true;
@@ -2141,7 +2133,37 @@ impl<'a> LowerContext<'a> {
                 self.variables.insert(var.node.clone(), err_var);
                 self.var_types.insert(var.node.clone(), PlutoType::Error);
 
-                let result = self.lower_expr(&body.node)?;
+                let stmts = &body.node.stmts;
+                let mut block_terminated = false;
+
+                // Lower all statements except the last
+                for i in 0..stmts.len().saturating_sub(1) {
+                    self.lower_stmt(&stmts[i].node, &mut block_terminated)?;
+                }
+
+                // Determine result from the last statement
+                let (result, did_terminate) = if block_terminated {
+                    // Already terminated (e.g., early return in non-last stmt)
+                    (None, true)
+                } else if let Some(last) = stmts.last() {
+                    match &last.node {
+                        Stmt::Expr(e) => (Some(self.lower_expr(&e.node)?), false),
+                        Stmt::Return(_) => {
+                            self.lower_stmt(&last.node, &mut block_terminated)?;
+                            (None, true)
+                        }
+                        _ => {
+                            self.lower_stmt(&last.node, &mut block_terminated)?;
+                            if block_terminated {
+                                (None, true)
+                            } else {
+                                (Some(self.builder.ins().iconst(types::I64, 0)), false)
+                            }
+                        }
+                    }
+                } else {
+                    (Some(self.builder.ins().iconst(types::I64, 0)), false)
+                };
 
                 // Restore previous binding
                 if let Some(pv) = prev_var {
@@ -2155,7 +2177,14 @@ impl<'a> LowerContext<'a> {
                     self.var_types.remove(&var.node);
                 }
 
-                result
+                if did_terminate {
+                    // Block terminated (e.g., return), don't jump to merge
+                    self.builder.switch_to_block(merge_bb);
+                    self.builder.seal_block(merge_bb);
+                    return Ok(self.builder.block_params(merge_bb)[0]);
+                }
+
+                result.unwrap()
             }
             CatchHandler::Shorthand(fallback) => {
                 // Clear the error

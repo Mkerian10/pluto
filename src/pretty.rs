@@ -1119,9 +1119,8 @@ impl PrettyPrinter {
                     CatchHandler::Wildcard { var, body } => {
                         self.write(" catch ");
                         self.write(&var.node);
-                        self.write(" { ");
-                        self.emit_expr(&body.node, 0);
-                        self.write(" }");
+                        self.write(" ");
+                        self.emit_block(&body.node);
                     }
                 }
             }
@@ -1811,7 +1810,8 @@ fn main() {
 }
 "#;
         let result = pp(src);
-        assert!(result.contains("find() catch err { 0 }"));
+        assert!(result.contains("find() catch err {"));
+        assert!(result.contains("0"));
         assert_roundtrip_stable(src);
     }
 

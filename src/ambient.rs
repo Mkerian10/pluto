@@ -351,7 +351,7 @@ fn rewrite_expr(expr: &mut Expr, span: Span, active: &HashSet<String>) {
                 CatchHandler::Wildcard { var, body } => {
                     let mut inner_active = active.clone();
                     inner_active.remove(&var.node);
-                    rewrite_expr(&mut body.node, body.span, &inner_active);
+                    rewrite_block(&mut body.node, &inner_active);
                 }
                 CatchHandler::Shorthand(fb) => {
                     rewrite_expr(&mut fb.node, fb.span, active);

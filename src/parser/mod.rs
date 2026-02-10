@@ -1640,12 +1640,9 @@ impl<'a> Parser<'a> {
         // Lookahead: if ident followed by {, it's wildcard form
         if self.is_catch_wildcard_ahead() {
             let var = self.expect_ident()?;
-            self.expect(&Token::LBrace)?;
-            self.skip_newlines();
-            let body = self.parse_expr(0)?;
-            self.skip_newlines();
-            let close = self.expect(&Token::RBrace)?;
-            Ok((CatchHandler::Wildcard { var, body: Box::new(body) }, close.span.end))
+            let body = self.parse_block()?;
+            let end = body.span.end;
+            Ok((CatchHandler::Wildcard { var, body }, end))
         } else {
             let fallback = self.parse_expr(0)?;
             let end = fallback.span.end;

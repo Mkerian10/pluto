@@ -404,7 +404,7 @@ fn collect_expr_xrefs(
             collect_expr_xrefs(&inner.node, inner.span, fn_name, callers, constructors, enum_usages, raise_sites);
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    collect_expr_xrefs(&body.node, body.span, fn_name, callers, constructors, enum_usages, raise_sites);
+                    collect_block_xrefs(&body.node, fn_name, callers, constructors, enum_usages, raise_sites);
                 }
                 CatchHandler::Shorthand(body) => {
                     collect_expr_xrefs(&body.node, body.span, fn_name, callers, constructors, enum_usages, raise_sites);

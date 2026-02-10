@@ -1112,7 +1112,7 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
             rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    rewrite_expr_for_module(&mut body.node, module_name, module_prog);
+                    rewrite_block_for_module(&mut body.node, module_name, module_prog);
                 }
                 CatchHandler::Shorthand(fallback) => {
                     rewrite_expr_for_module(&mut fallback.node, module_name, module_prog);
@@ -1434,7 +1434,7 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
             rewrite_expr(&mut expr.node, expr.span, import_names);
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    rewrite_expr(&mut body.node, body.span, import_names);
+                    rewrite_block(&mut body.node, import_names);
                 }
                 CatchHandler::Shorthand(fallback) => {
                     rewrite_expr(&mut fallback.node, fallback.span, import_names);

@@ -274,7 +274,7 @@ fn collect_free_vars_expr(
             collect_free_vars_expr(&inner.node, param_names, outer_depth, env, captures, seen);
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    collect_free_vars_expr(&body.node, param_names, outer_depth, env, captures, seen);
+                    collect_free_vars_block(&body.node, param_names, outer_depth, env, captures, seen);
                 }
                 CatchHandler::Shorthand(fb) => {
                     collect_free_vars_expr(&fb.node, param_names, outer_depth, env, captures, seen);

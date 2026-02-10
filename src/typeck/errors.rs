@@ -297,7 +297,9 @@ fn collect_expr_effects(
             }
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    collect_expr_effects(&body.node, direct_errors, edges, current_fn, env);
+                    for stmt in &body.node.stmts {
+                        collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
+                    }
                 }
                 CatchHandler::Shorthand(fb) => {
                     collect_expr_effects(&fb.node, direct_errors, edges, current_fn, env);
@@ -643,7 +645,7 @@ fn enforce_expr(
                 }
             }
             match handler {
-                CatchHandler::Wildcard { body, .. } => enforce_expr(&body.node, body.span, current_fn, env),
+                CatchHandler::Wildcard { body, .. } => enforce_block(&body.node, current_fn, env),
                 CatchHandler::Shorthand(fb) => enforce_expr(&fb.node, fb.span, current_fn, env),
             }
         }
@@ -756,7 +758,7 @@ fn contains_propagate(expr: &Expr) -> bool {
         Expr::Closure { body, .. } => body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)),
         Expr::Catch { expr: inner, handler } => {
             contains_propagate(&inner.node) || match handler {
-                CatchHandler::Wildcard { body, .. } => contains_propagate(&body.node),
+                CatchHandler::Wildcard { body, .. } => body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)),
                 CatchHandler::Shorthand(fb) => contains_propagate(&fb.node),
             }
         }

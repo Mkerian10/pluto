@@ -275,7 +275,7 @@ fn resolve_expr(expr: &mut Expr, index: &DeclIndex) {
             resolve_expr(&mut expr.node, index);
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    resolve_expr(&mut body.node, index);
+                    resolve_block(&mut body.node, index);
                 }
                 CatchHandler::Shorthand(body) => {
                     resolve_expr(&mut body.node, index);

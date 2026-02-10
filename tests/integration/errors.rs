@@ -350,3 +350,45 @@ fn error_method_in_closure_body() {
         "must be handled",
     );
 }
+
+// ── Multi-statement catch blocks ────────────────────────────────────
+
+#[test]
+fn catch_wildcard_multi_stmt_with_return() {
+    let out = compile_and_run_stdout(
+        "error NotFound {\n    code: int\n}\n\nfn find(id: int) int {\n    if id < 0 {\n        raise NotFound { code: id }\n    }\n    return id * 2\n}\n\nfn main() {\n    let result = find(-1) catch err {\n        print(\"caught\")\n        return\n    }\n    print(result)\n}",
+    );
+    assert_eq!(out, "caught\n");
+}
+
+#[test]
+fn catch_wildcard_multi_stmt_fallback_value() {
+    let out = compile_and_run_stdout(
+        "error NotFound {\n    code: int\n}\n\nfn find(id: int) int {\n    if id < 0 {\n        raise NotFound { code: id }\n    }\n    return id * 2\n}\n\nfn main() {\n    let result = find(-1) catch err {\n        let fallback = 42\n        fallback\n    }\n    print(result)\n}",
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn catch_wildcard_multi_stmt_with_let_and_return() {
+    let out = compile_and_run_stdout(
+        "error BadInput {\n    code: int\n}\n\nfn validate(x: int) int {\n    if x < 0 {\n        raise BadInput { code: x }\n    }\n    return x\n}\n\nfn main() {\n    let result = validate(-5) catch err {\n        let msg = \"error occurred\"\n        print(msg)\n        return\n    }\n    print(result)\n}",
+    );
+    assert_eq!(out, "error occurred\n");
+}
+
+#[test]
+fn catch_wildcard_single_expr_still_works() {
+    let out = compile_and_run_stdout(
+        "error NotFound {\n    code: int\n}\n\nfn find(id: int) int {\n    if id < 0 {\n        raise NotFound { code: id }\n    }\n    return id * 2\n}\n\nfn main() {\n    let result = find(-1) catch err { -99 }\n    print(result)\n}",
+    );
+    assert_eq!(out, "-99\n");
+}
+
+#[test]
+fn catch_wildcard_multi_stmt_no_error() {
+    let out = compile_and_run_stdout(
+        "error NotFound {\n    code: int\n}\n\nfn find(id: int) int {\n    if id < 0 {\n        raise NotFound { code: id }\n    }\n    return id * 2\n}\n\nfn main() {\n    let result = find(5) catch err {\n        print(\"should not print\")\n        return\n    }\n    print(result)\n}",
+    );
+    assert_eq!(out, "10\n");
+}

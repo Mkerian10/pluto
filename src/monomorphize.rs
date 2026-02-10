@@ -570,7 +570,7 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
             substitute_in_expr(&mut expr.node, bindings);
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    substitute_in_expr(&mut body.node, bindings);
+                    substitute_in_block(&mut body.node, bindings);
                 }
                 CatchHandler::Shorthand(body) => {
                     substitute_in_expr(&mut body.node, bindings);
@@ -929,7 +929,7 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
                 CatchHandler::Wildcard { var, body } => {
                     offset_spanned(var, offset);
                     offset_spanned(body, offset);
-                    offset_expr_spans(&mut body.node, offset);
+                    offset_block_spans(&mut body.node, offset);
                 }
                 CatchHandler::Shorthand(body) => {
                     offset_spanned(body, offset);
@@ -1165,7 +1165,7 @@ fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(u
             rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
             match handler {
                 CatchHandler::Wildcard { body, .. } => {
-                    rewrite_expr(&mut body.node, body.span.start, body.span.end, rewrites);
+                    rewrite_block(&mut body.node, rewrites);
                 }
                 CatchHandler::Shorthand(body) => {
                     rewrite_expr(&mut body.node, body.span.start, body.span.end, rewrites);
@@ -1384,7 +1384,7 @@ fn resolve_generic_te_in_expr(expr: &mut Expr, env: &mut TypeEnv) -> Result<(), 
         Expr::Catch { expr, handler } => {
             resolve_generic_te_in_expr(&mut expr.node, env)?;
             match handler {
-                CatchHandler::Wildcard { body, .. } => resolve_generic_te_in_expr(&mut body.node, env)?,
+                CatchHandler::Wildcard { body, .. } => resolve_generic_te_in_block(&mut body.node, env)?,
                 CatchHandler::Shorthand(body) => resolve_generic_te_in_expr(&mut body.node, env)?,
             }
         }
