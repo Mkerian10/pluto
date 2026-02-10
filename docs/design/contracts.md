@@ -14,7 +14,7 @@ The guiding principle:
 |----------|--------|-------|
 | **Invariants** | Implemented (runtime checks) | Phase 1 |
 | **Pre/post conditions** | Implemented (runtime checks) | Phase 2 |
-| **Interface guarantees** | Not started | Phase 3 |
+| **Interface guarantees** | Implemented (runtime checks) | Phase 3 |
 | **Failure semantics** | Not started | Phase 4 |
 | **Protocol contracts** | Not started | Phase 5 |
 | **Static verifier** | Not started | Phase 6 |
@@ -372,29 +372,38 @@ Pure functions (no `mut self`, no channel sends, no extern calls, no transitive 
 
 ## 5. Interface Guarantees
 
-> **Status: Not started (Phase 3 target)**
+> **Status: Implemented (Phase 3)** — runtime checks on all implementing class methods.
 
-Traits can specify contracts on their methods. Any class implementing the trait must satisfy these contracts.
+Traits can specify contracts on their methods. Any class implementing the trait must satisfy these contracts. Enforcement is **runtime**: requires/ensures are checked at method entry/exit on every implementation, whether called directly or via dynamic dispatch (trait-typed parameter).
 
 ### Syntax
 
 ```
-trait PaymentGateway {
-    fn charge(self, req: ChargeReq) ChargeRes ! PayError
-        requires req.amount > 0
-        ensures result.status != Status.Unknown
+trait Validator {
+    fn validate(self, x: int) int
+        requires x > 0
+        ensures result >= 0
+}
 
-    @idempotent(key = req.transaction_id)
-    fn refund(self, req: RefundReq) RefundRes ! PayError
-        requires req.amount > 0
+class MyValidator impl Validator {
+    // Trait requires/ensures are enforced at runtime on this method.
+    // Class methods CANNOT add requires (Liskov violation).
+    // Class methods CAN add ensures (strengthening postconditions is safe).
+    fn validate(self, x: int) int
+        ensures result > x
+    {
+        return x * 2
+    }
 }
 ```
 
 ### Rules
 
-- Trait contracts apply to all implementations. An `impl` block for a class must satisfy every `requires`/`ensures` and failure semantics annotation declared on the trait.
-- Implementation methods may **strengthen** postconditions (promise more) but may not **weaken** preconditions (demand more than the trait declares). This follows the Liskov Substitution Principle.
-- Failure semantics annotations (`@idempotent`, `@retryable`, etc.) on trait methods are **requirements**, not suggestions — implementations must carry compatible annotations.
+- **Trait contracts apply to all implementations.** Every `requires`/`ensures` on a trait method is runtime-enforced on all implementing class methods, including default methods (both inherited and overridden).
+- **Liskov Substitution Principle:** Implementation methods **must not** add `requires` clauses. A trait method with no `requires` effectively has `requires true`; adding any `requires` in the class would weaken the precondition, breaking substitutability. This is enforced at compile time — any `requires` on a trait impl method is a compile error, regardless of whether the trait method itself declares contracts.
+- **Strengthening postconditions is allowed:** Implementation methods **may** add `ensures` clauses (promising more than the trait requires is Liskov-safe).
+- **Multi-trait collision guard:** If a class implements multiple traits that define the same method name, and at least one trait has contracts on that method, the compiler rejects it at compile time. This prevents ambiguous contract merging.
+- **Trait contracts can reference parameters and `result`**, but **not** `self.field` (since a trait doesn't know its implementors' field layout). Attempting to access `self.field` in a trait contract is a type error.
 
 ---
 
@@ -511,19 +520,21 @@ Runtime enforcement of `requires`/`ensures` contracts. Functions and methods wit
 
 **Key files:** `src/contracts.rs`, `src/typeck/register.rs`, `src/typeck/infer.rs`, `src/codegen/lower.rs`, `src/codegen/mod.rs`, `runtime/builtins.c`
 
-### Phase 3: Interface Guarantees
+### Phase 3: Interface Guarantees (Implemented)
 
-Contracts on trait methods, enforced on all implementations.
+Contracts on trait methods, runtime-enforced on all implementations.
 
-**Scope:**
-- `requires`/`ensures` on trait method declarations
-- Verification that implementations satisfy trait contracts
-- Liskov checking: implementations can strengthen postconditions but not weaken preconditions
-- Contracts propagate through trait-typed parameters (caller proves trait's requires, assumes trait's ensures)
+**What was implemented:**
+- `requires`/`ensures` parsing on trait method declarations (both abstract and default methods)
+- Type-checking of trait method contracts (parameters and `result` in scope, `self.field` rejected)
+- Trait contracts stored in `TraitInfo.method_contracts` and propagated to implementing class methods in codegen
+- **Liskov checking:** class methods implementing a trait MUST NOT add `requires` clauses (compile error). Classes CAN add `ensures` (strengthening postconditions is Liskov-safe). This applies unconditionally — even when the trait has no contracts.
+- **Multi-trait collision guard:** if a class implements two traits that define the same method name and at least one has contracts, it's a compile error
+- Runtime enforcement via the same requires/ensures check mechanism from Phase 2
+- Contracts work through dynamic dispatch (trait-typed parameters)
+- 13 integration tests (67 total contract tests)
 
-**Dependencies:** Phase 2 (obligation propagation must work first).
-
-**Estimated complexity:** Medium. Extends Phase 2's propagation to work through trait indirection. The main new work is Liskov checking on impl blocks.
+**Key files:** `src/parser/mod.rs` (parse_trait_method), `src/typeck/env.rs` (TraitInfo.method_contracts), `src/typeck/register.rs` (trait registration, type-checking, Liskov checking, multi-trait guard), `src/codegen/mod.rs` (contract propagation)
 
 ### Phase 4: Failure Semantics
 

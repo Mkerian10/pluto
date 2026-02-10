@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use super::types::PlutoType;
+use crate::parser::ast::ContractClause;
+use crate::span::Spanned;
 
 #[derive(Debug, Clone)]
 pub struct FuncSig {
@@ -19,6 +21,7 @@ pub struct TraitInfo {
     pub methods: Vec<(String, FuncSig)>,
     pub default_methods: Vec<String>,
     pub mut_self_methods: HashSet<String>,
+    pub method_contracts: HashMap<String, Vec<Spanned<ContractClause>>>,
 }
 
 #[derive(Debug, Clone)]

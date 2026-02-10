@@ -605,7 +605,7 @@ impl<'a> Parser<'a> {
         }
         self.expect(&Token::RParen)?;
 
-        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Newline | Token::RBrace) {
+        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Newline | Token::RBrace | Token::Requires | Token::Ensures) {
             // Check if next non-newline token is '{' — if so, no return type
             if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
                 None
@@ -616,15 +616,20 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // Parse optional requires/ensures contracts
+        let contracts = self.parse_contracts()?;
+
         // If next token is '{', parse a body (default implementation)
         let body = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
             Some(self.parse_block()?)
         } else {
-            self.consume_statement_end();
+            if contracts.is_empty() {
+                self.consume_statement_end();
+            }
             None
         };
 
-        Ok(TraitMethod { id: Uuid::new_v4(), name, params, return_type, contracts: vec![], body })
+        Ok(TraitMethod { id: Uuid::new_v4(), name, params, return_type, contracts, body })
     }
 
     fn parse_class(&mut self) -> Result<Spanned<ClassDecl>, CompileError> {

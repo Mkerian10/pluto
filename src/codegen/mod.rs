@@ -251,7 +251,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             }
         }
     }
-    // Trait default methods
+    // Trait default methods — contracts from default method declarations
     for class in &program.classes {
         let c = &class.node;
         let class_method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
@@ -276,6 +276,39 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+    // Propagate trait contracts to implementing class methods
+    // Trait requires are prepended (checked first), trait ensures are appended
+    for class in &program.classes {
+        let c = &class.node;
+        for trait_name_spanned in &c.impl_traits {
+            let trait_name = &trait_name_spanned.node;
+            if let Some(trait_info) = env.traits.get(trait_name) {
+                for (method_name, contracts) in &trait_info.method_contracts {
+                    let mangled = format!("{}_{}", c.name.node, method_name);
+                    let trait_requires: Vec<(Expr, String)> = contracts.iter()
+                        .filter(|c| c.node.kind == ContractKind::Requires)
+                        .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                        .collect();
+                    let trait_ensures: Vec<(Expr, String)> = contracts.iter()
+                        .filter(|c| c.node.kind == ContractKind::Ensures)
+                        .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                        .collect();
+                    if !trait_requires.is_empty() || !trait_ensures.is_empty() {
+                        let entry = fn_contracts.entry(mangled).or_insert_with(|| FnContracts {
+                            requires: Vec::new(),
+                            ensures: Vec::new(),
+                        });
+                        // Prepend trait requires (checked first)
+                        let mut merged_requires = trait_requires;
+                        merged_requires.append(&mut entry.requires);
+                        entry.requires = merged_requires;
+                        // Append trait ensures
+                        entry.ensures.extend(trait_ensures);
                     }
                 }
             }
