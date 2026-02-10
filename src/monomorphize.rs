@@ -445,6 +445,15 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
                 substitute_in_expr(&mut cap.node, bindings);
             }
         }
+        Stmt::Scope { seeds, bindings: scope_bindings, body } => {
+            for seed in seeds {
+                substitute_in_expr(&mut seed.node, bindings);
+            }
+            for sb in scope_bindings {
+                substitute_in_type_expr(&mut sb.ty.node, bindings);
+            }
+            substitute_in_block(&mut body.node, bindings);
+        }
         Stmt::Select { arms, default } => {
             for arm in arms {
                 match &mut arm.op {
@@ -773,6 +782,19 @@ fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
                 offset_expr_spans(&mut cap.node, offset);
             }
         }
+        Stmt::Scope { seeds, bindings, body } => {
+            for seed in seeds {
+                offset_spanned(seed, offset);
+                offset_expr_spans(&mut seed.node, offset);
+            }
+            for binding in bindings {
+                offset_spanned(&mut binding.name, offset);
+                offset_spanned(&mut binding.ty, offset);
+                offset_type_expr_spans(&mut binding.ty.node, offset);
+            }
+            offset_spanned(body, offset);
+            offset_block_spans(&mut body.node, offset);
+        }
         Stmt::Select { arms, default } => {
             for arm in arms {
                 match &mut arm.op {
@@ -1059,6 +1081,12 @@ fn rewrite_stmt(stmt: &mut Stmt, rewrites: &HashMap<(usize, usize), String>) {
                 rewrite_expr(&mut cap.node, cap.span.start, cap.span.end, rewrites);
             }
         }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                rewrite_expr(&mut seed.node, seed.span.start, seed.span.end, rewrites);
+            }
+            rewrite_block(&mut body.node, rewrites);
+        }
         Stmt::Select { arms, default } => {
             for arm in arms {
                 match &mut arm.op {
@@ -1289,6 +1317,15 @@ fn resolve_generic_te_in_stmt(stmt: &mut Stmt, env: &mut TypeEnv) -> Result<(), 
             if let Some(cap) = capacity {
                 resolve_generic_te_in_expr(&mut cap.node, env)?;
             }
+        }
+        Stmt::Scope { seeds, bindings, body } => {
+            for seed in seeds {
+                resolve_generic_te_in_expr(&mut seed.node, env)?;
+            }
+            for binding in bindings {
+                resolve_generic_te(&mut binding.ty.node, env)?;
+            }
+            resolve_generic_te_in_block(&mut body.node, env)?;
         }
         Stmt::Select { arms, default } => {
             for arm in arms {

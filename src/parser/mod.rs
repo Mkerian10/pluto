@@ -1071,6 +1071,7 @@ impl<'a> Parser<'a> {
             Token::For => self.parse_for_stmt(),
             Token::Match => self.parse_match_stmt(),
             Token::Select => self.parse_select_stmt(),
+            Token::Scope => self.parse_scope_stmt(),
             Token::Raise => self.parse_raise_stmt(),
             Token::Break => {
                 let span = self.advance().unwrap().span;
@@ -1576,6 +1577,72 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Spanned::new(Stmt::Select { arms, default: default_block }, Span::new(start, end)))
+    }
+
+    fn parse_scope_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let scope_tok = self.expect(&Token::Scope)?;
+        let start = scope_tok.span.start;
+        self.expect(&Token::LParen)?;
+
+        // Parse comma-separated seed expressions.
+        // No struct-lit restriction needed here since seeds are inside parentheses.
+        let old_restrict = self.restrict_struct_lit;
+        self.restrict_struct_lit = false;
+        let mut seeds = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
+                break;
+            }
+            if !seeds.is_empty() {
+                self.expect(&Token::Comma)?;
+                self.skip_newlines();
+                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
+                    break;
+                }
+            }
+            seeds.push(self.parse_expr(0)?);
+        }
+        self.restrict_struct_lit = old_restrict;
+        self.expect(&Token::RParen)?;
+
+        // Parse pipe-delimited bindings: |name: Type, name2: Type2|
+        self.expect(&Token::Pipe)?;
+        let mut bindings = Vec::new();
+        loop {
+            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Pipe) {
+                break;
+            }
+            if !bindings.is_empty() {
+                self.expect(&Token::Comma)?;
+            }
+            let name = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let ty = self.parse_type()?;
+            bindings.push(ScopeBinding { name, ty });
+        }
+        self.expect(&Token::Pipe)?;
+
+        if seeds.is_empty() {
+            return Err(CompileError::syntax(
+                "scope block requires at least one seed expression",
+                Span::new(start, start + 5),
+            ));
+        }
+        if bindings.is_empty() {
+            return Err(CompileError::syntax(
+                "scope block requires at least one binding",
+                Span::new(start, start + 5),
+            ));
+        }
+
+        let body = self.parse_block()?;
+        let end = body.span.end;
+
+        Ok(Spanned::new(
+            Stmt::Scope { seeds, bindings, body },
+            Span::new(start, end),
+        ))
     }
 
     /// Check if the next tokens form a recv pattern: `ident = ...`

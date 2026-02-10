@@ -183,6 +183,12 @@ fn resolve_stmt(stmt: &mut Stmt, index: &DeclIndex) {
                 resolve_block(&mut def.node, index);
             }
         }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                resolve_expr(&mut seed.node, index);
+            }
+            resolve_block(&mut body.node, index);
+        }
         Stmt::Break | Stmt::Continue => {}
         Stmt::Expr(expr) => {
             resolve_expr(&mut expr.node, index);

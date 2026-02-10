@@ -822,6 +822,12 @@ fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
                 }
                 if let Some(def) = default { walk_block(&def.node, result); }
             }
+            Stmt::Scope { seeds, body, .. } => {
+                for seed in seeds {
+                    walk_expr(&seed.node, result);
+                }
+                walk_block(&body.node, result);
+            }
             Stmt::Expr(e) => walk_expr(&e.node, result),
         }
     }

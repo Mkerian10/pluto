@@ -94,6 +94,12 @@ fn desugar_stmt(stmt: &mut Stmt) {
                 desugar_block(&mut def.node);
             }
         }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                desugar_expr(&mut seed.node, seed.span);
+            }
+            desugar_block(&mut body.node);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }

@@ -273,6 +273,16 @@ fn rewrite_stmt(stmt: &mut Spanned<Stmt>, active: &HashSet<String>) {
                 rewrite_block(&mut def.node, active);
             }
         }
+        Stmt::Scope { seeds, bindings, body } => {
+            for seed in seeds {
+                rewrite_expr(&mut seed.node, seed.span, active);
+            }
+            let mut inner = active.clone();
+            for binding in bindings {
+                inner.remove(&binding.name.node);
+            }
+            rewrite_block(&mut body.node, &inner);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }

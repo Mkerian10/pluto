@@ -324,7 +324,284 @@ fn check_stmt(
                 check_block(&def.node, env, return_type)?;
             }
         }
+        Stmt::Scope { seeds, bindings, body } => {
+            check_scope_stmt(seeds, bindings, body, span, env, return_type)?;
+        }
     }
+    Ok(())
+}
+
+fn check_scope_stmt(
+    seeds: &[Spanned<Expr>],
+    bindings: &[ScopeBinding],
+    body: &Spanned<Block>,
+    span: crate::span::Span,
+    env: &mut TypeEnv,
+    return_type: &PlutoType,
+) -> Result<(), CompileError> {
+    use std::collections::{HashMap as DMap, HashSet as DSet, VecDeque};
+    use crate::parser::ast::Lifecycle;
+    use super::env::{FieldWiring, ScopeResolution};
+
+    // 1. Check seed expressions and verify each is a scoped class
+    let mut seed_types: Vec<(String, usize)> = Vec::new(); // (class_name, seed_index)
+    let mut seed_class_names: DSet<String> = DSet::new();
+
+    for (i, seed) in seeds.iter().enumerate() {
+        let ty = infer_expr(&seed.node, seed.span, env)?;
+        match &ty {
+            PlutoType::Class(name) => {
+                let info = env.classes.get(name).ok_or_else(|| {
+                    CompileError::type_err(
+                        format!("unknown class '{name}' in scope seed"),
+                        seed.span,
+                    )
+                })?;
+                if info.lifecycle != Lifecycle::Scoped {
+                    return Err(CompileError::type_err(
+                        format!("scope seed must be a scoped class, but '{name}' has lifecycle '{:?}'", info.lifecycle),
+                        seed.span,
+                    ));
+                }
+                seed_types.push((name.clone(), i));
+                seed_class_names.insert(name.clone());
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("scope seed must be a class instance, found {ty}"),
+                    seed.span,
+                ));
+            }
+        }
+    }
+
+    // 2. Resolve binding types
+    let mut binding_types: Vec<(String, PlutoType)> = Vec::new(); // (class_name, type)
+    for binding in bindings {
+        let ty = resolve_type(&binding.ty, env)?;
+        match &ty {
+            PlutoType::Class(name) => {
+                if !env.classes.contains_key(name) {
+                    return Err(CompileError::type_err(
+                        format!("unknown class '{name}' in scope binding"),
+                        binding.ty.span,
+                    ));
+                }
+                binding_types.push((name.clone(), ty));
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("scope binding must be a class type, found {ty}"),
+                    binding.ty.span,
+                ));
+            }
+        }
+    }
+
+    // 3. Build scope DI graph — BFS from bindings to discover all needed scoped classes
+    let mut needed: DSet<String> = DSet::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+
+    // Start from all binding types
+    for (name, _) in &binding_types {
+        if !needed.contains(name) {
+            needed.insert(name.clone());
+            queue.push_back(name.clone());
+        }
+    }
+    // Also include seed types (they're provided, but may have deps)
+    for (name, _) in &seed_types {
+        if !needed.contains(name) {
+            needed.insert(name.clone());
+            queue.push_back(name.clone());
+        }
+    }
+
+    // BFS: for each needed class, examine injected fields → add scoped deps
+    while let Some(class_name) = queue.pop_front() {
+        let info = match env.classes.get(&class_name) {
+            Some(i) => i.clone(),
+            None => continue,
+        };
+        for (_, field_ty, is_injected) in &info.fields {
+            if !is_injected { continue; }
+            if let PlutoType::Class(dep_name) = field_ty {
+                let dep_info = env.classes.get(dep_name);
+                if let Some(dep_info) = dep_info {
+                    // Only add scoped deps to the needed set; singletons are accessed via globals
+                    if dep_info.lifecycle == Lifecycle::Scoped && !needed.contains(dep_name) {
+                        needed.insert(dep_name.clone());
+                        queue.push_back(dep_name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Validate: scoped classes that aren't seeds must have only injected fields (auto-creatable)
+    for class_name in &needed {
+        if seed_class_names.contains(class_name) { continue; }
+        let info = env.classes.get(class_name).ok_or_else(|| {
+            CompileError::type_err(
+                format!("scope: unknown class '{class_name}'"),
+                span,
+            )
+        })?;
+        if info.lifecycle != Lifecycle::Scoped && info.lifecycle != Lifecycle::Singleton {
+            // Transient classes are not wired through scope blocks
+            continue;
+        }
+        if info.lifecycle == Lifecycle::Scoped {
+            // Check if all fields are injected (auto-creatable)
+            let has_non_injected = info.fields.iter().any(|(_, _, inj)| !*inj);
+            if has_non_injected {
+                return Err(CompileError::type_err(
+                    format!(
+                        "scoped class '{class_name}' has non-injected fields and must be provided as a seed"
+                    ),
+                    span,
+                ));
+            }
+        }
+    }
+
+    // 5. Topological sort of scoped classes to create (excluding seeds — they're already provided)
+    let classes_to_create: Vec<String> = needed.iter()
+        .filter(|n| !seed_class_names.contains(*n))
+        .filter(|n| {
+            env.classes.get(*n).map_or(false, |i| i.lifecycle == Lifecycle::Scoped)
+        })
+        .cloned()
+        .collect();
+
+    // Build dependency graph: A depends on B means A has an injected field of type B (scoped)
+    let mut graph: DMap<String, Vec<String>> = DMap::new();
+    let mut all_nodes: DSet<String> = DSet::new();
+
+    for name in &classes_to_create {
+        all_nodes.insert(name.clone());
+        let info = env.classes.get(name).unwrap();
+        let deps: Vec<String> = info.fields.iter()
+            .filter(|(_, _, inj)| *inj)
+            .filter_map(|(_, ty, _)| {
+                if let PlutoType::Class(dep_name) = ty {
+                    if classes_to_create.contains(dep_name) {
+                        return Some(dep_name.clone());
+                    }
+                }
+                None
+            })
+            .collect();
+        graph.insert(name.clone(), deps);
+    }
+    // Add seeds as nodes too (they don't need creation but are deps)
+    for (name, _) in &seed_types {
+        all_nodes.insert(name.clone());
+        graph.entry(name.clone()).or_default();
+    }
+
+    // Kahn's algorithm — edge A → B means A depends on B, B must be created first
+    let mut in_degree: DMap<String, usize> = DMap::new();
+    for c in &all_nodes {
+        in_degree.insert(c.clone(), graph.get(c).map_or(0, |v| v.len()));
+    }
+    let mut topo_queue: VecDeque<String> = VecDeque::new();
+    for (c, deg) in &in_degree {
+        if *deg == 0 {
+            topo_queue.push_back(c.clone());
+        }
+    }
+    let mut creation_order: Vec<String> = Vec::new();
+    while let Some(node) = topo_queue.pop_front() {
+        if classes_to_create.contains(&node) {
+            creation_order.push(node.clone());
+        }
+        // Decrement in-degree for dependents
+        for (class, deps) in &graph {
+            if deps.contains(&node) {
+                if let Some(deg) = in_degree.get_mut(class) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        topo_queue.push_back(class.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    if creation_order.len() != classes_to_create.len() {
+        return Err(CompileError::type_err(
+            "scope block: circular dependency detected among scoped classes".to_string(),
+            span,
+        ));
+    }
+
+    // 6. Compute field wirings for each created class
+    let mut field_wirings: DMap<String, Vec<(String, FieldWiring)>> = DMap::new();
+    for class_name in &creation_order {
+        let info = env.classes.get(class_name).unwrap();
+        let mut wirings = Vec::new();
+        for (field_name, field_ty, is_injected) in &info.fields {
+            if !is_injected { continue; }
+            if let PlutoType::Class(dep_name) = field_ty {
+                let dep_info = env.classes.get(dep_name);
+                let wiring = if let Some((_, idx)) = seed_types.iter().find(|(n, _)| n == dep_name) {
+                    FieldWiring::Seed(*idx)
+                } else if dep_info.map_or(false, |d| d.lifecycle == Lifecycle::Singleton) {
+                    FieldWiring::Singleton(dep_name.clone())
+                } else if creation_order.contains(dep_name) || seed_class_names.contains(dep_name) {
+                    FieldWiring::ScopedInstance(dep_name.clone())
+                } else {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "scope block: cannot wire field '{field_name}' of class '{class_name}': \
+                             dependency '{dep_name}' is not available as a seed, singleton, or scoped instance"
+                        ),
+                        span,
+                    ));
+                };
+                wirings.push((field_name.clone(), wiring));
+            }
+        }
+        field_wirings.insert(class_name.clone(), wirings);
+    }
+
+    // 7. Compute binding sources — how each binding gets its value
+    let mut binding_sources: Vec<FieldWiring> = Vec::new();
+    for (binding_class, _) in &binding_types {
+        if let Some((_, idx)) = seed_types.iter().find(|(n, _)| n == binding_class) {
+            binding_sources.push(FieldWiring::Seed(*idx));
+        } else if creation_order.contains(binding_class) {
+            binding_sources.push(FieldWiring::ScopedInstance(binding_class.clone()));
+        } else {
+            return Err(CompileError::type_err(
+                format!(
+                    "scope block: binding type '{binding_class}' is not reachable from seeds"
+                ),
+                span,
+            ));
+        }
+    }
+
+    // 8. Store ScopeResolution
+    env.scope_resolutions.insert(
+        (span.start, span.end),
+        ScopeResolution {
+            creation_order,
+            field_wirings,
+            binding_sources,
+        },
+    );
+
+    // 9. Type-check body with bindings in scope
+    env.push_scope();
+    for (i, binding) in bindings.iter().enumerate() {
+        let (_, ty) = &binding_types[i];
+        env.define(binding.name.node.clone(), ty.clone());
+    }
+    check_block(&body.node, env, return_type)?;
+    env.pop_scope();
+
     Ok(())
 }
 
@@ -681,6 +958,9 @@ fn check_stmt_for_self_mutation(
             if let Some(def) = default {
                 check_body_for_self_mutation(&def.node, class_name, env)?;
             }
+        }
+        Stmt::Scope { body, .. } => {
+            check_body_for_self_mutation(&body.node, class_name, env)?;
         }
         Stmt::Expr(expr) => {
             check_expr_for_self_mutation(&expr.node, expr.span, class_name, env)?;

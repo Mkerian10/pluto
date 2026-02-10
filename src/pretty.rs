@@ -831,6 +831,26 @@ impl PrettyPrinter {
                 self.write_indent();
                 self.write("}");
             }
+            Stmt::Scope { seeds, bindings, body } => {
+                self.write("scope(");
+                for (i, seed) in seeds.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(&seed.node, 0);
+                }
+                self.write(") |");
+                for (i, binding) in bindings.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(&binding.name.node);
+                    self.write(": ");
+                    self.emit_type_expr(&binding.ty.node);
+                }
+                self.write("| ");
+                self.emit_block(&body.node);
+            }
             Stmt::Break => self.write("break"),
             Stmt::Continue => self.write("continue"),
             Stmt::Expr(e) => self.emit_expr(&e.node, 0),
