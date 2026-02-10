@@ -2,10 +2,6 @@
 
 Areas that need further design work before implementation.
 
-## Language Features
-
-- [x] **Null / optional** — first-class nullable types (`T?`, `none`, `?` operator). `T?` for any type, `none` for absent, `?` for null propagation. Compiler infers nullability transitively.
-
 ## Communication
 
 - [ ] **Geographic annotations** — syntax for region/locality constraints
@@ -97,3 +93,4 @@ Previously open questions that have been designed and implemented.
 - [x] **`loop` keyword** — rejected; use `while true` instead. No dedicated infinite loop construct needed
 - [x] **Channels** — `chan<T>()` with `Sender<T>`/`Receiver<T>`, blocking/non-blocking send/recv, for-in iteration, error integration
 - [x] **LSP** — language server (`plutoc lsp`) with diagnostics, go-to-definition, hover, and document symbols. Zed extension with tree-sitter grammar for syntax highlighting.
+- [x] **Null / optional** — first-class nullable types (`T?`, `none`, `?` operator). `T?` for any type, `none` for absent, `?` for null propagation. Compiler infers nullability transitively.

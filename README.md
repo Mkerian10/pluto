@@ -167,15 +167,29 @@ class Box<T> {
     value: T
 }
 
-enum Option<T> {
-    Some { value: T }
-    None
-}
-
 fn main() {
     let b = Box<int> { value: 42 }
     let name = identity("pluto")
-    let maybe = Option<int>.Some { value: 10 }
+}
+```
+
+### Nullable Types
+
+```
+fn find_user(id: int) string? {
+    if id <= 0 {
+        return none
+    }
+    return "User {id}"
+}
+
+fn main() int? {
+    let user = find_user(42)?      // unwrap or propagate none
+    print(user)
+
+    let n = "123".to_int()?        // string parsing returns int?
+    print(n * 2)
+    return none
 }
 ```
 
@@ -321,6 +335,9 @@ fn main() {
 | `std.fs` | File I/O: read, write, seek, directory operations |
 | `std.net` | TCP listener and connection wrappers |
 | `std.socket` | Low-level socket operations |
+| `std.collections` | `map`, `filter`, `fold`, `reduce`, `zip`, `enumerate`, and more |
+| `std.time` | Wall-clock time, monotonic clocks, sleep, elapsed |
+| `std.random` | Random integers, floats, coin flips, seeded RNG |
 | `std.io` | `println` and `print` |
 
 ## Compiler
@@ -358,18 +375,21 @@ Pluto is in early development (v0.1). The compiler supports a substantial set of
 - Functions, classes, traits, enums, generics, closures
 - Compile-time dependency injection with `app`
 - Typed error handling with compiler inference
-- Modules and imports
+- First-class nullable types (`T?`, `none`, `?` operator)
+- Concurrency (`spawn`, `Task<T>`, channels, `select`)
+- Design-by-contract (invariants, requires/ensures, interface guarantees)
+- Modules, imports, and package dependencies (local + git)
 - Maps, sets, arrays, string interpolation
 - Built-in test framework
-- Standard library (JSON, HTTP, filesystem, networking)
+- Standard library (JSON, HTTP, filesystem, networking, collections, time, random)
+- LSP with diagnostics, go-to-definition, hover, and document symbols
 - Native compilation on macOS and Linux (ARM64, x86_64)
 
 ### What's ahead
-- Concurrency (channels, structured concurrency)
 - Distribution (cross-pod RPC, geographic awareness)
 - Orchestration layer
 - LLVM backend
-- Package manager
+- Package manager (registry)
 
 ## License
 
