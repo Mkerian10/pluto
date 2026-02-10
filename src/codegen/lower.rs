@@ -1508,13 +1508,15 @@ impl<'a> LowerContext<'a> {
                 let cap_val = self.builder.ins().iconst(types::I64, n);
                 let handle = self.call_runtime("__pluto_array_new", &[cap_val]);
 
-                let elem_type = infer_type_for_expr(&elements[0].node, self.env, &self.var_types);
-                // Hoist func_ref before loop to avoid repeated HashMap lookups
-                let func_ref_push = self.module.declare_func_in_func(self.runtime.get("__pluto_array_push"), self.builder.func);
-                for elem in elements {
-                    let val = self.lower_expr(&elem.node)?;
-                    let slot = to_array_slot(val, &elem_type, &mut self.builder);
-                    self.builder.ins().call(func_ref_push, &[handle, slot]);
+                if !elements.is_empty() {
+                    let elem_type = infer_type_for_expr(&elements[0].node, self.env, &self.var_types);
+                    // Hoist func_ref before loop to avoid repeated HashMap lookups
+                    let func_ref_push = self.module.declare_func_in_func(self.runtime.get("__pluto_array_push"), self.builder.func);
+                    for elem in elements {
+                        let val = self.lower_expr(&elem.node)?;
+                        let slot = to_array_slot(val, &elem_type, &mut self.builder);
+                        self.builder.ins().call(func_ref_push, &[handle, slot]);
+                    }
                 }
 
                 Ok(handle)
@@ -3031,8 +3033,13 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
         }
         Expr::ArrayLit { elements } => {
-            let first = infer_type_for_expr(&elements[0].node, env, var_types);
-            PlutoType::Array(Box::new(first))
+            if elements.is_empty() {
+                // Empty array — type comes from context (var_types), default to Void
+                PlutoType::Array(Box::new(PlutoType::Void))
+            } else {
+                let first = infer_type_for_expr(&elements[0].node, env, var_types);
+                PlutoType::Array(Box::new(first))
+            }
         }
         Expr::Index { object, .. } => {
             let obj_type = infer_type_for_expr(&object.node, env, var_types);

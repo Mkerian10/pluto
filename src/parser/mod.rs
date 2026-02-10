@@ -2057,12 +2057,6 @@ impl<'a> Parser<'a> {
                 }
                 let close = self.expect(&Token::RBracket)?;
                 let end = close.span.end;
-                if elements.is_empty() {
-                    return Err(CompileError::syntax(
-                        "empty array literals are not supported",
-                        Span::new(start, end),
-                    ));
-                }
                 Ok(Spanned::new(Expr::ArrayLit { elements }, Span::new(start, end)))
             }
             Token::Spawn => {
