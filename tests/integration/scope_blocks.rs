@@ -309,3 +309,205 @@ app MyApp {
 }
 "#, "class instance");
 }
+
+// === Phase 5a: Nested Scope Tests ===
+
+#[test]
+fn nested_scope_basic() {
+    // Inner scope has a different seed type; both scopes produce correct results
+    let output = compile_and_run_stdout(r#"
+scoped class Outer {
+    value: int
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+scoped class Inner {
+    name: string
+
+    fn get(self) string {
+        return self.name
+    }
+}
+
+app MyApp {
+    fn main(self) {
+        scope(Outer { value: 10 }) |o: Outer| {
+            print(o.get())
+            scope(Inner { name: "nested" }) |i: Inner| {
+                print(i.get())
+            }
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "10\nnested");
+}
+
+#[test]
+fn nested_scope_shadowing() {
+    // Inner scope binding shadows outer binding name; outer restored after inner exits
+    let output = compile_and_run_stdout(r#"
+scoped class Ctx {
+    value: int
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+app MyApp {
+    fn main(self) {
+        scope(Ctx { value: 1 }) |c: Ctx| {
+            print(c.get())
+            scope(Ctx { value: 2 }) |c: Ctx| {
+                print(c.get())
+            }
+            print(c.get())
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "1\n2\n1");
+}
+
+#[test]
+fn nested_scope_sequential() {
+    // Two scope blocks side-by-side inside an outer scope; each gets fresh instances
+    let output = compile_and_run_stdout(r#"
+scoped class Seed {
+    id: int
+
+    fn get_id(self) int {
+        return self.id
+    }
+}
+
+scoped class Svc[seed: Seed] {
+    fn info(self) int {
+        return self.seed.get_id()
+    }
+}
+
+app MyApp {
+    fn main(self) {
+        scope(Seed { id: 100 }) |outer: Svc| {
+            print(outer.info())
+            scope(Seed { id: 200 }) |inner1: Svc| {
+                print(inner1.info())
+            }
+            scope(Seed { id: 300 }) |inner2: Svc| {
+                print(inner2.info())
+            }
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "100\n200\n300");
+}
+
+// === Phase 5b: Scope + Ambient DI Tests ===
+
+#[test]
+fn scope_ambient_singleton_dep() {
+    // Scoped class `uses Logger` (singleton), Logger wired from singleton global
+    let output = compile_and_run_stdout(r#"
+class Logger {
+    fn log(self, msg: string) string {
+        return msg
+    }
+}
+
+scoped class RequestCtx {
+    request_id: string
+
+    fn get_id(self) string {
+        return self.request_id
+    }
+}
+
+scoped class Handler uses Logger [ctx: RequestCtx] {
+    fn handle(self) string {
+        let id = self.ctx.get_id()
+        return self.logger.log(id)
+    }
+}
+
+app MyApp {
+    ambient Logger
+
+    fn main(self) {
+        scope(RequestCtx { request_id: "req-1" }) |h: Handler| {
+            print(h.handle())
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "req-1");
+}
+
+#[test]
+fn scope_ambient_scoped_dep() {
+    // Scoped class `uses RequestCtx` (scoped seed), ambient wired from scope seed
+    let output = compile_and_run_stdout(r#"
+scoped class RequestCtx {
+    trace: string
+
+    fn get_trace(self) string {
+        return self.trace
+    }
+}
+
+scoped class Handler uses RequestCtx {
+    fn handle(self) string {
+        return self.requestCtx.get_trace()
+    }
+}
+
+app MyApp {
+    ambient RequestCtx
+
+    fn main(self) {
+        scope(RequestCtx { trace: "t-abc" }) |h: Handler| {
+            print(h.handle())
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "t-abc");
+}
+
+#[test]
+fn scope_ambient_chain() {
+    // A `uses B`, B `uses C` (singleton), seed A in scope block, verify full chain
+    let output = compile_and_run_stdout(r#"
+class Config {
+    fn get_db(self) string {
+        return "postgres"
+    }
+}
+
+scoped class Ctx {
+    request_id: string
+}
+
+scoped class Service uses Config [ctx: Ctx] {
+    fn info(self) string {
+        return self.config.get_db()
+    }
+}
+
+app MyApp {
+    ambient Config
+
+    fn main(self) {
+        scope(Ctx { request_id: "r1" }) |svc: Service| {
+            print(svc.info())
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "postgres");
+}
