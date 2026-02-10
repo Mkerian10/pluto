@@ -251,6 +251,14 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
             name: "Task".to_string(),
             type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
         },
+        PlutoType::Sender(t) => TypeExpr::Generic {
+            name: "Sender".to_string(),
+            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
+        },
+        PlutoType::Receiver(t) => TypeExpr::Generic {
+            name: "Receiver".to_string(),
+            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
+        },
         PlutoType::Error => TypeExpr::Named("error".to_string()),
         PlutoType::TypeParam(name) => TypeExpr::Named(name.clone()),
         PlutoType::Range => TypeExpr::Named("range".to_string()),
@@ -375,6 +383,12 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
         }
         Stmt::Expr(expr) => {
             substitute_in_expr(&mut expr.node, bindings);
+        }
+        Stmt::LetChan { elem_type, capacity, .. } => {
+            substitute_in_type_expr(&mut elem_type.node, bindings);
+            if let Some(cap) = capacity {
+                substitute_in_expr(&mut cap.node, bindings);
+            }
         }
         Stmt::Break | Stmt::Continue => {}
     }
@@ -670,6 +684,16 @@ fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
             offset_spanned(expr, offset);
             offset_expr_spans(&mut expr.node, offset);
         }
+        Stmt::LetChan { sender, receiver, elem_type, capacity } => {
+            offset_spanned(sender, offset);
+            offset_spanned(receiver, offset);
+            offset_spanned(elem_type, offset);
+            offset_type_expr_spans(&mut elem_type.node, offset);
+            if let Some(cap) = capacity {
+                offset_spanned(cap, offset);
+                offset_expr_spans(&mut cap.node, offset);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -923,6 +947,11 @@ fn rewrite_stmt(stmt: &mut Stmt, rewrites: &HashMap<(usize, usize), String>) {
         Stmt::Expr(expr) => {
             rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
         }
+        Stmt::LetChan { capacity, .. } => {
+            if let Some(cap) = capacity {
+                rewrite_expr(&mut cap.node, cap.span.start, cap.span.end, rewrites);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -1127,6 +1156,12 @@ fn resolve_generic_te_in_stmt(stmt: &mut Stmt, env: &mut TypeEnv) -> Result<(), 
             }
         }
         Stmt::Expr(expr) => resolve_generic_te_in_expr(&mut expr.node, env)?,
+        Stmt::LetChan { elem_type, capacity, .. } => {
+            resolve_generic_te(&mut elem_type.node, env)?;
+            if let Some(cap) = capacity {
+                resolve_generic_te_in_expr(&mut cap.node, env)?;
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
     Ok(())
@@ -1222,7 +1257,7 @@ fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), Compil
     match te {
         TypeExpr::Generic { name, type_args } => {
             // Built-in generic types (Map, Set) are kept as-is — no monomorphization needed
-            if name == "Map" || name == "Set" {
+            if name == "Map" || name == "Set" || name == "Task" || name == "Sender" || name == "Receiver" {
                 for arg in type_args.iter_mut() {
                     resolve_generic_te(&mut arg.node, env)?;
                 }
@@ -1301,6 +1336,21 @@ fn type_expr_to_pluto_type(te: &TypeExpr, env: &TypeEnv) -> Result<PlutoType, Co
             let resolved_args: Vec<PlutoType> = type_args.iter()
                 .map(|ta| type_expr_to_pluto_type(&ta.node, env))
                 .collect::<Result<Vec<_>, _>>()?;
+            if name == "Sender" && resolved_args.len() == 1 {
+                return Ok(PlutoType::Sender(Box::new(resolved_args[0].clone())));
+            }
+            if name == "Receiver" && resolved_args.len() == 1 {
+                return Ok(PlutoType::Receiver(Box::new(resolved_args[0].clone())));
+            }
+            if name == "Map" && resolved_args.len() == 2 {
+                return Ok(PlutoType::Map(Box::new(resolved_args[0].clone()), Box::new(resolved_args[1].clone())));
+            }
+            if name == "Set" && resolved_args.len() == 1 {
+                return Ok(PlutoType::Set(Box::new(resolved_args[0].clone())));
+            }
+            if name == "Task" && resolved_args.len() == 1 {
+                return Ok(PlutoType::Task(Box::new(resolved_args[0].clone())));
+            }
             let mangled = crate::typeck::env::mangle_name(name, &resolved_args);
             Ok(PlutoType::Class(mangled))
         }

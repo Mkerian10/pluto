@@ -28,8 +28,15 @@
 #define GC_TAG_MAP   4   // [count][cap][keys_ptr][vals_ptr][meta_ptr]
 #define GC_TAG_SET   5   // [count][cap][keys_ptr][meta_ptr]
 #define GC_TAG_JSON  6   // JsonNode — recursive tree structure
-#define GC_TAG_TASK  7   // [closure][result][error][done][sync_ptr]
-#define GC_TAG_BYTES 8   // [len][cap][data_ptr]; 1 byte per element
+#define GC_TAG_TASK    7   // [closure][result][error][done][sync_ptr]
+#define GC_TAG_BYTES   8   // [len][cap][data_ptr]; 1 byte per element
+#define GC_TAG_CHANNEL 9   // [sync_ptr][buf_ptr][capacity][count][head][tail][closed]
+
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t not_empty;
+    pthread_cond_t not_full;
+} ChannelSync;
 
 typedef struct GCHeader {
     struct GCHeader *next;    // 8B: linked list of all GC objects
@@ -344,6 +351,24 @@ static void gc_trace_object(void *user_ptr) {
         (void)count;
         break;
     }
+    case GC_TAG_CHANNEL: {
+        // Channel handle: [sync_ptr][buf_ptr][capacity][count][head][tail][closed]
+        long *ch = (long *)user_ptr;
+        long *buf = (long *)ch[1];
+        long count = ch[3];
+        long head = ch[4];
+        long capacity = ch[2];
+        // Trace live buffer slots (they may hold GC pointers like strings/objects)
+        for (long i = 0; i < count; i++) {
+            long idx = (head + i) % capacity;
+            void *candidate = (void *)buf[idx];
+            GCHeader *child = gc_find_object(candidate);
+            if (child && !child->mark) {
+                gc_mark_object((char *)child + sizeof(GCHeader));
+            }
+        }
+        break;
+    }
     case GC_TAG_OBJECT:
     default: {
         // Scan all 8-byte slots conservatively
@@ -486,6 +511,20 @@ void __pluto_gc_collect(void) {
                     pthread_cond_destroy((pthread_cond_t *)((char *)sync + sizeof(pthread_mutex_t)));
                     free(sync);
                 }
+            }
+            // Free channel sync + buffer
+            if (h->type_tag == GC_TAG_CHANNEL && h->size >= 56) {
+                long *ch = (long *)((char *)h + sizeof(GCHeader));
+                void *sync = (void *)ch[0];
+                void *buf  = (void *)ch[1];
+                if (sync) {
+                    ChannelSync *cs = (ChannelSync *)sync;
+                    pthread_mutex_destroy(&cs->mutex);
+                    pthread_cond_destroy(&cs->not_empty);
+                    pthread_cond_destroy(&cs->not_full);
+                    free(cs);
+                }
+                if (buf) free(buf);
             }
             free(h);
             freed_bytes += total;
@@ -2499,4 +2538,147 @@ long __pluto_task_get(long task_ptr) {
         return 0;
     }
     return task[1];
+}
+
+// ── Channels ────────────────────────────────────────────────────────────────
+
+// Channel handle layout (56 bytes, 7 slots):
+//   [0] sync_ptr   (raw malloc'd ChannelSync)
+//   [1] buf_ptr    (raw malloc'd circular buffer of i64)
+//   [2] capacity   (int, always >= 1)
+//   [3] count      (int, items in buffer)
+//   [4] head       (int, read position)
+//   [5] tail       (int, write position)
+//   [6] closed     (int, 0 or 1)
+
+static void chan_raise_error(const char *msg) {
+    void *msg_str = __pluto_string_new((char *)msg, (long)strlen(msg));
+    void *err_obj = __pluto_alloc(8);  // 1 field: message
+    *(long *)err_obj = (long)msg_str;
+    __pluto_raise_error(err_obj);
+}
+
+long __pluto_chan_create(long capacity) {
+    long actual_cap = capacity > 0 ? capacity : 1;
+    // field_count=0: slots 0-1 are raw malloc ptrs, 2-6 are ints; GC_TAG_CHANNEL traces buffer
+    long *ch = (long *)gc_alloc(56, GC_TAG_CHANNEL, 0);
+
+    ChannelSync *sync = (ChannelSync *)calloc(1, sizeof(ChannelSync));
+    pthread_mutex_init(&sync->mutex, NULL);
+    pthread_cond_init(&sync->not_empty, NULL);
+    pthread_cond_init(&sync->not_full, NULL);
+
+    long *buf = (long *)calloc((size_t)actual_cap, sizeof(long));
+
+    ch[0] = (long)sync;
+    ch[1] = (long)buf;
+    ch[2] = actual_cap;
+    ch[3] = 0;  // count
+    ch[4] = 0;  // head
+    ch[5] = 0;  // tail
+    ch[6] = 0;  // closed
+    return (long)ch;
+}
+
+long __pluto_chan_send(long handle, long value) {
+    long *ch = (long *)handle;
+    ChannelSync *sync = (ChannelSync *)ch[0];
+
+    pthread_mutex_lock(&sync->mutex);
+    while (ch[3] == ch[2] && !ch[6]) {
+        pthread_cond_wait(&sync->not_full, &sync->mutex);
+    }
+    if (ch[6]) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error("channel closed");
+        return 0;
+    }
+    long *buf = (long *)ch[1];
+    buf[ch[5]] = value;
+    ch[5] = (ch[5] + 1) % ch[2];
+    ch[3]++;
+    pthread_cond_signal(&sync->not_empty);
+    pthread_mutex_unlock(&sync->mutex);
+    return value;
+}
+
+long __pluto_chan_recv(long handle) {
+    long *ch = (long *)handle;
+    ChannelSync *sync = (ChannelSync *)ch[0];
+
+    pthread_mutex_lock(&sync->mutex);
+    while (ch[3] == 0 && !ch[6]) {
+        pthread_cond_wait(&sync->not_empty, &sync->mutex);
+    }
+    if (ch[3] == 0 && ch[6]) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error("channel closed");
+        return 0;
+    }
+    long *buf = (long *)ch[1];
+    long val = buf[ch[4]];
+    ch[4] = (ch[4] + 1) % ch[2];
+    ch[3]--;
+    pthread_cond_signal(&sync->not_full);
+    pthread_mutex_unlock(&sync->mutex);
+    return val;
+}
+
+long __pluto_chan_try_send(long handle, long value) {
+    long *ch = (long *)handle;
+    ChannelSync *sync = (ChannelSync *)ch[0];
+
+    pthread_mutex_lock(&sync->mutex);
+    if (ch[6]) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error("channel closed");
+        return 0;
+    }
+    if (ch[3] == ch[2]) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error("channel full");
+        return 0;
+    }
+    long *buf = (long *)ch[1];
+    buf[ch[5]] = value;
+    ch[5] = (ch[5] + 1) % ch[2];
+    ch[3]++;
+    pthread_cond_signal(&sync->not_empty);
+    pthread_mutex_unlock(&sync->mutex);
+    return value;
+}
+
+long __pluto_chan_try_recv(long handle) {
+    long *ch = (long *)handle;
+    ChannelSync *sync = (ChannelSync *)ch[0];
+
+    pthread_mutex_lock(&sync->mutex);
+    if (ch[3] == 0 && ch[6]) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error("channel closed");
+        return 0;
+    }
+    if (ch[3] == 0) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error("channel empty");
+        return 0;
+    }
+    long *buf = (long *)ch[1];
+    long val = buf[ch[4]];
+    ch[4] = (ch[4] + 1) % ch[2];
+    ch[3]--;
+    pthread_cond_signal(&sync->not_full);
+    pthread_mutex_unlock(&sync->mutex);
+    return val;
+}
+
+void __pluto_chan_close(long handle) {
+    long *ch = (long *)handle;
+    ChannelSync *sync = (ChannelSync *)ch[0];
+
+    pthread_mutex_lock(&sync->mutex);
+    ch[6] = 1;
+    pthread_cond_broadcast(&sync->not_empty);
+    pthread_cond_broadcast(&sync->not_full);
+    pthread_mutex_unlock(&sync->mutex);
 }

@@ -828,6 +828,12 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
         Stmt::Expr(expr) => {
             rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
         }
+        Stmt::LetChan { elem_type, capacity, .. } => {
+            prefix_type_expr(&mut elem_type.node, module_name, module_prog);
+            if let Some(cap) = capacity {
+                rewrite_expr_for_module(&mut cap.node, module_name, module_prog);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -1115,6 +1121,12 @@ fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
         }
         Stmt::Expr(expr) => {
             rewrite_expr(&mut expr.node, expr.span, import_names);
+        }
+        Stmt::LetChan { elem_type, capacity, .. } => {
+            rewrite_type_expr(elem_type, import_names);
+            if let Some(cap) = capacity {
+                rewrite_expr(&mut cap.node, cap.span, import_names);
+            }
         }
         Stmt::Break | Stmt::Continue => {}
     }

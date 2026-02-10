@@ -104,6 +104,11 @@ fn lift_in_stmt(
                 lift_in_expr(&mut val.node, val.span, env, counter, new_fns)?;
             }
         }
+        Stmt::LetChan { capacity, .. } => {
+            if let Some(cap) = capacity {
+                lift_in_expr(&mut cap.node, cap.span, env, counter, new_fns)?;
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
     Ok(())
@@ -324,6 +329,12 @@ fn resolve_type_for_lift(ty: &TypeExpr) -> PlutoType {
             } else if name == "Task" && type_args.len() == 1 {
                 let t = resolve_type_for_lift(&type_args[0].node);
                 PlutoType::Task(Box::new(t))
+            } else if name == "Sender" && type_args.len() == 1 {
+                let t = resolve_type_for_lift(&type_args[0].node);
+                PlutoType::Sender(Box::new(t))
+            } else if name == "Receiver" && type_args.len() == 1 {
+                let t = resolve_type_for_lift(&type_args[0].node);
+                PlutoType::Receiver(Box::new(t))
             } else {
                 PlutoType::Class(name.clone())
             }
@@ -401,6 +412,14 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         },
         PlutoType::Task(t) => TypeExpr::Generic {
             name: "Task".to_string(),
+            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
+        },
+        PlutoType::Sender(t) => TypeExpr::Generic {
+            name: "Sender".to_string(),
+            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
+        },
+        PlutoType::Receiver(t) => TypeExpr::Generic {
+            name: "Receiver".to_string(),
             type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
         },
         PlutoType::Error => TypeExpr::Named("error".to_string()),

@@ -1249,6 +1249,117 @@ fn infer_method_call(
             }
         }
     }
+    // Sender methods
+    if let PlutoType::Sender(inner) = &obj_type {
+        match method.node.as_str() {
+            "send" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("send() expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **inner {
+                    return Err(CompileError::type_err(
+                        format!("send() expects {}, found {}", inner, arg_type),
+                        args[0].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::ChannelSend,
+                    );
+                }
+                return Ok(PlutoType::Void);
+            }
+            "try_send" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("try_send() expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **inner {
+                    return Err(CompileError::type_err(
+                        format!("try_send() expects {}, found {}", inner, arg_type),
+                        args[0].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::ChannelTrySend,
+                    );
+                }
+                return Ok(PlutoType::Void);
+            }
+            "close" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("close() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Void);
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("Sender has no method '{}'", method.node),
+                    method.span,
+                ));
+            }
+        }
+    }
+    // Receiver methods
+    if let PlutoType::Receiver(inner) = &obj_type {
+        match method.node.as_str() {
+            "recv" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("recv() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::ChannelRecv,
+                    );
+                }
+                return Ok(*inner.clone());
+            }
+            "try_recv" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("try_recv() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::ChannelTryRecv,
+                    );
+                }
+                return Ok(*inner.clone());
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("Receiver has no method '{}'", method.node),
+                    method.span,
+                ));
+            }
+        }
+    }
     if obj_type == PlutoType::String {
         let builtin = |env: &mut TypeEnv, method: &Spanned<String>| {
             if let Some(ref current) = env.current_fn {

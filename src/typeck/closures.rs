@@ -78,6 +78,11 @@ fn infer_closure_return_type(block: &Block, env: &mut TypeEnv) -> Result<PlutoTy
                     env.define(name.node.clone(), val_type);
                 }
             }
+            Stmt::LetChan { sender, receiver, elem_type, .. } => {
+                let resolved = resolve_type(elem_type, env)?;
+                env.define(sender.node.clone(), PlutoType::Sender(Box::new(resolved.clone())));
+                env.define(receiver.node.clone(), PlutoType::Receiver(Box::new(resolved)));
+            }
             Stmt::Return(Some(expr)) => {
                 return infer_expr(&expr.node, expr.span, env);
             }
@@ -157,6 +162,11 @@ fn collect_free_vars_stmt(
         Stmt::Raise { fields, .. } => {
             for (_, val) in fields {
                 collect_free_vars_expr(&val.node, param_names, outer_depth, env, captures, seen);
+            }
+        }
+        Stmt::LetChan { capacity, .. } => {
+            if let Some(cap) = capacity {
+                collect_free_vars_expr(&cap.node, param_names, outer_depth, env, captures, seen);
             }
         }
         Stmt::Break | Stmt::Continue => {}

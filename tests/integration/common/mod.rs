@@ -1,4 +1,6 @@
-use std::process::Command;
+use std::io::Read as _;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// Returns a Command for the plutoc binary. Use for CLI smoke tests only —
 /// most tests should use the library-call helpers below instead.
@@ -81,6 +83,35 @@ pub fn compile_and_run_output(source: &str) -> (String, String, i32) {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     (stdout, stderr, output.status.code().unwrap_or(-1))
+}
+
+/// Compile and run with a timeout (for tests that may deadlock).
+/// Panics if the binary doesn't exit within `timeout_secs`.
+pub fn compile_and_run_stdout_timeout(source: &str, timeout_secs: u64) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let bin_path = dir.path().join("test_bin");
+    plutoc::compile(source, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    let mut child = Command::new(&bin_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        match child.try_wait().unwrap() {
+            Some(status) => {
+                let mut stdout = String::new();
+                child.stdout.take().unwrap().read_to_string(&mut stdout).unwrap();
+                assert!(status.success(), "Binary exited with non-zero status");
+                return stdout;
+            }
+            None if Instant::now() >= deadline => {
+                child.kill().ok();
+                panic!("test timed out after {timeout_secs}s — possible deadlock");
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
 }
 
 /// Assert compilation fails in test mode with a specific error message substring.

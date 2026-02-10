@@ -8,6 +8,14 @@ Demonstrates built-in string methods (`contains`, `starts_with`, `trim`, `to_upp
 cargo run -- run examples/strings/main.pluto
 ```
 
+## channels
+
+Demonstrates channels for inter-task communication: `let (tx, rx) = chan<T>(capacity)`, blocking `send`/`recv`, non-blocking `try_send`/`try_recv`, `close()`, `for-in` iteration on receivers, and error handling with `catch`.
+
+```bash
+cargo run -- run examples/channels/main.pluto
+```
+
 ## concurrency
 
 Demonstrates `spawn` for concurrent execution: spawning functions on separate threads, collecting results with `.get()`, error handling with `catch`, and void tasks.

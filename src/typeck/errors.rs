@@ -170,6 +170,11 @@ fn collect_stmt_effects(
                 }
             }
         }
+        Stmt::LetChan { capacity, .. } => {
+            if let Some(cap) = capacity {
+                collect_expr_effects(&cap.node, direct_errors, edges, current_fn, env);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -227,6 +232,20 @@ fn collect_expr_effects(
                                     }
                                 }
                             }
+                        }
+                        Some(MethodResolution::ChannelSend) => {
+                            direct_errors.insert("ChannelClosed".to_string());
+                        }
+                        Some(MethodResolution::ChannelRecv) => {
+                            direct_errors.insert("ChannelClosed".to_string());
+                        }
+                        Some(MethodResolution::ChannelTrySend) => {
+                            direct_errors.insert("ChannelClosed".to_string());
+                            direct_errors.insert("ChannelFull".to_string());
+                        }
+                        Some(MethodResolution::ChannelTryRecv) => {
+                            direct_errors.insert("ChannelClosed".to_string());
+                            direct_errors.insert("ChannelEmpty".to_string());
                         }
                         Some(MethodResolution::Builtin) => {}
                         None => {}
@@ -447,6 +466,12 @@ fn enforce_stmt(
         Stmt::Raise { fields, .. } => {
             for (_, val) in fields {
                 enforce_expr(&val.node, val.span, current_fn, env)?;
+            }
+            Ok(())
+        }
+        Stmt::LetChan { capacity, .. } => {
+            if let Some(cap) = capacity {
+                enforce_expr(&cap.node, cap.span, current_fn, env)?;
             }
             Ok(())
         }
@@ -719,6 +744,9 @@ fn stmt_contains_propagate(stmt: &Stmt) -> bool {
             contains_propagate(&expr.node) || arms.iter().any(|a| a.body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)))
         }
         Stmt::Raise { fields, .. } => fields.iter().any(|(_, v)| contains_propagate(&v.node)),
+        Stmt::LetChan { capacity, .. } => {
+            capacity.as_ref().map_or(false, |cap| contains_propagate(&cap.node))
+        }
         Stmt::Break | Stmt::Continue => false,
     }
 }

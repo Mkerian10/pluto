@@ -123,6 +123,7 @@ impl<'a> LowerContext<'a> {
         }
         match stmt {
             Stmt::Let { name, ty, value } => self.lower_let(name, ty, value),
+            Stmt::LetChan { sender, receiver, elem_type, capacity } => self.lower_let_chan(sender, receiver, elem_type, capacity),
             Stmt::Return(value) => {
                 match value {
                     Some(expr) => {
@@ -274,6 +275,41 @@ impl<'a> LowerContext<'a> {
         Ok(())
     }
 
+    fn lower_let_chan(
+        &mut self,
+        sender: &crate::span::Spanned<String>,
+        receiver: &crate::span::Spanned<String>,
+        elem_type: &crate::span::Spanned<TypeExpr>,
+        capacity: &Option<crate::span::Spanned<Expr>>,
+    ) -> Result<(), CompileError> {
+        let cap_val = if let Some(cap_expr) = capacity {
+            self.lower_expr(&cap_expr.node)?
+        } else {
+            self.builder.ins().iconst(types::I64, 0)
+        };
+        let handle = self.call_runtime("__pluto_chan_create", &[cap_val]);
+
+        let elem_ty = resolve_type_expr_to_pluto(&elem_type.node, self.env);
+
+        // Define sender variable
+        let tx_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        self.builder.declare_var(tx_var, types::I64);
+        self.builder.def_var(tx_var, handle);
+        self.variables.insert(sender.node.clone(), tx_var);
+        self.var_types.insert(sender.node.clone(), PlutoType::Sender(Box::new(elem_ty.clone())));
+
+        // Define receiver variable
+        let rx_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        self.builder.declare_var(rx_var, types::I64);
+        self.builder.def_var(rx_var, handle);
+        self.variables.insert(receiver.node.clone(), rx_var);
+        self.var_types.insert(receiver.node.clone(), PlutoType::Receiver(Box::new(elem_ty)));
+
+        Ok(())
+    }
+
     fn lower_if(
         &mut self,
         condition: &crate::span::Spanned<Expr>,
@@ -379,7 +415,8 @@ impl<'a> LowerContext<'a> {
             PlutoType::Array(_) => self.lower_for_array(var, iterable, body),
             PlutoType::Bytes => self.lower_for_bytes(var, iterable, body),
             PlutoType::String => self.lower_for_string(var, iterable, body),
-            _ => Err(CompileError::codegen("for loop requires array, range, or string".to_string())),
+            PlutoType::Receiver(_) => self.lower_for_receiver(var, iterable, body),
+            _ => Err(CompileError::codegen("for loop requires array, range, string, or receiver".to_string())),
         }
     }
 
@@ -740,6 +777,90 @@ impl<'a> LowerContext<'a> {
         let new_counter = self.builder.ins().iadd(counter_inc, one);
         self.builder.def_var(counter_var, new_counter);
         self.builder.ins().jump(header_bb, &[]);
+
+        self.builder.seal_block(header_bb);
+        self.builder.switch_to_block(exit_bb);
+        self.builder.seal_block(exit_bb);
+        Ok(())
+    }
+
+    fn lower_for_receiver(
+        &mut self,
+        var: &crate::span::Spanned<String>,
+        iterable: &crate::span::Spanned<Expr>,
+        body: &crate::span::Spanned<Block>,
+    ) -> Result<(), CompileError> {
+        let handle = self.lower_expr(&iterable.node)?;
+
+        let iter_type = infer_type_for_expr(&iterable.node, self.env, &self.var_types);
+        let elem_type = match &iter_type {
+            PlutoType::Receiver(elem) => *elem.clone(),
+            _ => return Err(CompileError::codegen("for-in requires receiver".to_string())),
+        };
+
+        // Blocks: header tries recv, check_err tests for error, body runs loop, exit leaves
+        let header_bb = self.builder.create_block();
+        let check_bb = self.builder.create_block();
+        let body_bb = self.builder.create_block();
+        let exit_bb = self.builder.create_block();
+
+        self.builder.ins().jump(header_bb, &[]);
+
+        // Header: call recv, check for error
+        self.builder.switch_to_block(header_bb);
+        let raw_val = self.call_runtime("__pluto_chan_recv", &[handle]);
+        let has_err = self.call_runtime("__pluto_has_error", &[]);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let err_cond = self.builder.ins().icmp(IntCC::NotEqual, has_err, zero);
+        self.builder.ins().brif(err_cond, check_bb, &[], body_bb, &[]);
+
+        // Check block: recv errored (ChannelClosed) — clear error and exit loop
+        self.builder.switch_to_block(check_bb);
+        self.builder.seal_block(check_bb);
+        self.call_runtime_void("__pluto_clear_error", &[]);
+        self.builder.ins().jump(exit_bb, &[]);
+
+        // Body block
+        self.builder.switch_to_block(body_bb);
+        self.builder.seal_block(body_bb);
+
+        let elem_val = from_array_slot(raw_val, &elem_type, &mut self.builder);
+
+        // Create loop variable
+        let prev_var = self.variables.get(&var.node).cloned();
+        let prev_type = self.var_types.get(&var.node).cloned();
+
+        let loop_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        let cl_elem_type = pluto_to_cranelift(&elem_type);
+        self.builder.declare_var(loop_var, cl_elem_type);
+        self.builder.def_var(loop_var, elem_val);
+        self.variables.insert(var.node.clone(), loop_var);
+        self.var_types.insert(var.node.clone(), elem_type);
+
+        // Push loop stack: continue goes to header (re-recv), break goes to exit
+        self.loop_stack.push((header_bb, exit_bb));
+        let mut body_terminated = false;
+        for s in &body.node.stmts {
+            self.lower_stmt(&s.node, &mut body_terminated)?;
+        }
+        self.loop_stack.pop();
+
+        // Restore prior variable binding
+        if let Some(pv) = prev_var {
+            self.variables.insert(var.node.clone(), pv);
+        } else {
+            self.variables.remove(&var.node);
+        }
+        if let Some(pt) = prev_type {
+            self.var_types.insert(var.node.clone(), pt);
+        } else {
+            self.var_types.remove(&var.node);
+        }
+
+        if !body_terminated {
+            self.builder.ins().jump(header_bb, &[]);
+        }
 
         self.builder.seal_block(header_bb);
         self.builder.switch_to_block(exit_bb);
@@ -1580,6 +1701,46 @@ impl<'a> LowerContext<'a> {
             }
         }
 
+        // Sender methods
+        if let PlutoType::Sender(inner) = &obj_type {
+            match method.node.as_str() {
+                "send" => {
+                    let inner = inner.clone();
+                    let arg_val = self.lower_expr(&args[0].node)?;
+                    let slot = to_array_slot(arg_val, &inner, &mut self.builder);
+                    self.call_runtime("__pluto_chan_send", &[obj_ptr, slot]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "try_send" => {
+                    let inner = inner.clone();
+                    let arg_val = self.lower_expr(&args[0].node)?;
+                    let slot = to_array_slot(arg_val, &inner, &mut self.builder);
+                    self.call_runtime("__pluto_chan_try_send", &[obj_ptr, slot]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "close" => {
+                    self.call_runtime_void("__pluto_chan_close", &[obj_ptr]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                _ => return Err(CompileError::codegen(format!("Sender has no method '{}'", method.node)))
+            }
+        }
+
+        // Receiver methods
+        if let PlutoType::Receiver(inner) = &obj_type {
+            match method.node.as_str() {
+                "recv" => {
+                    let raw = self.call_runtime("__pluto_chan_recv", &[obj_ptr]);
+                    return Ok(from_array_slot(raw, &inner, &mut self.builder));
+                }
+                "try_recv" => {
+                    let raw = self.call_runtime("__pluto_chan_try_recv", &[obj_ptr]);
+                    return Ok(from_array_slot(raw, &inner, &mut self.builder));
+                }
+                _ => return Err(CompileError::codegen(format!("Receiver has no method '{}'", method.node)))
+            }
+        }
+
         // Array methods
         if let PlutoType::Array(elem) = &obj_type {
             match method.node.as_str() {
@@ -1863,7 +2024,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I64, arg_val);
                 self.call_runtime_void("__pluto_print_int", &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -2063,6 +2224,12 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
             } else if name == "Task" && type_args.len() == 1 {
                 let t = resolve_type_expr_to_pluto(&type_args[0].node, env);
                 PlutoType::Task(Box::new(t))
+            } else if name == "Sender" && type_args.len() == 1 {
+                let t = resolve_type_expr_to_pluto(&type_args[0].node, env);
+                PlutoType::Sender(Box::new(t))
+            } else if name == "Receiver" && type_args.len() == 1 {
+                let t = resolve_type_expr_to_pluto(&type_args[0].node, env);
+                PlutoType::Receiver(Box::new(t))
             } else {
                 panic!("Generic TypeExpr should not reach codegen — monomorphize should have resolved it")
             }
@@ -2103,6 +2270,8 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Map(_, _) => types::I64,    // pointer to map handle
         PlutoType::Set(_) => types::I64,       // pointer to set handle
         PlutoType::Task(_) => types::I64,      // pointer to task handle
+        PlutoType::Sender(_) => types::I64,    // pointer to channel handle
+        PlutoType::Receiver(_) => types::I64,  // pointer to channel handle
         PlutoType::Error => types::I64,        // pointer to error object
         PlutoType::Range => types::I64,           // not used as a value type
         PlutoType::TypeParam(_) => panic!("TypeParam should not reach codegen"),
@@ -2278,6 +2447,15 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                     "len" => PlutoType::Int,
                     "to_string" => PlutoType::String,
                     _ => PlutoType::Void, // push
+                };
+            }
+            if let PlutoType::Sender(_) = &obj_type {
+                return PlutoType::Void; // send/try_send/close all return void
+            }
+            if let PlutoType::Receiver(inner) = &obj_type {
+                return match method.node.as_str() {
+                    "recv" | "try_recv" => *inner.clone(),
+                    _ => PlutoType::Void,
                 };
             }
             if obj_type == PlutoType::String {

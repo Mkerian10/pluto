@@ -75,6 +75,14 @@ pub enum MethodResolution {
     Builtin,
     /// Task.get() — spawned_fn tracks origin for error propagation
     TaskGet { spawned_fn: Option<String> },
+    /// Channel send — fallible (ChannelClosed)
+    ChannelSend,
+    /// Channel recv — fallible (ChannelClosed)
+    ChannelRecv,
+    /// Channel try_send — fallible (ChannelClosed + ChannelFull)
+    ChannelTrySend,
+    /// Channel try_recv — fallible (ChannelClosed + ChannelEmpty)
+    ChannelTryRecv,
 }
 
 #[derive(Debug)]
@@ -246,6 +254,10 @@ impl TypeEnv {
                     None => Ok(true), // conservatively fallible
                 }
             }
+            Some(MethodResolution::ChannelSend) => Ok(true),
+            Some(MethodResolution::ChannelRecv) => Ok(true),
+            Some(MethodResolution::ChannelTrySend) => Ok(true),
+            Some(MethodResolution::ChannelTryRecv) => Ok(true),
             None => Err(format!(
                 "internal error: unresolved method resolution at span {} in fn '{}'",
                 span_start, current_fn
@@ -297,5 +309,7 @@ fn mangle_type(ty: &PlutoType) -> String {
         PlutoType::Task(inner) => format!("task_{}", mangle_type(inner)),
         PlutoType::Byte => "byte".into(),
         PlutoType::Bytes => "bytes".into(),
+        PlutoType::Sender(inner) => format!("sender_{}", mangle_type(inner)),
+        PlutoType::Receiver(inner) => format!("receiver_{}", mangle_type(inner)),
     }
 }

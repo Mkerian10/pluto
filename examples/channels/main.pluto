@@ -1,0 +1,46 @@
+// Channels — producer-consumer communication between tasks
+
+fn producer(tx: Sender<int>, count: int) {
+    for i in 1..count + 1 {
+        tx.send(i)!
+    }
+    tx.close()
+}
+
+fn main() {
+    // Create a buffered channel with capacity 5
+    let (tx, rx) = chan<int>(5)
+
+    // Spawn a producer that sends values 1..10
+    spawn producer(tx, 10)
+
+    // Consume values using for-in on the receiver
+    let sum = 0
+    for val in rx {
+        sum = sum + val
+    }
+    print("Sum of 1..10:")
+    print(sum)
+
+    // Non-blocking operations with try_send / try_recv
+    let (tx2, rx2) = chan<string>(2)
+    tx2.try_send("hello")!
+    tx2.try_send("world")!
+
+    // Channel is full — try_send returns ChannelFull error
+    tx2.try_send("overflow") catch print("channel full, not sent")
+
+    // Drain with try_recv
+    print(rx2.try_recv()!)
+    print(rx2.try_recv()!)
+
+    // Channel is empty — try_recv returns ChannelEmpty error
+    let got = rx2.try_recv() catch "nothing"
+    print(got)
+
+    // Error handling on closed channel
+    let (tx3, rx3) = chan<int>(1)
+    tx3.close()
+    let val = rx3.recv() catch -1
+    print(val)
+}

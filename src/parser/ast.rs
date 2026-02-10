@@ -156,6 +156,12 @@ pub enum Stmt {
         error_name: Spanned<String>,
         fields: Vec<(Spanned<String>, Spanned<Expr>)>,
     },
+    LetChan {
+        sender: Spanned<String>,
+        receiver: Spanned<String>,
+        elem_type: Spanned<TypeExpr>,
+        capacity: Option<Spanned<Expr>>,
+    },
     Break,
     Continue,
     Expr(Spanned<Expr>),

@@ -119,3 +119,7 @@ path = "tests/integration/concurrency.rs"
 [[test]]
 name = "bytes"
 path = "tests/integration/bytes.rs"
+
+[[test]]
+name = "channels"
+path = "tests/integration/channels.rs"

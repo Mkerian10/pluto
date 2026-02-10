@@ -168,9 +168,10 @@ fn check_stmt(
                 PlutoType::Range => PlutoType::Int,
                 PlutoType::String => PlutoType::String,
                 PlutoType::Bytes => PlutoType::Byte,
+                PlutoType::Receiver(elem) => *elem,
                 _ => {
                     return Err(CompileError::type_err(
-                        format!("for loop requires array, range, string, or bytes, found {iter_type}"),
+                        format!("for loop requires array, range, string, bytes, or receiver, found {iter_type}"),
                         iterable.span,
                     ));
                 }
@@ -218,6 +219,20 @@ fn check_stmt(
                     ));
                 }
             }
+        }
+        Stmt::LetChan { sender, receiver, elem_type, capacity } => {
+            let elem = resolve_type(elem_type, env)?;
+            if let Some(cap) = capacity {
+                let cap_type = infer_expr(&cap.node, cap.span, env)?;
+                if cap_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("channel capacity must be int, found {cap_type}"),
+                        cap.span,
+                    ));
+                }
+            }
+            env.define(sender.node.clone(), PlutoType::Sender(Box::new(elem.clone())));
+            env.define(receiver.node.clone(), PlutoType::Receiver(Box::new(elem)));
         }
     }
     Ok(())

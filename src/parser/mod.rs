@@ -1024,6 +1024,12 @@ impl<'a> Parser<'a> {
     fn parse_let_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
         let let_tok = self.expect(&Token::Let)?;
         let start = let_tok.span.start;
+
+        // Check for destructuring: let (tx, rx) = chan<T>(...)
+        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
+            return self.parse_let_chan(start);
+        }
+
         let name = self.expect_ident()?;
 
         let ty = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Colon) {
@@ -1039,6 +1045,45 @@ impl<'a> Parser<'a> {
         self.consume_statement_end();
 
         Ok(Spanned::new(Stmt::Let { name, ty, value }, Span::new(start, end)))
+    }
+
+    fn parse_let_chan(&mut self, start: usize) -> Result<Spanned<Stmt>, CompileError> {
+        self.expect(&Token::LParen)?;
+        let sender = self.expect_ident()?;
+        self.expect(&Token::Comma)?;
+        let receiver = self.expect_ident()?;
+        self.expect(&Token::RParen)?;
+        self.expect(&Token::Eq)?;
+
+        // Expect `chan`
+        let chan_ident = self.expect_ident()?;
+        if chan_ident.node != "chan" {
+            return Err(CompileError::syntax(
+                "expected `chan<T>()` after `let (tx, rx) =`".to_string(),
+                chan_ident.span,
+            ));
+        }
+
+        // Parse <T>
+        self.expect(&Token::Lt)?;
+        let elem_type = self.parse_type()?;
+        self.expect(&Token::Gt)?;
+
+        // Parse ( [capacity] )
+        self.expect(&Token::LParen)?;
+        let capacity = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
+            Some(self.parse_expr(0)?)
+        } else {
+            None
+        };
+        let close = self.expect(&Token::RParen)?;
+        let end = close.span.end;
+        self.consume_statement_end();
+
+        Ok(Spanned::new(
+            Stmt::LetChan { sender, receiver, elem_type, capacity },
+            Span::new(start, end),
+        ))
     }
 
     fn parse_return_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {

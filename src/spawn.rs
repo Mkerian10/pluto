@@ -72,6 +72,11 @@ fn desugar_stmt(stmt: &mut Stmt) {
             }
         }
         Stmt::Expr(expr) => desugar_expr(&mut expr.node, expr.span),
+        Stmt::LetChan { capacity, .. } => {
+            if let Some(cap) = capacity {
+                desugar_expr(&mut cap.node, cap.span);
+            }
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
