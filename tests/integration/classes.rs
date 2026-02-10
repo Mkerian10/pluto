@@ -87,3 +87,146 @@ fn class_duplicate_method_rejected() {
         "duplicate method 'foo'",
     );
 }
+
+// ── mut self enforcement ─────────────────────────────────────
+
+#[test]
+fn mut_self_field_assign_ok() {
+    let out = compile_and_run_stdout(
+        r#"
+class Counter {
+    val: int
+
+    fn inc(mut self) {
+        self.val = self.val + 1
+    }
+
+    fn get(self) int {
+        return self.val
+    }
+}
+
+fn main() {
+    let c = Counter { val: 0 }
+    c.inc()
+    c.inc()
+    print(c.get())
+}
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+#[test]
+fn non_mut_self_field_assign_rejected() {
+    compile_should_fail_with(
+        r#"
+class Counter {
+    val: int
+
+    fn inc(self) {
+        self.val = self.val + 1
+    }
+}
+
+fn main() {
+    let c = Counter { val: 0 }
+    c.inc()
+}
+"#,
+        "cannot assign to 'self.val' in a non-mut method",
+    );
+}
+
+#[test]
+fn non_mut_calling_mut_method_rejected() {
+    compile_should_fail_with(
+        r#"
+class Counter {
+    val: int
+
+    fn inc(mut self) {
+        self.val = self.val + 1
+    }
+
+    fn wrapper(self) {
+        self.inc()
+    }
+}
+
+fn main() {
+    let c = Counter { val: 0 }
+    c.wrapper()
+}
+"#,
+        "cannot call 'mut self' method 'inc' on self in a non-mut method",
+    );
+}
+
+#[test]
+fn trait_mut_self_mismatch_rejected() {
+    compile_should_fail_with(
+        r#"
+trait Incrementable {
+    fn inc(mut self)
+}
+
+class Counter impl Incrementable {
+    val: int
+
+    fn inc(self) {
+        let x = self.val
+    }
+}
+
+fn main() {
+}
+"#,
+        "declares 'mut self', but class 'Counter' does not",
+    );
+}
+
+#[test]
+fn trait_mut_self_reverse_mismatch_rejected() {
+    compile_should_fail_with(
+        r#"
+trait Readable {
+    fn read(self) int
+}
+
+class Counter impl Readable {
+    val: int
+
+    fn read(mut self) int {
+        return self.val
+    }
+}
+
+fn main() {
+}
+"#,
+        "declares 'self', but class 'Counter' declares 'mut self'",
+    );
+}
+
+#[test]
+fn non_mut_self_read_only_ok() {
+    let out = compile_and_run_stdout(
+        r#"
+class Point {
+    x: int
+    y: int
+
+    fn sum(self) int {
+        return self.x + self.y
+    }
+}
+
+fn main() {
+    let p = Point { x: 3, y: 4 }
+    print(p.sum())
+}
+"#,
+    );
+    assert_eq!(out, "7\n");
+}

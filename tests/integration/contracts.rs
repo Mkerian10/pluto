@@ -113,7 +113,7 @@ class Counter {
 
     invariant self.value >= 0
 
-    fn increment(self) {
+    fn increment(mut self) {
         self.value = self.value + 1
     }
 
@@ -218,7 +218,7 @@ fn method_requires_parses() {
 class Account {
     balance: float
 
-    fn withdraw(self, amount: float) float
+    fn withdraw(mut self, amount: float) float
         requires amount > 0.0
     {
         self.balance = self.balance - amount
@@ -468,7 +468,7 @@ class Counter {
 
     invariant self.value >= 0
 
-    fn decrement(self) {
+    fn decrement(mut self) {
         self.value = self.value - 1
     }
 }
@@ -520,7 +520,7 @@ class Range {
     invariant self.lo >= 0
     invariant self.hi > self.lo
 
-    fn widen(self, amount: int) {
+    fn widen(mut self, amount: int) {
         self.hi = self.hi + amount
     }
 
@@ -688,7 +688,7 @@ fn requires_on_class_method() {
 class Account {
     balance: int
 
-    fn deposit(self, amount: int)
+    fn deposit(mut self, amount: int)
         requires amount > 0
     {
         self.balance = self.balance + amount
@@ -712,7 +712,7 @@ fn requires_on_method_violated() {
 class Account {
     balance: int
 
-    fn deposit(self, amount: int)
+    fn deposit(mut self, amount: int)
         requires amount > 0
     {
         self.balance = self.balance + amount
@@ -833,7 +833,7 @@ fn ensures_on_void_function() {
 class Counter {
     count: int
 
-    fn increment(self)
+    fn increment(mut self)
         ensures self.count > 0
     {
         self.count = self.count + 1
@@ -859,7 +859,7 @@ fn ensures_old_satisfied() {
 class Counter {
     count: int
 
-    fn increment(self)
+    fn increment(mut self)
         ensures self.count == old(self.count) + 1
     {
         self.count = self.count + 1
@@ -907,7 +907,7 @@ fn ensures_old_nested_field() {
 class Wallet {
     balance: int
 
-    fn withdraw(self, amount: int)
+    fn withdraw(mut self, amount: int)
         requires amount > 0
         ensures self.balance == old(self.balance) - amount
     {
@@ -1050,7 +1050,7 @@ class BoundedCounter {
 
     invariant self.count >= 0
 
-    fn add(self, n: int)
+    fn add(mut self, n: int)
         requires n > 0
         ensures self.count == old(self.count) + n
     {
@@ -1076,7 +1076,7 @@ fn old_and_result_in_same_ensures() {
 class Stack {
     size: int
 
-    fn push(self) int
+    fn push(mut self) int
         ensures result == old(self.size)
         ensures self.size == old(self.size) + 1
     {

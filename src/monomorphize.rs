@@ -167,6 +167,13 @@ fn instantiate_class(
                 Some(rt) => crate::typeck::resolve_type_for_monomorphize(rt, env)?,
                 None => PlutoType::Void,
             };
+            // Propagate mut self
+            if !method.node.params.is_empty()
+                && method.node.params[0].name.node == "self"
+                && method.node.params[0].is_mut
+            {
+                env.mut_self_methods.insert(method_name.clone());
+            }
             env.functions.insert(method_name, crate::typeck::env::FuncSig {
                 params: param_types,
                 return_type,

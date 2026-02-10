@@ -364,7 +364,7 @@ impl<'a> Parser<'a> {
             let pname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let pty = self.parse_type()?;
-            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
+            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
         }
         let close_paren = self.expect(&Token::RParen)?;
         let mut end = close_paren.span.end;
@@ -571,18 +571,36 @@ impl<'a> Parser<'a> {
             }
             first = false;
 
-            if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
+            if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Mut) {
+                let mut_tok = self.advance().unwrap();
+                let mut_span = mut_tok.span;
+                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
+                    let self_tok = self.advance().unwrap();
+                    params.push(Param {
+                        id: Uuid::new_v4(),
+                        name: Spanned::new("self".to_string(), self_tok.span),
+                        ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
+                        is_mut: true,
+                    });
+                } else {
+                    return Err(CompileError::syntax(
+                        "expected 'self' after 'mut'",
+                        mut_span,
+                    ));
+                }
+            } else if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
                 let self_tok = self.advance().unwrap();
                 params.push(Param {
                     id: Uuid::new_v4(),
                     name: Spanned::new("self".to_string(), self_tok.span),
                     ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
+                    is_mut: false,
                 });
             } else {
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let pty = self.parse_type()?;
-                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
+                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
             }
         }
         self.expect(&Token::RParen)?;
@@ -697,19 +715,37 @@ impl<'a> Parser<'a> {
             }
             first = false;
 
-            // Check for `self` as first param
-            if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
+            // Check for `mut self` or `self` as first param
+            if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Mut) {
+                let mut_tok = self.advance().unwrap();
+                let mut_span = mut_tok.span;
+                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
+                    let self_tok = self.advance().unwrap();
+                    params.push(Param {
+                        id: Uuid::new_v4(),
+                        name: Spanned::new("self".to_string(), self_tok.span),
+                        ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
+                        is_mut: true,
+                    });
+                } else {
+                    return Err(CompileError::syntax(
+                        "expected 'self' after 'mut'",
+                        mut_span,
+                    ));
+                }
+            } else if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
                 let self_tok = self.advance().unwrap();
                 params.push(Param {
                     id: Uuid::new_v4(),
                     name: Spanned::new("self".to_string(), self_tok.span),
                     ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
+                    is_mut: false,
                 });
             } else {
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let pty = self.parse_type()?;
-                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
+                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
             }
         }
         self.expect(&Token::RParen)?;
@@ -813,7 +849,7 @@ impl<'a> Parser<'a> {
             let pname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let pty = self.parse_type()?;
-            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
+            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
         }
         self.expect(&Token::RParen)?;
 
@@ -2420,7 +2456,7 @@ impl<'a> Parser<'a> {
             let pname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let pty = self.parse_type()?;
-            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
+            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
         }
         self.expect(&Token::RParen)?;
 

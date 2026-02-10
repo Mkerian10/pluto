@@ -100,6 +100,7 @@ pub struct Param {
     pub id: Uuid,
     pub name: Spanned<String>,
     pub ty: Spanned<TypeExpr>,
+    pub is_mut: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
