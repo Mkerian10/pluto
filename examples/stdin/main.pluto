@@ -1,0 +1,7 @@
+import std.io
+
+fn main() {
+    io.print("What is your name? ")
+    let name = io.read_line()
+    print("Hello, " + name + "!")
+}

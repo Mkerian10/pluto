@@ -583,6 +583,22 @@ void *__pluto_string_new(const char *data, long len) {
     return header;
 }
 
+void *__pluto_io_read_line(void) {
+    char *buf = NULL;
+    size_t cap = 0;
+    ssize_t len = getline(&buf, &cap, stdin);
+    if (len < 0) {
+        free(buf);
+        return __pluto_string_new("", 0);
+    }
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) {
+        len--;
+    }
+    void *result = __pluto_string_new(buf, len);
+    free(buf);
+    return result;
+}
+
 void *__pluto_string_concat(void *a, void *b) {
     long len_a = *(long *)a;
     long len_b = *(long *)b;

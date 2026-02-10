@@ -138,3 +138,7 @@ path = "tests/integration/manifest.rs"
 [[test]]
 name = "contracts"
 path = "tests/integration/contracts.rs"
+
+[[test]]
+name = "io"
+path = "tests/integration/io.rs"

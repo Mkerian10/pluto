@@ -108,6 +108,14 @@ Demonstrates the `std.collections` functional collections library: `map`, `filte
 cargo run -- run examples/collections-lib/main.pluto --stdlib stdlib
 ```
 
+## stdin
+
+Demonstrates reading from stdin with `std.io`: `io.read_line()` reads a line of input, stripping the trailing newline.
+
+```bash
+echo "World" | cargo run -- run examples/stdin/main.pluto --stdlib stdlib
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.
