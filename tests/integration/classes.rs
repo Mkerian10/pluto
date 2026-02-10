@@ -1,5 +1,5 @@
 mod common;
-use common::compile_and_run_stdout;
+use common::{compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
 
 #[test]
 fn class_construct_and_field_access() {
@@ -55,4 +55,35 @@ fn class_multiple_methods() {
         "class Rect {\n    w: int\n    h: int\n\n    fn area(self) int {\n        return self.w * self.h\n    }\n\n    fn perimeter(self) int {\n        return 2 * (self.w + self.h)\n    }\n}\n\nfn main() {\n    let r = Rect { w: 3, h: 4 }\n    print(r.area())\n    print(r.perimeter())\n}",
     );
     assert_eq!(out, "12\n14\n");
+}
+
+#[test]
+fn class_duplicate_field_rejected() {
+    compile_should_fail_with(
+        "class Bad {\n    x: int\n    x: int\n}\n\nfn main() {\n    let b = Bad { x: 1 }\n}",
+        "duplicate field 'x'",
+    );
+}
+
+#[test]
+fn class_methods_only() {
+    let out = compile_and_run_stdout(
+        "class Greeter {\n    name: string\n\n    fn greet(self) string {\n        return \"hello \" + self.name\n    }\n\n    fn shout(self) string {\n        return \"HEY \" + self.name\n    }\n}\n\nfn main() {\n    let g = Greeter { name: \"world\" }\n    print(g.greet())\n    print(g.shout())\n}",
+    );
+    assert_eq!(out, "hello world\nHEY world\n");
+}
+
+#[test]
+fn class_unknown_field_type_rejected() {
+    compile_should_fail(
+        "class Bad {\n    x: NonExistent\n}\n\nfn main() {\n    let b = Bad { x: 1 }\n}",
+    );
+}
+
+#[test]
+fn class_duplicate_method_rejected() {
+    compile_should_fail_with(
+        "class Bad {\n    x: int\n\n    fn foo(self) int {\n        return 1\n    }\n\n    fn foo(self) int {\n        return 2\n    }\n}\n\nfn main() {\n    let b = Bad { x: 1 }\n}",
+        "duplicate method 'foo'",
+    );
 }

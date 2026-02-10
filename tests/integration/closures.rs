@@ -72,3 +72,27 @@ fn closure_return_from_fn() {
     );
     assert_eq!(out.trim(), "15");
 }
+
+#[test]
+fn closure_returning_closure() {
+    let out = compile_and_run_stdout(
+        "fn make_multiplier(factor: int) fn(int) int {\n    let f = (x: int) => x * factor\n    return f\n}\n\nfn main() {\n    let double = make_multiplier(2)\n    let triple = make_multiplier(3)\n    print(double(5))\n    print(triple(5))\n}",
+    );
+    assert_eq!(out, "10\n15\n");
+}
+
+#[test]
+fn closure_capture_loop_variable() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let sum = 0\n    for i in 0..5 {\n        let captured = i\n        let f = () => captured\n        sum = sum + f()\n    }\n    print(sum)\n}",
+    );
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn closure_capture_mixed_types() {
+    let out = compile_and_run_stdout(
+        "class Point {\n    x: int\n    y: int\n}\n\nfn main() {\n    let n = 42\n    let s = \"hello\"\n    let p = Point { x: 1, y: 2 }\n    let f = () => {\n        print(n)\n        print(s)\n        print(p.x + p.y)\n    }\n    f()\n}",
+    );
+    assert_eq!(out, "42\nhello\n3\n");
+}
