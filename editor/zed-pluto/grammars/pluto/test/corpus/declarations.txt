@@ -1,0 +1,312 @@
+========
+Simple function
+========
+
+fn add(a: int, b: int) int {
+    return a + b
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list
+      (parameter name: (identifier) type: (named_type (identifier)))
+      (parameter name: (identifier) type: (named_type (identifier))))
+    return_type: (named_type (identifier))
+    (block
+      (return_statement
+        (binary_expression
+          left: (primary_expression (identifier))
+          right: (primary_expression (identifier)))))))
+
+========
+Void function
+========
+
+fn greet(name: string) {
+    print(name)
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list
+      (parameter name: (identifier) type: (named_type (identifier))))
+    (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          (argument_list (primary_expression (identifier))))))))
+
+========
+Public function
+========
+
+pub fn helper() int {
+    return 42
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    return_type: (named_type (identifier))
+    (block
+      (return_statement (primary_expression (integer))))))
+
+========
+Class with fields and methods
+========
+
+class Point {
+    x: int
+    y: int
+
+    fn distance(self: Point) float {
+        return 0.0
+    }
+}
+
+---
+
+(source_file
+  (class_definition
+    name: (identifier)
+    (class_member (field_definition name: (identifier) type: (named_type (identifier))))
+    (class_member (field_definition name: (identifier) type: (named_type (identifier))))
+    (class_member
+      (function_definition
+        name: (identifier)
+        (parameter_list (parameter name: (self_) type: (named_type (identifier))))
+        return_type: (named_type (identifier))
+        (block
+          (return_statement (primary_expression (float))))))))
+
+========
+Class with bracket deps
+========
+
+class UserService[db: Database] {
+    fn get_user(self: UserService) string {
+        return "user"
+    }
+}
+
+---
+
+(source_file
+  (class_definition
+    name: (identifier)
+    (bracket_deps
+      (bracket_dep name: (identifier) type: (named_type (identifier))))
+    (class_member
+      (function_definition
+        name: (identifier)
+        (parameter_list (parameter name: (self_) type: (named_type (identifier))))
+        return_type: (named_type (identifier))
+        (block
+          (return_statement (primary_expression (string))))))))
+
+========
+Class with impl
+========
+
+class Square impl HasArea {
+    side: int
+
+    fn area(self: Square) int {
+        return 1
+    }
+}
+
+---
+
+(source_file
+  (class_definition
+    name: (identifier)
+    (impl_clause (identifier))
+    (class_member (field_definition name: (identifier) type: (named_type (identifier))))
+    (class_member
+      (function_definition
+        name: (identifier)
+        (parameter_list (parameter name: (self_) type: (named_type (identifier))))
+        return_type: (named_type (identifier))
+        (block
+          (return_statement (primary_expression (integer))))))))
+
+========
+Trait definition
+========
+
+trait HasArea {
+    fn area(self: HasArea) int
+}
+
+---
+
+(source_file
+  (trait_definition
+    name: (identifier)
+    (trait_member
+      (function_definition
+        name: (identifier)
+        (parameter_list (parameter name: (self_) type: (named_type (identifier))))
+        return_type: (named_type (identifier))))))
+
+========
+Enum with unit variants
+========
+
+enum Color {
+    Red
+    Green
+    Blue
+}
+
+---
+
+(source_file
+  (enum_definition
+    name: (identifier)
+    (enum_variant name: (identifier))
+    (enum_variant name: (identifier))
+    (enum_variant name: (identifier))))
+
+========
+Enum with data
+========
+
+enum Shape {
+    Circle { radius: float }
+    Rect { w: int, h: int }
+}
+
+---
+
+(source_file
+  (enum_definition
+    name: (identifier)
+    (enum_variant
+      name: (identifier)
+      (field_definition name: (identifier) type: (named_type (identifier))))
+    (enum_variant
+      name: (identifier)
+      (field_definition name: (identifier) type: (named_type (identifier)))
+      (field_definition name: (identifier) type: (named_type (identifier))))))
+
+========
+Error definition
+========
+
+error NotFound {
+    message: string
+}
+
+---
+
+(source_file
+  (error_definition
+    name: (identifier)
+    (field_definition name: (identifier) type: (named_type (identifier)))))
+
+========
+App definition
+========
+
+app MyApp[svc: UserService] {
+    ambient Logger
+
+    fn main(self: MyApp) {
+        print("hello")
+    }
+}
+
+---
+
+(source_file
+  (app_definition
+    name: (identifier)
+    (bracket_deps
+      (bracket_dep name: (identifier) type: (named_type (identifier))))
+    (app_member (ambient_declaration (identifier)))
+    (app_member
+      (function_definition
+        name: (identifier)
+        (parameter_list (parameter name: (self_) type: (named_type (identifier))))
+        (block
+          (expression_statement
+            (call_expression
+              function: (identifier)
+              (argument_list (primary_expression (string))))))))))
+
+========
+Import declaration
+========
+
+import math
+
+---
+
+(source_file
+  (import_declaration (identifier)))
+
+========
+Extern rust
+========
+
+extern rust "./my_math" as math
+
+---
+
+(source_file
+  (extern_rust_declaration
+    path: (string)
+    alias: (identifier)))
+
+========
+Test definition
+========
+
+test "it works" {
+    expect(1).to_equal(1)
+}
+
+---
+
+(source_file
+  (test_definition
+    name: (string)
+    (block
+      (expression_statement
+        (method_call_expression
+          object: (call_expression
+            function: (identifier)
+            (argument_list (primary_expression (integer))))
+          method: (identifier)
+          (argument_list (primary_expression (integer))))))))
+
+========
+Generic function
+========
+
+fn identity<T>(x: T) T {
+    return x
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (type_parameters (identifier))
+    (parameter_list
+      (parameter name: (identifier) type: (named_type (identifier))))
+    return_type: (named_type (identifier))
+    (block
+      (return_statement (primary_expression (identifier))))))

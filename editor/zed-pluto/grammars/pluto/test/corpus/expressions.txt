@@ -1,0 +1,287 @@
+========
+Binary operators
+========
+
+fn main() {
+    let a = 1 + 2 * 3
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (binary_expression
+          left: (primary_expression (integer))
+          operator: "+"
+          right: (binary_expression
+            left: (primary_expression (integer))
+            operator: "*"
+            right: (primary_expression (integer))))))))
+
+========
+Unary operator
+========
+
+fn main() {
+    let b = !true
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (unary_expression
+          operator: "!"
+          operand: (primary_expression (boolean)))))))
+
+========
+Method call
+========
+
+fn main() {
+    let n = arr.len()
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (method_call_expression
+          object: (primary_expression (identifier))
+          method: (identifier)
+          (argument_list))))))
+
+========
+Field access
+========
+
+fn main() {
+    let x = self.name
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (field_expression
+          object: (primary_expression (self_))
+          field: (identifier))))))
+
+========
+Index expression
+========
+
+fn main() {
+    let v = arr[0]
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (index_expression
+          object: (primary_expression (identifier))
+          index: (primary_expression (integer)))))))
+
+========
+Error propagation
+========
+
+fn main() {
+    let val = get_value()!
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (propagate_expression
+          expression: (call_expression
+            function: (identifier)
+            (argument_list)))))))
+
+========
+Catch expression
+========
+
+fn main() {
+    let val = get_value() catch 0
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (catch_expression
+          expression: (call_expression
+            function: (identifier)
+            (argument_list))
+          handler: (primary_expression (integer)))))))
+
+========
+Cast expression
+========
+
+fn main() {
+    let f = 42 as float
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (cast_expression
+          expression: (primary_expression (integer))
+          type: (named_type (identifier)))))))
+
+========
+Spawn expression
+========
+
+fn main() {
+    let t = spawn compute(42)
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (spawn_expression
+          call: (call_expression
+            function: (identifier)
+            (argument_list (primary_expression (integer)))))))))
+
+========
+Closure expression
+========
+
+fn main() {
+    let f = (x: int) => x + 1
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (closure_expression
+          (closure_parameters
+            (parameter name: (identifier) type: (named_type (identifier))))
+          body: (binary_expression
+            left: (primary_expression (identifier))
+            operator: "+"
+            right: (primary_expression (integer))))))))
+
+========
+Array literal
+========
+
+fn main() {
+    let arr = [1, 2, 3]
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (primary_expression
+          (array_literal
+            (primary_expression (integer))
+            (primary_expression (integer))
+            (primary_expression (integer))))))))
+
+========
+String literal
+========
+
+fn main() {
+    let s = "hello world"
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (primary_expression (string))))))
+
+========
+Boolean literal
+========
+
+fn main() {
+    let t = true
+    let f = false
+}
+
+---
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        name: (identifier)
+        value: (primary_expression (boolean)))
+      (let_statement
+        name: (identifier)
+        value: (primary_expression (boolean))))))

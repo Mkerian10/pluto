@@ -1,0 +1,10 @@
+name = "Pluto"
+grammar = "pluto"
+path_suffixes = ["pluto"]
+line_comments = ["// "]
+tab_size = 4
+brackets = [
+    { start = "{", end = "}", close = true, newline = true },
+    { start = "[", end = "]", close = true, newline = true },
+    { start = "(", end = ")", close = true, newline = false },
+]

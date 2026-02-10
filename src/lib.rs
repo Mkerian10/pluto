@@ -14,6 +14,7 @@ pub mod spawn;
 pub mod contracts;
 pub mod manifest;
 pub mod git_cache;
+pub mod lsp;
 
 use diagnostics::CompileError;
 use std::path::{Path, PathBuf};

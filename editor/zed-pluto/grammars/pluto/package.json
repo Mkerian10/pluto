@@ -1,0 +1,12 @@
+{
+  "name": "tree-sitter-pluto",
+  "version": "0.1.0",
+  "main": "bindings/node",
+  "devDependencies": {
+    "tree-sitter-cli": "^0.24.0"
+  },
+  "scripts": {
+    "build": "tree-sitter generate",
+    "test": "tree-sitter test"
+  }
+}
