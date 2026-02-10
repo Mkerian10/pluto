@@ -1,0 +1,6 @@
+[package]
+name = "git-packages-example"
+version = "0.1.0"
+
+[dependencies]
+strutils = { git = "file:///tmp/pluto-strutils" }

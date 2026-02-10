@@ -64,6 +64,14 @@ Demonstrates local path dependencies via `pluto.toml`. A project declares a `mat
 cargo run -- run examples/packages/main.pluto
 ```
 
+## git-packages
+
+Demonstrates git-based dependencies via `pluto.toml`. A project declares a `strutils` dependency pointing to a git repository, then imports and uses string utility functions from it.
+
+```bash
+cargo run -- run examples/git-packages/main.pluto
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.
