@@ -1017,6 +1017,175 @@ fn infer_method_call(
                 }
                 return Ok(PlutoType::Void);
             }
+            "pop" | "last" | "first" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 0 arguments, got {}", method.node, args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok((**elem).clone());
+            }
+            "is_empty" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("is_empty() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Bool);
+            }
+            "clear" | "reverse" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 0 arguments, got {}", method.node, args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Void);
+            }
+            "remove_at" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("remove_at() expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("remove_at(): expected int index, found {arg_type}"),
+                        args[0].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok((**elem).clone());
+            }
+            "insert_at" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        format!("insert_at() expects 2 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let idx_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if idx_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("insert_at(): expected int index, found {idx_type}"),
+                        args[0].span,
+                    ));
+                }
+                let val_type = infer_expr(&args[1].node, args[1].span, env)?;
+                if val_type != **elem {
+                    return Err(CompileError::type_err(
+                        format!("insert_at(): expected {}, found {val_type}", **elem),
+                        args[1].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Void);
+            }
+            "slice" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        format!("slice() expects 2 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let start_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if start_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("slice(): expected int start, found {start_type}"),
+                        args[0].span,
+                    ));
+                }
+                let end_type = infer_expr(&args[1].node, args[1].span, env)?;
+                if end_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("slice(): expected int end, found {end_type}"),
+                        args[1].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Array(elem.clone()));
+            }
+            "contains" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("contains() expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **elem {
+                    return Err(CompileError::type_err(
+                        format!("contains(): expected {}, found {arg_type}", **elem),
+                        args[0].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Bool);
+            }
+            "index_of" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("index_of() expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **elem {
+                    return Err(CompileError::type_err(
+                        format!("index_of(): expected {}, found {arg_type}", **elem),
+                        args[0].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Int);
+            }
             _ => {
                 return Err(CompileError::type_err(
                     format!("array has no method '{}'", method.node),

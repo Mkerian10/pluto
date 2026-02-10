@@ -2185,6 +2185,69 @@ impl<'a> LowerContext<'a> {
                     self.call_runtime_void("__pluto_array_push", &[obj_ptr, slot]);
                     return Ok(self.builder.ins().iconst(types::I64, 0));
                 }
+                "pop" => {
+                    let elem = elem.clone();
+                    let raw = self.call_runtime("__pluto_array_pop", &[obj_ptr]);
+                    return Ok(from_array_slot(raw, &elem, &mut self.builder));
+                }
+                "last" => {
+                    let elem = elem.clone();
+                    let raw = self.call_runtime("__pluto_array_last", &[obj_ptr]);
+                    return Ok(from_array_slot(raw, &elem, &mut self.builder));
+                }
+                "first" => {
+                    let elem = elem.clone();
+                    let raw = self.call_runtime("__pluto_array_first", &[obj_ptr]);
+                    return Ok(from_array_slot(raw, &elem, &mut self.builder));
+                }
+                "is_empty" => {
+                    let len_val = self.call_runtime("__pluto_array_len", &[obj_ptr]);
+                    let zero = self.builder.ins().iconst(types::I64, 0);
+                    let cmp = self.builder.ins().icmp(IntCC::Equal, len_val, zero);
+                    return Ok(cmp);
+                }
+                "clear" => {
+                    self.call_runtime_void("__pluto_array_clear", &[obj_ptr]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "remove_at" => {
+                    let elem = elem.clone();
+                    let idx = self.lower_expr(&args[0].node)?;
+                    let raw = self.call_runtime("__pluto_array_remove_at", &[obj_ptr, idx]);
+                    return Ok(from_array_slot(raw, &elem, &mut self.builder));
+                }
+                "insert_at" => {
+                    let elem = elem.clone();
+                    let idx = self.lower_expr(&args[0].node)?;
+                    let arg_val = self.lower_expr(&args[1].node)?;
+                    let slot = to_array_slot(arg_val, &elem, &mut self.builder);
+                    self.call_runtime_void("__pluto_array_insert_at", &[obj_ptr, idx, slot]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "slice" => {
+                    let start = self.lower_expr(&args[0].node)?;
+                    let end = self.lower_expr(&args[1].node)?;
+                    return Ok(self.call_runtime("__pluto_array_slice", &[obj_ptr, start, end]));
+                }
+                "reverse" => {
+                    self.call_runtime_void("__pluto_array_reverse", &[obj_ptr]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "contains" => {
+                    let elem = elem.clone();
+                    let arg_val = self.lower_expr(&args[0].node)?;
+                    let slot = to_array_slot(arg_val, &elem, &mut self.builder);
+                    let tag = self.builder.ins().iconst(types::I64, key_type_tag(&elem));
+                    let result = self.call_runtime("__pluto_array_contains", &[obj_ptr, slot, tag]);
+                    return Ok(self.builder.ins().ireduce(types::I8, result));
+                }
+                "index_of" => {
+                    let elem = elem.clone();
+                    let arg_val = self.lower_expr(&args[0].node)?;
+                    let slot = to_array_slot(arg_val, &elem, &mut self.builder);
+                    let tag = self.builder.ins().iconst(types::I64, key_type_tag(&elem));
+                    return Ok(self.call_runtime("__pluto_array_index_of", &[obj_ptr, slot, tag]));
+                }
                 _ => {
                     return Err(CompileError::codegen(format!("array has no method '{}'", method.node)));
                 }
@@ -3075,10 +3138,13 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 }
             }
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
-            if matches!(&obj_type, PlutoType::Array(_)) {
+            if let PlutoType::Array(elem) = &obj_type {
                 return match method.node.as_str() {
-                    "len" => PlutoType::Int,
-                    _ => PlutoType::Void,
+                    "len" | "index_of" => PlutoType::Int,
+                    "pop" | "last" | "first" | "remove_at" => (**elem).clone(),
+                    "is_empty" | "contains" => PlutoType::Bool,
+                    "slice" => PlutoType::Array(elem.clone()),
+                    _ => PlutoType::Void, // push, clear, insert_at, reverse
                 };
             }
             if let PlutoType::Map(key_ty, val_ty) = &obj_type {

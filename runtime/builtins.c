@@ -691,6 +691,141 @@ long __pluto_array_len(void *handle) {
     return ((long *)handle)[0];
 }
 
+long __pluto_array_pop(void *handle) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (len == 0) {
+        fprintf(stderr, "pluto: pop from empty array\n");
+        exit(1);
+    }
+    long *data = (long *)h[2];
+    h[0] = len - 1;
+    return data[len - 1];
+}
+
+long __pluto_array_last(void *handle) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (len == 0) {
+        fprintf(stderr, "pluto: last() on empty array\n");
+        exit(1);
+    }
+    long *data = (long *)h[2];
+    return data[len - 1];
+}
+
+long __pluto_array_first(void *handle) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (len == 0) {
+        fprintf(stderr, "pluto: first() on empty array\n");
+        exit(1);
+    }
+    long *data = (long *)h[2];
+    return data[0];
+}
+
+void __pluto_array_clear(void *handle) {
+    ((long *)handle)[0] = 0;
+}
+
+long __pluto_array_remove_at(void *handle, long index) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (index < 0 || index >= len) {
+        fprintf(stderr, "pluto: array remove_at index out of bounds: index %ld, length %ld\n", index, len);
+        exit(1);
+    }
+    long *data = (long *)h[2];
+    long removed = data[index];
+    for (long i = index; i < len - 1; i++) {
+        data[i] = data[i + 1];
+    }
+    h[0] = len - 1;
+    return removed;
+}
+
+void __pluto_array_insert_at(void *handle, long index, long value) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (index < 0 || index > len) {
+        fprintf(stderr, "pluto: array insert_at index out of bounds: index %ld, length %ld\n", index, len);
+        exit(1);
+    }
+    long cap = h[1];
+    long *data = (long *)h[2];
+    if (len == cap) {
+        cap = cap * 2;
+        if (cap == 0) cap = 4;
+        data = (long *)realloc(data, cap * 8);
+        if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+        h[1] = cap;
+        h[2] = (long)data;
+    }
+    for (long i = len; i > index; i--) {
+        data[i] = data[i - 1];
+    }
+    data[index] = value;
+    h[0] = len + 1;
+}
+
+void *__pluto_array_slice(void *handle, long start, long end) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (start < 0) start = 0;
+    if (end > len) end = len;
+    if (start > end) start = end;
+    long new_len = end - start;
+    long *data = (long *)h[2];
+    void *new_handle = __pluto_array_new(new_len > 0 ? new_len : 1);
+    long *nh = (long *)new_handle;
+    long *new_data = (long *)nh[2];
+    for (long i = 0; i < new_len; i++) {
+        new_data[i] = data[start + i];
+    }
+    nh[0] = new_len;
+    return new_handle;
+}
+
+void __pluto_array_reverse(void *handle) {
+    long *h = (long *)handle;
+    long len = h[0];
+    long *data = (long *)h[2];
+    for (long i = 0; i < len / 2; i++) {
+        long tmp = data[i];
+        data[i] = data[len - 1 - i];
+        data[len - 1 - i] = tmp;
+    }
+}
+
+long __pluto_array_contains(void *handle, long value, long type_tag) {
+    long *h = (long *)handle;
+    long len = h[0];
+    long *data = (long *)h[2];
+    for (long i = 0; i < len; i++) {
+        if (type_tag == 3) { // string
+            if (__pluto_string_eq((void *)data[i], (void *)value)) return 1;
+        } else {
+            if (data[i] == value) return 1;
+        }
+    }
+    return 0;
+}
+
+long __pluto_array_index_of(void *handle, long value, long type_tag) {
+    long *h = (long *)handle;
+    long len = h[0];
+    long *data = (long *)h[2];
+    for (long i = 0; i < len; i++) {
+        if (type_tag == 3) { // string
+            if (__pluto_string_eq((void *)data[i], (void *)value)) return i;
+        } else {
+            if (data[i] == value) return i;
+        }
+    }
+    return -1;
+}
+
 // ── Bytes runtime functions ───────────────────────────────────────────────────
 // Handle layout (24 bytes): [len: long] [cap: long] [data_ptr: unsigned char*]
 
