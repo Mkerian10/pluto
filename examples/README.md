@@ -116,6 +116,22 @@ Demonstrates interactive I/O with `std.io`: reading input with `io.read_line()`,
 echo -e "Alice\n21\n72" | cargo run -- run examples/stdin/main.pluto --stdlib stdlib
 ```
 
+## time
+
+Demonstrates the `std.time` module: wall-clock time (`now`, `now_ns`), monotonic clocks (`monotonic`, `monotonic_ns`), sleeping (`sleep`), and measuring elapsed time (`elapsed`).
+
+```bash
+cargo run -- run examples/time/main.pluto --stdlib stdlib
+```
+
+## random
+
+Demonstrates the `std.random` module: random integers (`next`, `between`), random floats (`decimal`, `decimal_between`), coin flips (`coin`), and seeded determinism (`seed`).
+
+```bash
+cargo run -- run examples/random/main.pluto --stdlib stdlib
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.

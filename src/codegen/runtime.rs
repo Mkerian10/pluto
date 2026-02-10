@@ -58,6 +58,13 @@ impl RuntimeRegistry {
 
         // Time
         reg.declare(module, "__pluto_time_ns", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_time_wall_ns", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_time_sleep_ns", &[types::I64], &[])?;
+
+        // Random
+        reg.declare(module, "__pluto_random_seed", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_random_int", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_random_float", &[], &[types::F64])?;
 
         // Math builtins
         reg.declare(module, "__pluto_abs_int", &[types::I64], &[types::I64])?;

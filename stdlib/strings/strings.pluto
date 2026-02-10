@@ -68,3 +68,14 @@ pub fn byte_at(s: string, index: int) int {
 pub fn format_float(v: float) string {
     return __pluto_string_format_float(v)
 }
+
+pub fn join(arr: [string], sep: string) string {
+    if arr.len() == 0 {
+        return ""
+    }
+    let result = arr[0]
+    for i in 1..arr.len() {
+        result = result + sep + arr[i]
+    }
+    return result
+}

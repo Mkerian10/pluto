@@ -1176,6 +1176,53 @@ long __pluto_time_ns(void) {
     return (long)ts.tv_sec * 1000000000L + (long)ts.tv_nsec;
 }
 
+long __pluto_time_wall_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (long)ts.tv_sec * 1000000000L + (long)ts.tv_nsec;
+}
+
+void __pluto_time_sleep_ns(long ns) {
+    struct timespec req;
+    req.tv_sec = ns / 1000000000L;
+    req.tv_nsec = ns % 1000000000L;
+    nanosleep(&req, NULL);
+}
+
+// Random — xorshift64*
+static unsigned long long __pluto_rng_state = 0;
+static int __pluto_rng_seeded = 0;
+
+static void __pluto_rng_ensure_seeded(void) {
+    if (!__pluto_rng_seeded) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        __pluto_rng_state = (unsigned long long)ts.tv_sec * 1000000000ULL + (unsigned long long)ts.tv_nsec;
+        if (__pluto_rng_state == 0) __pluto_rng_state = 1;
+        __pluto_rng_seeded = 1;
+    }
+}
+
+void __pluto_random_seed(long seed) {
+    __pluto_rng_state = (unsigned long long)seed;
+    if (__pluto_rng_state == 0) __pluto_rng_state = 1;
+    __pluto_rng_seeded = 1;
+}
+
+long __pluto_random_int(void) {
+    __pluto_rng_ensure_seeded();
+    __pluto_rng_state ^= __pluto_rng_state >> 12;
+    __pluto_rng_state ^= __pluto_rng_state << 25;
+    __pluto_rng_state ^= __pluto_rng_state >> 27;
+    return (long)(__pluto_rng_state * 0x2545F4914F6CDD1DULL);
+}
+
+double __pluto_random_float(void) {
+    long r = __pluto_random_int();
+    unsigned long long u = (unsigned long long)r;
+    return (double)(u >> 11) * (1.0 / (double)(1ULL << 53));
+}
+
 // GC introspection
 long __pluto_gc_heap_size(void) {
     return (long)gc_bytes_allocated;

@@ -80,6 +80,24 @@ fn stdlib_collections() {
 }
 
 #[test]
+fn stdlib_time() {
+    let (stdout, stderr, code) = run_pluto_test_file("time");
+    if code != 0 {
+        panic!("time tests failed (exit {code}):\nstdout: {stdout}\nstderr: {stderr}");
+    }
+    assert!(stdout.contains("tests passed"), "Expected test summary in output:\n{stdout}");
+}
+
+#[test]
+fn stdlib_random() {
+    let (stdout, stderr, code) = run_pluto_test_file("random");
+    if code != 0 {
+        panic!("random tests failed (exit {code}):\nstdout: {stdout}\nstderr: {stderr}");
+    }
+    assert!(stdout.contains("tests passed"), "Expected test summary in output:\n{stdout}");
+}
+
+#[test]
 fn stdlib_json_conformance() {
     let (stdout, stderr, code) = run_pluto_file("json");
     if code != 0 {

@@ -68,3 +68,113 @@ test "clamp above upper bound" {
     expect(math.clamp(15, 0, 10)).to_equal(10)
     expect(math.clamp(100, -10, 10)).to_equal(10)
 }
+
+test "PI constant" {
+    expect(math.PI() > 3.14).to_be_true()
+    expect(math.PI() < 3.15).to_be_true()
+}
+
+test "E constant" {
+    expect(math.E() > 2.71).to_be_true()
+    expect(math.E() < 2.72).to_be_true()
+}
+
+test "TAU constant" {
+    expect(math.TAU() > 6.28).to_be_true()
+    expect(math.TAU() < 6.29).to_be_true()
+}
+
+test "sign positive" {
+    expect(math.sign(5)).to_equal(1)
+    expect(math.sign(1000000)).to_equal(1)
+}
+
+test "sign negative" {
+    expect(math.sign(-5)).to_equal(-1)
+    expect(math.sign(-1)).to_equal(-1)
+}
+
+test "sign zero" {
+    expect(math.sign(0)).to_equal(0)
+}
+
+test "clamp_float within bounds" {
+    expect(math.clamp_float(5.0, 0.0, 10.0) == 5.0).to_be_true()
+}
+
+test "clamp_float below" {
+    expect(math.clamp_float(-1.0, 0.0, 10.0) == 0.0).to_be_true()
+}
+
+test "clamp_float above" {
+    expect(math.clamp_float(15.0, 0.0, 10.0) == 10.0).to_be_true()
+}
+
+test "clamp_float degenerate" {
+    expect(math.clamp_float(0.0, 0.0, 0.0) == 0.0).to_be_true()
+}
+
+test "gcd basic" {
+    expect(math.gcd(12, 8)).to_equal(4)
+    expect(math.gcd(7, 13)).to_equal(1)
+    expect(math.gcd(100, 100)).to_equal(100)
+}
+
+test "gcd with zero" {
+    expect(math.gcd(0, 5)).to_equal(5)
+    expect(math.gcd(5, 0)).to_equal(5)
+    expect(math.gcd(0, 0)).to_equal(0)
+}
+
+test "gcd negative" {
+    expect(math.gcd(-12, 8)).to_equal(4)
+}
+
+test "lcm basic" {
+    expect(math.lcm(4, 6)).to_equal(12)
+    expect(math.lcm(3, 7)).to_equal(21)
+    expect(math.lcm(12, 12)).to_equal(12)
+}
+
+test "lcm with zero" {
+    expect(math.lcm(0, 5)).to_equal(0)
+    expect(math.lcm(5, 0)).to_equal(0)
+}
+
+test "factorial" {
+    expect(math.factorial(0)).to_equal(1)
+    expect(math.factorial(1)).to_equal(1)
+    expect(math.factorial(5)).to_equal(120)
+    expect(math.factorial(10)).to_equal(3628800)
+}
+
+test "is_even" {
+    expect(math.is_even(0)).to_be_true()
+    expect(math.is_even(2)).to_be_true()
+    expect(math.is_even(3)).to_be_false()
+    expect(math.is_even(-4)).to_be_true()
+}
+
+test "is_odd" {
+    expect(math.is_odd(0)).to_be_false()
+    expect(math.is_odd(1)).to_be_true()
+    expect(math.is_odd(2)).to_be_false()
+    expect(math.is_odd(-3)).to_be_true()
+}
+
+test "to_radians" {
+    let r180 = math.to_radians(180.0)
+    expect(r180 > 3.14).to_be_true()
+    expect(r180 < 3.15).to_be_true()
+    expect(math.to_radians(0.0) == 0.0).to_be_true()
+    let r90 = math.to_radians(90.0)
+    expect(r90 > 1.57).to_be_true()
+    expect(r90 < 1.58).to_be_true()
+}
+
+test "to_degrees" {
+    let d = math.to_degrees(math.PI())
+    expect(d > 179.9).to_be_true()
+    expect(d < 180.1).to_be_true()
+    expect(math.to_degrees(0.0) == 0.0).to_be_true()
+}
