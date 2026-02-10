@@ -388,7 +388,11 @@ fn check_scope_stmt(
                 })?;
                 if info.lifecycle != Lifecycle::Scoped {
                     return Err(CompileError::type_err(
-                        format!("scope seed must be a scoped class, but '{name}' has lifecycle '{:?}'", info.lifecycle),
+                        format!(
+                            "scope seed must be a scoped class, but '{name}' has lifecycle '{}'; \
+                             add 'scoped' keyword: scoped class {name} {{ ... }}",
+                            info.lifecycle
+                        ),
                         seed.span,
                     ));
                 }
@@ -486,7 +490,8 @@ fn check_scope_stmt(
             if has_non_injected {
                 return Err(CompileError::type_err(
                     format!(
-                        "scoped class '{class_name}' has non-injected fields and must be provided as a seed"
+                        "scoped class '{class_name}' has non-injected fields and must be provided as a seed; \
+                         provide it as a seed expression: scope({class_name} {{ field: val }}) |...| {{ ... }}"
                     ),
                     span,
                 ));
@@ -559,8 +564,15 @@ fn check_scope_stmt(
     }
 
     if creation_order.len() != classes_to_create.len() {
+        let in_cycle: Vec<String> = classes_to_create.iter()
+            .filter(|c| !creation_order.contains(c))
+            .cloned()
+            .collect();
+        let cycle_str = in_cycle.join(" -> ");
         return Err(CompileError::type_err(
-            "scope block: circular dependency detected among scoped classes".to_string(),
+            format!(
+                "scope block: circular dependency detected among scoped classes: {cycle_str}"
+            ),
             span,
         ));
     }
@@ -584,7 +596,8 @@ fn check_scope_stmt(
                     return Err(CompileError::type_err(
                         format!(
                             "scope block: cannot wire field '{field_name}' of class '{class_name}': \
-                             dependency '{dep_name}' is not available as a seed, singleton, or scoped instance"
+                             dependency '{dep_name}' is not available as a seed, singleton, or scoped instance; \
+                             make '{dep_name}' a seed, or ensure it is a singleton or scoped class in the DI graph"
                         ),
                         span,
                     ));
@@ -605,7 +618,8 @@ fn check_scope_stmt(
         } else {
             return Err(CompileError::type_err(
                 format!(
-                    "scope block: binding type '{binding_class}' is not reachable from seeds"
+                    "scope block: binding type '{binding_class}' is not reachable from seeds; \
+                     add a seed for '{binding_class}' or one of its transitive scoped dependencies"
                 ),
                 span,
             ));

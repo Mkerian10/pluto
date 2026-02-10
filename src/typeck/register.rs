@@ -689,7 +689,11 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
                         .unwrap_or(crate::span::Span { start: 0, end: 0, file_id: 0 })
                 };
                 return Err(CompileError::type_err(
-                    format!("injected dependency '{}' in class '{}' is not a known class", dep, class_name),
+                    format!(
+                        "injected dependency '{}' in class '{}' is not a known class; \
+                         check spelling or ensure '{}' is declared with pub visibility if imported",
+                        dep, class_name, dep
+                    ),
                     span,
                 ));
             }
@@ -807,7 +811,8 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
             if lifecycle_rank(*target_lifecycle) > lifecycle_rank(current) {
                 return Err(CompileError::type_err(
                     format!(
-                        "lifecycle override: cannot lengthen lifecycle of '{}' from {:?} to {:?}",
+                        "lifecycle override: cannot lengthen lifecycle of '{}' from {} to {}; \
+                         overrides can only shorten lifecycle (singleton -> scoped -> transient)",
                         class_name.node, current, *target_lifecycle
                     ),
                     class_name.span,

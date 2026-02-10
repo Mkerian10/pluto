@@ -60,6 +60,16 @@ pub enum Lifecycle {
     Transient,
 }
 
+impl std::fmt::Display for Lifecycle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Lifecycle::Singleton => write!(f, "singleton"),
+            Lifecycle::Scoped => write!(f, "scoped"),
+            Lifecycle::Transient => write!(f, "transient"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassDecl {
     pub id: Uuid,

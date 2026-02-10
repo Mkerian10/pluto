@@ -801,3 +801,64 @@ app MyApp {
 }
 "#, "closure capturing scope binding cannot escape scope block via assignment to outer variable");
 }
+
+// ===== Error message quality tests (Phase 6a) =====
+
+#[test]
+fn error_suggests_scoped_keyword_for_non_scoped_seed() {
+    compile_should_fail_with(r#"
+class Ctx {
+    id: int
+}
+
+app MyApp {
+    fn main(self) {
+        scope(Ctx { id: 1 }) |c: Ctx| {
+            print(c.id)
+        }
+    }
+}
+"#, "add 'scoped' keyword");
+}
+
+#[test]
+fn error_suggests_seed_expression_for_non_auto_constructible() {
+    compile_should_fail_with(r#"
+scoped class Ctx {
+    id: int
+}
+
+scoped class Other {
+    tag: string
+}
+
+app MyApp {
+    fn main(self) {
+        scope(Other { tag: "x" }) |c: Ctx| {
+            print(c.id)
+        }
+    }
+}
+"#, "provide it as a seed expression");
+}
+
+#[test]
+fn error_shows_cycle_class_names_in_di_graph() {
+    // Circular DI dependencies are caught by the global DI graph validation,
+    // which includes class names in the error message
+    compile_should_fail_with(r#"
+scoped class A[b: B] {
+    fn run(self) int { return 1 }
+}
+
+scoped class B[a: A] {
+    fn run(self) int { return 2 }
+}
+
+app MyApp {
+    fn main(self) {
+        print(1)
+    }
+}
+"#, "circular dependency detected:");
+}
