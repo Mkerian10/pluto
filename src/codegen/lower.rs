@@ -374,7 +374,8 @@ impl<'a> LowerContext<'a> {
         match &iter_type {
             PlutoType::Range => self.lower_for_range(var, iterable, body),
             PlutoType::Array(_) => self.lower_for_array(var, iterable, body),
-            _ => Err(CompileError::codegen("for loop requires array or range".to_string())),
+            PlutoType::String => self.lower_for_string(var, iterable, body),
+            _ => Err(CompileError::codegen("for loop requires array, range, or string".to_string())),
         }
     }
 
@@ -529,6 +530,96 @@ impl<'a> LowerContext<'a> {
         self.builder.def_var(loop_var, elem_val);
         self.variables.insert(var.node.clone(), loop_var);
         self.var_types.insert(var.node.clone(), elem_type);
+
+        // Push loop stack: continue goes to increment, break goes to exit
+        self.loop_stack.push((increment_bb, exit_bb));
+        let mut body_terminated = false;
+        for s in &body.node.stmts {
+            self.lower_stmt(&s.node, &mut body_terminated)?;
+        }
+        self.loop_stack.pop();
+
+        // Restore prior variable binding if shadowed
+        if let Some(pv) = prev_var {
+            self.variables.insert(var.node.clone(), pv);
+        } else {
+            self.variables.remove(&var.node);
+        }
+        if let Some(pt) = prev_type {
+            self.var_types.insert(var.node.clone(), pt);
+        } else {
+            self.var_types.remove(&var.node);
+        }
+
+        if !body_terminated {
+            self.builder.ins().jump(increment_bb, &[]);
+        }
+
+        // Increment block
+        self.builder.switch_to_block(increment_bb);
+        self.builder.seal_block(increment_bb);
+        let counter_inc = self.builder.use_var(counter_var);
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let new_counter = self.builder.ins().iadd(counter_inc, one);
+        self.builder.def_var(counter_var, new_counter);
+        self.builder.ins().jump(header_bb, &[]);
+
+        self.builder.seal_block(header_bb);
+        self.builder.switch_to_block(exit_bb);
+        self.builder.seal_block(exit_bb);
+        Ok(())
+    }
+
+    fn lower_for_string(
+        &mut self,
+        var: &crate::span::Spanned<String>,
+        iterable: &crate::span::Spanned<Expr>,
+        body: &crate::span::Spanned<Block>,
+    ) -> Result<(), CompileError> {
+        let handle = self.lower_expr(&iterable.node)?;
+
+        // Get string length
+        let len_val = self.call_runtime("__pluto_string_len", &[handle]);
+
+        // Create counter variable, init to 0
+        let counter_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        self.builder.declare_var(counter_var, types::I64);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.def_var(counter_var, zero);
+
+        // Create blocks
+        let header_bb = self.builder.create_block();
+        let body_bb = self.builder.create_block();
+        let increment_bb = self.builder.create_block();
+        let exit_bb = self.builder.create_block();
+
+        self.builder.ins().jump(header_bb, &[]);
+
+        // Header: check counter < len
+        self.builder.switch_to_block(header_bb);
+        let counter = self.builder.use_var(counter_var);
+        let cond = self.builder.ins().icmp(IntCC::SignedLessThan, counter, len_val);
+        self.builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
+
+        // Body
+        self.builder.switch_to_block(body_bb);
+        self.builder.seal_block(body_bb);
+
+        // Get character: char_at(handle, counter)
+        let counter_for_get = self.builder.use_var(counter_var);
+        let char_val = self.call_runtime("__pluto_string_char_at", &[handle, counter_for_get]);
+
+        // Create loop variable
+        let prev_var = self.variables.get(&var.node).cloned();
+        let prev_type = self.var_types.get(&var.node).cloned();
+
+        let loop_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        self.builder.declare_var(loop_var, types::I64);
+        self.builder.def_var(loop_var, char_val);
+        self.variables.insert(var.node.clone(), loop_var);
+        self.var_types.insert(var.node.clone(), PlutoType::String);
 
         // Push loop stack: continue goes to increment, break goes to exit
         self.loop_stack.push((increment_bb, exit_bb));
@@ -833,6 +924,8 @@ impl<'a> LowerContext<'a> {
                     let key_slot = to_array_slot(idx, &key_ty, &mut self.builder);
                     let raw = self.call_runtime("__pluto_map_get", &[handle, tag, key_slot]);
                     Ok(from_array_slot(raw, &val_ty, &mut self.builder))
+                } else if obj_type == PlutoType::String {
+                    Ok(self.call_runtime("__pluto_string_char_at", &[handle, idx]))
                 } else {
                     Err(CompileError::codegen(format!("index on non-indexable type {obj_type}")))
                 }
@@ -1458,10 +1551,50 @@ impl<'a> LowerContext<'a> {
 
         // String methods
         if obj_type == PlutoType::String {
-            if method.node == "len" {
-                return Ok(self.call_runtime("__pluto_string_len", &[obj_ptr]));
-            }
-            return Err(CompileError::codegen(format!("string has no method '{}'", method.node)));
+            return match method.node.as_str() {
+                "len" => Ok(self.call_runtime("__pluto_string_len", &[obj_ptr])),
+                "contains" => {
+                    let arg = self.lower_expr(&args[0].node)?;
+                    let result = self.call_runtime("__pluto_string_contains", &[obj_ptr, arg]);
+                    Ok(self.builder.ins().ireduce(types::I8, result))
+                }
+                "starts_with" => {
+                    let arg = self.lower_expr(&args[0].node)?;
+                    let result = self.call_runtime("__pluto_string_starts_with", &[obj_ptr, arg]);
+                    Ok(self.builder.ins().ireduce(types::I8, result))
+                }
+                "ends_with" => {
+                    let arg = self.lower_expr(&args[0].node)?;
+                    let result = self.call_runtime("__pluto_string_ends_with", &[obj_ptr, arg]);
+                    Ok(self.builder.ins().ireduce(types::I8, result))
+                }
+                "index_of" => {
+                    let arg = self.lower_expr(&args[0].node)?;
+                    Ok(self.call_runtime("__pluto_string_index_of", &[obj_ptr, arg]))
+                }
+                "substring" => {
+                    let start = self.lower_expr(&args[0].node)?;
+                    let len = self.lower_expr(&args[1].node)?;
+                    Ok(self.call_runtime("__pluto_string_substring", &[obj_ptr, start, len]))
+                }
+                "trim" => Ok(self.call_runtime("__pluto_string_trim", &[obj_ptr])),
+                "to_upper" => Ok(self.call_runtime("__pluto_string_to_upper", &[obj_ptr])),
+                "to_lower" => Ok(self.call_runtime("__pluto_string_to_lower", &[obj_ptr])),
+                "replace" => {
+                    let old = self.lower_expr(&args[0].node)?;
+                    let new = self.lower_expr(&args[1].node)?;
+                    Ok(self.call_runtime("__pluto_string_replace", &[obj_ptr, old, new]))
+                }
+                "split" => {
+                    let delim = self.lower_expr(&args[0].node)?;
+                    Ok(self.call_runtime("__pluto_string_split", &[obj_ptr, delim]))
+                }
+                "char_at" => {
+                    let idx = self.lower_expr(&args[0].node)?;
+                    Ok(self.call_runtime("__pluto_string_char_at", &[obj_ptr, idx]))
+                }
+                _ => Err(CompileError::codegen(format!("string has no method '{}'", method.node))),
+            };
         }
 
         // Trait dynamic dispatch via handle
@@ -1937,6 +2070,8 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 *elem
             } else if let PlutoType::Map(_, v) = obj_type {
                 *v
+            } else if obj_type == PlutoType::String {
+                PlutoType::String
             } else {
                 PlutoType::Void
             }
@@ -1998,8 +2133,14 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                     _ => PlutoType::Void,
                 };
             }
-            if obj_type == PlutoType::String && method.node == "len" {
-                return PlutoType::Int;
+            if obj_type == PlutoType::String {
+                return match method.node.as_str() {
+                    "len" | "index_of" => PlutoType::Int,
+                    "contains" | "starts_with" | "ends_with" => PlutoType::Bool,
+                    "substring" | "trim" | "to_upper" | "to_lower" | "replace" | "char_at" => PlutoType::String,
+                    "split" => PlutoType::Array(Box::new(PlutoType::String)),
+                    _ => PlutoType::Void,
+                };
             }
             if let PlutoType::Trait(trait_name) = &obj_type {
                 if let Some(trait_info) = env.traits.get(trait_name) {

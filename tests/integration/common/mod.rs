@@ -71,6 +71,18 @@ pub fn compile_test_and_run(source: &str) -> (String, String, i32) {
     (stdout, stderr, code)
 }
 
+/// Compile source and run, returning (stdout, stderr, exit_code).
+/// Does NOT assert success — use for testing runtime aborts.
+pub fn compile_and_run_output(source: &str) -> (String, String, i32) {
+    let dir = tempfile::tempdir().unwrap();
+    let bin_path = dir.path().join("test_bin");
+    plutoc::compile(source, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    let output = Command::new(&bin_path).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    (stdout, stderr, output.status.code().unwrap_or(-1))
+}
+
 /// Assert compilation fails in test mode with a specific error message substring.
 pub fn compile_test_should_fail_with(source: &str, expected_msg: &str) {
     match plutoc::compile_to_object_test_mode(source) {

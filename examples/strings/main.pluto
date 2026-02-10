@@ -1,11 +1,38 @@
-fn greet(name: string) string {
-    return "hello " + name
-}
-
 fn main() {
-    let s = "world"
-    let greeting = greet(s)
-    print(greeting)
-    print(greeting.len())
-    print("foo" == "foo")
+    let s = "Hello, World!"
+
+    // Built-in methods
+    print(s.len())
+    print(s.contains("World"))
+    print(s.starts_with("Hello"))
+    print(s.ends_with("!"))
+    print(s.index_of("World"))
+
+    // Transformation
+    print(s.to_upper())
+    print(s.to_lower())
+    print("  spaces  ".trim())
+    print(s.replace("World", "Pluto"))
+    print(s.substring(7, 5))
+
+    // Indexing
+    print(s[0])
+    print(s[s.len() - 1])
+
+    // Splitting
+    let csv = "alice,bob,charlie"
+    let names = csv.split(",")
+    for name in names {
+        print(name)
+    }
+
+    // Iterating over characters
+    let result = ""
+    for c in "abc" {
+        result = result + c + "-"
+    }
+    print(result)
+
+    // Method chaining
+    print("  Hello World  ".trim().to_lower().contains("hello"))
 }

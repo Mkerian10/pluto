@@ -166,9 +166,10 @@ fn check_stmt(
             let elem_type = match iter_type {
                 PlutoType::Array(elem) => *elem,
                 PlutoType::Range => PlutoType::Int,
+                PlutoType::String => PlutoType::String,
                 _ => {
                     return Err(CompileError::type_err(
-                        format!("for loop requires array or range, found {iter_type}"),
+                        format!("for loop requires array, range, or string, found {iter_type}"),
                         iterable.span,
                     ));
                 }

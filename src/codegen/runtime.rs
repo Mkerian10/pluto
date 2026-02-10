@@ -33,6 +33,17 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_string_concat", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_string_eq", &[types::I64, types::I64], &[types::I32])?; // I32 for C ABI
         reg.declare(module, "__pluto_string_len", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_contains", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_starts_with", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_ends_with", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_index_of", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_substring", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_trim", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_to_upper", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_to_lower", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_replace", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_split", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_char_at", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_int_to_string", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_float_to_string", &[types::F64], &[types::I64])?;
         reg.declare(module, "__pluto_bool_to_string", &[types::I32], &[types::I64])?; // I32 for C ABI

@@ -51,6 +51,17 @@ Runtime functions:
 - `__pluto_string_concat(void *a, void *b) -> void *`
 - `__pluto_string_eq(void *a, void *b) -> int` (1 or 0)
 - `__pluto_string_len(void *s) -> long`
+- `__pluto_string_contains(void *s, void *needle) -> long` (1 or 0)
+- `__pluto_string_starts_with(void *s, void *prefix) -> long` (1 or 0)
+- `__pluto_string_ends_with(void *s, void *suffix) -> long` (1 or 0)
+- `__pluto_string_index_of(void *s, void *needle) -> long` (-1 if not found)
+- `__pluto_string_substring(void *s, long start, long len) -> void *`
+- `__pluto_string_trim(void *s) -> void *`
+- `__pluto_string_to_upper(void *s) -> void *`
+- `__pluto_string_to_lower(void *s) -> void *`
+- `__pluto_string_replace(void *s, void *old, void *new) -> void *`
+- `__pluto_string_split(void *s, void *delim) -> void *` (returns array handle)
+- `__pluto_string_char_at(void *s, long index) -> void *` (aborts on OOB)
 
 ## Array Runtime
 
