@@ -84,6 +84,7 @@ Test files: `basics`, `operators`, `control_flow`, `strings`, `arrays`, `classes
 The following branches must NOT be merged into `master` until explicitly authorized by the user. Do not rebase them onto master, do not merge them, do not fast-forward them. They are long-lived feature branches with in-progress work:
 
 - **`ast-uuids`** — Phase 1 of AI-native representation (stable UUIDs on AST nodes). Worktree at `../pluto-ast-uuids`.
+- **`canonical-flip`** — Making `.pluto` binary the canonical source format (AI-native representation). Worktree at `../pluto-canonical-flip`. Long-lived branch — do NOT merge until fully migrated.
 
 ## Git Workflow
 
