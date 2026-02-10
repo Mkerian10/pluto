@@ -131,6 +131,20 @@ pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<
                 ))
             }
         }
+        TypeExpr::Nullable(inner) => {
+            let inner_type = resolve_type(inner, env)?;
+            match &inner_type {
+                PlutoType::Nullable(_) => Err(CompileError::type_err(
+                    "nested nullable types (T??) are not allowed".to_string(),
+                    ty.span,
+                )),
+                PlutoType::Void => Err(CompileError::type_err(
+                    "void? is not allowed".to_string(),
+                    ty.span,
+                )),
+                _ => Ok(PlutoType::Nullable(Box::new(inner_type))),
+            }
+        }
     }
 }
 
@@ -240,6 +254,20 @@ pub(crate) fn resolve_type_with_params(
                 }
             }
         }
+        TypeExpr::Nullable(inner) => {
+            let inner_type = resolve_type_with_params(inner, env, type_param_names)?;
+            match &inner_type {
+                PlutoType::Nullable(_) => Err(CompileError::type_err(
+                    "nested nullable types (T??) are not allowed".to_string(),
+                    ty.span,
+                )),
+                PlutoType::Void => Err(CompileError::type_err(
+                    "void? is not allowed".to_string(),
+                    ty.span,
+                )),
+                _ => Ok(PlutoType::Nullable(Box::new(inner_type))),
+            }
+        }
         _ => resolve_type(ty, env),
     }
 }
@@ -250,7 +278,7 @@ fn contains_type_param(ty: &PlutoType) -> bool {
         PlutoType::Array(inner) => contains_type_param(inner),
         PlutoType::Fn(params, ret) => params.iter().any(contains_type_param) || contains_type_param(ret),
         PlutoType::Map(k, v) => contains_type_param(k) || contains_type_param(v),
-        PlutoType::Set(t) | PlutoType::Task(t) | PlutoType::Sender(t) | PlutoType::Receiver(t) => contains_type_param(t),
+        PlutoType::Set(t) | PlutoType::Task(t) | PlutoType::Sender(t) | PlutoType::Receiver(t) | PlutoType::Nullable(t) => contains_type_param(t),
         PlutoType::GenericInstance(_, _, args) => args.iter().any(contains_type_param),
         _ => false,
     }
@@ -277,6 +305,7 @@ pub(crate) fn substitute_pluto_type(ty: &PlutoType, bindings: &HashMap<String, P
         PlutoType::Task(t) => PlutoType::Task(Box::new(substitute_pluto_type(t, bindings))),
         PlutoType::Sender(t) => PlutoType::Sender(Box::new(substitute_pluto_type(t, bindings))),
         PlutoType::Receiver(t) => PlutoType::Receiver(Box::new(substitute_pluto_type(t, bindings))),
+        PlutoType::Nullable(inner) => PlutoType::Nullable(Box::new(substitute_pluto_type(inner, bindings))),
         PlutoType::GenericInstance(kind, name, args) => {
             let substituted_args: Vec<PlutoType> = args.iter()
                 .map(|a| substitute_pluto_type(a, bindings))
@@ -352,6 +381,13 @@ pub(crate) fn unify(pattern: &PlutoType, concrete: &PlutoType, bindings: &mut Ha
                 false
             }
         }
+        PlutoType::Nullable(p_inner) => {
+            if let PlutoType::Nullable(c_inner) = concrete {
+                unify(p_inner, c_inner, bindings)
+            } else {
+                false
+            }
+        }
         PlutoType::GenericInstance(pk, pn, pargs) => {
             if let PlutoType::GenericInstance(ck, cn, cargs) = concrete {
                 if pk != ck || pn != cn || pargs.len() != cargs.len() { return false; }
@@ -404,6 +440,7 @@ pub(crate) fn resolve_generic_instances(ty: &PlutoType, env: &mut TypeEnv) -> Pl
         PlutoType::Task(t) => PlutoType::Task(Box::new(resolve_generic_instances(t, env))),
         PlutoType::Sender(t) => PlutoType::Sender(Box::new(resolve_generic_instances(t, env))),
         PlutoType::Receiver(t) => PlutoType::Receiver(Box::new(resolve_generic_instances(t, env))),
+        PlutoType::Nullable(inner) => PlutoType::Nullable(Box::new(resolve_generic_instances(inner, env))),
         _ => ty.clone(),
     }
 }

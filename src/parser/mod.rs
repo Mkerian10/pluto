@@ -964,7 +964,7 @@ impl<'a> Parser<'a> {
 
     fn parse_type(&mut self) -> Result<Spanned<TypeExpr>, CompileError> {
         self.skip_newlines();
-        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBracket) {
+        let mut result = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBracket) {
             let open = self.advance().unwrap();
             let start = open.span.start;
             let inner = self.parse_type()?;
@@ -1019,7 +1019,14 @@ impl<'a> Parser<'a> {
             } else {
                 Ok(Spanned::new(TypeExpr::Named(ident.node), ident.span))
             }
+        }?;
+        // Trailing ? makes this a nullable type: T?
+        if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Question) {
+            let q = self.advance().unwrap();
+            let start = result.span.start;
+            result = Spanned::new(TypeExpr::Nullable(Box::new(result)), Span::new(start, q.span.end));
         }
+        Ok(result)
     }
 
     fn parse_block(&mut self) -> Result<Spanned<Block>, CompileError> {
@@ -1827,12 +1834,15 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Postfix ? — reserved for future Option/null handling
+            // Postfix ? — null propagation (unwrap nullable, early-return none)
             if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Question) {
-                return Err(CompileError::syntax(
-                    "? is reserved for future Option/null handling; use ! for error propagation",
-                    self.peek_raw().unwrap().span,
-                ));
+                let q = self.advance().unwrap();
+                let span = Span::new(lhs.span.start, q.span.end);
+                lhs = Spanned::new(
+                    Expr::NullPropagate { expr: Box::new(lhs) },
+                    span,
+                );
+                continue;
             }
 
             // Postfix ! — error propagation (must be on same line via peek_raw)
@@ -2123,11 +2133,9 @@ impl<'a> Parser<'a> {
                     Span::new(start, close.span.end),
                 ))
             }
-            Token::Question => {
-                return Err(CompileError::syntax(
-                    "? is reserved for future Option/null handling; use ! for error propagation",
-                    tok.span,
-                ));
+            Token::None => {
+                let tok = self.advance().unwrap();
+                return Ok(Spanned::new(Expr::NoneLit, tok.span));
             }
             _ => Err(CompileError::syntax(
                 format!("unexpected token {} in expression", tok.node),

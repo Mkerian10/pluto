@@ -1,38 +1,18 @@
 import std.io
 
-fn unwrap_int(opt: Option<int>, fallback: int) int {
-    match opt {
-        Option.Some { value } {
-            return value
-        }
-        Option.None {
-            return fallback
-        }
-    }
-}
-
-fn unwrap_float(opt: Option<float>, fallback: float) float {
-    match opt {
-        Option.Some { value } {
-            return value
-        }
-        Option.None {
-            return fallback
-        }
-    }
-}
-
-fn main() {
+fn main() int? {
     io.print("What is your name? ")
     let name = io.read_line()
     print("Hello, {name}!")
 
     io.print("Enter a number: ")
-    let n = unwrap_int(io.read_line().to_int(), 0)
+    let n = io.read_line().to_int()?
     print("Your number doubled is {n * 2}")
 
     io.print("Enter a temperature in Fahrenheit: ")
-    let f = unwrap_float(io.read_line().to_float(), 0.0)
+    let f = io.read_line().to_float()?
     let celsius = (f - 32.0) * 5.0 / 9.0
     print("That's {celsius} Celsius")
+
+    return none
 }

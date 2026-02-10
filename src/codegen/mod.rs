@@ -764,8 +764,10 @@ fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
                 walk_expr(&start.node, result);
                 walk_expr(&end.node, result);
             }
+            Expr::NullPropagate { expr } => walk_expr(&expr.node, result),
             Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
-            | Expr::StringLit(_) | Expr::Ident(_) | Expr::EnumUnit { .. } => {}
+            | Expr::StringLit(_) | Expr::Ident(_) | Expr::EnumUnit { .. }
+            | Expr::NoneLit => {}
         }
     }
 

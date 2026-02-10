@@ -110,7 +110,7 @@ cargo run -- run examples/collections-lib/main.pluto --stdlib stdlib
 
 ## stdin
 
-Demonstrates interactive I/O with `std.io`: reading input with `io.read_line()`, parsing strings to numbers with `.to_int()` and `.to_float()` (both fallible — use `catch` to handle invalid input), and string interpolation for output.
+Demonstrates interactive I/O with `std.io`: reading input with `io.read_line()`, parsing strings to numbers with `.to_int()` and `.to_float()` (both return nullable types — use `?` to propagate none on invalid input), and string interpolation for output.
 
 ```bash
 echo -e "Alice\n21\n72" | cargo run -- run examples/stdin/main.pluto --stdlib stdlib
@@ -130,6 +130,14 @@ Demonstrates the `std.random` module: random integers (`next`, `between`), rando
 
 ```bash
 cargo run -- run examples/random/main.pluto --stdlib stdlib
+```
+
+## nullable
+
+Demonstrates first-class nullable types: `T?` syntax for nullable types, `none` literal for absent values, `?` postfix operator for null propagation (early-return none), implicit `T` to `T?` coercion, nullable classes, and `to_int()`/`to_float()` string parsing returning nullable types.
+
+```bash
+cargo run -- run examples/nullable/main.pluto
 ```
 
 ## http-api

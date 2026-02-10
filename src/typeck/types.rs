@@ -25,6 +25,7 @@ pub enum PlutoType {
     /// Used during generic function signature registration when the type args include TypeParams.
     /// substitute_pluto_type resolves these to concrete Class/Enum types when all args become concrete.
     GenericInstance(GenericKind, std::string::String, Vec<PlutoType>),
+    Nullable(Box<PlutoType>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -63,6 +64,7 @@ impl std::fmt::Display for PlutoType {
             PlutoType::Bytes => write!(f, "bytes"),
             PlutoType::Sender(inner) => write!(f, "Sender<{inner}>"),
             PlutoType::Receiver(inner) => write!(f, "Receiver<{inner}>"),
+            PlutoType::Nullable(inner) => write!(f, "{inner}?"),
             PlutoType::GenericInstance(_, name, args) => {
                 write!(f, "{name}<")?;
                 for (i, a) in args.iter().enumerate() {

@@ -25,6 +25,7 @@
 
 - [Closures](./advanced/closures.md)
 - [Generics](./advanced/generics.md)
+- [Nullable Types](./advanced/nullable.md)
 - [Error Handling](./advanced/errors.md)
 - [Modules and Imports](./advanced/modules.md)
 - [Maps and Sets](./advanced/collections.md)

@@ -285,6 +285,9 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
                 .map(|a| Spanned::new(pluto_type_to_type_expr(a), Span::new(0, 0)))
                 .collect(),
         },
+        PlutoType::Nullable(inner) => {
+            TypeExpr::Nullable(Box::new(Spanned::new(pluto_type_to_type_expr(inner), Span::new(0, 0))))
+        }
     }
 }
 
@@ -309,6 +312,9 @@ fn substitute_in_type_expr(te: &mut TypeExpr, bindings: &HashMap<String, TypeExp
             for arg in type_args.iter_mut() {
                 substitute_in_type_expr(&mut arg.node, bindings);
             }
+        }
+        TypeExpr::Nullable(inner) => {
+            substitute_in_type_expr(&mut inner.node, bindings);
         }
     }
 }
@@ -463,7 +469,10 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
 fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
     match expr {
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
-        | Expr::StringLit(_) | Expr::Ident(_) => {}
+        | Expr::StringLit(_) | Expr::Ident(_) | Expr::NoneLit => {}
+        Expr::NullPropagate { expr } => {
+            substitute_in_expr(&mut expr.node, bindings);
+        }
         Expr::BinOp { lhs, rhs, .. } => {
             substitute_in_expr(&mut lhs.node, bindings);
             substitute_in_expr(&mut rhs.node, bindings);
@@ -649,6 +658,10 @@ fn offset_type_expr_spans(te: &mut TypeExpr, offset: usize) {
                 offset_type_expr_spans(&mut arg.node, offset);
             }
         }
+        TypeExpr::Nullable(inner) => {
+            offset_spanned(inner, offset);
+            offset_type_expr_spans(&mut inner.node, offset);
+        }
     }
 }
 
@@ -790,7 +803,12 @@ fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
 fn offset_expr_spans(expr: &mut Expr, offset: usize) {
     match expr {
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
-        | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. } => {}
+        | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. }
+        | Expr::NoneLit => {}
+        Expr::NullPropagate { expr } => {
+            offset_spanned(expr, offset);
+            offset_expr_spans(&mut expr.node, offset);
+        }
         Expr::BinOp { lhs, rhs, .. } => {
             offset_spanned(lhs, offset);
             offset_expr_spans(&mut lhs.node, offset);
@@ -1168,8 +1186,12 @@ fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(u
         Expr::Spawn { call } => {
             rewrite_expr(&mut call.node, call.span.start, call.span.end, rewrites);
         }
+        Expr::NullPropagate { expr } => {
+            rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
-        | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. } => {}
+        | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. }
+        | Expr::NoneLit => {}
     }
 }
 
@@ -1369,6 +1391,9 @@ fn resolve_generic_te_in_expr(expr: &mut Expr, env: &mut TypeEnv) -> Result<(), 
         Expr::Spawn { call } => {
             resolve_generic_te_in_expr(&mut call.node, env)?;
         }
+        Expr::NullPropagate { expr } => {
+            resolve_generic_te_in_expr(&mut expr.node, env)?;
+        }
         _ => {}
     }
     Ok(())
@@ -1415,6 +1440,7 @@ fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), Compil
             resolve_generic_te(&mut return_type.node, env)?;
         }
         TypeExpr::Named(_) | TypeExpr::Qualified { .. } => {}
+        TypeExpr::Nullable(inner) => resolve_generic_te(&mut inner.node, env)?,
     }
     Ok(())
 }
@@ -1476,6 +1502,10 @@ fn type_expr_to_pluto_type(te: &TypeExpr, env: &TypeEnv) -> Result<PlutoType, Co
             }
             let mangled = crate::typeck::env::mangle_name(name, &resolved_args);
             Ok(PlutoType::Class(mangled))
+        }
+        TypeExpr::Nullable(inner) => {
+            let inner_type = type_expr_to_pluto_type(&inner.node, env)?;
+            Ok(PlutoType::Nullable(Box::new(inner_type)))
         }
     }
 }

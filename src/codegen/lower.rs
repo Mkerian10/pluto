@@ -145,6 +145,43 @@ impl<'a> LowerContext<'a> {
         }
     }
 
+    /// Box a value type for T → T? coercion. Allocates 8 bytes and stores the value.
+    /// Heap types (string, class, array, etc.) are no-ops since the pointer IS the value.
+    fn emit_nullable_wrap(&mut self, val: Value, inner_type: &PlutoType) -> Value {
+        match inner_type {
+            PlutoType::Int | PlutoType::Byte => {
+                // Widen byte to I64 if needed, then store in 8-byte allocation
+                let store_val = if matches!(inner_type, PlutoType::Byte) {
+                    self.builder.ins().uextend(types::I64, val)
+                } else {
+                    val
+                };
+                let size = self.builder.ins().iconst(types::I64, 8);
+                let ptr = self.call_runtime("__pluto_alloc", &[size]);
+                self.builder.ins().store(MemFlags::new(), store_val, ptr, Offset32::new(0));
+                ptr
+            }
+            PlutoType::Float => {
+                let raw = self.builder.ins().bitcast(types::I64, MemFlags::new(), val);
+                let size = self.builder.ins().iconst(types::I64, 8);
+                let ptr = self.call_runtime("__pluto_alloc", &[size]);
+                self.builder.ins().store(MemFlags::new(), raw, ptr, Offset32::new(0));
+                ptr
+            }
+            PlutoType::Bool => {
+                let widened = self.builder.ins().uextend(types::I64, val);
+                let size = self.builder.ins().iconst(types::I64, 8);
+                let ptr = self.call_runtime("__pluto_alloc", &[size]);
+                self.builder.ins().store(MemFlags::new(), widened, ptr, Offset32::new(0));
+                ptr
+            }
+            _ => {
+                // Heap types: pointer IS the value, no boxing needed
+                val
+            }
+        }
+    }
+
     /// Create a null-terminated string in the data section and return its pointer as a Value.
     fn create_data_str(&mut self, s: &str) -> Result<Value, CompileError> {
         let mut data_desc = DataDescription::new();
@@ -379,10 +416,14 @@ impl<'a> LowerContext<'a> {
                             }
                         } else {
                             // If returning a class where a trait is expected, wrap it
+                            // If returning T where T? is expected, box value types
                             let expected = self.expected_return_type.clone();
                             let final_val = match (&val_type, &expected) {
                                 (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
                                     self.wrap_class_as_trait(val, cn, tn)?
+                                }
+                                (inner, Some(PlutoType::Nullable(expected_inner))) if !matches!(inner, PlutoType::Nullable(_)) && **expected_inner != PlutoType::Void => {
+                                    self.emit_nullable_wrap(val, inner)
                                 }
                                 _ => val,
                             };
@@ -506,12 +547,18 @@ impl<'a> LowerContext<'a> {
         let declared_type = ty.as_ref().map(|t| resolve_type_expr_to_pluto(&t.node, self.env));
 
         // If assigning a class to a trait-typed variable, wrap it
+        // If assigning T to T?, box value types
         let (final_val, store_type) = match (&val_type, &declared_type) {
             (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
                 let cn = cn.clone();
                 let tn = tn.clone();
                 let wrapped = self.wrap_class_as_trait(val, &cn, &tn)?;
                 (wrapped, PlutoType::Trait(tn))
+            }
+            // T → T? coercion: box value types
+            (inner, Some(PlutoType::Nullable(expected_inner))) if !matches!(inner, PlutoType::Nullable(_)) && **expected_inner != PlutoType::Void => {
+                let wrapped = self.emit_nullable_wrap(val, inner);
+                (wrapped, PlutoType::Nullable(expected_inner.clone()))
             }
             (_, Some(dt)) => (val, dt.clone()),
             _ => (val, val_type),
@@ -1473,6 +1520,62 @@ impl<'a> LowerContext<'a> {
             Expr::IntLit(n) => Ok(self.builder.ins().iconst(types::I64, *n)),
             Expr::FloatLit(n) => Ok(self.builder.ins().f64const(*n)),
             Expr::BoolLit(b) => Ok(self.builder.ins().iconst(types::I8, if *b { 1 } else { 0 })),
+            Expr::NoneLit => Ok(self.builder.ins().iconst(types::I64, 0)),
+            Expr::NullPropagate { expr: inner } => {
+                // Lower the inner expression (must be Nullable(T))
+                let val = self.lower_expr(&inner.node)?;
+                let inner_type = infer_type_for_expr(&inner.node, self.env, &self.var_types);
+
+                // Compare with 0 (none)
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let is_none = self.builder.ins().icmp(IntCC::Equal, val, zero);
+
+                let propagate_bb = self.builder.create_block();
+                let continue_bb = self.builder.create_block();
+                self.builder.ins().brif(is_none, propagate_bb, &[], continue_bb, &[]);
+
+                // Propagate block: early-return none (0)
+                self.builder.switch_to_block(propagate_bb);
+                self.builder.seal_block(propagate_bb);
+                let none_val = self.builder.ins().iconst(types::I64, 0);
+                if let Some(exit_bb) = self.exit_block {
+                    self.builder.ins().jump(exit_bb, &[none_val]);
+                } else {
+                    self.builder.ins().return_(&[none_val]);
+                }
+
+                // Continue block: unwrap the value
+                self.builder.switch_to_block(continue_bb);
+                self.builder.seal_block(continue_bb);
+
+                // Unbox value types (int, float, bool stored as boxed pointer)
+                if let PlutoType::Nullable(unwrapped) = &inner_type {
+                    match unwrapped.as_ref() {
+                        PlutoType::Int => {
+                            Ok(self.builder.ins().load(types::I64, MemFlags::new(), val, Offset32::new(0)))
+                        }
+                        PlutoType::Float => {
+                            let raw = self.builder.ins().load(types::I64, MemFlags::new(), val, Offset32::new(0));
+                            Ok(self.builder.ins().bitcast(types::F64, MemFlags::new(), raw))
+                        }
+                        PlutoType::Bool => {
+                            let raw = self.builder.ins().load(types::I64, MemFlags::new(), val, Offset32::new(0));
+                            Ok(self.builder.ins().ireduce(types::I8, raw))
+                        }
+                        PlutoType::Byte => {
+                            let raw = self.builder.ins().load(types::I64, MemFlags::new(), val, Offset32::new(0));
+                            Ok(self.builder.ins().ireduce(types::I8, raw))
+                        }
+                        _ => {
+                            // Heap types (string, class, array, etc.) — pointer IS the value
+                            Ok(val)
+                        }
+                    }
+                } else {
+                    // Shouldn't happen — typeck ensures ? is only on nullable types
+                    Ok(val)
+                }
+            }
             Expr::StringLit(s) => {
                 let raw_ptr = self.create_data_str(s)?;
                 let len_val = self.builder.ins().iconst(types::I64, s.len() as i64);
@@ -2526,7 +2629,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I64, arg_val);
                 self.call_runtime_void("__pluto_print_int", &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes | PlutoType::GenericInstance(_, _, _) => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes | PlutoType::GenericInstance(_, _, _) | PlutoType::Nullable(_) => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -2949,6 +3052,10 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
                 panic!("Generic TypeExpr should not reach codegen — monomorphize should have resolved it")
             }
         }
+        TypeExpr::Nullable(inner) => {
+            let inner_ty = resolve_type_expr_to_pluto(&inner.node, env);
+            PlutoType::Nullable(Box::new(inner_ty))
+        }
     }
 }
 
@@ -2992,6 +3099,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::TypeParam(name) => panic!("ICE: generic type parameter '{name}' reached codegen unresolved"),
         PlutoType::Byte => types::I8,          // unsigned 8-bit value
         PlutoType::Bytes => types::I64,        // pointer to bytes handle
+        PlutoType::Nullable(_) => types::I64,   // pointer (0 = none)
         PlutoType::GenericInstance(_, name, _) => panic!("ICE: generic instance '{name}' reached codegen unresolved"),
     }
 }
@@ -3193,8 +3301,8 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                     "substring" | "trim" | "to_upper" | "to_lower" | "replace" | "char_at" => PlutoType::String,
                     "split" => PlutoType::Array(Box::new(PlutoType::String)),
                     "to_bytes" => PlutoType::Bytes,
-                    "to_int" => PlutoType::Enum("Option__int".to_string()),
-                    "to_float" => PlutoType::Enum("Option__float".to_string()),
+                    "to_int" => PlutoType::Nullable(Box::new(PlutoType::Int)),
+                    "to_float" => PlutoType::Nullable(Box::new(PlutoType::Float)),
                     _ => PlutoType::Void,
                 };
             }
@@ -3241,6 +3349,15 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
         }
         Expr::Range { .. } => PlutoType::Range,
+        Expr::NoneLit => PlutoType::Nullable(Box::new(PlutoType::Void)),
+        Expr::NullPropagate { expr } => {
+            // The result of `expr?` is the inner type if nullable, otherwise same type
+            let inner = infer_type_for_expr(&expr.node, env, var_types);
+            match inner {
+                PlutoType::Nullable(t) => *t,
+                other => other,
+            }
+        }
     }
 }
 

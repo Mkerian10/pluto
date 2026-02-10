@@ -315,9 +315,13 @@ fn lift_in_expr(
             lift_in_expr(&mut start.node, start.span, env, counter, new_fns)?;
             lift_in_expr(&mut end.node, end.span, env, counter, new_fns)?;
         }
+        Expr::NullPropagate { expr: inner } => {
+            lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
+        }
         // Non-capturing expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => {}
+        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. }
+        | Expr::NoneLit => {}
     }
     Ok(())
 }
@@ -363,6 +367,7 @@ fn resolve_type_for_lift(ty: &TypeExpr) -> PlutoType {
                 PlutoType::Class(name.clone())
             }
         }
+        TypeExpr::Nullable(inner) => PlutoType::Nullable(Box::new(resolve_type_for_lift(&inner.node))),
     }
 }
 
@@ -457,5 +462,8 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
                 .map(|a| Spanned::new(pluto_type_to_type_expr(a), Span::new(0, 0)))
                 .collect(),
         },
+        PlutoType::Nullable(inner) => {
+            TypeExpr::Nullable(Box::new(Spanned::new(pluto_type_to_type_expr(inner), Span::new(0, 0))))
+        }
     }
 }

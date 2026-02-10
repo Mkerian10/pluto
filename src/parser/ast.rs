@@ -124,6 +124,7 @@ pub enum TypeExpr {
         name: String,
         type_args: Vec<Spanned<TypeExpr>>,
     },
+    Nullable(Box<Spanned<TypeExpr>>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,6 +303,10 @@ pub enum Expr {
     },
     Spawn {
         call: Box<Spanned<Expr>>,
+    },
+    NoneLit,
+    NullPropagate {
+        expr: Box<Spanned<Expr>>,
     },
 }
 

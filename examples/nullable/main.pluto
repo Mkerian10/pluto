@@ -1,0 +1,85 @@
+// Nullable types: T? represents a value that may be absent (none)
+
+// A function that returns a nullable int
+fn find_positive(x: int) int? {
+    if x > 0 {
+        return x
+    }
+    return none
+}
+
+// The ? operator unwraps a nullable value, early-returning none if absent
+fn double_positive(x: int) int? {
+    let val = find_positive(x)?
+    return val * 2
+}
+
+// Chaining nullable calls
+fn pipeline(x: int) string? {
+    let doubled = double_positive(x)?
+    return "result: {doubled}"
+}
+
+// Nullable works with all types
+fn maybe_greet(name: string?) string? {
+    let n = name?
+    return "Hello, {n}!"
+}
+
+class Point {
+    x: int
+    y: int
+}
+
+fn find_origin() Point? {
+    return Point { x: 0, y: 0 }
+}
+
+fn find_nothing() Point? {
+    return none
+}
+
+// String parsing returns nullable types
+fn parse_and_double(s: string) int? {
+    let n = s.to_int()?
+    return n * 2
+}
+
+fn main() {
+    // Basic nullable usage
+    let a = find_positive(5)
+    let b = find_positive(-3)
+    print("find_positive(5) returned a value")
+    print("find_positive(-3) returned none")
+
+    // ? propagation in action
+    let c = double_positive(5)
+    let d = double_positive(-1)
+    print("double_positive(5) returned a value")
+    print("double_positive(-1) propagated none")
+
+    // Chained nullable calls
+    let e = pipeline(3)
+    let f = pipeline(-1)
+    print("pipeline(3) returned a value")
+    print("pipeline(-1) propagated none")
+
+    // Nullable class instances
+    let p = find_origin()
+    let q = find_nothing()
+    print("find_origin returned a point")
+    print("find_nothing returned none")
+
+    // to_int returns int? — parse valid and invalid strings
+    let valid = parse_and_double("21")
+    let invalid = parse_and_double("abc")
+    print("parse_and_double(21) returned a value")
+    print("parse_and_double(abc) propagated none")
+
+    // T is assignable to T? (implicit wrap)
+    let x: int? = 42
+    let y: int? = none
+    print("int? can hold a value or none")
+
+    print("done")
+}

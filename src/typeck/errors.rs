@@ -389,8 +389,11 @@ fn collect_expr_effects(
             collect_expr_effects(&start.node, direct_errors, edges, current_fn, env);
             collect_expr_effects(&end.node, direct_errors, edges, current_fn, env);
         }
+        Expr::NullPropagate { expr: inner } => {
+            collect_expr_effects(&inner.node, direct_errors, edges, current_fn, env);
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => {}
+        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
     }
 }
 
@@ -723,8 +726,11 @@ fn enforce_expr(
             }
             Ok(())
         }
+        Expr::NullPropagate { expr: inner } => {
+            enforce_expr(&inner.node, inner.span, current_fn, env)
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => Ok(()),
+        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => Ok(()),
     }
 }
 
@@ -758,6 +764,7 @@ fn contains_propagate(expr: &Expr) -> bool {
         Expr::SetLit { elements, .. } => elements.iter().any(|e| contains_propagate(&e.node)),
         Expr::Range { start, end, .. } => contains_propagate(&start.node) || contains_propagate(&end.node),
         Expr::Spawn { call } => contains_propagate(&call.node),
+        Expr::NullPropagate { expr: inner } => contains_propagate(&inner.node),
         _ => false,
     }
 }

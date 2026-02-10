@@ -469,6 +469,7 @@ fn type_expr_eq(a: &TypeExpr, b: &TypeExpr) -> bool {
                 && ta.len() == tb.len()
                 && ta.iter().zip(tb.iter()).all(|(a, b)| type_expr_eq(&a.node, &b.node))
         }
+        (TypeExpr::Nullable(ia), TypeExpr::Nullable(ib)) => type_expr_eq(&ia.node, &ib.node),
         _ => false,
     }
 }
@@ -890,6 +891,9 @@ fn prefix_type_expr(ty: &mut TypeExpr, module_name: &str, module_prog: &Program)
                 prefix_type_expr(&mut arg.node, module_name, module_prog);
             }
         }
+        TypeExpr::Nullable(inner) => {
+            prefix_type_expr(&mut inner.node, module_name, module_prog);
+        }
     }
 }
 
@@ -1122,7 +1126,11 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
         Expr::Spawn { call } => {
             rewrite_expr_for_module(&mut call.node, module_name, module_prog);
         }
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
+        Expr::NullPropagate { expr } => {
+            rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
+        }
+        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
+        | Expr::Ident(_) | Expr::NoneLit => {}
     }
 }
 
@@ -1221,6 +1229,9 @@ fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, import_names: &HashSet<String>)
             for arg in type_args {
                 rewrite_type_expr(arg, import_names);
             }
+        }
+        TypeExpr::Nullable(inner) => {
+            rewrite_type_expr(inner, import_names);
         }
     }
 }
@@ -1437,7 +1448,11 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
         Expr::Spawn { call } => {
             rewrite_expr(&mut call.node, call.span, import_names);
         }
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
+        Expr::NullPropagate { expr } => {
+            rewrite_expr(&mut expr.node, expr.span, import_names);
+        }
+        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
+        | Expr::Ident(_) | Expr::NoneLit => {}
     }
     let _ = span;
 }

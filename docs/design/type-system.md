@@ -171,10 +171,6 @@ class Box<T> {
     }
 }
 
-enum Option<T> {
-    Some { value: T }
-    None
-}
 ```
 
 Usage:
@@ -182,7 +178,6 @@ Usage:
 ```
 let b = Box<int> { value: 42 }
 let s = Box<string> { value: "hello" }
-let n = Option<int>.Some { value: 10 }
 
 // Type arguments inferred on function calls
 let x = identity(42)        // inferred as identity<int>
@@ -227,6 +222,37 @@ Key types for map keys: `int`, `float`, `bool`, `string`, enums (hashable primit
 - **Nominal (default):** Two types with identical fields are NOT interchangeable unless they are the same named type. `APIDatabase` and `AccountsDatabase` are distinct types even if they have the same fields.
 - **Structural (traits):** A class satisfies a trait if it declares `impl Trait` and provides all required methods with matching signatures. The compiler generates vtables for trait dispatch.
 
+## Nullable Types
+
+Nullable types are a first-class concept for representing absent values:
+
+```
+// T? syntax
+let x: int? = 42
+let y: int? = none
+
+// Nullable functions
+fn find_positive(x: int) int? {
+    if x > 0 {
+        return x          // T coerced to T?
+    }
+    return none
+}
+
+// ? operator: unwrap or propagate none
+fn double_positive(x: int) int? {
+    let val = find_positive(x)?
+    return val * 2
+}
+```
+
+Key properties:
+- `T` is assignable to `T?` (implicit coercion); `T?` is NOT assignable to `T` (must use `?` to unwrap)
+- `none` is the absent value (keyword literal)
+- `?` postfix unwraps or early-returns `none` — mirrors `!` for errors
+- No nested nullables (`T??` is rejected)
+- `void?` is rejected
+- String methods `to_int()` and `to_float()` return `int?` and `float?`
+
 ## Not Yet Implemented
 
-- **Option type** — `Option<T>` for absent values, `??` coalesce, `?.` null-safe chain

@@ -299,8 +299,11 @@ fn collect_free_vars_expr(
         Expr::Spawn { call } => {
             collect_free_vars_expr(&call.node, param_names, outer_depth, env, captures, seen);
         }
+        Expr::NullPropagate { expr: inner } => {
+            collect_free_vars_expr(&inner.node, param_names, outer_depth, env, captures, seen);
+        }
         // Literals and other non-capturing expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => {}
+        | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
     }
 }
