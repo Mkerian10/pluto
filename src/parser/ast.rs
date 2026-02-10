@@ -1,8 +1,9 @@
+use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 
 use crate::span::Spanned;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Program {
     pub imports: Vec<Spanned<ImportDecl>>,
     pub functions: Vec<Spanned<Function>>,
@@ -17,7 +18,7 @@ pub struct Program {
     pub fallible_extern_fns: Vec<String>,  // populated by rust_ffi::inject_extern_fns for Result-returning FFI fns
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportDecl {
     pub path: Vec<Spanned<String>>,
     pub alias: Option<Spanned<String>>,
@@ -37,7 +38,7 @@ impl ImportDecl {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExternFnDecl {
     pub name: Spanned<String>,
     pub params: Vec<Param>,
@@ -45,13 +46,13 @@ pub struct ExternFnDecl {
     pub is_pub: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExternRustDecl {
     pub crate_path: Spanned<String>,
     pub alias: Spanned<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassDecl {
     pub id: Uuid,
     pub name: Spanned<String>,
@@ -64,7 +65,7 @@ pub struct ClassDecl {
     pub is_pub: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Field {
     pub id: Uuid,
     pub name: Spanned<String>,
@@ -73,7 +74,7 @@ pub struct Field {
     pub is_ambient: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppDecl {
     pub id: Uuid,
     pub name: Spanned<String>,
@@ -82,7 +83,7 @@ pub struct AppDecl {
     pub methods: Vec<Spanned<Function>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Function {
     pub id: Uuid,
     pub name: Spanned<String>,
@@ -94,14 +95,14 @@ pub struct Function {
     pub is_pub: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Param {
     pub id: Uuid,
     pub name: Spanned<String>,
     pub ty: Spanned<TypeExpr>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeExpr {
     Named(String),
     Array(Box<Spanned<TypeExpr>>),
@@ -116,12 +117,12 @@ pub enum TypeExpr {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     pub stmts: Vec<Spanned<Stmt>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Stmt {
     Let {
         name: Spanned<String>,
@@ -180,19 +181,19 @@ pub enum Stmt {
     Expr(Spanned<Expr>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SelectOp {
     Recv { binding: Spanned<String>, channel: Spanned<Expr> },
     Send { channel: Spanned<Expr>, value: Spanned<Expr> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectArm {
     pub op: SelectOp,
     pub body: Spanned<Block>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Expr {
     IntLit(i64),
     FloatLit(f64),
@@ -286,13 +287,13 @@ pub enum Expr {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StringInterpPart {
     Lit(String),
     Expr(Spanned<Expr>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum BinOp {
     Add,
     Sub,
@@ -314,27 +315,27 @@ pub enum BinOp {
     Shr,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum UnaryOp {
     Neg,
     Not,
     BitNot,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractClause {
     pub kind: ContractKind,
     pub expr: Spanned<Expr>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ContractKind {
     Requires,
     Ensures,
     Invariant,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraitDecl {
     pub id: Uuid,
     pub name: Spanned<String>,
@@ -342,7 +343,7 @@ pub struct TraitDecl {
     pub is_pub: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraitMethod {
     pub id: Uuid,
     pub name: Spanned<String>,
@@ -352,7 +353,7 @@ pub struct TraitMethod {
     pub body: Option<Spanned<Block>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnumDecl {
     pub id: Uuid,
     pub name: Spanned<String>,
@@ -361,7 +362,7 @@ pub struct EnumDecl {
     pub is_pub: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorDecl {
     pub id: Uuid,
     pub name: Spanned<String>,
@@ -369,7 +370,7 @@ pub struct ErrorDecl {
     pub is_pub: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CatchHandler {
     Wildcard {
         var: Spanned<String>,
@@ -378,14 +379,14 @@ pub enum CatchHandler {
     Shorthand(Box<Spanned<Expr>>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnumVariant {
     pub id: Uuid,
     pub name: Spanned<String>,
     pub fields: Vec<Field>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchArm {
     pub enum_name: Spanned<String>,
     pub variant_name: Spanned<String>,
