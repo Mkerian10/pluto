@@ -1805,85 +1805,57 @@ impl<'a> LowerContext<'a> {
         if name.node == "print" {
             return self.lower_print(args);
         }
-        if name.node == "time_ns" {
-            return Ok(self.call_runtime("__pluto_time_ns", &[]));
+        // Table-driven zero-arg builtins
+        const ZERO_ARG_BUILTINS: &[(&str, &str)] = &[
+            ("time_ns", "__pluto_time_ns"),
+            ("gc_heap_size", "__pluto_gc_heap_size"),
+            ("bytes_new", "__pluto_bytes_new"),
+        ];
+        if let Some((_, rt_fn)) = ZERO_ARG_BUILTINS.iter().find(|(n, _)| *n == name.node.as_str()) {
+            return Ok(self.call_runtime(rt_fn, &[]));
         }
-        if name.node == "abs" {
+
+        // Table-driven type-dispatched unary builtins (int/float)
+        const TYPED_UNARY: &[(&str, &str, &str)] = &[
+            ("abs", "__pluto_abs_int", "__pluto_abs_float"),
+        ];
+        if let Some((_, int_fn, float_fn)) = TYPED_UNARY.iter().find(|(n, _, _)| *n == name.node.as_str()) {
             let arg = self.lower_expr(&args[0].node)?;
             let arg_ty = infer_type_for_expr(&args[0].node, self.env, &self.var_types);
             return Ok(match arg_ty {
-                PlutoType::Int => self.call_runtime("__pluto_abs_int", &[arg]),
-                PlutoType::Float => self.call_runtime("__pluto_abs_float", &[arg]),
-                _ => return Err(CompileError::codegen("invalid abs() argument type in lowered AST".to_string())),
+                PlutoType::Int => self.call_runtime(int_fn, &[arg]),
+                PlutoType::Float => self.call_runtime(float_fn, &[arg]),
+                _ => return Err(CompileError::codegen(format!("invalid {}() argument type in lowered AST", name.node))),
             });
         }
-        if name.node == "min" {
+
+        // Table-driven type-dispatched binary builtins (int/float)
+        const TYPED_BINARY: &[(&str, &str, &str)] = &[
+            ("min", "__pluto_min_int", "__pluto_min_float"),
+            ("max", "__pluto_max_int", "__pluto_max_float"),
+            ("pow", "__pluto_pow_int", "__pluto_pow_float"),
+        ];
+        if let Some((_, int_fn, float_fn)) = TYPED_BINARY.iter().find(|(n, _, _)| *n == name.node.as_str()) {
             let a = self.lower_expr(&args[0].node)?;
             let b = self.lower_expr(&args[1].node)?;
             let arg_ty = infer_type_for_expr(&args[0].node, self.env, &self.var_types);
             return Ok(match arg_ty {
-                PlutoType::Int => self.call_runtime("__pluto_min_int", &[a, b]),
-                PlutoType::Float => self.call_runtime("__pluto_min_float", &[a, b]),
-                _ => return Err(CompileError::codegen("invalid min() argument type in lowered AST".to_string())),
+                PlutoType::Int => self.call_runtime(int_fn, &[a, b]),
+                PlutoType::Float => self.call_runtime(float_fn, &[a, b]),
+                _ => return Err(CompileError::codegen(format!("invalid {}() argument type in lowered AST", name.node))),
             });
         }
-        if name.node == "max" {
-            let a = self.lower_expr(&args[0].node)?;
-            let b = self.lower_expr(&args[1].node)?;
-            let arg_ty = infer_type_for_expr(&args[0].node, self.env, &self.var_types);
-            return Ok(match arg_ty {
-                PlutoType::Int => self.call_runtime("__pluto_max_int", &[a, b]),
-                PlutoType::Float => self.call_runtime("__pluto_max_float", &[a, b]),
-                _ => return Err(CompileError::codegen("invalid max() argument type in lowered AST".to_string())),
-            });
-        }
-        if name.node == "pow" {
-            let base = self.lower_expr(&args[0].node)?;
-            let exp = self.lower_expr(&args[1].node)?;
-            let arg_ty = infer_type_for_expr(&args[0].node, self.env, &self.var_types);
-            return Ok(match arg_ty {
-                PlutoType::Int => self.call_runtime("__pluto_pow_int", &[base, exp]),
-                PlutoType::Float => self.call_runtime("__pluto_pow_float", &[base, exp]),
-                _ => return Err(CompileError::codegen("invalid pow() argument type in lowered AST".to_string())),
-            });
-        }
-        if name.node == "sqrt" {
+
+        // Table-driven single-arg float math builtins
+        const MATH_UNARY_FLOAT: &[(&str, &str)] = &[
+            ("sqrt", "__pluto_sqrt"), ("floor", "__pluto_floor"),
+            ("ceil", "__pluto_ceil"), ("round", "__pluto_round"),
+            ("sin", "__pluto_sin"),   ("cos", "__pluto_cos"),
+            ("tan", "__pluto_tan"),   ("log", "__pluto_log"),
+        ];
+        if let Some((_, rt_fn)) = MATH_UNARY_FLOAT.iter().find(|(n, _)| *n == name.node.as_str()) {
             let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_sqrt", &[arg]));
-        }
-        if name.node == "floor" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_floor", &[arg]));
-        }
-        if name.node == "ceil" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_ceil", &[arg]));
-        }
-        if name.node == "round" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_round", &[arg]));
-        }
-        if name.node == "sin" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_sin", &[arg]));
-        }
-        if name.node == "cos" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_cos", &[arg]));
-        }
-        if name.node == "tan" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_tan", &[arg]));
-        }
-        if name.node == "log" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_log", &[arg]));
-        }
-        if name.node == "gc_heap_size" {
-            return Ok(self.call_runtime("__pluto_gc_heap_size", &[]));
-        }
-        if name.node == "bytes_new" {
-            return Ok(self.call_runtime("__pluto_bytes_new", &[]));
+            return Ok(self.call_runtime(rt_fn, &[arg]));
         }
 
         // Check if calling a closure variable

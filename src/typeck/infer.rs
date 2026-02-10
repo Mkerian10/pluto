@@ -403,6 +403,11 @@ fn infer_call(
 
     // Check builtins first
     if env.builtins.contains(&name.node) {
+        // Float unary math builtins: 1 float arg → float
+        const FLOAT_UNARY_BUILTINS: &[&str] = &[
+            "sqrt", "floor", "ceil", "round", "sin", "cos", "tan", "log",
+        ];
+
         return match name.node.as_str() {
             "print" => {
                 if args.len() != 1 {
@@ -423,14 +428,23 @@ fn infer_call(
                 }
                 Ok(PlutoType::Void)
             }
-            "time_ns" => {
+            "time_ns" | "gc_heap_size" => {
                 if !args.is_empty() {
                     return Err(CompileError::type_err(
-                        format!("time_ns() expects 0 arguments, got {}", args.len()),
+                        format!("{}() expects 0 arguments, got {}", name.node, args.len()),
                         span,
                     ));
                 }
                 Ok(PlutoType::Int)
+            }
+            "bytes_new" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("bytes_new() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                Ok(PlutoType::Bytes)
             }
             "abs" => {
                 if args.len() != 1 {
@@ -501,7 +515,7 @@ fn infer_call(
                     )),
                 }
             }
-            "sqrt" | "floor" | "ceil" | "round" | "sin" | "cos" | "tan" | "log" => {
+            n if FLOAT_UNARY_BUILTINS.contains(&n) => {
                 if args.len() != 1 {
                     return Err(CompileError::type_err(
                         format!("{}() expects 1 argument, got {}", name.node, args.len()),
@@ -516,24 +530,6 @@ fn infer_call(
                     ));
                 }
                 Ok(PlutoType::Float)
-            }
-            "gc_heap_size" => {
-                if !args.is_empty() {
-                    return Err(CompileError::type_err(
-                        format!("gc_heap_size() expects 0 arguments, got {}", args.len()),
-                        span,
-                    ));
-                }
-                Ok(PlutoType::Int)
-            }
-            "bytes_new" => {
-                if !args.is_empty() {
-                    return Err(CompileError::type_err(
-                        format!("bytes_new() expects 0 arguments, got {}", args.len()),
-                        span,
-                    ));
-                }
-                Ok(PlutoType::Bytes)
             }
             "expect" => {
                 if args.len() != 1 {
