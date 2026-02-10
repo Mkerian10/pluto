@@ -131,6 +131,9 @@ impl RuntimeRegistry {
         // Contracts
         reg.declare(module, "__pluto_invariant_violation", &[types::I64, types::I64], &[])?;
 
+        // Uncaught error reporting (for main)
+        reg.declare(module, "__pluto_print_uncaught_error", &[], &[])?;
+
         // Test framework
         reg.declare(module, "__pluto_expect_equal_int", &[types::I64, types::I64, types::I64], &[])?;
         reg.declare(module, "__pluto_expect_equal_float", &[types::F64, types::F64, types::I64], &[])?;

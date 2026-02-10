@@ -2855,3 +2855,18 @@ void __pluto_invariant_violation(long class_name, long invariant_desc) {
             (int)name_len, name_data, (int)desc_len, desc_data);
     exit(1);
 }
+
+void __pluto_print_uncaught_error(void) {
+    if (!__pluto_current_error) return;
+    // Error object layout: [message_ptr: i64] at offset 0
+    long *err_obj = (long *)__pluto_current_error;
+    long msg_ptr = err_obj[0];
+    if (msg_ptr) {
+        long *str_ptr = (long *)msg_ptr;
+        long msg_len = str_ptr[0];
+        char *msg_data = (char *)&str_ptr[1];
+        fprintf(stderr, "error: %.*s\n", (int)msg_len, msg_data);
+    } else {
+        fprintf(stderr, "error: (unknown)\n");
+    }
+}

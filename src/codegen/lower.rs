@@ -37,6 +37,8 @@ struct LowerContext<'a> {
     sender_cleanup_vars: Vec<Variable>,
     /// If non-None, all returns jump here for sender cleanup before actual return
     exit_block: Option<cranelift_codegen::ir::Block>,
+    /// True when lowering the program's main function (not a method or app main)
+    is_main: bool,
 }
 
 impl<'a> LowerContext<'a> {
@@ -1490,7 +1492,18 @@ impl<'a> LowerContext<'a> {
                 // Propagate block: return default (error stays in TLS for caller)
                 self.builder.switch_to_block(propagate_bb);
                 self.builder.seal_block(propagate_bb);
-                self.emit_default_return();
+                if self.is_main {
+                    // In main: print the uncaught error to stderr and return 1
+                    self.call_runtime_void("__pluto_print_uncaught_error", &[]);
+                    let one = self.builder.ins().iconst(types::I64, 1);
+                    if let Some(exit_bb) = self.exit_block {
+                        self.builder.ins().jump(exit_bb, &[one]);
+                    } else {
+                        self.builder.ins().return_(&[one]);
+                    }
+                } else {
+                    self.emit_default_return();
+                }
 
                 // Continue block: no error, use the call result
                 self.builder.switch_to_block(continue_bb);
@@ -2519,6 +2532,7 @@ pub fn lower_function(
         loop_stack: Vec::new(),
         sender_cleanup_vars,
         exit_block,
+        is_main,
     };
 
     // Initialize GC at start of non-app main
