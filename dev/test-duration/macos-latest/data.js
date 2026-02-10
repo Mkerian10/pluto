@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770724968067,
+  "lastUpdate": 1770725411326,
   "repoUrl": "https://github.com/Mkerian10/pluto",
   "entries": {
     "Benchmark": [
@@ -86,6 +86,35 @@ window.BENCHMARK_DATA = {
           {
             "name": "cargo_test",
             "value": 185468,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "33331268+Mkerian10@users.noreply.github.com",
+            "name": "Matthew Kerian",
+            "username": "Mkerian10"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "621341e51d88cf1e2141517838ef97ee75f23a58",
+          "message": "Merge pull request #16 from Mkerian10/derived-info-pr\n\nEnrich DerivedInfo with full type data",
+          "timestamp": "2026-02-10T06:07:52-06:00",
+          "tree_id": "ec6460cdb5dc62e2272f97e81dd41b4e11086ac9",
+          "url": "https://github.com/Mkerian10/pluto/commit/621341e51d88cf1e2141517838ef97ee75f23a58"
+        },
+        "date": 1770725410414,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cargo_test",
+            "value": 121247,
             "unit": "ms"
           }
         ]
