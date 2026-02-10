@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770725394980,
+  "lastUpdate": 1770759479509,
   "repoUrl": "https://github.com/Mkerian10/pluto",
   "entries": {
     "Benchmark": [
@@ -115,6 +115,35 @@ window.BENCHMARK_DATA = {
           {
             "name": "cargo_test",
             "value": 111194,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "33331268+Mkerian10@users.noreply.github.com",
+            "name": "Matthew Kerian",
+            "username": "Mkerian10"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "522add0c1daa5074abedfa39db593d2b2309fae2",
+          "message": "Merge pull request #18 from Mkerian10/di-lifecycle-5e\n\nImplement DI lifecycle phase 5e: scope closure escape analysis",
+          "timestamp": "2026-02-10T15:35:38-06:00",
+          "tree_id": "11b7a56c80ccd65b5da4a46ca3d721084fffbf87",
+          "url": "https://github.com/Mkerian10/pluto/commit/522add0c1daa5074abedfa39db593d2b2309fae2"
+        },
+        "date": 1770759479192,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cargo_test",
+            "value": 119080,
             "unit": "ms"
           }
         ]
