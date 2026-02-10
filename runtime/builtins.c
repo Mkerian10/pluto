@@ -2703,3 +2703,20 @@ void __pluto_chan_sender_dec(long handle) {
         __pluto_chan_close(handle);  // last sender -> auto-close
     }
 }
+
+// ── Contracts ──────────────────────────────────────────────
+
+void __pluto_invariant_violation(long class_name, long invariant_desc) {
+    // class_name and invariant_desc are Pluto strings (length-prefixed)
+    long *name_ptr = (long *)class_name;
+    long name_len = name_ptr[0];
+    char *name_data = (char *)&name_ptr[1];
+
+    long *desc_ptr = (long *)invariant_desc;
+    long desc_len = desc_ptr[0];
+    char *desc_data = (char *)&desc_ptr[1];
+
+    fprintf(stderr, "invariant violation on %.*s: %.*s\n",
+            (int)name_len, name_data, (int)desc_len, desc_data);
+    exit(1);
+}

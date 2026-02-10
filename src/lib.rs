@@ -11,6 +11,7 @@ pub mod prelude;
 pub mod ambient;
 pub mod rust_ffi;
 pub mod spawn;
+pub mod contracts;
 pub mod manifest;
 pub mod git_cache;
 
@@ -39,6 +40,7 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
         .map(|(_, fn_name)| fn_name.clone()).collect();
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
+    contracts::validate_contracts(&program)?;
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
@@ -78,6 +80,7 @@ pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError
     ambient::desugar_ambient(&mut program)?;
     spawn::desugar_spawn(&mut program)?;
     // test_info is NOT stripped in test mode
+    contracts::validate_contracts(&program)?;
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
@@ -142,6 +145,7 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
         .map(|(_, fn_name)| fn_name.clone()).collect();
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
+    contracts::validate_contracts(&program)?;
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
@@ -203,6 +207,7 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
     prelude::inject_prelude(&mut program)?;
     ambient::desugar_ambient(&mut program)?;
     spawn::desugar_spawn(&mut program)?;
+    contracts::validate_contracts(&program)?;
     let mut env = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;

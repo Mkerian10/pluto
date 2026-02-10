@@ -24,6 +24,8 @@ struct LowerContext<'a> {
     runtime: &'a RuntimeRegistry,
     vtable_ids: &'a HashMap<(String, String), DataId>,
     source: &'a str,
+    /// Class invariants: class_name → Vec<(expr, description_string)>
+    class_invariants: &'a HashMap<String, Vec<(Expr, String)>>,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
     var_types: HashMap<String, PlutoType>,
@@ -129,6 +131,76 @@ impl<'a> LowerContext<'a> {
 
         let gv = self.module.declare_data_in_func(data_id, self.builder.func);
         Ok(self.builder.ins().global_value(types::I64, gv))
+    }
+
+    /// Emit runtime invariant checks for a class after construction or mutation.
+    /// `class_name` is the class to check, `obj_ptr` is the pointer to the struct.
+    fn emit_invariant_checks(
+        &mut self,
+        class_name: &str,
+        obj_ptr: Value,
+    ) -> Result<(), CompileError> {
+        let invariants = match self.class_invariants.get(class_name) {
+            Some(invs) if !invs.is_empty() => invs.clone(),
+            _ => return Ok(()),
+        };
+
+        // Temporarily bind `self` to obj_ptr so invariant expressions resolve self.field
+        let prev_self_var = self.variables.get("self").cloned();
+        let prev_self_type = self.var_types.get("self").cloned();
+
+        let self_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        self.builder.declare_var(self_var, types::I64);
+        self.builder.def_var(self_var, obj_ptr);
+        self.variables.insert("self".to_string(), self_var);
+        self.var_types.insert("self".to_string(), PlutoType::Class(class_name.to_string()));
+
+        for (inv_expr, inv_desc) in &invariants {
+            let result = self.lower_expr(inv_expr)?;
+
+            // Branch: if result is false (0), call violation handler
+            let violation_bb = self.builder.create_block();
+            let ok_bb = self.builder.create_block();
+
+            self.builder.ins().brif(result, ok_bb, &[], violation_bb, &[]);
+
+            // Violation block: create strings and call __pluto_invariant_violation
+            self.builder.switch_to_block(violation_bb);
+            self.builder.seal_block(violation_bb);
+
+            // Create class name Pluto string
+            let name_raw = self.create_data_str(class_name)?;
+            let name_len = self.builder.ins().iconst(types::I64, class_name.len() as i64);
+            let name_str = self.call_runtime("__pluto_string_new", &[name_raw, name_len]);
+
+            // Create invariant description Pluto string
+            let desc_raw = self.create_data_str(inv_desc)?;
+            let desc_len = self.builder.ins().iconst(types::I64, inv_desc.len() as i64);
+            let desc_str = self.call_runtime("__pluto_string_new", &[desc_raw, desc_len]);
+
+            self.call_runtime_void("__pluto_invariant_violation", &[name_str, desc_str]);
+            // __pluto_invariant_violation calls exit(), but Cranelift needs a terminator
+            self.builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+
+            // OK block: continue
+            self.builder.switch_to_block(ok_bb);
+            self.builder.seal_block(ok_bb);
+        }
+
+        // Restore previous self binding
+        if let Some(pv) = prev_self_var {
+            self.variables.insert("self".to_string(), pv);
+        } else {
+            self.variables.remove("self");
+        }
+        if let Some(pt) = prev_self_type {
+            self.var_types.insert("self".to_string(), pt);
+        } else {
+            self.var_types.remove("self");
+        }
+
+        Ok(())
     }
 
     // ── lower_stmt dispatch ──────────────────────────────────────────────
@@ -1566,6 +1638,9 @@ impl<'a> LowerContext<'a> {
             self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
         }
 
+        // Emit invariant checks after struct construction
+        self.emit_invariant_checks(&name.node, ptr)?;
+
         Ok(ptr)
     }
 
@@ -1982,6 +2057,7 @@ impl<'a> LowerContext<'a> {
                 Ok(results[0])
             }
         } else if let PlutoType::Class(class_name) = &obj_type {
+            let class_name = class_name.clone();
             let mangled = format!("{}_{}", class_name, method.node);
             let func_id = self.func_ids.get(&mangled).ok_or_else(|| {
                 CompileError::codegen(format!("undefined method '{}'", method.node))
@@ -1995,11 +2071,16 @@ impl<'a> LowerContext<'a> {
 
             let call = self.builder.ins().call(func_ref, &arg_values);
             let results = self.builder.inst_results(call);
-            if results.is_empty() {
-                Ok(self.builder.ins().iconst(types::I64, 0))
+            let result = if results.is_empty() {
+                self.builder.ins().iconst(types::I64, 0)
             } else {
-                Ok(results[0])
-            }
+                results[0]
+            };
+
+            // Emit invariant checks after method call (conservative: all methods)
+            self.emit_invariant_checks(&class_name, obj_ptr)?;
+
+            Ok(result)
         } else {
             Err(CompileError::codegen(format!("method call on non-class type {obj_type}")))
         }
@@ -2125,6 +2206,7 @@ pub fn lower_function(
     vtable_ids: &HashMap<(String, String), DataId>,
     source: &str,
     spawn_closure_fns: &HashSet<String>,
+    class_invariants: &HashMap<String, Vec<(Expr, String)>>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -2239,6 +2321,7 @@ pub fn lower_function(
         runtime,
         vtable_ids,
         source,
+        class_invariants,
         variables,
         var_types,
         next_var,
