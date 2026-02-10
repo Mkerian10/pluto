@@ -1,7 +1,7 @@
 pub mod lower;
 pub mod runtime;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cranelift_codegen::ir::immediates::Offset32;
 use cranelift_codegen::ir::{types, AbiParam, InstBuilder, MemFlags, Value};
@@ -175,6 +175,9 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         }
     }
 
+    // Pre-pass: collect spawn closure function names for sender cleanup
+    let spawn_closure_fns = collect_spawn_closure_names(program);
+
     // Pass 2: Define all top-level functions
     for func in &program.functions {
         let f = &func.node;
@@ -187,7 +190,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source)?;
+            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns)?;
         }
 
         module
@@ -210,7 +213,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns)?;
             }
 
             module
@@ -261,7 +264,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns)?;
                             }
 
                             module
@@ -305,7 +308,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns)?;
             }
 
             module
@@ -523,6 +526,142 @@ fn build_signature(func: &Function, module: &impl Module, env: &TypeEnv) -> cran
     }
 
     sig
+}
+
+/// Collect the set of function names that are spawn closure bodies.
+/// These functions need sender_dec cleanup for captured Sender variables.
+fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
+    let mut result = HashSet::new();
+
+    fn walk_expr(expr: &Expr, result: &mut HashSet<String>) {
+        match expr {
+            Expr::Spawn { call } => {
+                if let Expr::ClosureCreate { fn_name, .. } = &call.node {
+                    result.insert(fn_name.clone());
+                }
+                walk_expr(&call.node, result);
+            }
+            Expr::BinOp { lhs, rhs, .. } => {
+                walk_expr(&lhs.node, result);
+                walk_expr(&rhs.node, result);
+            }
+            Expr::UnaryOp { operand, .. } => walk_expr(&operand.node, result),
+            Expr::Call { args, .. } => {
+                for a in args { walk_expr(&a.node, result); }
+            }
+            Expr::MethodCall { object, args, .. } => {
+                walk_expr(&object.node, result);
+                for a in args { walk_expr(&a.node, result); }
+            }
+            Expr::FieldAccess { object, .. } => walk_expr(&object.node, result),
+            Expr::Index { object, index } => {
+                walk_expr(&object.node, result);
+                walk_expr(&index.node, result);
+            }
+            Expr::StructLit { fields, .. } => {
+                for (_, v) in fields { walk_expr(&v.node, result); }
+            }
+            Expr::EnumData { fields, .. } => {
+                for (_, v) in fields { walk_expr(&v.node, result); }
+            }
+            Expr::ArrayLit { elements } => {
+                for e in elements { walk_expr(&e.node, result); }
+            }
+            Expr::SetLit { elements, .. } => {
+                for e in elements { walk_expr(&e.node, result); }
+            }
+            Expr::MapLit { entries, .. } => {
+                for (k, v) in entries { walk_expr(&k.node, result); walk_expr(&v.node, result); }
+            }
+            Expr::StringInterp { parts } => {
+                for p in parts {
+                    if let StringInterpPart::Expr(e) = p { walk_expr(&e.node, result); }
+                }
+            }
+            Expr::Propagate { expr } | Expr::Cast { expr, .. } => walk_expr(&expr.node, result),
+            Expr::Catch { expr, handler } => {
+                walk_expr(&expr.node, result);
+                match handler {
+                    CatchHandler::Wildcard { body, .. } => walk_expr(&body.node, result),
+                    CatchHandler::Shorthand(e) => walk_expr(&e.node, result),
+                }
+            }
+            Expr::Closure { body, .. } => walk_block(&body.node, result),
+            Expr::ClosureCreate { .. } => {}
+            Expr::Range { start, end, .. } => {
+                walk_expr(&start.node, result);
+                walk_expr(&end.node, result);
+            }
+            Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
+            | Expr::StringLit(_) | Expr::Ident(_) | Expr::EnumUnit { .. } => {}
+        }
+    }
+
+    fn walk_stmt(stmt: &Stmt, result: &mut HashSet<String>) {
+        match stmt {
+            Stmt::Let { value, .. } => walk_expr(&value.node, result),
+            Stmt::LetChan { capacity, .. } => {
+                if let Some(cap) = capacity { walk_expr(&cap.node, result); }
+            }
+            Stmt::Return(Some(e)) => walk_expr(&e.node, result),
+            Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
+            Stmt::Assign { value, .. } => walk_expr(&value.node, result),
+            Stmt::FieldAssign { object, value, .. } => {
+                walk_expr(&object.node, result);
+                walk_expr(&value.node, result);
+            }
+            Stmt::IndexAssign { object, index, value } => {
+                walk_expr(&object.node, result);
+                walk_expr(&index.node, result);
+                walk_expr(&value.node, result);
+            }
+            Stmt::If { condition, then_block, else_block } => {
+                walk_expr(&condition.node, result);
+                walk_block(&then_block.node, result);
+                if let Some(eb) = else_block { walk_block(&eb.node, result); }
+            }
+            Stmt::While { condition, body } => {
+                walk_expr(&condition.node, result);
+                walk_block(&body.node, result);
+            }
+            Stmt::For { iterable, body, .. } => {
+                walk_expr(&iterable.node, result);
+                walk_block(&body.node, result);
+            }
+            Stmt::Match { expr, arms } => {
+                walk_expr(&expr.node, result);
+                for arm in arms { walk_block(&arm.body.node, result); }
+            }
+            Stmt::Raise { fields, .. } => {
+                for (_, v) in fields { walk_expr(&v.node, result); }
+            }
+            Stmt::Expr(e) => walk_expr(&e.node, result),
+        }
+    }
+
+    fn walk_block(block: &Block, result: &mut HashSet<String>) {
+        for stmt in &block.stmts { walk_stmt(&stmt.node, result); }
+    }
+
+    fn walk_function(func: &Function, result: &mut HashSet<String>) {
+        walk_block(&func.body.node, result);
+    }
+
+    for func in &program.functions {
+        walk_function(&func.node, &mut result);
+    }
+    for class in &program.classes {
+        for method in &class.node.methods {
+            walk_function(&method.node, &mut result);
+        }
+    }
+    if let Some(app) = &program.app {
+        for method in &app.node.methods {
+            walk_function(&method.node, &mut result);
+        }
+    }
+
+    result
 }
 
 fn build_method_signature(func: &Function, module: &impl Module, class_name: &str, env: &TypeEnv) -> cranelift_codegen::ir::Signature {

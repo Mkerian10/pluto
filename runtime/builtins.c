@@ -2560,8 +2560,8 @@ static void chan_raise_error(const char *msg) {
 
 long __pluto_chan_create(long capacity) {
     long actual_cap = capacity > 0 ? capacity : 1;
-    // field_count=0: slots 0-1 are raw malloc ptrs, 2-6 are ints; GC_TAG_CHANNEL traces buffer
-    long *ch = (long *)gc_alloc(56, GC_TAG_CHANNEL, 0);
+    // field_count=0: slots 0-1 are raw malloc ptrs, 2-7 are ints; GC_TAG_CHANNEL traces buffer
+    long *ch = (long *)gc_alloc(64, GC_TAG_CHANNEL, 0);
 
     ChannelSync *sync = (ChannelSync *)calloc(1, sizeof(ChannelSync));
     pthread_mutex_init(&sync->mutex, NULL);
@@ -2577,6 +2577,7 @@ long __pluto_chan_create(long capacity) {
     ch[4] = 0;  // head
     ch[5] = 0;  // tail
     ch[6] = 0;  // closed
+    ch[7] = 1;  // sender_count (starts at 1 for the initial LetChan sender)
     return (long)ch;
 }
 
@@ -2681,4 +2682,24 @@ void __pluto_chan_close(long handle) {
     pthread_cond_broadcast(&sync->not_empty);
     pthread_cond_broadcast(&sync->not_full);
     pthread_mutex_unlock(&sync->mutex);
+}
+
+void __pluto_chan_sender_inc(long handle) {
+    long *ch = (long *)handle;
+    if (!ch) return;  // null guard for pre-declared vars
+    __atomic_fetch_add(&ch[7], 1, __ATOMIC_SEQ_CST);
+}
+
+void __pluto_chan_sender_dec(long handle) {
+    long *ch = (long *)handle;
+    if (!ch) return;  // null guard for pre-declared vars
+    long old = __atomic_fetch_sub(&ch[7], 1, __ATOMIC_SEQ_CST);
+    if (old <= 0) {
+        // Underflow guard: undo dec, fail safe
+        __atomic_fetch_add(&ch[7], 1, __ATOMIC_SEQ_CST);
+        return;
+    }
+    if (old == 1) {
+        __pluto_chan_close(handle);  // last sender -> auto-close
+    }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::immediates::Offset32;
@@ -31,6 +31,10 @@ struct LowerContext<'a> {
     expected_return_type: Option<PlutoType>,
     /// Stack of (continue_target, break_target) blocks for break/continue
     loop_stack: Vec<(cranelift_codegen::ir::Block, cranelift_codegen::ir::Block)>,
+    /// Variables holding Sender handles that need sender_dec on function exit
+    sender_cleanup_vars: Vec<Variable>,
+    /// If non-None, all returns jump here for sender cleanup before actual return
+    exit_block: Option<cranelift_codegen::ir::Block>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -75,20 +79,36 @@ impl<'a> LowerContext<'a> {
     fn emit_default_return(&mut self) {
         match &self.expected_return_type {
             Some(PlutoType::Void) | None => {
-                self.builder.ins().return_(&[]);
+                if let Some(exit_bb) = self.exit_block {
+                    self.builder.ins().jump(exit_bb, &[]);
+                } else {
+                    self.builder.ins().return_(&[]);
+                }
             }
             Some(PlutoType::Float) => {
                 let val = self.builder.ins().f64const(0.0);
-                self.builder.ins().return_(&[val]);
+                if let Some(exit_bb) = self.exit_block {
+                    self.builder.ins().jump(exit_bb, &[val]);
+                } else {
+                    self.builder.ins().return_(&[val]);
+                }
             }
             Some(PlutoType::Bool) | Some(PlutoType::Byte) => {
                 let val = self.builder.ins().iconst(types::I8, 0);
-                self.builder.ins().return_(&[val]);
+                if let Some(exit_bb) = self.exit_block {
+                    self.builder.ins().jump(exit_bb, &[val]);
+                } else {
+                    self.builder.ins().return_(&[val]);
+                }
             }
             Some(_) => {
                 // Int, String, Class, Array, Enum, Map, Set, Bytes, Error — all I64
                 let val = self.builder.ins().iconst(types::I64, 0);
-                self.builder.ins().return_(&[val]);
+                if let Some(exit_bb) = self.exit_block {
+                    self.builder.ins().jump(exit_bb, &[val]);
+                } else {
+                    self.builder.ins().return_(&[val]);
+                }
             }
         }
     }
@@ -133,7 +153,11 @@ impl<'a> LowerContext<'a> {
                         // If returning a void expression (e.g., spawn closure wrapping a void function),
                         // lower the expr for side effects but emit return_(&[])
                         if val_type == PlutoType::Void {
-                            self.builder.ins().return_(&[]);
+                            if let Some(exit_bb) = self.exit_block {
+                                self.builder.ins().jump(exit_bb, &[]);
+                            } else {
+                                self.builder.ins().return_(&[]);
+                            }
                         } else {
                             // If returning a class where a trait is expected, wrap it
                             let expected = self.expected_return_type.clone();
@@ -143,11 +167,19 @@ impl<'a> LowerContext<'a> {
                                 }
                                 _ => val,
                             };
-                            self.builder.ins().return_(&[final_val]);
+                            if let Some(exit_bb) = self.exit_block {
+                                self.builder.ins().jump(exit_bb, &[final_val]);
+                            } else {
+                                self.builder.ins().return_(&[final_val]);
+                            }
                         }
                     }
                     None => {
-                        self.builder.ins().return_(&[]);
+                        if let Some(exit_bb) = self.exit_block {
+                            self.builder.ins().jump(exit_bb, &[]);
+                        } else {
+                            self.builder.ins().return_(&[]);
+                        }
                     }
                 }
                 *terminated = true;
@@ -291,12 +323,16 @@ impl<'a> LowerContext<'a> {
 
         let elem_ty = resolve_type_expr_to_pluto(&elem_type.node, self.env);
 
-        // Define sender variable
-        let tx_var = Variable::from_u32(self.next_var);
-        self.next_var += 1;
-        self.builder.declare_var(tx_var, types::I64);
-        self.builder.def_var(tx_var, handle);
-        self.variables.insert(sender.node.clone(), tx_var);
+        // Define sender variable — reuse pre-declared cleanup variable if it exists
+        if let Some(&existing_var) = self.variables.get(&sender.node) {
+            self.builder.def_var(existing_var, handle);
+        } else {
+            let tx_var = Variable::from_u32(self.next_var);
+            self.next_var += 1;
+            self.builder.declare_var(tx_var, types::I64);
+            self.builder.def_var(tx_var, handle);
+            self.variables.insert(sender.node.clone(), tx_var);
+        }
         self.var_types.insert(sender.node.clone(), PlutoType::Sender(Box::new(elem_ty.clone())));
 
         // Define receiver variable
@@ -1221,6 +1257,14 @@ impl<'a> LowerContext<'a> {
                 match &call.node {
                     Expr::ClosureCreate { fn_name, captures } => {
                         let closure_ptr = self.lower_closure_create(fn_name, captures)?;
+                        // Inc refcount for each captured Sender
+                        for cap_name in captures {
+                            if let Some(PlutoType::Sender(_)) = self.var_types.get(cap_name) {
+                                let var = self.variables.get(cap_name).unwrap();
+                                let val = self.builder.use_var(*var);
+                                self.call_runtime_void("__pluto_chan_sender_inc", &[val]);
+                            }
+                        }
                         Ok(self.call_runtime("__pluto_task_spawn", &[closure_ptr]))
                     }
                     _ => Err(CompileError::codegen("spawn should contain ClosureCreate after lifting"))
@@ -1719,7 +1763,7 @@ impl<'a> LowerContext<'a> {
                     return Ok(self.builder.ins().iconst(types::I64, 0));
                 }
                 "close" => {
-                    self.call_runtime_void("__pluto_chan_close", &[obj_ptr]);
+                    self.call_runtime_void("__pluto_chan_sender_dec", &[obj_ptr]);
                     return Ok(self.builder.ins().iconst(types::I64, 0));
                 }
                 _ => return Err(CompileError::codegen(format!("Sender has no method '{}'", method.node)))
@@ -2034,6 +2078,41 @@ impl<'a> LowerContext<'a> {
     }
 }
 
+/// Collect sender variable names from LetChan statements in a function body.
+fn collect_sender_var_names(stmts: &[crate::span::Spanned<Stmt>]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = HashSet::new();
+    for stmt in stmts {
+        collect_sender_var_names_stmt(&stmt.node, &mut names, &mut seen);
+    }
+    names
+}
+
+fn collect_sender_var_names_stmt(stmt: &Stmt, names: &mut Vec<String>, seen: &mut HashSet<String>) {
+    match stmt {
+        Stmt::LetChan { sender, .. } => {
+            if seen.insert(sender.node.clone()) {
+                names.push(sender.node.clone());
+            }
+        }
+        Stmt::If { then_block, else_block, .. } => {
+            for s in &then_block.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
+            if let Some(eb) = else_block {
+                for s in &eb.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
+            }
+        }
+        Stmt::While { body, .. } | Stmt::For { body, .. } => {
+            for s in &body.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
+        }
+        Stmt::Match { arms, .. } => {
+            for arm in arms {
+                for s in &arm.body.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Lower a function body into Cranelift IR.
 pub fn lower_function(
     func: &Function,
@@ -2045,6 +2124,7 @@ pub fn lower_function(
     class_name: Option<&str>,
     vtable_ids: &HashMap<(String, String), DataId>,
     source: &str,
+    spawn_closure_fns: &HashSet<String>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -2054,6 +2134,7 @@ pub fn lower_function(
     let mut variables = HashMap::new();
     let mut var_types = HashMap::new();
     let mut next_var = 0u32;
+    let mut sender_cleanup_vars: Vec<Variable> = Vec::new();
 
     // Declare parameters as variables — trait params are now a single I64 handle
     let mut cranelift_param_idx = 0usize;
@@ -2096,6 +2177,30 @@ pub fn lower_function(
             variables.insert(cap_name.clone(), var);
             var_types.insert(cap_name.clone(), cap_type.clone());
         }
+
+        // For spawn closure functions, register captured Sender vars for cleanup
+        if spawn_closure_fns.contains(&func.name.node) {
+            for (cap_name, cap_type) in captures.iter() {
+                if matches!(cap_type, PlutoType::Sender(_)) {
+                    if let Some(&var) = variables.get(cap_name) {
+                        sender_cleanup_vars.push(var);
+                    }
+                }
+            }
+        }
+    }
+
+    // Pre-scan body for LetChan senders and pre-declare cleanup variables
+    let sender_names = collect_sender_var_names(&func.body.node.stmts);
+    let null_val = builder.ins().iconst(types::I64, 0);
+    for name in &sender_names {
+        let var = Variable::from_u32(next_var);
+        next_var += 1;
+        builder.declare_var(var, types::I64);
+        builder.def_var(var, null_val);
+        variables.insert(name.clone(), var);
+        var_types.insert(name.clone(), PlutoType::Sender(Box::new(PlutoType::Void)));
+        sender_cleanup_vars.push(var);
     }
 
     // Compute expected return type for class→trait wrapping in return statements
@@ -2108,6 +2213,20 @@ pub fn lower_function(
             func.name.node.clone()
         };
         env.functions.get(&lookup_name).map(|s| s.return_type.clone())
+    };
+
+    // Create exit block if we have sender cleanup vars
+    let exit_block = if !sender_cleanup_vars.is_empty() {
+        let exit_bb = builder.create_block();
+        // Add return value as block param if function returns non-void
+        let is_void_return = matches!(&expected_return_type, Some(PlutoType::Void) | None);
+        if !is_void_return {
+            let ret_cl_type = pluto_to_cranelift(expected_return_type.as_ref().unwrap());
+            builder.append_block_param(exit_bb, ret_cl_type);
+        }
+        Some(exit_bb)
+    } else {
+        None
     };
 
     // Build context and lower body
@@ -2125,6 +2244,8 @@ pub fn lower_function(
         next_var,
         expected_return_type,
         loop_stack: Vec::new(),
+        sender_cleanup_vars,
+        exit_block,
     };
 
     // Initialize GC at start of non-app main
@@ -2147,7 +2268,11 @@ pub fn lower_function(
     // If main and no explicit return, return 0
     if is_main && !terminated {
         let zero = ctx.builder.ins().iconst(types::I64, 0);
-        ctx.builder.ins().return_(&[zero]);
+        if let Some(exit_bb) = ctx.exit_block {
+            ctx.builder.ins().jump(exit_bb, &[zero]);
+        } else {
+            ctx.builder.ins().return_(&[zero]);
+        }
     } else if !terminated {
         // Void function with no return
         let lookup_name = if let Some(cn) = class_name {
@@ -2157,6 +2282,32 @@ pub fn lower_function(
         };
         let ret_type = ctx.env.functions.get(&lookup_name).map(|s| &s.return_type);
         if ret_type == Some(&PlutoType::Void) {
+            if let Some(exit_bb) = ctx.exit_block {
+                ctx.builder.ins().jump(exit_bb, &[]);
+            } else {
+                ctx.builder.ins().return_(&[]);
+            }
+        }
+    }
+
+    // Emit exit block: sender cleanup + actual return
+    if let Some(exit_bb) = ctx.exit_block {
+        ctx.builder.switch_to_block(exit_bb);
+        ctx.builder.seal_block(exit_bb);
+
+        // Call sender_dec for each cleanup variable
+        let dec_ref = ctx.module.declare_func_in_func(ctx.runtime.get("__pluto_chan_sender_dec"), ctx.builder.func);
+        for &var in &ctx.sender_cleanup_vars {
+            let val = ctx.builder.use_var(var);
+            ctx.builder.ins().call(dec_ref, &[val]);
+        }
+
+        // Emit actual return
+        let is_void_return = matches!(&ctx.expected_return_type, Some(PlutoType::Void) | None);
+        if !is_void_return {
+            let ret_val = ctx.builder.block_params(exit_bb)[0];
+            ctx.builder.ins().return_(&[ret_val]);
+        } else {
             ctx.builder.ins().return_(&[]);
         }
     }

@@ -568,3 +568,152 @@ fn main() {
 "#);
     assert_eq!(out.trim(), "100");
 }
+
+// ── Sender reference counting & auto-close ────────────────────────────────
+
+#[test]
+fn chan_auto_close_basic() {
+    // LetChan in helper fn, return without close -> auto-close on exit
+    let out = compile_and_run_stdout(r#"
+fn helper() int {
+    let (tx, rx) = chan<int>(2)
+    tx.send(42)!
+    let val = rx.recv()!
+    // no tx.close() — sender_dec on function exit auto-closes
+    return val
+}
+
+fn main() {
+    let result = helper() catch 0
+    print(result)
+}
+"#);
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn chan_auto_close_with_spawn() {
+    // spawn producer(tx); tx.close(); for val in rx { ... } — terminates correctly
+    let out = compile_and_run_stdout_timeout(r#"
+fn producer(tx: Sender<int>) {
+    tx.send(1)!
+    tx.send(2)!
+    tx.send(3)!
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(10)
+    spawn producer(tx)
+    tx.close()
+    let sum = 0
+    for val in rx {
+        sum = sum + val
+    }
+    print(sum)
+}
+"#, 5);
+    assert_eq!(out.trim(), "6");
+}
+
+#[test]
+fn chan_multiple_spawn_refs() {
+    // Two spawn worker(tx) calls — channel closes only when both finish
+    let out = compile_and_run_stdout_timeout(r#"
+fn worker(tx: Sender<int>, value: int) {
+    tx.send(value)!
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(10)
+    spawn worker(tx, 10)
+    spawn worker(tx, 20)
+    tx.close()
+    let sum = 0
+    for val in rx {
+        sum = sum + val
+    }
+    print(sum)
+}
+"#, 5);
+    assert_eq!(out.trim(), "30");
+}
+
+#[test]
+fn chan_early_return_before_letchan() {
+    // Pre-declared null safely skipped by null guard in sender_dec
+    let out = compile_and_run_stdout(r#"
+fn maybe_create(flag: bool) int {
+    if flag {
+        return 99
+    }
+    let (tx, rx) = chan<int>(1)
+    tx.send(1)!
+    return rx.recv()!
+}
+
+fn main() {
+    let result = maybe_create(true) catch 0
+    print(result)
+}
+"#);
+    assert_eq!(out.trim(), "99");
+}
+
+#[test]
+fn chan_explicit_close_plus_exit_block() {
+    // tx.close() then function exit — double-dec with underflow guard
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(2)
+    tx.send(42)!
+    tx.close()
+    let val = rx.recv()!
+    print(val)
+}
+"#);
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn chan_non_spawn_closure_capturing_sender() {
+    // Regular closure captures sender, no inc/dec per call, closes at fn exit
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(10)
+    let send_val = (x: int) => { tx.send(x)! }
+    send_val(1)
+    send_val(2)
+    send_val(3)
+    let v1 = rx.recv()!
+    let v2 = rx.recv()!
+    let v3 = rx.recv()!
+    let sum = v1 + v2 + v3
+    print(sum)
+}
+"#);
+    assert_eq!(out.trim(), "6");
+}
+
+#[test]
+fn chan_sender_reassignment_compile_error() {
+    // Reassigning a Sender variable should be a type error
+    compile_should_fail_with(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let (tx2, rx2) = chan<int>(1)
+    tx = tx2
+}
+"#, "cannot reassign channel sender/receiver variable");
+}
+
+#[test]
+fn chan_receiver_reassignment_compile_error() {
+    // Reassigning a Receiver variable should be a type error
+    compile_should_fail_with(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let (tx2, rx2) = chan<int>(1)
+    rx = rx2
+}
+"#, "cannot reassign channel sender/receiver variable");
+}

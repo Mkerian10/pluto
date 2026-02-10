@@ -115,6 +115,12 @@ fn check_stmt(
                     target.span,
                 )
             })?.clone();
+            if matches!(&var_type, PlutoType::Sender(_) | PlutoType::Receiver(_)) {
+                return Err(CompileError::type_err(
+                    "cannot reassign channel sender/receiver variable".to_string(),
+                    target.span,
+                ));
+            }
             let val_type = infer_expr(&value.node, value.span, env)?;
             if !types_compatible(&val_type, &var_type, env) {
                 return Err(CompileError::type_err(
