@@ -129,3 +129,7 @@ path = "tests/integration/channels.rs"
 [[test]]
 name = "manifest"
 path = "tests/integration/manifest.rs"
+
+[[test]]
+name = "contracts"
+path = "tests/integration/contracts.rs"

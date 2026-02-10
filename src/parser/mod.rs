@@ -764,6 +764,7 @@ impl<'a> Parser<'a> {
         while let Some(tok) = self.peek() {
             match &tok.node {
                 Token::Requires => {
+                    self.skip_newlines();
                     let req_tok = self.advance().unwrap();
                     let req_start = req_tok.span.start;
                     let expr = self.parse_expr(0)?;
@@ -775,6 +776,7 @@ impl<'a> Parser<'a> {
                     self.consume_statement_end();
                 }
                 Token::Ensures => {
+                    self.skip_newlines();
                     let ens_tok = self.advance().unwrap();
                     let ens_start = ens_tok.span.start;
                     let expr = self.parse_expr(0)?;
