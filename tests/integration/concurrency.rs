@@ -1,5 +1,6 @@
 mod common;
 use common::*;
+use std::time::{Duration, Instant};
 
 // ── Basic functionality ────────────────────────────────────────────────
 
@@ -432,6 +433,7 @@ fn main() {
 
 // ── Race conditions (demonstrating unsafety without future primitives) ──
 
+#[test]
 #[test]
 fn race_shared_class_field_write() {
     // Two tasks write different values to the same field in a tight loop.
