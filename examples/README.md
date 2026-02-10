@@ -80,6 +80,14 @@ Demonstrates git-based dependencies via `pluto.toml`. A project declares a `stru
 cargo run -- run examples/git-packages/main.pluto
 ```
 
+## contracts
+
+Demonstrates Pluto's contract system: `requires` (preconditions), `ensures` (postconditions), `old()` for capturing values at function entry, the `result` keyword in postconditions, and class `invariant` declarations.
+
+```bash
+cargo run -- run examples/contracts/main.pluto
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.

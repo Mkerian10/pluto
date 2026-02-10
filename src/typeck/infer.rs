@@ -390,6 +390,11 @@ fn infer_call(
     span: crate::span::Span,
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
+    // Handle old() in ensures contracts — old(expr) has the same type as expr
+    if name.node == "old" && args.len() == 1 && env.in_ensures_context {
+        return infer_expr(&args[0].node, args[0].span, env);
+    }
+
     // Check builtins first
     if env.builtins.contains(&name.node) {
         return match name.node.as_str() {

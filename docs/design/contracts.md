@@ -13,7 +13,7 @@ The guiding principle:
 | Contract | Status | Phase |
 |----------|--------|-------|
 | **Invariants** | Implemented (runtime checks) | Phase 1 |
-| **Pre/post conditions** | Parsed, not enforced | Phase 2 |
+| **Pre/post conditions** | Implemented (runtime checks) | Phase 2 |
 | **Interface guarantees** | Not started | Phase 3 |
 | **Failure semantics** | Not started | Phase 4 |
 | **Protocol contracts** | Not started | Phase 5 |
@@ -136,15 +136,15 @@ Invariant processing spans two compiler passes:
 
 ## 2. Pre/Post Conditions
 
-> **Status: Parsed and type-checked, not enforced (Phase 2 target)**
+> **Status: Implemented (Phase 2)** — runtime checks at function entry (requires) and exit (ensures).
 
-Functions and methods can declare `requires` (preconditions) and `ensures` (postconditions) that the compiler propagates through the call graph.
+Functions and methods can declare `requires` (preconditions) and `ensures` (postconditions). Currently enforced via runtime checks; static obligation propagation is planned for Phase 6.
 
 ### Syntax
 
 ```
-fn withdraw(mut self, amount: float) float
-    requires amount > 0.0
+fn withdraw(self, amount: int) int
+    requires amount > 0
     requires self.balance >= amount
     ensures self.balance == old(self.balance) - amount
 {
@@ -160,23 +160,41 @@ Contracts appear between the return type and the opening `{`, one per line. Mult
 In the current release, `requires` and `ensures` clauses are:
 - **Parsed** by the parser (syntax is stable)
 - **Type-checked** as bool expressions in the function's parameter scope
-- **Fragment-validated** against the decidable fragment
-- **Not enforced** — no obligation propagation, no runtime checks
+- **Fragment-validated** against the decidable fragment (with `old()` allowed in ensures)
+- **Runtime-enforced** — `requires` checked at function entry, `ensures` checked at function exit
 
-Writing contracts now is forward-compatible. They will be enforced once the static verifier lands in Phase 2.
+Violations are hard aborts (same as invariants): the program prints a diagnostic to stderr and exits with a non-zero code.
+
+```
+requires violation in withdraw: self.balance >= amount
+ensures violation in deposit: self.balance == old(self.balance) + amount
+```
 
 ### `old()` Expressions
 
-`old(expr)` captures the value of `expr` at function entry. Only valid in `ensures` clauses. The compiler snapshots the referenced values before the function body executes.
+`old(expr)` captures the value of `expr` at function entry. Only valid in `ensures` clauses. The compiler snapshots the referenced values before the function body executes. Only expressions in the decidable fragment are allowed inside `old()`.
 
 ```
 ensures self.balance == old(self.balance) - amount
-ensures result >= 0.0
+ensures result >= 0
 ```
 
-`result` refers to the function's return value in `ensures` clauses.
+`result` refers to the function's return value in `ensures` clauses. It has the function's return type and is only valid in `ensures` (using `result` in `requires` is a compile error). For void functions, `result` is not available.
 
-### Obligation Propagation (Phase 2)
+### Implementation
+
+**Runtime enforcement (current):**
+- `requires` expressions are evaluated at function entry. If any returns false, the program aborts with a diagnostic.
+- `ensures` expressions are evaluated at function exit (all return paths). If any returns false, the program aborts.
+- `old()` values are computed once at function entry and stored as snapshots. They are referenced during ensures evaluation.
+- `result` is bound to the return value and available during ensures evaluation.
+
+**Ensures block pattern:** The compiler creates a single ensures block that all return paths jump to, avoiding code duplication. The return value is passed as a block parameter:
+```
+return expr → ensures_block(val) → exit_block(val) → actual return
+```
+
+### Obligation Propagation (Phase 6)
 
 When function `A` calls function `B`:
 
@@ -187,7 +205,7 @@ The compiler checks this transitively through the entire call graph. If `A` cann
 - Add a matching `requires` to `A` (pushing the obligation to `A`'s callers), or
 - Add a guard (e.g., an `if` check) before the call that makes the precondition provably true.
 
-### Proof Strategy (Phase 2)
+### Proof Strategy (Phase 6)
 
 The compiler uses a lightweight abstract interpretation pass:
 
@@ -382,14 +400,14 @@ trait PaymentGateway {
 
 ## Verification Pipeline
 
-The contract checker runs as part of the compiler pipeline. In Phase 1, it spans two existing passes:
+The contract checker runs as part of the compiler pipeline. After Phase 2, it spans typeck, validation, and codegen:
 
 **Current pipeline:**
 ```
 lex → parse → modules → flatten → prelude → ambient → typeck* → validate_contracts → monomorphize → closures → codegen* → link
                                                          ↑                                                        ↑
-                                              invariant expressions                                    invariant runtime
-                                              type-checked here                                        checks emitted here
+                                              invariant + requires/ensures                             invariant, requires, ensures
+                                              expressions type-checked here                            runtime checks emitted here
 ```
 
 **Future pipeline (with full verifier):**
@@ -475,22 +493,23 @@ Runtime-checked class invariants. The foundation — exercises the full pipeline
 
 **Key files:** `src/contracts.rs`, `src/lexer/token.rs`, `src/parser/ast.rs`, `src/parser/mod.rs`, `src/typeck/register.rs`, `src/codegen/lower.rs`, `runtime/builtins.c`
 
-### Phase 2: Pre/Post Condition Enforcement
+### Phase 2: Pre/Post Condition Runtime Enforcement (Done)
 
-Static obligation propagation for `requires`/`ensures`. The core of the contract verifier — proves callers satisfy callees' preconditions at compile time.
+Runtime enforcement of `requires`/`ensures` contracts. Functions and methods with contracts get runtime checks at entry and exit.
 
-**Scope:**
-- Abstract interpretation pass tracking constraints at each program point
-- Constraint entailment checking (does the current constraint set imply the callee's requires?)
-- `ensures` assumption after calls
-- `old()` expression support (snapshot values at function entry)
-- `result` keyword in ensures clauses
-- Compile errors when obligations cannot be proven
-- Guidance in error messages ("add a requires clause" or "add an if guard")
+**Delivered:**
+- Type-checking of `requires`/`ensures` expressions in function parameter scope
+- `old(expr)` support in ensures — snapshots values at function entry
+- `result` keyword in ensures — refers to return value
+- Decidable fragment validation extended for `old()` (ensures only)
+- Runtime `requires` checks at function entry (hard abort on violation)
+- Runtime `ensures` checks at function exit, all return paths (hard abort on violation)
+- `__pluto_requires_violation` and `__pluto_ensures_violation` runtime functions
+- Ensures block pattern: single block for all return paths, return value as block param
+- Works on: free functions, class methods, app methods, trait default methods
+- 25 integration tests (54 total contract tests)
 
-**Dependencies:** None beyond Phase 1.
-
-**Estimated complexity:** High. Abstract interpretation over the decidable fragment, constraint tracking through control flow (if/else branches, loops), handling of field access chains.
+**Key files:** `src/contracts.rs`, `src/typeck/register.rs`, `src/typeck/infer.rs`, `src/codegen/lower.rs`, `src/codegen/mod.rs`, `runtime/builtins.c`
 
 ### Phase 3: Interface Guarantees
 
@@ -563,7 +582,7 @@ Replace runtime invariant checks with compile-time proofs where possible. Runtim
 - [ ] **Contract inheritance on generic types** — how do invariants interact with generics? Does `Box<T>` inherit T's invariants?
 - [ ] **Quantifiers** — should a future version support bounded quantifiers (`forall item in self.items: item.price > 0`)?
 - [ ] **Contract testing** — should there be a `@test` mode that inserts runtime assertions for all contracts (for debugging)?
-- [ ] **`old()` implementation** — what values can `old()` capture? Deep clone for heap types? Shallow for primitives?
+- [x] **`old()` implementation** — implemented in Phase 2. Captures by value (Cranelift Variable snapshot at function entry). For heap types (strings, arrays), captures the pointer — shallow snapshot. Deep clone for heap types is a future consideration.
 - [ ] **Protocol composition** — can protocols be composed or extended?
 - [ ] **`@assume` scope** — should `@assume` apply to a single call, a block, or an entire function?
 - [ ] **Gradual adoption** — should contracts be opt-in per module, or always enforced?

@@ -8,6 +8,93 @@ use super::env::{self, ClassInfo, EnumInfo, ErrorInfo, FuncSig, GenericClassInfo
 use super::types::PlutoType;
 use super::resolve::{resolve_type, resolve_type_with_params};
 use super::check::check_function;
+use crate::parser::ast::ContractKind;
+
+/// Type-check requires/ensures contracts on a function or method.
+/// For requires: push scope with params, infer each expr, assert bool.
+/// For ensures: additionally define `result` bound to return type (if non-void).
+/// For ensures: `old(expr)` is handled by infer_expr returning same type as inner expr.
+fn check_function_contracts(
+    func: &Function,
+    env: &mut TypeEnv,
+    class_name: Option<&str>,
+) -> Result<(), CompileError> {
+    if func.contracts.is_empty() {
+        return Ok(());
+    }
+
+    let return_type = match &func.return_type {
+        Some(rt) => resolve_type(rt, env)?,
+        None => PlutoType::Void,
+    };
+
+    // Check requires clauses
+    let has_requires = func.contracts.iter().any(|c| c.node.kind == ContractKind::Requires);
+    if has_requires {
+        env.push_scope();
+        // Define params (including self for methods)
+        for p in &func.params {
+            if p.name.node == "self" {
+                if let Some(cn) = class_name {
+                    env.define("self".to_string(), PlutoType::Class(cn.to_string()));
+                }
+            } else {
+                let ty = resolve_type(&p.ty, env)?;
+                env.define(p.name.node.clone(), ty);
+            }
+        }
+        for contract in &func.contracts {
+            if contract.node.kind == ContractKind::Requires {
+                let ty = super::infer::infer_expr(&contract.node.expr.node, contract.node.expr.span, env)?;
+                if ty != PlutoType::Bool {
+                    return Err(CompileError::type_err(
+                        format!("requires expression must be bool, found {ty}"),
+                        contract.node.expr.span,
+                    ));
+                }
+            }
+        }
+        env.pop_scope();
+    }
+
+    // Check ensures clauses
+    let has_ensures = func.contracts.iter().any(|c| c.node.kind == ContractKind::Ensures);
+    if has_ensures {
+        env.push_scope();
+        // Define params (including self for methods)
+        for p in &func.params {
+            if p.name.node == "self" {
+                if let Some(cn) = class_name {
+                    env.define("self".to_string(), PlutoType::Class(cn.to_string()));
+                }
+            } else {
+                let ty = resolve_type(&p.ty, env)?;
+                env.define(p.name.node.clone(), ty);
+            }
+        }
+        // Define `result` if return type is non-void
+        if return_type != PlutoType::Void {
+            env.define("result".to_string(), return_type);
+        }
+        // Enable old() type inference
+        env.in_ensures_context = true;
+        for contract in &func.contracts {
+            if contract.node.kind == ContractKind::Ensures {
+                let ty = super::infer::infer_expr(&contract.node.expr.node, contract.node.expr.span, env)?;
+                if ty != PlutoType::Bool {
+                    return Err(CompileError::type_err(
+                        format!("ensures expression must be bool, found {ty}"),
+                        contract.node.expr.span,
+                    ));
+                }
+            }
+        }
+        env.in_ensures_context = false;
+        env.pop_scope();
+    }
+
+    Ok(())
+}
 
 pub(crate) fn register_traits(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     for trait_decl in &program.traits {
@@ -742,18 +829,20 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
 }
 
 pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
-    // Check function bodies
+    // Check function bodies and contracts
     for func in &program.functions {
         if !func.node.type_params.is_empty() { continue; } // Skip generic functions
         check_function(&func.node, env, None)?;
+        check_function_contracts(&func.node, env, None)?;
     }
 
-    // Check method bodies
+    // Check method bodies and contracts
     for class in &program.classes {
         let c = &class.node;
         if !c.type_params.is_empty() { continue; } // Skip generic classes
         for method in &c.methods {
             check_function(&method.node, env, Some(&c.name.node))?;
+            check_function_contracts(&method.node, env, Some(&c.name.node))?;
         }
         // Type-check class invariants
         if !c.invariants.is_empty() {
@@ -806,12 +895,13 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
         }
     }
 
-    // Type-check app method bodies
+    // Type-check app method bodies and contracts
     if let Some(app_spanned) = &program.app {
         let app = &app_spanned.node;
         let app_name = &app.name.node;
         for method in &app.methods {
             check_function(&method.node, env, Some(app_name))?;
+            check_function_contracts(&method.node, env, Some(app_name))?;
         }
     }
     Ok(())

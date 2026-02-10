@@ -17,7 +17,7 @@ use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::typeck::env::TypeEnv;
 use crate::typeck::types::PlutoType;
-use lower::{lower_function, pluto_to_cranelift, resolve_type_expr_to_pluto, POINTER_SIZE};
+use lower::{lower_function, pluto_to_cranelift, resolve_type_expr_to_pluto, FnContracts, POINTER_SIZE};
 use runtime::RuntimeRegistry;
 
 fn host_target_triple() -> Result<&'static str, CompileError> {
@@ -193,6 +193,95 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         })
         .collect();
 
+    // Build function contracts map for codegen
+    let mut fn_contracts: HashMap<String, FnContracts> = HashMap::new();
+    for func in &program.functions {
+        let f = &func.node;
+        if !f.contracts.is_empty() {
+            let requires: Vec<(Expr, String)> = f.contracts.iter()
+                .filter(|c| c.node.kind == ContractKind::Requires)
+                .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                .collect();
+            let ensures: Vec<(Expr, String)> = f.contracts.iter()
+                .filter(|c| c.node.kind == ContractKind::Ensures)
+                .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                .collect();
+            if !requires.is_empty() || !ensures.is_empty() {
+                fn_contracts.insert(f.name.node.clone(), FnContracts { requires, ensures });
+            }
+        }
+    }
+    for class in &program.classes {
+        let c = &class.node;
+        for method in &c.methods {
+            let m = &method.node;
+            if !m.contracts.is_empty() {
+                let mangled = format!("{}_{}", c.name.node, m.name.node);
+                let requires: Vec<(Expr, String)> = m.contracts.iter()
+                    .filter(|c| c.node.kind == ContractKind::Requires)
+                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                    .collect();
+                let ensures: Vec<(Expr, String)> = m.contracts.iter()
+                    .filter(|c| c.node.kind == ContractKind::Ensures)
+                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                    .collect();
+                if !requires.is_empty() || !ensures.is_empty() {
+                    fn_contracts.insert(mangled, FnContracts { requires, ensures });
+                }
+            }
+        }
+    }
+    if let Some(app_spanned) = &program.app {
+        let app = &app_spanned.node;
+        for method in &app.methods {
+            let m = &method.node;
+            if !m.contracts.is_empty() {
+                let mangled = format!("{}_{}", app.name.node, m.name.node);
+                let requires: Vec<(Expr, String)> = m.contracts.iter()
+                    .filter(|c| c.node.kind == ContractKind::Requires)
+                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                    .collect();
+                let ensures: Vec<(Expr, String)> = m.contracts.iter()
+                    .filter(|c| c.node.kind == ContractKind::Ensures)
+                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                    .collect();
+                if !requires.is_empty() || !ensures.is_empty() {
+                    fn_contracts.insert(mangled, FnContracts { requires, ensures });
+                }
+            }
+        }
+    }
+    // Trait default methods
+    for class in &program.classes {
+        let c = &class.node;
+        let class_method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
+        for trait_name_spanned in &c.impl_traits {
+            let trait_name = &trait_name_spanned.node;
+            for trait_decl in &program.traits {
+                if trait_decl.node.name.node == *trait_name {
+                    for trait_method in &trait_decl.node.methods {
+                        if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node) {
+                            if !trait_method.contracts.is_empty() {
+                                let mangled = format!("{}_{}", c.name.node, trait_method.name.node);
+                                let requires: Vec<(Expr, String)> = trait_method.contracts.iter()
+                                    .filter(|c| c.node.kind == ContractKind::Requires)
+                                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                                    .collect();
+                                let ensures: Vec<(Expr, String)> = trait_method.contracts.iter()
+                                    .filter(|c| c.node.kind == ContractKind::Ensures)
+                                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                                    .collect();
+                                if !requires.is_empty() || !ensures.is_empty() {
+                                    fn_contracts.insert(mangled, FnContracts { requires, ensures });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Pass 2: Define all top-level functions
     for func in &program.functions {
         let f = &func.node;
@@ -205,7 +294,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants)?;
+            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts)?;
         }
 
         module
@@ -228,7 +317,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts)?;
             }
 
             module
@@ -281,7 +370,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts)?;
                             }
 
                             module
@@ -325,7 +414,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts)?;
             }
 
             module
@@ -720,7 +809,7 @@ fn build_method_signature(func: &Function, module: &impl Module, class_name: &st
 }
 
 /// Format an invariant expression as a human-readable string for error messages.
-fn format_invariant_expr(expr: &Expr) -> String {
+pub(super) fn format_invariant_expr(expr: &Expr) -> String {
     match expr {
         Expr::IntLit(n) => n.to_string(),
         Expr::FloatLit(f) => f.to_string(),
@@ -752,6 +841,9 @@ fn format_invariant_expr(expr: &Expr) -> String {
                 UnaryOp::BitNot => "~",
             };
             format!("{}{}", op_str, format_invariant_expr(&operand.node))
+        }
+        Expr::Call { name, args } if name.node == "old" && args.len() == 1 => {
+            format!("old({})", format_invariant_expr(&args[0].node))
         }
         _ => "<contract>".to_string(),
     }

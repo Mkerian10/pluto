@@ -2855,3 +2855,31 @@ void __pluto_invariant_violation(long class_name, long invariant_desc) {
             (int)name_len, name_data, (int)desc_len, desc_data);
     exit(1);
 }
+
+void __pluto_requires_violation(long fn_name, long contract_desc) {
+    long *name_ptr = (long *)fn_name;
+    long name_len = name_ptr[0];
+    char *name_data = (char *)&name_ptr[1];
+
+    long *desc_ptr = (long *)contract_desc;
+    long desc_len = desc_ptr[0];
+    char *desc_data = (char *)&desc_ptr[1];
+
+    fprintf(stderr, "requires violation in %.*s: %.*s\n",
+            (int)name_len, name_data, (int)desc_len, desc_data);
+    exit(1);
+}
+
+void __pluto_ensures_violation(long fn_name, long contract_desc) {
+    long *name_ptr = (long *)fn_name;
+    long name_len = name_ptr[0];
+    char *name_data = (char *)&name_ptr[1];
+
+    long *desc_ptr = (long *)contract_desc;
+    long desc_len = desc_ptr[0];
+    char *desc_data = (char *)&desc_ptr[1];
+
+    fprintf(stderr, "ensures violation in %.*s: %.*s\n",
+            (int)name_len, name_data, (int)desc_len, desc_data);
+    exit(1);
+}

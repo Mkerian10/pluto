@@ -128,6 +128,8 @@ pub struct TypeEnv {
     pub invalidated_task_vars: HashSet<String>,
     /// Closure span → return type (set during typeck, used during closure lifting)
     pub closure_return_types: HashMap<(usize, usize), PlutoType>,
+    /// Whether we are currently type-checking an ensures clause (allows old() calls)
+    pub in_ensures_context: bool,
 }
 
 impl TypeEnv {
@@ -178,6 +180,7 @@ impl TypeEnv {
             task_spawn_scopes: vec![HashMap::new()],
             invalidated_task_vars: HashSet::new(),
             closure_return_types: HashMap::new(),
+            in_ensures_context: false,
         }
     }
 
