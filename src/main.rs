@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "plutoc", about = "The Pluto compiler")]
+#[command(name = "plutoc", version, about = "The Pluto compiler")]
 struct Cli {
     /// Path to stdlib root directory
     #[arg(long, global = true)]
