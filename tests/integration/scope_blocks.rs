@@ -596,3 +596,40 @@ fn main() {
 "#);
     assert_eq!(output.trim(), "42");
 }
+
+// === Phase 5d: Scope with app-overridden class ===
+
+#[test]
+fn scope_with_app_overridden_class() {
+    // End-to-end: override class to scoped in app + use in scope block
+    let output = compile_and_run_stdout(r#"
+class Database {
+    url: string
+
+    fn query(self) string {
+        return self.url
+    }
+}
+
+scoped class RequestCtx {
+    id: string
+}
+
+scoped class Service[db: Database, ctx: RequestCtx] {
+    fn run(self) string {
+        return self.db.query()
+    }
+}
+
+app MyApp {
+    scoped Database
+
+    fn main(self) {
+        scope(RequestCtx { id: "r1" }, Database { url: "pg://db" }) |svc: Service| {
+            print(svc.run())
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "pg://db");
+}

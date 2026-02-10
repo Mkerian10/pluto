@@ -567,13 +567,24 @@ impl<'a> Parser<'a> {
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
-        // Parse ambient declarations and methods
+        // Parse ambient declarations, lifecycle overrides, and methods
         let mut ambient_types = Vec::new();
+        let mut lifecycle_overrides = Vec::new();
         let mut methods = Vec::new();
         while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
             if matches!(self.peek().expect("token should exist after is_some check").node, Token::Ambient) {
                 self.advance(); // consume 'ambient'
                 ambient_types.push(self.expect_ident()?);
+                self.consume_statement_end();
+            } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Scoped) {
+                self.advance(); // consume 'scoped'
+                let class_name = self.expect_ident()?;
+                lifecycle_overrides.push((class_name, Lifecycle::Scoped));
+                self.consume_statement_end();
+            } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Transient) {
+                self.advance(); // consume 'transient'
+                let class_name = self.expect_ident()?;
+                lifecycle_overrides.push((class_name, Lifecycle::Transient));
                 self.consume_statement_end();
             } else {
                 methods.push(self.parse_method()?);
@@ -584,7 +595,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(AppDecl { id: Uuid::new_v4(), name, inject_fields, ambient_types, methods }, Span::new(start, end)))
+        Ok(Spanned::new(AppDecl { id: Uuid::new_v4(), name, inject_fields, ambient_types, lifecycle_overrides, methods }, Span::new(start, end)))
     }
 
     fn parse_enum_decl(&mut self) -> Result<Spanned<EnumDecl>, CompileError> {

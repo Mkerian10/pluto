@@ -783,6 +783,88 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
             .filter(|n| Some(n) != app_name_opt.as_ref())
             .collect();
     }
+
+    // Apply app-level lifecycle overrides (runs even if no DI classes in graph)
+    if let Some(app_spanned) = &program.app {
+        for (class_name, target_lifecycle) in &app_spanned.node.lifecycle_overrides {
+            // Verify class exists
+            let class_info = env.classes.get(&class_name.node).ok_or_else(|| {
+                CompileError::type_err(
+                    format!("lifecycle override: unknown class '{}'", class_name.node),
+                    class_name.span,
+                )
+            })?;
+
+            // Verify shortening only (Singleton→Scoped OK, Scoped→Transient OK; reverse is error)
+            let current = class_info.lifecycle;
+            let lifecycle_rank = |l: Lifecycle| -> u8 {
+                match l {
+                    Lifecycle::Transient => 0,
+                    Lifecycle::Scoped => 1,
+                    Lifecycle::Singleton => 2,
+                }
+            };
+            if lifecycle_rank(*target_lifecycle) > lifecycle_rank(current) {
+                return Err(CompileError::type_err(
+                    format!(
+                        "lifecycle override: cannot lengthen lifecycle of '{}' from {:?} to {:?}",
+                        class_name.node, current, *target_lifecycle
+                    ),
+                    class_name.span,
+                ));
+            }
+
+            // Apply the override
+            if let Some(info) = env.classes.get_mut(&class_name.node) {
+                info.lifecycle = *target_lifecycle;
+            }
+            env.lifecycle_overridden.insert(class_name.node.clone());
+        }
+
+        // Re-run lifecycle inference to propagate overrides to dependents
+        let di_order_snapshot = env.di_order.clone();
+        for class_name in &di_order_snapshot {
+            if let Some(class_info) = env.classes.get(class_name) {
+                let deps: Vec<String> = class_info.fields.iter()
+                    .filter(|(_, _, inj)| *inj)
+                    .filter_map(|(_, ty, _)| {
+                        if let PlutoType::Class(name) = ty { Some(name.clone()) } else { None }
+                    })
+                    .collect();
+                let mut inferred = class_info.lifecycle;
+                for dep_name in &deps {
+                    if let Some(dep_info) = env.classes.get(dep_name) {
+                        inferred = min_lifecycle(inferred, dep_info.lifecycle);
+                    }
+                }
+                if let Some(info) = env.classes.get_mut(class_name) {
+                    if inferred != info.lifecycle {
+                        info.lifecycle = inferred;
+                        env.lifecycle_overridden.insert(class_name.clone());
+                    }
+                }
+            }
+        }
+
+        // Validate app bracket deps don't reference overridden classes
+        for field in &app_spanned.node.inject_fields {
+            if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node {
+                if env.lifecycle_overridden.contains(type_name) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "app bracket dependency '{}' has overridden lifecycle; use scope blocks to access scoped/transient instances",
+                            field.name.node
+                        ),
+                        field.ty.span,
+                    ));
+                }
+            }
+        }
+
+        // Remove overridden classes from di_order
+        env.di_order.retain(|n| !env.lifecycle_overridden.contains(n));
+    }
+
     Ok(())
 }
 

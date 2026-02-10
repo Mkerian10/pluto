@@ -88,6 +88,7 @@ pub struct AppDecl {
     pub name: Spanned<String>,
     pub inject_fields: Vec<Field>,
     pub ambient_types: Vec<Spanned<String>>,
+    pub lifecycle_overrides: Vec<(Spanned<String>, Lifecycle)>,
     pub methods: Vec<Spanned<Function>>,
 }
 

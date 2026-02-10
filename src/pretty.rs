@@ -495,8 +495,20 @@ impl PrettyPrinter {
             self.newline();
         }
 
-        // Blank line between ambients and methods
-        if !app.ambient_types.is_empty() && !app.methods.is_empty() {
+        // Lifecycle overrides
+        for (name, lifecycle) in &app.lifecycle_overrides {
+            self.write_indent();
+            match lifecycle {
+                crate::parser::ast::Lifecycle::Scoped => self.write("scoped "),
+                crate::parser::ast::Lifecycle::Transient => self.write("transient "),
+                crate::parser::ast::Lifecycle::Singleton => self.write("singleton "),
+            }
+            self.write(&name.node);
+            self.newline();
+        }
+
+        // Blank line between directives and methods
+        if (!app.ambient_types.is_empty() || !app.lifecycle_overrides.is_empty()) && !app.methods.is_empty() {
             self.newline();
         }
 
