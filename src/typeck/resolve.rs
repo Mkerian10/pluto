@@ -524,6 +524,39 @@ pub(crate) fn ensure_generic_class_instantiated(
             return_type: concrete_ret,
         });
     }
+    // Register default trait methods for the concrete class
+    for trait_name in &gen_info.impl_traits {
+        if let Some(trait_info) = env.traits.get(trait_name).cloned() {
+            for (method_name, trait_sig) in &trait_info.methods {
+                if !gen_info.methods.contains(method_name) && trait_info.default_methods.contains(method_name) {
+                    let method_mangled = mangle_method(&mangled, method_name);
+                    if !env.functions.contains_key(&method_mangled) {
+                        let mut params = trait_sig.params.clone();
+                        // Replace the Void placeholder self param with the concrete class type
+                        if !params.is_empty() {
+                            params[0] = PlutoType::Class(mangled.clone());
+                        }
+                        env.functions.insert(
+                            method_mangled.clone(),
+                            env::FuncSig {
+                                params,
+                                return_type: trait_sig.return_type.clone(),
+                            },
+                        );
+                        if trait_info.mut_self_methods.contains(method_name) {
+                            env.mut_self_methods.insert(method_mangled);
+                        }
+                        // Add default method to class info
+                        if let Some(info) = env.classes.get_mut(&mangled) {
+                            if !info.methods.contains(method_name) {
+                                info.methods.push(method_name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     env.instantiations.insert(Instantiation {
         kind: InstKind::Class(base_name.to_string()),
         type_args: type_args.to_vec(),

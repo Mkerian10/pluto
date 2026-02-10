@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail};
+use common::{compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
 
 // ── Generic Functions ────────────────────────────────────────────
 
@@ -163,4 +163,162 @@ fn main() {
 "#,
     );
     assert_eq!(out, "7\n");
+}
+
+// ── Generic Classes with Trait Impls (Phase A) ─────────────────
+
+#[test]
+fn generic_class_impl_trait() {
+    let out = compile_and_run_stdout(
+        r#"
+trait Printable {
+    fn show(self) string
+}
+
+class Box<T> impl Printable {
+    value: T
+
+    fn show(self) string {
+        return "box"
+    }
+}
+
+fn use_printable(p: Printable) string {
+    return p.show()
+}
+
+fn main() {
+    let b = Box<int> { value: 42 }
+    print(use_printable(b))
+}
+"#,
+    );
+    assert_eq!(out, "box\n");
+}
+
+#[test]
+fn generic_class_trait_dispatch() {
+    let out = compile_and_run_stdout(
+        r#"
+trait Describable {
+    fn describe(self) string
+}
+
+class Wrapper<T> impl Describable {
+    inner: T
+
+    fn describe(self) string {
+        return "wrapper"
+    }
+}
+
+fn print_description(d: Describable) {
+    print(d.describe())
+}
+
+fn main() {
+    let w1 = Wrapper<int> { inner: 10 }
+    let w2 = Wrapper<string> { inner: "hello" }
+    print_description(w1)
+    print_description(w2)
+}
+"#,
+    );
+    assert_eq!(out, "wrapper\nwrapper\n");
+}
+
+#[test]
+fn generic_class_multiple_traits() {
+    let out = compile_and_run_stdout(
+        r#"
+trait Showable {
+    fn show(self) string
+}
+
+trait Countable {
+    fn count(self) int
+}
+
+class Container<T> impl Showable, Countable {
+    item: T
+    size: int
+
+    fn show(self) string {
+        return "container"
+    }
+
+    fn count(self) int {
+        return self.size
+    }
+}
+
+fn display(s: Showable) {
+    print(s.show())
+}
+
+fn get_count(c: Countable) int {
+    return c.count()
+}
+
+fn main() {
+    let c = Container<string> { item: "hello", size: 3 }
+    display(c)
+    print(get_count(c))
+}
+"#,
+    );
+    assert_eq!(out, "container\n3\n");
+}
+
+#[test]
+fn generic_class_trait_default_method() {
+    let out = compile_and_run_stdout(
+        r#"
+trait Greetable {
+    fn name(self) string
+
+    fn greet(self) string {
+        return "Hello, " + self.name() + "!"
+    }
+}
+
+class Holder<T> impl Greetable {
+    value: T
+
+    fn name(self) string {
+        return "holder"
+    }
+}
+
+fn main() {
+    let h = Holder<int> { value: 42 }
+    print(h.greet())
+}
+"#,
+    );
+    assert_eq!(out, "Hello, holder!\n");
+}
+
+#[test]
+fn generic_class_trait_conformance_fail() {
+    compile_should_fail_with(
+        r#"
+trait Showable {
+    fn show(self) string
+}
+
+class Bad<T> impl Showable {
+    value: T
+
+    fn show(self) int {
+        return 42
+    }
+}
+
+fn main() {
+    let b = Bad<int> { value: 1 }
+}
+"#,
+        "return type",
+    );
 }

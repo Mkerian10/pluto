@@ -9,6 +9,7 @@ mod errors;
 
 // Re-exports for external use
 pub(crate) use check::check_function;
+pub(crate) use register::check_trait_conformance;
 pub(crate) use resolve::resolve_type_for_monomorphize;
 
 use crate::diagnostics::{CompileError, CompileWarning, WarningKind};
@@ -584,9 +585,9 @@ mod tests {
     }
 
     #[test]
-    fn generic_class_with_trait_impl_rejected() {
-        let result = check("trait Printable {\n    fn show(self) string\n}\n\nclass Box<T> impl Printable {\n    value: T\n\n    fn show(self) string {\n        return \"box\"\n    }\n}\n\nfn main() {\n}");
-        assert!(result.is_err());
+    fn generic_class_with_trait_impl_allowed() {
+        let result = check("trait Printable {\n    fn show(self) string\n}\n\nclass Box<T> impl Printable {\n    value: T\n\n    fn show(self) string {\n        return \"box\"\n    }\n}\n\nfn main() {\n    let b = Box<int> { value: 42 }\n}");
+        assert!(result.is_ok(), "generic class with trait impl should compile: {:?}", result.err());
     }
 
     #[test]

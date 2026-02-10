@@ -238,12 +238,14 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
         let c = &class.node;
         if !c.type_params.is_empty() {
             // Generic class — register in generic_classes
-            // v1 restriction: no trait impls on generic classes
-            if !c.impl_traits.is_empty() {
-                return Err(CompileError::type_err(
-                    "generic classes cannot implement traits (v1 restriction)".to_string(),
-                    class.span,
-                ));
+            // Validate trait names for generic classes
+            for trait_name in &c.impl_traits {
+                if !env.traits.contains_key(&trait_name.node) {
+                    return Err(CompileError::type_err(
+                        format!("unknown trait '{}'", trait_name.node),
+                        trait_name.span,
+                    ));
+                }
             }
             // v1 restriction: no DI on generic classes
             if c.fields.iter().any(|f| f.is_injected) {
@@ -318,7 +320,7 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                 fields,
                 methods: method_names,
                 method_sigs,
-                impl_traits: Vec::new(),
+                impl_traits: c.impl_traits.iter().map(|t| t.node.clone()).collect(),
                 mut_self_methods: generic_mut_self,
                 lifecycle: c.lifecycle,
             });
