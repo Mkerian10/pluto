@@ -35,4 +35,17 @@ Whole-program compilation imposes one key constraint: **no dynamically loaded pl
 
 Libraries work within this model — they are source code (or pre-compiled IR) that gets included in the whole-program compilation step. The compiler can analyze library code the same way it analyzes application code.
 
-> **Status:** Open design question — exact library distribution format.
+> **Status:** Open design question — exact library distribution format. The [AI-native representation](ai-native-representation.md) RFC proposes `.pluto` binary files as the distribution format, with full or signature-only variants.
+
+## Future: AI-Native Representation
+
+> See [AI-Native Representation RFC](ai-native-representation.md) for the full design.
+
+The compilation model is designed to evolve toward an AI-native representation where:
+
+- **`.pluto` files become binary** — a canonical semantic graph with stable UUIDs per declaration, authored content (AST), and compiler-derived analysis (types, errors, call graphs)
+- **`plutoc analyze`** enriches `.pluto` files with derived data on demand (separate from compilation, which is non-mutating)
+- **`plutoc-sdk`** (Rust crate) provides programmatic read/write access for AI agents
+- **Incremental compilation** becomes more precise — stable UUIDs enable exact change tracking at the declaration level rather than file-level heuristics
+
+This preserves the whole-program compilation model while making the compiler's analysis persistent and accessible to AI tooling.

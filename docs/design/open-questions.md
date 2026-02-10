@@ -41,6 +41,17 @@ Areas that need further design work before implementation.
 - [ ] **`@assume` scope** — should `@assume` apply to a single call, a block, or an entire function?
 - [ ] **Gradual adoption** — should contracts be opt-in per module, or always enforced?
 
+## AI-Native Representation
+
+- [ ] **Binary format** — protobuf, FlatBuffers, Cap'n Proto, or custom? Needs benchmarking
+- [ ] **Derived data staleness** — how does the compiler detect stale derived data? Content hash? Version counter?
+- [ ] **Incremental analysis** — can `plutoc analyze` update only affected derived data, or full recompute?
+- [ ] **Cross-project UUIDs** — UUID namespace management across library boundaries
+- [ ] **SDK language bindings** — Rust crate is primary, but AI agents may need Python/TS bindings (FFI? gRPC?)
+- [ ] **Diff tooling** — custom `git diff` driver for binary `.pluto` files, or rely on `.pt` diffs?
+- [ ] **IDE integration** — editors work with `.pt` and sync on save? Or SDK-powered LSP on `.pluto` directly?
+- [ ] **Concurrent SDK access** — multiple AI agents editing same `.pluto` file (locking? CRDT?)
+
 ## Tooling
 
 - [ ] **Testing** — built-in test framework, distributed testing support
