@@ -1,5 +1,13 @@
 # Pluto Examples
 
+## strings
+
+Demonstrates built-in string methods (`contains`, `starts_with`, `trim`, `to_upper`, `replace`, `split`, etc.), string indexing (`s[0]`), character iteration (`for c in s`), and method chaining.
+
+```bash
+cargo run -- run examples/strings/main.pluto
+```
+
 ## concurrency
 
 Demonstrates `spawn` for concurrent execution: spawning functions on separate threads, collecting results with `.get()`, error handling with `catch`, and void tasks.
