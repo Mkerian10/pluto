@@ -8,7 +8,7 @@ use cranelift_codegen::ir::{types, AbiParam, InstBuilder, MemFlags, Value};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
 use cranelift_frontend::FunctionBuilderContext;
-use cranelift_module::{DataDescription, Linkage, Module};
+use cranelift_module::{DataDescription, DataId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use uuid::Uuid;
@@ -38,6 +38,29 @@ fn host_target_triple() -> Result<&'static str, CompileError> {
     }
 }
 
+/// Declare a writable, zero-initialized 8-byte global for each DI singleton.
+/// These globals hold singleton pointers so that scope block codegen (Phase 3)
+/// can load them when wiring scoped instances.
+fn declare_singleton_globals(
+    env: &TypeEnv,
+    module: &mut ObjectModule,
+) -> Result<HashMap<String, DataId>, CompileError> {
+    let mut globals = HashMap::new();
+    for class_name in &env.di_order {
+        let data_name = format!("__pluto_singleton_{}", class_name);
+        let data_id = module
+            .declare_data(&data_name, Linkage::Local, true, false)
+            .map_err(|e| CompileError::codegen(format!("declare singleton global: {e}")))?;
+        let mut data_desc = DataDescription::new();
+        data_desc.define_zeroinit(8);
+        module
+            .define_data(data_id, &data_desc)
+            .map_err(|e| CompileError::codegen(format!("define singleton global: {e}")))?;
+        globals.insert(class_name.clone(), data_id);
+    }
+    Ok(globals)
+}
+
 pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>, CompileError> {
     let mut flag_builder = settings::builder();
     flag_builder.set("is_pic", "true").unwrap();
@@ -58,6 +81,9 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
     let mut module = ObjectModule::new(obj_builder);
     let runtime = RuntimeRegistry::new(&mut module)?;
     let mut func_ids = HashMap::new();
+
+    // Declare module-level globals for DI singleton pointers (Phase 2)
+    let singleton_data_ids = declare_singleton_globals(env, &mut module)?;
 
     // Pass 0: Declare extern fns with Import linkage
     for ext in &program.extern_fns {
@@ -327,7 +353,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts)?;
+            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
         }
 
         module
@@ -350,7 +376,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
             }
 
             module
@@ -403,7 +429,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
                             }
 
                             module
@@ -447,7 +473,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
             }
 
             module
@@ -587,6 +613,13 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                 }
 
                 singletons.insert(class_name.clone(), ptr);
+
+                // Store pointer to module-level global for scope block access (Phase 2)
+                if let Some(&data_id) = singleton_data_ids.get(class_name) {
+                    let gv = module.declare_data_in_func(data_id, builder.func);
+                    let addr = builder.ins().global_value(types::I64, gv);
+                    builder.ins().store(MemFlags::new(), ptr, addr, Offset32::new(0));
+                }
             }
 
             // Allocate and wire the app itself

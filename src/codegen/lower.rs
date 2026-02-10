@@ -35,6 +35,9 @@ struct LowerContext<'a> {
     /// Function contracts: fn_mangled_name → FnContracts (used during function setup)
     #[allow(dead_code)]
     fn_contracts: &'a HashMap<String, FnContracts>,
+    /// Module-level globals holding DI singleton pointers (Phase 2).
+    #[allow(dead_code)]
+    singleton_globals: &'a HashMap<String, DataId>,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
     var_types: HashMap<String, PlutoType>,
@@ -89,6 +92,18 @@ impl<'a> LowerContext<'a> {
         let gv = self.module.declare_data_in_func(*vtable_data_id, self.builder.func);
         let vtable_ptr = self.builder.ins().global_value(types::I64, gv);
         Ok(self.call_runtime("__pluto_trait_wrap", &[class_val, vtable_ptr]))
+    }
+
+    /// Load a singleton pointer from its module-level global.
+    /// Used by scope block codegen (Phase 3).
+    #[allow(dead_code)]
+    fn load_singleton(&mut self, class_name: &str) -> Result<Value, CompileError> {
+        let data_id = self.singleton_globals.get(class_name).ok_or_else(|| {
+            CompileError::codegen(format!("no singleton global for '{}'", class_name))
+        })?;
+        let gv = self.module.declare_data_in_func(*data_id, self.builder.func);
+        let addr = self.builder.ins().global_value(types::I64, gv);
+        Ok(self.builder.ins().load(types::I64, MemFlags::new(), addr, Offset32::new(0)))
     }
 
     /// Emit a return with the default value for the current function's return type.
@@ -2543,6 +2558,7 @@ pub fn lower_function(
     spawn_closure_fns: &HashSet<String>,
     class_invariants: &HashMap<String, Vec<(Expr, String)>>,
     fn_contracts: &HashMap<String, FnContracts>,
+    singleton_globals: &HashMap<String, DataId>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -2683,6 +2699,7 @@ pub fn lower_function(
         source,
         class_invariants,
         fn_contracts,
+        singleton_globals,
         variables,
         var_types,
         next_var,
