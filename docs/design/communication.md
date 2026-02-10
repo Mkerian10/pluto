@@ -46,70 +46,13 @@ Remote calls can fail in ways local calls cannot (network errors, timeouts, pod 
 
 ## Channels
 
-### When to Use
+Channels are Pluto's second communication primitive — for streaming, fan-out/fan-in, and decoupling producers from consumers. They also serve as the **universal I/O abstraction**: HTTP connections, file streams, and socket reads all expose the same channel interface.
 
-Channels are for when synchronous call/response is not the right model:
-- Streaming data (continuous flow of values)
-- Pub/sub patterns
-- Fan-out / fan-in
-- Fire-and-forget
-- Decoupling producer and consumer speeds
-
-### Creating Channels
-
-Channels are **directional** — separate send and receive ends:
-
-```
-let (tx, rx) = chan<Order>()
-
-// Buffered channel
-let (tx, rx) = chan<Order>(buffer: 100)
-```
-
-### Sending and Receiving
-
-Channel operations are **fallible** and must be handled:
-
-```
-// Send — can fail (full, disconnected, network error)
-tx <- msg ! "sending order"
-tx <- msg catch err { log(err) }
-
-// Receive — can fail (empty, disconnected, timeout)
-let val = <-rx ! "waiting for response"
-let val = <-rx catch err {
-    // handle error
-    default_value
-}
-```
-
-### Explicit Blocking
-
-Blocking is opt-in, not the default:
-
-```
-// Block until operation succeeds
-tx.wait() <- msg
-let val = <-rx.wait()
-
-// Bounded wait
-let val = <-rx.timeout(5.seconds) catch {
-    TimeoutError => retry(),
-    Disconnected => shutdown(),
-}
-```
-
-### Compiler Optimizations
-
-The compiler optimizes channel implementation based on topology:
-
-| Scenario                    | Generated code                          |
-| --------------------------- | --------------------------------------- |
-| Both ends in same process   | In-memory queue, no serialization       |
-| Same pod, different process | Shared memory, no network               |
-| Cross-pod, same region      | Serialization + local network           |
-| Cross-pod, cross-region     | Serialization + handles latency/retries |
-
-### Auto-Serialization
-
-Any type sent over a cross-pod channel must implement the `Serializable` trait. The compiler enforces this at compile time and can auto-derive `Serializable` for simple types.
+See **[channels.md](channels.md)** for the full design, including:
+- Core API (`chan<T>()`, `Sender<T>`, `Receiver<T>`)
+- Method syntax (`.send()`, `.recv()`, `.try_send()`, `.try_recv()`)
+- Error integration (`ChannelClosed`, `ChannelFull`, `ChannelEmpty`)
+- Channel iteration (`for item in rx { ... }`)
+- Universal I/O pattern (HTTP, files, sockets as channels)
+- Runtime implementation (mutex + condvar blocking queue)
+- Phase 1 scope and examples
