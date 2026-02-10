@@ -10,6 +10,8 @@ extern fn __pluto_string_replace(s: string, old: string, new_str: string) string
 extern fn __pluto_string_split(s: string, delim: string) [string]
 extern fn __pluto_string_char_at(s: string, index: int) string
 extern fn __pluto_string_len(s: string) int
+extern fn __pluto_string_byte_at(s: string, index: int) int
+extern fn __pluto_string_format_float(v: float) string
 
 pub fn substring(s: string, start: int, length: int) string {
     return __pluto_string_substring(s, start, length)
@@ -57,4 +59,12 @@ pub fn char_at(s: string, index: int) string {
 
 pub fn len(s: string) int {
     return __pluto_string_len(s)
+}
+
+pub fn byte_at(s: string, index: int) int {
+    return __pluto_string_byte_at(s, index)
+}
+
+pub fn format_float(v: float) string {
+    return __pluto_string_format_float(v)
 }

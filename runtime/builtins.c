@@ -1005,6 +1005,25 @@ void *__pluto_string_char_at(void *s, long index) {
     return header;
 }
 
+long __pluto_string_byte_at(void *s, long index) {
+    long slen = *(long *)s;
+    if (index < 0 || index >= slen) {
+        fprintf(stderr, "pluto: string byte_at index out of bounds: index %ld, length %ld\n", index, slen);
+        exit(1);
+    }
+    const char *data = (const char *)s + 8;
+    return (long)(unsigned char)data[index];
+}
+
+void *__pluto_string_format_float(double value) {
+    int len = snprintf(NULL, 0, "%g", value);
+    size_t alloc_size = 8 + len + 1;
+    void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
+    *(long *)header = len;
+    snprintf((char *)header + 8, len + 1, "%g", value);
+    return header;
+}
+
 void *__pluto_int_to_string(long value) {
     int len = snprintf(NULL, 0, "%ld", value);
     size_t alloc_size = 8 + len + 1;
