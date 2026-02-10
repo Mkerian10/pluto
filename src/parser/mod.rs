@@ -1877,8 +1877,9 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Postfix as — type cast (binds tighter than all infix operators)
-            if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::As) {
+            // Postfix as — type cast (binds tighter than all infix operators, but
+            // looser than prefix unary ops so that `-1 as byte` = `(-1) as byte`)
+            if min_bp < 21 && self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::As) {
                 self.advance(); // consume 'as'
                 let target_type = self.parse_type()?;
                 let span = Span::new(lhs.span.start, target_type.span.end);
@@ -2091,7 +2092,10 @@ impl<'a> Parser<'a> {
             Token::Minus => {
                 let tok = self.advance().unwrap();
                 let start = tok.span.start;
-                let operand = self.parse_prefix()?;
+                // Use parse_expr(21) so that postfix ops (., [], !, ?, as, catch)
+                // bind tighter than prefix unary operators.
+                // 21 is above all infix operators (max is Mul/Div/Mod at 19-20).
+                let operand = self.parse_expr(21)?;
                 let end = operand.span.end;
                 Ok(Spanned::new(
                     Expr::UnaryOp { op: UnaryOp::Neg, operand: Box::new(operand) },
@@ -2101,7 +2105,7 @@ impl<'a> Parser<'a> {
             Token::Bang => {
                 let tok = self.advance().unwrap();
                 let start = tok.span.start;
-                let operand = self.parse_prefix()?;
+                let operand = self.parse_expr(21)?;
                 let end = operand.span.end;
                 Ok(Spanned::new(
                     Expr::UnaryOp { op: UnaryOp::Not, operand: Box::new(operand) },
@@ -2111,7 +2115,7 @@ impl<'a> Parser<'a> {
             Token::Tilde => {
                 let tok = self.advance().unwrap();
                 let start = tok.span.start;
-                let operand = self.parse_prefix()?;
+                let operand = self.parse_expr(21)?;
                 let end = operand.span.end;
                 Ok(Spanned::new(
                     Expr::UnaryOp { op: UnaryOp::BitNot, operand: Box::new(operand) },

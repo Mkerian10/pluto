@@ -1093,13 +1093,16 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
                 rewrite_stmt_for_module(&mut stmt.node, module_name, module_prog);
             }
         }
-        Expr::MapLit { entries, .. } => {
+        Expr::MapLit { key_type, value_type, entries } => {
+            prefix_type_expr(&mut key_type.node, module_name, module_prog);
+            prefix_type_expr(&mut value_type.node, module_name, module_prog);
             for (k, v) in entries {
                 rewrite_expr_for_module(&mut k.node, module_name, module_prog);
                 rewrite_expr_for_module(&mut v.node, module_name, module_prog);
             }
         }
-        Expr::SetLit { elements, .. } => {
+        Expr::SetLit { elem_type, elements } => {
+            prefix_type_expr(&mut elem_type.node, module_name, module_prog);
             for elem in elements {
                 rewrite_expr_for_module(&mut elem.node, module_name, module_prog);
             }
@@ -1415,13 +1418,16 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
         Expr::Closure { body, .. } => {
             rewrite_block(&mut body.node, import_names);
         }
-        Expr::MapLit { entries, .. } => {
+        Expr::MapLit { key_type, value_type, entries } => {
+            rewrite_type_expr(key_type, import_names);
+            rewrite_type_expr(value_type, import_names);
             for (k, v) in entries {
                 rewrite_expr(&mut k.node, k.span, import_names);
                 rewrite_expr(&mut v.node, v.span, import_names);
             }
         }
-        Expr::SetLit { elements, .. } => {
+        Expr::SetLit { elem_type, elements } => {
+            rewrite_type_expr(elem_type, import_names);
             for elem in elements {
                 rewrite_expr(&mut elem.node, elem.span, import_names);
             }
