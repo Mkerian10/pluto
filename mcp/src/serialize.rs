@@ -1,0 +1,490 @@
+use serde::Serialize;
+
+use plutoc::parser::ast::{
+    AppDecl, ClassDecl, EnumDecl, ErrorDecl, Field, Function, Param, TraitDecl,
+    TypeExpr,
+};
+use plutoc::span::Span;
+use plutoc_sdk::decl::{DeclKind, DeclRef};
+
+// --- JSON-serializable output structs ---
+
+#[derive(Serialize)]
+pub struct DeclSummary {
+    pub name: String,
+    pub uuid: String,
+    pub kind: String,
+}
+
+#[derive(Serialize)]
+pub struct ModuleSummary {
+    pub path: String,
+    pub summary: DeclCounts,
+    pub declarations: Vec<DeclSummary>,
+}
+
+#[derive(Serialize)]
+pub struct DeclCounts {
+    pub functions: usize,
+    pub classes: usize,
+    pub enums: usize,
+    pub traits: usize,
+    pub errors: usize,
+    pub app: usize,
+}
+
+#[derive(Serialize)]
+pub struct FunctionDetail {
+    pub name: String,
+    pub uuid: String,
+    pub kind: String,
+    pub params: Vec<ParamInfo>,
+    pub return_type: Option<String>,
+    pub is_fallible: bool,
+    pub error_set: Vec<ErrorRefInfo>,
+    pub signature: Option<SignatureInfo>,
+    pub source: String,
+}
+
+#[derive(Serialize)]
+pub struct ClassDetail {
+    pub name: String,
+    pub uuid: String,
+    pub kind: String,
+    pub fields: Vec<FieldInfo>,
+    pub methods: Vec<MethodSummary>,
+    pub bracket_deps: Vec<FieldInfo>,
+    pub impl_traits: Vec<String>,
+    pub invariant_count: usize,
+    pub source: String,
+}
+
+#[derive(Serialize)]
+pub struct EnumDetail {
+    pub name: String,
+    pub uuid: String,
+    pub kind: String,
+    pub variants: Vec<VariantInfo>,
+    pub type_params: Vec<String>,
+    pub source: String,
+}
+
+#[derive(Serialize)]
+pub struct TraitDetail {
+    pub name: String,
+    pub uuid: String,
+    pub kind: String,
+    pub methods: Vec<TraitMethodInfo>,
+    pub source: String,
+}
+
+#[derive(Serialize)]
+pub struct ErrorDeclDetail {
+    pub name: String,
+    pub uuid: String,
+    pub kind: String,
+    pub fields: Vec<FieldInfo>,
+    pub source: String,
+}
+
+#[derive(Serialize)]
+pub struct AppDetail {
+    pub name: String,
+    pub uuid: String,
+    pub kind: String,
+    pub bracket_deps: Vec<FieldInfo>,
+    pub methods: Vec<MethodSummary>,
+    pub ambient_types: Vec<String>,
+    pub source: String,
+}
+
+#[derive(Serialize)]
+pub struct ParamInfo {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_str: String,
+    pub is_mut: bool,
+}
+
+#[derive(Serialize)]
+pub struct FieldInfo {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_str: String,
+    pub uuid: String,
+}
+
+#[derive(Serialize)]
+pub struct MethodSummary {
+    pub name: String,
+    pub uuid: String,
+}
+
+#[derive(Serialize)]
+pub struct VariantInfo {
+    pub name: String,
+    pub uuid: String,
+    pub fields: Vec<FieldInfo>,
+}
+
+#[derive(Serialize)]
+pub struct TraitMethodInfo {
+    pub name: String,
+    pub uuid: String,
+    pub params: Vec<ParamInfo>,
+    pub return_type: Option<String>,
+    pub has_default_body: bool,
+}
+
+#[derive(Serialize)]
+pub struct SignatureInfo {
+    pub param_types: Vec<String>,
+    pub return_type: String,
+    pub is_fallible: bool,
+}
+
+#[derive(Serialize)]
+pub struct ErrorRefInfo {
+    pub name: String,
+    pub uuid: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct SpanInfo {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Serialize)]
+pub struct XrefSiteInfo {
+    pub function_name: String,
+    pub function_uuid: Option<String>,
+    pub span: SpanInfo,
+}
+
+#[derive(Serialize)]
+pub struct ErrorsResult {
+    pub function_name: String,
+    pub is_fallible: bool,
+    pub error_set: Vec<ErrorRefInfo>,
+}
+
+#[derive(Serialize)]
+pub struct DisambiguationEntry {
+    pub uuid: String,
+    pub name: String,
+    pub kind: String,
+}
+
+// --- Conversion functions ---
+
+pub fn type_expr_to_string(te: &TypeExpr) -> String {
+    match te {
+        TypeExpr::Named(n) => n.clone(),
+        TypeExpr::Array(inner) => format!("[{}]", type_expr_to_string(&inner.node)),
+        TypeExpr::Qualified { module, name } => format!("{module}.{name}"),
+        TypeExpr::Fn { params, return_type } => {
+            let params_str: Vec<String> =
+                params.iter().map(|p| type_expr_to_string(&p.node)).collect();
+            let ret = type_expr_to_string(&return_type.node);
+            if ret == "void" {
+                format!("fn({})", params_str.join(", "))
+            } else {
+                format!("fn({}) {}", params_str.join(", "), ret)
+            }
+        }
+        TypeExpr::Generic { name, type_args } => {
+            let args_str: Vec<String> =
+                type_args.iter().map(|a| type_expr_to_string(&a.node)).collect();
+            format!("{}<{}>", name, args_str.join(", "))
+        }
+    }
+}
+
+fn param_to_info(p: &Param) -> ParamInfo {
+    ParamInfo {
+        name: p.name.node.clone(),
+        type_str: type_expr_to_string(&p.ty.node),
+        is_mut: p.is_mut,
+    }
+}
+
+fn field_to_info(f: &Field) -> FieldInfo {
+    FieldInfo {
+        name: f.name.node.clone(),
+        type_str: type_expr_to_string(&f.ty.node),
+        uuid: f.id.to_string(),
+    }
+}
+
+pub fn decl_kind_to_string(kind: DeclKind) -> &'static str {
+    match kind {
+        DeclKind::Function => "function",
+        DeclKind::Class => "class",
+        DeclKind::Enum => "enum",
+        DeclKind::EnumVariant => "enum_variant",
+        DeclKind::Trait => "trait",
+        DeclKind::TraitMethod => "trait_method",
+        DeclKind::Error => "error",
+        DeclKind::App => "app",
+        DeclKind::Field => "field",
+        DeclKind::Param => "param",
+    }
+}
+
+pub fn decl_to_summary(decl: &DeclRef<'_>) -> DeclSummary {
+    DeclSummary {
+        name: decl.name().to_string(),
+        uuid: decl.id().to_string(),
+        kind: decl_kind_to_string(decl.kind()).to_string(),
+    }
+}
+
+pub fn span_to_info(span: Span) -> SpanInfo {
+    SpanInfo {
+        start: span.start,
+        end: span.end,
+    }
+}
+
+// --- Pretty-print helpers ---
+
+fn pretty_print_function(func: &Function) -> String {
+    let program = plutoc::parser::ast::Program {
+        imports: vec![],
+        functions: vec![plutoc::span::Spanned::new(func.clone(), plutoc::span::Span::dummy())],
+        extern_fns: vec![],
+        extern_rust_crates: vec![],
+        classes: vec![],
+        traits: vec![],
+        enums: vec![],
+        app: None,
+        errors: vec![],
+        test_info: vec![],
+        fallible_extern_fns: vec![],
+    };
+    plutoc::pretty::pretty_print(&program)
+}
+
+fn pretty_print_class(cls: &ClassDecl) -> String {
+    let program = plutoc::parser::ast::Program {
+        imports: vec![],
+        functions: vec![],
+        extern_fns: vec![],
+        extern_rust_crates: vec![],
+        classes: vec![plutoc::span::Spanned::new(cls.clone(), plutoc::span::Span::dummy())],
+        traits: vec![],
+        enums: vec![],
+        app: None,
+        errors: vec![],
+        test_info: vec![],
+        fallible_extern_fns: vec![],
+    };
+    plutoc::pretty::pretty_print(&program)
+}
+
+fn pretty_print_enum(en: &EnumDecl) -> String {
+    let program = plutoc::parser::ast::Program {
+        imports: vec![],
+        functions: vec![],
+        extern_fns: vec![],
+        extern_rust_crates: vec![],
+        classes: vec![],
+        traits: vec![],
+        enums: vec![plutoc::span::Spanned::new(en.clone(), plutoc::span::Span::dummy())],
+        app: None,
+        errors: vec![],
+        test_info: vec![],
+        fallible_extern_fns: vec![],
+    };
+    plutoc::pretty::pretty_print(&program)
+}
+
+fn pretty_print_trait(tr: &TraitDecl) -> String {
+    let program = plutoc::parser::ast::Program {
+        imports: vec![],
+        functions: vec![],
+        extern_fns: vec![],
+        extern_rust_crates: vec![],
+        classes: vec![],
+        traits: vec![plutoc::span::Spanned::new(tr.clone(), plutoc::span::Span::dummy())],
+        enums: vec![],
+        app: None,
+        errors: vec![],
+        test_info: vec![],
+        fallible_extern_fns: vec![],
+    };
+    plutoc::pretty::pretty_print(&program)
+}
+
+fn pretty_print_error_decl(err: &ErrorDecl) -> String {
+    let program = plutoc::parser::ast::Program {
+        imports: vec![],
+        functions: vec![],
+        extern_fns: vec![],
+        extern_rust_crates: vec![],
+        classes: vec![],
+        traits: vec![],
+        enums: vec![],
+        app: None,
+        errors: vec![plutoc::span::Spanned::new(err.clone(), plutoc::span::Span::dummy())],
+        test_info: vec![],
+        fallible_extern_fns: vec![],
+    };
+    plutoc::pretty::pretty_print(&program)
+}
+
+fn pretty_print_app(app: &AppDecl) -> String {
+    let program = plutoc::parser::ast::Program {
+        imports: vec![],
+        functions: vec![],
+        extern_fns: vec![],
+        extern_rust_crates: vec![],
+        classes: vec![],
+        traits: vec![],
+        enums: vec![],
+        app: Some(plutoc::span::Spanned::new(app.clone(), plutoc::span::Span::dummy())),
+        errors: vec![],
+        test_info: vec![],
+        fallible_extern_fns: vec![],
+    };
+    plutoc::pretty::pretty_print(&program)
+}
+
+// --- High-level detail builders ---
+
+pub fn function_detail(
+    func: &Function,
+    module: &plutoc_sdk::Module,
+) -> FunctionDetail {
+    let id = func.id;
+    let error_set = module
+        .error_set_of(id)
+        .iter()
+        .map(|e| ErrorRefInfo {
+            name: e.name.clone(),
+            uuid: e.id.map(|u| u.to_string()),
+        })
+        .collect();
+
+    let signature = module.signature_of(id).map(|sig| SignatureInfo {
+        param_types: sig.param_types.iter().map(|t| format!("{t:?}")).collect(),
+        return_type: format!("{:?}", sig.return_type),
+        is_fallible: sig.is_fallible,
+    });
+
+    FunctionDetail {
+        name: func.name.node.clone(),
+        uuid: id.to_string(),
+        kind: "function".to_string(),
+        params: func.params.iter().map(param_to_info).collect(),
+        return_type: func.return_type.as_ref().map(|rt| type_expr_to_string(&rt.node)),
+        is_fallible: module.is_fallible(id),
+        error_set,
+        signature,
+        source: pretty_print_function(func),
+    }
+}
+
+pub fn class_detail(cls: &ClassDecl) -> ClassDetail {
+    let regular_fields: Vec<FieldInfo> = cls
+        .fields
+        .iter()
+        .filter(|f| !f.is_injected)
+        .map(field_to_info)
+        .collect();
+
+    let bracket_deps: Vec<FieldInfo> = cls
+        .fields
+        .iter()
+        .filter(|f| f.is_injected)
+        .map(field_to_info)
+        .collect();
+
+    ClassDetail {
+        name: cls.name.node.clone(),
+        uuid: cls.id.to_string(),
+        kind: "class".to_string(),
+        fields: regular_fields,
+        methods: cls
+            .methods
+            .iter()
+            .map(|m| MethodSummary {
+                name: m.node.name.node.clone(),
+                uuid: m.node.id.to_string(),
+            })
+            .collect(),
+        bracket_deps,
+        impl_traits: cls.impl_traits.iter().map(|t| t.node.clone()).collect(),
+        invariant_count: cls.invariants.len(),
+        source: pretty_print_class(cls),
+    }
+}
+
+pub fn enum_detail(en: &EnumDecl) -> EnumDetail {
+    EnumDetail {
+        name: en.name.node.clone(),
+        uuid: en.id.to_string(),
+        kind: "enum".to_string(),
+        variants: en
+            .variants
+            .iter()
+            .map(|v| VariantInfo {
+                name: v.name.node.clone(),
+                uuid: v.id.to_string(),
+                fields: v.fields.iter().map(field_to_info).collect(),
+            })
+            .collect(),
+        type_params: en.type_params.iter().map(|tp| tp.node.clone()).collect(),
+        source: pretty_print_enum(en),
+    }
+}
+
+pub fn trait_detail(tr: &TraitDecl) -> TraitDetail {
+    TraitDetail {
+        name: tr.name.node.clone(),
+        uuid: tr.id.to_string(),
+        kind: "trait".to_string(),
+        methods: tr
+            .methods
+            .iter()
+            .map(|m| TraitMethodInfo {
+                name: m.name.node.clone(),
+                uuid: m.id.to_string(),
+                params: m.params.iter().map(param_to_info).collect(),
+                return_type: m.return_type.as_ref().map(|rt| type_expr_to_string(&rt.node)),
+                has_default_body: m.body.is_some(),
+            })
+            .collect(),
+        source: pretty_print_trait(tr),
+    }
+}
+
+pub fn error_decl_detail(err: &ErrorDecl) -> ErrorDeclDetail {
+    ErrorDeclDetail {
+        name: err.name.node.clone(),
+        uuid: err.id.to_string(),
+        kind: "error".to_string(),
+        fields: err.fields.iter().map(field_to_info).collect(),
+        source: pretty_print_error_decl(err),
+    }
+}
+
+pub fn app_detail(app: &AppDecl) -> AppDetail {
+    AppDetail {
+        name: app.name.node.clone(),
+        uuid: app.id.to_string(),
+        kind: "app".to_string(),
+        bracket_deps: app.inject_fields.iter().map(field_to_info).collect(),
+        methods: app
+            .methods
+            .iter()
+            .map(|m| MethodSummary {
+                name: m.node.name.node.clone(),
+                uuid: m.node.id.to_string(),
+            })
+            .collect(),
+        ambient_types: app.ambient_types.iter().map(|a| a.node.clone()).collect(),
+        source: pretty_print_app(app),
+    }
+}

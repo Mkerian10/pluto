@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "sdk"]
+members = [".", "sdk", "mcp"]
 exclude = ["tests/fixtures/test_math_crate", "examples/rust_ffi/my_math"]
 resolver = "2"
 
