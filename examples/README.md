@@ -56,6 +56,14 @@ Demonstrates the `byte` and `bytes` types: hex literals (`0xFF`), explicit casti
 cargo run -- run examples/bytes/main.pluto
 ```
 
+## packages
+
+Demonstrates local path dependencies via `pluto.toml`. A project declares a `mathlib` dependency pointing to a local directory, then imports and uses functions and classes from it.
+
+```bash
+cargo run -- run examples/packages/main.pluto
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.

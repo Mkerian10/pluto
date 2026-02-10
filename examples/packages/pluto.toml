@@ -1,0 +1,6 @@
+[package]
+name = "packages-example"
+version = "0.1.0"
+
+[dependencies]
+mathlib = { path = "deps/mathlib" }

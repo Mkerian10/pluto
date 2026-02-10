@@ -11,6 +11,7 @@ pub mod prelude;
 pub mod ambient;
 pub mod rust_ffi;
 pub mod spawn;
+pub mod manifest;
 
 use diagnostics::CompileError;
 use std::path::{Path, PathBuf};
@@ -108,12 +109,16 @@ pub fn compile_file(entry_file: &Path, output_path: &Path) -> Result<(), Compile
 
 /// Compile with an explicit stdlib root path.
 pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<(), CompileError> {
-    let source = std::fs::read_to_string(entry_file)
+    let entry_file = entry_file.canonicalize().map_err(|e|
+        CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
+    let source = std::fs::read_to_string(&entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
     let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
     let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
 
-    let graph = modules::resolve_modules(entry_file, effective_stdlib.as_deref())?;
+    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
+    let pkg_graph = manifest::find_and_resolve(entry_dir)?;
+    let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
 
     // Check extern rust aliases don't collide with import aliases
     check_extern_rust_import_collisions(&graph)?;
@@ -121,7 +126,6 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
 
     // Resolve extern rust crates (build glue, extract signatures)
-    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
     let rust_artifacts = if program.extern_rust_crates.is_empty() {
         vec![]
     } else {
@@ -160,12 +164,16 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
 
 /// Compile a file in test mode. Tests are preserved and a test runner main is generated.
 pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<(), CompileError> {
-    let source = std::fs::read_to_string(entry_file)
+    let entry_file = entry_file.canonicalize().map_err(|e|
+        CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
+    let source = std::fs::read_to_string(&entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
     let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
     let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
 
-    let graph = modules::resolve_modules(entry_file, effective_stdlib.as_deref())?;
+    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
+    let pkg_graph = manifest::find_and_resolve(entry_dir)?;
+    let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
 
     // Check extern rust aliases don't collide with import aliases
     check_extern_rust_import_collisions(&graph)?;
@@ -184,7 +192,6 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
     }
 
     // Resolve extern rust crates
-    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
     let rust_artifacts = if program.extern_rust_crates.is_empty() {
         vec![]
     } else {
@@ -304,7 +311,7 @@ fn check_extern_rust_import_collisions(graph: &modules::ModuleGraph) -> Result<(
     let import_aliases: std::collections::HashSet<&str> = graph
         .imports
         .iter()
-        .map(|(name, _)| name.as_str())
+        .map(|(name, _, _)| name.as_str())
         .collect();
 
     for ext_rust in &graph.root.extern_rust_crates {

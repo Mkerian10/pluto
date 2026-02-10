@@ -1,4 +1,5 @@
 pub mod token;
+pub use token::is_keyword;
 
 use logos::Logos;
 use crate::span::{Span, Spanned};

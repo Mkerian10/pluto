@@ -1,4 +1,5 @@
 use crate::span::Span;
+use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -14,6 +15,9 @@ pub enum CompileError {
 
     #[error("Link error: {msg}")]
     Link { msg: String },
+
+    #[error("Manifest error: {msg}")]
+    Manifest { msg: String, path: PathBuf },
 }
 
 impl CompileError {
@@ -31,6 +35,10 @@ impl CompileError {
 
     pub fn link(msg: impl Into<String>) -> Self {
         Self::Link { msg: msg.into() }
+    }
+
+    pub fn manifest(msg: impl Into<String>, path: PathBuf) -> Self {
+        Self::Manifest { msg: msg.into(), path }
     }
 }
 
@@ -57,6 +65,10 @@ pub fn render_error(source: &str, _filename: &str, err: &CompileError) {
         }
         CompileError::Codegen { msg } | CompileError::Link { msg } => {
             eprintln!("error: {msg}");
+        }
+        CompileError::Manifest { msg, path } => {
+            eprintln!("error[manifest]: {msg}");
+            eprintln!("  --> {}", path.display());
         }
     }
 }

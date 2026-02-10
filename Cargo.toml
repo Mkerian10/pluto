@@ -12,6 +12,8 @@ cranelift-object = "0.116"
 clap = { version = "4", features = ["derive"] }
 ariadne = "0.4"
 thiserror = "2"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -123,3 +125,7 @@ path = "tests/integration/bytes.rs"
 [[test]]
 name = "channels"
 path = "tests/integration/channels.rs"
+
+[[test]]
+name = "manifest"
+path = "tests/integration/manifest.rs"

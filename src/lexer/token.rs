@@ -214,6 +214,14 @@ pub enum Token {
     Comment,
 }
 
+/// Returns true if the given string is a Pluto keyword.
+pub fn is_keyword(s: &str) -> bool {
+    matches!(s, "fn" | "let" | "mut" | "return" | "if" | "else" | "while" | "true" | "false"
+        | "class" | "trait" | "app" | "inject" | "error" | "raise" | "catch" | "spawn"
+        | "enum" | "impl" | "self" | "pub" | "for" | "in" | "break" | "continue"
+        | "match" | "import" | "as" | "extern" | "uses" | "ambient" | "test")
+}
+
 impl std::fmt::Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
