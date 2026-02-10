@@ -533,11 +533,12 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let test_start_ref = module.declare_func_in_func(runtime.get("__pluto_test_start"), builder.func);
             let test_pass_ref = module.declare_func_in_func(runtime.get("__pluto_test_pass"), builder.func);
             let string_new_ref = module.declare_func_in_func(runtime.get("__pluto_string_new"), builder.func);
+            let test_run_ref = module.declare_func_in_func(runtime.get("__pluto_test_run"), builder.func);
 
-            for (display_name, fn_name) in &program.test_info {
+            for test in &program.test_info {
                 // Create Pluto string for the test name
                 let mut data_desc = DataDescription::new();
-                let mut bytes = display_name.as_bytes().to_vec();
+                let mut bytes = test.display_name.as_bytes().to_vec();
                 bytes.push(0);
                 data_desc.define(bytes.into_boxed_slice());
                 let data_id = module.declare_anonymous_data(false, false)
@@ -546,19 +547,27 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                     .map_err(|e| CompileError::codegen(format!("define test name data error: {e}")))?;
                 let gv = module.declare_data_in_func(data_id, builder.func);
                 let raw_ptr = builder.ins().global_value(types::I64, gv);
-                let len_val = builder.ins().iconst(types::I64, display_name.len() as i64);
+                let len_val = builder.ins().iconst(types::I64, test.display_name.len() as i64);
                 let call = builder.ins().call(string_new_ref, &[raw_ptr, len_val]);
                 let name_str = builder.inst_results(call)[0];
 
                 // call __pluto_test_start(name_str)
                 builder.ins().call(test_start_ref, &[name_str]);
 
-                // call test function
-                let test_func_id = func_ids.get(fn_name).ok_or_else(|| {
-                    CompileError::codegen(format!("missing test function '{fn_name}'"))
+                // Get function pointer for the test function
+                let test_func_id = func_ids.get(&test.fn_name).ok_or_else(|| {
+                    CompileError::codegen(format!("missing test function '{}'", test.fn_name))
                 })?;
                 let test_func_ref = module.declare_func_in_func(*test_func_id, builder.func);
-                builder.ins().call(test_func_ref, &[]);
+                let fn_addr = builder.ins().func_addr(types::I64, test_func_ref);
+
+                // Strategy, seed, iterations as constants
+                let strategy_val = builder.ins().iconst(types::I64, test.strategy as i64);
+                let seed_val = builder.ins().iconst(types::I64, test.seed as i64);
+                let iterations_val = builder.ins().iconst(types::I64, test.iterations as i64);
+
+                // call __pluto_test_run(fn_ptr, strategy, seed, iterations)
+                builder.ins().call(test_run_ref, &[fn_addr, strategy_val, seed_val, iterations_val]);
 
                 // call __pluto_test_pass()
                 builder.ins().call(test_pass_ref, &[]);

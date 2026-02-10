@@ -1,6 +1,6 @@
 # RFC: Deterministic Concurrency Testing
 
-**Status:** Phase A Implemented
+**Status:** Phase B Implemented
 **Author:** Matt Kerian
 **Date:** 2026-02-10
 

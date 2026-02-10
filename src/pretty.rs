@@ -158,7 +158,7 @@ impl PrettyPrinter {
         let test_fn_names: std::collections::HashSet<&str> = program
             .test_info
             .iter()
-            .map(|(_, fn_name)| fn_name.as_str())
+            .map(|t| t.fn_name.as_str())
             .collect();
 
         for func in &program.functions {
@@ -178,10 +178,10 @@ impl PrettyPrinter {
         }
 
         // 10. Test blocks
-        for (display_name, fn_name) in &program.test_info {
-            if let Some(func) = program.functions.iter().find(|f| &f.node.name.node == fn_name) {
+        for test in &program.test_info {
+            if let Some(func) = program.functions.iter().find(|f| f.node.name.node == test.fn_name) {
                 sep!(self, has_output);
-                self.emit_test(display_name, &func.node);
+                self.emit_test_info(test, &func.node);
                 self.newline();
             }
         }
@@ -530,10 +530,24 @@ impl PrettyPrinter {
 
     // ── Test ─────────────────────────────────────────────────────────
 
-    fn emit_test(&mut self, display_name: &str, func: &Function) {
+    fn emit_test_info(&mut self, test: &crate::parser::ast::TestInfo, func: &Function) {
         self.write("test \"");
-        self.write(&escape_string(display_name));
-        self.write("\" ");
+        self.write(&escape_string(&test.display_name));
+        self.write("\"");
+        match test.strategy {
+            crate::parser::ast::TestStrategy::Sequential => {}
+            crate::parser::ast::TestStrategy::RoundRobin => {
+                self.write(" @round_robin");
+            }
+            crate::parser::ast::TestStrategy::Random => {
+                self.write(&format!(" @random(iterations: {}", test.iterations));
+                if test.seed != 0 {
+                    self.write(&format!(", seed: {}", test.seed));
+                }
+                self.write(")");
+            }
+        }
+        self.write(" ");
         self.emit_block(&func.body.node);
     }
 

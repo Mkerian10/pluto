@@ -237,7 +237,7 @@ impl<'a> Parser<'a> {
         let mut app = None;
         let mut system = None;
         let mut errors = Vec::new();
-        let mut test_info: Vec<(String, String)> = Vec::new();
+        let mut test_info: Vec<TestInfo> = Vec::new();
         self.skip_newlines();
 
         // Parse imports first
@@ -412,12 +412,16 @@ impl<'a> Parser<'a> {
                     };
                     let name_span = name_tok.span;
                     // Check for duplicate test names
-                    if test_info.iter().any(|(n, _)| *n == display_name) {
+                    if test_info.iter().any(|t| t.display_name == display_name) {
                         return Err(CompileError::syntax(
                             format!("duplicate test name: \"{}\"", display_name),
                             name_span,
                         ));
                     }
+
+                    // Parse optional strategy annotation: @sequential | @round_robin | @random(...)
+                    let (strategy, seed, iterations) = self.parse_test_strategy()?;
+
                     // Generate unique fn_name with collision avoidance
                     let mut idx = test_info.len();
                     let mut fn_name = format!("__test_{}", idx);
@@ -438,7 +442,13 @@ impl<'a> Parser<'a> {
                         body,
                         is_pub: false,
                     }, Span::new(test_start, end)));
-                    test_info.push((display_name, fn_name));
+                    test_info.push(TestInfo {
+                        display_name,
+                        fn_name,
+                        strategy,
+                        seed,
+                        iterations,
+                    });
                 }
                 Token::System => {
                     if lifecycle != Lifecycle::Singleton {
@@ -482,6 +492,76 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, system, errors, test_info, fallible_extern_fns: Vec::new() })
+    }
+
+    /// Parse an optional test strategy annotation: @sequential | @round_robin | @random(...)
+    /// Returns (strategy, seed, iterations).
+    fn parse_test_strategy(&mut self) -> Result<(TestStrategy, u64, u64), CompileError> {
+        // Check for '@' token (without skipping newlines — annotation must be on same line)
+        if self.peek_raw().is_none() || !matches!(self.peek_raw().unwrap().node, Token::At) {
+            return Ok((TestStrategy::Sequential, 0, 100));
+        }
+        let at_tok = self.advance().unwrap(); // consume '@'
+        let at_span = at_tok.span;
+
+        // Expect identifier: sequential, round_robin, random
+        let ident_tok = self.peek_raw().ok_or_else(|| {
+            CompileError::syntax("expected strategy name after '@'", at_span)
+        })?;
+        if !matches!(ident_tok.node, Token::Ident) {
+            return Err(CompileError::syntax(
+                "expected strategy name after '@' (sequential, round_robin, or random)",
+                ident_tok.span,
+            ));
+        }
+        let ident_span = ident_tok.span;
+        let strategy_name = self.source[ident_span.start..ident_span.end].to_string();
+        self.advance(); // consume identifier
+
+        match strategy_name.as_str() {
+            "sequential" => Ok((TestStrategy::Sequential, 0, 100)),
+            "round_robin" => Ok((TestStrategy::RoundRobin, 0, 1)),
+            "random" => {
+                // Expect (iterations: N) or (iterations: N, seed: S)
+                self.expect(&Token::LParen)?;
+                let mut iterations: u64 = 100;
+                let mut seed: u64 = 0;
+
+                // Parse key: value pairs
+                loop {
+                    let key_tok = self.expect_ident()?;
+                    let key = key_tok.node.clone();
+                    self.expect(&Token::Colon)?;
+                    let val_tok = self.expect(&Token::IntLit(0))?;
+                    let val = match &val_tok.node {
+                        Token::IntLit(n) => *n as u64,
+                        _ => unreachable!(),
+                    };
+                    match key.as_str() {
+                        "iterations" => iterations = val,
+                        "seed" => seed = val,
+                        other => {
+                            return Err(CompileError::syntax(
+                                format!("unknown @random parameter '{}' (expected 'iterations' or 'seed')", other),
+                                key_tok.span,
+                            ));
+                        }
+                    }
+                    // Check for comma (more params) or closing paren
+                    if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Comma) {
+                        self.advance(); // consume ','
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(&Token::RParen)?;
+                Ok((TestStrategy::Random, seed, iterations))
+            }
+            _ => Err(CompileError::syntax(
+                format!("unknown test strategy '{}' (expected sequential, round_robin, or random)", strategy_name),
+                ident_span,
+            )),
+        }
     }
 
     fn parse_import(&mut self) -> Result<Spanned<ImportDecl>, CompileError> {
@@ -3639,8 +3719,31 @@ mod tests {
         let mut parser = Parser::new(&tokens, src);
         let prog = parser.parse_program().unwrap();
         assert_eq!(prog.test_info.len(), 1);
-        assert_eq!(prog.test_info[0].0, "hello");
-        assert_eq!(prog.test_info[0].1, "__test_0");
+        assert_eq!(prog.test_info[0].display_name, "hello");
+        assert_eq!(prog.test_info[0].fn_name, "__test_0");
+        assert_eq!(prog.test_info[0].strategy, crate::parser::ast::TestStrategy::Sequential);
         assert_eq!(prog.functions.len(), 1);
+    }
+
+    #[test]
+    fn parse_test_round_robin() {
+        let src = "test \"rr\" @round_robin {\n}\n";
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let prog = parser.parse_program().unwrap();
+        assert_eq!(prog.test_info.len(), 1);
+        assert_eq!(prog.test_info[0].strategy, crate::parser::ast::TestStrategy::RoundRobin);
+    }
+
+    #[test]
+    fn parse_test_random() {
+        let src = "test \"rand\" @random(iterations: 50, seed: 42) {\n}\n";
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let prog = parser.parse_program().unwrap();
+        assert_eq!(prog.test_info.len(), 1);
+        assert_eq!(prog.test_info[0].strategy, crate::parser::ast::TestStrategy::Random);
+        assert_eq!(prog.test_info[0].iterations, 50);
+        assert_eq!(prog.test_info[0].seed, 42);
     }
 }

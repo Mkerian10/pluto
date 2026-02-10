@@ -224,6 +224,8 @@ pub enum Token {
     Dot,
     #[token("?")]
     Question,
+    #[token("@")]
+    At,
 
     // Newline (significant for statement termination)
     #[regex(r"\n[\n]*")]
@@ -334,6 +336,7 @@ impl std::fmt::Display for Token {
             Token::DotDot => write!(f, ".."),
             Token::Dot => write!(f, "."),
             Token::Question => write!(f, "?"),
+            Token::At => write!(f, "@"),
             Token::Newline => write!(f, "newline"),
             Token::Comment => write!(f, "comment"),
         }

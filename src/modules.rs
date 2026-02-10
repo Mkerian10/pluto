@@ -792,7 +792,7 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
     // Filter out test functions from imported modules before merging
     for (_module_name, module_prog, _origin) in &mut graph.imports {
         let test_fn_names: HashSet<String> = module_prog.test_info.iter()
-            .map(|(_, fn_name)| fn_name.clone()).collect();
+            .map(|t| t.fn_name.clone()).collect();
         module_prog.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
         module_prog.test_info.clear();
     }

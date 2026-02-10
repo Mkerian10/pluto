@@ -31,6 +31,9 @@ enum Commands {
     Test {
         /// Source file path
         file: PathBuf,
+        /// Override seed for random test strategies (for reproducibility)
+        #[arg(long)]
+        seed: Option<u64>,
     },
     /// Analyze a .pt source file and emit a .pluto binary AST
     EmitAst {
@@ -147,7 +150,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Test { file } => {
+        Commands::Test { file, seed } => {
             let tmp = std::env::temp_dir().join("pluto_test");
             if let Err(err) = plutoc::compile_file_for_tests(&file, &tmp, stdlib) {
                 let filename = file.to_string_lossy().to_string();
@@ -155,7 +158,11 @@ fn main() {
                 std::process::exit(1);
             }
 
-            let status = std::process::Command::new(&tmp)
+            let mut cmd = std::process::Command::new(&tmp);
+            if let Some(s) = seed {
+                cmd.env("PLUTO_TEST_SEED", s.to_string());
+            }
+            let status = cmd
                 .status()
                 .unwrap_or_else(|e| {
                     eprintln!("error: could not run compiled binary: {e}");

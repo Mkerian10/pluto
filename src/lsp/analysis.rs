@@ -61,7 +61,7 @@ pub fn check_file(
     let test_fn_names: std::collections::HashSet<String> = program
         .test_info
         .iter()
-        .map(|(_, fn_name)| fn_name.clone())
+        .map(|t| t.fn_name.clone())
         .collect();
     program
         .functions

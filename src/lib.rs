@@ -55,7 +55,7 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
     spawn::desugar_spawn(&mut program)?;
     // Strip test functions in non-test mode
     let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
-        .map(|(_, fn_name)| fn_name.clone()).collect();
+        .map(|t| t.fn_name.clone()).collect();
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
     contracts::validate_contracts(&program)?;
@@ -82,7 +82,7 @@ pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<Com
     ambient::desugar_ambient(&mut program)?;
     spawn::desugar_spawn(&mut program)?;
     let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
-        .map(|(_, fn_name)| fn_name.clone()).collect();
+        .map(|t| t.fn_name.clone()).collect();
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
     contracts::validate_contracts(&program)?;
@@ -202,7 +202,7 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
     spawn::desugar_spawn(&mut program)?;
     // Strip test functions in non-test mode
     let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
-        .map(|(_, fn_name)| fn_name.clone()).collect();
+        .map(|t| t.fn_name.clone()).collect();
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
     contracts::validate_contracts(&program)?;
@@ -271,7 +271,7 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
     spawn::desugar_spawn(&mut program)?;
     // Strip test functions in non-test mode
     let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
-        .map(|(_, fn_name)| fn_name.clone()).collect();
+        .map(|t| t.fn_name.clone()).collect();
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
     contracts::validate_contracts(&program)?;
@@ -400,7 +400,12 @@ fn cached_test_runtime_object() -> Result<&'static Path, CompileError> {
             std::fs::write(&runtime_c, runtime_src)
                 .map_err(|e| CompileError::link(format!("failed to write test runtime source: {e}")))?;
             let mut cmd = std::process::Command::new("cc");
-            cmd.arg("-c").arg("-DPLUTO_TEST_MODE").arg(&runtime_c).arg("-o").arg(&runtime_o);
+            cmd.arg("-c")
+               .arg("-DPLUTO_TEST_MODE")
+               .arg("-Wno-deprecated-declarations")
+               .arg(&runtime_c)
+               .arg("-o")
+               .arg(&runtime_o);
             // No -pthread in test mode (single-threaded)
             let status = cmd.status()
                 .map_err(|e| CompileError::link(format!("failed to compile test runtime: {e}")))?;

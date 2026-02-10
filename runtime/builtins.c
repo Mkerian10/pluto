@@ -1,4 +1,8 @@
+#define _XOPEN_SOURCE 700
 #define _GNU_SOURCE
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +23,9 @@
 #ifndef PLUTO_TEST_MODE
 #include <pthread.h>
 #include <stdatomic.h>
+#endif
+#ifdef PLUTO_TEST_MODE
+#include <ucontext.h>
 #endif
 
 // ── Forward declarations ─────────────────────────────────────────────────────
@@ -2253,25 +2260,147 @@ static void task_raise_cancelled(void) {
 
 #ifdef PLUTO_TEST_MODE
 
-// ── Test mode: sequential execution (tasks run inline) ──
+// ── Fiber scheduler infrastructure ──────────────────────────────────────────
 
-long __pluto_task_spawn(long closure_ptr) {
-    long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
-    task[0] = closure_ptr;
-    task[1] = 0;  task[2] = 0;  task[3] = 0;
-    task[4] = 0;  // no sync — single-threaded
-    task[5] = 0;  task[6] = 0;  // detached, cancelled
+#define FIBER_STACK_SIZE (64 * 1024)   // 64KB per fiber stack
+#define MAX_FIBERS 256
 
-    // Save/restore current task (tasks can nest in sequential mode)
-    long *prev_task = __pluto_current_task;
-    void *prev_error = __pluto_current_error;
-    __pluto_current_error = NULL;
-    __pluto_current_task = task;
+typedef enum { STRATEGY_SEQUENTIAL=0, STRATEGY_ROUND_ROBIN=1, STRATEGY_RANDOM=2 } Strategy;
+typedef enum {
+    FIBER_READY=0, FIBER_RUNNING=1,
+    FIBER_BLOCKED_TASK=2, FIBER_BLOCKED_CHAN_SEND=3,
+    FIBER_BLOCKED_CHAN_RECV=4, FIBER_BLOCKED_SELECT=5,
+    FIBER_COMPLETED=6
+} FiberState;
 
-    // Execute the closure inline
-    long fn_ptr = *(long *)closure_ptr;
-    long result = ((long(*)(long))fn_ptr)(closure_ptr);
+typedef struct {
+    ucontext_t context;
+    char *stack;
+    FiberState state;
+    long *task;              // associated task handle (NULL for fiber 0 / main test fiber)
+    long closure_ptr;        // closure to execute (for spawned fibers)
+    void *blocked_on;        // task handle or channel handle we're waiting on
+    long blocked_value;      // value for pending send
+    int id;
+    // Per-fiber saved TLS state (restored on context switch)
+    void *saved_error;       // __pluto_current_error
+    long *saved_current_task; // __pluto_current_task
+} Fiber;
 
+typedef struct {
+    Fiber fibers[MAX_FIBERS];
+    int fiber_count;
+    int current_fiber;
+    Strategy strategy;
+    uint64_t seed;
+    long main_fn_ptr;        // test function pointer (fiber 0 entry)
+    ucontext_t scheduler_ctx;
+    int deadlock;
+} Scheduler;
+
+static Scheduler *g_scheduler = NULL;
+
+// Forward declarations for fiber scheduler
+static void scheduler_run(void);
+static void fiber_yield_to_scheduler(void);
+static void test_main_fiber_entry(void);
+
+// ── Fiber helper functions ──────────────────────────────────────────────────
+
+static void wake_fibers_blocked_on_task(long *task_ptr) {
+    if (!g_scheduler) return;
+    for (int i = 0; i < g_scheduler->fiber_count; i++) {
+        Fiber *f = &g_scheduler->fibers[i];
+        if (f->state == FIBER_BLOCKED_TASK && f->blocked_on == (void *)task_ptr) {
+            f->state = FIBER_READY;
+            f->blocked_on = NULL;
+        }
+    }
+}
+
+static void wake_fibers_blocked_on_chan(long *ch_ptr) {
+    if (!g_scheduler) return;
+    for (int i = 0; i < g_scheduler->fiber_count; i++) {
+        Fiber *f = &g_scheduler->fibers[i];
+        if ((f->state == FIBER_BLOCKED_CHAN_SEND || f->state == FIBER_BLOCKED_CHAN_RECV ||
+             f->state == FIBER_BLOCKED_SELECT) && f->blocked_on == (void *)ch_ptr) {
+            f->state = FIBER_READY;
+            f->blocked_on = NULL;
+        }
+    }
+}
+
+// Wake ALL fibers blocked on select that include this channel in their buffer
+static void wake_select_fibers_for_chan(long *ch_ptr) {
+    if (!g_scheduler) return;
+    for (int i = 0; i < g_scheduler->fiber_count; i++) {
+        Fiber *f = &g_scheduler->fibers[i];
+        if (f->state == FIBER_BLOCKED_SELECT) {
+            // For select, blocked_on points to the buffer_ptr array
+            // We wake unconditionally since we can't cheaply check all handles
+            f->state = FIBER_READY;
+            f->blocked_on = NULL;
+        }
+    }
+}
+
+static uint64_t lcg_next(uint64_t *seed) {
+    *seed = (*seed) * 6364136223846793005ULL + 1442695040888963407ULL;
+    return *seed;
+}
+
+static int pick_next_fiber(void) {
+    if (!g_scheduler) return -1;
+    int n = g_scheduler->fiber_count;
+
+    if (g_scheduler->strategy == STRATEGY_ROUND_ROBIN) {
+        // Round-robin: start from current+1, find first READY
+        for (int off = 1; off <= n; off++) {
+            int idx = (g_scheduler->current_fiber + off) % n;
+            if (g_scheduler->fibers[idx].state == FIBER_READY) return idx;
+        }
+        return -1;
+    } else {
+        // Random: collect all READY fibers, pick one using LCG
+        int ready[MAX_FIBERS];
+        int ready_count = 0;
+        for (int i = 0; i < n; i++) {
+            if (g_scheduler->fibers[i].state == FIBER_READY) {
+                ready[ready_count++] = i;
+            }
+        }
+        if (ready_count == 0) return -1;
+        uint64_t r = lcg_next(&g_scheduler->seed);
+        return ready[(int)(r % (uint64_t)ready_count)];
+    }
+}
+
+static int all_fibers_done(void) {
+    for (int i = 0; i < g_scheduler->fiber_count; i++) {
+        if (g_scheduler->fibers[i].state != FIBER_COMPLETED) return 0;
+    }
+    return 1;
+}
+
+static void fiber_yield_to_scheduler(void) {
+    int cur = g_scheduler->current_fiber;
+    Fiber *f = &g_scheduler->fibers[cur];
+    // Save TLS state
+    f->saved_error = __pluto_current_error;
+    f->saved_current_task = __pluto_current_task;
+    swapcontext(&f->context, &g_scheduler->scheduler_ctx);
+    // Resumed — TLS state restored by scheduler before switching to us
+}
+
+static void fiber_entry_fn(int fiber_id) {
+    Fiber *f = &g_scheduler->fibers[fiber_id];
+    long *task = f->task;
+
+    // Execute the closure
+    long fn_ptr = *(long *)f->closure_ptr;
+    long result = ((long(*)(long))fn_ptr)(f->closure_ptr);
+
+    // Store result or error in task handle
     if (__pluto_current_error) {
         task[2] = (long)__pluto_current_error;
         __pluto_current_error = NULL;
@@ -2291,22 +2420,228 @@ long __pluto_task_spawn(long closure_ptr) {
         }
     }
 
-    // Restore previous task context
+    f->state = FIBER_COMPLETED;
+
+    // Wake any fibers waiting on this task
+    wake_fibers_blocked_on_task(task);
+
+    // Return to scheduler via uc_link
+}
+
+static void test_main_fiber_entry(void) {
+    // Execute the test function (no closure env, just a plain function pointer)
+    ((void(*)(void))g_scheduler->main_fn_ptr)();
+    g_scheduler->fibers[0].state = FIBER_COMPLETED;
+    // Return to scheduler via uc_link
+}
+
+static void scheduler_run(void) {
+    while (1) {
+        int next = pick_next_fiber();
+        if (next == -1) {
+            if (all_fibers_done()) break;
+            // Deadlock: all remaining fibers are blocked
+            fprintf(stderr, "pluto: deadlock detected in test\n");
+            for (int i = 0; i < g_scheduler->fiber_count; i++) {
+                Fiber *f = &g_scheduler->fibers[i];
+                if (f->state >= FIBER_BLOCKED_TASK && f->state <= FIBER_BLOCKED_SELECT) {
+                    const char *reason = "unknown";
+                    switch (f->state) {
+                        case FIBER_BLOCKED_TASK:      reason = "task.get()"; break;
+                        case FIBER_BLOCKED_CHAN_SEND:  reason = "chan.send()"; break;
+                        case FIBER_BLOCKED_CHAN_RECV:  reason = "chan.recv()"; break;
+                        case FIBER_BLOCKED_SELECT:     reason = "select"; break;
+                        default: break;
+                    }
+                    fprintf(stderr, "  Fiber %d: blocked on %s\n", i, reason);
+                }
+            }
+            g_scheduler->deadlock = 1;
+            break;
+        }
+
+        // Restore next fiber's TLS state
+        g_scheduler->current_fiber = next;
+        Fiber *f = &g_scheduler->fibers[next];
+        __pluto_current_error = f->saved_error;
+        __pluto_current_task = f->saved_current_task;
+        f->state = FIBER_RUNNING;
+
+        swapcontext(&g_scheduler->scheduler_ctx, &f->context);
+
+        // Fiber yielded or completed — state already saved in fiber_yield_to_scheduler
+        // (or fiber completed and returned via uc_link)
+        // For completed fibers that return via uc_link, save their state too
+        Fiber *yielded = &g_scheduler->fibers[g_scheduler->current_fiber];
+        if (yielded->state != FIBER_COMPLETED) {
+            // State was saved by fiber_yield_to_scheduler already
+        } else {
+            yielded->saved_error = __pluto_current_error;
+            yielded->saved_current_task = __pluto_current_task;
+        }
+    }
+}
+
+// ── __pluto_test_run: entry point called by codegen ──
+
+void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations) {
+    if (strategy == STRATEGY_SEQUENTIAL) {
+        // Phase A behavior: just call the function directly
+        ((void(*)(void))fn_ptr)();
+        return;
+    }
+
+    // Check env var override for seed
+    char *env_seed = getenv("PLUTO_TEST_SEED");
+    if (env_seed) seed = (long)strtoull(env_seed, NULL, 0);
+
+    int num_runs = (strategy == STRATEGY_RANDOM) ? (int)iterations : 1;
+    if (num_runs < 1) num_runs = 1;
+
+    for (int run = 0; run < num_runs; run++) {
+        uint64_t run_seed = (uint64_t)seed + (uint64_t)run;
+
+        g_scheduler = (Scheduler *)calloc(1, sizeof(Scheduler));
+        g_scheduler->strategy = (Strategy)strategy;
+        g_scheduler->seed = run_seed;
+        g_scheduler->main_fn_ptr = fn_ptr;
+
+        // Create fiber 0 for the test body
+        Fiber *f = &g_scheduler->fibers[0];
+        f->id = 0;
+        f->state = FIBER_READY;
+        f->stack = (char *)malloc(FIBER_STACK_SIZE);
+        f->task = NULL;
+        f->closure_ptr = 0;
+        f->saved_error = NULL;
+        f->saved_current_task = NULL;
+        getcontext(&f->context);
+        f->context.uc_stack.ss_sp = f->stack;
+        f->context.uc_stack.ss_size = FIBER_STACK_SIZE;
+        f->context.uc_link = &g_scheduler->scheduler_ctx;
+        makecontext(&f->context, (void(*)(void))test_main_fiber_entry, 0);
+        g_scheduler->fiber_count = 1;
+
+        scheduler_run();
+
+        int had_deadlock = g_scheduler->deadlock;
+
+        // Cleanup
+        for (int i = 0; i < g_scheduler->fiber_count; i++)
+            free(g_scheduler->fibers[i].stack);
+        free(g_scheduler);
+        g_scheduler = NULL;
+
+        if (had_deadlock) {
+            fprintf(stderr, "  (seed: 0x%llx, iteration: %d)\n",
+                    (unsigned long long)run_seed, run);
+            exit(1);
+        }
+    }
+}
+
+// ── Test mode: task operations (fiber-aware) ────────────────────────────────
+
+static long task_spawn_sequential(long closure_ptr) {
+    // Phase A inline behavior (for sequential strategy or no scheduler)
+    long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
+    task[0] = closure_ptr;
+    task[1] = 0;  task[2] = 0;  task[3] = 0;
+    task[4] = 0;  task[5] = 0;  task[6] = 0;
+
+    long *prev_task = __pluto_current_task;
+    void *prev_error = __pluto_current_error;
+    __pluto_current_error = NULL;
+    __pluto_current_task = task;
+
+    long fn_ptr = *(long *)closure_ptr;
+    long result = ((long(*)(long))fn_ptr)(closure_ptr);
+
+    if (__pluto_current_error) {
+        task[2] = (long)__pluto_current_error;
+        __pluto_current_error = NULL;
+    } else {
+        task[1] = result;
+    }
+    task[3] = 1;
+
+    if (task[5] && task[2]) {
+        long *err_obj = (long *)task[2];
+        char *msg_ptr = (char *)err_obj[0];
+        if (msg_ptr) {
+            long len = *(long *)msg_ptr;
+            char *data = msg_ptr + 8;
+            fprintf(stderr, "pluto: error in detached task: %.*s\n", (int)len, data);
+        }
+    }
+
     __pluto_current_task = prev_task;
     __pluto_current_error = prev_error;
+    return (long)task;
+}
+
+static long task_spawn_fiber(long closure_ptr) {
+    // Create a new fiber for the spawned task
+    long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
+    task[0] = closure_ptr;
+    task[1] = 0;  task[2] = 0;  task[3] = 0;
+    task[4] = 0;  task[5] = 0;  task[6] = 0;
+
+    int fid = g_scheduler->fiber_count;
+    if (fid >= MAX_FIBERS) {
+        fprintf(stderr, "pluto: too many fibers (max %d)\n", MAX_FIBERS);
+        exit(1);
+    }
+
+    Fiber *f = &g_scheduler->fibers[fid];
+    f->id = fid;
+    f->state = FIBER_READY;
+    f->stack = (char *)malloc(FIBER_STACK_SIZE);
+    f->task = task;
+    f->closure_ptr = closure_ptr;
+    f->blocked_on = NULL;
+    f->blocked_value = 0;
+    f->saved_error = NULL;
+    f->saved_current_task = task;  // fiber starts with its own task as current
+    getcontext(&f->context);
+    f->context.uc_stack.ss_sp = f->stack;
+    f->context.uc_stack.ss_size = FIBER_STACK_SIZE;
+    f->context.uc_link = &g_scheduler->scheduler_ctx;
+    makecontext(&f->context, (void(*)(void))fiber_entry_fn, 1, fid);
+    g_scheduler->fiber_count++;
+
+    // Store fiber_id in task[4] for cross-referencing
+    task[4] = (long)fid;
 
     return (long)task;
 }
 
+long __pluto_task_spawn(long closure_ptr) {
+    if (!g_scheduler || g_scheduler->strategy == STRATEGY_SEQUENTIAL) {
+        return task_spawn_sequential(closure_ptr);
+    }
+    return task_spawn_fiber(closure_ptr);
+}
+
 long __pluto_task_get(long task_ptr) {
     long *task = (long *)task_ptr;
-    // Task already completed (ran inline) — no blocking needed
 
     if (task[6] && !task[1] && !task[2]) {
         task_raise_cancelled();
         return 0;
     }
 
+    if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+        // Fiber mode: if task not done, block and yield
+        while (!task[3]) {
+            Fiber *cur = &g_scheduler->fibers[g_scheduler->current_fiber];
+            cur->state = FIBER_BLOCKED_TASK;
+            cur->blocked_on = (void *)task;
+            fiber_yield_to_scheduler();
+            // Resumed — task should be done now (or we got woken spuriously)
+        }
+    }
+    // Task is done (either was already done, or we waited)
     if (task[2]) {
         __pluto_current_error = (void *)task[2];
         return 0;
@@ -2316,8 +2651,7 @@ long __pluto_task_get(long task_ptr) {
 
 void __pluto_task_detach(long task_ptr) {
     long *task = (long *)task_ptr;
-    task[5] = 1;  // mark as detached
-    // If already done + errored, print to stderr now
+    task[5] = 1;
     if (task[3] && task[2]) {
         long *err_obj = (long *)task[2];
         char *msg_ptr = (char *)err_obj[0];
@@ -2331,7 +2665,7 @@ void __pluto_task_detach(long task_ptr) {
 
 void __pluto_task_cancel(long task_ptr) {
     long *task = (long *)task_ptr;
-    task[6] = 1;  // set cancelled flag (task already completed)
+    task[6] = 1;
 }
 
 #else
@@ -2699,12 +3033,12 @@ static void chan_raise_error(const char *msg) {
 
 #ifdef PLUTO_TEST_MODE
 
-// ── Test mode: no-mutex channel operations ──
+// ── Test mode: channel operations (fiber-aware) ──
 
 long __pluto_chan_create(long capacity) {
     long actual_cap = capacity > 0 ? capacity : 1;
     long *ch = (long *)gc_alloc(64, GC_TAG_CHANNEL, 0);
-    ch[0] = 0;  // no sync — single-threaded
+    ch[0] = 0;  // no sync needed in test mode
     long *buf = (long *)calloc((size_t)actual_cap, sizeof(long));
     ch[1] = (long)buf;
     ch[2] = actual_cap;
@@ -2718,12 +3052,41 @@ long __pluto_chan_create(long capacity) {
 
 long __pluto_chan_send(long handle, long value) {
     long *ch = (long *)handle;
+
+    if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+        // Fiber mode: yield when buffer is full
+        while (1) {
+            if (ch[6]) {
+                chan_raise_error("channel closed");
+                return 0;
+            }
+            if (ch[3] < ch[2]) {
+                // Space available — push value
+                long *buf = (long *)ch[1];
+                buf[ch[5]] = value;
+                ch[5] = (ch[5] + 1) % ch[2];
+                ch[3]++;
+                // Wake any fibers waiting to recv on this channel
+                wake_fibers_blocked_on_chan(ch);
+                wake_select_fibers_for_chan(ch);
+                return value;
+            }
+            // Buffer full — yield
+            Fiber *cur = &g_scheduler->fibers[g_scheduler->current_fiber];
+            cur->state = FIBER_BLOCKED_CHAN_SEND;
+            cur->blocked_on = (void *)ch;
+            cur->blocked_value = value;
+            fiber_yield_to_scheduler();
+            // Resumed — retry
+        }
+    }
+
+    // Sequential mode
     if (ch[6]) {
         chan_raise_error("channel closed");
         return 0;
     }
     if (ch[3] == ch[2]) {
-        // Buffer full — in sequential mode, no other task will drain it
         fprintf(stderr, "pluto: deadlock detected — channel send on full buffer in sequential test mode\n");
         exit(1);
     }
@@ -2736,12 +3099,40 @@ long __pluto_chan_send(long handle, long value) {
 
 long __pluto_chan_recv(long handle) {
     long *ch = (long *)handle;
+
+    if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+        // Fiber mode: yield when buffer is empty
+        while (1) {
+            if (ch[3] > 0) {
+                // Data available — pop value
+                long *buf = (long *)ch[1];
+                long val = buf[ch[4]];
+                ch[4] = (ch[4] + 1) % ch[2];
+                ch[3]--;
+                // Wake any fibers waiting to send on this channel
+                wake_fibers_blocked_on_chan(ch);
+                wake_select_fibers_for_chan(ch);
+                return val;
+            }
+            if (ch[6]) {
+                chan_raise_error("channel closed");
+                return 0;
+            }
+            // Buffer empty — yield
+            Fiber *cur = &g_scheduler->fibers[g_scheduler->current_fiber];
+            cur->state = FIBER_BLOCKED_CHAN_RECV;
+            cur->blocked_on = (void *)ch;
+            fiber_yield_to_scheduler();
+            // Resumed — retry
+        }
+    }
+
+    // Sequential mode
     if (ch[3] == 0 && ch[6]) {
         chan_raise_error("channel closed");
         return 0;
     }
     if (ch[3] == 0) {
-        // Buffer empty — in sequential mode, no other task will produce
         fprintf(stderr, "pluto: deadlock detected — channel recv on empty buffer in sequential test mode\n");
         exit(1);
     }
@@ -2766,6 +3157,10 @@ long __pluto_chan_try_send(long handle, long value) {
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
+    if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+        wake_fibers_blocked_on_chan(ch);
+        wake_select_fibers_for_chan(ch);
+    }
     return value;
 }
 
@@ -2783,12 +3178,21 @@ long __pluto_chan_try_recv(long handle) {
     long val = buf[ch[4]];
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
+    if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+        wake_fibers_blocked_on_chan(ch);
+        wake_select_fibers_for_chan(ch);
+    }
     return val;
 }
 
 void __pluto_chan_close(long handle) {
     long *ch = (long *)handle;
     ch[6] = 1;
+    if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+        // Wake ALL fibers blocked on this channel (both send and recv)
+        wake_fibers_blocked_on_chan(ch);
+        wake_select_fibers_for_chan(ch);
+    }
 }
 
 void __pluto_chan_sender_inc(long handle) {
@@ -2992,7 +3396,47 @@ void __pluto_chan_sender_dec(long handle) {
  */
 #ifdef PLUTO_TEST_MODE
 
-// ── Test mode: single-pass select (no polling loop) ──
+// ── Test mode: select (fiber-aware) ──
+
+static long select_try_arms(long *handles, long *ops, long *values, int n, int *indices) {
+    int all_closed = 1;
+    for (int si = 0; si < n; si++) {
+        int i = indices[si];
+        long *ch = (long *)handles[i];
+        if (ops[i] == 0) {
+            /* recv */
+            if (ch[3] > 0) {
+                long *cbuf = (long *)ch[1];
+                long val = cbuf[ch[4]];
+                ch[4] = (ch[4] + 1) % ch[2];
+                ch[3]--;
+                values[i] = val;
+                if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+                    wake_fibers_blocked_on_chan(ch);
+                    wake_select_fibers_for_chan(ch);
+                }
+                return (long)i;
+            }
+            if (!ch[6]) all_closed = 0;
+        } else {
+            /* send */
+            if (!ch[6] && ch[3] < ch[2]) {
+                long *cbuf = (long *)ch[1];
+                cbuf[ch[5]] = values[i];
+                ch[5] = (ch[5] + 1) % ch[2];
+                ch[3]++;
+                if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+                    wake_fibers_blocked_on_chan(ch);
+                    wake_select_fibers_for_chan(ch);
+                }
+                return (long)i;
+            }
+            if (!ch[6]) all_closed = 0;
+        }
+    }
+    if (all_closed) return -2;
+    return -3;  // no ready arm, not all closed
+}
 
 long __pluto_select(long buffer_ptr, long count, long has_default) {
     long *buf = (long *)buffer_ptr;
@@ -3012,46 +3456,34 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
         int tmp = indices[i]; indices[i] = indices[j]; indices[j] = tmp;
     }
 
-    int all_closed = 1;
-
-    for (int si = 0; si < n; si++) {
-        int i = indices[si];
-        long *ch = (long *)handles[i];
-
-        if (ops[i] == 0) {
-            /* recv */
-            if (ch[3] > 0) {
-                long *cbuf = (long *)ch[1];
-                long val = cbuf[ch[4]];
-                ch[4] = (ch[4] + 1) % ch[2];
-                ch[3]--;
-                values[i] = val;
-                return (long)i;
+    if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+        // Fiber mode: loop with yield
+        while (1) {
+            long result = select_try_arms(handles, ops, values, n, indices);
+            if (result >= 0) return result;
+            if (result == -2) {
+                chan_raise_error("channel closed");
+                return -2;
             }
-            if (!ch[6]) all_closed = 0;
-        } else {
-            /* send */
-            if (!ch[6] && ch[3] < ch[2]) {
-                long *cbuf = (long *)ch[1];
-                cbuf[ch[5]] = values[i];
-                ch[5] = (ch[5] + 1) % ch[2];
-                ch[3]++;
-                return (long)i;
-            }
-            if (!ch[6]) all_closed = 0;
+            // -3: no ready arm, not all closed
+            if (has_default) return -1;
+            // Block and yield
+            Fiber *cur = &g_scheduler->fibers[g_scheduler->current_fiber];
+            cur->state = FIBER_BLOCKED_SELECT;
+            cur->blocked_on = (void *)buf;
+            fiber_yield_to_scheduler();
+            // Resumed — retry all arms
         }
     }
 
-    if (has_default) {
-        return -1;
-    }
-
-    if (all_closed) {
+    // Sequential mode: single pass
+    long result = select_try_arms(handles, ops, values, n, indices);
+    if (result >= 0) return result;
+    if (has_default) return -1;
+    if (result == -2) {
         chan_raise_error("channel closed");
         return -2;
     }
-
-    /* No ready arm and no default — deadlock in sequential mode */
     fprintf(stderr, "pluto: deadlock detected — select with no ready channels in sequential test mode\n");
     exit(1);
 }

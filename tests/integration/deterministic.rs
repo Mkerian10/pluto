@@ -258,3 +258,224 @@ test "channel close" {
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
     assert_eq!(code, 0);
 }
+
+// ── Round-robin tests ──────────────────────────────────────────────────
+
+#[test]
+fn round_robin_spawn_basic() {
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn add(a: int, b: int) int {
+    return a + b
+}
+
+test "round robin spawn returns result" @round_robin {
+    let t = spawn add(1, 2)
+    expect(t.get()).to_equal(3)
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn round_robin_multiple_spawns() {
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn double(x: int) int {
+    return x * 2
+}
+
+test "round robin multiple spawns" @round_robin {
+    let t1 = spawn double(5)
+    let t2 = spawn double(10)
+    let t3 = spawn double(15)
+    expect(t1.get()).to_equal(10)
+    expect(t2.get()).to_equal(20)
+    expect(t3.get()).to_equal(30)
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn round_robin_channel_pipeline() {
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn producer(tx: Sender<int>) {
+    tx.send(10)!
+    tx.send(20)!
+    tx.send(30)!
+}
+
+test "round robin channel pipeline" @round_robin {
+    let (tx, rx) = chan<int>(1)
+    let t = spawn producer(tx)
+    let a = rx.recv()!
+    let b = rx.recv()!
+    let c = rx.recv()!
+    t.get()!
+    expect(a).to_equal(10)
+    expect(b).to_equal(20)
+    expect(c).to_equal(30)
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn round_robin_spawn_with_error() {
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+error TaskError {
+    message: string
+}
+
+fn fail_task() int {
+    raise TaskError { message: "oops" }
+    return 0
+}
+
+fn run() int {
+    let t = spawn fail_task()
+    let result = t.get() catch -1
+    return result
+}
+
+test "round robin error propagation" @round_robin {
+    expect(run()).to_equal(-1)
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn round_robin_string_result() {
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn greet(name: string) string {
+    return "hello " + name
+}
+
+test "round robin string result" @round_robin {
+    let t = spawn greet("world")
+    expect(t.get()).to_equal("hello world")
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
+    assert_eq!(code, 0);
+}
+
+// ── Random strategy tests ──────────────────────────────────────────────
+
+#[test]
+fn random_spawn_basic() {
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn add(a: int, b: int) int {
+    return a + b
+}
+
+test "random spawn basic" @random(iterations: 10) {
+    let t = spawn add(3, 4)
+    expect(t.get()).to_equal(7)
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn random_seed_reproducibility() {
+    // With a fixed seed, results should always be the same
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn compute(x: int) int {
+    return x * x + 1
+}
+
+test "random with seed" @random(iterations: 5, seed: 42) {
+    let t = spawn compute(7)
+    expect(t.get()).to_equal(50)
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn random_multiple_spawns() {
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn double(x: int) int {
+    return x * 2
+}
+
+test "random multiple spawns" @random(iterations: 10) {
+    let t1 = spawn double(5)
+    let t2 = spawn double(10)
+    expect(t1.get()).to_equal(10)
+    expect(t2.get()).to_equal(20)
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn random_channel_pipeline() {
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn producer(tx: Sender<int>) {
+    tx.send(1)!
+    tx.send(2)!
+    tx.send(3)!
+}
+
+test "random channel" @random(iterations: 5) {
+    let (tx, rx) = chan<int>(1)
+    let t = spawn producer(tx)
+    let a = rx.recv()!
+    let b = rx.recv()!
+    let c = rx.recv()!
+    t.get()!
+    expect(a).to_equal(1)
+    expect(b).to_equal(2)
+    expect(c).to_equal(3)
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
+    assert_eq!(code, 0);
+}
+
+// ── Sequential annotation (explicit) ───────────────────────────────────
+
+#[test]
+fn explicit_sequential_annotation() {
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn add(a: int, b: int) int {
+    return a + b
+}
+
+test "explicit sequential" @sequential {
+    let t = spawn add(2, 3)
+    expect(t.get()).to_equal(5)
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
+    assert_eq!(code, 0);
+}
+
+// ── Parse error tests ──────────────────────────────────────────────────
+
+#[test]
+fn annotation_parse_error_unknown() {
+    compile_test_should_fail_with(r#"
+test "bad" @unknown {
+    expect(true).to_be_true()
+}
+"#, "unknown test strategy");
+}
+
+#[test]
+fn annotation_parse_error_random_missing_params() {
+    compile_test_should_fail_with(r#"
+test "bad" @random {
+    expect(true).to_be_true()
+}
+"#, "expected (");
+}
