@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -613,6 +614,10 @@ void *__pluto_string_new(const char *data, long len) {
 void *__pluto_string_concat(void *a, void *b) {
     long len_a = *(long *)a;
     long len_b = *(long *)b;
+    if (len_a > LONG_MAX - len_b) {
+        fprintf(stderr, "pluto: string concatenation overflow\n");
+        exit(1);
+    }
     long total = len_a + len_b;
     size_t alloc_size = 8 + total + 1;
     void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
@@ -654,6 +659,10 @@ void __pluto_array_push(void *handle, long value) {
     long cap = h[1];
     long *data = (long *)h[2];
     if (len == cap) {
+        if (cap > LONG_MAX / 2) {
+            fprintf(stderr, "pluto: array capacity overflow\n");
+            exit(1);
+        }
         cap = cap * 2;
         if (cap == 0) cap = 4;
         data = (long *)realloc(data, cap * 8);
@@ -710,6 +719,10 @@ void __pluto_bytes_push(long handle, long value) {
     long cap = h[1];
     unsigned char *data = (unsigned char *)h[2];
     if (len == cap) {
+        if (cap > LONG_MAX / 2) {
+            fprintf(stderr, "pluto: bytes capacity overflow\n");
+            exit(1);
+        }
         cap = cap * 2;
         if (cap == 0) cap = 16;
         data = (unsigned char *)realloc(data, cap);
@@ -897,6 +910,12 @@ void *__pluto_string_replace(void *s, void *old, void *new_str) {
         count++;
         remaining -= (found - p) + olen;
         p = found + olen;
+    }
+    if (nlen > olen && count > 0) {
+        if (count > (LONG_MAX - slen) / (nlen - olen)) {
+            fprintf(stderr, "pluto: string replace overflow\n");
+            exit(1);
+        }
     }
     long newlen = slen + count * (nlen - olen);
     size_t alloc_size = 8 + newlen + 1;
@@ -1304,6 +1323,10 @@ void *__pluto_map_values(void *handle) {
 
 static void map_grow(long *h, long key_type) {
     long old_cap = h[1];
+    if (old_cap > LONG_MAX / 2) {
+        fprintf(stderr, "pluto: map capacity overflow\n");
+        exit(1);
+    }
     long new_cap = old_cap * 2;
     long *old_keys = (long *)h[2]; long *old_vals = (long *)h[3];
     unsigned char *old_meta = (unsigned char *)h[4];
@@ -1417,6 +1440,10 @@ void *__pluto_set_to_array(void *handle) {
 
 static void set_grow(long *h, long key_type) {
     long old_cap = h[1];
+    if (old_cap > LONG_MAX / 2) {
+        fprintf(stderr, "pluto: set capacity overflow\n");
+        exit(1);
+    }
     long new_cap = old_cap * 2;
     long *old_keys = (long *)h[2];
     unsigned char *old_meta = (unsigned char *)h[3];
@@ -1965,6 +1992,10 @@ void __pluto_json_array_push(void *handle, void *item_handle) {
     JsonNode *item = json_unwrap(item_handle);
     if (arr->type != JSON_ARRAY) { fprintf(stderr, "pluto: json: not an array\n"); exit(1); }
     if (arr->array.len >= arr->array.cap) {
+        if (arr->array.cap > INT_MAX / 2) {
+            fprintf(stderr, "pluto: json array capacity overflow\n");
+            exit(1);
+        }
         arr->array.cap *= 2;
         arr->array.items = (JsonNode **)realloc(arr->array.items, arr->array.cap * sizeof(JsonNode *));
     }
@@ -1987,6 +2018,10 @@ void __pluto_json_object_set(void *handle, void *key_str, void *val_handle) {
     }
     // Add new key
     if (obj->object.len >= obj->object.cap) {
+        if (obj->object.cap > INT_MAX / 2) {
+            fprintf(stderr, "pluto: json object capacity overflow\n");
+            exit(1);
+        }
         obj->object.cap *= 2;
         obj->object.keys = (char **)realloc(obj->object.keys, obj->object.cap * sizeof(char *));
         obj->object.vals = (JsonNode **)realloc(obj->object.vals, obj->object.cap * sizeof(JsonNode *));
