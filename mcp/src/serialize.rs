@@ -56,6 +56,10 @@ pub struct ClassDetail {
     pub bracket_deps: Vec<FieldInfo>,
     pub impl_traits: Vec<String>,
     pub invariant_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_fields: Option<Vec<ResolvedFieldJson>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<String>,
     pub source: String,
 }
 
@@ -66,6 +70,8 @@ pub struct EnumDetail {
     pub kind: String,
     pub variants: Vec<VariantInfo>,
     pub type_params: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_variants: Option<Vec<ResolvedVariantJson>>,
     pub source: String,
 }
 
@@ -75,6 +81,10 @@ pub struct TraitDetail {
     pub uuid: String,
     pub kind: String,
     pub methods: Vec<TraitMethodInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_methods: Option<Vec<ResolvedTraitMethodJson>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub implementors: Option<Vec<String>>,
     pub source: String,
 }
 
@@ -84,6 +94,8 @@ pub struct ErrorDeclDetail {
     pub uuid: String,
     pub kind: String,
     pub fields: Vec<FieldInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_fields: Option<Vec<ResolvedFieldJson>>,
     pub source: String,
 }
 
@@ -95,6 +107,8 @@ pub struct AppDetail {
     pub bracket_deps: Vec<FieldInfo>,
     pub methods: Vec<MethodSummary>,
     pub ambient_types: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub di_order: Option<Vec<String>>,
     pub source: String,
 }
 
@@ -134,6 +148,28 @@ pub struct TraitMethodInfo {
     pub params: Vec<ParamInfo>,
     pub return_type: Option<String>,
     pub has_default_body: bool,
+}
+
+#[derive(Serialize)]
+pub struct ResolvedFieldJson {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_str: String,
+    pub is_injected: bool,
+}
+
+#[derive(Serialize)]
+pub struct ResolvedTraitMethodJson {
+    pub name: String,
+    pub param_types: Vec<String>,
+    pub return_type: String,
+    pub is_fallible: bool,
+}
+
+#[derive(Serialize)]
+pub struct ResolvedVariantJson {
+    pub name: String,
+    pub fields: Vec<ResolvedFieldJson>,
 }
 
 #[derive(Serialize)]
@@ -635,7 +671,7 @@ pub fn function_detail(
     }
 }
 
-pub fn class_detail(cls: &ClassDecl) -> ClassDetail {
+pub fn class_detail(cls: &ClassDecl, module: &plutoc_sdk::Module) -> ClassDetail {
     let regular_fields: Vec<FieldInfo> = cls
         .fields
         .iter()
@@ -649,6 +685,19 @@ pub fn class_detail(cls: &ClassDecl) -> ClassDetail {
         .filter(|f| f.is_injected)
         .map(field_to_info)
         .collect();
+
+    let resolved = module.class_info_of(cls.id);
+    let resolved_fields = resolved.map(|ci| {
+        ci.fields
+            .iter()
+            .map(|f| ResolvedFieldJson {
+                name: f.name.clone(),
+                type_str: format!("{}", f.ty),
+                is_injected: f.is_injected,
+            })
+            .collect()
+    });
+    let lifecycle = resolved.map(|ci| format!("{:?}", ci.lifecycle));
 
     ClassDetail {
         name: cls.name.node.clone(),
@@ -666,11 +715,31 @@ pub fn class_detail(cls: &ClassDecl) -> ClassDetail {
         bracket_deps,
         impl_traits: cls.impl_traits.iter().map(|t| t.node.clone()).collect(),
         invariant_count: cls.invariants.len(),
+        resolved_fields,
+        lifecycle,
         source: pretty_print_class(cls),
     }
 }
 
-pub fn enum_detail(en: &EnumDecl) -> EnumDetail {
+pub fn enum_detail(en: &EnumDecl, module: &plutoc_sdk::Module) -> EnumDetail {
+    let resolved_variants = module.enum_info_of(en.id).map(|ei| {
+        ei.variants
+            .iter()
+            .map(|v| ResolvedVariantJson {
+                name: v.name.clone(),
+                fields: v
+                    .fields
+                    .iter()
+                    .map(|f| ResolvedFieldJson {
+                        name: f.name.clone(),
+                        type_str: format!("{}", f.ty),
+                        is_injected: f.is_injected,
+                    })
+                    .collect(),
+            })
+            .collect()
+    });
+
     EnumDetail {
         name: en.name.node.clone(),
         uuid: en.id.to_string(),
@@ -685,11 +754,31 @@ pub fn enum_detail(en: &EnumDecl) -> EnumDetail {
             })
             .collect(),
         type_params: en.type_params.iter().map(|tp| tp.node.clone()).collect(),
+        resolved_variants,
         source: pretty_print_enum(en),
     }
 }
 
-pub fn trait_detail(tr: &TraitDecl) -> TraitDetail {
+pub fn trait_detail(tr: &TraitDecl, module: &plutoc_sdk::Module) -> TraitDetail {
+    let resolved = module.trait_info_of(tr.id);
+    let resolved_methods = resolved.map(|ti| {
+        ti.methods
+            .iter()
+            .map(|(name, sig)| ResolvedTraitMethodJson {
+                name: name.clone(),
+                param_types: sig.param_types.iter().map(|t| format!("{}", t)).collect(),
+                return_type: format!("{}", sig.return_type),
+                is_fallible: sig.is_fallible,
+            })
+            .collect()
+    });
+    let implementors = resolved.map(|ti| {
+        ti.implementors
+            .iter()
+            .map(|uuid| uuid.to_string())
+            .collect()
+    });
+
     TraitDetail {
         name: tr.name.node.clone(),
         uuid: tr.id.to_string(),
@@ -705,21 +794,44 @@ pub fn trait_detail(tr: &TraitDecl) -> TraitDetail {
                 has_default_body: m.body.is_some(),
             })
             .collect(),
+        resolved_methods,
+        implementors,
         source: pretty_print_trait(tr),
     }
 }
 
-pub fn error_decl_detail(err: &ErrorDecl) -> ErrorDeclDetail {
+pub fn error_decl_detail(err: &ErrorDecl, module: &plutoc_sdk::Module) -> ErrorDeclDetail {
+    let resolved_fields = module.error_info_of(err.id).map(|ei| {
+        ei.fields
+            .iter()
+            .map(|f| ResolvedFieldJson {
+                name: f.name.clone(),
+                type_str: format!("{}", f.ty),
+                is_injected: f.is_injected,
+            })
+            .collect()
+    });
+
     ErrorDeclDetail {
         name: err.name.node.clone(),
         uuid: err.id.to_string(),
         kind: "error".to_string(),
         fields: err.fields.iter().map(field_to_info).collect(),
+        resolved_fields,
         source: pretty_print_error_decl(err),
     }
 }
 
-pub fn app_detail(app: &AppDecl) -> AppDetail {
+pub fn app_detail(app: &AppDecl, module: &plutoc_sdk::Module) -> AppDetail {
+    let di_order = {
+        let order = module.di_order();
+        if order.is_empty() {
+            None
+        } else {
+            Some(order.iter().map(|uuid| uuid.to_string()).collect())
+        }
+    };
+
     AppDetail {
         name: app.name.node.clone(),
         uuid: app.id.to_string(),
@@ -734,6 +846,7 @@ pub fn app_detail(app: &AppDecl) -> AppDetail {
             })
             .collect(),
         ambient_types: app.ambient_types.iter().map(|a| a.node.clone()).collect(),
+        di_order,
         source: pretty_print_app(app),
     }
 }

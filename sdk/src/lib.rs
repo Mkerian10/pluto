@@ -11,7 +11,11 @@ pub use error::SdkError;
 pub use module::Module;
 
 // Re-export key plutoc types for convenience
-pub use plutoc::derived::{DerivedInfo, ErrorRef, ResolvedSignature};
+pub use plutoc::derived::{
+    DerivedInfo, ErrorRef, ResolvedSignature,
+    ResolvedClassInfo, ResolvedTraitInfo, ResolvedEnumInfo,
+    ResolvedErrorInfo, ResolvedFieldInfo, ResolvedVariantInfo,
+};
 pub use plutoc::parser::ast::Program;
 pub use plutoc::span::{Span, Spanned};
 pub use plutoc::typeck::types::PlutoType;
@@ -65,10 +69,7 @@ mod tests {
     }
 
     fn empty_derived() -> DerivedInfo {
-        DerivedInfo {
-            fn_error_sets: Default::default(),
-            fn_signatures: Default::default(),
-        }
+        DerivedInfo::default()
     }
 
     /// Parse a source string into a Program (no typeck).

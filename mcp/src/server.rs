@@ -1176,23 +1176,23 @@ impl PlutoMcp {
             }
             DeclKind::Class => {
                 let cls = decl.as_class().unwrap();
-                serde_json::to_string_pretty(&serialize::class_detail(cls))
+                serde_json::to_string_pretty(&serialize::class_detail(cls, module))
             }
             DeclKind::Enum => {
                 let en = decl.as_enum().unwrap();
-                serde_json::to_string_pretty(&serialize::enum_detail(en))
+                serde_json::to_string_pretty(&serialize::enum_detail(en, module))
             }
             DeclKind::Trait => {
                 let tr = decl.as_trait().unwrap();
-                serde_json::to_string_pretty(&serialize::trait_detail(tr))
+                serde_json::to_string_pretty(&serialize::trait_detail(tr, module))
             }
             DeclKind::Error => {
                 let err = decl.as_error().unwrap();
-                serde_json::to_string_pretty(&serialize::error_decl_detail(err))
+                serde_json::to_string_pretty(&serialize::error_decl_detail(err, module))
             }
             DeclKind::App => {
                 let app = decl.as_app().unwrap();
-                serde_json::to_string_pretty(&serialize::app_detail(app))
+                serde_json::to_string_pretty(&serialize::app_detail(app, module))
             }
             other => {
                 serde_json::to_string_pretty(&serde_json::json!({
