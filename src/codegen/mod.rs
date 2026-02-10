@@ -381,7 +381,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
 
             module
                 .define_function(func_id, &mut fn_ctx)
-                .map_err(|e| CompileError::codegen(format!("define method error: {e}")))?;
+                .map_err(|e| CompileError::codegen(format!("define method error for '{mangled}': {e}")))?;
         }
     }
 
@@ -435,7 +435,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
 
                             module
                                 .define_function(func_id, &mut fn_ctx)
-                                .map_err(|e| CompileError::codegen(format!("define default method error: {e}")))?;
+                                .map_err(|e| CompileError::codegen(format!("define default method error for '{mangled}': {e}")))?;
                         }
                     }
                 }
@@ -479,7 +479,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
 
             module
                 .define_function(func_id, &mut fn_ctx)
-                .map_err(|e| CompileError::codegen(format!("define app method error: {e}")))?;
+                .map_err(|e| CompileError::codegen(format!("define app method error for '{mangled}': {e}")))?;
         }
     }
 
