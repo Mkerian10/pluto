@@ -643,6 +643,8 @@ fn build_glue_crate(glue_dir: &Path) -> Result<(PathBuf, Vec<String>), CompileEr
     let output = std::process::Command::new("cargo")
         .arg("rustc")
         .arg("--release")
+        .arg("--color")
+        .arg("never")
         .arg("--crate-type")
         .arg("staticlib")
         .arg("--")
@@ -674,7 +676,26 @@ fn build_glue_crate(glue_dir: &Path) -> Result<(PathBuf, Vec<String>), CompileEr
     Ok((lib_path, native_libs))
 }
 
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip until 'm' (end of ANSI escape sequence)
+            for c2 in chars.by_ref() {
+                if c2 == 'm' {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn parse_native_static_libs(stderr: &str) -> Vec<String> {
+    let stderr = &strip_ansi(stderr);
     for line in stderr.lines() {
         if let Some(pos) = line.find("native-static-libs:") {
             let libs_str = &line[pos + "native-static-libs:".len()..];
