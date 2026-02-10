@@ -26,11 +26,15 @@ use crate::tools::*;
 async fn execute_with_timeout(
     binary: &Path,
     timeout: Duration,
+    cwd: Option<&Path>,
 ) -> Result<(String, String, Option<i32>, bool), McpError> {
-    let mut child = tokio::process::Command::new(binary)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+    let mut cmd = tokio::process::Command::new(binary);
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    let mut child = cmd.spawn()
         .map_err(|e| mcp_internal(format!("Failed to execute binary: {e}")))?;
 
     match tokio::time::timeout(timeout, child.wait()).await {
@@ -550,7 +554,7 @@ impl PlutoMcp {
     }
 
     // --- Tool 10: check ---
-    #[tool(description = "Type-check a .pluto source file and return structured diagnostics (errors and warnings with spans). Does NOT produce a binary. Compiler errors are returned as structured JSON (not MCP errors).")]
+    #[tool(description = "Type-check a .pluto source file and return structured diagnostics (errors and warnings with spans including line:col). Does NOT produce a binary. Compiler errors are returned as structured JSON (not MCP errors).")]
     async fn check(
         &self,
         Parameters(input): Parameters<CheckInput>,
@@ -558,6 +562,9 @@ impl PlutoMcp {
         let canonical = canon(&input.path);
         let entry_path = Path::new(&canonical);
         let stdlib_path = input.stdlib.as_ref().map(|s| PathBuf::from(s));
+
+        // Read source for line:col enrichment
+        let source_text = std::fs::read_to_string(&canonical).ok();
 
         let result = plutoc::analyze_file_with_warnings(
             entry_path,
@@ -570,14 +577,14 @@ impl PlutoMcp {
                     success: true,
                     path: canonical,
                     errors: vec![],
-                    warnings: warnings.iter().map(serialize::compile_warning_to_diagnostic).collect(),
+                    warnings: warnings.iter().map(|w| serialize::compile_warning_to_diagnostic(w, source_text.as_deref())).collect(),
                 }
             }
             Err(err) => {
                 serialize::CheckResult {
                     success: false,
                     path: canonical,
-                    errors: vec![serialize::compile_error_to_diagnostic(&err)],
+                    errors: vec![serialize::compile_error_to_diagnostic(&err, source_text.as_deref())],
                     warnings: vec![],
                 }
             }
@@ -589,7 +596,7 @@ impl PlutoMcp {
     }
 
     // --- Tool 11: compile ---
-    #[tool(description = "Compile a .pluto source file to a native binary. Returns the output path on success or structured error diagnostics on failure.")]
+    #[tool(description = "Compile a .pluto source file to a native binary. Returns the output path on success or structured error diagnostics (with line:col) on failure.")]
     async fn compile(
         &self,
         Parameters(input): Parameters<CompileInput>,
@@ -609,6 +616,9 @@ impl PlutoMcp {
                 path
             }
         };
+
+        // Read source for line:col enrichment
+        let source_text = std::fs::read_to_string(&canonical).ok();
 
         let result = plutoc::compile_file_with_stdlib(
             entry_path,
@@ -630,7 +640,7 @@ impl PlutoMcp {
                     success: false,
                     path: canonical,
                     output: None,
-                    errors: vec![serialize::compile_error_to_diagnostic(&err)],
+                    errors: vec![serialize::compile_error_to_diagnostic(&err, source_text.as_deref())],
                 }
             }
         };
@@ -652,6 +662,14 @@ impl PlutoMcp {
         let timeout_ms = input.timeout_ms.unwrap_or(10_000).min(60_000);
         let timeout = Duration::from_millis(timeout_ms);
 
+        // Determine working directory: explicit cwd > source file's parent
+        let cwd = input.cwd.as_ref()
+            .map(|c| PathBuf::from(c))
+            .or_else(|| entry_path.parent().map(|p| p.to_path_buf()));
+
+        // Read source for line:col enrichment
+        let source_text = std::fs::read_to_string(&canonical).ok();
+
         // Compile to temp binary
         let tmp_dir = tempfile::tempdir()
             .map_err(|e| mcp_internal(format!("Failed to create temp dir: {e}")))?;
@@ -667,7 +685,7 @@ impl PlutoMcp {
             let run_result = serialize::RunResult {
                 success: false,
                 path: canonical,
-                compilation_errors: vec![serialize::compile_error_to_diagnostic(&err)],
+                compilation_errors: vec![serialize::compile_error_to_diagnostic(&err, source_text.as_deref())],
                 stdout: None,
                 stderr: None,
                 exit_code: None,
@@ -680,7 +698,7 @@ impl PlutoMcp {
 
         // Execute
         let (stdout, stderr, exit_code, timed_out) =
-            execute_with_timeout(&binary_path, timeout).await?;
+            execute_with_timeout(&binary_path, timeout, cwd.as_deref()).await?;
 
         let run_result = serialize::RunResult {
             success: !timed_out && exit_code == Some(0),
@@ -710,6 +728,14 @@ impl PlutoMcp {
         let timeout_ms = input.timeout_ms.unwrap_or(30_000).min(60_000);
         let timeout = Duration::from_millis(timeout_ms);
 
+        // Determine working directory: explicit cwd > source file's parent
+        let cwd = input.cwd.as_ref()
+            .map(|c| PathBuf::from(c))
+            .or_else(|| entry_path.parent().map(|p| p.to_path_buf()));
+
+        // Read source for line:col enrichment
+        let source_text = std::fs::read_to_string(&canonical).ok();
+
         // Compile in test mode to temp binary
         let tmp_dir = tempfile::tempdir()
             .map_err(|e| mcp_internal(format!("Failed to create temp dir: {e}")))?;
@@ -725,7 +751,7 @@ impl PlutoMcp {
             let test_result = serialize::TestResult {
                 success: false,
                 path: canonical,
-                compilation_errors: vec![serialize::compile_error_to_diagnostic(&err)],
+                compilation_errors: vec![serialize::compile_error_to_diagnostic(&err, source_text.as_deref())],
                 stdout: None,
                 stderr: None,
                 exit_code: None,
@@ -738,7 +764,7 @@ impl PlutoMcp {
 
         // Execute test runner
         let (stdout, stderr, exit_code, timed_out) =
-            execute_with_timeout(&binary_path, timeout).await?;
+            execute_with_timeout(&binary_path, timeout, cwd.as_deref()).await?;
 
         let test_result = serialize::TestResult {
             success: !timed_out && exit_code == Some(0),
@@ -757,7 +783,7 @@ impl PlutoMcp {
     }
 
     // --- Tool 14: add_declaration ---
-    #[tool(description = "Add a new top-level declaration to a .pluto source file. The file is created if it doesn't exist. Returns the UUID, name, and kind of the added declaration.")]
+    #[tool(description = "Add a new top-level declaration to a .pluto source file. The file is created if it doesn't exist. Returns the UUID, name, and kind of the added declaration. Supports multiple declarations in a single source string — all will be added and their details returned as an array.")]
     async fn add_declaration(
         &self,
         Parameters(input): Parameters<AddDeclarationInput>,
@@ -769,24 +795,29 @@ impl PlutoMcp {
             .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
 
         let mut editor = module.edit();
-        let id = editor.add_from_source(&input.source)
+        let ids = editor.add_many_from_source(&input.source)
             .map_err(|e| mcp_err(format!("Failed to add declaration: {e}")))?;
 
         let module = editor.commit();
 
-        // Find the name and kind of what we just added
-        let decl = module.get(id)
-            .ok_or_else(|| mcp_internal("Added declaration not found after commit"))?;
-        let name = decl.name().to_string();
-        let kind = serialize::decl_kind_to_string(decl.kind()).to_string();
+        // Collect results for all added declarations
+        let mut results: Vec<serialize::AddDeclResult> = Vec::new();
+        for id in &ids {
+            if let Some(decl) = module.get(*id) {
+                results.push(serialize::AddDeclResult {
+                    uuid: id.to_string(),
+                    name: decl.name().to_string(),
+                    kind: serialize::decl_kind_to_string(decl.kind()).to_string(),
+                });
+            }
+        }
 
         std::fs::write(&canonical, module.source())
             .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
 
         self.modules.write().await.insert(canonical, module);
 
-        let result = serialize::AddDeclResult { uuid: id.to_string(), name, kind };
-        let json = serde_json::to_string_pretty(&result)
+        let json = serde_json::to_string_pretty(&results)
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -979,6 +1010,27 @@ impl PlutoMcp {
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
+
+    // --- Tool 20: docs ---
+    #[tool(description = "Get Pluto language reference documentation. Optionally filter by topic: types, operators, statements, declarations, strings, errors, closures, generics, modules, contracts, concurrency, gotchas. Returns markdown-formatted reference text.")]
+    async fn docs(
+        &self,
+        Parameters(input): Parameters<DocsInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let text = crate::docs::get_docs(input.topic.as_deref());
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    // --- Tool 21: stdlib_docs ---
+    #[tool(description = "Get Pluto stdlib documentation. Without a module name, lists all available stdlib modules. With a module name (e.g. 'strings', 'fs', 'math'), returns all pub function signatures and descriptions from that module.")]
+    async fn stdlib_docs(
+        &self,
+        Parameters(input): Parameters<StdlibDocsInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let text = crate::docs::get_stdlib_docs(input.module.as_deref())
+            .map_err(|e| mcp_err(e))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
 }
 
 /// Recursively discover .pluto files in a directory, skipping hidden dirs and .git.
@@ -1170,7 +1222,7 @@ impl ServerHandler for PlutoMcp {
                 website_url: None,
             },
             instructions: Some(
-                "Pluto language MCP server. Load a .pluto source file with load_module, or scan a project directory with load_project. Then query declarations, types, error sets, and cross-references. Use add_declaration, replace_declaration, delete_declaration, rename_declaration, add_method, and add_field to edit source files. Use check to type-check, compile to build, run to execute, and test to run tests.".to_string()
+                "Pluto language MCP server. Load a .pluto source file with load_module, or scan a project directory with load_project. Then query declarations, types, error sets, and cross-references. Use add_declaration, replace_declaration, delete_declaration, rename_declaration, add_method, and add_field to edit source files. Use check to type-check, compile to build, run to execute, and test to run tests. Use docs to get language reference documentation and stdlib_docs to explore available stdlib modules and functions.".to_string()
             ),
         }
     }

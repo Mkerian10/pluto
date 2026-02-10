@@ -153,6 +153,14 @@ pub struct ErrorRefInfo {
 pub struct SpanInfo {
     pub start: usize,
     pub end: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_col: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_col: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -319,20 +327,26 @@ pub struct DanglingRefInfo {
     pub span: SpanInfo,
 }
 
-pub fn compile_error_to_diagnostic(err: &plutoc::diagnostics::CompileError) -> DiagnosticInfo {
+pub fn compile_error_to_diagnostic(err: &plutoc::diagnostics::CompileError, source: Option<&str>) -> DiagnosticInfo {
+    let make_span = |span: Span| -> SpanInfo {
+        match source {
+            Some(src) => span_to_info_with_source(span, src),
+            None => span_to_info(span),
+        }
+    };
     match err {
         plutoc::diagnostics::CompileError::Syntax { msg, span } => DiagnosticInfo {
             severity: "error".to_string(),
             kind: "syntax".to_string(),
             message: msg.clone(),
-            span: Some(span_to_info(*span)),
+            span: Some(make_span(*span)),
             path: None,
         },
         plutoc::diagnostics::CompileError::Type { msg, span } => DiagnosticInfo {
             severity: "error".to_string(),
             kind: "type".to_string(),
             message: msg.clone(),
-            span: Some(span_to_info(*span)),
+            span: Some(make_span(*span)),
             path: None,
         },
         plutoc::diagnostics::CompileError::Codegen { msg } => DiagnosticInfo {
@@ -359,12 +373,16 @@ pub fn compile_error_to_diagnostic(err: &plutoc::diagnostics::CompileError) -> D
     }
 }
 
-pub fn compile_warning_to_diagnostic(w: &plutoc::diagnostics::CompileWarning) -> DiagnosticInfo {
+pub fn compile_warning_to_diagnostic(w: &plutoc::diagnostics::CompileWarning, source: Option<&str>) -> DiagnosticInfo {
+    let span = match source {
+        Some(src) => span_to_info_with_source(w.span, src),
+        None => span_to_info(w.span),
+    };
     DiagnosticInfo {
         severity: "warning".to_string(),
         kind: format!("{:?}", w.kind).to_lowercase(),
         message: w.msg.clone(),
-        span: Some(span_to_info(w.span)),
+        span: Some(span),
         path: None,
     }
 }
@@ -440,6 +458,41 @@ pub fn span_to_info(span: Span) -> SpanInfo {
     SpanInfo {
         start: span.start,
         end: span.end,
+        start_line: None,
+        start_col: None,
+        end_line: None,
+        end_col: None,
+    }
+}
+
+/// Convert a byte offset to 1-based (line, col).
+pub fn byte_offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
+    let mut line = 1usize;
+    let mut col = 1usize;
+    for (i, ch) in source.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
+pub fn span_to_info_with_source(span: Span, source: &str) -> SpanInfo {
+    let (start_line, start_col) = byte_offset_to_line_col(source, span.start);
+    let (end_line, end_col) = byte_offset_to_line_col(source, span.end);
+    SpanInfo {
+        start: span.start,
+        end: span.end,
+        start_line: Some(start_line),
+        start_col: Some(start_col),
+        end_line: Some(end_line),
+        end_col: Some(end_col),
     }
 }
 

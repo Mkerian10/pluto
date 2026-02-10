@@ -111,6 +111,55 @@ impl ModuleEditor {
         Err(SdkError::Edit("could not extract declaration from source".to_string()))
     }
 
+    /// Parse source text containing one or more top-level declarations and append them all.
+    /// Returns the UUIDs of all newly added declarations.
+    pub fn add_many_from_source(&mut self, source: &str) -> Result<Vec<Uuid>, SdkError> {
+        let mut program = parse_single_program(source, &self.program)?;
+
+        let count = program.functions.len()
+            + program.classes.len()
+            + program.enums.len()
+            + program.traits.len()
+            + program.errors.len()
+            + program.app.iter().len();
+
+        if count == 0 {
+            return Err(SdkError::Edit("source contains no declarations".to_string()));
+        }
+
+        let mut ids = Vec::new();
+
+        for f in program.functions.drain(..) {
+            ids.push(f.node.id);
+            self.program.functions.push(f);
+        }
+        for c in program.classes.drain(..) {
+            ids.push(c.node.id);
+            self.program.classes.push(c);
+        }
+        for e in program.enums.drain(..) {
+            ids.push(e.node.id);
+            self.program.enums.push(e);
+        }
+        for t in program.traits.drain(..) {
+            ids.push(t.node.id);
+            self.program.traits.push(t);
+        }
+        for e in program.errors.drain(..) {
+            ids.push(e.node.id);
+            self.program.errors.push(e);
+        }
+        if let Some(a) = program.app.take() {
+            if self.program.app.is_some() {
+                return Err(SdkError::Edit("program already has an app declaration".to_string()));
+            }
+            ids.push(a.node.id);
+            self.program.app = Some(a);
+        }
+
+        Ok(ids)
+    }
+
     /// Replace a top-level declaration with new source.
     /// The replacement must be the same kind (function→function, class→class, etc.).
     /// The top-level UUID is preserved; nested items are matched by name.

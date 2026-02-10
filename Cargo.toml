@@ -27,6 +27,7 @@ bincode = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3"
+uuid = { version = "1", features = ["v4"] }
 
 [[test]]
 name = "basics"
@@ -159,3 +160,7 @@ path = "tests/integration/warnings.rs"
 [[test]]
 name = "nullable"
 path = "tests/integration/nullable.rs"
+
+[[test]]
+name = "sync"
+path = "tests/integration/sync.rs"

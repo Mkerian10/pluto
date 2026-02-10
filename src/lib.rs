@@ -19,6 +19,7 @@ pub mod binary;
 pub mod derived;
 pub mod pretty;
 pub mod xref;
+pub mod sync;
 
 use diagnostics::{CompileError, CompileWarning};
 use std::path::{Path, PathBuf};
