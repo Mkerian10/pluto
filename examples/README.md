@@ -132,6 +132,14 @@ Demonstrates the `std.random` module: random integers (`next`, `between`), rando
 cargo run -- run examples/random/main.pluto --stdlib stdlib
 ```
 
+## nullable
+
+Demonstrates first-class nullable types: `T?` syntax for nullable types, `none` literal for absent values, `?` postfix operator for null propagation (early-return none), implicit `T` to `T?` coercion, nullable classes, and `to_int()`/`to_float()` string parsing returning nullable types.
+
+```bash
+cargo run -- run examples/nullable/main.pluto
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.

@@ -4,7 +4,7 @@ Areas that need further design work before implementation.
 
 ## Language Features
 
-- [ ] **Null / optional** — how are absent values represented? Option type? nullable types?
+- [x] **Null / optional** — first-class nullable types (`T?`, `none`, `?` operator). `T?` for any type, `none` for absent, `?` for null propagation. Compiler infers nullability transitively.
 
 ## Communication
 
@@ -82,7 +82,7 @@ Previously open questions that have been designed and implemented.
 - [x] **Early return** — `return` in functions and methods
 - [x] **Arrays** — literal syntax, indexing, `push`, `len`, `for-in` iteration
 - [x] **Extern functions** — `extern fn` declarations for FFI with C runtime
-- [x] **Generics** — monomorphization strategy, `fn first<T>(items: [T]) T`, `class Box<T>`, `enum Option<T>`
+- [x] **Generics** — monomorphization strategy, `fn first<T>(items: [T]) T`, `class Box<T>`, generic enums
 - [x] **Collections** — built-in `Map<K, V>` and `Set<T>` with hash-table implementation
 - [x] **Garbage collection** — mark-and-sweep GC in the C runtime, tag-based tracing
 - [x] **Standard library (core)** — `std.strings`, `std.math`, `std.net`, `std.socket`, `std.fs`
