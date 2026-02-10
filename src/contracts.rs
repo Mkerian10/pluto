@@ -124,6 +124,15 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
             }
         }
 
+        // None literal — allowed (useful for nullable comparisons in contracts)
+        Expr::NoneLit => Ok(()),
+
+        // Null propagation — rejected (side-effectful)
+        Expr::NullPropagate { .. } => Err(CompileError::syntax(
+            "null propagation is not allowed in contract expressions",
+            span,
+        )),
+
         // Everything else — rejected
         Expr::StringLit(_) => Err(CompileError::syntax(
             "string literals are not allowed in contract expressions",

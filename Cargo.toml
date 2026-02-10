@@ -155,3 +155,7 @@ path = "tests/integration/di_lifecycle.rs"
 [[test]]
 name = "warnings"
 path = "tests/integration/warnings.rs"
+
+[[test]]
+name = "nullable"
+path = "tests/integration/nullable.rs"

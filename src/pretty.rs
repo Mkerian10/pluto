@@ -521,6 +521,10 @@ impl PrettyPrinter {
                 }
                 self.write(">");
             }
+            TypeExpr::Nullable(inner) => {
+                self.emit_type_expr(&inner.node);
+                self.write("?");
+            }
         }
     }
 
@@ -1102,6 +1106,13 @@ impl PrettyPrinter {
                 self.write("spawn ");
                 // The inner expr should be a Call — emit it directly
                 self.emit_expr(&call.node, 0);
+            }
+            Expr::NoneLit => {
+                self.write("none");
+            }
+            Expr::NullPropagate { expr } => {
+                self.emit_expr(&expr.node, 25);
+                self.write("?");
             }
         }
     }

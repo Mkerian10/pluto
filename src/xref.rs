@@ -292,9 +292,12 @@ fn resolve_expr(expr: &mut Expr, index: &DeclIndex) {
         Expr::Spawn { call } => {
             resolve_expr(&mut call.node, index);
         }
+        Expr::NullPropagate { expr } => {
+            resolve_expr(&mut expr.node, index);
+        }
         // Leaf expressions — no cross-references
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) |
-        Expr::StringLit(_) | Expr::Ident(_) => {}
+        Expr::StringLit(_) | Expr::Ident(_) | Expr::NoneLit => {}
     }
 }
 

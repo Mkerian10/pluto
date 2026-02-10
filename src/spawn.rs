@@ -205,7 +205,11 @@ fn desugar_expr(expr: &mut Expr, span: Span) {
             desugar_expr(&mut start.node, start.span);
             desugar_expr(&mut end.node, end.span);
         }
+        Expr::NullPropagate { expr: inner } => {
+            desugar_expr(&mut inner.node, inner.span);
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => {}
+        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. }
+        | Expr::NoneLit => {}
     }
 }

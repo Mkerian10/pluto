@@ -352,5 +352,6 @@ fn mangle_type(ty: &PlutoType) -> String {
             let suffixes: Vec<String> = args.iter().map(mangle_type).collect();
             format!("{}__{}", name, suffixes.join("_"))
         }
+        PlutoType::Nullable(inner) => format!("nullable_{}", mangle_type(inner)),
     }
 }

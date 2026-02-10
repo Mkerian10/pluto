@@ -301,6 +301,21 @@ pub(crate) fn infer_expr(
             }
             Ok(PlutoType::Task(Box::new(inner_type)))
         }
+        Expr::NoneLit => {
+            // Sentinel type — Nullable(Void) means "none literal, type not yet known"
+            // The actual nullable type will be determined by context (let annotation, return type, etc.)
+            Ok(PlutoType::Nullable(Box::new(PlutoType::Void)))
+        }
+        Expr::NullPropagate { expr } => {
+            let inner_type = infer_expr(&expr.node, expr.span, env)?;
+            match &inner_type {
+                PlutoType::Nullable(inner) => Ok(*inner.clone()),
+                _ => Err(CompileError::type_err(
+                    format!("'?' applied to non-nullable type {inner_type}"),
+                    span,
+                )),
+            }
+        }
     }
 }
 
@@ -350,7 +365,17 @@ fn infer_binop(
                     span,
                 ));
             }
-            if lt != rt {
+            // Allow comparing nullable types with none (Nullable(Void))
+            let compatible = if lt == rt {
+                true
+            } else if matches!(&lt, PlutoType::Nullable(_)) && rt == PlutoType::Nullable(Box::new(PlutoType::Void)) {
+                true
+            } else if lt == PlutoType::Nullable(Box::new(PlutoType::Void)) && matches!(&rt, PlutoType::Nullable(_)) {
+                true
+            } else {
+                false
+            };
+            if !compatible {
                 return Err(CompileError::type_err(
                     format!("cannot compare {lt} with {rt}"),
                     span,

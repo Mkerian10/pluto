@@ -35,6 +35,18 @@ fn types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> 
         }
         return types_compatible(a_ret, e_ret, env);
     }
+    // T is assignable to T? (implicit nullable wrap)
+    if let PlutoType::Nullable(inner) = expected {
+        if types_compatible(actual, inner, env) {
+            return true;
+        }
+    }
+    // Nullable(Void) (the none literal) is assignable to any Nullable(T)
+    if actual == &PlutoType::Nullable(Box::new(PlutoType::Void)) {
+        if matches!(expected, PlutoType::Nullable(_)) {
+            return true;
+        }
+    }
     false
 }
 
