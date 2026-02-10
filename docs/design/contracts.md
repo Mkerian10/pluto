@@ -13,8 +13,8 @@ The guiding principle:
 | Contract | Status | Phase |
 |----------|--------|-------|
 | **Invariants** | Implemented (runtime checks) | Phase 1 |
-| **Pre/post conditions** | Parsed, not enforced | Phase 2 |
-| **Interface guarantees** | Not started | Phase 3 |
+| **Pre/post conditions** | Implemented (runtime checks) | Phase 2 |
+| **Interface guarantees** | Implemented (runtime checks) | Phase 3 |
 | **Failure semantics** | Not started | Phase 4 |
 | **Protocol contracts** | Not started | Phase 5 |
 | **Static verifier** | Not started | Phase 6 |
@@ -136,15 +136,15 @@ Invariant processing spans two compiler passes:
 
 ## 2. Pre/Post Conditions
 
-> **Status: Parsed and type-checked, not enforced (Phase 2 target)**
+> **Status: Implemented (Phase 2)** — runtime checks at function entry (requires) and exit (ensures).
 
-Functions and methods can declare `requires` (preconditions) and `ensures` (postconditions) that the compiler propagates through the call graph.
+Functions and methods can declare `requires` (preconditions) and `ensures` (postconditions). Currently enforced via runtime checks; static obligation propagation is planned for Phase 6.
 
 ### Syntax
 
 ```
-fn withdraw(mut self, amount: float) float
-    requires amount > 0.0
+fn withdraw(self, amount: int) int
+    requires amount > 0
     requires self.balance >= amount
     ensures self.balance == old(self.balance) - amount
 {
@@ -160,23 +160,41 @@ Contracts appear between the return type and the opening `{`, one per line. Mult
 In the current release, `requires` and `ensures` clauses are:
 - **Parsed** by the parser (syntax is stable)
 - **Type-checked** as bool expressions in the function's parameter scope
-- **Fragment-validated** against the decidable fragment
-- **Not enforced** — no obligation propagation, no runtime checks
+- **Fragment-validated** against the decidable fragment (with `old()` allowed in ensures)
+- **Runtime-enforced** — `requires` checked at function entry, `ensures` checked at function exit
 
-Writing contracts now is forward-compatible. They will be enforced once the static verifier lands in Phase 2.
+Violations are hard aborts (same as invariants): the program prints a diagnostic to stderr and exits with a non-zero code.
+
+```
+requires violation in withdraw: self.balance >= amount
+ensures violation in deposit: self.balance == old(self.balance) + amount
+```
 
 ### `old()` Expressions
 
-`old(expr)` captures the value of `expr` at function entry. Only valid in `ensures` clauses. The compiler snapshots the referenced values before the function body executes.
+`old(expr)` captures the value of `expr` at function entry. Only valid in `ensures` clauses. The compiler snapshots the referenced values before the function body executes. Only expressions in the decidable fragment are allowed inside `old()`.
 
 ```
 ensures self.balance == old(self.balance) - amount
-ensures result >= 0.0
+ensures result >= 0
 ```
 
-`result` refers to the function's return value in `ensures` clauses.
+`result` refers to the function's return value in `ensures` clauses. It has the function's return type and is only valid in `ensures` (using `result` in `requires` is a compile error). For void functions, `result` is not available.
 
-### Obligation Propagation (Phase 2)
+### Implementation
+
+**Runtime enforcement (current):**
+- `requires` expressions are evaluated at function entry. If any returns false, the program aborts with a diagnostic.
+- `ensures` expressions are evaluated at function exit (all return paths). If any returns false, the program aborts.
+- `old()` values are computed once at function entry and stored as snapshots. They are referenced during ensures evaluation.
+- `result` is bound to the return value and available during ensures evaluation.
+
+**Ensures block pattern:** The compiler creates a single ensures block that all return paths jump to, avoiding code duplication. The return value is passed as a block parameter:
+```
+return expr → ensures_block(val) → exit_block(val) → actual return
+```
+
+### Obligation Propagation (Phase 6)
 
 When function `A` calls function `B`:
 
@@ -187,7 +205,7 @@ The compiler checks this transitively through the entire call graph. If `A` cann
 - Add a matching `requires` to `A` (pushing the obligation to `A`'s callers), or
 - Add a guard (e.g., an `if` check) before the call that makes the precondition provably true.
 
-### Proof Strategy (Phase 2)
+### Proof Strategy (Phase 6)
 
 The compiler uses a lightweight abstract interpretation pass:
 
@@ -354,42 +372,51 @@ Pure functions (no `mut self`, no channel sends, no extern calls, no transitive 
 
 ## 5. Interface Guarantees
 
-> **Status: Not started (Phase 3 target)**
+> **Status: Implemented (Phase 3)** — runtime checks on all implementing class methods.
 
-Traits can specify contracts on their methods. Any class implementing the trait must satisfy these contracts.
+Traits can specify contracts on their methods. Any class implementing the trait must satisfy these contracts. Enforcement is **runtime**: requires/ensures are checked at method entry/exit on every implementation, whether called directly or via dynamic dispatch (trait-typed parameter).
 
 ### Syntax
 
 ```
-trait PaymentGateway {
-    fn charge(self, req: ChargeReq) ChargeRes ! PayError
-        requires req.amount > 0
-        ensures result.status != Status.Unknown
+trait Validator {
+    fn validate(self, x: int) int
+        requires x > 0
+        ensures result >= 0
+}
 
-    @idempotent(key = req.transaction_id)
-    fn refund(self, req: RefundReq) RefundRes ! PayError
-        requires req.amount > 0
+class MyValidator impl Validator {
+    // Trait requires/ensures are enforced at runtime on this method.
+    // Class methods CANNOT add requires (Liskov violation).
+    // Class methods CAN add ensures (strengthening postconditions is safe).
+    fn validate(self, x: int) int
+        ensures result > x
+    {
+        return x * 2
+    }
 }
 ```
 
 ### Rules
 
-- Trait contracts apply to all implementations. An `impl` block for a class must satisfy every `requires`/`ensures` and failure semantics annotation declared on the trait.
-- Implementation methods may **strengthen** postconditions (promise more) but may not **weaken** preconditions (demand more than the trait declares). This follows the Liskov Substitution Principle.
-- Failure semantics annotations (`@idempotent`, `@retryable`, etc.) on trait methods are **requirements**, not suggestions — implementations must carry compatible annotations.
+- **Trait contracts apply to all implementations.** Every `requires`/`ensures` on a trait method is runtime-enforced on all implementing class methods, including default methods (both inherited and overridden).
+- **Liskov Substitution Principle:** Implementation methods **must not** add `requires` clauses. A trait method with no `requires` effectively has `requires true`; adding any `requires` in the class would weaken the precondition, breaking substitutability. This is enforced at compile time — any `requires` on a trait impl method is a compile error, regardless of whether the trait method itself declares contracts.
+- **Strengthening postconditions is allowed:** Implementation methods **may** add `ensures` clauses (promising more than the trait requires is Liskov-safe).
+- **Multi-trait collision guard:** If a class implements multiple traits that define the same method name, and at least one trait has contracts on that method, the compiler rejects it at compile time. This prevents ambiguous contract merging.
+- **Trait contracts can reference parameters and `result`**, but **not** `self.field` (since a trait doesn't know its implementors' field layout). Attempting to access `self.field` in a trait contract is a type error.
 
 ---
 
 ## Verification Pipeline
 
-The contract checker runs as part of the compiler pipeline. In Phase 1, it spans two existing passes:
+The contract checker runs as part of the compiler pipeline. After Phase 2, it spans typeck, validation, and codegen:
 
 **Current pipeline:**
 ```
 lex → parse → modules → flatten → prelude → ambient → typeck* → validate_contracts → monomorphize → closures → codegen* → link
                                                          ↑                                                        ↑
-                                              invariant expressions                                    invariant runtime
-                                              type-checked here                                        checks emitted here
+                                              invariant + requires/ensures                             invariant, requires, ensures
+                                              expressions type-checked here                            runtime checks emitted here
 ```
 
 **Future pipeline (with full verifier):**
@@ -475,36 +502,39 @@ Runtime-checked class invariants. The foundation — exercises the full pipeline
 
 **Key files:** `src/contracts.rs`, `src/lexer/token.rs`, `src/parser/ast.rs`, `src/parser/mod.rs`, `src/typeck/register.rs`, `src/codegen/lower.rs`, `runtime/builtins.c`
 
-### Phase 2: Pre/Post Condition Enforcement
+### Phase 2: Pre/Post Condition Runtime Enforcement (Done)
 
-Static obligation propagation for `requires`/`ensures`. The core of the contract verifier — proves callers satisfy callees' preconditions at compile time.
+Runtime enforcement of `requires`/`ensures` contracts. Functions and methods with contracts get runtime checks at entry and exit.
 
-**Scope:**
-- Abstract interpretation pass tracking constraints at each program point
-- Constraint entailment checking (does the current constraint set imply the callee's requires?)
-- `ensures` assumption after calls
-- `old()` expression support (snapshot values at function entry)
-- `result` keyword in ensures clauses
-- Compile errors when obligations cannot be proven
-- Guidance in error messages ("add a requires clause" or "add an if guard")
+**Delivered:**
+- Type-checking of `requires`/`ensures` expressions in function parameter scope
+- `old(expr)` support in ensures — snapshots values at function entry
+- `result` keyword in ensures — refers to return value
+- Decidable fragment validation extended for `old()` (ensures only)
+- Runtime `requires` checks at function entry (hard abort on violation)
+- Runtime `ensures` checks at function exit, all return paths (hard abort on violation)
+- `__pluto_requires_violation` and `__pluto_ensures_violation` runtime functions
+- Ensures block pattern: single block for all return paths, return value as block param
+- Works on: free functions, class methods, app methods, trait default methods
+- 25 integration tests (54 total contract tests)
 
-**Dependencies:** None beyond Phase 1.
+**Key files:** `src/contracts.rs`, `src/typeck/register.rs`, `src/typeck/infer.rs`, `src/codegen/lower.rs`, `src/codegen/mod.rs`, `runtime/builtins.c`
 
-**Estimated complexity:** High. Abstract interpretation over the decidable fragment, constraint tracking through control flow (if/else branches, loops), handling of field access chains.
+### Phase 3: Interface Guarantees (Implemented)
 
-### Phase 3: Interface Guarantees
+Contracts on trait methods, runtime-enforced on all implementations.
 
-Contracts on trait methods, enforced on all implementations.
+**What was implemented:**
+- `requires`/`ensures` parsing on trait method declarations (both abstract and default methods)
+- Type-checking of trait method contracts (parameters and `result` in scope, `self.field` rejected)
+- Trait contracts stored in `TraitInfo.method_contracts` and propagated to implementing class methods in codegen
+- **Liskov checking:** class methods implementing a trait MUST NOT add `requires` clauses (compile error). Classes CAN add `ensures` (strengthening postconditions is Liskov-safe). This applies unconditionally — even when the trait has no contracts.
+- **Multi-trait collision guard:** if a class implements two traits that define the same method name and at least one has contracts, it's a compile error
+- Runtime enforcement via the same requires/ensures check mechanism from Phase 2
+- Contracts work through dynamic dispatch (trait-typed parameters)
+- 13 integration tests (67 total contract tests)
 
-**Scope:**
-- `requires`/`ensures` on trait method declarations
-- Verification that implementations satisfy trait contracts
-- Liskov checking: implementations can strengthen postconditions but not weaken preconditions
-- Contracts propagate through trait-typed parameters (caller proves trait's requires, assumes trait's ensures)
-
-**Dependencies:** Phase 2 (obligation propagation must work first).
-
-**Estimated complexity:** Medium. Extends Phase 2's propagation to work through trait indirection. The main new work is Liskov checking on impl blocks.
+**Key files:** `src/parser/mod.rs` (parse_trait_method), `src/typeck/env.rs` (TraitInfo.method_contracts), `src/typeck/register.rs` (trait registration, type-checking, Liskov checking, multi-trait guard), `src/codegen/mod.rs` (contract propagation)
 
 ### Phase 4: Failure Semantics
 
@@ -563,7 +593,7 @@ Replace runtime invariant checks with compile-time proofs where possible. Runtim
 - [ ] **Contract inheritance on generic types** — how do invariants interact with generics? Does `Box<T>` inherit T's invariants?
 - [ ] **Quantifiers** — should a future version support bounded quantifiers (`forall item in self.items: item.price > 0`)?
 - [ ] **Contract testing** — should there be a `@test` mode that inserts runtime assertions for all contracts (for debugging)?
-- [ ] **`old()` implementation** — what values can `old()` capture? Deep clone for heap types? Shallow for primitives?
+- [x] **`old()` implementation** — implemented in Phase 2. Captures by value (Cranelift Variable snapshot at function entry). For heap types (strings, arrays), captures the pointer — shallow snapshot. Deep clone for heap types is a future consideration.
 - [ ] **Protocol composition** — can protocols be composed or extended?
 - [ ] **`@assume` scope** — should `@assume` apply to a single call, a block, or an entire function?
 - [ ] **Gradual adoption** — should contracts be opt-in per module, or always enforced?

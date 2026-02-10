@@ -1,3 +1,8 @@
+[workspace]
+members = [".", "sdk", "mcp"]
+exclude = ["tests/fixtures/test_math_crate", "examples/rust_ffi/my_math"]
+resolver = "2"
+
 [package]
 name = "plutoc"
 version = "0.1.0"
@@ -138,3 +143,19 @@ path = "tests/integration/manifest.rs"
 [[test]]
 name = "contracts"
 path = "tests/integration/contracts.rs"
+
+[[test]]
+name = "io"
+path = "tests/integration/io.rs"
+
+[[test]]
+name = "di_lifecycle"
+path = "tests/integration/di_lifecycle.rs"
+
+[[test]]
+name = "warnings"
+path = "tests/integration/warnings.rs"
+
+[[test]]
+name = "nullable"
+path = "tests/integration/nullable.rs"

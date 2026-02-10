@@ -47,6 +47,8 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_int_to_string", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_float_to_string", &[types::F64], &[types::I64])?;
         reg.declare(module, "__pluto_bool_to_string", &[types::I32], &[types::I64])?; // I32 for C ABI
+        reg.declare(module, "__pluto_string_to_int", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_to_float", &[types::I64], &[types::I64])?;
 
         // Error handling
         reg.declare(module, "__pluto_raise_error", &[types::I64], &[])?;
@@ -56,6 +58,13 @@ impl RuntimeRegistry {
 
         // Time
         reg.declare(module, "__pluto_time_ns", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_time_wall_ns", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_time_sleep_ns", &[types::I64], &[])?;
+
+        // Random
+        reg.declare(module, "__pluto_random_seed", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_random_int", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_random_float", &[], &[types::F64])?;
 
         // Math builtins
         reg.declare(module, "__pluto_abs_int", &[types::I64], &[types::I64])?;
@@ -81,6 +90,16 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_array_get", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_array_set", &[types::I64, types::I64, types::I64], &[])?;
         reg.declare(module, "__pluto_array_len", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_array_pop", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_array_last", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_array_first", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_array_clear", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_array_remove_at", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_array_insert_at", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_array_slice", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_array_reverse", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_array_contains", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_array_index_of", &[types::I64, types::I64, types::I64], &[types::I64])?;
 
         // Bytes functions
         reg.declare(module, "__pluto_bytes_new", &[], &[types::I64])?;
@@ -130,6 +149,8 @@ impl RuntimeRegistry {
 
         // Contracts
         reg.declare(module, "__pluto_invariant_violation", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_requires_violation", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_ensures_violation", &[types::I64, types::I64], &[])?;
 
         // Test framework
         reg.declare(module, "__pluto_expect_equal_int", &[types::I64, types::I64, types::I64], &[])?;

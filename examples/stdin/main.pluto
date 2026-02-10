@@ -1,0 +1,18 @@
+import std.io
+
+fn main() int? {
+    io.print("What is your name? ")
+    let name = io.read_line()
+    print("Hello, {name}!")
+
+    io.print("Enter a number: ")
+    let n = io.read_line().to_int()?
+    print("Your number doubled is {n * 2}")
+
+    io.print("Enter a temperature in Fahrenheit: ")
+    let f = io.read_line().to_float()?
+    let celsius = (f - 32.0) * 5.0 / 9.0
+    print("That's {celsius} Celsius")
+
+    return none
+}

@@ -1,0 +1,46 @@
+class Counter {
+    value: int
+
+    fn increment(mut self) {
+        self.value = self.value + 1
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+enum Direction {
+    North
+    South
+    East
+    West
+}
+
+fn opposite(d: Direction) Direction {
+    match d {
+        Direction.North {
+            return Direction.South
+        }
+        Direction.South {
+            return Direction.North
+        }
+        Direction.East {
+            return Direction.West
+        }
+        Direction.West {
+            return Direction.East
+        }
+    }
+}
+
+fn main() {
+    let mut c = Counter { value: 0 }
+    c.increment()
+    c.increment()
+    print(c.get())
+
+    let d = Direction.North
+    let opp = opposite(d)
+    print("done")
+}

@@ -1,0 +1,76 @@
+import std.collections
+
+fn print_ints(label: string, arr: [int]) {
+    let s = label
+    let i = 0
+    while i < arr.len() {
+        if i > 0 { s = s + ", " }
+        s = s + "{arr[i]}"
+        i = i + 1
+    }
+    print(s)
+}
+
+fn main() {
+    let nums = [1, 2, 3, 4, 5]
+
+    // Transform: double every number
+    let doubled = collections.map(nums, (x: int) => x * 2)
+    print_ints("doubled: ", doubled)
+
+    // Filter: keep only evens
+    let evens = collections.filter(nums, (x: int) => x % 2 == 0)
+    print_ints("evens: ", evens)
+
+    // Fold: sum with an accumulator
+    let total = collections.fold(nums, 0, (acc: int, x: int) => acc + x)
+    print("sum via fold: {total}")
+
+    // Composition: filter -> map -> fold
+    let data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    let even_data = collections.filter(data, (x: int) => x % 2 == 0)
+    let squared = collections.map(even_data, (x: int) => x * x)
+    let sum_of_squares = collections.fold(squared, 0, (acc: int, x: int) => acc + x)
+    print("sum of even squares: {sum_of_squares}")
+
+    // Predicates
+    let has_big = collections.any(nums, (x: int) => x > 4)
+    print("any > 4? {has_big}")
+    let all_pos = collections.all(nums, (x: int) => x > 0)
+    print("all > 0? {all_pos}")
+    let big_count = collections.count(nums, (x: int) => x > 3)
+    print("count > 3: {big_count}")
+
+    // Array utilities
+    print_ints("reverse: ", collections.reverse(nums))
+    print_ints("take 3: ", collections.take(nums, 3))
+    print_ints("drop 3: ", collections.drop(nums, 3))
+
+    // Zip: pair up two arrays
+    print("--- zip ---")
+    let names = ["alice", "bob", "carol"]
+    let scores = [95, 87, 92]
+    let pairs = collections.zip(names, scores)
+    collections.for_each(pairs, (p: collections.Pair<string, int>) => {
+        print("{p.first}: {p.second}")
+    })
+
+    // Enumerate: add indices
+    print("--- enumerate ---")
+    let items = ["first", "second", "third"]
+    let indexed = collections.enumerate(items)
+    collections.for_each(indexed, (p: collections.Pair<int, string>) => {
+        print("{p.first}. {p.second}")
+    })
+
+    // Flatten nested arrays
+    let nested = [[1, 2], [3, 4], [5]]
+    let flat = collections.flatten(nested)
+    print_ints("flatten: ", flat)
+
+    // Sum shortcuts
+    let s = collections.sum([10, 20, 30])
+    print("sum: {s}")
+    let sf = collections.sum_float([1.5, 2.5, 3.0])
+    print("sum_float: {sf}")
+}

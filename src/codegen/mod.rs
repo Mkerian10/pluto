@@ -8,7 +8,7 @@ use cranelift_codegen::ir::{types, AbiParam, InstBuilder, MemFlags, Value};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
 use cranelift_frontend::FunctionBuilderContext;
-use cranelift_module::{DataDescription, Linkage, Module};
+use cranelift_module::{DataDescription, DataId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use uuid::Uuid;
@@ -17,7 +17,7 @@ use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::typeck::env::TypeEnv;
 use crate::typeck::types::PlutoType;
-use lower::{lower_function, pluto_to_cranelift, resolve_type_expr_to_pluto, POINTER_SIZE};
+use lower::{lower_function, pluto_to_cranelift, resolve_type_expr_to_pluto, FnContracts, POINTER_SIZE};
 use runtime::RuntimeRegistry;
 
 fn host_target_triple() -> Result<&'static str, CompileError> {
@@ -36,6 +36,29 @@ fn host_target_triple() -> Result<&'static str, CompileError> {
             std::env::consts::OS
         )))
     }
+}
+
+/// Declare a writable, zero-initialized 8-byte global for each DI singleton.
+/// These globals hold singleton pointers so that scope block codegen (Phase 3)
+/// can load them when wiring scoped instances.
+fn declare_singleton_globals(
+    env: &TypeEnv,
+    module: &mut ObjectModule,
+) -> Result<HashMap<String, DataId>, CompileError> {
+    let mut globals = HashMap::new();
+    for class_name in &env.di_order {
+        let data_name = format!("__pluto_singleton_{}", class_name);
+        let data_id = module
+            .declare_data(&data_name, Linkage::Local, true, false)
+            .map_err(|e| CompileError::codegen(format!("declare singleton global: {e}")))?;
+        let mut data_desc = DataDescription::new();
+        data_desc.define_zeroinit(8);
+        module
+            .define_data(data_id, &data_desc)
+            .map_err(|e| CompileError::codegen(format!("define singleton global: {e}")))?;
+        globals.insert(class_name.clone(), data_id);
+    }
+    Ok(globals)
 }
 
 pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>, CompileError> {
@@ -58,6 +81,9 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
     let mut module = ObjectModule::new(obj_builder);
     let runtime = RuntimeRegistry::new(&mut module)?;
     let mut func_ids = HashMap::new();
+
+    // Declare module-level globals for DI singleton pointers (Phase 2)
+    let singleton_data_ids = declare_singleton_globals(env, &mut module)?;
 
     // Pass 0: Declare extern fns with Import linkage
     for ext in &program.extern_fns {
@@ -193,6 +219,128 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         })
         .collect();
 
+    // Build function contracts map for codegen
+    let mut fn_contracts: HashMap<String, FnContracts> = HashMap::new();
+    for func in &program.functions {
+        let f = &func.node;
+        if !f.contracts.is_empty() {
+            let requires: Vec<(Expr, String)> = f.contracts.iter()
+                .filter(|c| c.node.kind == ContractKind::Requires)
+                .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                .collect();
+            let ensures: Vec<(Expr, String)> = f.contracts.iter()
+                .filter(|c| c.node.kind == ContractKind::Ensures)
+                .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                .collect();
+            if !requires.is_empty() || !ensures.is_empty() {
+                fn_contracts.insert(f.name.node.clone(), FnContracts { requires, ensures });
+            }
+        }
+    }
+    for class in &program.classes {
+        let c = &class.node;
+        for method in &c.methods {
+            let m = &method.node;
+            if !m.contracts.is_empty() {
+                let mangled = format!("{}_{}", c.name.node, m.name.node);
+                let requires: Vec<(Expr, String)> = m.contracts.iter()
+                    .filter(|c| c.node.kind == ContractKind::Requires)
+                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                    .collect();
+                let ensures: Vec<(Expr, String)> = m.contracts.iter()
+                    .filter(|c| c.node.kind == ContractKind::Ensures)
+                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                    .collect();
+                if !requires.is_empty() || !ensures.is_empty() {
+                    fn_contracts.insert(mangled, FnContracts { requires, ensures });
+                }
+            }
+        }
+    }
+    if let Some(app_spanned) = &program.app {
+        let app = &app_spanned.node;
+        for method in &app.methods {
+            let m = &method.node;
+            if !m.contracts.is_empty() {
+                let mangled = format!("{}_{}", app.name.node, m.name.node);
+                let requires: Vec<(Expr, String)> = m.contracts.iter()
+                    .filter(|c| c.node.kind == ContractKind::Requires)
+                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                    .collect();
+                let ensures: Vec<(Expr, String)> = m.contracts.iter()
+                    .filter(|c| c.node.kind == ContractKind::Ensures)
+                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                    .collect();
+                if !requires.is_empty() || !ensures.is_empty() {
+                    fn_contracts.insert(mangled, FnContracts { requires, ensures });
+                }
+            }
+        }
+    }
+    // Trait default methods — contracts from default method declarations
+    for class in &program.classes {
+        let c = &class.node;
+        let class_method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
+        for trait_name_spanned in &c.impl_traits {
+            let trait_name = &trait_name_spanned.node;
+            for trait_decl in &program.traits {
+                if trait_decl.node.name.node == *trait_name {
+                    for trait_method in &trait_decl.node.methods {
+                        if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node) {
+                            if !trait_method.contracts.is_empty() {
+                                let mangled = format!("{}_{}", c.name.node, trait_method.name.node);
+                                let requires: Vec<(Expr, String)> = trait_method.contracts.iter()
+                                    .filter(|c| c.node.kind == ContractKind::Requires)
+                                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                                    .collect();
+                                let ensures: Vec<(Expr, String)> = trait_method.contracts.iter()
+                                    .filter(|c| c.node.kind == ContractKind::Ensures)
+                                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                                    .collect();
+                                if !requires.is_empty() || !ensures.is_empty() {
+                                    fn_contracts.insert(mangled, FnContracts { requires, ensures });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Propagate trait contracts to implementing class methods
+    // Trait requires are prepended (checked first), trait ensures are appended
+    for class in &program.classes {
+        let c = &class.node;
+        for trait_name_spanned in &c.impl_traits {
+            let trait_name = &trait_name_spanned.node;
+            if let Some(trait_info) = env.traits.get(trait_name) {
+                for (method_name, contracts) in &trait_info.method_contracts {
+                    let mangled = format!("{}_{}", c.name.node, method_name);
+                    let trait_requires: Vec<(Expr, String)> = contracts.iter()
+                        .filter(|c| c.node.kind == ContractKind::Requires)
+                        .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                        .collect();
+                    let trait_ensures: Vec<(Expr, String)> = contracts.iter()
+                        .filter(|c| c.node.kind == ContractKind::Ensures)
+                        .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                        .collect();
+                    if !trait_requires.is_empty() || !trait_ensures.is_empty() {
+                        let entry = fn_contracts.entry(mangled).or_insert_with(|| FnContracts {
+                            requires: Vec::new(),
+                            ensures: Vec::new(),
+                        });
+                        // Prepend trait requires (checked first)
+                        let mut merged_requires = trait_requires;
+                        merged_requires.append(&mut entry.requires);
+                        entry.requires = merged_requires;
+                        // Append trait ensures
+                        entry.ensures.extend(trait_ensures);
+                    }
+                }
+            }
+        }
+    }
+
     // Pass 2: Define all top-level functions
     for func in &program.functions {
         let f = &func.node;
@@ -205,7 +353,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants)?;
+            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
         }
 
         module
@@ -228,7 +376,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
             }
 
             module
@@ -281,7 +429,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
                             }
 
                             module
@@ -325,7 +473,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
             }
 
             module
@@ -465,6 +613,13 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                 }
 
                 singletons.insert(class_name.clone(), ptr);
+
+                // Store pointer to module-level global for scope block access (Phase 2)
+                if let Some(&data_id) = singleton_data_ids.get(class_name) {
+                    let gv = module.declare_data_in_func(data_id, builder.func);
+                    let addr = builder.ins().global_value(types::I64, gv);
+                    builder.ins().store(MemFlags::new(), ptr, addr, Offset32::new(0));
+                }
             }
 
             // Allocate and wire the app itself
@@ -609,8 +764,10 @@ fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
                 walk_expr(&start.node, result);
                 walk_expr(&end.node, result);
             }
+            Expr::NullPropagate { expr } => walk_expr(&expr.node, result),
             Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
-            | Expr::StringLit(_) | Expr::Ident(_) | Expr::EnumUnit { .. } => {}
+            | Expr::StringLit(_) | Expr::Ident(_) | Expr::EnumUnit { .. }
+            | Expr::NoneLit => {}
         }
     }
 
@@ -720,7 +877,7 @@ fn build_method_signature(func: &Function, module: &impl Module, class_name: &st
 }
 
 /// Format an invariant expression as a human-readable string for error messages.
-fn format_invariant_expr(expr: &Expr) -> String {
+pub(super) fn format_invariant_expr(expr: &Expr) -> String {
     match expr {
         Expr::IntLit(n) => n.to_string(),
         Expr::FloatLit(f) => f.to_string(),
@@ -752,6 +909,9 @@ fn format_invariant_expr(expr: &Expr) -> String {
                 UnaryOp::BitNot => "~",
             };
             format!("{}{}", op_str, format_invariant_expr(&operand.node))
+        }
+        Expr::Call { name, args, .. } if name.node == "old" && args.len() == 1 => {
+            format!("old({})", format_invariant_expr(&args[0].node))
         }
         _ => "<contract>".to_string(),
     }

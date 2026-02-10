@@ -5,7 +5,7 @@ use crate::parser::ast::*;
 use crate::span::Spanned;
 use super::env::TypeEnv;
 use super::types::PlutoType;
-use super::resolve::{resolve_type, unify, substitute_pluto_type, ensure_generic_func_instantiated, ensure_generic_class_instantiated, ensure_generic_enum_instantiated};
+use super::resolve::{resolve_type, unify, ensure_generic_func_instantiated, ensure_generic_class_instantiated, ensure_generic_enum_instantiated};
 use super::closures::infer_closure;
 use super::types_compatible;
 
@@ -37,6 +37,10 @@ pub(crate) fn infer_expr(
             Ok(PlutoType::String)
         }
         Expr::Ident(name) => {
+            // Track variable read for unused-variable warnings
+            if let Some((_, depth)) = env.lookup_with_depth(name) {
+                env.variable_reads.insert((name.clone(), depth));
+            }
             env.lookup(name)
                 .cloned()
                 .ok_or_else(|| CompileError::type_err(
@@ -93,7 +97,7 @@ pub(crate) fn infer_expr(
                 )),
             }
         }
-        Expr::Call { name, args } => infer_call(name, args, span, env),
+        Expr::Call { name, args, .. } => infer_call(name, args, span, env),
         Expr::StructLit { name, fields: lit_fields, type_args, .. } => {
             infer_struct_lit(name, lit_fields, type_args, span, env)
         }
@@ -127,6 +131,12 @@ pub(crate) fn infer_expr(
             }
         }
         Expr::ArrayLit { elements } => {
+            if elements.is_empty() {
+                return Err(CompileError::type_err(
+                    "cannot infer type of empty array literal; add a type annotation".to_string(),
+                    span,
+                ));
+            }
             let first_type = infer_expr(&elements[0].node, elements[0].span, env)?;
             for elem in &elements[1..] {
                 let t = infer_expr(&elem.node, elem.span, env)?;
@@ -190,10 +200,10 @@ pub(crate) fn infer_expr(
                 }
             }
         }
-        Expr::EnumUnit { enum_name, variant, type_args } => {
+        Expr::EnumUnit { enum_name, variant, type_args, .. } => {
             infer_enum_unit(enum_name, variant, type_args, span, env)
         }
-        Expr::EnumData { enum_name, variant, fields: lit_fields, type_args } => {
+        Expr::EnumData { enum_name, variant, fields: lit_fields, type_args, .. } => {
             infer_enum_data(enum_name, variant, lit_fields, type_args, span, env)
         }
         Expr::Propagate { expr } => {
@@ -291,6 +301,21 @@ pub(crate) fn infer_expr(
             }
             Ok(PlutoType::Task(Box::new(inner_type)))
         }
+        Expr::NoneLit => {
+            // Sentinel type — Nullable(Void) means "none literal, type not yet known"
+            // The actual nullable type will be determined by context (let annotation, return type, etc.)
+            Ok(PlutoType::Nullable(Box::new(PlutoType::Void)))
+        }
+        Expr::NullPropagate { expr } => {
+            let inner_type = infer_expr(&expr.node, expr.span, env)?;
+            match &inner_type {
+                PlutoType::Nullable(inner) => Ok(*inner.clone()),
+                _ => Err(CompileError::type_err(
+                    format!("'?' applied to non-nullable type {inner_type}"),
+                    span,
+                )),
+            }
+        }
     }
 }
 
@@ -340,7 +365,17 @@ fn infer_binop(
                     span,
                 ));
             }
-            if lt != rt {
+            // Allow comparing nullable types with none (Nullable(Void))
+            let compatible = if lt == rt {
+                true
+            } else if matches!(&lt, PlutoType::Nullable(_)) && rt == PlutoType::Nullable(Box::new(PlutoType::Void)) {
+                true
+            } else if lt == PlutoType::Nullable(Box::new(PlutoType::Void)) && matches!(&rt, PlutoType::Nullable(_)) {
+                true
+            } else {
+                false
+            };
+            if !compatible {
                 return Err(CompileError::type_err(
                     format!("cannot compare {lt} with {rt}"),
                     span,
@@ -390,8 +425,18 @@ fn infer_call(
     span: crate::span::Span,
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
+    // Handle old() in ensures contracts — old(expr) has the same type as expr
+    if name.node == "old" && args.len() == 1 && env.in_ensures_context {
+        return infer_expr(&args[0].node, args[0].span, env);
+    }
+
     // Check builtins first
     if env.builtins.contains(&name.node) {
+        // Float unary math builtins: 1 float arg → float
+        const FLOAT_UNARY_BUILTINS: &[&str] = &[
+            "sqrt", "floor", "ceil", "round", "sin", "cos", "tan", "log",
+        ];
+
         return match name.node.as_str() {
             "print" => {
                 if args.len() != 1 {
@@ -412,14 +457,23 @@ fn infer_call(
                 }
                 Ok(PlutoType::Void)
             }
-            "time_ns" => {
+            "time_ns" | "gc_heap_size" => {
                 if !args.is_empty() {
                     return Err(CompileError::type_err(
-                        format!("time_ns() expects 0 arguments, got {}", args.len()),
+                        format!("{}() expects 0 arguments, got {}", name.node, args.len()),
                         span,
                     ));
                 }
                 Ok(PlutoType::Int)
+            }
+            "bytes_new" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("bytes_new() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                Ok(PlutoType::Bytes)
             }
             "abs" => {
                 if args.len() != 1 {
@@ -490,7 +544,7 @@ fn infer_call(
                     )),
                 }
             }
-            "sqrt" | "floor" | "ceil" | "round" | "sin" | "cos" | "tan" | "log" => {
+            n if FLOAT_UNARY_BUILTINS.contains(&n) => {
                 if args.len() != 1 {
                     return Err(CompileError::type_err(
                         format!("{}() expects 1 argument, got {}", name.node, args.len()),
@@ -505,24 +559,6 @@ fn infer_call(
                     ));
                 }
                 Ok(PlutoType::Float)
-            }
-            "gc_heap_size" => {
-                if !args.is_empty() {
-                    return Err(CompileError::type_err(
-                        format!("gc_heap_size() expects 0 arguments, got {}", args.len()),
-                        span,
-                    ));
-                }
-                Ok(PlutoType::Int)
-            }
-            "bytes_new" => {
-                if !args.is_empty() {
-                    return Err(CompileError::type_err(
-                        format!("bytes_new() expects 0 arguments, got {}", args.len()),
-                        span,
-                    ));
-                }
-                Ok(PlutoType::Bytes)
             }
             "expect" => {
                 if args.len() != 1 {
@@ -611,7 +647,8 @@ fn infer_call(
         let mangled = ensure_generic_func_instantiated(&name.node, &type_args, env);
         // Store rewrite
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
-        let concrete_ret = substitute_pluto_type(&gen_sig.return_type, &bindings);
+        // Use the return type from the registered FuncSig — it has GenericInstance types resolved
+        let concrete_ret = env.functions.get(&mangled).unwrap().return_type.clone();
         return Ok(concrete_ret);
     }
 
@@ -1008,6 +1045,175 @@ fn infer_method_call(
                     );
                 }
                 return Ok(PlutoType::Void);
+            }
+            "pop" | "last" | "first" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 0 arguments, got {}", method.node, args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok((**elem).clone());
+            }
+            "is_empty" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("is_empty() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Bool);
+            }
+            "clear" | "reverse" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 0 arguments, got {}", method.node, args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Void);
+            }
+            "remove_at" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("remove_at() expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("remove_at(): expected int index, found {arg_type}"),
+                        args[0].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok((**elem).clone());
+            }
+            "insert_at" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        format!("insert_at() expects 2 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let idx_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if idx_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("insert_at(): expected int index, found {idx_type}"),
+                        args[0].span,
+                    ));
+                }
+                let val_type = infer_expr(&args[1].node, args[1].span, env)?;
+                if val_type != **elem {
+                    return Err(CompileError::type_err(
+                        format!("insert_at(): expected {}, found {val_type}", **elem),
+                        args[1].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Void);
+            }
+            "slice" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        format!("slice() expects 2 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let start_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if start_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("slice(): expected int start, found {start_type}"),
+                        args[0].span,
+                    ));
+                }
+                let end_type = infer_expr(&args[1].node, args[1].span, env)?;
+                if end_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("slice(): expected int end, found {end_type}"),
+                        args[1].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Array(elem.clone()));
+            }
+            "contains" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("contains() expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **elem {
+                    return Err(CompileError::type_err(
+                        format!("contains(): expected {}, found {arg_type}", **elem),
+                        args[0].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Bool);
+            }
+            "index_of" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("index_of() expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != **elem {
+                    return Err(CompileError::type_err(
+                        format!("index_of(): expected {}, found {arg_type}", **elem),
+                        args[0].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::Builtin,
+                    );
+                }
+                return Ok(PlutoType::Int);
             }
             _ => {
                 return Err(CompileError::type_err(
@@ -1464,6 +1670,24 @@ fn infer_method_call(
                 builtin(env, method);
                 return Ok(PlutoType::Array(Box::new(PlutoType::String)));
             }
+            "to_int" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        "to_int() expects 0 arguments".to_string(), span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Nullable(Box::new(PlutoType::Int)));
+            }
+            "to_float" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        "to_float() expects 0 arguments".to_string(), span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Nullable(Box::new(PlutoType::Float)));
+            }
             "to_bytes" => {
                 if !args.is_empty() {
                     return Err(CompileError::type_err(
@@ -1534,6 +1758,20 @@ fn infer_method_call(
                 },
             );
         }
+        // Check caller-side mutability for trait method calls
+        if trait_info.mut_self_methods.contains(&method.node) {
+            if let Some(root) = super::check::root_variable(&object.node) {
+                if root != "self" && env.is_immutable(root) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "cannot call mutating method '{}' on immutable variable '{}'; declare with 'let mut' to allow mutation",
+                            method.node, root
+                        ),
+                        method.span,
+                    ));
+                }
+            }
+        }
         return Ok(method_sig.return_type.clone());
     }
 
@@ -1553,6 +1791,20 @@ fn infer_method_call(
             (current.clone(), method.span.start),
             super::env::MethodResolution::Class { mangled_name: mangled.clone() },
         );
+    }
+    // Check caller-side mutability: cannot call mut self method on immutable binding
+    if env.mut_self_methods.contains(&mangled) {
+        if let Some(root) = super::check::root_variable(&object.node) {
+            if root != "self" && env.is_immutable(root) {
+                return Err(CompileError::type_err(
+                    format!(
+                        "cannot call mutating method '{}' on immutable variable '{}'; declare with 'let mut' to allow mutation",
+                        method.node, root
+                    ),
+                    method.span,
+                ));
+            }
+        }
     }
     let sig = env.functions.get(&mangled).ok_or_else(|| {
         CompileError::type_err(

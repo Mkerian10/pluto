@@ -80,6 +80,66 @@ Demonstrates git-based dependencies via `pluto.toml`. A project declares a `stru
 cargo run -- run examples/git-packages/main.pluto
 ```
 
+## contracts
+
+Demonstrates Pluto's contract system: `requires` (preconditions), `ensures` (postconditions), `old()` for capturing values at function entry, the `result` keyword in postconditions, and class `invariant` declarations.
+
+```bash
+cargo run -- run examples/contracts/main.pluto
+```
+
+## binary-ast
+
+Demonstrates the binary AST commands: `emit-ast` serializes a Pluto source file into a binary `.pluto` AST (with UUIDs and cross-references), and `generate-pt` reads a binary AST back into human-readable Pluto source.
+
+```bash
+# Serialize source to binary AST
+cargo run -- emit-ast examples/binary-ast/main.pluto -o /tmp/main.pluto
+
+# Read binary AST back to text
+cargo run -- generate-pt /tmp/main.pluto
+```
+
+## collections-lib
+
+Demonstrates the `std.collections` functional collections library: `map`, `filter`, `fold`, `reduce`, `any`, `all`, `count`, `flat_map`, `for_each`, `reverse`, `take`, `drop`, `zip` (with `Pair`), `enumerate`, `flatten`, `sum`, and `sum_float`. Shows function composition by chaining filter, map, and fold.
+
+```bash
+cargo run -- run examples/collections-lib/main.pluto --stdlib stdlib
+```
+
+## stdin
+
+Demonstrates interactive I/O with `std.io`: reading input with `io.read_line()`, parsing strings to numbers with `.to_int()` and `.to_float()` (both return nullable types — use `?` to propagate none on invalid input), and string interpolation for output.
+
+```bash
+echo -e "Alice\n21\n72" | cargo run -- run examples/stdin/main.pluto --stdlib stdlib
+```
+
+## time
+
+Demonstrates the `std.time` module: wall-clock time (`now`, `now_ns`), monotonic clocks (`monotonic`, `monotonic_ns`), sleeping (`sleep`), and measuring elapsed time (`elapsed`).
+
+```bash
+cargo run -- run examples/time/main.pluto --stdlib stdlib
+```
+
+## random
+
+Demonstrates the `std.random` module: random integers (`next`, `between`), random floats (`decimal`, `decimal_between`), coin flips (`coin`), and seeded determinism (`seed`).
+
+```bash
+cargo run -- run examples/random/main.pluto --stdlib stdlib
+```
+
+## nullable
+
+Demonstrates first-class nullable types: `T?` syntax for nullable types, `none` literal for absent values, `?` postfix operator for null propagation (early-return none), implicit `T` to `T?` coercion, nullable classes, and `to_int()`/`to_float()` string parsing returning nullable types.
+
+```bash
+cargo run -- run examples/nullable/main.pluto
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.

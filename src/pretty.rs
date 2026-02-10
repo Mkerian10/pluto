@@ -7,6 +7,54 @@ pub fn pretty_print(program: &Program) -> String {
     pp.buf
 }
 
+/// Pretty-print a single function declaration.
+pub fn pretty_print_function(func: &Function) -> String {
+    let mut pp = PrettyPrinter::new();
+    pp.emit_function(func);
+    pp.newline();
+    pp.buf
+}
+
+/// Pretty-print a single class declaration.
+pub fn pretty_print_class(cls: &ClassDecl) -> String {
+    let mut pp = PrettyPrinter::new();
+    pp.emit_class_decl(cls);
+    pp.newline();
+    pp.buf
+}
+
+/// Pretty-print a single enum declaration.
+pub fn pretty_print_enum(en: &EnumDecl) -> String {
+    let mut pp = PrettyPrinter::new();
+    pp.emit_enum_decl(en);
+    pp.newline();
+    pp.buf
+}
+
+/// Pretty-print a single trait declaration.
+pub fn pretty_print_trait(tr: &TraitDecl) -> String {
+    let mut pp = PrettyPrinter::new();
+    pp.emit_trait_decl(tr);
+    pp.newline();
+    pp.buf
+}
+
+/// Pretty-print a single error declaration.
+pub fn pretty_print_error(err: &ErrorDecl) -> String {
+    let mut pp = PrettyPrinter::new();
+    pp.emit_error_decl(err);
+    pp.newline();
+    pp.buf
+}
+
+/// Pretty-print a single app declaration.
+pub fn pretty_print_app(app: &AppDecl) -> String {
+    let mut pp = PrettyPrinter::new();
+    pp.emit_app_decl(app);
+    pp.newline();
+    pp.buf
+}
+
 struct PrettyPrinter {
     buf: String,
     indent: usize,
@@ -283,6 +331,11 @@ impl PrettyPrinter {
         if cls.is_pub {
             self.write("pub ");
         }
+        match cls.lifecycle {
+            Lifecycle::Scoped => self.write("scoped "),
+            Lifecycle::Transient => self.write("transient "),
+            Lifecycle::Singleton => {},
+        }
         self.write("class ");
         self.write(&cls.name.node);
         self.emit_type_params(&cls.type_params);
@@ -516,6 +569,10 @@ impl PrettyPrinter {
                 }
                 self.write(">");
             }
+            TypeExpr::Nullable(inner) => {
+                self.emit_type_expr(&inner.node);
+                self.write("?");
+            }
         }
     }
 
@@ -525,12 +582,10 @@ impl PrettyPrinter {
                 self.write(", ");
             }
             // Detect self parameter: name is "self" and type is Named("Self")
-            if p.name.node == "self" && matches!(&p.ty.node, TypeExpr::Named(n) if n == "Self") {
-                self.write("self");
-            } else if p.name.node == "mut self"
-                && matches!(&p.ty.node, TypeExpr::Named(n) if n == "Self")
-            {
+            if p.name.node == "self" && p.is_mut && matches!(&p.ty.node, TypeExpr::Named(n) if n == "Self") {
                 self.write("mut self");
+            } else if p.name.node == "self" && matches!(&p.ty.node, TypeExpr::Named(n) if n == "Self") {
+                self.write("self");
             } else {
                 self.write(&p.name.node);
                 self.write(": ");
@@ -572,8 +627,12 @@ impl PrettyPrinter {
 
     fn emit_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { name, ty, value } => {
-                self.write("let ");
+            Stmt::Let { name, ty, value, is_mut } => {
+                if *is_mut {
+                    self.write("let mut ");
+                } else {
+                    self.write("let ");
+                }
                 self.write(&name.node);
                 if let Some(ty) = ty {
                     self.write(": ");
@@ -702,6 +761,7 @@ impl PrettyPrinter {
             Stmt::Raise {
                 error_name,
                 fields,
+                ..
             } => {
                 self.write("raise ");
                 self.write(&error_name.node);
@@ -829,7 +889,7 @@ impl PrettyPrinter {
                 self.write(op_str);
                 self.emit_expr(&operand.node, 25);
             }
-            Expr::Call { name, args } => {
+            Expr::Call { name, args, .. } => {
                 self.write(&name.node);
                 self.write("(");
                 for (i, arg) in args.iter().enumerate() {
@@ -866,6 +926,7 @@ impl PrettyPrinter {
                 name,
                 type_args,
                 fields,
+                ..
             } => {
                 self.write(&name.node);
                 if !type_args.is_empty() {
@@ -909,6 +970,7 @@ impl PrettyPrinter {
                 enum_name,
                 variant,
                 type_args,
+                ..
             } => {
                 self.write(&enum_name.node);
                 if !type_args.is_empty() {
@@ -929,6 +991,7 @@ impl PrettyPrinter {
                 variant,
                 type_args,
                 fields,
+                ..
             } => {
                 self.write(&enum_name.node);
                 if !type_args.is_empty() {
@@ -1091,6 +1154,13 @@ impl PrettyPrinter {
                 self.write("spawn ");
                 // The inner expr should be a Call — emit it directly
                 self.emit_expr(&call.node, 0);
+            }
+            Expr::NoneLit => {
+                self.write("none");
+            }
+            Expr::NullPropagate { expr } => {
+                self.emit_expr(&expr.node, 25);
+                self.write("?");
             }
         }
     }

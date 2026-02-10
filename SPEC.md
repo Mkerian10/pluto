@@ -102,6 +102,19 @@ class Box<T> {
     value: T
 }
 
+// Nullable types
+fn find_user(id: int) string? {
+    if id <= 0 {
+        return none
+    }
+    return "User {id}"
+}
+
+fn greet(id: int) string? {
+    let name = find_user(id)?    // unwrap or propagate none
+    return "Hello, {name}!"
+}
+
 // Maps and Sets
 let m = Map<string, int> { "a": 1, "b": 2 }
 let s = Set<int> { 1, 2, 3 }

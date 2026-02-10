@@ -2,10 +2,6 @@
 
 Areas that need further design work before implementation.
 
-## Language Features
-
-- [ ] **Null / optional** — how are absent values represented? Option type? nullable types?
-
 ## Communication
 
 - [ ] **Geographic annotations** — syntax for region/locality constraints
@@ -41,6 +37,17 @@ Areas that need further design work before implementation.
 - [ ] **`@assume` scope** — should `@assume` apply to a single call, a block, or an entire function?
 - [ ] **Gradual adoption** — should contracts be opt-in per module, or always enforced?
 
+## AI-Native Representation
+
+- [ ] **Binary format** — protobuf, FlatBuffers, Cap'n Proto, or custom? Needs benchmarking
+- [ ] **Derived data staleness** — how does the compiler detect stale derived data? Content hash? Version counter?
+- [ ] **Incremental analysis** — can `plutoc analyze` update only affected derived data, or full recompute?
+- [ ] **Cross-project UUIDs** — UUID namespace management across library boundaries
+- [ ] **SDK language bindings** — Rust crate is primary, but AI agents may need Python/TS bindings (FFI? gRPC?)
+- [ ] **Diff tooling** — custom `git diff` driver for binary `.pluto` files, or rely on `.pt` diffs?
+- [ ] **IDE integration** — editors work with `.pt` and sync on save? Or SDK-powered LSP on `.pluto` directly?
+- [ ] **Concurrent SDK access** — multiple AI agents editing same `.pluto` file (locking? CRDT?)
+
 ## Tooling
 
 - [ ] **Testing** — built-in test framework, distributed testing support
@@ -71,7 +78,7 @@ Previously open questions that have been designed and implemented.
 - [x] **Early return** — `return` in functions and methods
 - [x] **Arrays** — literal syntax, indexing, `push`, `len`, `for-in` iteration
 - [x] **Extern functions** — `extern fn` declarations for FFI with C runtime
-- [x] **Generics** — monomorphization strategy, `fn first<T>(items: [T]) T`, `class Box<T>`, `enum Option<T>`
+- [x] **Generics** — monomorphization strategy, `fn first<T>(items: [T]) T`, `class Box<T>`, generic enums
 - [x] **Collections** — built-in `Map<K, V>` and `Set<T>` with hash-table implementation
 - [x] **Garbage collection** — mark-and-sweep GC in the C runtime, tag-based tracing
 - [x] **Standard library (core)** — `std.strings`, `std.math`, `std.net`, `std.socket`, `std.fs`
@@ -86,3 +93,4 @@ Previously open questions that have been designed and implemented.
 - [x] **`loop` keyword** — rejected; use `while true` instead. No dedicated infinite loop construct needed
 - [x] **Channels** — `chan<T>()` with `Sender<T>`/`Receiver<T>`, blocking/non-blocking send/recv, for-in iteration, error integration
 - [x] **LSP** — language server (`plutoc lsp`) with diagnostics, go-to-definition, hover, and document symbols. Zed extension with tree-sitter grammar for syntax highlighting.
+- [x] **Null / optional** — first-class nullable types (`T?`, `none`, `?` operator). `T?` for any type, `none` for absent, `?` for null propagation. Compiler infers nullability transitively.

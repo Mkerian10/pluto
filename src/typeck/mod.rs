@@ -11,7 +11,7 @@ mod errors;
 pub(crate) use check::check_function;
 pub(crate) use resolve::resolve_type_for_monomorphize;
 
-use crate::diagnostics::CompileError;
+use crate::diagnostics::{CompileError, CompileWarning, WarningKind};
 use crate::parser::ast::Program;
 use env::{ErrorInfo, TypeEnv};
 use types::PlutoType;
@@ -35,10 +35,22 @@ fn types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> 
         }
         return types_compatible(a_ret, e_ret, env);
     }
+    // T is assignable to T? (implicit nullable wrap)
+    if let PlutoType::Nullable(inner) = expected {
+        if types_compatible(actual, inner, env) {
+            return true;
+        }
+    }
+    // Nullable(Void) (the none literal) is assignable to any Nullable(T)
+    if actual == &PlutoType::Nullable(Box::new(PlutoType::Void)) {
+        if matches!(expected, PlutoType::Nullable(_)) {
+            return true;
+        }
+    }
     false
 }
 
-pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
+pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), CompileError> {
     let mut env = TypeEnv::new();
 
     register::register_traits(program, &mut env)?;
@@ -69,6 +81,7 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     register::validate_di_graph(program, &mut env)?;
     register::check_trait_conformance(program, &mut env)?;
     register::check_all_bodies(program, &mut env)?;
+    check::enforce_mut_self(program, &env)?;
     // Seed Rust FFI fallible functions into fn_errors before inference
     // so that infer_error_sets can propagate RustError through callers.
     for fn_name in &program.fallible_extern_fns {
@@ -79,7 +92,58 @@ pub fn type_check(program: &Program) -> Result<TypeEnv, CompileError> {
     errors::infer_error_sets(program, &mut env);
     errors::enforce_error_handling(program, &env)?;
 
-    Ok(env)
+    let warnings = generate_warnings(&env, program);
+    Ok((env, warnings))
+}
+
+fn generate_warnings(env: &TypeEnv, program: &Program) -> Vec<CompileWarning> {
+    let mut warnings = Vec::new();
+
+    // Collect function parameter names to exclude from unused-variable warnings
+    let mut param_names = std::collections::HashSet::new();
+    for func in &program.functions {
+        for p in &func.node.params {
+            param_names.insert(p.name.node.clone());
+        }
+    }
+    if let Some(app) = &program.app {
+        for m in &app.node.methods {
+            for p in &m.node.params {
+                param_names.insert(p.name.node.clone());
+            }
+        }
+    }
+    for class in &program.classes {
+        for method in &class.node.methods {
+            for p in &method.node.params {
+                param_names.insert(p.name.node.clone());
+            }
+        }
+    }
+
+    for ((name, depth), decl_span) in &env.variable_decls {
+        // Skip _-prefixed variables (intentionally unused convention)
+        if name.starts_with('_') {
+            continue;
+        }
+        // Skip function parameters
+        if param_names.contains(name) {
+            continue;
+        }
+        // Skip if variable was read
+        if env.variable_reads.contains(&(name.clone(), *depth)) {
+            continue;
+        }
+        warnings.push(CompileWarning {
+            msg: format!("unused variable '{name}'"),
+            span: *decl_span,
+            kind: WarningKind::UnusedVariable,
+        });
+    }
+
+    // Sort for deterministic output
+    warnings.sort_by_key(|w| w.span.start);
+    warnings
 }
 
 #[cfg(test)]
@@ -92,7 +156,7 @@ mod tests {
         let tokens = lex(src).unwrap();
         let mut parser = Parser::new(&tokens, src);
         let program = parser.parse_program().unwrap();
-        type_check(&program)
+        type_check(&program).map(|(env, _warnings)| env)
     }
 
     #[test]

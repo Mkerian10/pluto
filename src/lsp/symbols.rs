@@ -216,5 +216,8 @@ fn format_type_expr(te: &crate::parser::ast::TypeExpr) -> String {
         TypeExpr::Qualified { module, name } => {
             format!("{}.{}", module, name)
         }
+        TypeExpr::Nullable(inner) => {
+            format!("{}?", format_type_expr(&inner.node))
+        }
     }
 }

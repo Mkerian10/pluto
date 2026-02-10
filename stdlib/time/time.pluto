@@ -1,0 +1,27 @@
+extern fn __pluto_time_wall_ns() int
+extern fn __pluto_time_sleep_ns(ns: int)
+extern fn __pluto_time_ns() int
+
+pub fn now() int {
+    return __pluto_time_wall_ns() / 1000000
+}
+
+pub fn now_ns() int {
+    return __pluto_time_wall_ns()
+}
+
+pub fn monotonic() int {
+    return __pluto_time_ns() / 1000000
+}
+
+pub fn monotonic_ns() int {
+    return __pluto_time_ns()
+}
+
+pub fn sleep(ms: int) {
+    __pluto_time_sleep_ns(ms * 1000000)
+}
+
+pub fn elapsed(start_ms: int) int {
+    return monotonic() - start_ms
+}

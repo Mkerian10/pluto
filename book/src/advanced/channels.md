@@ -180,9 +180,32 @@ fn main() {
 }
 ```
 
+## Timeouts
+
+`.send_timeout(value, ms)` and `.recv_timeout(ms)` block up to the specified number of milliseconds. If the operation can't complete in time, a `Timeout` error is raised:
+
+```
+fn main() {
+    let (tx, rx) = chan<int>(1)
+
+    // recv_timeout: wait up to 100ms for a value
+    let val = rx.recv_timeout(100) catch -1
+    print(val)  // -1 (timed out, nothing was sent)
+
+    // send_timeout: fill the buffer, then timeout trying to send more
+    tx.send(1)!
+    tx.send_timeout(2, 100) catch e { print(e.message) }  // "timeout"
+
+    tx.close()
+}
+```
+
+Timeout of 0 acts like an immediate check (similar to `try_send`/`try_recv` but raises `Timeout` instead of `ChannelFull`/`ChannelEmpty`).
+
+If the channel is closed, `ChannelClosed` is raised regardless of the timeout -- closed channels always take priority.
+
 ## Limitations
 
 - Channels must be explicitly closed with `.close()` -- there is no automatic close-on-drop yet
 - `chan<T>()` with no capacity argument uses capacity 1 (not true rendezvous)
-- There is no `select` for waiting on multiple channels simultaneously
 - Buffered values are copied by value (pointer copy for heap types) -- no move semantics

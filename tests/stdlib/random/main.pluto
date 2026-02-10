@@ -1,0 +1,110 @@
+import std.random
+
+test "next returns int" {
+    let x = random.next()
+    expect(true).to_be_true()
+}
+
+test "next produces different values" {
+    let a = random.next()
+    let b = random.next()
+    expect(a != b).to_be_true()
+}
+
+test "between in range" {
+    let i = 0
+    while i < 100 {
+        let v = random.between(1, 10)
+        expect(v >= 1).to_be_true()
+        expect(v <= 10).to_be_true()
+        i = i + 1
+    }
+}
+
+test "between equal bounds" {
+    let i = 0
+    while i < 10 {
+        expect(random.between(5, 5)).to_equal(5)
+        i = i + 1
+    }
+}
+
+test "between negative range" {
+    let i = 0
+    while i < 100 {
+        let v = random.between(-10, -5)
+        expect(v >= -10).to_be_true()
+        expect(v <= -5).to_be_true()
+        i = i + 1
+    }
+}
+
+test "between small range" {
+    let i = 0
+    while i < 100 {
+        let v = random.between(0, 1)
+        expect(v >= 0).to_be_true()
+        expect(v <= 1).to_be_true()
+        i = i + 1
+    }
+}
+
+test "decimal in 0 to 1" {
+    let i = 0
+    while i < 100 {
+        let v = random.decimal()
+        expect(v >= 0.0).to_be_true()
+        expect(v < 1.0).to_be_true()
+        i = i + 1
+    }
+}
+
+test "decimal_between in range" {
+    let i = 0
+    while i < 100 {
+        let v = random.decimal_between(5.0, 10.0)
+        expect(v >= 5.0).to_be_true()
+        expect(v < 10.0).to_be_true()
+        i = i + 1
+    }
+}
+
+test "decimal_between negative range" {
+    let i = 0
+    while i < 100 {
+        let v = random.decimal_between(-1.0, 1.0)
+        expect(v >= -1.0).to_be_true()
+        expect(v < 1.0).to_be_true()
+        i = i + 1
+    }
+}
+
+test "coin returns both values" {
+    let saw_true = false
+    let saw_false = false
+    let i = 0
+    while i < 100 {
+        if random.coin() {
+            saw_true = true
+        } else {
+            saw_false = true
+        }
+        i = i + 1
+    }
+    expect(saw_true).to_be_true()
+    expect(saw_false).to_be_true()
+}
+
+test "seed determinism" {
+    random.seed(42)
+    let a1 = random.next()
+    let a2 = random.next()
+    let a3 = random.next()
+    random.seed(42)
+    let b1 = random.next()
+    let b2 = random.next()
+    let b3 = random.next()
+    expect(a1).to_equal(b1)
+    expect(a2).to_equal(b2)
+    expect(a3).to_equal(b3)
+}

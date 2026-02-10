@@ -101,40 +101,6 @@ fn main() {
 }
 ```
 
-## Option&lt;T&gt;
-
-Pluto includes a built-in `Option<T>` type in the prelude for representing optional values:
-
-```
-enum Option<T> {
-    Some { value: T }
-    None
-}
-```
-
-You don't need to define it -- it's always available:
-
-```
-fn find(id: int) Option<int> {
-    if id > 0 {
-        return Option<int>.Some { value: id }
-    }
-    return Option<int>.None
-}
-
-fn main() {
-    let result = find(42)
-    match result {
-        Option.Some { value } {
-            print("found: {value}")
-        }
-        Option.None {
-            print("not found")
-        }
-    }
-}
-```
-
 ## How It Works
 
 Pluto uses **monomorphization** -- the compiler generates a specialized copy of each generic function/class/enum for every concrete type it's used with. This means generics have zero runtime overhead. `Box<int>` and `Box<string>` become completely separate types at compile time.

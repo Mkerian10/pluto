@@ -20,7 +20,7 @@ fn class_method_call() {
 #[test]
 fn class_field_mutation() {
     let out = compile_and_run_stdout(
-        "class Counter {\n    val: int\n\n    fn get(self) int {\n        return self.val\n    }\n}\n\nfn main() {\n    let c = Counter { val: 0 }\n    c.val = 42\n    print(c.get())\n}",
+        "class Counter {\n    val: int\n\n    fn get(self) int {\n        return self.val\n    }\n}\n\nfn main() {\n    let mut c = Counter { val: 0 }\n    c.val = 42\n    print(c.get())\n}",
     );
     assert_eq!(out, "42\n");
 }
@@ -85,5 +85,323 @@ fn class_duplicate_method_rejected() {
     compile_should_fail_with(
         "class Bad {\n    x: int\n\n    fn foo(self) int {\n        return 1\n    }\n\n    fn foo(self) int {\n        return 2\n    }\n}\n\nfn main() {\n    let b = Bad { x: 1 }\n}",
         "duplicate method 'foo'",
+    );
+}
+
+// ── mut self enforcement ─────────────────────────────────────
+
+#[test]
+fn mut_self_field_assign_ok() {
+    let out = compile_and_run_stdout(
+        r#"
+class Counter {
+    val: int
+
+    fn inc(mut self) {
+        self.val = self.val + 1
+    }
+
+    fn get(self) int {
+        return self.val
+    }
+}
+
+fn main() {
+    let mut c = Counter { val: 0 }
+    c.inc()
+    c.inc()
+    print(c.get())
+}
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+#[test]
+fn non_mut_self_field_assign_rejected() {
+    compile_should_fail_with(
+        r#"
+class Counter {
+    val: int
+
+    fn inc(self) {
+        self.val = self.val + 1
+    }
+}
+
+fn main() {
+    let c = Counter { val: 0 }
+    c.inc()
+}
+"#,
+        "cannot assign to 'self.val' in a non-mut method",
+    );
+}
+
+#[test]
+fn non_mut_calling_mut_method_rejected() {
+    compile_should_fail_with(
+        r#"
+class Counter {
+    val: int
+
+    fn inc(mut self) {
+        self.val = self.val + 1
+    }
+
+    fn wrapper(self) {
+        self.inc()
+    }
+}
+
+fn main() {
+    let c = Counter { val: 0 }
+    c.wrapper()
+}
+"#,
+        "cannot call 'mut self' method 'inc' on self in a non-mut method",
+    );
+}
+
+#[test]
+fn trait_mut_self_mismatch_rejected() {
+    compile_should_fail_with(
+        r#"
+trait Incrementable {
+    fn inc(mut self)
+}
+
+class Counter impl Incrementable {
+    val: int
+
+    fn inc(self) {
+        let x = self.val
+    }
+}
+
+fn main() {
+}
+"#,
+        "declares 'mut self', but class 'Counter' does not",
+    );
+}
+
+#[test]
+fn trait_mut_self_reverse_mismatch_rejected() {
+    compile_should_fail_with(
+        r#"
+trait Readable {
+    fn read(self) int
+}
+
+class Counter impl Readable {
+    val: int
+
+    fn read(mut self) int {
+        return self.val
+    }
+}
+
+fn main() {
+}
+"#,
+        "declares 'self', but class 'Counter' declares 'mut self'",
+    );
+}
+
+#[test]
+fn non_mut_self_read_only_ok() {
+    let out = compile_and_run_stdout(
+        r#"
+class Point {
+    x: int
+    y: int
+
+    fn sum(self) int {
+        return self.x + self.y
+    }
+}
+
+fn main() {
+    let p = Point { x: 3, y: 4 }
+    print(p.sum())
+}
+"#,
+    );
+    assert_eq!(out, "7\n");
+}
+
+// ── let mut enforcement tests ──────────────────────────────────────────────
+
+#[test]
+fn let_mut_field_assign_ok() {
+    let out = compile_and_run_stdout(
+        r#"
+class Counter {
+    val: int
+}
+
+fn main() {
+    let mut c = Counter { val: 0 }
+    c.val = 42
+    print(c.val)
+}
+"#,
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn let_immutable_field_assign_rejected() {
+    compile_should_fail_with(
+        r#"
+class Counter {
+    val: int
+}
+
+fn main() {
+    let c = Counter { val: 0 }
+    c.val = 42
+}
+"#,
+        "cannot assign to field of immutable variable 'c'",
+    );
+}
+
+#[test]
+fn let_immutable_mut_method_rejected() {
+    compile_should_fail_with(
+        r#"
+class Counter {
+    val: int
+
+    fn inc(mut self) {
+        self.val = self.val + 1
+    }
+}
+
+fn main() {
+    let c = Counter { val: 0 }
+    c.inc()
+}
+"#,
+        "cannot call mutating method 'inc' on immutable variable 'c'",
+    );
+}
+
+#[test]
+fn let_mut_mut_method_ok() {
+    let out = compile_and_run_stdout(
+        r#"
+class Counter {
+    val: int
+
+    fn inc(mut self) {
+        self.val = self.val + 1
+    }
+
+    fn get(self) int {
+        return self.val
+    }
+}
+
+fn main() {
+    let mut c = Counter { val: 0 }
+    c.inc()
+    c.inc()
+    print(c.get())
+}
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+#[test]
+fn let_immutable_read_only_ok() {
+    let out = compile_and_run_stdout(
+        r#"
+class Counter {
+    val: int
+}
+
+fn main() {
+    let c = Counter { val: 42 }
+    print(c.val)
+}
+"#,
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn let_immutable_non_mut_method_ok() {
+    let out = compile_and_run_stdout(
+        r#"
+class Counter {
+    val: int
+
+    fn get(self) int {
+        return self.val
+    }
+}
+
+fn main() {
+    let c = Counter { val: 42 }
+    print(c.get())
+}
+"#,
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn fn_param_is_mutable() {
+    let out = compile_and_run_stdout(
+        r#"
+class Counter {
+    val: int
+
+    fn inc(mut self) {
+        self.val = self.val + 1
+    }
+
+    fn get(self) int {
+        return self.val
+    }
+}
+
+fn bump(c: Counter) {
+    c.val = c.val + 10
+    c.inc()
+}
+
+fn main() {
+    let mut c = Counter { val: 0 }
+    bump(c)
+    print(c.get())
+}
+"#,
+    );
+    assert_eq!(out, "11\n");
+}
+
+#[test]
+fn let_immutable_field_assign_inner_rejected() {
+    compile_should_fail_with(
+        r#"
+class Inner {
+    val: int
+}
+
+class Outer {
+    inner: Inner
+}
+
+fn main() {
+    let o = Outer { inner: Inner { val: 0 } }
+    o.inner = Inner { val: 1 }
+}
+"#,
+        "cannot assign to field of immutable variable 'o'",
     );
 }

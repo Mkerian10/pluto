@@ -167,6 +167,13 @@ fn instantiate_class(
                 Some(rt) => crate::typeck::resolve_type_for_monomorphize(rt, env)?,
                 None => PlutoType::Void,
             };
+            // Propagate mut self
+            if !method.node.params.is_empty()
+                && method.node.params[0].name.node == "self"
+                && method.node.params[0].is_mut
+            {
+                env.mut_self_methods.insert(method_name.clone());
+            }
             env.functions.insert(method_name, crate::typeck::env::FuncSig {
                 params: param_types,
                 return_type,
@@ -272,6 +279,15 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         PlutoType::Range => TypeExpr::Named("range".to_string()),
         PlutoType::Byte => TypeExpr::Named("byte".to_string()),
         PlutoType::Bytes => TypeExpr::Named("bytes".to_string()),
+        PlutoType::GenericInstance(_, name, args) => TypeExpr::Generic {
+            name: name.clone(),
+            type_args: args.iter()
+                .map(|a| Spanned::new(pluto_type_to_type_expr(a), Span::new(0, 0)))
+                .collect(),
+        },
+        PlutoType::Nullable(inner) => {
+            TypeExpr::Nullable(Box::new(Spanned::new(pluto_type_to_type_expr(inner), Span::new(0, 0))))
+        }
     }
 }
 
@@ -296,6 +312,9 @@ fn substitute_in_type_expr(te: &mut TypeExpr, bindings: &HashMap<String, TypeExp
             for arg in type_args.iter_mut() {
                 substitute_in_type_expr(&mut arg.node, bindings);
             }
+        }
+        TypeExpr::Nullable(inner) => {
+            substitute_in_type_expr(&mut inner.node, bindings);
         }
     }
 }
@@ -450,7 +469,10 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
 fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
     match expr {
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
-        | Expr::StringLit(_) | Expr::Ident(_) => {}
+        | Expr::StringLit(_) | Expr::Ident(_) | Expr::NoneLit => {}
+        Expr::NullPropagate { expr } => {
+            substitute_in_expr(&mut expr.node, bindings);
+        }
         Expr::BinOp { lhs, rhs, .. } => {
             substitute_in_expr(&mut lhs.node, bindings);
             substitute_in_expr(&mut rhs.node, bindings);
@@ -636,6 +658,10 @@ fn offset_type_expr_spans(te: &mut TypeExpr, offset: usize) {
                 offset_type_expr_spans(&mut arg.node, offset);
             }
         }
+        TypeExpr::Nullable(inner) => {
+            offset_spanned(inner, offset);
+            offset_type_expr_spans(&mut inner.node, offset);
+        }
     }
 }
 
@@ -648,7 +674,7 @@ fn offset_block_spans(block: &mut Block, offset: usize) {
 
 fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
     match stmt {
-        Stmt::Let { name, ty, value } => {
+        Stmt::Let { name, ty, value, .. } => {
             offset_spanned(name, offset);
             if let Some(t) = ty {
                 offset_spanned(t, offset);
@@ -725,7 +751,7 @@ fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
                 offset_block_spans(&mut arm.body.node, offset);
             }
         }
-        Stmt::Raise { error_name, fields } => {
+        Stmt::Raise { error_name, fields, .. } => {
             offset_spanned(error_name, offset);
             for (fname, fexpr) in fields.iter_mut() {
                 offset_spanned(fname, offset);
@@ -777,7 +803,12 @@ fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
 fn offset_expr_spans(expr: &mut Expr, offset: usize) {
     match expr {
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
-        | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. } => {}
+        | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. }
+        | Expr::NoneLit => {}
+        Expr::NullPropagate { expr } => {
+            offset_spanned(expr, offset);
+            offset_expr_spans(&mut expr.node, offset);
+        }
         Expr::BinOp { lhs, rhs, .. } => {
             offset_spanned(lhs, offset);
             offset_expr_spans(&mut lhs.node, offset);
@@ -800,7 +831,7 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
             offset_spanned(target_type, offset);
             offset_type_expr_spans(&mut target_type.node, offset);
         }
-        Expr::Call { name, args } => {
+        Expr::Call { name, args, .. } => {
             offset_spanned(name, offset);
             for arg in args.iter_mut() {
                 offset_spanned(arg, offset);
@@ -821,7 +852,7 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
                 offset_expr_spans(&mut arg.node, offset);
             }
         }
-        Expr::StructLit { name, type_args, fields } => {
+        Expr::StructLit { name, type_args, fields, .. } => {
             offset_spanned(name, offset);
             for ta in type_args.iter_mut() {
                 offset_spanned(ta, offset);
@@ -845,7 +876,7 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
             offset_spanned(index, offset);
             offset_expr_spans(&mut index.node, offset);
         }
-        Expr::EnumUnit { enum_name, variant, type_args } => {
+        Expr::EnumUnit { enum_name, variant, type_args, .. } => {
             offset_spanned(enum_name, offset);
             offset_spanned(variant, offset);
             for ta in type_args.iter_mut() {
@@ -853,7 +884,7 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
                 offset_type_expr_spans(&mut ta.node, offset);
             }
         }
-        Expr::EnumData { enum_name, variant, type_args, fields } => {
+        Expr::EnumData { enum_name, variant, type_args, fields, .. } => {
             offset_spanned(enum_name, offset);
             offset_spanned(variant, offset);
             for ta in type_args.iter_mut() {
@@ -1155,8 +1186,12 @@ fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(u
         Expr::Spawn { call } => {
             rewrite_expr(&mut call.node, call.span.start, call.span.end, rewrites);
         }
+        Expr::NullPropagate { expr } => {
+            rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
-        | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. } => {}
+        | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. }
+        | Expr::NoneLit => {}
     }
 }
 
@@ -1356,6 +1391,9 @@ fn resolve_generic_te_in_expr(expr: &mut Expr, env: &mut TypeEnv) -> Result<(), 
         Expr::Spawn { call } => {
             resolve_generic_te_in_expr(&mut call.node, env)?;
         }
+        Expr::NullPropagate { expr } => {
+            resolve_generic_te_in_expr(&mut expr.node, env)?;
+        }
         _ => {}
     }
     Ok(())
@@ -1402,6 +1440,7 @@ fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), Compil
             resolve_generic_te(&mut return_type.node, env)?;
         }
         TypeExpr::Named(_) | TypeExpr::Qualified { .. } => {}
+        TypeExpr::Nullable(inner) => resolve_generic_te(&mut inner.node, env)?,
     }
     Ok(())
 }
@@ -1463,6 +1502,10 @@ fn type_expr_to_pluto_type(te: &TypeExpr, env: &TypeEnv) -> Result<PlutoType, Co
             }
             let mangled = crate::typeck::env::mangle_name(name, &resolved_args);
             Ok(PlutoType::Class(mangled))
+        }
+        TypeExpr::Nullable(inner) => {
+            let inner_type = type_expr_to_pluto_type(&inner.node, env)?;
+            Ok(PlutoType::Nullable(Box::new(inner_type)))
         }
     }
 }

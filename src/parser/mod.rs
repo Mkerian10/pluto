@@ -30,6 +30,18 @@ impl<'a> Parser<'a> {
         Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names: HashSet::new() }
     }
 
+    /// Constructor with extra enum names added to the prelude set.
+    /// Used by the SDK editor to parse snippets that reference enums from the current program.
+    pub fn new_with_enum_context(
+        tokens: &'a [Spanned<Token>],
+        source: &'a str,
+        extra_enum_names: HashSet<String>,
+    ) -> Self {
+        let mut enum_names = crate::prelude::prelude_enum_names().clone();
+        enum_names.extend(extra_enum_names);
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names }
+    }
+
     fn peek(&self) -> Option<&Spanned<Token>> {
         let mut i = self.pos;
         // Skip newlines when peeking
@@ -143,6 +155,57 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse a comma-separated list of items until `close` delimiter is reached.
+    /// Assumes the opening delimiter has already been consumed and `skip_newlines()` called.
+    /// If `mandatory_comma` is true, commas between items are required (function args);
+    /// otherwise commas are optional (struct fields, set elements).
+    /// Handles trailing commas in both modes.
+    fn parse_comma_list<T>(
+        &mut self,
+        close: &Token,
+        mandatory_comma: bool,
+        mut parse_item: impl FnMut(&mut Self) -> Result<T, CompileError>,
+    ) -> Result<Vec<T>, CompileError> {
+        let mut items = Vec::new();
+        while self.peek().is_some()
+            && std::mem::discriminant(&self.peek().unwrap().node) != std::mem::discriminant(close)
+        {
+            if !items.is_empty() {
+                if mandatory_comma {
+                    self.expect(&Token::Comma)?;
+                } else if self.peek().is_some()
+                    && matches!(self.peek().unwrap().node, Token::Comma)
+                {
+                    self.advance();
+                }
+                self.skip_newlines();
+                if self.peek().is_some()
+                    && std::mem::discriminant(&self.peek().unwrap().node)
+                        == std::mem::discriminant(close)
+                {
+                    break; // trailing comma
+                }
+            }
+            items.push(parse_item(self)?);
+            self.skip_newlines();
+        }
+        Ok(items)
+    }
+
+    /// Parse `name: expr, ...` field list inside `{ }`. Assumes `{` already consumed.
+    /// Returns fields and the closing `}` span end.
+    fn parse_field_list(&mut self) -> Result<(Vec<(Spanned<String>, Spanned<Expr>)>, usize), CompileError> {
+        self.skip_newlines();
+        let fields = self.parse_comma_list(&Token::RBrace, false, |p| {
+            let fname = p.expect_ident()?;
+            p.expect(&Token::Colon)?;
+            let fval = p.parse_expr(0)?;
+            Ok((fname, fval))
+        })?;
+        let close = self.expect(&Token::RBrace)?;
+        Ok((fields, close.span.end))
+    }
+
     fn pre_scan_enum_names(&mut self) {
         let saved = self.pos;
         let mut i = 0;
@@ -193,12 +256,45 @@ impl<'a> Parser<'a> {
                 false
             };
 
+            // Parse optional lifecycle modifier: scoped | transient
+            let lifecycle = match self.peek().map(|t| &t.node) {
+                Some(Token::Scoped) => {
+                    self.advance();
+                    self.skip_newlines();
+                    Lifecycle::Scoped
+                }
+                Some(Token::Transient) => {
+                    self.advance();
+                    self.skip_newlines();
+                    Lifecycle::Transient
+                }
+                Some(_) => Lifecycle::Singleton,
+                None => {
+                    return Err(CompileError::syntax(
+                        "expected declaration after 'pub'", self.eof_span(),
+                    ));
+                }
+            };
+
             let tok = self.peek().ok_or_else(|| {
-                CompileError::syntax("expected declaration after 'pub'", self.eof_span())
+                CompileError::syntax(
+                    if lifecycle != Lifecycle::Singleton {
+                        "expected 'class' after lifecycle modifier"
+                    } else {
+                        "expected declaration"
+                    },
+                    self.eof_span(),
+                )
             })?;
 
             match &tok.node {
                 Token::App => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     if is_pub {
                         return Err(CompileError::syntax(
                             "app declarations cannot be pub",
@@ -217,29 +313,60 @@ impl<'a> Parser<'a> {
                 Token::Class => {
                     let mut class = self.parse_class()?;
                     class.node.is_pub = is_pub;
+                    class.node.lifecycle = lifecycle;
                     classes.push(class);
                 }
                 Token::Fn => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     let mut func = self.parse_function()?;
                     func.node.is_pub = is_pub;
                     functions.push(func);
                 }
                 Token::Trait => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     let mut tr = self.parse_trait()?;
                     tr.node.is_pub = is_pub;
                     traits.push(tr);
                 }
                 Token::Enum => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     let mut e = self.parse_enum_decl()?;
                     e.node.is_pub = is_pub;
                     enums.push(e);
                 }
                 Token::Error => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     let mut err_decl = self.parse_error_decl()?;
                     err_decl.node.is_pub = is_pub;
                     errors.push(err_decl);
                 }
                 Token::Extern => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     // Peek at next token to decide: extern fn vs extern rust
                     let next = self.peek_nth(1);
                     match next {
@@ -264,6 +391,12 @@ impl<'a> Parser<'a> {
                     }
                 }
                 Token::Test => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
                     if is_pub {
                         return Err(CompileError::syntax(
                             "tests cannot be pub",
@@ -355,17 +488,12 @@ impl<'a> Parser<'a> {
         self.expect(&Token::Fn)?;
         let name = self.expect_ident()?;
         self.expect(&Token::LParen)?;
-
-        let mut params = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-            if !params.is_empty() {
-                self.expect(&Token::Comma)?;
-            }
-            let pname = self.expect_ident()?;
-            self.expect(&Token::Colon)?;
-            let pty = self.parse_type()?;
-            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
-        }
+        let params = self.parse_comma_list(&Token::RParen, true, |p| {
+            let pname = p.expect_ident()?;
+            p.expect(&Token::Colon)?;
+            let pty = p.parse_type()?;
+            Ok(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false })
+        })?;
         let close_paren = self.expect(&Token::RParen)?;
         let mut end = close_paren.span.end;
 
@@ -415,21 +543,19 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_bracket_deps(&mut self) -> Result<Vec<Field>, CompileError> {
-        let mut deps = Vec::new();
         if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBracket) {
             self.advance(); // consume '['
-            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBracket) {
-                if !deps.is_empty() {
-                    self.expect(&Token::Comma)?;
-                }
-                let name = self.expect_ident()?;
-                self.expect(&Token::Colon)?;
-                let ty = self.parse_type()?;
-                deps.push(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false });
-            }
+            let deps = self.parse_comma_list(&Token::RBracket, true, |p| {
+                let name = p.expect_ident()?;
+                p.expect(&Token::Colon)?;
+                let ty = p.parse_type()?;
+                Ok(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false })
+            })?;
             self.expect(&Token::RBracket)?;
+            Ok(deps)
+        } else {
+            Ok(Vec::new())
         }
-        Ok(deps)
     }
 
     fn parse_app_decl(&mut self) -> Result<Spanned<AppDecl>, CompileError> {
@@ -476,23 +602,12 @@ impl<'a> Parser<'a> {
             let fields = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
                 self.expect(&Token::LBrace)?;
                 self.skip_newlines();
-                let mut fields = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                    if !fields.is_empty() {
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                            self.advance();
-                        }
-                        self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                            break;
-                        }
-                    }
-                    let fname = self.expect_ident()?;
-                    self.expect(&Token::Colon)?;
-                    let fty = self.parse_type()?;
-                    fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false });
-                    self.skip_newlines();
-                }
+                let fields = self.parse_comma_list(&Token::RBrace, false, |p| {
+                    let fname = p.expect_ident()?;
+                    p.expect(&Token::Colon)?;
+                    let fty = p.parse_type()?;
+                    Ok(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false })
+                })?;
                 self.expect(&Token::RBrace)?;
                 fields
             } else {
@@ -571,23 +686,41 @@ impl<'a> Parser<'a> {
             }
             first = false;
 
-            if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
+            if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Mut) {
+                let mut_tok = self.advance().unwrap();
+                let mut_span = mut_tok.span;
+                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
+                    let self_tok = self.advance().unwrap();
+                    params.push(Param {
+                        id: Uuid::new_v4(),
+                        name: Spanned::new("self".to_string(), self_tok.span),
+                        ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
+                        is_mut: true,
+                    });
+                } else {
+                    return Err(CompileError::syntax(
+                        "expected 'self' after 'mut'",
+                        mut_span,
+                    ));
+                }
+            } else if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
                 let self_tok = self.advance().unwrap();
                 params.push(Param {
                     id: Uuid::new_v4(),
                     name: Spanned::new("self".to_string(), self_tok.span),
                     ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
+                    is_mut: false,
                 });
             } else {
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let pty = self.parse_type()?;
-                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
+                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
             }
         }
         self.expect(&Token::RParen)?;
 
-        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Newline | Token::RBrace) {
+        let return_type = if self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::LBrace | Token::Newline | Token::RBrace | Token::Requires | Token::Ensures) {
             // Check if next non-newline token is '{' — if so, no return type
             if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
                 None
@@ -598,15 +731,20 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // Parse optional requires/ensures contracts
+        let contracts = self.parse_contracts()?;
+
         // If next token is '{', parse a body (default implementation)
         let body = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
             Some(self.parse_block()?)
         } else {
-            self.consume_statement_end();
+            if contracts.is_empty() {
+                self.consume_statement_end();
+            }
             None
         };
 
-        Ok(TraitMethod { id: Uuid::new_v4(), name, params, return_type, contracts: vec![], body })
+        Ok(TraitMethod { id: Uuid::new_v4(), name, params, return_type, contracts, body })
     }
 
     fn parse_class(&mut self) -> Result<Spanned<ClassDecl>, CompileError> {
@@ -680,7 +818,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, fields, methods, invariants, impl_traits, uses, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, fields, methods, invariants, impl_traits, uses, is_pub: false, lifecycle: Lifecycle::Singleton }, Span::new(start, end)))
     }
 
     fn parse_method(&mut self) -> Result<Spanned<Function>, CompileError> {
@@ -697,19 +835,37 @@ impl<'a> Parser<'a> {
             }
             first = false;
 
-            // Check for `self` as first param
-            if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
+            // Check for `mut self` or `self` as first param
+            if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Mut) {
+                let mut_tok = self.advance().unwrap();
+                let mut_span = mut_tok.span;
+                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
+                    let self_tok = self.advance().unwrap();
+                    params.push(Param {
+                        id: Uuid::new_v4(),
+                        name: Spanned::new("self".to_string(), self_tok.span),
+                        ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
+                        is_mut: true,
+                    });
+                } else {
+                    return Err(CompileError::syntax(
+                        "expected 'self' after 'mut'",
+                        mut_span,
+                    ));
+                }
+            } else if params.is_empty() && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::SelfVal) {
                 let self_tok = self.advance().unwrap();
                 params.push(Param {
                     id: Uuid::new_v4(),
                     name: Spanned::new("self".to_string(), self_tok.span),
                     ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
+                    is_mut: false,
                 });
             } else {
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let pty = self.parse_type()?;
-                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
+                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
             }
         }
         self.expect(&Token::RParen)?;
@@ -735,13 +891,7 @@ impl<'a> Parser<'a> {
     fn parse_type_params(&mut self) -> Result<Vec<Spanned<String>>, CompileError> {
         if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Lt) {
             self.advance(); // consume '<'
-            let mut params = Vec::new();
-            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::Gt) {
-                if !params.is_empty() {
-                    self.expect(&Token::Comma)?;
-                }
-                params.push(self.expect_ident()?);
-            }
+            let params = self.parse_comma_list(&Token::Gt, true, |p| p.expect_ident())?;
             self.expect(&Token::Gt)?;
             Ok(params)
         } else {
@@ -752,13 +902,7 @@ impl<'a> Parser<'a> {
     /// Parse a type argument list: `<int, string>`, etc. Assumes we're positioned at `<`.
     fn parse_type_arg_list(&mut self) -> Result<Vec<Spanned<TypeExpr>>, CompileError> {
         self.expect(&Token::Lt)?;
-        let mut args = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::Gt) {
-            if !args.is_empty() {
-                self.expect(&Token::Comma)?;
-            }
-            args.push(self.parse_type()?);
-        }
+        let args = self.parse_comma_list(&Token::Gt, true, |p| p.parse_type())?;
         self.expect(&Token::Gt)?;
         Ok(args)
     }
@@ -804,17 +948,12 @@ impl<'a> Parser<'a> {
         let name = self.expect_ident()?;
         let type_params = self.parse_type_params()?;
         self.expect(&Token::LParen)?;
-
-        let mut params = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-            if !params.is_empty() {
-                self.expect(&Token::Comma)?;
-            }
-            let pname = self.expect_ident()?;
-            self.expect(&Token::Colon)?;
-            let pty = self.parse_type()?;
-            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
-        }
+        let params = self.parse_comma_list(&Token::RParen, true, |p| {
+            let pname = p.expect_ident()?;
+            p.expect(&Token::Colon)?;
+            let pty = p.parse_type()?;
+            Ok(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false })
+        })?;
         self.expect(&Token::RParen)?;
 
         // Return type: if next non-newline token is not '{' or a contract keyword, it's a return type
@@ -837,7 +976,7 @@ impl<'a> Parser<'a> {
 
     fn parse_type(&mut self) -> Result<Spanned<TypeExpr>, CompileError> {
         self.skip_newlines();
-        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBracket) {
+        let mut result = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBracket) {
             let open = self.advance().unwrap();
             let start = open.span.start;
             let inner = self.parse_type()?;
@@ -849,14 +988,9 @@ impl<'a> Parser<'a> {
             let fn_tok = self.advance().unwrap();
             let start = fn_tok.span.start;
             self.expect(&Token::LParen)?;
-            let mut params = Vec::new();
-            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-                if !params.is_empty() {
-                    self.expect(&Token::Comma)?;
-                }
-                let ty = self.parse_type()?;
-                params.push(Box::new(ty));
-            }
+            let params = self.parse_comma_list(&Token::RParen, true, |p| {
+                Ok(Box::new(p.parse_type()?))
+            })?;
             let close_paren = self.expect(&Token::RParen)?;
             let mut end = close_paren.span.end;
             // Optional return type — if next token looks like a type, parse it; otherwise void
@@ -897,7 +1031,14 @@ impl<'a> Parser<'a> {
             } else {
                 Ok(Spanned::new(TypeExpr::Named(ident.node), ident.span))
             }
+        }?;
+        // Trailing ? makes this a nullable type: T?
+        if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Question) {
+            let q = self.advance().unwrap();
+            let start = result.span.start;
+            result = Spanned::new(TypeExpr::Nullable(Box::new(result)), Span::new(start, q.span.end));
         }
+        Ok(result)
     }
 
     fn parse_block(&mut self) -> Result<Spanned<Block>, CompileError> {
@@ -1082,6 +1223,14 @@ impl<'a> Parser<'a> {
         let let_tok = self.expect(&Token::Let)?;
         let start = let_tok.span.start;
 
+        // Check for `mut` keyword
+        let is_mut = if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Mut) {
+            self.advance(); // consume `mut`
+            true
+        } else {
+            false
+        };
+
         // Check for destructuring: let (tx, rx) = chan<T>(...)
         if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
             return self.parse_let_chan(start);
@@ -1101,7 +1250,7 @@ impl<'a> Parser<'a> {
         let end = value.span.end;
         self.consume_statement_end();
 
-        Ok(Spanned::new(Stmt::Let { name, ty, value }, Span::new(start, end)))
+        Ok(Spanned::new(Stmt::Let { name, ty, value, is_mut }, Span::new(start, end)))
     }
 
     fn parse_let_chan(&mut self, start: usize) -> Result<Spanned<Stmt>, CompileError> {
@@ -1282,7 +1431,7 @@ impl<'a> Parser<'a> {
                 (Vec::new(), body)
             };
 
-            arms.push(MatchArm { enum_name, variant_name, type_args: vec![], bindings, body });
+            arms.push(MatchArm { enum_name, variant_name, type_args: vec![], bindings, body, enum_id: None, variant_id: None });
             self.skip_newlines();
         }
 
@@ -1482,7 +1631,7 @@ impl<'a> Parser<'a> {
         self.consume_statement_end();
 
         Ok(Spanned::new(
-            Stmt::Raise { error_name, fields },
+            Stmt::Raise { error_name, fields, error_id: None },
             Span::new(start, end),
         ))
     }
@@ -1540,18 +1689,7 @@ impl<'a> Parser<'a> {
                 if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
                     self.advance(); // consume '('
                     self.skip_newlines();
-                    let mut args = Vec::new();
-                    while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-                        if !args.is_empty() {
-                            self.expect(&Token::Comma)?;
-                            self.skip_newlines();
-                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
-                                break; // trailing comma
-                            }
-                        }
-                        args.push(self.parse_expr(0)?);
-                        self.skip_newlines();
-                    }
+                    let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
                     let close = self.expect(&Token::RParen)?;
                     let span = Span::new(lhs.span.start, close.span.end);
                     lhs = Spanned::new(
@@ -1576,32 +1714,16 @@ impl<'a> Parser<'a> {
                     {
                         // EnumName.Variant { field: value }
                         self.advance(); // consume '{'
-                        self.skip_newlines();
-                        let mut fields = Vec::new();
-                        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                            if !fields.is_empty() {
-                                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                                    self.advance();
-                                }
-                                self.skip_newlines();
-                                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                                    break;
-                                }
-                            }
-                            let fname = self.expect_ident()?;
-                            self.expect(&Token::Colon)?;
-                            let fval = self.parse_expr(0)?;
-                            fields.push((fname, fval));
-                            self.skip_newlines();
-                        }
-                        let close = self.expect(&Token::RBrace)?;
-                        let span = Span::new(lhs.span.start, close.span.end);
+                        let (fields, close_end) = self.parse_field_list()?;
+                        let span = Span::new(lhs.span.start, close_end);
                         lhs = Spanned::new(
                             Expr::EnumData {
                                 enum_name: Spanned::new(enum_name_str, enum_name_span),
                                 variant: field_name,
                                 type_args: vec![],
                                 fields,
+                                enum_id: None,
+                                variant_id: None,
                             },
                             span,
                         );
@@ -1613,6 +1735,8 @@ impl<'a> Parser<'a> {
                                 enum_name: Spanned::new(enum_name_str, enum_name_span),
                                 variant: field_name,
                                 type_args: vec![],
+                                enum_id: None,
+                                variant_id: None,
                             },
                             span,
                         );
@@ -1632,31 +1756,14 @@ impl<'a> Parser<'a> {
                     let name_span = Span::new(lhs.span.start, field_name.span.end);
 
                     self.advance(); // consume '{'
-                    self.skip_newlines();
-                    let mut fields = Vec::new();
-                    while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                        if !fields.is_empty() {
-                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                                self.advance();
-                            }
-                            self.skip_newlines();
-                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                                break;
-                            }
-                        }
-                        let fname = self.expect_ident()?;
-                        self.expect(&Token::Colon)?;
-                        let fval = self.parse_expr(0)?;
-                        fields.push((fname, fval));
-                        self.skip_newlines();
-                    }
-                    let close = self.expect(&Token::RBrace)?;
-                    let span = Span::new(lhs.span.start, close.span.end);
+                    let (fields, close_end) = self.parse_field_list()?;
+                    let span = Span::new(lhs.span.start, close_end);
                     lhs = Spanned::new(
                         Expr::StructLit {
                             name: Spanned::new(qualified_name, name_span),
                             type_args: vec![],
                             fields,
+                            target_id: None,
                         },
                         span,
                     );
@@ -1681,32 +1788,16 @@ impl<'a> Parser<'a> {
                     {
                         // module.Enum.Variant { field: value }
                         self.advance(); // consume '{'
-                        self.skip_newlines();
-                        let mut fields = Vec::new();
-                        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                            if !fields.is_empty() {
-                                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                                    self.advance();
-                                }
-                                self.skip_newlines();
-                                if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                                    break;
-                                }
-                            }
-                            let fname = self.expect_ident()?;
-                            self.expect(&Token::Colon)?;
-                            let fval = self.parse_expr(0)?;
-                            fields.push((fname, fval));
-                            self.skip_newlines();
-                        }
-                        let close = self.expect(&Token::RBrace)?;
-                        let span = Span::new(lhs.span.start, close.span.end);
+                        let (fields, close_end) = self.parse_field_list()?;
+                        let span = Span::new(lhs.span.start, close_end);
                         lhs = Spanned::new(
                             Expr::EnumData {
                                 enum_name: Spanned::new(qualified_enum_name, enum_name_span),
                                 variant: field_name,
                                 type_args: vec![],
                                 fields,
+                                enum_id: None,
+                                variant_id: None,
                             },
                             span,
                         );
@@ -1719,6 +1810,8 @@ impl<'a> Parser<'a> {
                                 enum_name: Spanned::new(qualified_enum_name, enum_name_span),
                                 variant: field_name,
                                 type_args: vec![],
+                                enum_id: None,
+                                variant_id: None,
                             },
                             span,
                         );
@@ -1753,12 +1846,15 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Postfix ? — reserved for future Option/null handling
+            // Postfix ? — null propagation (unwrap nullable, early-return none)
             if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Question) {
-                return Err(CompileError::syntax(
-                    "? is reserved for future Option/null handling; use ! for error propagation",
-                    self.peek_raw().unwrap().span,
-                ));
+                let q = self.advance().unwrap();
+                let span = Span::new(lhs.span.start, q.span.end);
+                lhs = Spanned::new(
+                    Expr::NullPropagate { expr: Box::new(lhs) },
+                    span,
+                );
+                continue;
             }
 
             // Postfix ! — error propagation (must be on same line via peek_raw)
@@ -1820,32 +1916,16 @@ impl<'a> Parser<'a> {
                 {
                     // EnumName<type_args>.Variant { field: value }
                     self.advance(); // consume '{'
-                    self.skip_newlines();
-                    let mut fields = Vec::new();
-                    while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                        if !fields.is_empty() {
-                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                                self.advance();
-                            }
-                            self.skip_newlines();
-                            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                                break;
-                            }
-                        }
-                        let fname = self.expect_ident()?;
-                        self.expect(&Token::Colon)?;
-                        let fval = self.parse_expr(0)?;
-                        fields.push((fname, fval));
-                        self.skip_newlines();
-                    }
-                    let close = self.expect(&Token::RBrace)?;
-                    let span = Span::new(lhs.span.start, close.span.end);
+                    let (fields, close_end) = self.parse_field_list()?;
+                    let span = Span::new(lhs.span.start, close_end);
                     lhs = Spanned::new(
                         Expr::EnumData {
                             enum_name: Spanned::new(enum_name_str, enum_name_span),
                             variant,
                             type_args,
                             fields,
+                            enum_id: None,
+                            variant_id: None,
                         },
                         span,
                     );
@@ -1856,6 +1936,8 @@ impl<'a> Parser<'a> {
                             enum_name: Spanned::new(enum_name_str, enum_name_span),
                             variant,
                             type_args,
+                            enum_id: None,
+                            variant_id: None,
                         },
                         span,
                     );
@@ -2043,26 +2125,9 @@ impl<'a> Parser<'a> {
                 let tok = self.advance().unwrap();
                 let start = tok.span.start;
                 self.skip_newlines();
-                let mut elements = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBracket) {
-                    if !elements.is_empty() {
-                        self.expect(&Token::Comma)?;
-                        self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBracket) {
-                            break; // trailing comma
-                        }
-                    }
-                    elements.push(self.parse_expr(0)?);
-                    self.skip_newlines();
-                }
+                let elements = self.parse_comma_list(&Token::RBracket, true, |p| p.parse_expr(0))?;
                 let close = self.expect(&Token::RBracket)?;
                 let end = close.span.end;
-                if elements.is_empty() {
-                    return Err(CompileError::syntax(
-                        "empty array literals are not supported",
-                        Span::new(start, end),
-                    ));
-                }
                 Ok(Spanned::new(Expr::ArrayLit { elements }, Span::new(start, end)))
             }
             Token::Spawn => {
@@ -2071,31 +2136,18 @@ impl<'a> Parser<'a> {
                 let func_name = self.expect_ident()?;
                 self.expect(&Token::LParen)?;
                 self.skip_newlines();
-                let mut args = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-                    if !args.is_empty() {
-                        self.expect(&Token::Comma)?;
-                        self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
-                            break;
-                        }
-                    }
-                    args.push(self.parse_expr(0)?);
-                    self.skip_newlines();
-                }
+                let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
                 let close = self.expect(&Token::RParen)?;
                 let call_span = Span::new(func_name.span.start, close.span.end);
-                let call = Expr::Call { name: func_name, args };
+                let call = Expr::Call { name: func_name, args, target_id: None };
                 Ok(Spanned::new(
                     Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
                     Span::new(start, close.span.end),
                 ))
             }
-            Token::Question => {
-                return Err(CompileError::syntax(
-                    "? is reserved for future Option/null handling; use ! for error propagation",
-                    tok.span,
-                ));
+            Token::None => {
+                let tok = self.advance().unwrap();
+                return Ok(Spanned::new(Expr::NoneLit, tok.span));
             }
             _ => Err(CompileError::syntax(
                 format!("unexpected token {} in expression", tok.node),
@@ -2110,49 +2162,19 @@ impl<'a> Parser<'a> {
         if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LParen) {
             self.advance(); // consume '('
             self.skip_newlines();
-            let mut args = Vec::new();
-            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-                if !args.is_empty() {
-                    self.expect(&Token::Comma)?;
-                    self.skip_newlines();
-                    if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RParen) {
-                        break; // trailing comma
-                    }
-                }
-                args.push(self.parse_expr(0)?);
-                self.skip_newlines();
-            }
+            let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
             let close = self.expect(&Token::RParen)?;
             let span = Span::new(ident.span.start, close.span.end);
-            Ok(Spanned::new(Expr::Call { name: ident, args }, span))
+            Ok(Spanned::new(Expr::Call { name: ident, args, target_id: None }, span))
         } else if !self.restrict_struct_lit && self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBrace) {
             // Check if this looks like a struct literal: Ident { field: value, ... }
             // We need to distinguish from a block. A struct literal has `ident : expr` inside.
             // Use a lookahead: after `{`, if we see `ident :` it's a struct literal.
             if self.is_struct_lit_ahead() {
                 self.advance(); // consume '{'
-                self.skip_newlines();
-                let mut fields = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                    if !fields.is_empty() {
-                        // Allow comma or newline as separator
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                            self.advance();
-                        }
-                        self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                            break;
-                        }
-                    }
-                    let fname = self.expect_ident()?;
-                    self.expect(&Token::Colon)?;
-                    let fval = self.parse_expr(0)?;
-                    fields.push((fname, fval));
-                    self.skip_newlines();
-                }
-                let close = self.expect(&Token::RBrace)?;
-                let span = Span::new(ident.span.start, close.span.end);
-                Ok(Spanned::new(Expr::StructLit { name: ident, type_args: vec![], fields }, span))
+                let (fields, close_end) = self.parse_field_list()?;
+                let span = Span::new(ident.span.start, close_end);
+                Ok(Spanned::new(Expr::StructLit { name: ident, type_args: vec![], fields, target_id: None }, span))
             } else {
                 Ok(Spanned::new(Expr::Ident(ident.node.clone()), ident.span))
             }
@@ -2176,23 +2198,12 @@ impl<'a> Parser<'a> {
                 }
                 let key_type = type_args[0].clone();
                 let value_type = type_args[1].clone();
-                let mut entries = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                    if !entries.is_empty() {
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                            self.advance();
-                        }
-                        self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                            break;
-                        }
-                    }
-                    let key_expr = self.parse_expr(0)?;
-                    self.expect(&Token::Colon)?;
-                    let val_expr = self.parse_expr(0)?;
-                    entries.push((key_expr, val_expr));
-                    self.skip_newlines();
-                }
+                let entries = self.parse_comma_list(&Token::RBrace, false, |p| {
+                    let key_expr = p.parse_expr(0)?;
+                    p.expect(&Token::Colon)?;
+                    let val_expr = p.parse_expr(0)?;
+                    Ok((key_expr, val_expr))
+                })?;
                 let close = self.expect(&Token::RBrace)?;
                 let span = Span::new(start, close.span.end);
                 Ok(Spanned::new(Expr::MapLit { key_type, value_type, entries }, span))
@@ -2205,20 +2216,7 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 let elem_type = type_args[0].clone();
-                let mut elements = Vec::new();
-                while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                    if !elements.is_empty() {
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                            self.advance();
-                        }
-                        self.skip_newlines();
-                        if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                            break;
-                        }
-                    }
-                    elements.push(self.parse_expr(0)?);
-                    self.skip_newlines();
-                }
+                let elements = self.parse_comma_list(&Token::RBrace, false, |p| p.parse_expr(0))?;
                 let close = self.expect(&Token::RBrace)?;
                 let span = Span::new(start, close.span.end);
                 Ok(Spanned::new(Expr::SetLit { elem_type, elements }, span))
@@ -2232,27 +2230,9 @@ impl<'a> Parser<'a> {
             let start = ident.span.start;
             let type_args = self.parse_type_arg_list()?;
             self.advance(); // consume '{'
-            self.skip_newlines();
-            let mut fields = Vec::new();
-            while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
-                if !fields.is_empty() {
-                    if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::Comma) {
-                        self.advance();
-                    }
-                    self.skip_newlines();
-                    if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::RBrace) {
-                        break;
-                    }
-                }
-                let fname = self.expect_ident()?;
-                self.expect(&Token::Colon)?;
-                let fval = self.parse_expr(0)?;
-                fields.push((fname, fval));
-                self.skip_newlines();
-            }
-            let close = self.expect(&Token::RBrace)?;
-            let span = Span::new(start, close.span.end);
-            Ok(Spanned::new(Expr::StructLit { name: ident, type_args, fields }, span))
+            let (fields, close_end) = self.parse_field_list()?;
+            let span = Span::new(start, close_end);
+            Ok(Spanned::new(Expr::StructLit { name: ident, type_args, fields, target_id: None }, span))
         } else {
             Ok(Spanned::new(Expr::Ident(ident.node.clone()), ident.span))
         }
@@ -2405,16 +2385,12 @@ impl<'a> Parser<'a> {
         let start = open.span.start;
 
         // Parse params
-        let mut params = Vec::new();
-        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RParen) {
-            if !params.is_empty() {
-                self.expect(&Token::Comma)?;
-            }
-            let pname = self.expect_ident()?;
-            self.expect(&Token::Colon)?;
-            let pty = self.parse_type()?;
-            params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty });
-        }
+        let params = self.parse_comma_list(&Token::RParen, true, |p| {
+            let pname = p.expect_ident()?;
+            p.expect(&Token::Colon)?;
+            let pty = p.parse_type()?;
+            Ok(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false })
+        })?;
         self.expect(&Token::RParen)?;
 
         // Optional return type: if next non-newline token is NOT `=>`, parse a type first
@@ -3231,7 +3207,7 @@ mod tests {
         let body = &prog.functions[0].node.body.node;
         if let Stmt::Let { value, .. } = &body.stmts[0].node {
             match &value.node {
-                Expr::StructLit { name, type_args, fields } => {
+                Expr::StructLit { name, type_args, fields, .. } => {
                     assert_eq!(name.node, "Pair");
                     assert_eq!(type_args.len(), 2);
                     assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
@@ -3251,7 +3227,7 @@ mod tests {
         let body = &prog.functions[0].node.body.node;
         if let Stmt::Let { value, .. } = &body.stmts[0].node {
             match &value.node {
-                Expr::EnumUnit { enum_name, variant, type_args } => {
+                Expr::EnumUnit { enum_name, variant, type_args, .. } => {
                     assert_eq!(enum_name.node, "Option");
                     assert_eq!(variant.node, "None");
                     assert_eq!(type_args.len(), 1);
@@ -3270,7 +3246,7 @@ mod tests {
         let body = &prog.functions[0].node.body.node;
         if let Stmt::Let { value, .. } = &body.stmts[0].node {
             match &value.node {
-                Expr::EnumData { enum_name, variant, fields, type_args } => {
+                Expr::EnumData { enum_name, variant, fields, type_args, .. } => {
                     assert_eq!(enum_name.node, "Option");
                     assert_eq!(variant.node, "Some");
                     assert_eq!(type_args.len(), 1);

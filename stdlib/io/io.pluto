@@ -1,0 +1,15 @@
+extern fn __pluto_print_string(s: string)
+extern fn __pluto_print_string_no_newline(s: string)
+extern fn __pluto_io_read_line() string
+
+pub fn println(s: string) {
+    __pluto_print_string(s)
+}
+
+pub fn print(s: string) {
+    __pluto_print_string_no_newline(s)
+}
+
+pub fn read_line() string {
+    return __pluto_io_read_line()
+}

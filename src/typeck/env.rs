@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use super::types::PlutoType;
+use crate::parser::ast::{ContractClause, Lifecycle};
+use crate::span::{Span, Spanned};
 
 #[derive(Debug, Clone)]
 pub struct FuncSig {
@@ -12,12 +14,15 @@ pub struct ClassInfo {
     pub fields: Vec<(String, PlutoType, bool)>,  // (name, type, is_injected)
     pub methods: Vec<String>,
     pub impl_traits: Vec<String>,
+    pub lifecycle: Lifecycle,
 }
 
 #[derive(Debug, Clone)]
 pub struct TraitInfo {
     pub methods: Vec<(String, FuncSig)>,
     pub default_methods: Vec<String>,
+    pub mut_self_methods: HashSet<String>,
+    pub method_contracts: HashMap<String, Vec<Spanned<ContractClause>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +49,8 @@ pub struct GenericClassInfo {
     pub methods: Vec<String>,
     pub method_sigs: HashMap<String, FuncSig>,  // method_name → sig (may contain TypeParam)
     pub impl_traits: Vec<String>,
+    pub mut_self_methods: HashSet<String>,
+    pub lifecycle: Lifecycle,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +135,16 @@ pub struct TypeEnv {
     pub invalidated_task_vars: HashSet<String>,
     /// Closure span → return type (set during typeck, used during closure lifting)
     pub closure_return_types: HashMap<(usize, usize), PlutoType>,
+    /// Whether we are currently type-checking an ensures clause (allows old() calls)
+    pub in_ensures_context: bool,
+    /// Mangled names of methods that declare `mut self`
+    pub mut_self_methods: HashSet<String>,
+    /// Scope-mirrored: tracks variables declared with `let` (not `let mut`)
+    pub immutable_bindings: Vec<HashSet<String>>,
+    /// Variable declarations: (var_name, scope_depth) → declaration span
+    pub variable_decls: HashMap<(String, usize), Span>,
+    /// Variable reads: (var_name, scope_depth)
+    pub variable_reads: HashSet<(String, usize)>,
 }
 
 impl TypeEnv {
@@ -178,17 +195,24 @@ impl TypeEnv {
             task_spawn_scopes: vec![HashMap::new()],
             invalidated_task_vars: HashSet::new(),
             closure_return_types: HashMap::new(),
+            in_ensures_context: false,
+            mut_self_methods: HashSet::new(),
+            immutable_bindings: vec![HashSet::new()],
+            variable_decls: HashMap::new(),
+            variable_reads: HashSet::new(),
         }
     }
 
     pub fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
         self.task_spawn_scopes.push(HashMap::new());
+        self.immutable_bindings.push(HashSet::new());
     }
 
     pub fn pop_scope(&mut self) {
         self.scopes.pop();
         self.task_spawn_scopes.pop();
+        self.immutable_bindings.pop();
     }
 
     pub fn define(&mut self, name: String, ty: PlutoType) {
@@ -280,6 +304,19 @@ impl TypeEnv {
         }
         None
     }
+
+    pub fn mark_immutable(&mut self, name: &str) {
+        self.immutable_bindings.last_mut().unwrap().insert(name.to_string());
+    }
+
+    pub fn is_immutable(&self, name: &str) -> bool {
+        for scope in self.immutable_bindings.iter().rev() {
+            if scope.contains(name) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 pub fn mangle_name(base: &str, type_args: &[PlutoType]) -> String {
@@ -311,5 +348,10 @@ fn mangle_type(ty: &PlutoType) -> String {
         PlutoType::Bytes => "bytes".into(),
         PlutoType::Sender(inner) => format!("sender_{}", mangle_type(inner)),
         PlutoType::Receiver(inner) => format!("receiver_{}", mangle_type(inner)),
+        PlutoType::GenericInstance(_, name, args) => {
+            let suffixes: Vec<String> = args.iter().map(mangle_type).collect();
+            format!("{}__{}", name, suffixes.join("_"))
+        }
+        PlutoType::Nullable(inner) => format!("nullable_{}", mangle_type(inner)),
     }
 }

@@ -126,7 +126,7 @@ fn generic_enum_data_variant_match() {
 #[test]
 fn generic_class_method_operates_on_t() {
     let out = compile_and_run_stdout(
-        "class Wrapper<T> {\n    value: T\n\n    fn get(self) T {\n        return self.value\n    }\n\n    fn set(self, v: T) {\n        self.value = v\n    }\n}\n\nfn main() {\n    let w = Wrapper<string> { value: \"hello\" }\n    print(w.get())\n    w.set(\"world\")\n    print(w.get())\n}",
+        "class Wrapper<T> {\n    value: T\n\n    fn get(self) T {\n        return self.value\n    }\n\n    fn set(mut self, v: T) {\n        self.value = v\n    }\n}\n\nfn main() {\n    let mut w = Wrapper<string> { value: \"hello\" }\n    print(w.get())\n    w.set(\"world\")\n    print(w.get())\n}",
     );
     assert_eq!(out, "hello\nworld\n");
 }

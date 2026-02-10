@@ -1,5 +1,6 @@
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position, Uri};
 
+use crate::parser::ast::Lifecycle;
 use crate::typeck::env::{ClassInfo, EnumInfo, ErrorInfo, FuncSig, TraitInfo};
 use crate::typeck::types::PlutoType;
 
@@ -74,7 +75,12 @@ fn format_function_hover(name: &str, sig: &FuncSig) -> String {
 }
 
 fn format_class_hover(name: &str, info: &ClassInfo) -> String {
-    let mut lines = vec![format!("class {} {{", name)];
+    let prefix = match info.lifecycle {
+        Lifecycle::Scoped => "scoped class",
+        Lifecycle::Transient => "transient class",
+        Lifecycle::Singleton => "class",
+    };
+    let mut lines = vec![format!("{} {} {{", prefix, name)];
     for (fname, ftype, _) in &info.fields {
         lines.push(format!("  {}: {}", fname, ftype));
     }

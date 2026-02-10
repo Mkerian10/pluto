@@ -16,6 +16,12 @@ use super::runtime::RuntimeRegistry;
 /// Size of a pointer in bytes. All heap-allocated objects use pointer-sized slots.
 pub const POINTER_SIZE: i32 = 8;
 
+/// Pre/post condition contracts for a function.
+pub struct FnContracts {
+    pub requires: Vec<(Expr, String)>,  // (expr, description)
+    pub ensures: Vec<(Expr, String)>,
+}
+
 struct LowerContext<'a> {
     builder: FunctionBuilder<'a>,
     module: &'a mut dyn Module,
@@ -26,6 +32,12 @@ struct LowerContext<'a> {
     source: &'a str,
     /// Class invariants: class_name → Vec<(expr, description_string)>
     class_invariants: &'a HashMap<String, Vec<(Expr, String)>>,
+    /// Function contracts: fn_mangled_name → FnContracts (used during function setup)
+    #[allow(dead_code)]
+    fn_contracts: &'a HashMap<String, FnContracts>,
+    /// Module-level globals holding DI singleton pointers (Phase 2).
+    #[allow(dead_code)]
+    singleton_globals: &'a HashMap<String, DataId>,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
     var_types: HashMap<String, PlutoType>,
@@ -37,6 +49,12 @@ struct LowerContext<'a> {
     sender_cleanup_vars: Vec<Variable>,
     /// If non-None, all returns jump here for sender cleanup before actual return
     exit_block: Option<cranelift_codegen::ir::Block>,
+    /// old() snapshots: keyed by description string → Variable holding the snapshot value
+    old_snapshots: HashMap<String, Variable>,
+    /// If non-None, all returns jump here for ensures checks before exit_block/return
+    ensures_block: Option<cranelift_codegen::ir::Block>,
+    /// Display name for the current function (for contract violation messages)
+    fn_display_name: String,
 }
 
 impl<'a> LowerContext<'a> {
@@ -76,6 +94,18 @@ impl<'a> LowerContext<'a> {
         Ok(self.call_runtime("__pluto_trait_wrap", &[class_val, vtable_ptr]))
     }
 
+    /// Load a singleton pointer from its module-level global.
+    /// Used by scope block codegen (Phase 3).
+    #[allow(dead_code)]
+    fn load_singleton(&mut self, class_name: &str) -> Result<Value, CompileError> {
+        let data_id = self.singleton_globals.get(class_name).ok_or_else(|| {
+            CompileError::codegen(format!("no singleton global for '{}'", class_name))
+        })?;
+        let gv = self.module.declare_data_in_func(*data_id, self.builder.func);
+        let addr = self.builder.ins().global_value(types::I64, gv);
+        Ok(self.builder.ins().load(types::I64, MemFlags::new(), addr, Offset32::new(0)))
+    }
+
     /// Emit a return with the default value for the current function's return type.
     /// Used by raise and propagation to exit the function when an error occurs.
     fn emit_default_return(&mut self) {
@@ -111,6 +141,43 @@ impl<'a> LowerContext<'a> {
                 } else {
                     self.builder.ins().return_(&[val]);
                 }
+            }
+        }
+    }
+
+    /// Box a value type for T → T? coercion. Allocates 8 bytes and stores the value.
+    /// Heap types (string, class, array, etc.) are no-ops since the pointer IS the value.
+    fn emit_nullable_wrap(&mut self, val: Value, inner_type: &PlutoType) -> Value {
+        match inner_type {
+            PlutoType::Int | PlutoType::Byte => {
+                // Widen byte to I64 if needed, then store in 8-byte allocation
+                let store_val = if matches!(inner_type, PlutoType::Byte) {
+                    self.builder.ins().uextend(types::I64, val)
+                } else {
+                    val
+                };
+                let size = self.builder.ins().iconst(types::I64, 8);
+                let ptr = self.call_runtime("__pluto_alloc", &[size]);
+                self.builder.ins().store(MemFlags::new(), store_val, ptr, Offset32::new(0));
+                ptr
+            }
+            PlutoType::Float => {
+                let raw = self.builder.ins().bitcast(types::I64, MemFlags::new(), val);
+                let size = self.builder.ins().iconst(types::I64, 8);
+                let ptr = self.call_runtime("__pluto_alloc", &[size]);
+                self.builder.ins().store(MemFlags::new(), raw, ptr, Offset32::new(0));
+                ptr
+            }
+            PlutoType::Bool => {
+                let widened = self.builder.ins().uextend(types::I64, val);
+                let size = self.builder.ins().iconst(types::I64, 8);
+                let ptr = self.call_runtime("__pluto_alloc", &[size]);
+                self.builder.ins().store(MemFlags::new(), widened, ptr, Offset32::new(0));
+                ptr
+            }
+            _ => {
+                // Heap types: pointer IS the value, no boxing needed
+                val
             }
         }
     }
@@ -203,6 +270,121 @@ impl<'a> LowerContext<'a> {
         Ok(())
     }
 
+    /// Emit runtime requires checks at function entry.
+    fn emit_requires_checks(
+        &mut self,
+        requires: &[(Expr, String)],
+    ) -> Result<(), CompileError> {
+        for (req_expr, req_desc) in requires {
+            let result = self.lower_expr(req_expr)?;
+
+            let violation_bb = self.builder.create_block();
+            let ok_bb = self.builder.create_block();
+
+            self.builder.ins().brif(result, ok_bb, &[], violation_bb, &[]);
+
+            // Violation block
+            self.builder.switch_to_block(violation_bb);
+            self.builder.seal_block(violation_bb);
+
+            let name_raw = self.create_data_str(&self.fn_display_name.clone())?;
+            let name_len = self.builder.ins().iconst(types::I64, self.fn_display_name.len() as i64);
+            let name_str = self.call_runtime("__pluto_string_new", &[name_raw, name_len]);
+
+            let desc_raw = self.create_data_str(req_desc)?;
+            let desc_len = self.builder.ins().iconst(types::I64, req_desc.len() as i64);
+            let desc_str = self.call_runtime("__pluto_string_new", &[desc_raw, desc_len]);
+
+            self.call_runtime_void("__pluto_requires_violation", &[name_str, desc_str]);
+            self.builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+
+            // OK block: continue
+            self.builder.switch_to_block(ok_bb);
+            self.builder.seal_block(ok_bb);
+        }
+        Ok(())
+    }
+
+    /// Emit runtime ensures checks (called from ensures_block).
+    /// `result_var` is the Variable holding the return value (None for void functions).
+    fn emit_ensures_checks(
+        &mut self,
+        ensures: &[(Expr, String)],
+        result_var: Option<Variable>,
+    ) -> Result<(), CompileError> {
+        // Temporarily bind `result` if available
+        if let Some(rv) = result_var {
+            self.variables.insert("result".to_string(), rv);
+            // We need the return type for result — use expected_return_type
+            if let Some(ref ret_ty) = self.expected_return_type.clone() {
+                self.var_types.insert("result".to_string(), ret_ty.clone());
+            }
+        }
+
+        for (ens_expr, ens_desc) in ensures {
+            let result = self.lower_expr(ens_expr)?;
+
+            let violation_bb = self.builder.create_block();
+            let ok_bb = self.builder.create_block();
+
+            self.builder.ins().brif(result, ok_bb, &[], violation_bb, &[]);
+
+            // Violation block
+            self.builder.switch_to_block(violation_bb);
+            self.builder.seal_block(violation_bb);
+
+            let name_raw = self.create_data_str(&self.fn_display_name.clone())?;
+            let name_len = self.builder.ins().iconst(types::I64, self.fn_display_name.len() as i64);
+            let name_str = self.call_runtime("__pluto_string_new", &[name_raw, name_len]);
+
+            let desc_raw = self.create_data_str(ens_desc)?;
+            let desc_len = self.builder.ins().iconst(types::I64, ens_desc.len() as i64);
+            let desc_str = self.call_runtime("__pluto_string_new", &[desc_raw, desc_len]);
+
+            self.call_runtime_void("__pluto_ensures_violation", &[name_str, desc_str]);
+            self.builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+
+            // OK block: continue
+            self.builder.switch_to_block(ok_bb);
+            self.builder.seal_block(ok_bb);
+        }
+
+        // Clean up result binding
+        if result_var.is_some() {
+            self.variables.remove("result");
+            self.var_types.remove("result");
+        }
+
+        Ok(())
+    }
+
+    /// Recursively collect all old(expr) descriptions from an expression.
+    fn collect_old_exprs(expr: &Expr, out: &mut Vec<(Expr, String)>) {
+        match expr {
+            Expr::Call { name, args, .. } if name.node == "old" && args.len() == 1 => {
+                let desc = super::format_invariant_expr(&args[0].node);
+                out.push((args[0].node.clone(), desc));
+            }
+            Expr::BinOp { lhs, rhs, .. } => {
+                Self::collect_old_exprs(&lhs.node, out);
+                Self::collect_old_exprs(&rhs.node, out);
+            }
+            Expr::UnaryOp { operand, .. } => {
+                Self::collect_old_exprs(&operand.node, out);
+            }
+            Expr::FieldAccess { object, .. } => {
+                Self::collect_old_exprs(&object.node, out);
+            }
+            Expr::MethodCall { object, args, .. } => {
+                Self::collect_old_exprs(&object.node, out);
+                for arg in args {
+                    Self::collect_old_exprs(&arg.node, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
     // ── lower_stmt dispatch ──────────────────────────────────────────────
 
     fn lower_stmt(
@@ -214,9 +396,11 @@ impl<'a> LowerContext<'a> {
             return Ok(());
         }
         match stmt {
-            Stmt::Let { name, ty, value } => self.lower_let(name, ty, value),
+            Stmt::Let { name, ty, value, .. } => self.lower_let(name, ty, value),
             Stmt::LetChan { sender, receiver, elem_type, capacity } => self.lower_let_chan(sender, receiver, elem_type, capacity),
             Stmt::Return(value) => {
+                // Return target priority: ensures_block > exit_block > direct return
+                let target_block = self.ensures_block.or(self.exit_block);
                 match value {
                     Some(expr) => {
                         let val = self.lower_expr(&expr.node)?;
@@ -225,30 +409,34 @@ impl<'a> LowerContext<'a> {
                         // If returning a void expression (e.g., spawn closure wrapping a void function),
                         // lower the expr for side effects but emit return_(&[])
                         if val_type == PlutoType::Void {
-                            if let Some(exit_bb) = self.exit_block {
-                                self.builder.ins().jump(exit_bb, &[]);
+                            if let Some(bb) = target_block {
+                                self.builder.ins().jump(bb, &[]);
                             } else {
                                 self.builder.ins().return_(&[]);
                             }
                         } else {
                             // If returning a class where a trait is expected, wrap it
+                            // If returning T where T? is expected, box value types
                             let expected = self.expected_return_type.clone();
                             let final_val = match (&val_type, &expected) {
                                 (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
                                     self.wrap_class_as_trait(val, cn, tn)?
                                 }
+                                (inner, Some(PlutoType::Nullable(expected_inner))) if !matches!(inner, PlutoType::Nullable(_)) && **expected_inner != PlutoType::Void => {
+                                    self.emit_nullable_wrap(val, inner)
+                                }
                                 _ => val,
                             };
-                            if let Some(exit_bb) = self.exit_block {
-                                self.builder.ins().jump(exit_bb, &[final_val]);
+                            if let Some(bb) = target_block {
+                                self.builder.ins().jump(bb, &[final_val]);
                             } else {
                                 self.builder.ins().return_(&[final_val]);
                             }
                         }
                     }
                     None => {
-                        if let Some(exit_bb) = self.exit_block {
-                            self.builder.ins().jump(exit_bb, &[]);
+                        if let Some(bb) = target_block {
+                            self.builder.ins().jump(bb, &[]);
                         } else {
                             self.builder.ins().return_(&[]);
                         }
@@ -315,7 +503,7 @@ impl<'a> LowerContext<'a> {
             Stmt::While { condition, body } => self.lower_while(condition, body),
             Stmt::For { var, iterable, body } => self.lower_for(var, iterable, body),
             Stmt::Match { expr, arms } => self.lower_match_stmt(expr, arms, terminated),
-            Stmt::Raise { error_name, fields } => {
+            Stmt::Raise { error_name, fields, .. } => {
                 self.lower_raise(error_name, fields)?;
                 *terminated = true;
                 Ok(())
@@ -359,12 +547,18 @@ impl<'a> LowerContext<'a> {
         let declared_type = ty.as_ref().map(|t| resolve_type_expr_to_pluto(&t.node, self.env));
 
         // If assigning a class to a trait-typed variable, wrap it
+        // If assigning T to T?, box value types
         let (final_val, store_type) = match (&val_type, &declared_type) {
             (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
                 let cn = cn.clone();
                 let tn = tn.clone();
                 let wrapped = self.wrap_class_as_trait(val, &cn, &tn)?;
                 (wrapped, PlutoType::Trait(tn))
+            }
+            // T → T? coercion: box value types
+            (inner, Some(PlutoType::Nullable(expected_inner))) if !matches!(inner, PlutoType::Nullable(_)) && **expected_inner != PlutoType::Void => {
+                let wrapped = self.emit_nullable_wrap(val, inner);
+                (wrapped, PlutoType::Nullable(expected_inner.clone()))
             }
             (_, Some(dt)) => (val, dt.clone()),
             _ => (val, val_type),
@@ -1326,6 +1520,62 @@ impl<'a> LowerContext<'a> {
             Expr::IntLit(n) => Ok(self.builder.ins().iconst(types::I64, *n)),
             Expr::FloatLit(n) => Ok(self.builder.ins().f64const(*n)),
             Expr::BoolLit(b) => Ok(self.builder.ins().iconst(types::I8, if *b { 1 } else { 0 })),
+            Expr::NoneLit => Ok(self.builder.ins().iconst(types::I64, 0)),
+            Expr::NullPropagate { expr: inner } => {
+                // Lower the inner expression (must be Nullable(T))
+                let val = self.lower_expr(&inner.node)?;
+                let inner_type = infer_type_for_expr(&inner.node, self.env, &self.var_types);
+
+                // Compare with 0 (none)
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let is_none = self.builder.ins().icmp(IntCC::Equal, val, zero);
+
+                let propagate_bb = self.builder.create_block();
+                let continue_bb = self.builder.create_block();
+                self.builder.ins().brif(is_none, propagate_bb, &[], continue_bb, &[]);
+
+                // Propagate block: early-return none (0)
+                self.builder.switch_to_block(propagate_bb);
+                self.builder.seal_block(propagate_bb);
+                let none_val = self.builder.ins().iconst(types::I64, 0);
+                if let Some(exit_bb) = self.exit_block {
+                    self.builder.ins().jump(exit_bb, &[none_val]);
+                } else {
+                    self.builder.ins().return_(&[none_val]);
+                }
+
+                // Continue block: unwrap the value
+                self.builder.switch_to_block(continue_bb);
+                self.builder.seal_block(continue_bb);
+
+                // Unbox value types (int, float, bool stored as boxed pointer)
+                if let PlutoType::Nullable(unwrapped) = &inner_type {
+                    match unwrapped.as_ref() {
+                        PlutoType::Int => {
+                            Ok(self.builder.ins().load(types::I64, MemFlags::new(), val, Offset32::new(0)))
+                        }
+                        PlutoType::Float => {
+                            let raw = self.builder.ins().load(types::I64, MemFlags::new(), val, Offset32::new(0));
+                            Ok(self.builder.ins().bitcast(types::F64, MemFlags::new(), raw))
+                        }
+                        PlutoType::Bool => {
+                            let raw = self.builder.ins().load(types::I64, MemFlags::new(), val, Offset32::new(0));
+                            Ok(self.builder.ins().ireduce(types::I8, raw))
+                        }
+                        PlutoType::Byte => {
+                            let raw = self.builder.ins().load(types::I64, MemFlags::new(), val, Offset32::new(0));
+                            Ok(self.builder.ins().ireduce(types::I8, raw))
+                        }
+                        _ => {
+                            // Heap types (string, class, array, etc.) — pointer IS the value
+                            Ok(val)
+                        }
+                    }
+                } else {
+                    // Shouldn't happen — typeck ensures ? is only on nullable types
+                    Ok(val)
+                }
+            }
             Expr::StringLit(s) => {
                 let raw_ptr = self.create_data_str(s)?;
                 let len_val = self.builder.ins().iconst(types::I64, s.len() as i64);
@@ -1369,20 +1619,22 @@ impl<'a> LowerContext<'a> {
                     _ => Err(CompileError::codegen("invalid cast in lowered AST".to_string())),
                 }
             }
-            Expr::Call { name, args } => self.lower_call(name, args),
+            Expr::Call { name, args, .. } => self.lower_call(name, args),
             Expr::StructLit { name, fields, .. } => self.lower_struct_lit(name, fields),
             Expr::ArrayLit { elements } => {
                 let n = elements.len() as i64;
                 let cap_val = self.builder.ins().iconst(types::I64, n);
                 let handle = self.call_runtime("__pluto_array_new", &[cap_val]);
 
-                let elem_type = infer_type_for_expr(&elements[0].node, self.env, &self.var_types);
-                // Hoist func_ref before loop to avoid repeated HashMap lookups
-                let func_ref_push = self.module.declare_func_in_func(self.runtime.get("__pluto_array_push"), self.builder.func);
-                for elem in elements {
-                    let val = self.lower_expr(&elem.node)?;
-                    let slot = to_array_slot(val, &elem_type, &mut self.builder);
-                    self.builder.ins().call(func_ref_push, &[handle, slot]);
+                if !elements.is_empty() {
+                    let elem_type = infer_type_for_expr(&elements[0].node, self.env, &self.var_types);
+                    // Hoist func_ref before loop to avoid repeated HashMap lookups
+                    let func_ref_push = self.module.declare_func_in_func(self.runtime.get("__pluto_array_push"), self.builder.func);
+                    for elem in elements {
+                        let val = self.lower_expr(&elem.node)?;
+                        let slot = to_array_slot(val, &elem_type, &mut self.builder);
+                        self.builder.ins().call(func_ref_push, &[handle, slot]);
+                    }
                 }
 
                 Ok(handle)
@@ -1504,12 +1756,12 @@ impl<'a> LowerContext<'a> {
             Expr::Closure { .. } => {
                 Err(CompileError::codegen("closures should be lifted before codegen"))
             }
-            Expr::ClosureCreate { fn_name, captures } => {
+            Expr::ClosureCreate { fn_name, captures, .. } => {
                 self.lower_closure_create(fn_name, captures)
             }
             Expr::Spawn { call } => {
                 match &call.node {
-                    Expr::ClosureCreate { fn_name, captures } => {
+                    Expr::ClosureCreate { fn_name, captures, .. } => {
                         let closure_ptr = self.lower_closure_create(fn_name, captures)?;
                         // Inc refcount for each captured Sender
                         for cap_name in captures {
@@ -1640,6 +1892,15 @@ impl<'a> LowerContext<'a> {
         name: &crate::span::Spanned<String>,
         args: &[crate::span::Spanned<Expr>],
     ) -> Result<Value, CompileError> {
+        // old(expr) in ensures — resolve to snapshot variable
+        if name.node == "old" && args.len() == 1 {
+            let desc = super::format_invariant_expr(&args[0].node);
+            if let Some(&var) = self.old_snapshots.get(&desc) {
+                return Ok(self.builder.use_var(var));
+            }
+            // Fallback: if not found in snapshots, just evaluate the expr normally
+            return self.lower_expr(&args[0].node);
+        }
         if name.node == "expect" {
             // Passthrough — just return the lowered arg
             return self.lower_expr(&args[0].node);
@@ -1647,85 +1908,57 @@ impl<'a> LowerContext<'a> {
         if name.node == "print" {
             return self.lower_print(args);
         }
-        if name.node == "time_ns" {
-            return Ok(self.call_runtime("__pluto_time_ns", &[]));
+        // Table-driven zero-arg builtins
+        const ZERO_ARG_BUILTINS: &[(&str, &str)] = &[
+            ("time_ns", "__pluto_time_ns"),
+            ("gc_heap_size", "__pluto_gc_heap_size"),
+            ("bytes_new", "__pluto_bytes_new"),
+        ];
+        if let Some((_, rt_fn)) = ZERO_ARG_BUILTINS.iter().find(|(n, _)| *n == name.node.as_str()) {
+            return Ok(self.call_runtime(rt_fn, &[]));
         }
-        if name.node == "abs" {
+
+        // Table-driven type-dispatched unary builtins (int/float)
+        const TYPED_UNARY: &[(&str, &str, &str)] = &[
+            ("abs", "__pluto_abs_int", "__pluto_abs_float"),
+        ];
+        if let Some((_, int_fn, float_fn)) = TYPED_UNARY.iter().find(|(n, _, _)| *n == name.node.as_str()) {
             let arg = self.lower_expr(&args[0].node)?;
             let arg_ty = infer_type_for_expr(&args[0].node, self.env, &self.var_types);
             return Ok(match arg_ty {
-                PlutoType::Int => self.call_runtime("__pluto_abs_int", &[arg]),
-                PlutoType::Float => self.call_runtime("__pluto_abs_float", &[arg]),
-                _ => return Err(CompileError::codegen("invalid abs() argument type in lowered AST".to_string())),
+                PlutoType::Int => self.call_runtime(int_fn, &[arg]),
+                PlutoType::Float => self.call_runtime(float_fn, &[arg]),
+                _ => return Err(CompileError::codegen(format!("invalid {}() argument type in lowered AST", name.node))),
             });
         }
-        if name.node == "min" {
+
+        // Table-driven type-dispatched binary builtins (int/float)
+        const TYPED_BINARY: &[(&str, &str, &str)] = &[
+            ("min", "__pluto_min_int", "__pluto_min_float"),
+            ("max", "__pluto_max_int", "__pluto_max_float"),
+            ("pow", "__pluto_pow_int", "__pluto_pow_float"),
+        ];
+        if let Some((_, int_fn, float_fn)) = TYPED_BINARY.iter().find(|(n, _, _)| *n == name.node.as_str()) {
             let a = self.lower_expr(&args[0].node)?;
             let b = self.lower_expr(&args[1].node)?;
             let arg_ty = infer_type_for_expr(&args[0].node, self.env, &self.var_types);
             return Ok(match arg_ty {
-                PlutoType::Int => self.call_runtime("__pluto_min_int", &[a, b]),
-                PlutoType::Float => self.call_runtime("__pluto_min_float", &[a, b]),
-                _ => return Err(CompileError::codegen("invalid min() argument type in lowered AST".to_string())),
+                PlutoType::Int => self.call_runtime(int_fn, &[a, b]),
+                PlutoType::Float => self.call_runtime(float_fn, &[a, b]),
+                _ => return Err(CompileError::codegen(format!("invalid {}() argument type in lowered AST", name.node))),
             });
         }
-        if name.node == "max" {
-            let a = self.lower_expr(&args[0].node)?;
-            let b = self.lower_expr(&args[1].node)?;
-            let arg_ty = infer_type_for_expr(&args[0].node, self.env, &self.var_types);
-            return Ok(match arg_ty {
-                PlutoType::Int => self.call_runtime("__pluto_max_int", &[a, b]),
-                PlutoType::Float => self.call_runtime("__pluto_max_float", &[a, b]),
-                _ => return Err(CompileError::codegen("invalid max() argument type in lowered AST".to_string())),
-            });
-        }
-        if name.node == "pow" {
-            let base = self.lower_expr(&args[0].node)?;
-            let exp = self.lower_expr(&args[1].node)?;
-            let arg_ty = infer_type_for_expr(&args[0].node, self.env, &self.var_types);
-            return Ok(match arg_ty {
-                PlutoType::Int => self.call_runtime("__pluto_pow_int", &[base, exp]),
-                PlutoType::Float => self.call_runtime("__pluto_pow_float", &[base, exp]),
-                _ => return Err(CompileError::codegen("invalid pow() argument type in lowered AST".to_string())),
-            });
-        }
-        if name.node == "sqrt" {
+
+        // Table-driven single-arg float math builtins
+        const MATH_UNARY_FLOAT: &[(&str, &str)] = &[
+            ("sqrt", "__pluto_sqrt"), ("floor", "__pluto_floor"),
+            ("ceil", "__pluto_ceil"), ("round", "__pluto_round"),
+            ("sin", "__pluto_sin"),   ("cos", "__pluto_cos"),
+            ("tan", "__pluto_tan"),   ("log", "__pluto_log"),
+        ];
+        if let Some((_, rt_fn)) = MATH_UNARY_FLOAT.iter().find(|(n, _)| *n == name.node.as_str()) {
             let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_sqrt", &[arg]));
-        }
-        if name.node == "floor" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_floor", &[arg]));
-        }
-        if name.node == "ceil" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_ceil", &[arg]));
-        }
-        if name.node == "round" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_round", &[arg]));
-        }
-        if name.node == "sin" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_sin", &[arg]));
-        }
-        if name.node == "cos" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_cos", &[arg]));
-        }
-        if name.node == "tan" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_tan", &[arg]));
-        }
-        if name.node == "log" {
-            let arg = self.lower_expr(&args[0].node)?;
-            return Ok(self.call_runtime("__pluto_log", &[arg]));
-        }
-        if name.node == "gc_heap_size" {
-            return Ok(self.call_runtime("__pluto_gc_heap_size", &[]));
-        }
-        if name.node == "bytes_new" {
-            return Ok(self.call_runtime("__pluto_bytes_new", &[]));
+            return Ok(self.call_runtime(rt_fn, &[arg]));
         }
 
         // Check if calling a closure variable
@@ -2055,6 +2288,69 @@ impl<'a> LowerContext<'a> {
                     self.call_runtime_void("__pluto_array_push", &[obj_ptr, slot]);
                     return Ok(self.builder.ins().iconst(types::I64, 0));
                 }
+                "pop" => {
+                    let elem = elem.clone();
+                    let raw = self.call_runtime("__pluto_array_pop", &[obj_ptr]);
+                    return Ok(from_array_slot(raw, &elem, &mut self.builder));
+                }
+                "last" => {
+                    let elem = elem.clone();
+                    let raw = self.call_runtime("__pluto_array_last", &[obj_ptr]);
+                    return Ok(from_array_slot(raw, &elem, &mut self.builder));
+                }
+                "first" => {
+                    let elem = elem.clone();
+                    let raw = self.call_runtime("__pluto_array_first", &[obj_ptr]);
+                    return Ok(from_array_slot(raw, &elem, &mut self.builder));
+                }
+                "is_empty" => {
+                    let len_val = self.call_runtime("__pluto_array_len", &[obj_ptr]);
+                    let zero = self.builder.ins().iconst(types::I64, 0);
+                    let cmp = self.builder.ins().icmp(IntCC::Equal, len_val, zero);
+                    return Ok(cmp);
+                }
+                "clear" => {
+                    self.call_runtime_void("__pluto_array_clear", &[obj_ptr]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "remove_at" => {
+                    let elem = elem.clone();
+                    let idx = self.lower_expr(&args[0].node)?;
+                    let raw = self.call_runtime("__pluto_array_remove_at", &[obj_ptr, idx]);
+                    return Ok(from_array_slot(raw, &elem, &mut self.builder));
+                }
+                "insert_at" => {
+                    let elem = elem.clone();
+                    let idx = self.lower_expr(&args[0].node)?;
+                    let arg_val = self.lower_expr(&args[1].node)?;
+                    let slot = to_array_slot(arg_val, &elem, &mut self.builder);
+                    self.call_runtime_void("__pluto_array_insert_at", &[obj_ptr, idx, slot]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "slice" => {
+                    let start = self.lower_expr(&args[0].node)?;
+                    let end = self.lower_expr(&args[1].node)?;
+                    return Ok(self.call_runtime("__pluto_array_slice", &[obj_ptr, start, end]));
+                }
+                "reverse" => {
+                    self.call_runtime_void("__pluto_array_reverse", &[obj_ptr]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "contains" => {
+                    let elem = elem.clone();
+                    let arg_val = self.lower_expr(&args[0].node)?;
+                    let slot = to_array_slot(arg_val, &elem, &mut self.builder);
+                    let tag = self.builder.ins().iconst(types::I64, key_type_tag(&elem));
+                    let result = self.call_runtime("__pluto_array_contains", &[obj_ptr, slot, tag]);
+                    return Ok(self.builder.ins().ireduce(types::I8, result));
+                }
+                "index_of" => {
+                    let elem = elem.clone();
+                    let arg_val = self.lower_expr(&args[0].node)?;
+                    let slot = to_array_slot(arg_val, &elem, &mut self.builder);
+                    let tag = self.builder.ins().iconst(types::I64, key_type_tag(&elem));
+                    return Ok(self.call_runtime("__pluto_array_index_of", &[obj_ptr, slot, tag]));
+                }
                 _ => {
                     return Err(CompileError::codegen(format!("array has no method '{}'", method.node)));
                 }
@@ -2180,6 +2476,8 @@ impl<'a> LowerContext<'a> {
                     Ok(self.call_runtime("__pluto_string_char_at", &[obj_ptr, idx]))
                 }
                 "to_bytes" => Ok(self.call_runtime("__pluto_string_to_bytes", &[obj_ptr])),
+                "to_int" => Ok(self.call_runtime("__pluto_string_to_int", &[obj_ptr])),
+                "to_float" => Ok(self.call_runtime("__pluto_string_to_float", &[obj_ptr])),
                 _ => Err(CompileError::codegen(format!("string has no method '{}'", method.node))),
             };
         }
@@ -2331,7 +2629,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I64, arg_val);
                 self.call_runtime_void("__pluto_print_int", &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes | PlutoType::GenericInstance(_, _, _) | PlutoType::Nullable(_) => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -2397,6 +2695,8 @@ pub fn lower_function(
     source: &str,
     spawn_closure_fns: &HashSet<String>,
     class_invariants: &HashMap<String, Vec<(Expr, String)>>,
+    fn_contracts: &HashMap<String, FnContracts>,
+    singleton_globals: &HashMap<String, DataId>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -2501,6 +2801,30 @@ pub fn lower_function(
         None
     };
 
+    // Compute function lookup name (mangled for methods)
+    let fn_lookup = if let Some(cn) = class_name {
+        format!("{}_{}", cn, func.name.node)
+    } else {
+        func.name.node.clone()
+    };
+
+    // Display name for contract violation messages
+    let fn_display_name = fn_lookup.clone();
+
+    // Check if this function has ensures contracts — if so, create ensures_block
+    let is_void_return = matches!(&expected_return_type, Some(PlutoType::Void) | None);
+    let has_ensures = fn_contracts.get(&fn_lookup).map_or(false, |c| !c.ensures.is_empty());
+    let ensures_block = if has_ensures {
+        let ens_bb = builder.create_block();
+        if !is_void_return {
+            let ret_cl_type = pluto_to_cranelift(expected_return_type.as_ref().unwrap());
+            builder.append_block_param(ens_bb, ret_cl_type);
+        }
+        Some(ens_bb)
+    } else {
+        None
+    };
+
     // Build context and lower body
     let is_main = func.name.node == "main" && class_name.is_none();
     let mut ctx = LowerContext {
@@ -2512,6 +2836,8 @@ pub fn lower_function(
         vtable_ids,
         source,
         class_invariants,
+        fn_contracts,
+        singleton_globals,
         variables,
         var_types,
         next_var,
@@ -2519,11 +2845,44 @@ pub fn lower_function(
         loop_stack: Vec::new(),
         sender_cleanup_vars,
         exit_block,
+        old_snapshots: HashMap::new(),
+        ensures_block,
+        fn_display_name,
     };
 
     // Initialize GC at start of non-app main
     if is_main {
         ctx.call_runtime_void("__pluto_gc_init", &[]);
+    }
+
+    // Emit requires checks at function entry
+    if let Some(contracts) = fn_contracts.get(&fn_lookup) {
+        if !contracts.requires.is_empty() {
+            let requires = contracts.requires.clone();
+            ctx.emit_requires_checks(&requires)?;
+        }
+
+        // Compute old() snapshots for ensures clauses
+        if !contracts.ensures.is_empty() {
+            let mut old_exprs: Vec<(Expr, String)> = Vec::new();
+            for (ens_expr, _) in &contracts.ensures {
+                LowerContext::collect_old_exprs(ens_expr, &mut old_exprs);
+            }
+            // Deduplicate by description key
+            let mut seen = HashSet::new();
+            let unique_old_exprs: Vec<(Expr, String)> = old_exprs.into_iter()
+                .filter(|(_, desc)| seen.insert(desc.clone()))
+                .collect();
+            for (old_inner_expr, desc) in &unique_old_exprs {
+                let snapshot_val = ctx.lower_expr(old_inner_expr)?;
+                let old_inner_type = infer_type_for_expr(old_inner_expr, ctx.env, &ctx.var_types);
+                let var = Variable::from_u32(ctx.next_var);
+                ctx.next_var += 1;
+                ctx.builder.declare_var(var, pluto_to_cranelift(&old_inner_type));
+                ctx.builder.def_var(var, snapshot_val);
+                ctx.old_snapshots.insert(desc.clone(), var);
+            }
+        }
     }
 
     let mut terminated = false;
@@ -2541,22 +2900,58 @@ pub fn lower_function(
     // If main and no explicit return, return 0
     if is_main && !terminated {
         let zero = ctx.builder.ins().iconst(types::I64, 0);
-        if let Some(exit_bb) = ctx.exit_block {
-            ctx.builder.ins().jump(exit_bb, &[zero]);
+        let target = ctx.ensures_block.or(ctx.exit_block);
+        if let Some(bb) = target {
+            ctx.builder.ins().jump(bb, &[zero]);
         } else {
             ctx.builder.ins().return_(&[zero]);
         }
     } else if !terminated {
         // Void function with no return
-        let lookup_name = if let Some(cn) = class_name {
-            format!("{}_{}", cn, func.name.node)
-        } else {
-            func.name.node.clone()
-        };
-        let ret_type = ctx.env.functions.get(&lookup_name).map(|s| &s.return_type);
+        let ret_type = ctx.env.functions.get(&fn_lookup).map(|s| &s.return_type);
         if ret_type == Some(&PlutoType::Void) {
-            if let Some(exit_bb) = ctx.exit_block {
+            let target = ctx.ensures_block.or(ctx.exit_block);
+            if let Some(bb) = target {
+                ctx.builder.ins().jump(bb, &[]);
+            } else {
+                ctx.builder.ins().return_(&[]);
+            }
+        }
+    }
+
+    // Emit ensures block: ensures checks, then jump to exit_block or return
+    if let Some(ens_bb) = ctx.ensures_block {
+        ctx.builder.switch_to_block(ens_bb);
+        ctx.builder.seal_block(ens_bb);
+
+        // Get the result variable (block param for non-void functions)
+        let result_var = if !is_void_return {
+            let ret_val = ctx.builder.block_params(ens_bb)[0];
+            let var = Variable::from_u32(ctx.next_var);
+            ctx.next_var += 1;
+            let ret_cl_type = pluto_to_cranelift(ctx.expected_return_type.as_ref().unwrap());
+            ctx.builder.declare_var(var, ret_cl_type);
+            ctx.builder.def_var(var, ret_val);
+            Some(var)
+        } else {
+            None
+        };
+
+        let ensures = fn_contracts.get(&fn_lookup).unwrap().ensures.clone();
+        ctx.emit_ensures_checks(&ensures, result_var)?;
+
+        // After ensures pass, jump to exit_block or return directly
+        if let Some(exit_bb) = ctx.exit_block {
+            if !is_void_return {
+                let ret_val = ctx.builder.use_var(result_var.unwrap());
+                ctx.builder.ins().jump(exit_bb, &[ret_val]);
+            } else {
                 ctx.builder.ins().jump(exit_bb, &[]);
+            }
+        } else {
+            if !is_void_return {
+                let ret_val = ctx.builder.use_var(result_var.unwrap());
+                ctx.builder.ins().return_(&[ret_val]);
             } else {
                 ctx.builder.ins().return_(&[]);
             }
@@ -2576,7 +2971,6 @@ pub fn lower_function(
         }
 
         // Emit actual return
-        let is_void_return = matches!(&ctx.expected_return_type, Some(PlutoType::Void) | None);
         if !is_void_return {
             let ret_val = ctx.builder.block_params(exit_bb)[0];
             ctx.builder.ins().return_(&[ret_val]);
@@ -2658,6 +3052,10 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
                 panic!("Generic TypeExpr should not reach codegen — monomorphize should have resolved it")
             }
         }
+        TypeExpr::Nullable(inner) => {
+            let inner_ty = resolve_type_expr_to_pluto(&inner.node, env);
+            PlutoType::Nullable(Box::new(inner_ty))
+        }
     }
 }
 
@@ -2701,6 +3099,8 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::TypeParam(name) => panic!("ICE: generic type parameter '{name}' reached codegen unresolved"),
         PlutoType::Byte => types::I8,          // unsigned 8-bit value
         PlutoType::Bytes => types::I64,        // pointer to bytes handle
+        PlutoType::Nullable(_) => types::I64,   // pointer (0 = none)
+        PlutoType::GenericInstance(_, name, _) => panic!("ICE: generic instance '{name}' reached codegen unresolved"),
     }
 }
 
@@ -2741,7 +3141,11 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
         }
         Expr::Cast { target_type, .. } => resolve_type_expr_to_pluto(&target_type.node, env),
-        Expr::Call { name, args } => {
+        Expr::Call { name, args, .. } => {
+            // old(expr) has same type as expr
+            if name.node == "old" && args.len() == 1 {
+                return infer_type_for_expr(&args[0].node, env, var_types);
+            }
             // Check if calling a closure variable first
             if let Some(PlutoType::Fn(_, ret)) = var_types.get(&name.node) {
                 return *ret.clone();
@@ -2792,8 +3196,13 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
         }
         Expr::ArrayLit { elements } => {
-            let first = infer_type_for_expr(&elements[0].node, env, var_types);
-            PlutoType::Array(Box::new(first))
+            if elements.is_empty() {
+                // Empty array — type comes from context (var_types), default to Void
+                PlutoType::Array(Box::new(PlutoType::Void))
+            } else {
+                let first = infer_type_for_expr(&elements[0].node, env, var_types);
+                PlutoType::Array(Box::new(first))
+            }
         }
         Expr::Index { object, .. } => {
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
@@ -2837,10 +3246,13 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 }
             }
             let obj_type = infer_type_for_expr(&object.node, env, var_types);
-            if matches!(&obj_type, PlutoType::Array(_)) {
+            if let PlutoType::Array(elem) = &obj_type {
                 return match method.node.as_str() {
-                    "len" => PlutoType::Int,
-                    _ => PlutoType::Void,
+                    "len" | "index_of" => PlutoType::Int,
+                    "pop" | "last" | "first" | "remove_at" => (**elem).clone(),
+                    "is_empty" | "contains" => PlutoType::Bool,
+                    "slice" => PlutoType::Array(elem.clone()),
+                    _ => PlutoType::Void, // push, clear, insert_at, reverse
                 };
             }
             if let PlutoType::Map(key_ty, val_ty) = &obj_type {
@@ -2889,6 +3301,8 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                     "substring" | "trim" | "to_upper" | "to_lower" | "replace" | "char_at" => PlutoType::String,
                     "split" => PlutoType::Array(Box::new(PlutoType::String)),
                     "to_bytes" => PlutoType::Bytes,
+                    "to_int" => PlutoType::Nullable(Box::new(PlutoType::Int)),
+                    "to_float" => PlutoType::Nullable(Box::new(PlutoType::Float)),
                     _ => PlutoType::Void,
                 };
             }
@@ -2935,6 +3349,15 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
         }
         Expr::Range { .. } => PlutoType::Range,
+        Expr::NoneLit => PlutoType::Nullable(Box::new(PlutoType::Void)),
+        Expr::NullPropagate { expr } => {
+            // The result of `expr?` is the inner type if nullable, otherwise same type
+            let inner = infer_type_for_expr(&expr.node, env, var_types);
+            match inner {
+                PlutoType::Nullable(t) => *t,
+                other => other,
+            }
+        }
     }
 }
 

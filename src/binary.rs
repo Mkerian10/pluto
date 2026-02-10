@@ -1,23 +1,25 @@
-//! Binary container format for serialized Pluto ASTs.
+//! Binary container format for serialized Pluto ASTs (v2).
 //!
-//! Container layout (16-byte header + two length-prefixed sections):
+//! Container layout (20-byte header + three length-prefixed sections):
 //!
 //! ```text
-//! [4B magic "PLTO"] [4B schema version u32 LE] [4B source offset u32 LE] [4B AST offset u32 LE]
+//! [4B magic "PLTO"] [4B schema version u32 LE] [4B source offset u32 LE] [4B AST offset u32 LE] [4B derived offset u32 LE]
 //! [Source section: 4B length u32 LE + UTF-8 bytes]
 //! [AST section: 4B length u32 LE + bincode bytes]
+//! [Derived section: 4B length u32 LE + bincode bytes]
 //! ```
 
+use crate::derived::DerivedInfo;
 use crate::parser::ast::Program;
 
 /// Magic bytes identifying a binary Pluto file.
 const MAGIC: &[u8; 4] = b"PLTO";
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
-/// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4).
-const HEADER_SIZE: usize = 16;
+/// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
+const HEADER_SIZE: usize = 20;
 
 /// Errors that can occur during binary serialization/deserialization.
 #[derive(Debug, thiserror::Error)]
@@ -36,20 +38,28 @@ pub enum BinaryError {
     InvalidUtf8(#[from] std::string::FromUtf8Error),
 }
 
-/// Serialize a parsed `Program` and its source text into the binary container format.
-pub fn serialize_program(program: &Program, source: &str) -> Result<Vec<u8>, BinaryError> {
+/// Serialize a parsed `Program`, its source text, and derived analysis data into the binary container format.
+pub fn serialize_program(
+    program: &Program,
+    source: &str,
+    derived: &DerivedInfo,
+) -> Result<Vec<u8>, BinaryError> {
     let config = bincode::config::standard();
     let ast_bytes = bincode::serde::encode_to_vec(program, config)
         .map_err(|e| BinaryError::Encode(e.to_string()))?;
+    let derived_bytes = bincode::serde::encode_to_vec(derived, config)
+        .map_err(|e| BinaryError::Encode(e.to_string()))?;
 
     let source_bytes = source.as_bytes();
-    let source_section_size = 4 + source_bytes.len(); // length prefix + data
+    let source_section_size = 4 + source_bytes.len();
     let ast_section_size = 4 + ast_bytes.len();
+    let derived_section_size = 4 + derived_bytes.len();
 
     let source_offset = HEADER_SIZE as u32;
     let ast_offset = (HEADER_SIZE + source_section_size) as u32;
+    let derived_offset = (HEADER_SIZE + source_section_size + ast_section_size) as u32;
 
-    let total_size = HEADER_SIZE + source_section_size + ast_section_size;
+    let total_size = HEADER_SIZE + source_section_size + ast_section_size + derived_section_size;
     let mut buf = Vec::with_capacity(total_size);
 
     // Header
@@ -57,6 +67,7 @@ pub fn serialize_program(program: &Program, source: &str) -> Result<Vec<u8>, Bin
     buf.extend_from_slice(&SCHEMA_VERSION.to_le_bytes());
     buf.extend_from_slice(&source_offset.to_le_bytes());
     buf.extend_from_slice(&ast_offset.to_le_bytes());
+    buf.extend_from_slice(&derived_offset.to_le_bytes());
 
     // Source section
     buf.extend_from_slice(&(source_bytes.len() as u32).to_le_bytes());
@@ -66,17 +77,22 @@ pub fn serialize_program(program: &Program, source: &str) -> Result<Vec<u8>, Bin
     buf.extend_from_slice(&(ast_bytes.len() as u32).to_le_bytes());
     buf.extend_from_slice(&ast_bytes);
 
+    // Derived section
+    buf.extend_from_slice(&(derived_bytes.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&derived_bytes);
+
     Ok(buf)
 }
 
-/// Deserialize a binary container back into a `Program` and its source text.
-pub fn deserialize_program(data: &[u8]) -> Result<(Program, String), BinaryError> {
+/// Deserialize a binary container back into a `Program`, its source text, and derived analysis data.
+pub fn deserialize_program(data: &[u8]) -> Result<(Program, String, DerivedInfo), BinaryError> {
     validate_header(data)?;
 
     let source = read_source_section(data)?;
     let program = read_ast_section(data)?;
+    let derived = read_derived_section(data)?;
 
-    Ok((program, source))
+    Ok((program, source, derived))
 }
 
 /// Check whether a byte slice starts with the Pluto binary magic number.
@@ -163,6 +179,35 @@ fn read_ast_section(data: &[u8]) -> Result<Program, BinaryError> {
     Ok(program)
 }
 
+fn read_derived_section(data: &[u8]) -> Result<DerivedInfo, BinaryError> {
+    let derived_offset = u32::from_le_bytes(data[16..20].try_into().unwrap()) as usize;
+
+    if data.len() < derived_offset + 4 {
+        return Err(BinaryError::Truncated {
+            expected: derived_offset + 4,
+            got: data.len(),
+        });
+    }
+
+    let derived_len =
+        u32::from_le_bytes(data[derived_offset..derived_offset + 4].try_into().unwrap()) as usize;
+
+    let derived_end = derived_offset + 4 + derived_len;
+    if data.len() < derived_end {
+        return Err(BinaryError::Truncated {
+            expected: derived_end,
+            got: data.len(),
+        });
+    }
+
+    let config = bincode::config::standard();
+    let (derived, _bytes_read): (DerivedInfo, usize) =
+        bincode::serde::decode_from_slice(&data[derived_offset + 4..derived_end], config)
+            .map_err(|e| BinaryError::Decode(e.to_string()))?;
+
+    Ok(derived)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,18 +221,28 @@ mod tests {
         parser.parse_program().expect("parse failed")
     }
 
+    fn empty_derived() -> DerivedInfo {
+        DerivedInfo {
+            fn_error_sets: Default::default(),
+            fn_signatures: Default::default(),
+        }
+    }
+
     #[test]
     fn round_trip_empty_program() {
         let source = "fn main() {\n}\n";
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
-        let (program2, source2) = deserialize_program(&bytes).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
+        let (program2, source2, derived2) = deserialize_program(&bytes).unwrap();
         assert_eq!(source, source2);
         assert_eq!(program.functions.len(), program2.functions.len());
         assert_eq!(
             program.functions[0].node.name.node,
             program2.functions[0].node.name.node
         );
+        assert!(derived2.fn_error_sets.is_empty());
+        assert!(derived2.fn_signatures.is_empty());
     }
 
     #[test]
@@ -202,12 +257,13 @@ fn add(a: int, b: int) int {
 }
 "#;
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
-        let (program2, source2) = deserialize_program(&bytes).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
+        let (program2, source2, _) = deserialize_program(&bytes).unwrap();
         assert_eq!(source, source2);
         assert_eq!(program.functions.len(), program2.functions.len());
         // Re-serialize and check bytes match
-        let bytes2 = serialize_program(&program2, &source2).unwrap();
+        let bytes2 = serialize_program(&program2, &source2, &derived).unwrap();
         assert_eq!(bytes, bytes2);
     }
 
@@ -230,12 +286,13 @@ fn main() {
 }
 "#;
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
-        let (program2, source2) = deserialize_program(&bytes).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
+        let (program2, source2, _) = deserialize_program(&bytes).unwrap();
         assert_eq!(source, source2);
         assert_eq!(program.classes.len(), program2.classes.len());
         assert_eq!(program.enums.len(), program2.enums.len());
-        let bytes2 = serialize_program(&program2, &source2).unwrap();
+        let bytes2 = serialize_program(&program2, &source2, &derived).unwrap();
         assert_eq!(bytes, bytes2);
     }
 
@@ -255,11 +312,12 @@ fn main() {
 }
 "#;
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
-        let (program2, source2) = deserialize_program(&bytes).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
+        let (program2, source2, _) = deserialize_program(&bytes).unwrap();
         assert_eq!(source, source2);
         assert_eq!(program.errors.len(), program2.errors.len());
-        let bytes2 = serialize_program(&program2, &source2).unwrap();
+        let bytes2 = serialize_program(&program2, &source2, &derived).unwrap();
         assert_eq!(bytes, bytes2);
     }
 
@@ -275,10 +333,11 @@ fn main() {
 }
 "#;
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
-        let (program2, source2) = deserialize_program(&bytes).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
+        let (program2, source2, _) = deserialize_program(&bytes).unwrap();
         assert_eq!(source, source2);
-        let bytes2 = serialize_program(&program2, &source2).unwrap();
+        let bytes2 = serialize_program(&program2, &source2, &derived).unwrap();
         assert_eq!(bytes, bytes2);
     }
 
@@ -297,9 +356,10 @@ fn main() {
         let program = parse(source);
         let class_id = program.classes[0].node.id;
         let fn_id = program.functions[0].node.id;
+        let derived = empty_derived();
 
-        let bytes = serialize_program(&program, source).unwrap();
-        let (program2, _) = deserialize_program(&bytes).unwrap();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
+        let (program2, _, _) = deserialize_program(&bytes).unwrap();
 
         assert_eq!(class_id, program2.classes[0].node.id);
         assert_eq!(fn_id, program2.functions[0].node.id);
@@ -309,7 +369,8 @@ fn main() {
     fn magic_number_detection() {
         let source = "fn main() {\n}\n";
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         assert!(is_binary_format(&bytes));
 
         // Plain text is not binary
@@ -321,7 +382,7 @@ fn main() {
 
     #[test]
     fn invalid_magic_rejected() {
-        let data = b"NOPExxxxxxxxxxxxmore data here";
+        let data = b"NOPExxxxxxxxxxxxxxxxxxxxmore data here";
         let result = deserialize_program(data);
         assert!(matches!(result, Err(BinaryError::InvalidMagic)));
     }
@@ -339,7 +400,8 @@ fn main() {
     fn source_only_read() {
         let source = "fn main() {\n    let x = 42\n}\n";
         let program = parse(source);
-        let bytes = serialize_program(&program, source).unwrap();
+        let derived = empty_derived();
+        let bytes = serialize_program(&program, source, &derived).unwrap();
         let extracted = read_source_only(&bytes).unwrap();
         assert_eq!(source, extracted);
     }
@@ -352,18 +414,76 @@ fn main() {
         assert!(matches!(
             result,
             Err(BinaryError::Truncated {
-                expected: 16,
+                expected: 20,
                 got: 3
             })
         ));
 
         // Valid header but truncated source section
-        let mut data = vec![0u8; 16];
+        let mut data = vec![0u8; 20];
         data[..4].copy_from_slice(MAGIC);
         data[4..8].copy_from_slice(&SCHEMA_VERSION.to_le_bytes());
-        data[8..12].copy_from_slice(&16u32.to_le_bytes()); // source at offset 16
-        data[12..16].copy_from_slice(&20u32.to_le_bytes()); // ast at offset 20
+        data[8..12].copy_from_slice(&20u32.to_le_bytes()); // source at offset 20
+        data[12..16].copy_from_slice(&24u32.to_le_bytes()); // ast at offset 24
+        data[16..20].copy_from_slice(&28u32.to_le_bytes()); // derived at offset 28
         let result = deserialize_program(&data);
         assert!(matches!(result, Err(BinaryError::Truncated { .. })));
+    }
+
+    #[test]
+    fn round_trip_with_derived_data() {
+        use crate::derived::{ErrorRef, ResolvedSignature};
+        use crate::typeck::types::PlutoType;
+        use std::collections::BTreeMap;
+        use uuid::Uuid;
+
+        let source = "fn main() {\n}\n";
+        let program = parse(source);
+        let fn_id = program.functions[0].node.id;
+
+        let mut fn_error_sets = BTreeMap::new();
+        fn_error_sets.insert(
+            fn_id,
+            vec![ErrorRef {
+                id: Some(Uuid::new_v4()),
+                name: "NotFound".to_string(),
+            }],
+        );
+
+        let mut fn_signatures = BTreeMap::new();
+        fn_signatures.insert(
+            fn_id,
+            ResolvedSignature {
+                param_types: vec![PlutoType::String],
+                return_type: PlutoType::Int,
+                is_fallible: true,
+            },
+        );
+
+        let derived = DerivedInfo {
+            fn_error_sets,
+            fn_signatures,
+        };
+
+        let bytes = serialize_program(&program, source, &derived).unwrap();
+        let (program2, source2, derived2) = deserialize_program(&bytes).unwrap();
+
+        assert_eq!(source, source2);
+        assert_eq!(program.functions.len(), program2.functions.len());
+
+        // Check derived data round-trips correctly
+        assert_eq!(derived2.fn_error_sets.len(), 1);
+        let errors = &derived2.fn_error_sets[&fn_id];
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].name, "NotFound");
+
+        let sig = &derived2.fn_signatures[&fn_id];
+        assert_eq!(sig.param_types, vec![PlutoType::String]);
+        assert_eq!(sig.return_type, PlutoType::Int);
+        assert!(sig.is_fallible);
+
+        // Deterministic: re-serialize yields identical bytes
+        let bytes2 = serialize_program(&program2, &source2, &derived2).unwrap();
+        assert_eq!(bytes, bytes2);
     }
 }

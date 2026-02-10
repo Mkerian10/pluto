@@ -76,13 +76,6 @@ fn load_directory_module(
     }
     visited.insert(canonical_dir.clone());
     let result = (|| {
-        let mod_file = dir.join("mod.pluto");
-        if mod_file.is_file() {
-            let (mut program, _) = load_and_parse(&mod_file, source_map)?;
-            resolve_module_imports(&mut program, dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
-            return Ok(program);
-        }
-
         let mut merged = Program {
             imports: Vec::new(),
             functions: Vec::new(),
@@ -476,6 +469,7 @@ fn type_expr_eq(a: &TypeExpr, b: &TypeExpr) -> bool {
                 && ta.len() == tb.len()
                 && ta.iter().zip(tb.iter()).all(|(a, b)| type_expr_eq(&a.node, &b.node))
         }
+        (TypeExpr::Nullable(ia), TypeExpr::Nullable(ib)) => type_expr_eq(&ia.node, &ib.node),
         _ => false,
     }
 }
@@ -897,6 +891,9 @@ fn prefix_type_expr(ty: &mut TypeExpr, module_name: &str, module_prog: &Program)
                 prefix_type_expr(&mut arg.node, module_name, module_prog);
             }
         }
+        TypeExpr::Nullable(inner) => {
+            prefix_type_expr(&mut inner.node, module_name, module_prog);
+        }
     }
 }
 
@@ -973,7 +970,7 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
                 rewrite_block_for_module(&mut arm.body.node, module_name, module_prog);
             }
         }
-        Stmt::Raise { error_name, fields } => {
+        Stmt::Raise { error_name, fields, .. } => {
             if module_prog.errors.iter().any(|e| e.node.name.node == error_name.node) {
                 error_name.node = format!("{}.{}", module_name, error_name.node);
             }
@@ -1013,7 +1010,7 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
 
 fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Program) {
     match expr {
-        Expr::Call { name, args } => {
+        Expr::Call { name, args, .. } => {
             // Prefix calls to module-internal functions (but NOT extern fns — those are C symbols)
             if module_prog.functions.iter().any(|f| f.node.name.node == name.node) {
                 name.node = format!("{}.{}", module_name, name.node);
@@ -1022,7 +1019,7 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
                 rewrite_expr_for_module(&mut arg.node, module_name, module_prog);
             }
         }
-        Expr::StructLit { name, type_args, fields } => {
+        Expr::StructLit { name, type_args, fields, .. } => {
             if is_module_type(&name.node, module_prog) {
                 name.node = format!("{}.{}", module_name, name.node);
             }
@@ -1129,7 +1126,11 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
         Expr::Spawn { call } => {
             rewrite_expr_for_module(&mut call.node, module_name, module_prog);
         }
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
+        Expr::NullPropagate { expr } => {
+            rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
+        }
+        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
+        | Expr::Ident(_) | Expr::NoneLit => {}
     }
 }
 
@@ -1228,6 +1229,9 @@ fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, import_names: &HashSet<String>)
             for arg in type_args {
                 rewrite_type_expr(arg, import_names);
             }
+        }
+        TypeExpr::Nullable(inner) => {
+            rewrite_type_expr(inner, import_names);
         }
     }
 }
@@ -1337,6 +1341,7 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
                     *expr = Expr::Call {
                         name: Spanned::new(qualified_name, name_span),
                         args: std::mem::take(args),
+                        target_id: None,
                     };
                     return;
                 }
@@ -1350,7 +1355,7 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
             rewrite_expr(&mut object.node, object.span, import_names);
             let _ = field;
         }
-        Expr::Call { name, args } => {
+        Expr::Call { name, args, .. } => {
             for arg in args {
                 rewrite_expr(&mut arg.node, arg.span, import_names);
             }
@@ -1443,7 +1448,11 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
         Expr::Spawn { call } => {
             rewrite_expr(&mut call.node, call.span, import_names);
         }
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Ident(_) => {}
+        Expr::NullPropagate { expr } => {
+            rewrite_expr(&mut expr.node, expr.span, import_names);
+        }
+        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
+        | Expr::Ident(_) | Expr::NoneLit => {}
     }
     let _ = span;
 }

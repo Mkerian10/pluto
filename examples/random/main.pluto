@@ -1,0 +1,58 @@
+import std.random
+
+fn main() {
+    print("=== Random Module Demo ===")
+
+    print("Random integers:")
+    let i = 0
+    while i < 5 {
+        let n = random.next()
+        print("  {n}")
+        i = i + 1
+    }
+
+    print("Random between 1 and 100:")
+    i = 0
+    while i < 5 {
+        let n = random.between(1, 100)
+        print("  {n}")
+        i = i + 1
+    }
+
+    print("Random decimals [0, 1):")
+    i = 0
+    while i < 5 {
+        let d = random.decimal()
+        print("  {d}")
+        i = i + 1
+    }
+
+    print("Random decimals between 10.0 and 20.0:")
+    i = 0
+    while i < 5 {
+        let d = random.decimal_between(10.0, 20.0)
+        print("  {d}")
+        i = i + 1
+    }
+
+    print("Coin flips:")
+    i = 0
+    while i < 10 {
+        let c = random.coin()
+        print("  {c}")
+        i = i + 1
+    }
+
+    print("Seeded determinism (seed=42):")
+    random.seed(42)
+    let a = random.next()
+    let b = random.next()
+    print("  First: {a}, {b}")
+    random.seed(42)
+    let c = random.next()
+    let d = random.next()
+    print("  Second: {c}, {d}")
+    print("  Match: {a == c}, {b == d}")
+
+    print("Done!")
+}

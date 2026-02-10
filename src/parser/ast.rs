@@ -52,6 +52,13 @@ pub struct ExternRustDecl {
     pub alias: Spanned<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Lifecycle {
+    Singleton,  // default
+    Scoped,
+    Transient,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassDecl {
     pub id: Uuid,
@@ -63,6 +70,7 @@ pub struct ClassDecl {
     pub impl_traits: Vec<Spanned<String>>,
     pub uses: Vec<Spanned<String>>,
     pub is_pub: bool,
+    pub lifecycle: Lifecycle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +108,7 @@ pub struct Param {
     pub id: Uuid,
     pub name: Spanned<String>,
     pub ty: Spanned<TypeExpr>,
+    pub is_mut: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -115,6 +124,7 @@ pub enum TypeExpr {
         name: String,
         type_args: Vec<Spanned<TypeExpr>>,
     },
+    Nullable(Box<Spanned<TypeExpr>>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +138,7 @@ pub enum Stmt {
         name: Spanned<String>,
         ty: Option<Spanned<TypeExpr>>,
         value: Spanned<Expr>,
+        is_mut: bool,
     },
     Return(Option<Spanned<Expr>>),
     Assign {
@@ -165,6 +176,7 @@ pub enum Stmt {
     Raise {
         error_name: Spanned<String>,
         fields: Vec<(Spanned<String>, Spanned<Expr>)>,
+        error_id: Option<Uuid>,
     },
     LetChan {
         sender: Spanned<String>,
@@ -212,6 +224,7 @@ pub enum Expr {
     Call {
         name: Spanned<String>,
         args: Vec<Spanned<Expr>>,
+        target_id: Option<Uuid>,
     },
     FieldAccess {
         object: Box<Spanned<Expr>>,
@@ -226,6 +239,7 @@ pub enum Expr {
         name: Spanned<String>,
         type_args: Vec<Spanned<TypeExpr>>,
         fields: Vec<(Spanned<String>, Spanned<Expr>)>,
+        target_id: Option<Uuid>,
     },
     ArrayLit {
         elements: Vec<Spanned<Expr>>,
@@ -238,12 +252,16 @@ pub enum Expr {
         enum_name: Spanned<String>,
         variant: Spanned<String>,
         type_args: Vec<Spanned<TypeExpr>>,
+        enum_id: Option<Uuid>,
+        variant_id: Option<Uuid>,
     },
     EnumData {
         enum_name: Spanned<String>,
         variant: Spanned<String>,
         type_args: Vec<Spanned<TypeExpr>>,
         fields: Vec<(Spanned<String>, Spanned<Expr>)>,
+        enum_id: Option<Uuid>,
+        variant_id: Option<Uuid>,
     },
     StringInterp {
         parts: Vec<StringInterpPart>,
@@ -265,6 +283,7 @@ pub enum Expr {
     ClosureCreate {
         fn_name: String,
         captures: Vec<String>,
+        target_id: Option<Uuid>,
     },
     Propagate {
         expr: Box<Spanned<Expr>>,
@@ -284,6 +303,10 @@ pub enum Expr {
     },
     Spawn {
         call: Box<Spanned<Expr>>,
+    },
+    NoneLit,
+    NullPropagate {
+        expr: Box<Spanned<Expr>>,
     },
 }
 
@@ -393,4 +416,6 @@ pub struct MatchArm {
     pub type_args: Vec<Spanned<TypeExpr>>,
     pub bindings: Vec<(Spanned<String>, Option<Spanned<String>>)>,
     pub body: Spanned<Block>,
+    pub enum_id: Option<Uuid>,
+    pub variant_id: Option<Uuid>,
 }

@@ -1,0 +1,66 @@
+import std.time
+
+test "now returns positive" {
+    expect(time.now() > 0).to_be_true()
+}
+
+test "now_ns returns positive" {
+    expect(time.now_ns() > 0).to_be_true()
+}
+
+test "now_ns is larger than now" {
+    let ms = time.now()
+    let ns = time.now_ns()
+    expect(ns > ms).to_be_true()
+}
+
+test "two now calls are non-decreasing" {
+    let a = time.now()
+    let b = time.now()
+    expect(b >= a).to_be_true()
+}
+
+test "monotonic returns positive" {
+    expect(time.monotonic() > 0).to_be_true()
+}
+
+test "monotonic_ns returns positive" {
+    expect(time.monotonic_ns() > 0).to_be_true()
+}
+
+test "monotonic_ns is larger than monotonic" {
+    let ms = time.monotonic()
+    let ns = time.monotonic_ns()
+    expect(ns > ms).to_be_true()
+}
+
+test "two monotonic calls are non-decreasing" {
+    let a = time.monotonic()
+    let b = time.monotonic()
+    expect(b >= a).to_be_true()
+}
+
+test "sleep 50ms" {
+    let start = time.monotonic()
+    time.sleep(50)
+    let delta = time.monotonic() - start
+    expect(delta >= 40).to_be_true()
+}
+
+test "sleep 0 does not hang" {
+    time.sleep(0)
+    expect(true).to_be_true()
+}
+
+test "elapsed after sleep" {
+    let start = time.monotonic()
+    time.sleep(50)
+    let e = time.elapsed(start)
+    expect(e >= 40).to_be_true()
+}
+
+test "elapsed near-instant" {
+    let start = time.monotonic()
+    let e = time.elapsed(start)
+    expect(e < 10).to_be_true()
+}

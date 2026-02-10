@@ -174,7 +174,11 @@ class Account {
 
 Multiple `requires` clauses are allowed -- all must hold.
 
-> **Note:** In the current release, `requires` clauses are parsed and validated but not yet enforced. The static obligation propagation system (where the compiler proves callers satisfy callees' preconditions) is planned for a future release. Writing `requires` now is forward-compatible -- your contracts will be enforced once the verifier lands.
+If a precondition is violated at runtime, the program exits with an error message:
+
+```
+requires violation in withdraw: amount > 0.0
+```
 
 ## Postconditions (ensures)
 
@@ -203,7 +207,13 @@ fn increment(self) int
 }
 ```
 
-> **Note:** Like `requires`, `ensures` clauses are parsed and validated but not yet enforced. They are included in the syntax now so you can start writing contracts before the verifier is complete.
+If a postcondition is violated at runtime, the program exits with an error message:
+
+```
+ensures violation in increment: self.value == old(self.value) + 1
+```
+
+`old()` is only valid in `ensures` clauses. `result` is only valid in `ensures` and refers to the return value (not available for void functions).
 
 ## The Decidable Fragment
 
@@ -245,6 +255,6 @@ These will be documented as they are implemented.
 ## Limitations
 
 - Invariants are checked at runtime (after construction and after every method call). A future static verifier will eliminate redundant checks where the compiler can prove the invariant holds.
-- `requires` and `ensures` are parsed and type-checked but not yet enforced. They will be enforced once the static obligation propagation system is implemented.
+- `requires` and `ensures` are enforced at runtime. A future static verifier will prove obligations at compile time, eliminating the need for runtime checks where possible.
 - The decidable fragment does not include indexing, arbitrary method calls, or string operations (besides `.len()`).
 - Invariants on generic classes work after monomorphization -- the checks use concrete types.

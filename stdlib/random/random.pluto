@@ -1,0 +1,32 @@
+extern fn __pluto_random_seed(s: int)
+extern fn __pluto_random_int() int
+extern fn __pluto_random_float() float
+
+pub fn seed(s: int) {
+    __pluto_random_seed(s)
+}
+
+pub fn next() int {
+    return __pluto_random_int()
+}
+
+pub fn between(low: int, high: int) int {
+    let r = __pluto_random_int()
+    if r < 0 {
+        r = 0 - r
+    }
+    let range = high - low + 1
+    return low + r % range
+}
+
+pub fn decimal() float {
+    return __pluto_random_float()
+}
+
+pub fn decimal_between(low: float, high: float) float {
+    return low + __pluto_random_float() * (high - low)
+}
+
+pub fn coin() bool {
+    return __pluto_random_int() % 2 == 0
+}

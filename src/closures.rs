@@ -214,6 +214,7 @@ fn lift_in_expr(
                     id: Uuid::new_v4(),
                     name: Spanned::new("__env".to_string(), Span::new(0, 0)),
                     ty: Spanned::new(TypeExpr::Named("int".to_string()), Span::new(0, 0)),
+                    is_mut: false,
                 };
 
                 // Build the full param list: __env + original params
@@ -278,6 +279,7 @@ fn lift_in_expr(
                 *expr = Expr::ClosureCreate {
                     fn_name,
                     captures: capture_names,
+                    target_id: None,
                 };
             }
         }
@@ -313,9 +315,13 @@ fn lift_in_expr(
             lift_in_expr(&mut start.node, start.span, env, counter, new_fns)?;
             lift_in_expr(&mut end.node, end.span, env, counter, new_fns)?;
         }
+        Expr::NullPropagate { expr: inner } => {
+            lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
+        }
         // Non-capturing expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } => {}
+        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. }
+        | Expr::NoneLit => {}
     }
     Ok(())
 }
@@ -361,6 +367,7 @@ fn resolve_type_for_lift(ty: &TypeExpr) -> PlutoType {
                 PlutoType::Class(name.clone())
             }
         }
+        TypeExpr::Nullable(inner) => PlutoType::Nullable(Box::new(resolve_type_for_lift(&inner.node))),
     }
 }
 
@@ -449,5 +456,14 @@ fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         PlutoType::TypeParam(name) => TypeExpr::Named(name.clone()),
         PlutoType::Byte => TypeExpr::Named("byte".to_string()),
         PlutoType::Bytes => TypeExpr::Named("bytes".to_string()),
+        PlutoType::GenericInstance(_, name, args) => TypeExpr::Generic {
+            name: name.clone(),
+            type_args: args.iter()
+                .map(|a| Spanned::new(pluto_type_to_type_expr(a), Span::new(0, 0)))
+                .collect(),
+        },
+        PlutoType::Nullable(inner) => {
+            TypeExpr::Nullable(Box::new(Spanned::new(pluto_type_to_type_expr(inner), Span::new(0, 0))))
+        }
     }
 }

@@ -1,0 +1,764 @@
+import std.strings
+
+pub error JsonError {
+    message: string
+}
+
+// Tag constants
+// 0=null, 1=bool, 2=int, 3=float, 4=string, 5=array, 6=object
+
+pub class Json {
+    tag: int
+    int_val: int
+    float_val: float
+    string_val: string
+    children: [Json]
+    keys: [string]
+
+    fn is_null(self) bool {
+        return self.tag == 0
+    }
+
+    fn is_bool(self) bool {
+        return self.tag == 1
+    }
+
+    fn is_int(self) bool {
+        return self.tag == 2
+    }
+
+    fn is_float(self) bool {
+        return self.tag == 3
+    }
+
+    fn is_string(self) bool {
+        return self.tag == 4
+    }
+
+    fn is_array(self) bool {
+        return self.tag == 5
+    }
+
+    fn is_object(self) bool {
+        return self.tag == 6
+    }
+
+    fn get_bool(self) bool {
+        return self.int_val == 1
+    }
+
+    fn get_int(self) int {
+        if self.tag == 2 {
+            return self.int_val
+        }
+        return self.float_val as int
+    }
+
+    fn get_float(self) float {
+        if self.tag == 3 {
+            return self.float_val
+        }
+        return self.int_val as float
+    }
+
+    fn get_string(self) string {
+        return self.string_val
+    }
+
+    fn get(self, key: string) Json {
+        if self.tag == 6 {
+            let i = 0
+            while i < self.keys.len() {
+                if self.keys[i] == key {
+                    return self.children[i]
+                }
+                i = i + 1
+            }
+        }
+        return null()
+    }
+
+    fn at(self, index: int) Json {
+        return self.children[index]
+    }
+
+    fn len(self) int {
+        if self.tag == 5 {
+            return self.children.len()
+        }
+        if self.tag == 6 {
+            return self.keys.len()
+        }
+        return 0
+    }
+
+    fn set(self, key: string, value: Json) {
+        let i = 0
+        while i < self.keys.len() {
+            if self.keys[i] == key {
+                self.children[i] = value
+                return
+            }
+            i = i + 1
+        }
+        self.keys.push(key)
+        self.children.push(value)
+    }
+
+    fn push(self, value: Json) {
+        self.children.push(value)
+    }
+
+    fn to_string(self) string {
+        return stringify(self)
+    }
+}
+
+fn make(tag: int, iv: int, fv: float, sv: string) Json {
+    let children: [Json] = []
+    let keys: [string] = []
+    return Json {
+        tag: tag,
+        int_val: iv,
+        float_val: fv,
+        string_val: sv,
+        children: children,
+        keys: keys
+    }
+}
+
+pub fn null() Json {
+    return make(0, 0, 0.0, "")
+}
+
+pub fn bool(v: bool) Json {
+    if v {
+        return make(1, 1, 0.0, "")
+    }
+    return make(1, 0, 0.0, "")
+}
+
+pub fn int(v: int) Json {
+    return make(2, v, 0.0, "")
+}
+
+pub fn float(v: float) Json {
+    return make(3, 0, v, "")
+}
+
+pub fn string(v: string) Json {
+    return make(4, 0, 0.0, v)
+}
+
+pub fn array() Json {
+    return make(5, 0, 0.0, "")
+}
+
+pub fn object() Json {
+    return make(6, 0, 0.0, "")
+}
+
+// ── Stringify ──────────────────────────────────────────────────────────────────
+
+fn escape_string(s: string) string {
+    let result = "\""
+    let i = 0
+    let slen = s.len()
+    while i < slen {
+        let b = strings.byte_at(s, i)
+        if b == 34 {
+            result = result + "\\\""
+        } else {
+            if b == 92 {
+                result = result + "\\\\"
+            } else {
+                if b == 8 {
+                    result = result + "\\b"
+                } else {
+                    if b == 12 {
+                        result = result + "\\f"
+                    } else {
+                        if b == 10 {
+                            result = result + "\\n"
+                        } else {
+                            if b == 13 {
+                                result = result + "\\r"
+                            } else {
+                                if b == 9 {
+                                    result = result + "\\t"
+                                } else {
+                                    if b < 32 {
+                                        result = result + "\\u00"
+                                        let hi = b / 16
+                                        let lo = b - hi * 16
+                                        result = result + hex_digit(hi) + hex_digit(lo)
+                                    } else {
+                                        result = result + strings.char_at(s, i)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    result = result + "\""
+    return result
+}
+
+fn hex_digit(v: int) string {
+    if v < 10 {
+        return strings.char_at("0123456789abcdef", v)
+    }
+    return strings.char_at("0123456789abcdef", v)
+}
+
+fn stringify(j: Json) string {
+    if j.tag == 0 {
+        return "null"
+    }
+    if j.tag == 1 {
+        if j.int_val == 1 {
+            return "true"
+        }
+        return "false"
+    }
+    if j.tag == 2 {
+        return "{j.int_val}"
+    }
+    if j.tag == 3 {
+        return strings.format_float(j.float_val)
+    }
+    if j.tag == 4 {
+        return escape_string(j.string_val)
+    }
+    if j.tag == 5 {
+        let result = "["
+        let i = 0
+        while i < j.children.len() {
+            if i > 0 {
+                result = result + ","
+            }
+            result = result + stringify(j.children[i])
+            i = i + 1
+        }
+        return result + "]"
+    }
+    // tag == 6 (object)
+    let result = __pluto_codepoint_to_string(123)
+    let i = 0
+    while i < j.keys.len() {
+        if i > 0 {
+            result = result + ","
+        }
+        result = result + escape_string(j.keys[i]) + ":" + stringify(j.children[i])
+        i = i + 1
+    }
+    return result + __pluto_codepoint_to_string(125)
+}
+
+// ── Parser ─────────────────────────────────────────────────────────────────────
+
+class Parser {
+    src: string
+    pos: int
+    src_len: int
+
+    fn peek(mut self) int {
+        self.skip_whitespace()
+        if self.pos >= self.src_len {
+            return -1
+        }
+        return strings.byte_at(self.src, self.pos)
+    }
+
+    fn advance(mut self) int {
+        if self.pos >= self.src_len {
+            return -1
+        }
+        let b = strings.byte_at(self.src, self.pos)
+        self.pos = self.pos + 1
+        return b
+    }
+
+    fn skip_whitespace(mut self) {
+        while self.pos < self.src_len {
+            let b = strings.byte_at(self.src, self.pos)
+            if b == 32 {
+                self.pos = self.pos + 1
+            } else {
+                if b == 9 {
+                    self.pos = self.pos + 1
+                } else {
+                    if b == 10 {
+                        self.pos = self.pos + 1
+                    } else {
+                        if b == 13 {
+                            self.pos = self.pos + 1
+                        } else {
+                            return
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn expect_byte(mut self, expected: int) bool {
+        self.skip_whitespace()
+        if self.pos >= self.src_len {
+            return false
+        }
+        if strings.byte_at(self.src, self.pos) == expected {
+            self.pos = self.pos + 1
+            return true
+        }
+        return false
+    }
+
+    fn match_word(mut self, word: string) bool {
+        let wlen = word.len()
+        if self.pos + wlen > self.src_len {
+            return false
+        }
+        let sub = strings.substring(self.src, self.pos, wlen)
+        if sub == word {
+            self.pos = self.pos + wlen
+            return true
+        }
+        return false
+    }
+
+    fn parse_value(mut self) Json {
+        self.skip_whitespace()
+        if self.pos >= self.src_len {
+            raise JsonError { message: "unexpected end of input" }
+        }
+        let c = strings.byte_at(self.src, self.pos)
+        // '"' = 34
+        if c == 34 {
+            return self.parse_string()!
+        }
+        // '{' = 123
+        if c == 123 {
+            return self.parse_object()!
+        }
+        // '[' = 91
+        if c == 91 {
+            return self.parse_array()!
+        }
+        // 't' = 116
+        if c == 116 {
+            return self.parse_keyword()!
+        }
+        // 'f' = 102
+        if c == 102 {
+            return self.parse_keyword()!
+        }
+        // 'n' = 110
+        if c == 110 {
+            return self.parse_keyword()!
+        }
+        // '-' = 45, '0'-'9' = 48-57
+        if c == 45 {
+            return self.parse_number()!
+        }
+        if c >= 48 {
+            if c <= 57 {
+                return self.parse_number()!
+            }
+        }
+        raise JsonError { message: "invalid JSON" }
+    }
+
+    fn parse_string(mut self) Json {
+        // skip opening "
+        self.pos = self.pos + 1
+        let result = ""
+        while self.pos < self.src_len {
+            let b = strings.byte_at(self.src, self.pos)
+            // '"' = 34
+            if b == 34 {
+                self.pos = self.pos + 1
+                return string(result)
+            }
+            // Reject unescaped control characters (0x00-0x1F)
+            if b < 32 {
+                raise JsonError { message: "invalid JSON" }
+            }
+            // '\' = 92
+            if b == 92 {
+                self.pos = self.pos + 1
+                if self.pos >= self.src_len {
+                    raise JsonError { message: "invalid JSON" }
+                }
+                let esc = strings.byte_at(self.src, self.pos)
+                // '"' = 34
+                if esc == 34 {
+                    result = result + "\""
+                    self.pos = self.pos + 1
+                } else {
+                    // '\' = 92
+                    if esc == 92 {
+                        result = result + "\\"
+                        self.pos = self.pos + 1
+                    } else {
+                        // '/' = 47
+                        if esc == 47 {
+                            result = result + "/"
+                            self.pos = self.pos + 1
+                        } else {
+                            // 'b' = 98 (backspace = 8)
+                            if esc == 98 {
+                                result = result + __pluto_codepoint_to_string(8)
+                                self.pos = self.pos + 1
+                            } else {
+                                // 'f' = 102 (formfeed = 12)
+                                if esc == 102 {
+                                    result = result + __pluto_codepoint_to_string(12)
+                                    self.pos = self.pos + 1
+                                } else {
+                                    // 'n' = 110
+                                    if esc == 110 {
+                                        result = result + "\n"
+                                        self.pos = self.pos + 1
+                                    } else {
+                                        // 'r' = 114
+                                        if esc == 114 {
+                                            result = result + "\r"
+                                            self.pos = self.pos + 1
+                                        } else {
+                                            // 't' = 116
+                                            if esc == 116 {
+                                                result = result + "\t"
+                                                self.pos = self.pos + 1
+                                            } else {
+                                                // 'u' = 117
+                                                if esc == 117 {
+                                                    self.pos = self.pos + 1
+                                                    result = result + self.parse_unicode_escape()!
+                                                } else {
+                                                    // Invalid escape sequence
+                                                    raise JsonError { message: "invalid JSON" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                result = result + strings.char_at(self.src, self.pos)
+                self.pos = self.pos + 1
+            }
+        }
+        raise JsonError { message: "invalid JSON" }
+    }
+
+    fn parse_hex4(mut self) int {
+        // Parse 4 hex digits, return codepoint value
+        if self.pos + 4 > self.src_len {
+            raise JsonError { message: "invalid JSON" }
+        }
+        let cp = 0
+        let i = 0
+        while i < 4 {
+            let h = strings.byte_at(self.src, self.pos + i)
+            cp = cp * 16
+            // '0'-'9' = 48-57
+            if h >= 48 {
+                if h <= 57 {
+                    cp = cp + h - 48
+                } else {
+                    // 'a'-'f' = 97-102
+                    if h >= 97 {
+                        if h <= 102 {
+                            cp = cp + 10 + h - 97
+                        } else {
+                            raise JsonError { message: "invalid JSON" }
+                        }
+                    } else {
+                        // 'A'-'F' = 65-70
+                        if h >= 65 {
+                            if h <= 70 {
+                                cp = cp + 10 + h - 65
+                            } else {
+                                raise JsonError { message: "invalid JSON" }
+                            }
+                        } else {
+                            raise JsonError { message: "invalid JSON" }
+                        }
+                    }
+                }
+            } else {
+                raise JsonError { message: "invalid JSON" }
+            }
+            i = i + 1
+        }
+        self.pos = self.pos + 4
+        return cp
+    }
+
+    fn parse_unicode_escape(mut self) string {
+        let cp = self.parse_hex4()!
+        // Handle surrogate pairs: high surrogate 0xD800-0xDBFF
+        if cp >= 55296 {
+            if cp <= 56319 {
+                // Expect \u followed by low surrogate
+                if self.pos + 2 > self.src_len {
+                    raise JsonError { message: "invalid JSON" }
+                }
+                // '\' = 92, 'u' = 117
+                if strings.byte_at(self.src, self.pos) != 92 {
+                    raise JsonError { message: "invalid JSON" }
+                }
+                if strings.byte_at(self.src, self.pos + 1) != 117 {
+                    raise JsonError { message: "invalid JSON" }
+                }
+                self.pos = self.pos + 2
+                let low = self.parse_hex4()!
+                // Low surrogate must be 0xDC00-0xDFFF (56320-57343)
+                if low < 56320 {
+                    raise JsonError { message: "invalid JSON" }
+                }
+                if low > 57343 {
+                    raise JsonError { message: "invalid JSON" }
+                }
+                // Decode: (high - 0xD800) * 0x400 + (low - 0xDC00) + 0x10000
+                cp = (cp - 55296) * 1024 + (low - 56320) + 65536
+            }
+        }
+        return __pluto_codepoint_to_string(cp)
+    }
+
+    fn is_digit(self, pos: int) bool {
+        if pos >= self.src_len {
+            return false
+        }
+        let b = strings.byte_at(self.src, pos)
+        if b >= 48 {
+            if b <= 57 {
+                return true
+            }
+        }
+        return false
+    }
+
+    fn skip_digits(mut self) {
+        while self.is_digit(self.pos) {
+            self.pos = self.pos + 1
+        }
+    }
+
+    fn require_digits(mut self) {
+        // Require at least one digit, then skip remaining digits
+        let has_digit = self.is_digit(self.pos)
+        if !has_digit {
+            raise JsonError { message: "invalid JSON" }
+        }
+        self.skip_digits()
+    }
+
+    fn parse_number(mut self) Json {
+        let start = self.pos
+        let is_float = false
+        // '-' = 45
+        if strings.byte_at(self.src, self.pos) == 45 {
+            self.pos = self.pos + 1
+        }
+        // Must have at least one digit after optional minus
+        let has_digit = self.is_digit(self.pos)
+        if !has_digit {
+            raise JsonError { message: "invalid JSON" }
+        }
+        // Check for leading zeros: if first digit is '0', next must not be a digit
+        let first_digit = strings.byte_at(self.src, self.pos)
+        if first_digit == 48 {
+            // '0'
+            self.pos = self.pos + 1
+            // If next char is a digit, that's a leading zero violation
+            if self.is_digit(self.pos) {
+                raise JsonError { message: "invalid JSON" }
+            }
+        } else {
+            self.skip_digits()
+        }
+        // '.' = 46
+        if self.pos < self.src_len {
+            if strings.byte_at(self.src, self.pos) == 46 {
+                is_float = true
+                self.pos = self.pos + 1
+                // Must have at least one digit after '.'
+                self.require_digits()!
+            }
+        }
+        // 'e' = 101, 'E' = 69
+        if self.pos < self.src_len {
+            let eb = strings.byte_at(self.src, self.pos)
+            if eb == 101 {
+                is_float = true
+                self.pos = self.pos + 1
+                self.skip_exp_suffix()!
+            } else {
+                if eb == 69 {
+                    is_float = true
+                    self.pos = self.pos + 1
+                    self.skip_exp_suffix()!
+                }
+            }
+        }
+        let numstr = strings.substring(self.src, start, self.pos - start)
+        if is_float {
+            return float(parse_float_value(numstr))
+        }
+        return int(parse_int_value(numstr))
+    }
+
+    fn skip_exp_suffix(mut self) {
+        if self.pos < self.src_len {
+            let sb = strings.byte_at(self.src, self.pos)
+            // '+' = 43, '-' = 45
+            if sb == 43 {
+                self.pos = self.pos + 1
+            } else {
+                if sb == 45 {
+                    self.pos = self.pos + 1
+                }
+            }
+        }
+        // Must have at least one digit after exponent
+        self.require_digits()!
+    }
+
+    fn parse_array(mut self) Json {
+        // skip '['
+        self.pos = self.pos + 1
+        let arr = array()
+        self.skip_whitespace()
+        if self.pos < self.src_len {
+            // ']' = 93
+            if strings.byte_at(self.src, self.pos) == 93 {
+                self.pos = self.pos + 1
+                return arr
+            }
+        }
+        while true {
+            let item = self.parse_value()!
+            arr.push(item)
+            self.skip_whitespace()
+            if self.pos >= self.src_len {
+                raise JsonError { message: "invalid JSON" }
+            }
+            let b = strings.byte_at(self.src, self.pos)
+            // ',' = 44
+            if b == 44 {
+                self.pos = self.pos + 1
+            } else {
+                // ']' = 93
+                if b == 93 {
+                    self.pos = self.pos + 1
+                    return arr
+                } else {
+                    raise JsonError { message: "invalid JSON" }
+                }
+            }
+        }
+        // unreachable but needed for typeck
+        return arr
+    }
+
+    fn parse_object(mut self) Json {
+        // skip '{'
+        self.pos = self.pos + 1
+        let obj = object()
+        self.skip_whitespace()
+        if self.pos < self.src_len {
+            // '}' = 125
+            if strings.byte_at(self.src, self.pos) == 125 {
+                self.pos = self.pos + 1
+                return obj
+            }
+        }
+        while true {
+            self.skip_whitespace()
+            // Parse key (must be a string)
+            if self.pos >= self.src_len {
+                raise JsonError { message: "invalid JSON" }
+            }
+            // '"' = 34
+            if strings.byte_at(self.src, self.pos) != 34 {
+                raise JsonError { message: "invalid JSON" }
+            }
+            let key_json = self.parse_string()!
+            let key = key_json.get_string()
+            // Expect ':'
+            self.skip_whitespace()
+            // ':' = 58
+            let got_colon = self.expect_byte(58)
+            if !got_colon {
+                raise JsonError { message: "invalid JSON" }
+            }
+            let val = self.parse_value()!
+            obj.set(key, val)
+            self.skip_whitespace()
+            if self.pos >= self.src_len {
+                raise JsonError { message: "invalid JSON" }
+            }
+            let b = strings.byte_at(self.src, self.pos)
+            // ',' = 44
+            if b == 44 {
+                self.pos = self.pos + 1
+            } else {
+                // '}' = 125
+                if b == 125 {
+                    self.pos = self.pos + 1
+                    return obj
+                } else {
+                    raise JsonError { message: "invalid JSON" }
+                }
+            }
+        }
+        // unreachable
+        return obj
+    }
+
+    fn parse_keyword(mut self) Json {
+        if self.match_word("true") {
+            return bool(true)
+        }
+        if self.match_word("false") {
+            return bool(false)
+        }
+        if self.match_word("null") {
+            return null()
+        }
+        raise JsonError { message: "invalid JSON" }
+    }
+}
+
+// Helpers using extern C functions
+extern fn __pluto_json_parse_int(s: string) int
+extern fn __pluto_json_parse_float(s: string) float
+extern fn __pluto_codepoint_to_string(cp: int) string
+
+fn parse_int_value(s: string) int {
+    return __pluto_json_parse_int(s)
+}
+
+fn parse_float_value(s: string) float {
+    return __pluto_json_parse_float(s)
+}
+
+pub fn parse(s: string) Json {
+    let mut p = Parser { src: s, pos: 0, src_len: s.len() }
+    let result = p.parse_value()!
+    p.skip_whitespace()
+    if p.pos < p.src_len {
+        raise JsonError { message: "invalid JSON" }
+    }
+    return result
+}

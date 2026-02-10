@@ -1,0 +1,81 @@
+extern fn __pluto_string_substring(s: string, start: int, length: int) string
+extern fn __pluto_string_contains(haystack: string, needle: string) int
+extern fn __pluto_string_starts_with(s: string, prefix: string) int
+extern fn __pluto_string_ends_with(s: string, suffix: string) int
+extern fn __pluto_string_index_of(haystack: string, needle: string) int
+extern fn __pluto_string_trim(s: string) string
+extern fn __pluto_string_to_upper(s: string) string
+extern fn __pluto_string_to_lower(s: string) string
+extern fn __pluto_string_replace(s: string, old: string, new_str: string) string
+extern fn __pluto_string_split(s: string, delim: string) [string]
+extern fn __pluto_string_char_at(s: string, index: int) string
+extern fn __pluto_string_len(s: string) int
+extern fn __pluto_string_byte_at(s: string, index: int) int
+extern fn __pluto_string_format_float(v: float) string
+
+pub fn substring(s: string, start: int, length: int) string {
+    return __pluto_string_substring(s, start, length)
+}
+
+pub fn contains(s: string, needle: string) bool {
+    return __pluto_string_contains(s, needle) != 0
+}
+
+pub fn starts_with(s: string, prefix: string) bool {
+    return __pluto_string_starts_with(s, prefix) != 0
+}
+
+pub fn ends_with(s: string, suffix: string) bool {
+    return __pluto_string_ends_with(s, suffix) != 0
+}
+
+pub fn index_of(s: string, needle: string) int {
+    return __pluto_string_index_of(s, needle)
+}
+
+pub fn trim(s: string) string {
+    return __pluto_string_trim(s)
+}
+
+pub fn to_upper(s: string) string {
+    return __pluto_string_to_upper(s)
+}
+
+pub fn to_lower(s: string) string {
+    return __pluto_string_to_lower(s)
+}
+
+pub fn replace(s: string, old: string, new_str: string) string {
+    return __pluto_string_replace(s, old, new_str)
+}
+
+pub fn split(s: string, delim: string) [string] {
+    return __pluto_string_split(s, delim)
+}
+
+pub fn char_at(s: string, index: int) string {
+    return __pluto_string_char_at(s, index)
+}
+
+pub fn len(s: string) int {
+    return __pluto_string_len(s)
+}
+
+pub fn byte_at(s: string, index: int) int {
+    return __pluto_string_byte_at(s, index)
+}
+
+pub fn format_float(v: float) string {
+    return __pluto_string_format_float(v)
+}
+
+pub fn join(arr: [string], sep: string) string {
+    if arr.len() == 0 {
+        return ""
+    }
+    let result = arr[0]
+    for i in 1..arr.len() {
+        result = result + sep + arr[i]
+    }
+    return result
+}

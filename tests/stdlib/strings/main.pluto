@@ -91,3 +91,32 @@ test "char_at" {
     expect(strings.char_at("hello", 4)).to_equal("o")
     expect(strings.char_at("abc", 1)).to_equal("b")
 }
+
+test "join basic" {
+    expect(strings.join(["a", "b", "c"], ",")).to_equal("a,b,c")
+}
+
+test "join single element" {
+    expect(strings.join(["hello"], ",")).to_equal("hello")
+}
+
+test "join empty array" {
+    let empty: [string] = []
+    expect(strings.join(empty, ",")).to_equal("")
+}
+
+test "join multi-char separator" {
+    expect(strings.join(["x", "y"], " and ")).to_equal("x and y")
+}
+
+test "join empty separator" {
+    expect(strings.join(["a", "b", "c"], "")).to_equal("abc")
+}
+
+test "join space separator" {
+    expect(strings.join(["hello", "world"], " ")).to_equal("hello world")
+}
+
+test "join longer array" {
+    expect(strings.join(["a", "b", "c", "d", "e"], "-")).to_equal("a-b-c-d-e")
+}

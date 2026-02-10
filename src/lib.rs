@@ -16,11 +16,24 @@ pub mod manifest;
 pub mod git_cache;
 pub mod lsp;
 pub mod binary;
+pub mod derived;
 pub mod pretty;
+pub mod xref;
 
-use diagnostics::CompileError;
+use diagnostics::{CompileError, CompileWarning};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+/// Parse source for editing — no transforms (no monomorphize, no closure lift, no spawn desugar).
+/// Does NOT inject prelude (avoids serializing Option<T> etc. into user source).
+/// Resolves cross-references so xref IDs are available for user-defined declarations.
+pub fn parse_for_editing(source: &str) -> Result<parser::ast::Program, CompileError> {
+    let tokens = lexer::lex(source)?;
+    let mut parser = parser::Parser::new(&tokens, source);
+    let mut program = parser.parse_program()?;
+    xref::resolve_cross_refs(&mut program);
+    Ok(program)
+}
 
 /// Compile a source string to object bytes (lex → parse → prelude → typeck → monomorphize → closures → codegen).
 /// No file I/O or linking. Useful for compile-fail tests that only need to check errors.
@@ -44,10 +57,38 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
     contracts::validate_contracts(&program)?;
-    let mut env = typeck::type_check(&program)?;
+    let (mut env, _warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
+    xref::resolve_cross_refs(&mut program);
     codegen::codegen(&program, &env, source)
+}
+
+/// Compile a source string and return both the object bytes and any compiler warnings.
+pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<CompileWarning>), CompileError> {
+    let tokens = lexer::lex(source)?;
+    let mut parser = parser::Parser::new(&tokens, source);
+    let mut program = parser.parse_program()?;
+    if !program.extern_rust_crates.is_empty() {
+        return Err(CompileError::syntax(
+            "extern rust declarations require file-based compilation (use compile_file instead)",
+            program.extern_rust_crates[0].span,
+        ));
+    }
+    prelude::inject_prelude(&mut program)?;
+    ambient::desugar_ambient(&mut program)?;
+    spawn::desugar_spawn(&mut program)?;
+    let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
+        .map(|(_, fn_name)| fn_name.clone()).collect();
+    program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
+    program.test_info.clear();
+    contracts::validate_contracts(&program)?;
+    let (mut env, warnings) = typeck::type_check(&program)?;
+    monomorphize::monomorphize(&mut program, &mut env)?;
+    closures::lift_closures(&mut program, &mut env)?;
+    xref::resolve_cross_refs(&mut program);
+    let obj = codegen::codegen(&program, &env, source)?;
+    Ok((obj, warnings))
 }
 
 /// Compile a source string directly (single-file, no module resolution).
@@ -84,9 +125,10 @@ pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError
     spawn::desugar_spawn(&mut program)?;
     // test_info is NOT stripped in test mode
     contracts::validate_contracts(&program)?;
-    let mut env = typeck::type_check(&program)?;
+    let (mut env, _warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
+    xref::resolve_cross_refs(&mut program);
     codegen::codegen(&program, &env, source)
 }
 
@@ -149,9 +191,13 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
     contracts::validate_contracts(&program)?;
-    let mut env = typeck::type_check(&program)?;
+    let (mut env, warnings) = typeck::type_check(&program)?;
+    for w in &warnings {
+        diagnostics::render_warning(&source, &entry_file.display().to_string(), w);
+    }
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
+    xref::resolve_cross_refs(&mut program);
     let object_bytes = codegen::codegen(&program, &env, &source)?;
 
     let obj_path = output_path.with_extension("o");
@@ -168,6 +214,58 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
     let _ = std::fs::remove_file(&obj_path);
 
     Ok(())
+}
+
+use parser::ast::Program;
+
+/// Analyze a source file: run the full front-end pipeline (parse → modules → desugar →
+/// typeck → monomorphize → closures → xref) but stop before codegen.
+/// Returns the fully resolved Program, the entry file's source text, and derived analysis data.
+pub fn analyze_file(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String, derived::DerivedInfo), CompileError> {
+    let (program, source, derived, _warnings) = analyze_file_with_warnings(entry_file, stdlib_root)?;
+    Ok((program, source, derived))
+}
+
+/// Like `analyze_file`, but also returns compiler warnings.
+pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String, derived::DerivedInfo, Vec<CompileWarning>), CompileError> {
+    let entry_file = entry_file.canonicalize().map_err(|e|
+        CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
+    let source = std::fs::read_to_string(&entry_file)
+        .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
+    let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
+    let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
+
+    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
+    let pkg_graph = manifest::find_and_resolve(entry_dir)?;
+    let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
+
+    check_extern_rust_import_collisions(&graph)?;
+
+    let (mut program, _source_map) = modules::flatten_modules(graph)?;
+
+    let rust_artifacts = if program.extern_rust_crates.is_empty() {
+        vec![]
+    } else {
+        rust_ffi::resolve_rust_crates(&program, entry_dir)?
+    };
+    rust_ffi::inject_extern_fns(&mut program, &rust_artifacts);
+
+    prelude::inject_prelude(&mut program)?;
+    ambient::desugar_ambient(&mut program)?;
+    spawn::desugar_spawn(&mut program)?;
+    // Strip test functions in non-test mode
+    let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
+        .map(|(_, fn_name)| fn_name.clone()).collect();
+    program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
+    program.test_info.clear();
+    contracts::validate_contracts(&program)?;
+    let (mut env, warnings) = typeck::type_check(&program)?;
+    monomorphize::monomorphize(&mut program, &mut env)?;
+    closures::lift_closures(&mut program, &mut env)?;
+    xref::resolve_cross_refs(&mut program);
+    let derived = derived::DerivedInfo::build(&env, &program);
+
+    Ok((program, source, derived, warnings))
 }
 
 /// Compile a file in test mode. Tests are preserved and a test runner main is generated.
@@ -211,9 +309,13 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
     ambient::desugar_ambient(&mut program)?;
     spawn::desugar_spawn(&mut program)?;
     contracts::validate_contracts(&program)?;
-    let mut env = typeck::type_check(&program)?;
+    let (mut env, warnings) = typeck::type_check(&program)?;
+    for w in &warnings {
+        diagnostics::render_warning(&source, &entry_file.display().to_string(), w);
+    }
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
+    xref::resolve_cross_refs(&mut program);
     let object_bytes = codegen::codegen(&program, &env, &source)?;
 
     let obj_path = output_path.with_extension("o");

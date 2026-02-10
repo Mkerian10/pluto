@@ -8,6 +8,93 @@ use super::env::{self, ClassInfo, EnumInfo, ErrorInfo, FuncSig, GenericClassInfo
 use super::types::PlutoType;
 use super::resolve::{resolve_type, resolve_type_with_params};
 use super::check::check_function;
+use crate::parser::ast::ContractKind;
+
+/// Type-check requires/ensures contracts on a function or method.
+/// For requires: push scope with params, infer each expr, assert bool.
+/// For ensures: additionally define `result` bound to return type (if non-void).
+/// For ensures: `old(expr)` is handled by infer_expr returning same type as inner expr.
+fn check_function_contracts(
+    func: &Function,
+    env: &mut TypeEnv,
+    class_name: Option<&str>,
+) -> Result<(), CompileError> {
+    if func.contracts.is_empty() {
+        return Ok(());
+    }
+
+    let return_type = match &func.return_type {
+        Some(rt) => resolve_type(rt, env)?,
+        None => PlutoType::Void,
+    };
+
+    // Check requires clauses
+    let has_requires = func.contracts.iter().any(|c| c.node.kind == ContractKind::Requires);
+    if has_requires {
+        env.push_scope();
+        // Define params (including self for methods)
+        for p in &func.params {
+            if p.name.node == "self" {
+                if let Some(cn) = class_name {
+                    env.define("self".to_string(), PlutoType::Class(cn.to_string()));
+                }
+            } else {
+                let ty = resolve_type(&p.ty, env)?;
+                env.define(p.name.node.clone(), ty);
+            }
+        }
+        for contract in &func.contracts {
+            if contract.node.kind == ContractKind::Requires {
+                let ty = super::infer::infer_expr(&contract.node.expr.node, contract.node.expr.span, env)?;
+                if ty != PlutoType::Bool {
+                    return Err(CompileError::type_err(
+                        format!("requires expression must be bool, found {ty}"),
+                        contract.node.expr.span,
+                    ));
+                }
+            }
+        }
+        env.pop_scope();
+    }
+
+    // Check ensures clauses
+    let has_ensures = func.contracts.iter().any(|c| c.node.kind == ContractKind::Ensures);
+    if has_ensures {
+        env.push_scope();
+        // Define params (including self for methods)
+        for p in &func.params {
+            if p.name.node == "self" {
+                if let Some(cn) = class_name {
+                    env.define("self".to_string(), PlutoType::Class(cn.to_string()));
+                }
+            } else {
+                let ty = resolve_type(&p.ty, env)?;
+                env.define(p.name.node.clone(), ty);
+            }
+        }
+        // Define `result` if return type is non-void
+        if return_type != PlutoType::Void {
+            env.define("result".to_string(), return_type);
+        }
+        // Enable old() type inference
+        env.in_ensures_context = true;
+        for contract in &func.contracts {
+            if contract.node.kind == ContractKind::Ensures {
+                let ty = super::infer::infer_expr(&contract.node.expr.node, contract.node.expr.span, env)?;
+                if ty != PlutoType::Bool {
+                    return Err(CompileError::type_err(
+                        format!("ensures expression must be bool, found {ty}"),
+                        contract.node.expr.span,
+                    ));
+                }
+            }
+        }
+        env.in_ensures_context = false;
+        env.pop_scope();
+    }
+
+    Ok(())
+}
 
 pub(crate) fn register_traits(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     for trait_decl in &program.traits {
@@ -34,7 +121,17 @@ pub(crate) fn register_traits(program: &Program, env: &mut TypeEnv) -> Result<()
             }
         }
 
-        env.traits.insert(t.name.node.clone(), TraitInfo { methods, default_methods });
+        let mut mut_self_methods = HashSet::new();
+        let mut method_contracts = HashMap::new();
+        for m in &t.methods {
+            if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
+                mut_self_methods.insert(m.name.node.clone());
+            }
+            if !m.contracts.is_empty() {
+                method_contracts.insert(m.name.node.clone(), m.contracts.clone());
+            }
+        }
+        env.traits.insert(t.name.node.clone(), TraitInfo { methods, default_methods, mut_self_methods, method_contracts });
     }
     Ok(())
 }
@@ -96,6 +193,7 @@ pub(crate) fn register_app_placeholder(program: &Program, env: &mut TypeEnv) -> 
                 fields: Vec::new(),
                 methods: Vec::new(),
                 impl_traits: Vec::new(),
+                lifecycle: Lifecycle::Singleton,
             },
         );
     }
@@ -128,6 +226,7 @@ pub(crate) fn register_class_names(program: &Program, env: &mut TypeEnv) -> Resu
                 fields: Vec::new(),
                 methods: Vec::new(),
                 impl_traits: Vec::new(),
+                lifecycle: c.lifecycle,
             },
         );
     }
@@ -150,6 +249,13 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
             if c.fields.iter().any(|f| f.is_injected) {
                 return Err(CompileError::type_err(
                     "generic classes cannot have injected dependencies (v1 restriction)".to_string(),
+                    class.span,
+                ));
+            }
+            // v1 restriction: no lifecycle annotations on generic classes
+            if c.lifecycle != Lifecycle::Singleton {
+                return Err(CompileError::type_err(
+                    "generic classes cannot have lifecycle annotations".to_string(),
                     class.span,
                 ));
             }
@@ -201,12 +307,20 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                     return_type,
                 });
             }
+            let mut generic_mut_self = HashSet::new();
+            for m in &c.methods {
+                if !m.node.params.is_empty() && m.node.params[0].name.node == "self" && m.node.params[0].is_mut {
+                    generic_mut_self.insert(m.node.name.node.clone());
+                }
+            }
             env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
                 type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
                 fields,
                 methods: method_names,
                 method_sigs,
                 impl_traits: Vec::new(),
+                mut_self_methods: generic_mut_self,
+                lifecycle: c.lifecycle,
             });
             continue;
         }
@@ -379,6 +493,10 @@ pub(crate) fn register_method_sigs(program: &Program, env: &mut TypeEnv) -> Resu
                 Some(t) => resolve_type(t, env)?,
                 None => PlutoType::Void,
             };
+            // Track mut self methods
+            if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
+                env.mut_self_methods.insert(mangled.clone());
+            }
             env.functions.insert(
                 mangled,
                 FuncSig { params: param_types, return_type },
@@ -414,6 +532,7 @@ pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeE
             fields: fields.clone(),
             methods: Vec::new(),
             impl_traits: Vec::new(),
+            lifecycle: Lifecycle::Singleton,
         }));
 
         // Populate ambient_types and validate each is a known class
@@ -465,6 +584,10 @@ pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeE
                 Some(t) => resolve_type(t, env)?,
                 None => PlutoType::Void,
             };
+            // Track mut self methods
+            if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
+                env.mut_self_methods.insert(mangled.clone());
+            }
             env.functions.insert(
                 mangled,
                 FuncSig { params: param_types, return_type },
@@ -635,6 +758,27 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
             ));
         }
 
+        // Lifecycle inference: propagate scoped/transient upward through dependency graph.
+        // A class's inferred lifecycle = min(its declared lifecycle, min of dep lifecycles)
+        // where Transient < Scoped < Singleton.
+        // Process in topological order so deps are resolved before dependents.
+        for class_name in &order {
+            let deps = graph.get(class_name).cloned().unwrap_or_default();
+            let mut inferred = env.classes.get(class_name)
+                .map(|ci| ci.lifecycle)
+                .unwrap_or(Lifecycle::Singleton);
+
+            for dep_name in &deps {
+                if let Some(dep_info) = env.classes.get(dep_name) {
+                    inferred = min_lifecycle(inferred, dep_info.lifecycle);
+                }
+            }
+
+            if let Some(info) = env.classes.get_mut(class_name) {
+                info.lifecycle = inferred;
+            }
+        }
+
         // Filter out the app name from di_order (app is wired separately)
         let app_name_opt = env.app.as_ref().map(|(n, _)| n.clone());
         env.di_order = order.into_iter()
@@ -655,6 +799,37 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                 class.span,
             )
         })?.clone();
+
+        // Multi-trait collision guard: reject if two traits define the same method
+        // and at least one has contracts on it
+        {
+            let mut method_contract_traits: HashMap<String, Vec<String>> = HashMap::new();
+            for trait_name_spanned in &c.impl_traits {
+                let trait_name = &trait_name_spanned.node;
+                if let Some(trait_info) = env.traits.get(trait_name) {
+                    for (method_name, _) in &trait_info.methods {
+                        if trait_info.method_contracts.contains_key(method_name) {
+                            method_contract_traits.entry(method_name.clone())
+                                .or_default()
+                                .push(trait_name.clone());
+                        }
+                    }
+                }
+            }
+            for (method_name, trait_names) in &method_contract_traits {
+                if trait_names.len() > 1 {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "class '{}' implements traits {} which both define method '{}' with contracts; this is not supported",
+                            class_name,
+                            trait_names.join(" and "),
+                            method_name
+                        ),
+                        class.span,
+                    ));
+                }
+            }
+        }
 
         for trait_name_spanned in &c.impl_traits {
             let trait_name = &trait_name_spanned.node;
@@ -708,6 +883,46 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                             trait_name_spanned.span,
                         ));
                     }
+                    // Check mut self conformance
+                    let trait_mut = trait_info.mut_self_methods.contains(method_name);
+                    let class_mut = env.mut_self_methods.contains(&mangled);
+                    if trait_mut && !class_mut {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "method '{}' in trait '{}' declares 'mut self', but class '{}' does not",
+                                method_name, trait_name, class_name
+                            ),
+                            trait_name_spanned.span,
+                        ));
+                    }
+                    if !trait_mut && class_mut {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "method '{}' in trait '{}' declares 'self', but class '{}' declares 'mut self'",
+                                method_name, trait_name, class_name
+                            ),
+                            trait_name_spanned.span,
+                        ));
+                    }
+                    // Liskov: class methods implementing a trait MUST NOT add requires clauses
+                    // (a trait method with no requires effectively has "requires true";
+                    //  adding requires would weaken the precondition and break substitutability)
+                    let class_method_ast = c.methods.iter().find(|m| m.node.name.node == *method_name);
+                    if let Some(cm) = class_method_ast {
+                        let has_class_requires = cm.node.contracts.iter()
+                            .any(|ct| ct.node.kind == ContractKind::Requires);
+                        if has_class_requires {
+                            return Err(CompileError::type_err(
+                                format!(
+                                    "method '{}' on class '{}' cannot add 'requires' clauses: \
+                                     it implements trait '{}' and adding preconditions would \
+                                     violate the Liskov Substitution Principle",
+                                    method_name, class_name, trait_name
+                                ),
+                                cm.node.name.span,
+                            ));
+                        }
+                    }
                 } else if trait_info.default_methods.contains(method_name) {
                     // Default implementation — register under mangled name
                     let mut params = trait_sig.params.clone();
@@ -716,12 +931,16 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                         params[0] = PlutoType::Class(class_name.clone());
                     }
                     env.functions.insert(
-                        mangled,
+                        mangled.clone(),
                         FuncSig {
                             params,
                             return_type: trait_sig.return_type.clone(),
                         },
                     );
+                    // Propagate mut self from trait default method
+                    if trait_info.mut_self_methods.contains(method_name) {
+                        env.mut_self_methods.insert(mangled.clone());
+                    }
                     // Add method name to class info
                     if let Some(info) = env.classes.get_mut(class_name) {
                         info.methods.push(method_name.clone());
@@ -742,18 +961,20 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
 }
 
 pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
-    // Check function bodies
+    // Check function bodies and contracts
     for func in &program.functions {
         if !func.node.type_params.is_empty() { continue; } // Skip generic functions
         check_function(&func.node, env, None)?;
+        check_function_contracts(&func.node, env, None)?;
     }
 
-    // Check method bodies
+    // Check method bodies and contracts
     for class in &program.classes {
         let c = &class.node;
         if !c.type_params.is_empty() { continue; } // Skip generic classes
         for method in &c.methods {
             check_function(&method.node, env, Some(&c.name.node))?;
+            check_function_contracts(&method.node, env, Some(&c.name.node))?;
         }
         // Type-check class invariants
         if !c.invariants.is_empty() {
@@ -769,6 +990,82 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
                 }
             }
             env.pop_scope();
+        }
+    }
+
+    // Type-check trait method contracts (requires/ensures on abstract trait methods)
+    for trait_decl in &program.traits {
+        let t = &trait_decl.node;
+        for m in &t.methods {
+            if m.contracts.is_empty() {
+                continue;
+            }
+            // Resolve param types and return type
+            let mut param_types = Vec::new();
+            for p in &m.params {
+                if p.name.node == "self" {
+                    param_types.push(("self".to_string(), PlutoType::Void));
+                } else {
+                    let ty = resolve_type(&p.ty, env)?;
+                    param_types.push((p.name.node.clone(), ty));
+                }
+            }
+            let return_type = match &m.return_type {
+                Some(rt) => resolve_type(rt, env)?,
+                None => PlutoType::Void,
+            };
+
+            // Check requires clauses
+            let has_requires = m.contracts.iter().any(|c| c.node.kind == ContractKind::Requires);
+            if has_requires {
+                env.push_scope();
+                for (name, ty) in &param_types {
+                    env.define(name.clone(), ty.clone());
+                }
+                for contract in &m.contracts {
+                    if contract.node.kind == ContractKind::Requires {
+                        let ty = super::infer::infer_expr(&contract.node.expr.node, contract.node.expr.span, env)?;
+                        if ty != PlutoType::Bool {
+                            return Err(CompileError::type_err(
+                                format!("requires expression must be bool, found {ty}"),
+                                contract.node.expr.span,
+                            ));
+                        }
+                    }
+                }
+                env.pop_scope();
+            }
+
+            // Check ensures clauses
+            let has_ensures = m.contracts.iter().any(|c| c.node.kind == ContractKind::Ensures);
+            if has_ensures {
+                env.push_scope();
+                for (name, ty) in &param_types {
+                    env.define(name.clone(), ty.clone());
+                }
+                if return_type != PlutoType::Void {
+                    env.define("result".to_string(), return_type.clone());
+                }
+                let saved_ensures = env.in_ensures_context;
+                env.in_ensures_context = true;
+                let result = (|| {
+                    for contract in &m.contracts {
+                        if contract.node.kind == ContractKind::Ensures {
+                            let ty = super::infer::infer_expr(&contract.node.expr.node, contract.node.expr.span, env)?;
+                            if ty != PlutoType::Bool {
+                                return Err(CompileError::type_err(
+                                    format!("ensures expression must be bool, found {ty}"),
+                                    contract.node.expr.span,
+                                ));
+                            }
+                        }
+                    }
+                    Ok(())
+                })();
+                env.in_ensures_context = saved_ensures;
+                env.pop_scope();
+                result?;
+            }
         }
     }
 
@@ -806,13 +1103,24 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
         }
     }
 
-    // Type-check app method bodies
+    // Type-check app method bodies and contracts
     if let Some(app_spanned) = &program.app {
         let app = &app_spanned.node;
         let app_name = &app.name.node;
         for method in &app.methods {
             check_function(&method.node, env, Some(app_name))?;
+            check_function_contracts(&method.node, env, Some(app_name))?;
         }
     }
     Ok(())
+}
+
+/// Returns the shorter of two lifecycles.
+/// Ordering: Transient < Scoped < Singleton.
+fn min_lifecycle(a: Lifecycle, b: Lifecycle) -> Lifecycle {
+    match (a, b) {
+        (Lifecycle::Transient, _) | (_, Lifecycle::Transient) => Lifecycle::Transient,
+        (Lifecycle::Scoped, _) | (_, Lifecycle::Scoped) => Lifecycle::Scoped,
+        _ => Lifecycle::Singleton,
+    }
 }
