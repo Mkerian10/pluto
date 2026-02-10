@@ -75,7 +75,27 @@ fn check_stmt(
 ) -> Result<(), CompileError> {
     match stmt {
         Stmt::Let { name, ty, value } => {
-            let val_type = infer_expr(&value.node, value.span, env)?;
+            // Handle empty array literals with type annotations: `let x: [int] = []`
+            let is_empty_array = matches!(&value.node, Expr::ArrayLit { elements } if elements.is_empty());
+            let val_type = if is_empty_array {
+                if let Some(declared_ty) = ty {
+                    let expected = resolve_type(declared_ty, env)?;
+                    if !matches!(&expected, PlutoType::Array(_)) {
+                        return Err(CompileError::type_err(
+                            format!("type mismatch: expected {expected}, found empty array"),
+                            value.span,
+                        ));
+                    }
+                    expected.clone()
+                } else {
+                    return Err(CompileError::type_err(
+                        "cannot infer type of empty array literal; add a type annotation".to_string(),
+                        value.span,
+                    ));
+                }
+            } else {
+                infer_expr(&value.node, value.span, env)?
+            };
             if let Some(declared_ty) = ty {
                 let expected = resolve_type(declared_ty, env)?;
                 if !types_compatible(&val_type, &expected, env) {

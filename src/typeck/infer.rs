@@ -127,6 +127,12 @@ pub(crate) fn infer_expr(
             }
         }
         Expr::ArrayLit { elements } => {
+            if elements.is_empty() {
+                return Err(CompileError::type_err(
+                    "cannot infer type of empty array literal; add a type annotation".to_string(),
+                    span,
+                ));
+            }
             let first_type = infer_expr(&elements[0].node, elements[0].span, env)?;
             for elem in &elements[1..] {
                 let t = infer_expr(&elem.node, elem.span, env)?;
