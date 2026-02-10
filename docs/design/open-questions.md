@@ -29,7 +29,7 @@ Areas that need further design work before implementation.
 
 - [ ] **Move semantics on spawn** — how does move-on-spawn interact with closures? Explicit `move` annotation?
 - [ ] **Task groups / scopes** — structured concurrency construct for managing multiple tasks with automatic cancellation?
-- [ ] **Select / race** — waiting on the first of multiple tasks or channels to complete
+- [x] **Select / race** — waiting on the first of multiple tasks or channels to complete (implemented as `select` statement)
 
 ## Contracts
 

@@ -1,0 +1,55 @@
+// Select — multiplexing across multiple channels
+
+fn numbers(tx: Sender<int>) {
+    for i in 1..6 {
+        tx.send(i)!
+    }
+}
+
+fn letters(tx: Sender<string>) {
+    let names = ["alpha", "beta", "gamma", "delta", "epsilon"]
+    for i in 0..5 {
+        tx.send(names[i])!
+    }
+}
+
+fn try_select(num_rx: Receiver<int>, str_rx: Receiver<string>) {
+    let count = 0
+    while count < 10 {
+        select {
+            n = num_rx.recv() {
+                print("number: {n}")
+                count = count + 1
+            }
+            s = str_rx.recv() {
+                print("letter: {s}")
+                count = count + 1
+            }
+        }
+    }
+}
+
+fn main() {
+    // Two producers sending different types on different channels
+    let (num_tx, num_rx) = chan<int>(10)
+    let (str_tx, str_rx) = chan<string>(10)
+
+    spawn numbers(num_tx)
+    spawn letters(str_tx)
+    num_tx.close()
+    str_tx.close()
+
+    // Select multiplexes: whichever channel has data ready gets consumed
+    try_select(num_rx, str_rx) catch print("done")
+
+    // Non-blocking select with default
+    let (tx, rx) = chan<int>(1)
+    select {
+        val = rx.recv() {
+            print("got {val}")
+        }
+        default {
+            print("no data ready, moving on")
+        }
+    }
+}
