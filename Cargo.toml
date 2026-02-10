@@ -107,3 +107,7 @@ path = "tests/integration/json_tests.rs"
 [[test]]
 name = "http_tests"
 path = "tests/integration/http_tests.rs"
+
+[[test]]
+name = "rust_ffi"
+path = "tests/integration/rust_ffi.rs"
