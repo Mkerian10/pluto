@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "pluto": {
+      "command": "/Users/matthewkerian/Documents/pluto/target/release/pluto-mcp",
+      "args": []
+    }
+  }
+}
