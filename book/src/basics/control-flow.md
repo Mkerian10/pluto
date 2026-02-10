@@ -54,7 +54,7 @@ while true {
 
 ## for / in Loops
 
-`for` iterates over arrays:
+`for` iterates over arrays, ranges, and strings:
 
 ```
 fn main() {
@@ -82,6 +82,22 @@ fn main() {
     }
 }
 ```
+
+### Strings
+
+You can iterate over the characters of a string:
+
+```
+fn main() {
+    for c in "hello" {
+        print(c)    // "h", "e", "l", "l", "o"
+    }
+}
+```
+
+Each element is a single-character `string`.
+
+### Range endpoints
 
 Range endpoints can be any integer expression:
 

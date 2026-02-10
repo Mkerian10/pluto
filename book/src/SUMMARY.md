@@ -28,6 +28,9 @@
 - [Error Handling](./advanced/errors.md)
 - [Modules and Imports](./advanced/modules.md)
 - [Maps and Sets](./advanced/collections.md)
+- [Concurrency](./advanced/concurrency.md)
+- [Testing](./advanced/testing.md)
+- [Rust FFI](./advanced/rust-ffi.md)
 
 # The App Model
 
