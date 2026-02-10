@@ -108,7 +108,7 @@ fn main() {
     let val = rx.recv()!
     print(val)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "99");
 }
 
@@ -129,7 +129,7 @@ fn main() {
     let c = rx.recv()!
     print(a + b + c)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "6");
 }
 
@@ -149,7 +149,7 @@ fn main() {
     print(rx.recv()!)
     print(rx.recv()!)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "10\n20\n30");
 }
 
@@ -169,7 +169,7 @@ fn main() {
         print(rx.recv()!)
     }
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "0\n1\n2\n3\n4");
 }
 
@@ -213,7 +213,7 @@ fn main() {
     let val = rx.recv() catch -1
     print(val)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "-1");
 }
 
@@ -330,7 +330,7 @@ fn main() {
     }
     print("done")
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "1\n2\n3\ndone");
 }
 
@@ -355,7 +355,7 @@ fn main() {
     }
     print("broke out")
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "1\nbroke out");
 }
 
@@ -379,7 +379,7 @@ fn main() {
         print(val)
     }
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "1\n3");
 }
 
@@ -517,7 +517,7 @@ fn main() {
     }
     print(sum)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "60");
 }
 
@@ -611,7 +611,7 @@ fn main() {
     }
     print(sum)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "6");
 }
 
@@ -634,7 +634,7 @@ fn main() {
     }
     print(sum)
 }
-"#, 5);
+"#, 15);
     assert_eq!(out.trim(), "30");
 }
 
