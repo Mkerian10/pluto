@@ -365,3 +365,44 @@ fn main() int? {
 }
 "#, "non-nullable");
 }
+
+#[test]
+fn question_mark_in_void_function() {
+    // ? in a void function acts as a guard: bail early if null
+    let out = compile_and_run_stdout(r#"
+fn process(line: string?) {
+    let value = line?
+    print(value)
+}
+
+fn main() {
+    process("hello")
+    process(none)
+    print("done")
+}
+"#);
+    assert_eq!(out.trim(), "hello\ndone");
+}
+
+#[test]
+fn question_mark_in_void_method() {
+    let out = compile_and_run_stdout(r#"
+class Processor {
+    tag: string
+
+    fn process(self, line: string?) {
+        let value = line?
+        print("{self.tag}: {value}")
+    }
+}
+
+fn main() {
+    let p = Processor { tag: "P" }
+    p.process("hello")
+    p.process(none)
+    print("done")
+}
+"#);
+    assert_eq!(out.trim(), "P: hello\ndone");
+}
+

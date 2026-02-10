@@ -1684,14 +1684,23 @@ impl<'a> LowerContext<'a> {
                 let continue_bb = self.builder.create_block();
                 self.builder.ins().brif(is_none, propagate_bb, &[], continue_bb, &[]);
 
-                // Propagate block: early-return none (0)
+                // Propagate block: early-return none (0), or void return for void functions
                 self.builder.switch_to_block(propagate_bb);
                 self.builder.seal_block(propagate_bb);
-                let none_val = self.builder.ins().iconst(types::I64, 0);
-                if let Some(exit_bb) = self.exit_block {
-                    self.builder.ins().jump(exit_bb, &[none_val]);
+                let is_void_return = matches!(&self.expected_return_type, Some(PlutoType::Void) | None);
+                if is_void_return {
+                    if let Some(exit_bb) = self.exit_block {
+                        self.builder.ins().jump(exit_bb, &[]);
+                    } else {
+                        self.builder.ins().return_(&[]);
+                    }
                 } else {
-                    self.builder.ins().return_(&[none_val]);
+                    let none_val = self.builder.ins().iconst(types::I64, 0);
+                    if let Some(exit_bb) = self.exit_block {
+                        self.builder.ins().jump(exit_bb, &[none_val]);
+                    } else {
+                        self.builder.ins().return_(&[none_val]);
+                    }
                 }
 
                 // Continue block: unwrap the value
