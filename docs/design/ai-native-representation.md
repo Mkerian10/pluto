@@ -210,40 +210,47 @@ The SDK is a Rust crate that provides programmatic read/write access to `.pluto`
 - **UUID-aware.** All operations work with UUIDs. The SDK handles name ↔ UUID resolution.
 - **Non-mutating reads.** Reading a `.pluto` file never modifies it.
 
-### Conceptual API
+### API (implemented)
+
+The SDK (`sdk/src/`) provides both read and write access. The read API loads modules from binary PLTO or source text. The write API (`ModuleEditor`) enables text-in/AST-out editing:
 
 ```rust
-use plutoc_sdk::{Module, Function, PlutoType, Visibility};
+use plutoc_sdk::{Module, ModuleEditor, DeclKind};
 
-// Read a module
-let module = Module::open("math/vectors.pluto")?;
+// Read a module from binary (.pluto) or source text
+let module = Module::from_bytes(&bytes)?;      // from PLTO binary
+let module = Module::from_source(source)?;     // from text (parse-only, no transforms)
 
 // Query declarations
-let dot_product = module.function_by_name("dot_product")?;
-println!("UUID: {}", dot_product.id());
-println!("Params: {:?}", dot_product.params());
+let funcs = module.find("dot_product");
+let decl = module.get(some_uuid)?;
+let callers = module.callers_of(some_uuid);
 
-// Read derived data (may be stale — check freshness)
-if let Some(errors) = dot_product.inferred_errors() {
-    println!("Can raise: {:?}", errors);
-}
+// Edit: Module::edit() consumes the module, returns ModuleEditor
+let mut editor = module.edit();
 
-// Add a new function
-let mut module = module.begin_edit();
-module.add_function(Function::new("cross_product")
-    .visibility(Visibility::Public)
-    .param("a", PlutoType::class("Vector"))
-    .param("b", PlutoType::class("Vector"))
-    .returns(PlutoType::class("Vector"))
-    .body(/* AST nodes */)
+// Add declarations from source text (returns UUID)
+let fn_id = editor.add_from_source(
+    "pub fn cross_product(a: Vector, b: Vector) Vector {\n    ...\n}"
 )?;
-module.commit("math/vectors.pluto")?;
 
-// Modify an existing function by UUID
-let mut module = module.begin_edit();
-let func = module.function_mut(dot_product.id())?;
-func.rename("inner_product");
-module.commit("math/vectors.pluto")?;
+// Replace a declaration (preserves top-level UUID)
+editor.replace_from_source(dot_product_id,
+    "pub fn dot_product(a: Vector, b: Vector) float {\n    return a.x * b.x + a.y * b.y\n}"
+)?;
+
+// Rename — updates all reference sites in the AST
+editor.rename(dot_product_id, "inner_product")?;
+
+// Delete — reports dangling references
+let result = editor.delete(old_fn_id)?;
+
+// Add method/field to a class
+editor.add_method_from_source(class_id, "fn magnitude(self) float { ... }")?;
+editor.add_field(class_id, "z", "float")?;
+
+// Commit: pretty-print → re-resolve xrefs → rebuild index → new Module
+let module = editor.commit();
 // UUID unchanged — all references still valid
 ```
 

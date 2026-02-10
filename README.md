@@ -384,6 +384,9 @@ Pluto is in early development (v0.1). The compiler supports a substantial set of
 - Standard library (JSON, HTTP, filesystem, networking, collections, time, random)
 - LSP with diagnostics, go-to-definition, hover, and document symbols
 - Native compilation on macOS and Linux (ARM64, x86_64)
+- Binary AST format (PLTO) with stable UUIDs and cross-references
+- SDK with read API and write API (`ModuleEditor` for programmatic add/replace/rename/delete)
+- MCP server for AI agent integration (explore, query, cross-reference tools)
 
 ### What's ahead
 - Distribution (cross-pod RPC, geographic awareness)
