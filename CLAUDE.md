@@ -77,6 +77,12 @@ Test files: `basics`, `operators`, `control_flow`, `strings`, `arrays`, `classes
 
 **Pre-commit hook** — A git pre-commit hook runs `cargo test` before every commit. All tests must pass for a commit to succeed.
 
+## Protected Feature Branches
+
+The following branches must NOT be merged into `master` until explicitly authorized by the user. Do not rebase them onto master, do not merge them, do not fast-forward them. They are long-lived feature branches with in-progress work:
+
+- **`ast-uuids`** — Phase 1 of AI-native representation (stable UUIDs on AST nodes). Worktree at `../pluto-ast-uuids`.
+
 ## Git Workflow
 
 **Master must always be green** — The `master` branch must always build and pass all tests. Never commit incomplete work, partial features, or broken code directly to `master`. All work happens on feature branches; `master` only receives completed, tested merges.

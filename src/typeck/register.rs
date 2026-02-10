@@ -713,6 +713,21 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
         for method in &c.methods {
             check_function(&method.node, env, Some(&c.name.node))?;
         }
+        // Type-check class invariants
+        if !c.invariants.is_empty() {
+            env.push_scope();
+            env.define("self".to_string(), PlutoType::Class(c.name.node.clone()));
+            for inv in &c.invariants {
+                let inv_type = super::infer::infer_expr(&inv.node.expr.node, inv.node.expr.span, env)?;
+                if inv_type != PlutoType::Bool {
+                    return Err(CompileError::type_err(
+                        format!("invariant expression must be bool, found {inv_type}"),
+                        inv.node.expr.span,
+                    ));
+                }
+            }
+            env.pop_scope();
+        }
     }
 
     // Type-check default method bodies for classes that inherit them
@@ -736,6 +751,7 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
                                 type_params: vec![],
                                 params: trait_method.params.clone(),
                                 return_type: trait_method.return_type.clone(),
+                                contracts: trait_method.contracts.clone(),
                                 body: body.clone(),
                                 is_pub: false,
                             };

@@ -55,6 +55,7 @@ pub struct ClassDecl {
     pub type_params: Vec<Spanned<String>>,
     pub fields: Vec<Field>,
     pub methods: Vec<Spanned<Function>>,
+    pub invariants: Vec<Spanned<ContractClause>>,
     pub impl_traits: Vec<Spanned<String>>,
     pub uses: Vec<Spanned<String>>,
     pub is_pub: bool,
@@ -82,6 +83,7 @@ pub struct Function {
     pub type_params: Vec<Spanned<String>>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
+    pub contracts: Vec<Spanned<ContractClause>>,
     pub body: Spanned<Block>,
     pub is_pub: bool,
 }
@@ -297,6 +299,19 @@ pub enum UnaryOp {
 }
 
 #[derive(Debug, Clone)]
+pub struct ContractClause {
+    pub kind: ContractKind,
+    pub expr: Spanned<Expr>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ContractKind {
+    Requires,
+    Ensures,
+    Invariant,
+}
+
+#[derive(Debug, Clone)]
 pub struct TraitDecl {
     pub name: Spanned<String>,
     pub methods: Vec<TraitMethod>,
@@ -308,6 +323,7 @@ pub struct TraitMethod {
     pub name: Spanned<String>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
+    pub contracts: Vec<Spanned<ContractClause>>,
     pub body: Option<Spanned<Block>>,
 }
 
