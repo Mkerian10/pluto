@@ -54,6 +54,14 @@ enum Commands {
         #[arg(default_value = ".")]
         dir: PathBuf,
     },
+    /// Sync edits from a .pt text file back to a .pluto binary, preserving UUIDs
+    Sync {
+        /// .pt text file to sync from
+        file: PathBuf,
+        /// .pluto binary file to sync to (defaults to same name with .pluto extension)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Start the LSP server (communicates over stdin/stdout)
     Lsp,
 }
@@ -179,6 +187,41 @@ fn main() {
                 }
                 None => {
                     print!("{}", text);
+                }
+            }
+        }
+        Commands::Sync { file, output } => {
+            let pluto_path = output.unwrap_or_else(|| file.with_extension("pluto"));
+
+            match plutoc::sync::sync_pt_to_pluto(&file, &pluto_path) {
+                Ok(result) => {
+                    if !result.added.is_empty() {
+                        for name in &result.added {
+                            eprintln!("  + {name}");
+                        }
+                    }
+                    if !result.removed.is_empty() {
+                        for name in &result.removed {
+                            eprintln!("  - {name}");
+                        }
+                    }
+                    if !result.modified.is_empty() {
+                        for name in &result.modified {
+                            eprintln!("  ~ {name}");
+                        }
+                    }
+                    eprintln!(
+                        "synced {} → {} ({} added, {} removed, {} unchanged)",
+                        file.display(),
+                        pluto_path.display(),
+                        result.added.len(),
+                        result.removed.len(),
+                        result.unchanged,
+                    );
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
                 }
             }
         }
