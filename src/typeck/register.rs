@@ -267,20 +267,6 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                     ));
                 }
             }
-            // v1 restriction: no DI on generic classes
-            if c.fields.iter().any(|f| f.is_injected) {
-                return Err(CompileError::type_err(
-                    "generic classes cannot have injected dependencies (v1 restriction)".to_string(),
-                    class.span,
-                ));
-            }
-            // v1 restriction: no lifecycle annotations on generic classes
-            if c.lifecycle != Lifecycle::Singleton {
-                return Err(CompileError::type_err(
-                    "generic classes cannot have lifecycle annotations".to_string(),
-                    class.span,
-                ));
-            }
             // Check for duplicate field names
             let mut seen_fields = HashSet::new();
             for f in &c.fields {

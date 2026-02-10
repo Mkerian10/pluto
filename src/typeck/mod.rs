@@ -591,9 +591,9 @@ mod tests {
     }
 
     #[test]
-    fn generic_class_with_di_rejected() {
+    fn generic_class_with_di_allowed() {
         let result = check("class Dep {\n    x: int\n}\n\nclass Box<T>[dep: Dep] {\n    value: T\n}\n\nfn main() {\n}");
-        assert!(result.is_err());
+        assert!(result.is_ok(), "generic class with DI should compile: {:?}", result.err());
     }
 
     #[test]

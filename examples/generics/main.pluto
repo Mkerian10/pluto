@@ -35,22 +35,46 @@ fn make_pair<A, B>(a: A, b: B) [A] {
     return arr
 }
 
-fn main() {
-    // Generic class with trait impl
-    let item = Item { name: "widget" }
-    let boxed = Box<Item> { value: item }
-    print(boxed.describe())
+// Generic class with dependency injection
+class Database {
+    fn query(self, table: string) string {
+        return "row from " + table
+    }
+}
 
-    // Type bounds: only Printable types allowed
-    let result = display(boxed)
-    print(result)
+class Repository<T>[db: Database] {
+    fn fetch(self, id: string) string {
+        return self.db.query(id)
+    }
+}
 
-    // Explicit type arguments on function calls
-    let arr = make_pair<string, int>("hello", 42)
-    print(arr[0])
+class UserService[repo: Repository<int>] {
+    fn get_user(self) string {
+        return self.repo.fetch("users")
+    }
+}
 
-    // Explicit type args when they could be inferred
-    let item2 = Item { name: "gadget" }
-    let s = display<Item>(item2)
-    print(s)
+app Main[svc: UserService] {
+    fn main(self) {
+        // Generic class with trait impl
+        let item = Item { name: "widget" }
+        let boxed = Box<Item> { value: item }
+        print(boxed.describe())
+
+        // Type bounds: only Printable types allowed
+        let result = display(boxed)
+        print(result)
+
+        // Explicit type arguments on function calls
+        let arr = make_pair<string, int>("hello", 42)
+        print(arr[0])
+
+        // Explicit type args when they could be inferred
+        let item2 = Item { name: "gadget" }
+        let s = display<Item>(item2)
+        print(s)
+
+        // Generic DI: Repository<int> injected into UserService
+        print(self.svc.get_user())
+    }
 }

@@ -665,3 +665,152 @@ fn main() {
         "does not satisfy bound",
     );
 }
+
+// ── Generic DI ─────────────────────────────────────────────────────
+
+#[test]
+fn generic_di_basic() {
+    let out = compile_and_run_stdout(r#"
+class Database {
+    fn query(self, table: string) string {
+        return "result from " + table
+    }
+}
+
+class Logger<T>[db: Database] {
+    fn log(self, msg: string) string {
+        return self.db.query(msg)
+    }
+}
+
+app MyApp[logger: Logger<int>] {
+    fn main(self) {
+        print(self.logger.log("users"))
+    }
+}
+"#);
+    assert_eq!(out.trim(), "result from users");
+}
+
+#[test]
+fn generic_di_app_bracket_dep() {
+    let out = compile_and_run_stdout(r#"
+class Database {
+    fn name(self) string {
+        return "db"
+    }
+}
+
+class Service<T>[db: Database] {
+    fn info(self) string {
+        return self.db.name()
+    }
+}
+
+app MyApp[svc: Service<int>] {
+    fn main(self) {
+        print(self.svc.info())
+    }
+}
+"#);
+    assert_eq!(out.trim(), "db");
+}
+
+#[test]
+fn generic_di_chain() {
+    let out = compile_and_run_stdout(r#"
+class Database {
+    fn query(self) string {
+        return "data"
+    }
+}
+
+class Repository<T>[db: Database] {
+    fn fetch(self) string {
+        return self.db.query()
+    }
+}
+
+class Service<T>[repo: Repository<T>] {
+    fn run(self) string {
+        return self.repo.fetch()
+    }
+}
+
+app MyApp[svc: Service<int>] {
+    fn main(self) {
+        print(self.svc.run())
+    }
+}
+"#);
+    assert_eq!(out.trim(), "data");
+}
+
+#[test]
+fn generic_di_two_instantiations() {
+    let out = compile_and_run_stdout(r#"
+class Database {
+    fn name(self) string {
+        return "shared"
+    }
+}
+
+class Repo<T>[db: Database] {
+    fn info(self) string {
+        return self.db.name()
+    }
+}
+
+app MyApp[users: Repo<int>, orders: Repo<string>] {
+    fn main(self) {
+        print(self.users.info())
+        print(self.orders.info())
+    }
+}
+"#);
+    assert_eq!(out.trim(), "shared\nshared");
+}
+
+#[test]
+fn generic_di_struct_literal_blocked() {
+    compile_should_fail(r#"
+class Database {
+    fn name(self) string {
+        return "db"
+    }
+}
+
+class Repo<T>[db: Database] {
+    label: string
+}
+
+fn main() {
+    let db = Database {}
+    let r = Repo<int> { label: "test" }
+}
+"#);
+}
+
+#[test]
+fn generic_di_lifecycle() {
+    let out = compile_and_run_stdout(r#"
+class Database {
+    fn query(self) string {
+        return "ok"
+    }
+}
+
+scoped class Handler<T>[db: Database] {
+    fn handle(self) string {
+        return self.db.query()
+    }
+}
+
+app MyApp[h: Handler<int>] {
+    fn main(self) {
+        print(self.h.handle())
+    }
+}
+"#);
+    assert_eq!(out.trim(), "ok");
+}
