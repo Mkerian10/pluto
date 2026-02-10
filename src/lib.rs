@@ -222,6 +222,12 @@ use parser::ast::Program;
 /// typeck → monomorphize → closures → xref) but stop before codegen.
 /// Returns the fully resolved Program, the entry file's source text, and derived analysis data.
 pub fn analyze_file(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String, derived::DerivedInfo), CompileError> {
+    let (program, source, derived, _warnings) = analyze_file_with_warnings(entry_file, stdlib_root)?;
+    Ok((program, source, derived))
+}
+
+/// Like `analyze_file`, but also returns compiler warnings.
+pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String, derived::DerivedInfo, Vec<CompileWarning>), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)
@@ -253,13 +259,13 @@ pub fn analyze_file(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Pr
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
     contracts::validate_contracts(&program)?;
-    let (mut env, _warnings) = typeck::type_check(&program)?;
+    let (mut env, warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
     closures::lift_closures(&mut program, &mut env)?;
     xref::resolve_cross_refs(&mut program);
     let derived = derived::DerivedInfo::build(&env, &program);
 
-    Ok((program, source, derived))
+    Ok((program, source, derived, warnings))
 }
 
 /// Compile a file in test mode. Tests are preserved and a test runner main is generated.

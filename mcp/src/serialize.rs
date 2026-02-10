@@ -214,6 +214,161 @@ pub struct CrossModuleMatch {
     pub kind: String,
 }
 
+// --- Compile/check/run/test result structs ---
+
+#[derive(Serialize)]
+pub struct DiagnosticInfo {
+    pub severity: String,
+    pub kind: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<SpanInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct CheckResult {
+    pub success: bool,
+    pub path: String,
+    pub errors: Vec<DiagnosticInfo>,
+    pub warnings: Vec<DiagnosticInfo>,
+}
+
+#[derive(Serialize)]
+pub struct CompileResult {
+    pub success: bool,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    pub errors: Vec<DiagnosticInfo>,
+}
+
+#[derive(Serialize)]
+pub struct RunResult {
+    pub success: bool,
+    pub path: String,
+    pub compilation_errors: Vec<DiagnosticInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+}
+
+#[derive(Serialize)]
+pub struct TestResult {
+    pub success: bool,
+    pub path: String,
+    pub compilation_errors: Vec<DiagnosticInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+}
+
+// --- Write tool result structs ---
+
+#[derive(Serialize)]
+pub struct AddDeclResult {
+    pub uuid: String,
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Serialize)]
+pub struct ReplaceDeclResult {
+    pub uuid: String,
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Serialize)]
+pub struct DeleteDeclResult {
+    pub deleted_source: String,
+    pub dangling_refs: Vec<DanglingRefInfo>,
+}
+
+#[derive(Serialize)]
+pub struct RenameDeclResult {
+    pub old_name: String,
+    pub new_name: String,
+    pub uuid: String,
+}
+
+#[derive(Serialize)]
+pub struct AddMethodResult {
+    pub uuid: String,
+    pub name: String,
+}
+
+#[derive(Serialize)]
+pub struct AddFieldResult {
+    pub uuid: String,
+}
+
+#[derive(Serialize)]
+pub struct DanglingRefInfo {
+    pub kind: String,
+    pub name: String,
+    pub span: SpanInfo,
+}
+
+pub fn compile_error_to_diagnostic(err: &plutoc::diagnostics::CompileError) -> DiagnosticInfo {
+    match err {
+        plutoc::diagnostics::CompileError::Syntax { msg, span } => DiagnosticInfo {
+            severity: "error".to_string(),
+            kind: "syntax".to_string(),
+            message: msg.clone(),
+            span: Some(span_to_info(*span)),
+            path: None,
+        },
+        plutoc::diagnostics::CompileError::Type { msg, span } => DiagnosticInfo {
+            severity: "error".to_string(),
+            kind: "type".to_string(),
+            message: msg.clone(),
+            span: Some(span_to_info(*span)),
+            path: None,
+        },
+        plutoc::diagnostics::CompileError::Codegen { msg } => DiagnosticInfo {
+            severity: "error".to_string(),
+            kind: "codegen".to_string(),
+            message: msg.clone(),
+            span: None,
+            path: None,
+        },
+        plutoc::diagnostics::CompileError::Link { msg } => DiagnosticInfo {
+            severity: "error".to_string(),
+            kind: "link".to_string(),
+            message: msg.clone(),
+            span: None,
+            path: None,
+        },
+        plutoc::diagnostics::CompileError::Manifest { msg, path } => DiagnosticInfo {
+            severity: "error".to_string(),
+            kind: "manifest".to_string(),
+            message: msg.clone(),
+            span: None,
+            path: Some(path.display().to_string()),
+        },
+    }
+}
+
+pub fn compile_warning_to_diagnostic(w: &plutoc::diagnostics::CompileWarning) -> DiagnosticInfo {
+    DiagnosticInfo {
+        severity: "warning".to_string(),
+        kind: format!("{:?}", w.kind).to_lowercase(),
+        message: w.msg.clone(),
+        span: Some(span_to_info(w.span)),
+        path: None,
+    }
+}
+
 // --- Conversion functions ---
 
 pub fn type_expr_to_string(te: &TypeExpr) -> String {
