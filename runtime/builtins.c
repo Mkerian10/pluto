@@ -116,8 +116,50 @@ static struct {
 #ifndef PLUTO_TEST_MODE
 static pthread_mutex_t gc_mutex = PTHREAD_MUTEX_INITIALIZER;
 static atomic_int __pluto_active_tasks = 0;
+
+// Thread registry for signal-based stop-the-world GC.
+// Each spawned thread registers itself so the GC can send SIGUSR1 to pause it.
+#define GC_MAX_THREAD_STACKS 64
+typedef struct {
+    pthread_t thread;
+    void *stack_lo;
+    void *stack_hi;
+    int active;
+} GCThreadStack;
+static GCThreadStack gc_thread_stacks[GC_MAX_THREAD_STACKS];
+static int gc_thread_stack_count = 0;
+
+// Signal-based stop-the-world state.
+// GC sends SIGUSR1 to each thread; the handler flushes registers (setjmp),
+// increments gc_stw_stopped, and spins until gc_stw_resume is set.
+static volatile int gc_stw_stopped = 0;
+static volatile int gc_stw_resume = 0;
+
+static void gc_stw_signal_handler(int sig) {
+    (void)sig;
+    // Flush registers to stack so GC can scan them
+    jmp_buf regs;
+    setjmp(regs);
+    (void)regs;  // prevent optimization
+
+    // Signal that we've stopped
+    __sync_fetch_and_add(&gc_stw_stopped, 1);
+
+    // Spin-wait until GC is done (memory barrier to see the update)
+    while (!gc_stw_resume) {
+        __sync_synchronize();
+    }
+}
+
+static void gc_stw_install_handler(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = gc_stw_signal_handler;
+    sa.sa_flags = SA_RESTART;
+    sigfillset(&sa.sa_mask);  // block all signals during handler
+    sigaction(SIGUSR1, &sa, NULL);
+}
 #endif
-#define PLUTO_MAX_HEAP_BYTES (1024L * 1024L * 1024L)  // 1 GB
 
 static inline GCHeader *gc_get_header(void *user_ptr) {
     return (GCHeader *)((char *)user_ptr - sizeof(GCHeader));
@@ -143,20 +185,48 @@ static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) 
     return (char *)h + sizeof(GCHeader);
 }
 #else
+// Stop all registered task threads via SIGUSR1 and wait for them to acknowledge.
+// Returns the number of threads that were stopped. Caller must call gc_stw_resume_threads() after GC.
+// Stop all registered task threads via SIGUSR1 and wait for them to acknowledge.
+// Returns the number of threads that were stopped. Caller must call gc_stw_resume_threads() after GC.
+static int gc_stw_stop_threads(void) {
+    int count = 0;
+    gc_stw_stopped = 0;
+    gc_stw_resume = 0;
+    __sync_synchronize();  // memory barrier
+
+    pthread_t self = pthread_self();
+    for (int i = 0; i < gc_thread_stack_count; i++) {
+        if (!gc_thread_stacks[i].active) continue;
+        if (pthread_equal(gc_thread_stacks[i].thread, self)) continue;  // skip self
+        pthread_kill(gc_thread_stacks[i].thread, SIGUSR1);
+        count++;
+    }
+
+    if (count > 0) {
+        // Wait for all threads to acknowledge (with timeout)
+        int spins = 0;
+        while (__sync_fetch_and_add(&gc_stw_stopped, 0) < count) {
+            __sync_synchronize();
+            if (++spins > 1000000) break;  // ~1s timeout — give up
+        }
+    }
+    return count;
+}
+
+static void gc_stw_resume_threads(void) {
+    gc_stw_resume = 1;
+    __sync_synchronize();  // ensure visibility
+}
+
 static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
     pthread_mutex_lock(&gc_mutex);
     if (gc_stack_bottom && !gc_collecting
-        && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold
-        && atomic_load(&__pluto_active_tasks) == 0) {
+        && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold) {
+        // Stop all other task threads via SIGUSR1 so we can safely scan their stacks
+        int stopped = gc_stw_stop_threads();
         __pluto_gc_collect();
-    }
-    // Heap ceiling guardrail when GC is suppressed
-    if (atomic_load(&__pluto_active_tasks) > 0
-        && gc_bytes_allocated + user_size + sizeof(GCHeader) > PLUTO_MAX_HEAP_BYTES) {
-        pthread_mutex_unlock(&gc_mutex);
-        fprintf(stderr, "pluto: heap exceeded %ld bytes while GC suppressed by active tasks\n",
-                (long)PLUTO_MAX_HEAP_BYTES);
-        exit(1);
+        if (stopped > 0) gc_stw_resume_threads();
     }
     size_t total = sizeof(GCHeader) + user_size;
     GCHeader *h = (GCHeader *)calloc(1, total);
@@ -471,17 +541,35 @@ void __pluto_gc_collect(void) {
         }
     }
 
-    // 3. Scan stack (direction-agnostic)
+    // 3. Scan the GC-initiating thread's own stack.
+    // In production mode, we find this thread's registered stack_hi.
+    // In test mode, we use gc_stack_bottom (always main thread, single-threaded).
     {
         void *stack_top;
-        // Get current stack pointer
         volatile long anchor = 0;
         (void)anchor;
         stack_top = (void *)&anchor;
 
+#ifndef PLUTO_TEST_MODE
+        // Find this thread's registered stack entry to get the correct stack_hi.
+        // Without this, a task thread would scan from its stack to gc_stack_bottom
+        // (the main thread's stack), crossing unmapped memory → SEGFAULT.
+        pthread_t self = pthread_self();
+        void *hi = gc_stack_bottom;  // fallback for main thread
+        for (int i = 0; i < gc_thread_stack_count; i++) {
+            if (pthread_equal(gc_thread_stacks[i].thread, self)) {
+                hi = gc_thread_stacks[i].stack_hi;
+                break;
+            }
+        }
+        void *lo = stack_top;
+        // On most platforms stacks grow down, so stack_top < stack_hi.
+        // Handle either direction just in case.
+        if (lo > hi) { void *tmp = lo; lo = hi; hi = tmp; }
+#else
         void *lo = stack_top < gc_stack_bottom ? stack_top : gc_stack_bottom;
         void *hi = stack_top < gc_stack_bottom ? gc_stack_bottom : stack_top;
-        // Align to 8-byte boundary
+#endif
         lo = (void *)(((size_t)lo) & ~7UL);
         for (long *p = (long *)lo; (void *)p < hi; p++) {
             gc_mark_candidate((void *)*p);
@@ -504,6 +592,27 @@ void __pluto_gc_collect(void) {
             void *flo = (void *)(((size_t)base) & ~7UL);
             void *fhi = (void *)(base + sz);
             for (long *p = (long *)flo; (void *)p < fhi; p++) {
+                gc_mark_candidate((void *)*p);
+            }
+        }
+    }
+#endif
+
+#ifndef PLUTO_TEST_MODE
+    // 3c. Scan all OTHER registered thread stacks as additional GC roots.
+    // The GC-initiating thread was already scanned in section 3 above.
+    // Stopped threads (paused by SIGUSR1) have their full register state
+    // saved on their stacks via the kernel signal frame + setjmp in the handler.
+    {
+        pthread_t gc_self = pthread_self();
+        for (int ti = 0; ti < gc_thread_stack_count; ti++) {
+            if (!gc_thread_stacks[ti].active) continue;
+            if (pthread_equal(gc_thread_stacks[ti].thread, gc_self)) continue;
+            void *tlo = gc_thread_stacks[ti].stack_lo;
+            void *thi = gc_thread_stacks[ti].stack_hi;
+            if (!tlo || !thi) continue;
+            tlo = (void *)(((size_t)tlo) & ~7UL);
+            for (long *p = (long *)tlo; (void *)p < thi; p++) {
                 gc_mark_candidate((void *)*p);
             }
         }
@@ -614,6 +723,32 @@ void __pluto_gc_init(void) {
     volatile long anchor = 0;
     (void)anchor;
     gc_stack_bottom = (void *)&anchor;
+#ifndef PLUTO_TEST_MODE
+    gc_stw_install_handler();
+    // Register main thread's stack for GC root scanning
+    {
+        pthread_t self = pthread_self();
+        void *stack_lo = NULL;
+        void *stack_hi = NULL;
+#ifdef __APPLE__
+        stack_hi = pthread_get_stackaddr_np(self);
+        size_t stack_sz = pthread_get_stacksize_np(self);
+        stack_lo = (char *)stack_hi - stack_sz;
+#else
+        pthread_attr_t pattr;
+        pthread_getattr_np(self, &pattr);
+        size_t stack_sz;
+        pthread_attr_getstack(&pattr, &stack_lo, &stack_sz);
+        stack_hi = (char *)stack_lo + stack_sz;
+        pthread_attr_destroy(&pattr);
+#endif
+        gc_thread_stacks[0].thread = self;
+        gc_thread_stacks[0].stack_lo = stack_lo;
+        gc_thread_stacks[0].stack_hi = stack_hi;
+        gc_thread_stacks[0].active = 1;
+        gc_thread_stack_count = 1;
+    }
+#endif
 }
 
 // ── Print functions ───────────────────────────────────────────────────────────
@@ -2746,6 +2881,35 @@ static void *__pluto_spawn_trampoline(void *arg) {
     __pluto_current_error = NULL;  // clean TLS for new thread
     __pluto_current_task = task;   // set TLS for cancellation checks
 
+    // Register this thread's stack with GC for root scanning
+    int my_stack_slot = -1;
+    {
+        pthread_t self = pthread_self();
+        void *stack_lo = NULL;
+        void *stack_hi = NULL;
+#ifdef __APPLE__
+        stack_hi = pthread_get_stackaddr_np(self);
+        size_t stack_sz = pthread_get_stacksize_np(self);
+        stack_lo = (char *)stack_hi - stack_sz;
+#else
+        pthread_attr_t pattr;
+        pthread_getattr_np(self, &pattr);
+        size_t stack_sz;
+        pthread_attr_getstack(&pattr, &stack_lo, &stack_sz);
+        stack_hi = (char *)stack_lo + stack_sz;
+        pthread_attr_destroy(&pattr);
+#endif
+        pthread_mutex_lock(&gc_mutex);
+        if (gc_thread_stack_count < GC_MAX_THREAD_STACKS) {
+            my_stack_slot = gc_thread_stack_count++;
+            gc_thread_stacks[my_stack_slot].thread = self;
+            gc_thread_stacks[my_stack_slot].stack_lo = stack_lo;
+            gc_thread_stacks[my_stack_slot].stack_hi = stack_hi;
+            gc_thread_stacks[my_stack_slot].active = 1;
+        }
+        pthread_mutex_unlock(&gc_mutex);
+    }
+
     long fn_ptr = *(long *)closure_ptr;
     long result = ((long(*)(long))fn_ptr)(closure_ptr);
 
@@ -2771,6 +2935,13 @@ static void *__pluto_spawn_trampoline(void *arg) {
     }
     pthread_cond_signal(&sync->cond);
     pthread_mutex_unlock(&sync->mutex);
+
+    // Deregister thread stack from GC
+    if (my_stack_slot >= 0) {
+        pthread_mutex_lock(&gc_mutex);
+        gc_thread_stacks[my_stack_slot].active = 0;
+        pthread_mutex_unlock(&gc_mutex);
+    }
 
     __pluto_current_task = NULL;
     atomic_fetch_sub(&__pluto_active_tasks, 1);
