@@ -21,6 +21,11 @@ pub fn desugar_spawn(program: &mut Program) -> Result<(), CompileError> {
             desugar_block(&mut method.node.body.node);
         }
     }
+    for stage in &mut program.stages {
+        for method in &mut stage.node.methods {
+            desugar_block(&mut method.node.body.node);
+        }
+    }
     Ok(())
 }
 

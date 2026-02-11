@@ -1049,6 +1049,11 @@ fn rewrite_program(program: &mut Program, rewrites: &HashMap<(usize, usize), Str
             rewrite_block(&mut method.node.body.node, rewrites);
         }
     }
+    for stage in &mut program.stages {
+        for method in &mut stage.node.methods {
+            rewrite_block(&mut method.node.body.node, rewrites);
+        }
+    }
 }
 
 fn rewrite_block(block: &mut Block, rewrites: &HashMap<(usize, usize), String>) {
@@ -1285,6 +1290,11 @@ fn resolve_all_generic_type_exprs(program: &mut Program, env: &mut TypeEnv) -> R
     }
     if let Some(ref mut app) = program.app {
         for method in &mut app.node.methods {
+            resolve_generic_te_in_function(&mut method.node, env)?;
+        }
+    }
+    for stage in &mut program.stages {
+        for method in &mut stage.node.methods {
             resolve_generic_te_in_function(&mut method.node, env)?;
         }
     }

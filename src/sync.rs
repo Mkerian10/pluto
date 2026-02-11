@@ -80,6 +80,9 @@ pub fn sync_pt_to_pluto(pt_path: &Path, pluto_path: &Path) -> Result<SyncResult,
         if let Some(app) = &new_program.app {
             added.push(format!("app {}", app.node.name.node));
         }
+        for stage in &new_program.stages {
+            added.push(format!("stage {}", stage.node.name.node));
+        }
         SyncResult {
             added,
             removed: Vec::new(),

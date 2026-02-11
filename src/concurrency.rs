@@ -12,8 +12,8 @@ use crate::typeck::env::{mangle_method, TypeEnv};
 /// Also: if two different spawn targets both access the same singleton,
 /// that singleton needs sync (concurrent tasks accessing shared state).
 pub fn infer_synchronization(program: &Program, env: &mut TypeEnv) {
-    // No app or no DI singletons → nothing to synchronize
-    if env.app.is_none() || env.di_order.is_empty() {
+    // No app/stage or no DI singletons → nothing to synchronize
+    if env.app.is_none() && env.stages.is_empty() || env.di_order.is_empty() {
         return;
     }
     // No spawn targets → no concurrency → nothing to synchronize
@@ -76,8 +76,17 @@ pub fn infer_synchronization(program: &Program, env: &mut TypeEnv) {
         for method in &app_spanned.node.methods {
             let mangled = mangle_method(app_name, &method.node.name.node);
             let (accesses, edges) = collect_block_accesses(&method.node.body.node, &mangled, env, &di_singletons);
-            // App methods also get direct accesses from their self.dep accesses
-            // detected inside collect_expr_accesses via FieldAccess on self
+            singleton_accesses.entry(mangled.clone()).or_default().extend(accesses);
+            call_edges.entry(mangled).or_default().extend(edges);
+        }
+    }
+
+    // Stage methods
+    for stage_spanned in &program.stages {
+        let stage_name = &stage_spanned.node.name.node;
+        for method in &stage_spanned.node.methods {
+            let mangled = mangle_method(stage_name, &method.node.name.node);
+            let (accesses, edges) = collect_block_accesses(&method.node.body.node, &mangled, env, &di_singletons);
             singleton_accesses.entry(mangled.clone()).or_default().extend(accesses);
             call_edges.entry(mangled).or_default().extend(edges);
         }
@@ -113,9 +122,16 @@ pub fn infer_synchronization(program: &Program, env: &mut TypeEnv) {
         per_spawn_accesses.push(accesses);
     }
 
-    let app_name = env.app.as_ref().unwrap().0.clone();
-    let app_main = mangle_method(&app_name, "main");
-    let main_side = singleton_accesses.get(&app_main).cloned().unwrap_or_default();
+    // Determine the main-side entry point (app or stage)
+    let main_side = if let Some(app) = &env.app {
+        let app_main = mangle_method(&app.0, "main");
+        singleton_accesses.get(&app_main).cloned().unwrap_or_default()
+    } else if let Some(stage) = env.stages.first() {
+        let stage_main = mangle_method(&stage.0, "main");
+        singleton_accesses.get(&stage_main).cloned().unwrap_or_default()
+    } else {
+        return;
+    };
 
     // A singleton needs sync if:
     // (a) accessed from both spawn-side and main-side, OR

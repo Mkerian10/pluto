@@ -37,6 +37,15 @@ pub fn validate_contracts(program: &Program) -> Result<(), CompileError> {
         }
     }
 
+    // Validate stage method contracts
+    for stage in &program.stages {
+        for method in &stage.node.methods {
+            for contract in &method.node.contracts {
+                validate_decidable_fragment(&contract.node.expr.node, contract.node.expr.span, contract.node.kind)?;
+            }
+        }
+    }
+
     // Validate trait method contracts
     for tr in &program.traits {
         for method in &tr.node.methods {

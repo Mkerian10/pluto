@@ -38,6 +38,13 @@ pub fn lift_closures(program: &mut Program, env: &mut TypeEnv) -> Result<(), Com
         }
     }
 
+    // Lift from stage method bodies
+    for stage in &mut program.stages {
+        for method in &mut stage.node.methods {
+            lift_in_block(&mut method.node.body.node, env, &mut counter, &mut new_fns)?;
+        }
+    }
+
     // Append lifted functions to the program
     for f in new_fns {
         program.functions.push(f);
