@@ -332,11 +332,11 @@ fn main() {
 #[test]
 fn error_nested_nullable() {
     // Parser sees int? as a type, then second ? triggers a parse error
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 fn main() {
     let x: int?? = none
 }
-"#);
+"#, "expected =, found ?");
 }
 
 #[test]

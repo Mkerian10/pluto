@@ -983,7 +983,7 @@ fn main() {
 
 #[test]
 fn result_in_requires_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         r#"
 fn foo(x: int) int
     requires result > 0
@@ -995,6 +995,7 @@ fn main() {
     print(foo(5))
 }
 "#,
+        "undefined variable 'result'",
     );
 }
 
@@ -1419,7 +1420,7 @@ fn main() {
 
 #[test]
 fn trait_contract_self_field_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         r#"
 trait Bad {
     fn check(self) bool
@@ -1439,6 +1440,7 @@ fn main() {
     print(b.check())
 }
 "#,
+        "field access on non-class type",
     );
 }
 

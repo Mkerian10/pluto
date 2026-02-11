@@ -478,12 +478,12 @@ test "byte equality" {
 #[test]
 fn byte_no_implicit_coercion() {
     // `let b: byte = 42` should fail — 42 is int, not byte
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 fn main() int {
     let b: byte = 42
     return 0
 }
-"#);
+"#, "expected byte, found int");
 }
 
 #[test]
@@ -512,24 +512,24 @@ test "bytes eq" {
 
 #[test]
 fn bytes_push_wrong_type() {
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 fn main() int {
     let buf = bytes_new()
     buf.push(42)
     return 0
 }
-"#);
+"#, "expected byte, found int");
 }
 
 #[test]
 fn bytes_unknown_method() {
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 fn main() int {
     let buf = bytes_new()
     buf.foo()
     return 0
 }
-"#);
+"#, "bytes has no method");
 }
 
 // ── Runtime abort: OOB index ─────────────────────────────────────────────────

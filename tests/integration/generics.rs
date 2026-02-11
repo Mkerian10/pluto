@@ -133,8 +133,9 @@ fn generic_class_method_operates_on_t() {
 
 #[test]
 fn generic_wrong_type_arg_count_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "class Box<T> {\n    value: T\n}\n\nfn main() {\n    let b = Box<int, string> { value: 42 }\n}",
+        "expects 1 type arguments",
     );
 }
 
@@ -773,7 +774,7 @@ app MyApp[users: Repo<int>, orders: Repo<string>] {
 
 #[test]
 fn generic_di_struct_literal_blocked() {
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 class Database {
     fn name(self) string {
         return "db"
@@ -788,7 +789,7 @@ fn main() {
     let db = Database {}
     let r = Repo<int> { label: "test" }
 }
-"#);
+"#, "unexpected token");
 }
 
 #[test]

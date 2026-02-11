@@ -448,53 +448,53 @@ fn main() {
 
 #[test]
 fn chan_bare_send_compile_fail() {
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 fn main() {
     let (tx, rx) = chan<int>(1)
     tx.send(42)
 }
-"#);
+"#, "must be handled with ! or catch");
 }
 
 #[test]
 fn chan_bare_recv_compile_fail() {
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 fn main() {
     let (tx, rx) = chan<int>(1)
     rx.recv()
 }
-"#);
+"#, "must be handled with ! or catch");
 }
 
 // ── Type errors ─────────────────────────────────────────────────────────────
 
 #[test]
 fn chan_wrong_type_compile_fail() {
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 fn main() {
     let (tx, rx) = chan<int>(1)
     tx.send("hello")!
 }
-"#);
+"#, "expects int, found string");
 }
 
 #[test]
 fn chan_non_int_capacity_compile_fail() {
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 fn main() {
     let (tx, rx) = chan<int>("big")
 }
-"#);
+"#, "capacity must be int");
 }
 
 #[test]
 fn chan_unknown_method_compile_fail() {
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 fn main() {
     let (tx, rx) = chan<int>(1)
     tx.foo()
 }
-"#);
+"#, "no method");
 }
 
 // ── Multi-task ──────────────────────────────────────────────────────────────
