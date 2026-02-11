@@ -176,6 +176,22 @@ impl DerivedInfo {
             }
         }
 
+        // Process stage methods
+        for stage in &program.stages {
+            let stage_name = &stage.node.name.node;
+            for method in &stage.node.methods {
+                let key = typeenv_key(&method.node.name.node, Some(stage_name));
+                Self::collect_fn_data(
+                    method.node.id,
+                    &key,
+                    env,
+                    &error_uuid_map,
+                    &mut fn_error_sets,
+                    &mut fn_signatures,
+                );
+            }
+        }
+
         // Build name->UUID maps for classes, traits, enums
         let class_name_to_uuid: BTreeMap<&str, Uuid> = program
             .classes

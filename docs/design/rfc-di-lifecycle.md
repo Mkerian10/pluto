@@ -1,6 +1,6 @@
 # RFC: DI Lifecycle Scopes
 
-**Status:** Draft
+**Status:** Implemented (Phases 1–3, 5a–5e). Phase 4 (Transient) deferred. Phase 6 (polish) complete.
 **Author:** Matt Kerian
 **Date:** 2026-02-10
 

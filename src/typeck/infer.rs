@@ -5,7 +5,7 @@ use crate::parser::ast::*;
 use crate::span::Spanned;
 use super::env::{mangle_method, TypeEnv};
 use super::types::PlutoType;
-use super::resolve::{resolve_type, unify, ensure_generic_func_instantiated, ensure_generic_class_instantiated, ensure_generic_enum_instantiated};
+use super::resolve::{resolve_type, unify, ensure_generic_func_instantiated, ensure_generic_class_instantiated, ensure_generic_enum_instantiated, validate_type_bounds};
 use super::closures::infer_closure;
 use super::types_compatible;
 
@@ -97,7 +97,7 @@ pub(crate) fn infer_expr(
                 )),
             }
         }
-        Expr::Call { name, args, .. } => infer_call(name, args, span, env),
+        Expr::Call { name, args, type_args, .. } => infer_call(name, args, type_args, span, env),
         Expr::StructLit { name, fields: lit_fields, type_args, .. } => {
             infer_struct_lit(name, lit_fields, type_args, span, env)
         }
@@ -289,11 +289,27 @@ pub(crate) fn infer_expr(
             // Extract the spawned function name by peeking inside the closure body
             if let Expr::Closure { body, .. } = &call.node {
                 for stmt in &body.node.stmts {
-                    if let Stmt::Return(Some(ret_expr)) = &stmt.node && let Expr::Call { name, .. } = &ret_expr.node {
-                        env.spawn_target_fns.insert(
-                            (span.start, span.end),
-                            name.node.clone(),
-                        );
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
+                        match &ret_expr.node {
+                            Expr::Call { name, .. } => {
+                                env.spawn_target_fns.insert(
+                                    (span.start, span.end),
+                                    name.node.clone(),
+                                );
+                            }
+                            Expr::MethodCall { object, method, .. } => {
+                                let obj_type = infer_expr(&object.node, object.span, env)?;
+                                if let PlutoType::Class(class_name) = &obj_type {
+                                    let mangled = super::env::mangle_method(class_name, &method.node);
+                                    env.spawn_target_fns.insert(
+                                        (span.start, span.end),
+                                        mangled,
+                                    );
+                                }
+                                // Non-class targets → None → conservatively fallible
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -431,12 +447,21 @@ fn infer_binop(
 fn infer_call(
     name: &Spanned<String>,
     args: &[Spanned<Expr>],
+    call_type_args: &[Spanned<TypeExpr>],
     span: crate::span::Span,
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
     // Handle old() in ensures contracts — old(expr) has the same type as expr
     if name.node == "old" && args.len() == 1 && env.in_ensures_context {
         return infer_expr(&args[0].node, args[0].span, env);
+    }
+
+    // Reject explicit type args on builtins
+    if !call_type_args.is_empty() && env.builtins.contains(&name.node) {
+        return Err(CompileError::type_err(
+            format!("builtin function '{}' does not accept type arguments", name.node),
+            span,
+        ));
     }
 
     // Check builtins first
@@ -615,7 +640,7 @@ fn infer_call(
         return Ok(*ret_type);
     }
 
-    // Check if calling a generic function — infer type args from arguments
+    // Check if calling a generic function — infer or use explicit type args
     if let Some(gen_sig) = env.generic_functions.get(&name.node).cloned() {
         if args.len() != gen_sig.params.len() {
             return Err(CompileError::type_err(
@@ -626,32 +651,54 @@ fn infer_call(
                 span,
             ));
         }
-        // Infer arg types and unify with generic params
-        let mut arg_types = Vec::new();
-        for arg in args {
-            arg_types.push(infer_expr(&arg.node, arg.span, env)?);
-        }
-        let mut bindings = HashMap::new();
-        for (param_ty, arg_ty) in gen_sig.params.iter().zip(&arg_types) {
-            if !unify(param_ty, arg_ty, &mut bindings) {
+        let type_args: Vec<PlutoType> = if !call_type_args.is_empty() {
+            // Explicit type args provided: resolve and validate count
+            if call_type_args.len() != gen_sig.type_params.len() {
                 return Err(CompileError::type_err(
-                    format!("cannot infer type parameters for '{}'", name.node),
+                    format!(
+                        "function '{}' expects {} type arguments, got {}",
+                        name.node, gen_sig.type_params.len(), call_type_args.len()
+                    ),
                     span,
                 ));
             }
-        }
-        // Check all type params are bound
-        for tp in &gen_sig.type_params {
-            if !bindings.contains_key(tp) {
-                return Err(CompileError::type_err(
-                    format!("cannot infer type parameter '{}' for '{}'", tp, name.node),
-                    span,
-                ));
+            // Still need to type-check the arguments
+            for arg in args {
+                infer_expr(&arg.node, arg.span, env)?;
             }
-        }
-        let type_args: Vec<PlutoType> = gen_sig.type_params.iter()
-            .map(|tp| bindings[tp].clone())
-            .collect();
+            call_type_args.iter()
+                .map(|a| resolve_type(a, env))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            // Infer type args from arguments
+            let mut arg_types = Vec::new();
+            for arg in args {
+                arg_types.push(infer_expr(&arg.node, arg.span, env)?);
+            }
+            let mut bindings = HashMap::new();
+            for (param_ty, arg_ty) in gen_sig.params.iter().zip(&arg_types) {
+                if !unify(param_ty, arg_ty, &mut bindings) {
+                    return Err(CompileError::type_err(
+                        format!("cannot infer type parameters for '{}'", name.node),
+                        span,
+                    ));
+                }
+            }
+            // Check all type params are bound
+            for tp in &gen_sig.type_params {
+                if !bindings.contains_key(tp) {
+                    return Err(CompileError::type_err(
+                        format!("cannot infer type parameter '{}' for '{}'", tp, name.node),
+                        span,
+                    ));
+                }
+            }
+            gen_sig.type_params.iter()
+                .map(|tp| bindings[tp].clone())
+                .collect()
+        };
+        // Validate type bounds before instantiation
+        validate_type_bounds(&gen_sig.type_params, &type_args, &gen_sig.type_param_bounds, env, span, &name.node)?;
         let mangled = ensure_generic_func_instantiated(&name.node, &type_args, env);
         // Store rewrite
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
@@ -660,6 +707,14 @@ fn infer_call(
             .expect("generic function should be registered after instantiation")
             .return_type.clone();
         return Ok(concrete_ret);
+    }
+
+    // Reject explicit type args on non-generic functions
+    if !call_type_args.is_empty() {
+        return Err(CompileError::type_err(
+            format!("function '{}' is not generic and does not accept type arguments", name.node),
+            span,
+        ));
     }
 
     let sig = env.functions.get(&name.node).ok_or_else(|| {
@@ -725,6 +780,8 @@ fn infer_struct_lit(
         let resolved_args: Vec<PlutoType> = type_args.iter()
             .map(|a| resolve_type(a, env))
             .collect::<Result<Vec<_>, _>>()?;
+        // Validate type bounds
+        validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, span, &name.node)?;
         let mangled = ensure_generic_class_instantiated(&name.node, &resolved_args, env);
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
         let ci = env.classes.get(&mangled)
@@ -814,6 +871,8 @@ fn infer_enum_unit(
         let resolved_args: Vec<PlutoType> = type_args.iter()
             .map(|a| resolve_type(a, env))
             .collect::<Result<Vec<_>, _>>()?;
+        // Validate type bounds
+        validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, span, &enum_name.node)?;
         let mangled = ensure_generic_enum_instantiated(&enum_name.node, &resolved_args, env);
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
         let ei = env.enums.get(&mangled)
@@ -870,6 +929,8 @@ fn infer_enum_data(
         let resolved_args: Vec<PlutoType> = type_args.iter()
             .map(|a| resolve_type(a, env))
             .collect::<Result<Vec<_>, _>>()?;
+        // Validate type bounds
+        validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, span, &enum_name.node)?;
         let mangled = ensure_generic_enum_instantiated(&enum_name.node, &resolved_args, env);
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
         let ei = env.enums.get(&mangled)
@@ -1416,7 +1477,7 @@ fn infer_method_call(
         }
     }
     // Task methods
-    if let PlutoType::Task(inner) = &obj_type {
+    if let PlutoType::Task(_inner) = &obj_type {
         match method.node.as_str() {
             "get" => {
                 if !args.is_empty() {
@@ -1437,7 +1498,37 @@ fn infer_method_call(
                         super::env::MethodResolution::TaskGet { spawned_fn },
                     );
                 }
-                return Ok(*inner.clone());
+                return Ok(*_inner.clone());
+            }
+            "detach" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("detach() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::TaskDetach,
+                    );
+                }
+                return Ok(PlutoType::Void);
+            }
+            "cancel" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("cancel() expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::TaskCancel,
+                    );
+                }
+                return Ok(PlutoType::Void);
             }
             _ => {
                 return Err(CompileError::type_err(

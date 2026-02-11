@@ -21,6 +21,11 @@ pub fn desugar_spawn(program: &mut Program) -> Result<(), CompileError> {
             desugar_block(&mut method.node.body.node);
         }
     }
+    for stage in &mut program.stages {
+        for method in &mut stage.node.methods {
+            desugar_block(&mut method.node.body.node);
+        }
+    }
     Ok(())
 }
 
@@ -107,13 +112,22 @@ fn desugar_stmt(stmt: &mut Stmt) {
 fn desugar_expr(expr: &mut Expr, span: Span) {
     match expr {
         Expr::Spawn { call } => {
-            // First recurse into the call's arguments
-            if let Expr::Call { args, .. } = &mut call.node {
-                for arg in args.iter_mut() {
-                    desugar_expr(&mut arg.node, arg.span);
+            // First recurse into the call's arguments (and object for method calls)
+            match &mut call.node {
+                Expr::Call { args, .. } => {
+                    for arg in args.iter_mut() {
+                        desugar_expr(&mut arg.node, arg.span);
+                    }
                 }
+                Expr::MethodCall { object, args, .. } => {
+                    desugar_expr(&mut object.node, object.span);
+                    for arg in args.iter_mut() {
+                        desugar_expr(&mut arg.node, arg.span);
+                    }
+                }
+                _ => {}
             }
-            // Replace the Call with a Closure wrapping it
+            // Replace the Call/MethodCall with a Closure wrapping it
             let call_spanned = std::mem::replace(
                 call,
                 Box::new(Spanned::new(Expr::IntLit(0), span)), // temporary placeholder

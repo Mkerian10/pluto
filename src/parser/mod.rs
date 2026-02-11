@@ -1,6 +1,6 @@
 pub mod ast;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
@@ -235,8 +235,11 @@ impl<'a> Parser<'a> {
         let mut traits = Vec::new();
         let mut enums = Vec::new();
         let mut app = None;
+        let mut stages = Vec::new();
+        let mut system = None;
         let mut errors = Vec::new();
-        let mut test_info: Vec<(String, String)> = Vec::new();
+        let mut test_info: Vec<TestInfo> = Vec::new();
+        let mut tests: Option<Spanned<TestsDecl>> = None;
         self.skip_newlines();
 
         // Parse imports first
@@ -389,6 +392,30 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                Token::Tests => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
+                    if is_pub {
+                        return Err(CompileError::syntax(
+                            "tests declarations cannot be pub",
+                            tok.span,
+                        ));
+                    }
+                    let (tests_decl, block_tests, block_functions) = self.parse_tests_decl(&test_info, &functions)?;
+                    if !test_info.is_empty() {
+                        return Err(CompileError::syntax(
+                            "cannot mix bare 'test' blocks with 'tests' declarations",
+                            tests_decl.span,
+                        ));
+                    }
+                    test_info.extend(block_tests);
+                    functions.extend(block_functions);
+                    tests = Some(tests_decl);
+                }
                 Token::Test => {
                     if lifecycle != Lifecycle::Singleton {
                         return Err(CompileError::syntax(
@@ -402,45 +429,57 @@ impl<'a> Parser<'a> {
                             tok.span,
                         ));
                     }
-                    let test_tok = self.expect(&Token::Test)?;
-                    let test_start = test_tok.span.start;
-                    let name_tok = self.expect(&Token::StringLit(String::new()))?;
-                    let display_name = match &name_tok.node {
-                        Token::StringLit(s) => s.clone(),
-                        _ => unreachable!(),
-                    };
-                    let name_span = name_tok.span;
-                    // Check for duplicate test names
-                    if test_info.iter().any(|(n, _)| *n == display_name) {
+                    if tests.is_some() {
                         return Err(CompileError::syntax(
-                            format!("duplicate test name: \"{}\"", display_name),
-                            name_span,
+                            "cannot mix bare 'test' blocks with 'tests' declarations",
+                            tok.span,
                         ));
                     }
-                    // Generate unique fn_name with collision avoidance
-                    let mut idx = test_info.len();
-                    let mut fn_name = format!("__test_{}", idx);
-                    while functions.iter().any(|f| f.node.name.node == fn_name) {
-                        idx += 1;
-                        fn_name = format!("__test_{}", idx);
+                    let (info, func) = self.parse_single_test(&test_info, &functions)?;
+                    test_info.push(info);
+                    functions.push(func);
+                }
+                Token::System => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
                     }
-                    let body = self.parse_block()?;
-                    let end = body.span.end;
-                    functions.push(Spanned::new(Function {
-                        id: Uuid::new_v4(),
-                        name: Spanned::new(fn_name.clone(), name_span),
-                        type_params: vec![],
-                        params: vec![],
-                        return_type: None,
-                        contracts: vec![],
-                        body,
-                        is_pub: false,
-                    }, Span::new(test_start, end)));
-                    test_info.push((display_name, fn_name));
+                    if is_pub {
+                        return Err(CompileError::syntax(
+                            "system declarations cannot be pub",
+                            tok.span,
+                        ));
+                    }
+                    let system_decl = self.parse_system_decl()?;
+                    if system.is_some() {
+                        return Err(CompileError::syntax(
+                            "duplicate system declaration",
+                            system_decl.span,
+                        ));
+                    }
+                    system = Some(system_decl);
+                }
+                Token::Stage => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
+                    if is_pub {
+                        return Err(CompileError::syntax(
+                            "stage declarations cannot be pub",
+                            tok.span,
+                        ));
+                    }
+                    let stage_decl = self.parse_stage_decl()?;
+                    stages.push(stage_decl);
                 }
                 _ => {
                     return Err(CompileError::syntax(
-                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'test', 'extern fn', or 'extern rust', found {}", tok.node),
+                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'stage', 'system', 'test', 'tests', 'extern fn', or 'extern rust', found {}", tok.node),
                         tok.span,
                     ));
                 }
@@ -448,7 +487,174 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, errors, test_info, fallible_extern_fns: Vec::new() })
+        // Reject system + app in same file
+        if system.is_some() && app.is_some() {
+            let app_span = app.as_ref().unwrap().span;
+            return Err(CompileError::syntax(
+                "a file cannot contain both 'system' and 'app' declarations",
+                app_span,
+            ));
+        }
+
+        // Reject tests + app in same file
+        if tests.is_some() && app.is_some() {
+            let tests_span = tests.as_ref().unwrap().span;
+            return Err(CompileError::syntax(
+                "a file cannot contain both 'tests' and 'app' declarations",
+                tests_span,
+            ));
+        }
+
+        // Reject tests + system in same file
+        if tests.is_some() && system.is_some() {
+            let tests_span = tests.as_ref().unwrap().span;
+            return Err(CompileError::syntax(
+                "a file cannot contain both 'tests' and 'system' declarations",
+                tests_span,
+            ));
+        }
+
+        // Reject stage + app in same file
+        if !stages.is_empty() && app.is_some() {
+            let app_span = app.as_ref().unwrap().span;
+            return Err(CompileError::syntax(
+                "a file cannot contain both 'stage' and 'app' declarations",
+                app_span,
+            ));
+        }
+
+        // Reject stage + system in same file
+        if !stages.is_empty() && system.is_some() {
+            let system_span = system.as_ref().unwrap().span;
+            return Err(CompileError::syntax(
+                "a file cannot contain both 'stage' and 'system' declarations",
+                system_span,
+            ));
+        }
+
+        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, stages, system, errors, test_info, tests, fallible_extern_fns: Vec::new() })
+    }
+
+    /// Parse a bare `test "name" { body }` block into a TestInfo + synthetic Function.
+    fn parse_single_test(&mut self, existing_tests: &[TestInfo], _existing_fns: &[Spanned<Function>]) -> Result<(TestInfo, Spanned<Function>), CompileError> {
+        let test_tok = self.expect(&Token::Test)?;
+        let start = test_tok.span.start;
+        let test_span = test_tok.span;
+
+        // Expect string literal for test name
+        let name_tok = self.advance().ok_or_else(|| {
+            CompileError::syntax("expected test name (string literal) after 'test'", test_span)
+        })?;
+        let display_name = match &name_tok.node {
+            Token::StringLit(s) => s.clone(),
+            _ => {
+                return Err(CompileError::syntax(
+                    "expected test name (string literal) after 'test'",
+                    name_tok.span,
+                ));
+            }
+        };
+
+        // Check for duplicate test names
+        if existing_tests.iter().any(|t| t.display_name == display_name) {
+            return Err(CompileError::syntax(
+                format!("duplicate test name '{}'", display_name),
+                name_tok.span,
+            ));
+        }
+
+        // Parse test body
+        self.skip_newlines();
+        let body = self.parse_block()?;
+        let end = body.span.end;
+
+        let test_index = existing_tests.len();
+        let fn_name = format!("__test_{}", test_index);
+        let info = TestInfo {
+            display_name,
+            fn_name: fn_name.clone(),
+        };
+        let func = Spanned::new(Function {
+            id: Uuid::new_v4(),
+            name: Spanned::new(fn_name, Span::new(start, end)),
+            type_params: Vec::new(),
+            type_param_bounds: HashMap::new(),
+            params: Vec::new(),
+            return_type: None,
+            contracts: Vec::new(),
+            body,
+            is_pub: false,
+        }, Span::new(start, end));
+
+        Ok((info, func))
+    }
+
+    /// Parse `tests[scheduler: Strategy] { test "name" { ... } ... }`
+    fn parse_tests_decl(&mut self, existing_tests: &[TestInfo], existing_fns: &[Spanned<Function>]) -> Result<(Spanned<TestsDecl>, Vec<TestInfo>, Vec<Spanned<Function>>), CompileError> {
+        let tests_tok = self.expect(&Token::Tests)?;
+        let start = tests_tok.span.start;
+
+        // Parse bracket dep: [scheduler: Ident]
+        self.expect(&Token::LBracket)?;
+        let key_tok = self.expect_ident()?;
+        if key_tok.node != "scheduler" {
+            return Err(CompileError::syntax(
+                format!("expected 'scheduler' in tests bracket, found '{}'", key_tok.node),
+                key_tok.span,
+            ));
+        }
+        self.expect(&Token::Colon)?;
+
+        // Expect strategy name: Sequential, RoundRobin, Random, Exhaustive
+        let strategy_tok = self.expect_ident()?;
+        let strategy = match strategy_tok.node.as_str() {
+            "Sequential" => "Sequential".to_string(),
+            "RoundRobin" => "RoundRobin".to_string(),
+            "Random" => "Random".to_string(),
+            "Exhaustive" => "Exhaustive".to_string(),
+            other => {
+                return Err(CompileError::syntax(
+                    format!("unknown scheduler strategy '{}' (expected Sequential, RoundRobin, Random, or Exhaustive)", other),
+                    strategy_tok.span,
+                ));
+            }
+        };
+        self.expect(&Token::RBracket)?;
+
+        // Parse body: { test "name" { ... } ... }
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut block_tests = Vec::new();
+        let mut block_functions = Vec::new();
+
+        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+            // Only test blocks are allowed inside tests { ... }
+            let inner_tok = self.peek().unwrap();
+            if !matches!(inner_tok.node, Token::Test) {
+                return Err(CompileError::syntax(
+                    "only 'test' blocks are allowed inside a 'tests' declaration",
+                    inner_tok.span,
+                ));
+            }
+            let combined_tests: Vec<TestInfo> = existing_tests.iter().chain(block_tests.iter()).cloned().collect();
+            let combined_fns: Vec<Spanned<Function>> = existing_fns.iter().chain(block_functions.iter()).cloned().collect();
+            let (info, func) = self.parse_single_test(&combined_tests, &combined_fns)?;
+            block_tests.push(info);
+            block_functions.push(func);
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+
+        let decl = Spanned::new(TestsDecl {
+            id: Uuid::new_v4(),
+            strategy,
+        }, Span::new(start, end));
+
+        Ok((decl, block_tests, block_functions))
     }
 
     fn parse_import(&mut self) -> Result<Spanned<ImportDecl>, CompileError> {
@@ -598,11 +804,95 @@ impl<'a> Parser<'a> {
         Ok(Spanned::new(AppDecl { id: Uuid::new_v4(), name, inject_fields, ambient_types, lifecycle_overrides, methods }, Span::new(start, end)))
     }
 
+    fn parse_stage_decl(&mut self) -> Result<Spanned<StageDecl>, CompileError> {
+        let stage_tok = self.expect(&Token::Stage)?;
+        let start = stage_tok.span.start;
+        let name = self.expect_ident()?;
+
+        let inject_fields = self.parse_bracket_deps()?;
+
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        // Parse ambient declarations, lifecycle overrides, and methods (mirrors parse_app_decl)
+        let mut ambient_types = Vec::new();
+        let mut lifecycle_overrides = Vec::new();
+        let mut methods = Vec::new();
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+            if matches!(self.peek().expect("token should exist after is_some check").node, Token::Ambient) {
+                self.advance(); // consume 'ambient'
+                ambient_types.push(self.expect_ident()?);
+                self.consume_statement_end();
+            } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Scoped) {
+                self.advance(); // consume 'scoped'
+                let class_name = self.expect_ident()?;
+                lifecycle_overrides.push((class_name, Lifecycle::Scoped));
+                self.consume_statement_end();
+            } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Transient) {
+                self.advance(); // consume 'transient'
+                let class_name = self.expect_ident()?;
+                lifecycle_overrides.push((class_name, Lifecycle::Transient));
+                self.consume_statement_end();
+            } else {
+                // Parse optional 'pub' before methods
+                let is_pub = if matches!(self.peek().expect("token should exist after is_some check").node, Token::Pub) {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
+                let mut method = self.parse_method()?;
+                method.node.is_pub = is_pub;
+                methods.push(method);
+            }
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+
+        Ok(Spanned::new(StageDecl { id: Uuid::new_v4(), name, inject_fields, ambient_types, lifecycle_overrides, methods }, Span::new(start, end)))
+    }
+
+    fn parse_system_decl(&mut self) -> Result<Spanned<SystemDecl>, CompileError> {
+        let system_tok = self.expect(&Token::System)?;
+        let start = system_tok.span.start;
+        let name = self.expect_ident()?;
+
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut members = Vec::new();
+        let mut seen_names = HashSet::new();
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+            let member_name = self.expect_ident()?;
+            if !seen_names.insert(member_name.node.clone()) {
+                return Err(CompileError::syntax(
+                    format!("duplicate system member name: '{}'", member_name.node),
+                    member_name.span,
+                ));
+            }
+            self.expect(&Token::Colon)?;
+            let module_name = self.expect_ident()?;
+            members.push(SystemMember {
+                id: Uuid::new_v4(),
+                name: member_name,
+                module_name,
+            });
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+
+        Ok(Spanned::new(SystemDecl { id: Uuid::new_v4(), name, members }, Span::new(start, end)))
+    }
+
     fn parse_enum_decl(&mut self) -> Result<Spanned<EnumDecl>, CompileError> {
         let enum_tok = self.expect(&Token::Enum)?;
         let start = enum_tok.span.start;
         let name = self.expect_ident()?;
-        let type_params = self.parse_type_params()?;
+        let (type_params, type_param_bounds) = self.parse_type_params()?;
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
@@ -630,7 +920,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(EnumDecl { id: Uuid::new_v4(), name, type_params, variants, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(EnumDecl { id: Uuid::new_v4(), name, type_params, type_param_bounds, variants, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_error_decl(&mut self) -> Result<Spanned<ErrorDecl>, CompileError> {
@@ -761,7 +1051,7 @@ impl<'a> Parser<'a> {
         let class_tok = self.expect(&Token::Class)?;
         let start = class_tok.span.start;
         let name = self.expect_ident()?;
-        let type_params = self.parse_type_params()?;
+        let (type_params, type_param_bounds) = self.parse_type_params()?;
 
         // Parse optional `uses Type, Type2`
         let uses = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Uses) {
@@ -828,7 +1118,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, fields, methods, invariants, impl_traits, uses, is_pub: false, lifecycle: Lifecycle::Singleton }, Span::new(start, end)))
+        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, type_param_bounds, fields, methods, invariants, impl_traits, uses, is_pub: false, lifecycle: Lifecycle::Singleton }, Span::new(start, end)))
     }
 
     fn parse_method(&mut self) -> Result<Spanned<Function>, CompileError> {
@@ -892,20 +1182,44 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { id: Uuid::new_v4(), name, type_params: vec![], params, return_type, contracts, body, is_pub: false },
+            Function { id: Uuid::new_v4(), name, type_params: vec![], type_param_bounds: HashMap::new(), params, return_type, contracts, body, is_pub: false },
             Span::new(start, end),
         ))
     }
 
-    /// Parse optional type parameters: `<T>`, `<A, B>`, or empty.
-    fn parse_type_params(&mut self) -> Result<Vec<Spanned<String>>, CompileError> {
+    /// Parse optional type parameters: `<T>`, `<A, B>`, `<T: Trait1 + Trait2>`, or empty.
+    /// Returns (type_param_names, bounds_map).
+    fn parse_type_params(&mut self) -> Result<(Vec<Spanned<String>>, HashMap<String, Vec<Spanned<String>>>), CompileError> {
         if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt) {
             self.advance(); // consume '<'
-            let params = self.parse_comma_list(&Token::Gt, true, |p| p.expect_ident())?;
+            let mut params = Vec::new();
+            let mut bounds = HashMap::new();
+            let result = self.parse_comma_list(&Token::Gt, true, |p| {
+                let name = p.expect_ident()?;
+                // Check for `: Trait1 + Trait2` bounds
+                if p.peek().is_some() && matches!(p.peek().expect("token should exist after is_some check").node, Token::Colon) {
+                    p.advance(); // consume ':'
+                    let mut trait_bounds = Vec::new();
+                    trait_bounds.push(p.expect_ident()?);
+                    while p.peek().is_some() && matches!(p.peek().expect("token should exist after is_some check").node, Token::Plus) {
+                        p.advance(); // consume '+'
+                        trait_bounds.push(p.expect_ident()?);
+                    }
+                    Ok((name, trait_bounds))
+                } else {
+                    Ok((name, Vec::new()))
+                }
+            })?;
+            for (name, trait_bounds) in result {
+                if !trait_bounds.is_empty() {
+                    bounds.insert(name.node.clone(), trait_bounds);
+                }
+                params.push(name);
+            }
             self.expect(&Token::Gt)?;
-            Ok(params)
+            Ok((params, bounds))
         } else {
-            Ok(Vec::new())
+            Ok((Vec::new(), HashMap::new()))
         }
     }
 
@@ -956,7 +1270,7 @@ impl<'a> Parser<'a> {
         let fn_tok = self.expect(&Token::Fn)?;
         let start = fn_tok.span.start;
         let name = self.expect_ident()?;
-        let type_params = self.parse_type_params()?;
+        let (type_params, type_param_bounds) = self.parse_type_params()?;
         self.expect(&Token::LParen)?;
         let params = self.parse_comma_list(&Token::RParen, true, |p| {
             let pname = p.expect_ident()?;
@@ -979,7 +1293,7 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { id: Uuid::new_v4(), name, type_params, params, return_type, contracts, body, is_pub: false },
+            Function { id: Uuid::new_v4(), name, type_params, type_param_bounds, params, return_type, contracts, body, is_pub: false },
             Span::new(start, end),
         ))
     }
@@ -2220,17 +2534,81 @@ impl<'a> Parser<'a> {
             Token::Spawn => {
                 let spawn_tok = self.advance().expect("token should exist after peek");
                 let start = spawn_tok.span.start;
-                let func_name = self.expect_ident()?;
-                self.expect(&Token::LParen)?;
-                self.skip_newlines();
-                let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
-                let close = self.expect(&Token::RParen)?;
-                let call_span = Span::new(func_name.span.start, close.span.end);
-                let call = Expr::Call { name: func_name, args, target_id: None };
-                Ok(Spanned::new(
-                    Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
-                    Span::new(start, close.span.end),
-                ))
+                // Parse the first identifier (or `self`)
+                let first = match self.peek_raw() {
+                    Some(tok) if matches!(tok.node, Token::SelfVal) => {
+                        let tok = self.advance().expect("token should exist");
+                        Spanned::new("self".to_string(), tok.span)
+                    }
+                    _ => self.expect_ident()?,
+                };
+                // Check what follows: `(` means direct call, `.` means chain
+                match self.peek() {
+                    Some(tok) if matches!(tok.node, Token::LParen) => {
+                        // spawn func(args)
+                        self.advance(); // consume '('
+                        self.skip_newlines();
+                        let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
+                        let close = self.expect(&Token::RParen)?;
+                        let call_span = Span::new(first.span.start, close.span.end);
+                        let call = Expr::Call { name: first, args, type_args: vec![], target_id: None };
+                        Ok(Spanned::new(
+                            Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
+                            Span::new(start, close.span.end),
+                        ))
+                    }
+                    Some(tok) if matches!(tok.node, Token::Dot) => {
+                        // spawn obj.field...field.method(args)
+                        let mut object: Spanned<Expr> = Spanned::new(
+                            Expr::Ident(first.node.clone()),
+                            first.span,
+                        );
+                        loop {
+                            self.advance(); // consume '.'
+                            let member = self.expect_ident()?;
+                            // Check if this member is followed by `(` (method call) or `.` (field access)
+                            match self.peek() {
+                                Some(tok) if matches!(tok.node, Token::LParen) => {
+                                    // This is the terminal method call
+                                    self.advance(); // consume '('
+                                    self.skip_newlines();
+                                    let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
+                                    let close = self.expect(&Token::RParen)?;
+                                    let call_span = Span::new(first.span.start, close.span.end);
+                                    let call = Expr::MethodCall {
+                                        object: Box::new(object),
+                                        method: member,
+                                        args,
+                                    };
+                                    return Ok(Spanned::new(
+                                        Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
+                                        Span::new(start, close.span.end),
+                                    ));
+                                }
+                                Some(tok) if matches!(tok.node, Token::Dot) => {
+                                    // Field access, continue chain
+                                    let fa_span = Span::new(object.span.start, member.span.end);
+                                    object = Spanned::new(
+                                        Expr::FieldAccess { object: Box::new(object), field: member },
+                                        fa_span,
+                                    );
+                                }
+                                _ => {
+                                    return Err(CompileError::syntax(
+                                        "expected '(' or '.' after identifier in spawn expression".to_string(),
+                                        member.span,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        Err(CompileError::syntax(
+                            "expected '(' or '.' after identifier in spawn expression".to_string(),
+                            first.span,
+                        ))
+                    }
+                }
             }
             Token::None => {
                 let tok = self.advance().expect("token should exist after peek");
@@ -2245,6 +2623,19 @@ impl<'a> Parser<'a> {
 
     /// Continue parsing an expression that started with an identifier (handles calls, struct literals, and plain ident).
     fn parse_expr_after_ident(&mut self, ident: Spanned<String>) -> Result<Spanned<Expr>, CompileError> {
+        // Check for explicit type args on function call: ident<type_args>(args)
+        if self.peek().is_some()
+            && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt)
+            && self.is_generic_call_ahead()
+        {
+            let type_args = self.parse_type_arg_list()?;
+            self.expect(&Token::LParen)?;
+            self.skip_newlines();
+            let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
+            let close = self.expect(&Token::RParen)?;
+            let span = Span::new(ident.span.start, close.span.end);
+            return Ok(Spanned::new(Expr::Call { name: ident, args, type_args, target_id: None }, span));
+        }
         // Check for function call
         if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LParen) {
             self.advance(); // consume '('
@@ -2252,7 +2643,7 @@ impl<'a> Parser<'a> {
             let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
             let close = self.expect(&Token::RParen)?;
             let span = Span::new(ident.span.start, close.span.end);
-            Ok(Spanned::new(Expr::Call { name: ident, args, target_id: None }, span))
+            Ok(Spanned::new(Expr::Call { name: ident, args, type_args: vec![], target_id: None }, span))
         } else if !self.restrict_struct_lit && self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace) {
             // Check if this looks like a struct literal: Ident { field: value, ... }
             // We need to distinguish from a block. A struct literal has `ident : expr` inside.
@@ -2559,6 +2950,36 @@ impl<'a> Parser<'a> {
     }
 
     /// Lookahead from current position (at `<`) to see if balanced `<...>` followed by `.`.
+    /// Lookahead to determine if `<` starts explicit type args for a function call: `ident<...>(`
+    fn is_generic_call_ahead(&self) -> bool {
+        let mut i = self.pos;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Lt) {
+            return false;
+        }
+        i += 1;
+        let mut depth = 1;
+        while i < self.tokens.len() && depth > 0 {
+            match &self.tokens[i].node {
+                Token::Lt => depth += 1,
+                Token::Gt => depth -= 1,
+                Token::GtEq => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        if depth != 0 {
+            return false;
+        }
+        // Must be followed by `(`
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        i < self.tokens.len() && matches!(self.tokens[i].node, Token::LParen)
+    }
+
     fn is_generic_enum_expr_ahead(&self) -> bool {
         let mut i = self.pos;
         while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
@@ -3441,8 +3862,42 @@ mod tests {
         let mut parser = Parser::new(&tokens, src);
         let prog = parser.parse_program().unwrap();
         assert_eq!(prog.test_info.len(), 1);
-        assert_eq!(prog.test_info[0].0, "hello");
-        assert_eq!(prog.test_info[0].1, "__test_0");
+        assert_eq!(prog.test_info[0].display_name, "hello");
+        assert_eq!(prog.test_info[0].fn_name, "__test_0");
+        assert!(prog.tests.is_none()); // bare test → no tests decl
         assert_eq!(prog.functions.len(), 1);
+    }
+
+    #[test]
+    fn parse_tests_decl_round_robin() {
+        let src = "tests[scheduler: RoundRobin] {\n    test \"rr\" {\n    }\n}\n";
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let prog = parser.parse_program().unwrap();
+        assert_eq!(prog.test_info.len(), 1);
+        assert_eq!(prog.test_info[0].display_name, "rr");
+        let tests_decl = prog.tests.as_ref().unwrap();
+        assert_eq!(tests_decl.node.strategy, "RoundRobin");
+    }
+
+    #[test]
+    fn parse_tests_decl_random() {
+        let src = "tests[scheduler: Random] {\n    test \"rand\" {\n    }\n}\n";
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let prog = parser.parse_program().unwrap();
+        assert_eq!(prog.test_info.len(), 1);
+        assert_eq!(prog.test_info[0].display_name, "rand");
+        let tests_decl = prog.tests.as_ref().unwrap();
+        assert_eq!(tests_decl.node.strategy, "Random");
+    }
+
+    #[test]
+    fn parse_tests_decl_rejects_bare_mix() {
+        let src = "test \"bare\" {\n}\ntests[scheduler: RoundRobin] {\n    test \"rr\" {\n    }\n}\n";
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let result = parser.parse_program();
+        assert!(result.is_err());
     }
 }

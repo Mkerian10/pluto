@@ -9,6 +9,7 @@ mod errors;
 
 // Re-exports for external use
 pub(crate) use check::check_function;
+pub(crate) use register::check_trait_conformance;
 pub(crate) use resolve::resolve_type_for_monomorphize;
 
 use crate::diagnostics::{CompileError, CompileWarning, WarningKind};
@@ -52,6 +53,7 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     register::register_traits(program, &mut env)?;
     register::register_enums(program, &mut env)?;
     register::register_app_placeholder(program, &mut env)?;
+    register::register_stage_placeholders(program, &mut env)?;
     register::register_errors(program, &mut env)?;
     env.errors.entry("MathError".to_string()).or_insert(ErrorInfo {
         fields: vec![("message".to_string(), PlutoType::String)],
@@ -68,12 +70,16 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     env.errors.entry("ChannelEmpty".to_string()).or_insert(ErrorInfo {
         fields: vec![("message".to_string(), PlutoType::String)],
     });
+    env.errors.entry("TaskCancelled".to_string()).or_insert(ErrorInfo {
+        fields: vec![("message".to_string(), PlutoType::String)],
+    });
     register::register_class_names(program, &mut env)?;
     register::resolve_class_fields(program, &mut env)?;
     register::register_extern_fns(program, &mut env)?;
     register::register_functions(program, &mut env)?;
     register::register_method_sigs(program, &mut env)?;
     register::register_app_fields_and_methods(program, &mut env)?;
+    register::register_stage_fields_and_methods(program, &mut env)?;
     register::validate_di_graph(program, &mut env)?;
     register::check_trait_conformance(program, &mut env)?;
     register::check_all_bodies(program, &mut env)?;
@@ -87,6 +93,7 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     }
     errors::infer_error_sets(program, &mut env);
     errors::enforce_error_handling(program, &env)?;
+    crate::concurrency::infer_synchronization(program, &mut env);
 
     let warnings = generate_warnings(&env, program);
     Ok((env, warnings))
@@ -104,6 +111,13 @@ fn generate_warnings(env: &TypeEnv, program: &Program) -> Vec<CompileWarning> {
     }
     if let Some(app) = &program.app {
         for m in &app.node.methods {
+            for p in &m.node.params {
+                param_names.insert(p.name.node.clone());
+            }
+        }
+    }
+    for stage in &program.stages {
+        for m in &stage.node.methods {
             for p in &m.node.params {
                 param_names.insert(p.name.node.clone());
             }
@@ -581,15 +595,15 @@ mod tests {
     }
 
     #[test]
-    fn generic_class_with_trait_impl_rejected() {
-        let result = check("trait Printable {\n    fn show(self) string\n}\n\nclass Box<T> impl Printable {\n    value: T\n\n    fn show(self) string {\n        return \"box\"\n    }\n}\n\nfn main() {\n}");
-        assert!(result.is_err());
+    fn generic_class_with_trait_impl_allowed() {
+        let result = check("trait Printable {\n    fn show(self) string\n}\n\nclass Box<T> impl Printable {\n    value: T\n\n    fn show(self) string {\n        return \"box\"\n    }\n}\n\nfn main() {\n    let b = Box<int> { value: 42 }\n}");
+        assert!(result.is_ok(), "generic class with trait impl should compile: {:?}", result.err());
     }
 
     #[test]
-    fn generic_class_with_di_rejected() {
+    fn generic_class_with_di_allowed() {
         let result = check("class Dep {\n    x: int\n}\n\nclass Box<T>[dep: Dep] {\n    value: T\n}\n\nfn main() {\n}");
-        assert!(result.is_err());
+        assert!(result.is_ok(), "generic class with DI should compile: {:?}", result.err());
     }
 
     #[test]

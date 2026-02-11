@@ -101,6 +101,63 @@ The whole-program compiler verifies:
 
 Missing dependencies are compile-time errors, not runtime surprises.
 
+## Lifecycles and Scope Blocks
+
+Pluto supports three DI lifecycles, ordered by duration:
+
+- **`singleton`** (default) — one instance for the entire process, created at startup
+- **`scoped`** — one instance per scope block, created fresh each time the scope runs
+- **`transient`** — fresh instance at every injection point (deferred, not yet implemented)
+
+### Declaring Scoped Classes
+
+Use the `scoped` keyword before `class`:
+
+```
+scoped class RequestCtx {
+    user_id: string
+    trace_id: string
+}
+```
+
+### Lifecycle Inference
+
+Classes inherit the shortest-lived dependency's lifecycle automatically. A class that depends on a scoped class is itself scoped — no annotation needed:
+
+```
+// UserService is inferred scoped because it depends on scoped RequestCtx
+class UserService[ctx: RequestCtx] {
+    fn current_user(self) string {
+        return self.ctx.user_id
+    }
+}
+```
+
+The compiler prevents captive dependencies: a singleton cannot depend on a scoped class, because the singleton would hold a stale reference after the scope ends.
+
+### Scope Blocks
+
+Scope blocks create fresh scoped instances. Seeds are user-provided values; bindings are auto-wired by the compiler:
+
+```
+scope(RequestCtx { user_id: "42", trace_id: "abc" }) |svc: UserService| {
+    print(svc.current_user())
+}
+```
+
+- **Seeds:** Scoped classes with regular (non-injected) fields must be provided as seeds
+- **Auto-constructible:** Scoped classes with only injected fields are created automatically
+- **Singleton access:** Singleton dependencies are available automatically inside scope blocks
+- **Isolation:** Each scope block creates independent instances — two scope calls don't share state
+
+### Safety
+
+- **Spawn restrictions:** Spawning tasks that capture scope bindings is rejected at compile time (scoped instances would outlive the scope)
+- **Closure escape analysis:** Closures that capture scope bindings are tracked; they cannot escape the scope block via return or assignment to outer variables
+- **App-level overrides:** The app can shorten a class's lifecycle (e.g., `scoped ConnectionPool`) but cannot lengthen it
+
+For the full design, see the [DI Lifecycle RFC](rfc-di-lifecycle.md).
+
 ## Implementation Details
 
 DI is implemented with compile-time wiring:
@@ -410,7 +467,7 @@ The language provides DI. The runtime provides `Env`. The orchestration layer op
 ## Open Questions
 
 - [ ] `Env` API surface — what methods should `Env` have? `.get(key) string?`, `.secret(key) Secret<string>?`, `.require(key) string` (raises if missing)?
-- [ ] Lifecycle management — singleton vs per-request vs per-process (see [DI Lifecycle RFC](rfc-di-lifecycle.md))
+- [x] ~~Lifecycle management~~ — resolved: singleton/scoped/transient with scope blocks and lifecycle inference. See [DI Lifecycle RFC](rfc-di-lifecycle.md).
 - [ ] Scoped overrides — `with` blocks for providing alternative implementations in tests
 - [ ] Should `Env` be a trait so the runtime can provide different implementations? Or a concrete class that the runtime populates?
 - [ ] Convention for config class naming — should there be a pattern (e.g., `XxxConfig` suffix) or is it freeform?

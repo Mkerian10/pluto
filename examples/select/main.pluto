@@ -34,8 +34,8 @@ fn main() {
     let (num_tx, num_rx) = chan<int>(10)
     let (str_tx, str_rx) = chan<string>(10)
 
-    spawn numbers(num_tx)
-    spawn letters(str_tx)
+    spawn numbers(num_tx).detach()
+    spawn letters(str_tx).detach()
     num_tx.close()
     str_tx.close()
 

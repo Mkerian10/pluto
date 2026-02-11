@@ -62,8 +62,11 @@ mod tests {
             traits: vec![],
             enums: vec![],
             app: None,
+            stages: vec![],
+            system: None,
             errors: vec![],
             test_info: vec![],
+            tests: None,
             fallible_extern_fns: vec![],
         }
     }

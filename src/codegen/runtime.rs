@@ -135,7 +135,15 @@ impl RuntimeRegistry {
         // Concurrency
         reg.declare(module, "__pluto_task_spawn", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_task_get", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_task_detach", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_task_cancel", &[types::I64], &[])?;
         reg.declare(module, "__pluto_deep_copy", &[types::I64], &[types::I64])?;
+
+        // Rwlock synchronization
+        reg.declare(module, "__pluto_rwlock_init", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_rwlock_rdlock", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_rwlock_wrlock", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_rwlock_unlock", &[types::I64], &[])?;
 
         // Channels
         reg.declare(module, "__pluto_chan_create", &[types::I64], &[types::I64])?;
@@ -163,6 +171,7 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_test_start", &[types::I64], &[])?;
         reg.declare(module, "__pluto_test_pass", &[], &[])?;
         reg.declare(module, "__pluto_test_summary", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_test_run", &[types::I64, types::I64, types::I64, types::I64], &[])?;
 
         Ok(reg)
     }

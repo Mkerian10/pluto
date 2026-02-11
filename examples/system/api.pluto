@@ -1,0 +1,18 @@
+class OrderService {
+    count: int
+
+    fn process_order(mut self) {
+        self.count = self.count + 1
+        print("processed order #{self.count}")
+    }
+}
+
+app ApiApp[orders: OrderService] {
+    fn main(self) {
+        print("=== API Server ===")
+        self.orders.process_order()
+        self.orders.process_order()
+        self.orders.process_order()
+        print("api server done")
+    }
+}

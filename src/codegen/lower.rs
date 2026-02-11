@@ -37,6 +37,8 @@ struct LowerContext<'a> {
     fn_contracts: &'a HashMap<String, FnContracts>,
     /// Module-level globals holding DI singleton pointers, used by scope blocks.
     singleton_globals: &'a HashMap<String, DataId>,
+    /// Module-level globals holding rwlock pointers for synchronized singletons.
+    rwlock_globals: &'a HashMap<String, DataId>,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
     var_types: HashMap<String, PlutoType>,
@@ -54,6 +56,8 @@ struct LowerContext<'a> {
     ensures_block: Option<cranelift_codegen::ir::Block>,
     /// Display name for the current function (for contract violation messages)
     fn_display_name: String,
+    /// Whether this function is a spawn closure (return values must be I64-encoded)
+    is_spawn_closure: bool,
 }
 
 impl<'a> LowerContext<'a> {
@@ -107,6 +111,16 @@ impl<'a> LowerContext<'a> {
     /// Emit a return with the default value for the current function's return type.
     /// Used by raise and propagation to exit the function when an error occurs.
     fn emit_default_return(&mut self) {
+        // Spawn closures always return I64, so default is always iconst 0
+        if self.is_spawn_closure && !matches!(&self.expected_return_type, Some(PlutoType::Void) | None) {
+            let val = self.builder.ins().iconst(types::I64, 0);
+            if let Some(exit_bb) = self.exit_block {
+                self.builder.ins().jump(exit_bb, &[val]);
+            } else {
+                self.builder.ins().return_(&[val]);
+            }
+            return;
+        }
         match &self.expected_return_type {
             Some(PlutoType::Void) | None => {
                 if let Some(exit_bb) = self.exit_block {
@@ -420,6 +434,12 @@ impl<'a> LowerContext<'a> {
                                     self.emit_nullable_wrap(val, inner)
                                 }
                                 _ => val,
+                            };
+                            // Spawn closures must return I64 (C runtime reads integer register)
+                            let final_val = if self.is_spawn_closure && val_type != PlutoType::Void {
+                                to_array_slot(final_val, &val_type, &mut self.builder)
+                            } else {
+                                final_val
                             };
                             if let Some(bb) = target_block {
                                 self.builder.ins().jump(bb, &[final_val]);
@@ -1923,10 +1943,17 @@ impl<'a> LowerContext<'a> {
                 match &call.node {
                     Expr::ClosureCreate { fn_name, captures, .. } => {
                         let closure_ptr = self.lower_closure_create(fn_name, captures)?;
-                        // Deep-copy heap-type captures so spawned task gets isolated data
+                        // Deep-copy heap-type captures so spawned task gets isolated data.
+                        // DI singletons and the app instance are shared by reference (not copied).
                         for (i, cap_name) in captures.iter().enumerate() {
                             let cap_type = self.var_types.get(cap_name).cloned().unwrap_or(PlutoType::Int);
-                            if needs_deep_copy(&cap_type) {
+                            let is_di_singleton = if let PlutoType::Class(name) = &cap_type {
+                                self.env.di_order.contains(name)
+                                    || self.env.app.as_ref().map_or(false, |(app_name, _)| app_name == name)
+                            } else {
+                                false
+                            };
+                            if !is_di_singleton && needs_deep_copy(&cap_type) {
                                 let offset = ((1 + i) * 8) as i32;
                                 let original = self.builder.ins().load(
                                     types::I64, MemFlags::new(), closure_ptr, Offset32::new(offset),
@@ -2445,6 +2472,14 @@ impl<'a> LowerContext<'a> {
                     let raw = self.call_runtime("__pluto_task_get", &[obj_ptr]);
                     return Ok(from_array_slot(raw, inner, &mut self.builder));
                 }
+                "detach" => {
+                    self.call_runtime_void("__pluto_task_detach", &[obj_ptr]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "cancel" => {
+                    self.call_runtime_void("__pluto_task_cancel", &[obj_ptr]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
                 _ => return Err(CompileError::codegen(format!("Task has no method '{}'", method.node)))
             }
         }
@@ -2763,6 +2798,20 @@ impl<'a> LowerContext<'a> {
                 arg_values.push(self.lower_expr(&arg.node)?);
             }
 
+            // Acquire rwlock if this singleton is synchronized (Phase 4b)
+            let needs_sync = self.rwlock_globals.contains_key(&class_name);
+            if needs_sync {
+                let data_id = self.rwlock_globals[&class_name];
+                let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+                let addr = self.builder.ins().global_value(types::I64, gv);
+                let lock_ptr = self.builder.ins().load(types::I64, MemFlags::new(), addr, Offset32::new(0));
+                if self.env.mut_self_methods.contains(&mangled) {
+                    self.call_runtime_void("__pluto_rwlock_wrlock", &[lock_ptr]);
+                } else {
+                    self.call_runtime_void("__pluto_rwlock_rdlock", &[lock_ptr]);
+                }
+            }
+
             let call = self.builder.ins().call(func_ref, &arg_values);
             let results = self.builder.inst_results(call);
             let result = if results.is_empty() {
@@ -2772,8 +2821,18 @@ impl<'a> LowerContext<'a> {
             };
 
             // Emit invariant checks only after mut self methods — only mutations can break invariants
+            // (runs inside lock scope so invariants are checked atomically)
             if self.env.mut_self_methods.contains(&mangled) {
                 self.emit_invariant_checks(&class_name, obj_ptr)?;
+            }
+
+            // Release rwlock after method call + invariant checks
+            if needs_sync {
+                let data_id = self.rwlock_globals[&class_name];
+                let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+                let addr = self.builder.ins().global_value(types::I64, gv);
+                let lock_ptr = self.builder.ins().load(types::I64, MemFlags::new(), addr, Offset32::new(0));
+                self.call_runtime_void("__pluto_rwlock_unlock", &[lock_ptr]);
             }
 
             Ok(result)
@@ -2914,6 +2973,7 @@ pub fn lower_function(
     class_invariants: &HashMap<String, Vec<(Expr, String)>>,
     fn_contracts: &HashMap<String, FnContracts>,
     singleton_globals: &HashMap<String, DataId>,
+    rwlock_globals: &HashMap<String, DataId>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -3002,14 +3062,21 @@ pub fn lower_function(
         env.functions.get(&lookup_name).map(|s| s.return_type.clone())
     };
 
+    let is_spawn_closure = spawn_closure_fns.contains(&func.name.node);
+
     // Create exit block if we have sender cleanup vars
     let exit_block = if !sender_cleanup_vars.is_empty() {
         let exit_bb = builder.create_block();
         // Add return value as block param if function returns non-void
         let is_void_return = matches!(&expected_return_type, Some(PlutoType::Void) | None);
         if !is_void_return {
-            let ret_cl_type = pluto_to_cranelift(expected_return_type.as_ref()
-                .expect("non-void return type should be set"));
+            // Spawn closures return I64 regardless of actual type
+            let ret_cl_type = if is_spawn_closure {
+                types::I64
+            } else {
+                pluto_to_cranelift(expected_return_type.as_ref()
+                    .expect("non-void return type should be set"))
+            };
             builder.append_block_param(exit_bb, ret_cl_type);
         }
         Some(exit_bb)
@@ -3033,8 +3100,12 @@ pub fn lower_function(
     let ensures_block = if has_ensures {
         let ens_bb = builder.create_block();
         if !is_void_return {
-            let ret_cl_type = pluto_to_cranelift(expected_return_type.as_ref()
-                .expect("non-void return type should be set"));
+            let ret_cl_type = if is_spawn_closure {
+                types::I64
+            } else {
+                pluto_to_cranelift(expected_return_type.as_ref()
+                    .expect("non-void return type should be set"))
+            };
             builder.append_block_param(ens_bb, ret_cl_type);
         }
         Some(ens_bb)
@@ -3055,6 +3126,7 @@ pub fn lower_function(
         class_invariants,
         fn_contracts,
         singleton_globals,
+        rwlock_globals,
         variables,
         var_types,
         next_var,
@@ -3065,6 +3137,7 @@ pub fn lower_function(
         old_snapshots: HashMap::new(),
         ensures_block,
         fn_display_name,
+        is_spawn_closure,
     };
 
     // Initialize GC at start of non-app main
@@ -3146,8 +3219,12 @@ pub fn lower_function(
             let ret_val = ctx.builder.block_params(ens_bb)[0];
             let var = Variable::from_u32(ctx.next_var);
             ctx.next_var += 1;
-            let ret_cl_type = pluto_to_cranelift(ctx.expected_return_type.as_ref()
-                .expect("non-void return type should be set"));
+            let ret_cl_type = if ctx.is_spawn_closure {
+                types::I64
+            } else {
+                pluto_to_cranelift(ctx.expected_return_type.as_ref()
+                    .expect("non-void return type should be set"))
+            };
             ctx.builder.declare_var(var, ret_cl_type);
             ctx.builder.def_var(var, ret_val);
             Some(var)

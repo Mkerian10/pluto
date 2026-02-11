@@ -177,7 +177,9 @@ When lowering `Expr::Scope`:
 
 ---
 
-## Phase 4: Transient Lifecycle
+## Phase 4: Transient Lifecycle (Deferred)
+
+**Status:** Deferred — transient lifecycle is not useful without field defaults (no way to construct a class with regular fields automatically). Will revisit when field defaults are implemented.
 
 **Goal:** `transient class Foo { ... }` creates a fresh instance at every injection point.
 
@@ -245,27 +247,27 @@ When lowering `Expr::Scope`:
 
 ---
 
-## Phase 6: Quality of Life
+## Phase 6: Quality of Life ✅
 
 **Goal:** Polish and ergonomics.
 
-### 6a. Error Messages
+### 6a. Error Messages ✅
 
-- Clear diagnostic for captive dependencies showing the full chain
-- Suggestion: "did you mean to make this class scoped?"
-- Show inferred lifecycle in error messages
+- Actionable suggestions in all scope block and DI lifecycle error messages
+- Lifecycle names displayed in lowercase (`singleton`, `scoped`, `transient`) via `Display` impl
+- Cycle detection includes class names in error message
+- Suggestions: "add 'scoped' keyword", "provide it as a seed expression", "overrides can only shorten lifecycle"
 
-### 6b. LSP Integration
+### 6b. LSP Integration ✅
 
-- Show inferred lifecycle on hover
-- Show scope graph in document symbols
-- Diagnostic for captive dependencies with quickfix
+- Show inferred lifecycle on hover (completed in Phase 5)
 
-### 6c. Documentation + Examples
+### 6c. Documentation + Examples ✅
 
-- Update `docs/design/dependency-injection.md`
-- Write `examples/scoped-di/main.pluto`
-- Update `examples/README.md`
+- Updated `docs/design/dependency-injection.md` with Lifecycles and Scope Blocks section
+- Updated RFC status to Implemented
+- Added scope block example to `SPEC.md`
+- Added DI Lifecycle RFC to SPEC.md design documents table
 
 ---
 

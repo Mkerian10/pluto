@@ -275,11 +275,18 @@ fn check_stmt(
             }
         }
         Stmt::Expr(expr) => {
-            infer_expr(&expr.node, expr.span, env)?;
+            let expr_type = infer_expr(&expr.node, expr.span, env)?;
             // Bare expect() as statement is likely a bug (forgot .to_equal() etc.)
             if let Expr::Call { name, .. } = &expr.node && name.node == "expect" {
                 return Err(CompileError::type_err(
                     "expect() must be followed by an assertion method like .to_equal(), .to_be_true(), or .to_be_false()",
+                    expr.span,
+                ));
+            }
+            // Must-use: bare spawn as statement is a compile error
+            if matches!(&expr_type, PlutoType::Task(_)) {
+                return Err(CompileError::type_err(
+                    "Task handle must be used -- call .get(), .detach(), or assign to a variable",
                     expr.span,
                 ));
             }
@@ -381,7 +388,11 @@ fn check_scope_stmt(
                 })?;
                 if info.lifecycle != Lifecycle::Scoped {
                     return Err(CompileError::type_err(
-                        format!("scope seed must be a scoped class, but '{name}' has lifecycle '{:?}'", info.lifecycle),
+                        format!(
+                            "scope seed must be a scoped class, but '{name}' has lifecycle '{}'; \
+                             add 'scoped' keyword: scoped class {name} {{ ... }}",
+                            info.lifecycle
+                        ),
                         seed.span,
                     ));
                 }
@@ -479,7 +490,8 @@ fn check_scope_stmt(
             if has_non_injected {
                 return Err(CompileError::type_err(
                     format!(
-                        "scoped class '{class_name}' has non-injected fields and must be provided as a seed"
+                        "scoped class '{class_name}' has non-injected fields and must be provided as a seed; \
+                         provide it as a seed expression: scope({class_name} {{ field: val }}) |...| {{ ... }}"
                     ),
                     span,
                 ));
@@ -552,8 +564,15 @@ fn check_scope_stmt(
     }
 
     if creation_order.len() != classes_to_create.len() {
+        let in_cycle: Vec<String> = classes_to_create.iter()
+            .filter(|c| !creation_order.contains(c))
+            .cloned()
+            .collect();
+        let cycle_str = in_cycle.join(" -> ");
         return Err(CompileError::type_err(
-            "scope block: circular dependency detected among scoped classes".to_string(),
+            format!(
+                "scope block: circular dependency detected among scoped classes: {cycle_str}"
+            ),
             span,
         ));
     }
@@ -577,7 +596,8 @@ fn check_scope_stmt(
                     return Err(CompileError::type_err(
                         format!(
                             "scope block: cannot wire field '{field_name}' of class '{class_name}': \
-                             dependency '{dep_name}' is not available as a seed, singleton, or scoped instance"
+                             dependency '{dep_name}' is not available as a seed, singleton, or scoped instance; \
+                             make '{dep_name}' a seed, or ensure it is a singleton or scoped class in the DI graph"
                         ),
                         span,
                     ));
@@ -598,7 +618,8 @@ fn check_scope_stmt(
         } else {
             return Err(CompileError::type_err(
                 format!(
-                    "scope block: binding type '{binding_class}' is not reachable from seeds"
+                    "scope block: binding type '{binding_class}' is not reachable from seeds; \
+                     add a seed for '{binding_class}' or one of its transitive scoped dependencies"
                 ),
                 span,
             ));
@@ -1086,6 +1107,22 @@ pub(crate) fn enforce_mut_self(program: &Program, env: &TypeEnv) -> Result<(), C
                 continue;
             }
             check_body_for_self_mutation(&m.body.node, app_name, env)?;
+        }
+    }
+
+    // Check stage methods
+    for stage_spanned in &program.stages {
+        let stage = &stage_spanned.node;
+        let stage_name = &stage.name.node;
+        for method in &stage.methods {
+            let m = &method.node;
+            if m.params.is_empty() || m.params[0].name.node != "self" {
+                continue;
+            }
+            if m.params[0].is_mut {
+                continue;
+            }
+            check_body_for_self_mutation(&m.body.node, stage_name, env)?;
         }
     }
 

@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail_with};
+use common::{compile_and_run, compile_and_run_stdout, compile_should_fail_with};
 
 #[test]
 fn scoped_class_parses() {
@@ -69,11 +69,11 @@ fn scoped_on_enum_rejected() {
 }
 
 #[test]
-fn scoped_generic_class_rejected() {
-    compile_should_fail_with(
-        "scoped class Box<T> {\n    value: T\n}\n\nfn main() {}",
-        "generic classes cannot have lifecycle annotations",
+fn scoped_generic_class_allowed() {
+    let exit = compile_and_run(
+        "scoped class Box<T> {\n    value: T\n}\n\nfn main() {\n    let b = Box<int> { value: 42 }\n    print(b.value)\n}",
     );
+    assert_eq!(exit, 0);
 }
 
 #[test]

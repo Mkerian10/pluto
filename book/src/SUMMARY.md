@@ -1,48 +1,44 @@
 # Summary
 
-[Introduction](./introduction.md)
+[Introduction](introduction.md)
 
 # Getting Started
 
-- [Installation](./getting-started/installation.md)
-- [Hello, World](./getting-started/hello-world.md)
+- [Installation](getting-started/installation.md)
+- [A Taste of Pluto](taste.md)
 
-# Language Basics
+# What Sets Pluto Apart
 
-- [Variables and Types](./basics/variables.md)
-- [Functions](./basics/functions.md)
-- [Control Flow](./basics/control-flow.md)
-- [Strings](./basics/strings.md)
-- [Arrays](./basics/arrays.md)
+- [Error Handling](whats-different/errors.md)
+- [Dependency Injection](whats-different/di.md)
+- [The App Model](whats-different/app.md)
+- [Concurrency](whats-different/concurrency.md)
+- [Contracts](whats-different/contracts.md)
 
-# Structs and Traits
+# The Language
 
-- [Classes](./structs/classes.md)
-- [Traits](./structs/traits.md)
-- [Enums and Pattern Matching](./structs/enums.md)
+- [Syntax at a Glance](language/syntax.md)
+- [Strings and Collections](language/strings-and-collections.md)
+- [Data Modeling](language/data-modeling.md)
+- [Closures and Generics](language/closures-and-generics.md)
+- [Nullable Types](language/nullable.md)
+- [Modules and Packages](language/modules-and-packages.md)
+- [Testing](language/testing.md)
+- [Rust FFI](language/rust-ffi.md)
 
-# Advanced Features
+# The Vision
 
-- [Closures](./advanced/closures.md)
-- [Generics](./advanced/generics.md)
-- [Nullable Types](./advanced/nullable.md)
-- [Error Handling](./advanced/errors.md)
-- [Modules and Imports](./advanced/modules.md)
-- [Maps and Sets](./advanced/collections.md)
-- [Concurrency](./advanced/concurrency.md)
-- [Channels](./advanced/channels.md)
-- [Testing](./advanced/testing.md)
-- [Contracts](./advanced/contracts.md)
-- [Rust FFI](./advanced/rust-ffi.md)
-
-# The App Model
-
-- [Dependency Injection](./app/di.md)
-- [The App Declaration](./app/app.md)
+- [AI-Native Development](vision.md)
 
 # Standard Library
 
-- [std.strings](./stdlib/strings.md)
-- [std.math](./stdlib/math.md)
-- [std.fs](./stdlib/fs.md)
-- [std.net](./stdlib/net.md)
+- [std.collections](stdlib/collections.md)
+- [std.json](stdlib/json.md)
+- [std.io](stdlib/io.md)
+- [std.strings](stdlib/strings.md)
+- [std.math](stdlib/math.md)
+- [std.time](stdlib/time.md)
+- [std.random](stdlib/random.md)
+- [std.fs](stdlib/fs.md)
+- [std.net](stdlib/net.md)
+- [std.http](stdlib/http.md)

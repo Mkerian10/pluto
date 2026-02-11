@@ -59,6 +59,13 @@ impl DeclIndex {
             }
         }
 
+        for stage in &program.stages {
+            for m in &stage.node.methods {
+                let mangled = mangle_method(&stage.node.name.node, &m.node.name.node);
+                fn_index.insert(mangled, m.node.id);
+            }
+        }
+
         // Also index extern functions (they have no UUID in the AST, so skip them)
         // Trait methods have bodies but are indexed through class impls, not directly callable by name
 
@@ -99,6 +106,13 @@ pub fn resolve_cross_refs(program: &mut Program) {
     // Walk app methods
     if let Some(app) = &mut program.app {
         for m in &mut app.node.methods {
+            resolve_block(&mut m.node.body.node, &index);
+        }
+    }
+
+    // Walk stage methods
+    for stage in &mut program.stages {
+        for m in &mut stage.node.methods {
             resolve_block(&mut m.node.body.node, &index);
         }
     }
@@ -199,7 +213,7 @@ fn resolve_stmt(stmt: &mut Stmt, index: &DeclIndex) {
 
 fn resolve_expr(expr: &mut Expr, index: &DeclIndex) {
     match expr {
-        Expr::Call { name, args, target_id } => {
+        Expr::Call { name, args, target_id, .. } => {
             *target_id = index.fn_index.get(&name.node).copied();
             for arg in args {
                 resolve_expr(&mut arg.node, index);
@@ -327,6 +341,7 @@ mod tests {
             id: Uuid::new_v4(),
             name: sp(name.to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             params: vec![],
             return_type: None,
             contracts: vec![],
@@ -345,8 +360,11 @@ mod tests {
             traits: vec![],
             enums: vec![],
             app: None,
+            stages: vec![],
+            system: None,
             errors: vec![],
             test_info: vec![],
+            tests: None,
             fallible_extern_fns: vec![],
         }
     }
@@ -363,6 +381,7 @@ mod tests {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
                 name: sp("greet".to_string()),
                 args: vec![],
+                type_args: vec![],
                 target_id: None,
             })))],
         });
@@ -390,6 +409,7 @@ mod tests {
             id: class_id,
             name: sp("Point".to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             fields: vec![],
             methods: vec![],
             invariants: vec![],
@@ -430,6 +450,7 @@ mod tests {
             id: enum_id,
             name: sp("Color".to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             variants: vec![EnumVariant {
                 id: variant_id,
                 name: sp("Red".to_string()),
@@ -471,6 +492,7 @@ mod tests {
             id: enum_id,
             name: sp("Shape".to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             variants: vec![EnumVariant {
                 id: variant_id,
                 name: sp("Circle".to_string()),
@@ -543,6 +565,7 @@ mod tests {
             id: enum_id,
             name: sp("Option".to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             variants: vec![EnumVariant {
                 id: variant_id,
                 name: sp("Some".to_string()),
@@ -586,6 +609,7 @@ mod tests {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
                 name: sp("print".to_string()),
                 args: vec![],
+                type_args: vec![],
                 target_id: None,
             })))],
         });
@@ -644,6 +668,7 @@ mod tests {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
                 name: sp("math.add".to_string()),
                 args: vec![],
+                type_args: vec![],
                 target_id: None,
             })))],
         });
@@ -673,6 +698,7 @@ mod tests {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
                 name: sp("identity$$int".to_string()),
                 args: vec![],
+                type_args: vec![],
                 target_id: None,
             })))],
         });
@@ -697,11 +723,13 @@ mod tests {
             id: Uuid::new_v4(),
             name: sp("Greeter".to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             fields: vec![],
             methods: vec![sp(Function {
                 id: method_id,
                 name: sp("hello".to_string()),
                 type_params: vec![],
+                type_param_bounds: std::collections::HashMap::new(),
                 params: vec![],
                 return_type: None,
                 contracts: vec![],
@@ -721,6 +749,7 @@ mod tests {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
                 name: sp("Greeter$hello".to_string()),
                 args: vec![],
+                type_args: vec![],
                 target_id: None,
             })))],
         });

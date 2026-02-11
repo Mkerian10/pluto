@@ -63,6 +63,17 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
         }
     }
 
+    // Collect effects from stage methods
+    for stage_spanned in &program.stages {
+        let stage_name = &stage_spanned.node.name.node;
+        for method in &stage_spanned.node.methods {
+            let mangled = mangle_method(stage_name, &method.node.name.node);
+            let (directs, edges) = collect_block_effects(&method.node.body.node, &mangled, env);
+            direct_errors.insert(mangled.clone(), directs);
+            propagation_edges.insert(mangled, edges);
+        }
+    }
+
     // Fixed-point iteration: propagate error sets through call edges.
     // Start from pre-existing fn_errors (e.g. seeded FFI fallible functions).
     let mut fn_errors: HashMap<String, HashSet<String>> = env.fn_errors.clone();
@@ -281,6 +292,8 @@ fn collect_expr_effects(
                             direct_errors.insert("ChannelClosed".to_string());
                             direct_errors.insert("ChannelEmpty".to_string());
                         }
+                        Some(MethodResolution::TaskDetach) => {}
+                        Some(MethodResolution::TaskCancel) => {}
                         Some(MethodResolution::Builtin) => {}
                         None => {}
                     }
@@ -371,12 +384,19 @@ fn collect_expr_effects(
         }
         Expr::Spawn { call } => {
             // Spawn is opaque to the error system — do NOT recurse into the closure body.
-            // Only collect effects from spawn arg expressions (inside the closure's inner Call).
+            // Only collect effects from spawn arg expressions (inside the closure's inner Call/MethodCall).
             if let Expr::Closure { body, .. } = &call.node {
                 for stmt in &body.node.stmts {
-                    if let Stmt::Return(Some(ret_expr)) = &stmt.node && let Expr::Call { args, .. } = &ret_expr.node {
-                        for arg in args {
-                            collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
+                        let args = match &ret_expr.node {
+                            Expr::Call { args, .. } => Some(args),
+                            Expr::MethodCall { args, .. } => Some(args),
+                            _ => None,
+                        };
+                        if let Some(args) = args {
+                            for arg in args {
+                                collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                            }
                         }
                     }
                 }
@@ -443,6 +463,14 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
         let app_name = &app_spanned.node.name.node;
         for method in &app_spanned.node.methods {
             let current_fn = mangle_method(app_name, &method.node.name.node);
+            enforce_block(&method.node.body.node, &current_fn, env)?;
+        }
+    }
+    // Enforce error handling in stage methods
+    for stage_spanned in &program.stages {
+        let stage_name = &stage_spanned.node.name.node;
+        for method in &stage_spanned.node.methods {
+            let current_fn = mangle_method(stage_name, &method.node.name.node);
             enforce_block(&method.node.body.node, &current_fn, env)?;
         }
     }
@@ -724,14 +752,21 @@ fn enforce_expr(
             // Do NOT enforce the inner call itself or the closure body as a whole.
             if let Expr::Closure { body, .. } = &call.node {
                 for stmt in &body.node.stmts {
-                    if let Stmt::Return(Some(ret_expr)) = &stmt.node && let Expr::Call { args, .. } = &ret_expr.node {
-                        for arg in args {
-                            enforce_expr(&arg.node, arg.span, current_fn, env)?;
-                            if contains_propagate(&arg.node) {
-                                return Err(CompileError::type_err(
-                                    "error propagation (!) is not allowed in spawn arguments; evaluate before spawn",
-                                    arg.span,
-                                ));
+                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
+                        let args = match &ret_expr.node {
+                            Expr::Call { args, .. } => Some(args),
+                            Expr::MethodCall { args, .. } => Some(args),
+                            _ => None,
+                        };
+                        if let Some(args) = args {
+                            for arg in args {
+                                enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                                if contains_propagate(&arg.node) {
+                                    return Err(CompileError::type_err(
+                                        "error propagation (!) is not allowed in spawn arguments; evaluate before spawn",
+                                        arg.span,
+                                    ));
+                                }
                             }
                         }
                     }

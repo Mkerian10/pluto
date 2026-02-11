@@ -168,3 +168,15 @@ path = "tests/integration/sync.rs"
 [[test]]
 name = "scope_blocks"
 path = "tests/integration/scope_blocks.rs"
+
+[[test]]
+name = "system"
+path = "tests/integration/system.rs"
+
+[[test]]
+name = "deterministic"
+path = "tests/integration/deterministic.rs"
+
+[[test]]
+name = "stages"
+path = "tests/integration/stages.rs"

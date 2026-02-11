@@ -559,6 +559,14 @@ fn find_expr_in_stmt<'a>(stmt: &'a Stmt, target: Span) -> Option<&'a Expr> {
             None
         }
         Stmt::Break | Stmt::Continue => None,
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                if let Some(e) = find_expr_recursive(&seed.node, seed.span, target) {
+                    return Some(e);
+                }
+            }
+            find_expr_in_block(&body.node, target)
+        }
     }
 }
 

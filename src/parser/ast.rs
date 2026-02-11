@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 
@@ -13,9 +14,24 @@ pub struct Program {
     pub traits: Vec<Spanned<TraitDecl>>,
     pub enums: Vec<Spanned<EnumDecl>>,
     pub app: Option<Spanned<AppDecl>>,
+    pub stages: Vec<Spanned<StageDecl>>,
+    pub system: Option<Spanned<SystemDecl>>,
     pub errors: Vec<Spanned<ErrorDecl>>,
-    pub test_info: Vec<(String, String)>,  // (display_name, fn_name)
+    pub test_info: Vec<TestInfo>,
+    pub tests: Option<Spanned<TestsDecl>>,
     pub fallible_extern_fns: Vec<String>,  // populated by rust_ffi::inject_extern_fns for Result-returning FFI fns
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestsDecl {
+    pub id: Uuid,
+    pub strategy: String,  // "Sequential", "RoundRobin", "Random"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestInfo {
+    pub display_name: String,
+    pub fn_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,11 +75,22 @@ pub enum Lifecycle {
     Transient,
 }
 
+impl std::fmt::Display for Lifecycle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Lifecycle::Singleton => write!(f, "singleton"),
+            Lifecycle::Scoped => write!(f, "scoped"),
+            Lifecycle::Transient => write!(f, "transient"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassDecl {
     pub id: Uuid,
     pub name: Spanned<String>,
     pub type_params: Vec<Spanned<String>>,
+    pub type_param_bounds: HashMap<String, Vec<Spanned<String>>>,
     pub fields: Vec<Field>,
     pub methods: Vec<Spanned<Function>>,
     pub invariants: Vec<Spanned<ContractClause>>,
@@ -93,10 +120,35 @@ pub struct AppDecl {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageDecl {
+    pub id: Uuid,
+    pub name: Spanned<String>,
+    pub inject_fields: Vec<Field>,
+    pub ambient_types: Vec<Spanned<String>>,
+    pub lifecycle_overrides: Vec<(Spanned<String>, Lifecycle)>,
+    pub methods: Vec<Spanned<Function>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemMember {
+    pub id: Uuid,
+    pub name: Spanned<String>,         // deployment name (e.g., "api_server")
+    pub module_name: Spanned<String>,   // imported module name (e.g., "api")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemDecl {
+    pub id: Uuid,
+    pub name: Spanned<String>,          // system name (e.g., "OrderPlatform")
+    pub members: Vec<SystemMember>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Function {
     pub id: Uuid,
     pub name: Spanned<String>,
     pub type_params: Vec<Spanned<String>>,
+    pub type_param_bounds: HashMap<String, Vec<Spanned<String>>>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub contracts: Vec<Spanned<ContractClause>>,
@@ -236,6 +288,7 @@ pub enum Expr {
     Call {
         name: Spanned<String>,
         args: Vec<Spanned<Expr>>,
+        type_args: Vec<Spanned<TypeExpr>>,
         target_id: Option<Uuid>,
     },
     FieldAccess {
@@ -393,6 +446,7 @@ pub struct EnumDecl {
     pub id: Uuid,
     pub name: Spanned<String>,
     pub type_params: Vec<Spanned<String>>,
+    pub type_param_bounds: HashMap<String, Vec<Spanned<String>>>,
     pub variants: Vec<EnumVariant>,
     pub is_pub: bool,
 }

@@ -473,7 +473,7 @@ class Service uses Logger {
 
 fn main() {
 }",
-        "no app declaration exists",
+        "no app or stage declaration exists",
     );
 }
 

@@ -4,7 +4,7 @@ use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 use crate::typeck::env::{FuncSig, TypeEnv};
-use crate::typeck::types::PlutoType;
+use crate::typeck::types::{PlutoType, pluto_type_to_type_expr};
 
 /// Lift closures out of function/method bodies into top-level functions.
 ///
@@ -34,6 +34,13 @@ pub fn lift_closures(program: &mut Program, env: &mut TypeEnv) -> Result<(), Com
     // Lift from app method bodies
     if let Some(app) = &mut program.app {
         for method in &mut app.node.methods {
+            lift_in_block(&mut method.node.body.node, env, &mut counter, &mut new_fns)?;
+        }
+    }
+
+    // Lift from stage method bodies
+    for stage in &mut program.stages {
+        for method in &mut stage.node.methods {
             lift_in_block(&mut method.node.body.node, env, &mut counter, &mut new_fns)?;
         }
     }
@@ -275,6 +282,7 @@ fn lift_in_expr(
                     id: Uuid::new_v4(),
                     name: Spanned::new(fn_name.clone(), Span::new(0, 0)),
                     type_params: vec![],
+                    type_param_bounds: std::collections::HashMap::new(),
                     params: all_params,
                     return_type: if ret_type == PlutoType::Void {
                         None
@@ -416,67 +424,5 @@ fn infer_type_from_expr(expr: &Expr) -> PlutoType {
         },
         Expr::Range { .. } => PlutoType::Range,
         _ => PlutoType::Int, // fallback — typeck has already validated
-    }
-}
-
-/// Convert a PlutoType back to a TypeExpr for the lifted function's return type annotation.
-fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
-    match ty {
-        PlutoType::Int => TypeExpr::Named("int".to_string()),
-        PlutoType::Float => TypeExpr::Named("float".to_string()),
-        PlutoType::Bool => TypeExpr::Named("bool".to_string()),
-        PlutoType::String => TypeExpr::Named("string".to_string()),
-        PlutoType::Void => TypeExpr::Named("void".to_string()),
-        PlutoType::Class(name) => TypeExpr::Named(name.clone()),
-        PlutoType::Array(inner) => {
-            TypeExpr::Array(Box::new(Spanned::new(pluto_type_to_type_expr(inner), Span::new(0, 0))))
-        }
-        PlutoType::Trait(name) => TypeExpr::Named(name.clone()),
-        PlutoType::Enum(name) => TypeExpr::Named(name.clone()),
-        PlutoType::Fn(params, ret) => {
-            TypeExpr::Fn {
-                params: params.iter()
-                    .map(|p| Box::new(Spanned::new(pluto_type_to_type_expr(p), Span::new(0, 0))))
-                    .collect(),
-                return_type: Box::new(Spanned::new(pluto_type_to_type_expr(ret), Span::new(0, 0))),
-            }
-        }
-        PlutoType::Map(k, v) => TypeExpr::Generic {
-            name: "Map".to_string(),
-            type_args: vec![
-                Spanned::new(pluto_type_to_type_expr(k), Span::new(0, 0)),
-                Spanned::new(pluto_type_to_type_expr(v), Span::new(0, 0)),
-            ],
-        },
-        PlutoType::Set(t) => TypeExpr::Generic {
-            name: "Set".to_string(),
-            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
-        },
-        PlutoType::Task(t) => TypeExpr::Generic {
-            name: "Task".to_string(),
-            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
-        },
-        PlutoType::Sender(t) => TypeExpr::Generic {
-            name: "Sender".to_string(),
-            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
-        },
-        PlutoType::Receiver(t) => TypeExpr::Generic {
-            name: "Receiver".to_string(),
-            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
-        },
-        PlutoType::Error => TypeExpr::Named("error".to_string()),
-        PlutoType::Range => TypeExpr::Named("range".to_string()),
-        PlutoType::TypeParam(name) => TypeExpr::Named(name.clone()),
-        PlutoType::Byte => TypeExpr::Named("byte".to_string()),
-        PlutoType::Bytes => TypeExpr::Named("bytes".to_string()),
-        PlutoType::GenericInstance(_, name, args) => TypeExpr::Generic {
-            name: name.clone(),
-            type_args: args.iter()
-                .map(|a| Spanned::new(pluto_type_to_type_expr(a), Span::new(0, 0)))
-                .collect(),
-        },
-        PlutoType::Nullable(inner) => {
-            TypeExpr::Nullable(Box::new(Spanned::new(pluto_type_to_type_expr(inner), Span::new(0, 0))))
-        }
     }
 }

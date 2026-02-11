@@ -149,6 +149,60 @@ pub fn desugar_ambient(program: &mut Program) -> Result<(), CompileError> {
         }
     }
 
+    // Process stage ambient types
+    for stage_spanned in &mut program.stages {
+        let stage = &mut stage_spanned.node;
+        if !stage.ambient_types.is_empty() {
+            let mut ambient_vars: HashSet<String> = HashSet::new();
+
+            let existing_names: HashSet<String> = stage.inject_fields.iter()
+                .map(|f| f.name.node.clone())
+                .collect();
+
+            let mut fields_to_add = Vec::new();
+
+            for type_name in &stage.ambient_types {
+                let var_name = lowercase_first(&type_name.node);
+
+                if !ambient_vars.insert(var_name.clone()) {
+                    return Err(CompileError::type_err(
+                        format!("duplicate ambient type '{}' in stage", type_name.node),
+                        type_name.span,
+                    ));
+                }
+
+                if existing_names.contains(&var_name) {
+                    return Err(CompileError::type_err(
+                        format!("ambient variable '{}' conflicts with existing stage dependency", var_name),
+                        type_name.span,
+                    ));
+                }
+
+                fields_to_add.push(Field {
+                    id: Uuid::new_v4(),
+                    name: Spanned::new(var_name, type_name.span),
+                    ty: Spanned::new(TypeExpr::Named(type_name.node.clone()), type_name.span),
+                    is_injected: true,
+                    is_ambient: true,
+                });
+            }
+
+            stage.inject_fields.extend(fields_to_add);
+
+            // Rewrite stage method bodies
+            for method in &mut stage.methods {
+                let params: HashSet<String> = method.node.params.iter()
+                    .map(|p| p.name.node.clone())
+                    .collect();
+                let mut active = ambient_vars.clone();
+                for p in &params {
+                    active.remove(p);
+                }
+                rewrite_block(&mut method.node.body.node, &active);
+            }
+        }
+    }
+
     Ok(())
 }
 

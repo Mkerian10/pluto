@@ -1,0 +1,17 @@
+class JobRunner {
+    jobs_done: int
+
+    fn run_job(mut self, name: string) {
+        self.jobs_done = self.jobs_done + 1
+        print("completed job: " + name)
+    }
+}
+
+app WorkerApp[runner: JobRunner] {
+    fn main(self) {
+        print("=== Background Worker ===")
+        self.runner.run_job("send-emails")
+        self.runner.run_job("generate-reports")
+        print("worker done")
+    }
+}

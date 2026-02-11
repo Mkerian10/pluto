@@ -86,8 +86,11 @@ fn load_directory_module(
             traits: Vec::new(),
             enums: Vec::new(),
             app: None,
+            stages: Vec::new(),
+            system: None,
             errors: Vec::new(),
             test_info: Vec::new(),
+            tests: None,
             fallible_extern_fns: Vec::new(),
         };
 
@@ -119,8 +122,27 @@ fn load_directory_module(
                 }
                 merged.app = Some(app_decl);
             }
+            if let Some(system_decl) = program.system {
+                if merged.system.is_some() {
+                    return Err(CompileError::codegen(format!(
+                        "multiple system declarations in module directory '{}'",
+                        dir.display()
+                    )));
+                }
+                merged.system = Some(system_decl);
+            }
+            merged.stages.extend(program.stages);
             merged.errors.extend(program.errors);
             merged.test_info.extend(program.test_info);
+            if let Some(tests_decl) = program.tests {
+                if merged.tests.is_some() {
+                    return Err(CompileError::codegen(format!(
+                        "multiple tests declarations in module directory '{}'",
+                        dir.display()
+                    )));
+                }
+                merged.tests = Some(tests_decl);
+            }
             merged.imports.extend(program.imports);
         }
 
@@ -332,17 +354,14 @@ fn resolve_module_imports(
     Ok(())
 }
 
-/// Flatten resolved imports into a program by prefixing names.
-/// Used for sub-module flattening (within a module's own imports).
-/// Adds ALL items (not just pub) since visibility is deferred.
-fn flatten_into_program(
-    program: &mut Program,
-    imports: Vec<(String, Program, ImportOrigin)>,
-) -> Result<(), CompileError> {
-    let import_names: HashSet<String> = imports.iter().map(|(n, _, _)| n.clone()).collect();
+/// Format a module-prefixed name: "module.name".
+fn prefix_name(module_name: &str, name: &str) -> String {
+    format!("{}.{}", module_name, name)
+}
 
-    // Reject app declarations in imported modules
-    for (module_name, module_prog, origin) in &imports {
+/// Validate that imported modules don't contain app or extern_rust declarations.
+fn validate_imported_modules(imports: &[(String, Program, ImportOrigin)]) -> Result<(), CompileError> {
+    for (module_name, module_prog, origin) in imports {
         if module_prog.app.is_some() {
             return Err(CompileError::codegen(format!(
                 "app declarations are not allowed in imported modules (found in '{}')",
@@ -363,92 +382,113 @@ fn flatten_into_program(
             return Err(CompileError::codegen(msg));
         }
     }
+    Ok(())
+}
 
-    for (module_name, module_prog, _origin) in &imports {
-        // Add ALL functions with prefixed names (no pub filter — visibility deferred)
-        for func in &module_prog.functions {
-            let mut prefixed_func = func.clone();
-            prefixed_func.node.name.node = format!("{}.{}", module_name, func.node.name.node);
-            prefix_function_types(&mut prefixed_func.node, module_name, module_prog);
-            program.functions.push(prefixed_func);
+/// Add all items from a module into the target program with prefixed names.
+/// Handles functions, classes, traits, enums, errors, and extern fns (deduplicated).
+fn add_prefixed_items(
+    target: &mut Program,
+    module_name: &str,
+    module_prog: &Program,
+) -> Result<(), CompileError> {
+    // Functions
+    for func in &module_prog.functions {
+        let mut prefixed_func = func.clone();
+        prefixed_func.node.name.node = prefix_name(module_name, &func.node.name.node);
+        prefix_function_types(&mut prefixed_func.node, module_name, module_prog);
+        target.functions.push(prefixed_func);
+    }
+
+    // Classes
+    for class in &module_prog.classes {
+        let mut prefixed_class = class.clone();
+        prefixed_class.node.name.node = prefix_name(module_name, &class.node.name.node);
+        for field in &mut prefixed_class.node.fields {
+            prefix_type_expr(&mut field.ty.node, module_name, module_prog);
         }
+        for method in &mut prefixed_class.node.methods {
+            prefix_function_types(&mut method.node, module_name, module_prog);
+        }
+        for trait_name in &mut prefixed_class.node.impl_traits {
+            if module_prog.traits.iter().any(|t| t.node.name.node == trait_name.node) {
+                trait_name.node = prefix_name(module_name, &trait_name.node);
+            }
+        }
+        target.classes.push(prefixed_class);
+    }
 
-        // Add ALL classes with prefixed names
-        for class in &module_prog.classes {
-            let mut prefixed_class = class.clone();
-            prefixed_class.node.name.node = format!("{}.{}", module_name, class.node.name.node);
-            for field in &mut prefixed_class.node.fields {
+    // Traits
+    for tr in &module_prog.traits {
+        let mut prefixed_trait = tr.clone();
+        prefixed_trait.node.name.node = prefix_name(module_name, &tr.node.name.node);
+        for method in &mut prefixed_trait.node.methods {
+            for param in &mut method.params {
+                prefix_type_expr(&mut param.ty.node, module_name, module_prog);
+            }
+            if let Some(ret) = &mut method.return_type {
+                prefix_type_expr(&mut ret.node, module_name, module_prog);
+            }
+        }
+        target.traits.push(prefixed_trait);
+    }
+
+    // Enums
+    for enum_decl in &module_prog.enums {
+        let mut prefixed_enum = enum_decl.clone();
+        prefixed_enum.node.name.node = prefix_name(module_name, &enum_decl.node.name.node);
+        for variant in &mut prefixed_enum.node.variants {
+            for field in &mut variant.fields {
                 prefix_type_expr(&mut field.ty.node, module_name, module_prog);
             }
-            for method in &mut prefixed_class.node.methods {
-                prefix_function_types(&mut method.node, module_name, module_prog);
-            }
-            for trait_name in &mut prefixed_class.node.impl_traits {
-                if module_prog.traits.iter().any(|t| t.node.name.node == trait_name.node) {
-                    trait_name.node = format!("{}.{}", module_name, trait_name.node);
-                }
-            }
-            program.classes.push(prefixed_class);
         }
+        target.enums.push(prefixed_enum);
+    }
 
-        // Add ALL traits with prefixed names
-        for tr in &module_prog.traits {
-            let mut prefixed_trait = tr.clone();
-            prefixed_trait.node.name.node = format!("{}.{}", module_name, tr.node.name.node);
-            for method in &mut prefixed_trait.node.methods {
-                for param in &mut method.params {
-                    prefix_type_expr(&mut param.ty.node, module_name, module_prog);
-                }
-                if let Some(ret) = &mut method.return_type {
-                    prefix_type_expr(&mut ret.node, module_name, module_prog);
-                }
-            }
-            program.traits.push(prefixed_trait);
+    // Errors
+    for error_decl in &module_prog.errors {
+        let mut prefixed_error = error_decl.clone();
+        prefixed_error.node.name.node = prefix_name(module_name, &error_decl.node.name.node);
+        for field in &mut prefixed_error.node.fields {
+            prefix_type_expr(&mut field.ty.node, module_name, module_prog);
         }
+        target.errors.push(prefixed_error);
+    }
 
-        // Add ALL enums with prefixed names
-        for enum_decl in &module_prog.enums {
-            let mut prefixed_enum = enum_decl.clone();
-            prefixed_enum.node.name.node = format!("{}.{}", module_name, enum_decl.node.name.node);
-            for variant in &mut prefixed_enum.node.variants {
-                for field in &mut variant.fields {
-                    prefix_type_expr(&mut field.ty.node, module_name, module_prog);
-                }
+    // Extern fns (NOT prefixed — C symbols stay as-is, but deduplicated)
+    for ext_fn in &module_prog.extern_fns {
+        let existing = target.extern_fns.iter()
+            .find(|e| e.node.name.node == ext_fn.node.name.node);
+        if let Some(existing) = existing {
+            if !extern_fn_sigs_match(&existing.node, &ext_fn.node) {
+                return Err(CompileError::codegen(format!(
+                    "conflicting extern fn signatures for '{}'",
+                    ext_fn.node.name.node
+                )));
             }
-            program.enums.push(prefixed_enum);
-        }
-
-        // Add ALL errors with prefixed names
-        for error_decl in &module_prog.errors {
-            let mut prefixed_error = error_decl.clone();
-            prefixed_error.node.name.node = format!("{}.{}", module_name, error_decl.node.name.node);
-            for field in &mut prefixed_error.node.fields {
-                prefix_type_expr(&mut field.ty.node, module_name, module_prog);
-            }
-            program.errors.push(prefixed_error);
-        }
-
-        // Add ALL extern fns WITHOUT prefixing (C symbols stay as-is)
-        for ext_fn in &module_prog.extern_fns {
-            // Deduplicate: check if already present with same name
-            let existing = program.extern_fns.iter()
-                .find(|e| e.node.name.node == ext_fn.node.name.node);
-            if let Some(existing) = existing {
-                // Verify signatures match
-                if !extern_fn_sigs_match(&existing.node, &ext_fn.node) {
-                    return Err(CompileError::codegen(format!(
-                        "conflicting extern fn signatures for '{}'",
-                        ext_fn.node.name.node
-                    )));
-                }
-                // Same signature, skip duplicate
-            } else {
-                program.extern_fns.push(ext_fn.clone());
-            }
+        } else {
+            target.extern_fns.push(ext_fn.clone());
         }
     }
 
-    // Rewrite qualified references in the program's AST
+    Ok(())
+}
+
+/// Flatten resolved imports into a program by prefixing names.
+/// Used for sub-module flattening (within a module's own imports).
+/// Adds ALL items (not just pub) since visibility is deferred.
+fn flatten_into_program(
+    program: &mut Program,
+    imports: Vec<(String, Program, ImportOrigin)>,
+) -> Result<(), CompileError> {
+    let import_names: HashSet<String> = imports.iter().map(|(n, _, _)| n.clone()).collect();
+
+    validate_imported_modules(&imports)?;
+
+    for (module_name, module_prog, _origin) in &imports {
+        add_prefixed_items(program, module_name, module_prog)?;
+    }
+
     rewrite_program(program, &import_names);
 
     Ok(())
@@ -506,6 +546,25 @@ pub fn resolve_modules(
     stdlib_root: Option<&Path>,
     pkg_graph: &PackageGraph,
 ) -> Result<ModuleGraph, CompileError> {
+    resolve_modules_inner(entry_file, stdlib_root, pkg_graph, false)
+}
+
+/// Like resolve_modules but skips sibling .pluto file auto-merging.
+/// Used for system member compilation where each member is compiled in isolation.
+pub fn resolve_modules_no_siblings(
+    entry_file: &Path,
+    stdlib_root: Option<&Path>,
+    pkg_graph: &PackageGraph,
+) -> Result<ModuleGraph, CompileError> {
+    resolve_modules_inner(entry_file, stdlib_root, pkg_graph, true)
+}
+
+fn resolve_modules_inner(
+    entry_file: &Path,
+    stdlib_root: Option<&Path>,
+    pkg_graph: &PackageGraph,
+    skip_siblings: bool,
+) -> Result<ModuleGraph, CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e| {
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display()))
     })?;
@@ -547,50 +606,62 @@ pub fn resolve_modules(
     let mut root = entry_prog;
 
     // Load sibling .pluto files (excluding the entry file and imported single-file modules)
-    let entries = std::fs::read_dir(entry_dir).map_err(|e| {
-        CompileError::codegen(format!("could not read directory '{}': {e}", entry_dir.display()))
-    })?;
+    // Skip this step when compiling system members in isolation
+    if !skip_siblings {
+        let entries = std::fs::read_dir(entry_dir).map_err(|e| {
+            CompileError::codegen(format!("could not read directory '{}': {e}", entry_dir.display()))
+        })?;
 
-    let mut sibling_files: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension().is_some_and(|ext| ext == "pluto")
-                && p.canonicalize().unwrap_or(p.clone()) != entry_file
-        })
-        .collect();
-    sibling_files.sort();
+        let mut sibling_files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension().is_some_and(|ext| ext == "pluto")
+                    && p.canonicalize().unwrap_or(p.clone()) != entry_file
+            })
+            .collect();
+        sibling_files.sort();
 
-    for file_path in &sibling_files {
-        let stem = file_path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-        // Skip files that match an import first segment (they'll be loaded as modules)
-        if import_first_segments.contains(stem) {
-            continue;
-        }
-        // Skip files that match a dep name
-        if dep_names.contains(&stem.to_string()) {
-            continue;
-        }
-        let (program, _file_id) = load_and_parse(file_path, &mut source_map)?;
-        // Merge sibling's imports into root (they might also have imports)
-        root.imports.extend(program.imports);
-        root.functions.extend(program.functions);
-        root.extern_fns.extend(program.extern_fns);
-        root.extern_rust_crates.extend(program.extern_rust_crates);
-        root.classes.extend(program.classes);
-        root.traits.extend(program.traits);
-        root.enums.extend(program.enums);
-        if let Some(app_decl) = program.app {
-            if root.app.is_some() {
-                return Err(CompileError::codegen(
-                    "multiple app declarations in project".to_string(),
-                ));
+        for file_path in &sibling_files {
+            let stem = file_path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            // Skip files that match an import first segment (they'll be loaded as modules)
+            if import_first_segments.contains(stem) {
+                continue;
             }
-            root.app = Some(app_decl);
+            // Skip files that match a dep name
+            if dep_names.contains(&stem.to_string()) {
+                continue;
+            }
+            let (program, _file_id) = load_and_parse(file_path, &mut source_map)?;
+            // Merge sibling's imports into root (they might also have imports)
+            root.imports.extend(program.imports);
+            root.functions.extend(program.functions);
+            root.extern_fns.extend(program.extern_fns);
+            root.extern_rust_crates.extend(program.extern_rust_crates);
+            root.classes.extend(program.classes);
+            root.traits.extend(program.traits);
+            root.enums.extend(program.enums);
+            if let Some(app_decl) = program.app {
+                if root.app.is_some() {
+                    return Err(CompileError::codegen(
+                        "multiple app declarations in project".to_string(),
+                    ));
+                }
+                root.app = Some(app_decl);
+            }
+            if let Some(system_decl) = program.system {
+                if root.system.is_some() {
+                    return Err(CompileError::codegen(
+                        "multiple system declarations in project".to_string(),
+                    ));
+                }
+                root.system = Some(system_decl);
+            }
+            root.stages.extend(program.stages);
+            root.errors.extend(program.errors);
         }
-        root.errors.extend(program.errors);
     }
 
     // Resolve each import (now with recursive sub-import support)
@@ -726,127 +797,19 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
         import_names.insert(ext_rust.node.alias.node.clone());
     }
 
-    // Reject app declarations and extern rust in imported modules
-    for (module_name, module_prog, origin) in &graph.imports {
-        if module_prog.app.is_some() {
-            return Err(CompileError::codegen(format!(
-                "app declarations are not allowed in imported modules (found in '{}')",
-                module_name
-            )));
-        }
-        if !module_prog.extern_rust_crates.is_empty() {
-            let msg = match origin {
-                ImportOrigin::PackageDep => format!(
-                    "extern rust declarations are not supported in package dependencies (found in '{}')",
-                    module_name
-                ),
-                ImportOrigin::Local => format!(
-                    "extern rust declarations are only allowed in the root program (found in '{}')",
-                    module_name
-                ),
-            };
-            return Err(CompileError::codegen(msg));
-        }
-    }
+    validate_imported_modules(&graph.imports)?;
 
     // Filter out test functions from imported modules before merging
     for (_module_name, module_prog, _origin) in &mut graph.imports {
         let test_fn_names: HashSet<String> = module_prog.test_info.iter()
-            .map(|(_, fn_name)| fn_name.clone()).collect();
+            .map(|t| t.fn_name.clone()).collect();
         module_prog.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
         module_prog.test_info.clear();
+        module_prog.tests = None;
     }
 
-    // Add prefixed items from imports
     for (module_name, module_prog, _origin) in &graph.imports {
-        // Add ALL functions with prefixed names (no pub filter — visibility deferred)
-        for func in &module_prog.functions {
-            let mut prefixed_func = func.clone();
-            prefixed_func.node.name.node = format!("{}.{}", module_name, func.node.name.node);
-            // Prefix types in params and return type that reference module-internal classes
-            prefix_function_types(&mut prefixed_func.node, module_name, module_prog);
-            graph.root.functions.push(prefixed_func);
-        }
-
-        // Add ALL classes with prefixed names
-        for class in &module_prog.classes {
-            let mut prefixed_class = class.clone();
-            prefixed_class.node.name.node = format!("{}.{}", module_name, class.node.name.node);
-            // Prefix field types that reference module-internal classes
-            for field in &mut prefixed_class.node.fields {
-                prefix_type_expr(&mut field.ty.node, module_name, module_prog);
-            }
-            // Prefix method params/return types and names
-            for method in &mut prefixed_class.node.methods {
-                prefix_function_types(&mut method.node, module_name, module_prog);
-            }
-            // Prefix trait names
-            for trait_name in &mut prefixed_class.node.impl_traits {
-                if module_prog.traits.iter().any(|t| t.node.name.node == trait_name.node) {
-                    trait_name.node = format!("{}.{}", module_name, trait_name.node);
-                }
-            }
-            graph.root.classes.push(prefixed_class);
-        }
-
-        // Add ALL traits with prefixed names
-        for tr in &module_prog.traits {
-            let mut prefixed_trait = tr.clone();
-            prefixed_trait.node.name.node = format!("{}.{}", module_name, tr.node.name.node);
-            // Prefix types in method signatures
-            for method in &mut prefixed_trait.node.methods {
-                for param in &mut method.params {
-                    prefix_type_expr(&mut param.ty.node, module_name, module_prog);
-                }
-                if let Some(ret) = &mut method.return_type {
-                    prefix_type_expr(&mut ret.node, module_name, module_prog);
-                }
-            }
-            graph.root.traits.push(prefixed_trait);
-        }
-
-        // Add ALL enums with prefixed names
-        for enum_decl in &module_prog.enums {
-            let mut prefixed_enum = enum_decl.clone();
-            prefixed_enum.node.name.node = format!("{}.{}", module_name, enum_decl.node.name.node);
-            // Prefix field types in variants that reference module-internal types
-            for variant in &mut prefixed_enum.node.variants {
-                for field in &mut variant.fields {
-                    prefix_type_expr(&mut field.ty.node, module_name, module_prog);
-                }
-            }
-            graph.root.enums.push(prefixed_enum);
-        }
-
-        // Add ALL errors with prefixed names
-        for error_decl in &module_prog.errors {
-            let mut prefixed_error = error_decl.clone();
-            prefixed_error.node.name.node = format!("{}.{}", module_name, error_decl.node.name.node);
-            for field in &mut prefixed_error.node.fields {
-                prefix_type_expr(&mut field.ty.node, module_name, module_prog);
-            }
-            graph.root.errors.push(prefixed_error);
-        }
-
-        // Add ALL extern fns from imported modules WITHOUT prefixing
-        // (extern fns refer to actual C symbols — their names must stay as-is)
-        for ext_fn in &module_prog.extern_fns {
-            // Deduplicate: check if already present with same name
-            let existing = graph.root.extern_fns.iter()
-                .find(|e| e.node.name.node == ext_fn.node.name.node);
-            if let Some(existing) = existing {
-                // Verify signatures match
-                if !extern_fn_sigs_match(&existing.node, &ext_fn.node) {
-                    return Err(CompileError::codegen(format!(
-                        "conflicting extern fn signatures for '{}'",
-                        ext_fn.node.name.node
-                    )));
-                }
-                // Same signature, skip duplicate
-            } else {
-                graph.root.extern_fns.push(ext_fn.clone());
-            }
-        }
+        add_prefixed_items(&mut graph.root, module_name, module_prog)?;
     }
 
     // Rewrite qualified references in root program's AST
@@ -871,7 +834,7 @@ fn prefix_type_expr(ty: &mut TypeExpr, module_name: &str, module_prog: &Program)
     match ty {
         TypeExpr::Named(name) => {
             if is_module_type(name, module_prog) {
-                *name = format!("{}.{}", module_name, name);
+                *name = prefix_name(module_name, name);
             }
         }
         TypeExpr::Array(inner) => {
@@ -888,7 +851,7 @@ fn prefix_type_expr(ty: &mut TypeExpr, module_name: &str, module_prog: &Program)
         }
         TypeExpr::Generic { name, type_args } => {
             if is_module_type(name, module_prog) {
-                *name = format!("{}.{}", module_name, name);
+                *name = prefix_name(module_name, name);
             }
             for arg in type_args {
                 prefix_type_expr(&mut arg.node, module_name, module_prog);
@@ -964,7 +927,7 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
             rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
             for arm in arms {
                 if is_module_type(&arm.enum_name.node, module_prog) {
-                    arm.enum_name.node = format!("{}.{}", module_name, arm.enum_name.node);
+                    arm.enum_name.node = prefix_name(module_name, &arm.enum_name.node);
                 }
                 // Rewrite type_args in match arms
                 for ta in &mut arm.type_args {
@@ -975,7 +938,7 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
         }
         Stmt::Raise { error_name, fields, .. } => {
             if module_prog.errors.iter().any(|e| e.node.name.node == error_name.node) {
-                error_name.node = format!("{}.{}", module_name, error_name.node);
+                error_name.node = prefix_name(module_name, &error_name.node);
             }
             for (_, val) in fields {
                 rewrite_expr_for_module(&mut val.node, module_name, module_prog);
@@ -1025,7 +988,7 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
         Expr::Call { name, args, .. } => {
             // Prefix calls to module-internal functions (but NOT extern fns — those are C symbols)
             if module_prog.functions.iter().any(|f| f.node.name.node == name.node) {
-                name.node = format!("{}.{}", module_name, name.node);
+                name.node = prefix_name(module_name, &name.node);
             }
             for arg in args {
                 rewrite_expr_for_module(&mut arg.node, module_name, module_prog);
@@ -1033,7 +996,7 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
         }
         Expr::StructLit { name, type_args, fields, .. } => {
             if is_module_type(&name.node, module_prog) {
-                name.node = format!("{}.{}", module_name, name.node);
+                name.node = prefix_name(module_name, &name.node);
             }
             for ta in type_args {
                 prefix_type_expr(&mut ta.node, module_name, module_prog);
@@ -1073,7 +1036,7 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
         }
         Expr::EnumUnit { enum_name, type_args, .. } => {
             if is_module_type(&enum_name.node, module_prog) {
-                enum_name.node = format!("{}.{}", module_name, enum_name.node);
+                enum_name.node = prefix_name(module_name, &enum_name.node);
             }
             for ta in type_args {
                 prefix_type_expr(&mut ta.node, module_name, module_prog);
@@ -1081,7 +1044,7 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
         }
         Expr::EnumData { enum_name, type_args, fields, .. } => {
             if is_module_type(&enum_name.node, module_prog) {
-                enum_name.node = format!("{}.{}", module_name, enum_name.node);
+                enum_name.node = prefix_name(module_name, &enum_name.node);
             }
             for ta in type_args {
                 prefix_type_expr(&mut ta.node, module_name, module_prog);
@@ -1203,6 +1166,15 @@ fn rewrite_program(program: &mut Program, import_names: &HashSet<String>) {
             rewrite_type_expr(&mut field.ty, import_names);
         }
     }
+    for stage in &mut program.stages {
+        for method in &mut stage.node.methods {
+            rewrite_function_body(&mut method.node, import_names);
+        }
+        // Rewrite stage inject field types
+        for field in &mut stage.node.inject_fields {
+            rewrite_type_expr(&mut field.ty, import_names);
+        }
+    }
 }
 
 fn rewrite_function_body(func: &mut Function, import_names: &HashSet<String>) {
@@ -1220,7 +1192,7 @@ fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, import_names: &HashSet<String>)
     match &mut ty.node {
         TypeExpr::Qualified { module, name } => {
             if import_names.contains(module.as_str()) {
-                ty.node = TypeExpr::Named(format!("{}.{}", module, name));
+                ty.node = TypeExpr::Named(prefix_name(module, name));
             }
         }
         TypeExpr::Array(inner) => {
@@ -1357,7 +1329,7 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
             if let Expr::Ident(name) = &object.node
                 && import_names.contains(name.as_str())
             {
-                let qualified_name = format!("{}.{}", name, method.node);
+                let qualified_name = prefix_name(name, &method.node);
                 let name_span = Span::new(object.span.start, method.span.end);
                 // Rewrite args first
                 for arg in args.iter_mut() {
@@ -1366,6 +1338,7 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
                 *expr = Expr::Call {
                     name: Spanned::new(qualified_name, name_span),
                     args: std::mem::take(args),
+                    type_args: vec![],
                     target_id: None,
                 };
                 return;

@@ -61,12 +61,13 @@ pub fn check_file(
     let test_fn_names: std::collections::HashSet<String> = program
         .test_info
         .iter()
-        .map(|(_, fn_name)| fn_name.clone())
+        .map(|t| t.fn_name.clone())
         .collect();
     program
         .functions
         .retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
+    program.tests = None;
 
     let (env, _warnings) = crate::typeck::type_check(&program).map_err(AnalysisError::compile)?;
 

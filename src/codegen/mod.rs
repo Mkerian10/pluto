@@ -61,6 +61,27 @@ fn declare_singleton_globals(
     Ok(globals)
 }
 
+/// Declare a writable, zero-initialized 8-byte global for each synchronized singleton's rwlock.
+fn declare_rwlock_globals(
+    env: &TypeEnv,
+    module: &mut ObjectModule,
+) -> Result<HashMap<String, DataId>, CompileError> {
+    let mut globals = HashMap::new();
+    for class_name in &env.synchronized_singletons {
+        let data_name = format!("__pluto_rwlock_{}", class_name);
+        let data_id = module
+            .declare_data(&data_name, Linkage::Local, true, false)
+            .map_err(|e| CompileError::codegen(format!("declare rwlock global: {e}")))?;
+        let mut data_desc = DataDescription::new();
+        data_desc.define_zeroinit(8);
+        module
+            .define_data(data_id, &data_desc)
+            .map_err(|e| CompileError::codegen(format!("define rwlock global: {e}")))?;
+        globals.insert(class_name.clone(), data_id);
+    }
+    Ok(globals)
+}
+
 pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>, CompileError> {
     let mut flag_builder = settings::builder();
     flag_builder.set("is_pic", "true").unwrap();
@@ -85,6 +106,12 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
     // Declare module-level globals for DI singleton pointers (Phase 2)
     let singleton_data_ids = declare_singleton_globals(env, &mut module)?;
 
+    // Declare module-level globals for rwlock pointers (Phase 4b)
+    let rwlock_data_ids = declare_rwlock_globals(env, &mut module)?;
+
+    // Pre-pass: collect spawn closure function names (needed before declarations)
+    let spawn_closure_fns = collect_spawn_closure_names(program);
+
     // Pass 0: Declare extern fns with Import linkage
     for ext in &program.extern_fns {
         let e = &ext.node;
@@ -106,7 +133,13 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
     // Pass 1: Declare all top-level functions
     for func in &program.functions {
         let f = &func.node;
-        let sig = build_signature(f, &module, env);
+        let mut sig = build_signature(f, &module, env);
+
+        // Spawn closure functions must return I64 so the C runtime reads the integer register
+        if spawn_closure_fns.contains(&f.name.node) && !sig.returns.is_empty() {
+            sig.returns.clear();
+            sig.returns.push(AbiParam::new(types::I64));
+        }
 
         let linkage = if f.name.node == "main" {
             Linkage::Export
@@ -203,9 +236,6 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         }
     }
 
-    // Pre-pass: collect spawn closure function names for sender cleanup
-    let spawn_closure_fns = collect_spawn_closure_names(program);
-
     // Build class invariants map for codegen
     let class_invariants: HashMap<String, Vec<(Expr, String)>> = program.classes.iter()
         .filter(|c| !c.node.invariants.is_empty())
@@ -263,6 +293,26 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let m = &method.node;
             if !m.contracts.is_empty() {
                 let mangled = mangle_method(&app.name.node, &m.name.node);
+                let requires: Vec<(Expr, String)> = m.contracts.iter()
+                    .filter(|c| c.node.kind == ContractKind::Requires)
+                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                    .collect();
+                let ensures: Vec<(Expr, String)> = m.contracts.iter()
+                    .filter(|c| c.node.kind == ContractKind::Ensures)
+                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                    .collect();
+                if !requires.is_empty() || !ensures.is_empty() {
+                    fn_contracts.insert(mangled, FnContracts { requires, ensures });
+                }
+            }
+        }
+    }
+    for stage_spanned in &program.stages {
+        let stage = &stage_spanned.node;
+        for method in &stage.methods {
+            let m = &method.node;
+            if !m.contracts.is_empty() {
+                let mangled = mangle_method(&stage.name.node, &m.name.node);
                 let requires: Vec<(Expr, String)> = m.contracts.iter()
                     .filter(|c| c.node.kind == ContractKind::Requires)
                     .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
@@ -345,7 +395,13 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
     for func in &program.functions {
         let f = &func.node;
         let func_id = func_ids[&f.name.node];
-        let sig = build_signature(f, &module, env);
+        let mut sig = build_signature(f, &module, env);
+
+        // Spawn closure functions must return I64 (matches declaration)
+        if spawn_closure_fns.contains(&f.name.node) && !sig.returns.is_empty() {
+            sig.returns.clear();
+            sig.returns.push(AbiParam::new(types::I64));
+        }
 
         let mut fn_ctx = Context::new();
         fn_ctx.func.signature = sig;
@@ -353,7 +409,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
+            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
         }
 
         module
@@ -376,7 +432,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
             }
 
             module
@@ -404,6 +460,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                                 id: Uuid::new_v4(),
                                 name: trait_method.name.clone(),
                                 type_params: vec![],
+                                type_param_bounds: std::collections::HashMap::new(),
                                 params: trait_method.params.clone(),
                                 return_type: trait_method.return_type.clone(),
                                 contracts: trait_method.contracts.clone(),
@@ -430,7 +487,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
                             }
 
                             module
@@ -458,6 +515,21 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         }
     }
 
+    // Pass 1e: Declare stage methods
+    for stage_spanned in &program.stages {
+        let stage = &stage_spanned.node;
+        let stage_name = &stage.name.node;
+        for method in &stage.methods {
+            let m = &method.node;
+            let mangled = mangle_method(stage_name, &m.name.node);
+            let sig = build_method_signature(m, &module, stage_name, env);
+            let func_id = module
+                .declare_function(&mangled, Linkage::Local, &sig)
+                .map_err(|e| CompileError::codegen(format!("declare stage method error: {e}")))?;
+            func_ids.insert(mangled, func_id);
+        }
+    }
+
     // Pass 2d: Define app method bodies
     if let Some(app_spanned) = &program.app {
         let app = &app_spanned.node;
@@ -474,12 +546,37 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
             }
 
             module
                 .define_function(func_id, &mut fn_ctx)
                 .map_err(|e| CompileError::codegen(format!("define app method error for '{mangled}': {e}")))?;
+        }
+    }
+
+    // Pass 2e: Define stage method bodies
+    for stage_spanned in &program.stages {
+        let stage = &stage_spanned.node;
+        let stage_name = &stage.name.node;
+        for method in &stage.methods {
+            let m = &method.node;
+            let mangled = mangle_method(stage_name, &m.name.node);
+            let func_id = func_ids[&mangled];
+            let sig = build_method_signature(m, &module, stage_name, env);
+
+            let mut fn_ctx = Context::new();
+            fn_ctx.func.signature = sig;
+
+            let mut builder_ctx = FunctionBuilderContext::new();
+            {
+                let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(stage_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
+            }
+
+            module
+                .define_function(func_id, &mut fn_ctx)
+                .map_err(|e| CompileError::codegen(format!("define stage method error for '{mangled}': {e}")))?;
         }
     }
 
@@ -508,11 +605,29 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let test_start_ref = module.declare_func_in_func(runtime.get("__pluto_test_start"), builder.func);
             let test_pass_ref = module.declare_func_in_func(runtime.get("__pluto_test_pass"), builder.func);
             let string_new_ref = module.declare_func_in_func(runtime.get("__pluto_string_new"), builder.func);
+            let test_run_ref = module.declare_func_in_func(runtime.get("__pluto_test_run"), builder.func);
 
-            for (display_name, fn_name) in &program.test_info {
+            // Determine strategy from program.tests (or default to Sequential for bare tests)
+            let (strategy_int, seed_int, iterations_int) = if let Some(tests_decl) = &program.tests {
+                let s = match tests_decl.node.strategy.as_str() {
+                    "RoundRobin" => 1i64,
+                    "Random" => 2i64,
+                    "Exhaustive" => 3i64,
+                    _ => 0i64, // Sequential
+                };
+                (s, 0i64, 100i64) // seed + iterations come from CLI env vars at runtime
+            } else {
+                (0i64, 0i64, 1i64) // bare tests → Sequential, 1 iteration
+            };
+
+            let strategy_val = builder.ins().iconst(types::I64, strategy_int);
+            let seed_val = builder.ins().iconst(types::I64, seed_int);
+            let iterations_val = builder.ins().iconst(types::I64, iterations_int);
+
+            for test in &program.test_info {
                 // Create Pluto string for the test name
                 let mut data_desc = DataDescription::new();
-                let mut bytes = display_name.as_bytes().to_vec();
+                let mut bytes = test.display_name.as_bytes().to_vec();
                 bytes.push(0);
                 data_desc.define(bytes.into_boxed_slice());
                 let data_id = module.declare_anonymous_data(false, false)
@@ -521,19 +636,22 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                     .map_err(|e| CompileError::codegen(format!("define test name data error: {e}")))?;
                 let gv = module.declare_data_in_func(data_id, builder.func);
                 let raw_ptr = builder.ins().global_value(types::I64, gv);
-                let len_val = builder.ins().iconst(types::I64, display_name.len() as i64);
+                let len_val = builder.ins().iconst(types::I64, test.display_name.len() as i64);
                 let call = builder.ins().call(string_new_ref, &[raw_ptr, len_val]);
                 let name_str = builder.inst_results(call)[0];
 
                 // call __pluto_test_start(name_str)
                 builder.ins().call(test_start_ref, &[name_str]);
 
-                // call test function
-                let test_func_id = func_ids.get(fn_name).ok_or_else(|| {
-                    CompileError::codegen(format!("missing test function '{fn_name}'"))
+                // Get function pointer for the test function
+                let test_func_id = func_ids.get(&test.fn_name).ok_or_else(|| {
+                    CompileError::codegen(format!("missing test function '{}'", test.fn_name))
                 })?;
                 let test_func_ref = module.declare_func_in_func(*test_func_id, builder.func);
-                builder.ins().call(test_func_ref, &[]);
+                let fn_addr = builder.ins().func_addr(types::I64, test_func_ref);
+
+                // call __pluto_test_run(fn_ptr, strategy, seed, iterations)
+                builder.ins().call(test_run_ref, &[fn_addr, strategy_val, seed_val, iterations_val]);
 
                 // call __pluto_test_pass()
                 builder.ins().call(test_pass_ref, &[]);
@@ -622,6 +740,18 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                 }
             }
 
+            // Initialize rwlocks for synchronized singletons (Phase 4b)
+            for class_name in &env.synchronized_singletons {
+                if let Some(&data_id) = rwlock_data_ids.get(class_name) {
+                    let rwlock_init_ref = module.declare_func_in_func(runtime.get("__pluto_rwlock_init"), builder.func);
+                    let call = builder.ins().call(rwlock_init_ref, &[]);
+                    let lock_ptr = builder.inst_results(call)[0];
+                    let gv = module.declare_data_in_func(data_id, builder.func);
+                    let addr = builder.ins().global_value(types::I64, gv);
+                    builder.ins().store(MemFlags::new(), lock_ptr, addr, Offset32::new(0));
+                }
+            }
+
             // Allocate and wire the app itself
             let app_info = env.classes.get(app_name).ok_or_else(|| {
                 CompileError::codegen(format!("DI: unknown app class '{}'", app_name))
@@ -653,6 +783,126 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             })?;
             let app_main_ref = module.declare_func_in_func(*app_main_id, builder.func);
             builder.ins().call(app_main_ref, &[app_ptr]);
+
+            // Return 0
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder.ins().return_(&[zero]);
+
+            builder.finalize();
+        }
+
+        module
+            .define_function(main_id, &mut fn_ctx)
+            .map_err(|e| CompileError::codegen(format!("define synthetic main error: {e}")))?;
+    }
+
+    // Generate synthetic main for stage (Phase 0: single stage → standalone binary)
+    if !program.stages.is_empty() && program.app.is_none() {
+        let stage = &program.stages[0].node;
+        let stage_name = &stage.name.node;
+
+        let mut main_sig = module.make_signature();
+        main_sig.returns.push(AbiParam::new(types::I64));
+        let main_id = module
+            .declare_function("main", Linkage::Export, &main_sig)
+            .map_err(|e| CompileError::codegen(format!("declare synthetic main error: {e}")))?;
+
+        let mut fn_ctx = Context::new();
+        fn_ctx.func.signature = main_sig;
+
+        let mut builder_ctx = FunctionBuilderContext::new();
+        {
+            let mut builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
+            let entry_block = builder.create_block();
+            builder.switch_to_block(entry_block);
+            builder.seal_block(entry_block);
+
+            // Initialize GC before any allocations
+            let gc_init_ref = module.declare_func_in_func(runtime.get("__pluto_gc_init"), builder.func);
+            builder.ins().call(gc_init_ref, &[]);
+
+            let alloc_ref = module.declare_func_in_func(runtime.get("__pluto_alloc"), builder.func);
+
+            // Create singletons in topological order
+            let mut singletons: HashMap<String, Value> = HashMap::new();
+
+            for class_name in &env.di_order {
+                let class_info = env.classes.get(class_name).ok_or_else(|| {
+                    CompileError::codegen(format!("DI: unknown class '{}'", class_name))
+                })?;
+                let size = class_info.fields.len() as i64 * POINTER_SIZE as i64;
+                let size_val = builder.ins().iconst(types::I64, size);
+                let call = builder.ins().call(alloc_ref, &[size_val]);
+                let ptr = builder.inst_results(call)[0];
+
+                // Wire injected fields
+                for (i, (_, field_ty, is_injected)) in class_info.fields.iter().enumerate() {
+                    if *is_injected
+                        && let PlutoType::Class(dep_name) = field_ty
+                        && let Some(&dep_ptr) = singletons.get(dep_name)
+                    {
+                        let offset = (i as i32) * POINTER_SIZE;
+                        builder.ins().store(
+                            MemFlags::new(),
+                            dep_ptr,
+                            ptr,
+                            Offset32::new(offset),
+                        );
+                    }
+                }
+
+                singletons.insert(class_name.clone(), ptr);
+
+                if let Some(&data_id) = singleton_data_ids.get(class_name) {
+                    let gv = module.declare_data_in_func(data_id, builder.func);
+                    let addr = builder.ins().global_value(types::I64, gv);
+                    builder.ins().store(MemFlags::new(), ptr, addr, Offset32::new(0));
+                }
+            }
+
+            // Initialize rwlocks for synchronized singletons
+            for class_name in &env.synchronized_singletons {
+                if let Some(&data_id) = rwlock_data_ids.get(class_name) {
+                    let rwlock_init_ref = module.declare_func_in_func(runtime.get("__pluto_rwlock_init"), builder.func);
+                    let call = builder.ins().call(rwlock_init_ref, &[]);
+                    let lock_ptr = builder.inst_results(call)[0];
+                    let gv = module.declare_data_in_func(data_id, builder.func);
+                    let addr = builder.ins().global_value(types::I64, gv);
+                    builder.ins().store(MemFlags::new(), lock_ptr, addr, Offset32::new(0));
+                }
+            }
+
+            // Allocate and wire the stage itself
+            let stage_info = env.classes.get(stage_name).ok_or_else(|| {
+                CompileError::codegen(format!("DI: unknown stage class '{}'", stage_name))
+            })?;
+            let stage_size = stage_info.fields.len() as i64 * POINTER_SIZE as i64;
+            let stage_size_val = builder.ins().iconst(types::I64, stage_size);
+            let stage_call = builder.ins().call(alloc_ref, &[stage_size_val]);
+            let stage_ptr = builder.inst_results(stage_call)[0];
+
+            for (i, (_, field_ty, is_injected)) in stage_info.fields.iter().enumerate() {
+                if *is_injected
+                    && let PlutoType::Class(dep_name) = field_ty
+                    && let Some(&dep_ptr) = singletons.get(dep_name)
+                {
+                    let offset = (i as i32) * POINTER_SIZE;
+                    builder.ins().store(
+                        MemFlags::new(),
+                        dep_ptr,
+                        stage_ptr,
+                        Offset32::new(offset),
+                    );
+                }
+            }
+
+            // Call StageName$main(stage_ptr)
+            let stage_main_mangled = mangle_method(stage_name, "main");
+            let stage_main_id = func_ids.get(&stage_main_mangled).ok_or_else(|| {
+                CompileError::codegen(format!("DI: missing stage main function '{}'", stage_main_mangled))
+            })?;
+            let stage_main_ref = module.declare_func_in_func(*stage_main_id, builder.func);
+            builder.ins().call(stage_main_ref, &[stage_ptr]);
 
             // Return 0
             let zero = builder.ins().iconst(types::I64, 0);
@@ -849,6 +1099,11 @@ fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
     }
     if let Some(app) = &program.app {
         for method in &app.node.methods {
+            walk_function(&method.node, &mut result);
+        }
+    }
+    for stage in &program.stages {
+        for method in &stage.node.methods {
             walk_function(&method.node, &mut result);
         }
     }

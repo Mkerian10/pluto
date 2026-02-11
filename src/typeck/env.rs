@@ -38,6 +38,7 @@ pub struct ErrorInfo {
 #[derive(Debug, Clone)]
 pub struct GenericFuncSig {
     pub type_params: Vec<String>,
+    pub type_param_bounds: HashMap<String, Vec<String>>,  // T -> [Trait1, Trait2]
     pub params: Vec<PlutoType>,      // contains TypeParam
     pub return_type: PlutoType,       // may contain TypeParam
 }
@@ -45,6 +46,7 @@ pub struct GenericFuncSig {
 #[derive(Debug, Clone)]
 pub struct GenericClassInfo {
     pub type_params: Vec<String>,
+    pub type_param_bounds: HashMap<String, Vec<String>>,  // T -> [Trait1, Trait2]
     pub fields: Vec<(String, PlutoType, bool)>,  // may contain TypeParam
     pub methods: Vec<String>,
     pub method_sigs: HashMap<String, FuncSig>,  // method_name → sig (may contain TypeParam)
@@ -56,6 +58,7 @@ pub struct GenericClassInfo {
 #[derive(Debug, Clone)]
 pub struct GenericEnumInfo {
     pub type_params: Vec<String>,
+    pub type_param_bounds: HashMap<String, Vec<String>>,  // T -> [Trait1, Trait2]
     pub variants: Vec<(String, Vec<(String, PlutoType)>)>,  // may contain TypeParam
 }
 
@@ -90,6 +93,10 @@ pub enum MethodResolution {
     ChannelTrySend,
     /// Channel try_recv — fallible (ChannelClosed + ChannelEmpty)
     ChannelTryRecv,
+    /// Task.detach() — infallible
+    TaskDetach,
+    /// Task.cancel() — infallible
+    TaskCancel,
 }
 
 /// How a field of a scoped class gets its value during a scope block.
@@ -129,7 +136,10 @@ pub struct TypeEnv {
     /// Lifted closure function name → captured variable names and types
     pub closure_fns: HashMap<String, Vec<(String, PlutoType)>>,
     pub app: Option<(String, ClassInfo)>,
+    pub stages: Vec<(String, ClassInfo)>,
     pub di_order: Vec<String>,
+    /// DI singletons that need rwlock synchronization (accessed concurrently from spawn + main)
+    pub synchronized_singletons: HashSet<String>,
     /// Per-function error sets: maps function name to set of error type names it can raise.
     /// Populated by the error inference pass.
     pub fn_errors: HashMap<String, HashSet<String>>,
@@ -220,7 +230,9 @@ impl TypeEnv {
             closure_captures: HashMap::new(),
             closure_fns: HashMap::new(),
             app: None,
+            stages: Vec::new(),
             di_order: Vec::new(),
+            synchronized_singletons: HashSet::new(),
             fn_errors: HashMap::new(),
             generic_functions: HashMap::new(),
             generic_classes: HashMap::new(),
@@ -329,6 +341,8 @@ impl TypeEnv {
             Some(MethodResolution::ChannelRecv) => Ok(true),
             Some(MethodResolution::ChannelTrySend) => Ok(true),
             Some(MethodResolution::ChannelTryRecv) => Ok(true),
+            Some(MethodResolution::TaskDetach) => Ok(false),
+            Some(MethodResolution::TaskCancel) => Ok(false),
             None => Err(format!(
                 "internal error: unresolved method resolution at span {} in fn '{}'",
                 span_start, current_fn

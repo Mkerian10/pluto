@@ -173,6 +173,23 @@ pub fn document_symbols(
         });
     }
 
+    for stage in &program.stages {
+        if stage.node.name.span.file_id == file_id {
+            let range = span_to_range(&stage.span, line_index);
+            let selection_range = span_to_range(&stage.node.name.span, line_index);
+            symbols.push(DocumentSymbol {
+                name: stage.node.name.node.clone(),
+                detail: Some("stage".to_string()),
+                kind: SymbolKind::MODULE,
+                tags: None,
+                deprecated: None,
+                range,
+                selection_range,
+                children: None,
+            });
+        }
+    }
+
     symbols
 }
 

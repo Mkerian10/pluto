@@ -40,6 +40,7 @@ Detailed design for each area of the language:
 | [Type System](docs/design/type-system.md) | Classes, traits, generics, nominal + structural typing |
 | [Error Handling](docs/design/error-handling.md) | Typed errors, inference, `!` and `catch` |
 | [Dependency Injection](docs/design/dependency-injection.md) | Bracket deps, ambient DI, auto-wiring, environment opacity |
+| [DI Lifecycle](docs/design/rfc-di-lifecycle.md) | Scoped/transient lifecycles, scope blocks, lifecycle inference |
 | [Concurrency](docs/design/concurrency.md) | Tasks, threads, structured concurrency, no shared mutable state |
 | [Contracts](docs/design/contracts.md) | Invariants, pre/post conditions, failure semantics, protocol contracts |
 | [Communication](docs/design/communication.md) | Synchronous calls, channels, serialization |
@@ -91,6 +92,23 @@ app OrderApp[order_service: OrderService] {
     fn main(self) {
         self.order_service.create(some_order)!
     }
+}
+
+// Scoped DI — per-request instances
+scoped class RequestCtx {
+    user_id: string
+    trace_id: string
+}
+
+scoped class UserService[db: Database, ctx: RequestCtx] {
+    fn current_user(self) string {
+        return self.ctx.user_id
+    }
+}
+
+// scope blocks create fresh instances per call
+scope(RequestCtx { user_id: "42", trace_id: "abc" }) |svc: UserService| {
+    print(svc.current_user())
 }
 
 // Generics
