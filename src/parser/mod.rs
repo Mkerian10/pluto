@@ -2318,9 +2318,10 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Index operator: arr[i] — use peek_raw to prevent newline-separated
-            // expressions from being parsed as indexing (e.g. arr\n[1,2])
-            if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::LBracket) {
+            // Index operator: arr[i] — allow across newlines like method calls
+            // This enables: let x = arr\n    [0]
+            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBracket) {
+                self.skip_newlines(); // Skip newlines before consuming '['
                 self.advance(); // consume '['
                 let index = self.parse_expr(0)?;
                 let close = self.expect(&Token::RBracket)?;
