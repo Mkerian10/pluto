@@ -1,14 +1,18 @@
-# No Libraries, No Binaries — Only Programs
+# Source-Level Libraries — No Boundaries
 
-Most languages force you to choose: are you writing a library or an executable?
+Pluto has libraries. You can write them, publish them, depend on them, and import them into your programs. But they work fundamentally differently than libraries in other languages.
 
-**Libraries** are compiled separately, expose a stable ABI, and get linked at runtime. You can't see into them at compile time. The compiler treats them as black boxes.
+**Traditional libraries** are compiled separately into binary artifacts (`.so`, `.dll`, `.jar`, `.rlib`). The compiler sees an opaque interface. The library is a black box.
 
-**Executables** consume libraries through dynamic linking or static linking. The linker stitches together binary artifacts that were compiled in isolation.
+**Pluto libraries** are always source code. When you depend on a package, the compiler pulls in the source and sees everything: every function, every type, every implementation detail (that's marked `pub` or used by your code).
 
-Pluto rejects this distinction entirely. **There are no libraries. There are no binaries. There is only source code, and the compiler sees all of it.**
+There is no binary artifact. There is no ABI boundary. There is no separate compilation. **The compiler always sees the source.**
 
-## Why Other Languages Have Libraries
+This isn't about whether libraries exist. It's about **how they're compiled**. In Rust, you compile a crate to an `.rlib`, and consumers link against it. In Go, you compile a package to a `.a` archive. In Java, you compile to a `.jar`. The consumer never sees your source code — only the binary interface.
+
+In Pluto, when you depend on a library, **you depend on source code**. The Pluto compiler pulls that source into your build and sees everything. It can inline functions across library boundaries. It can eliminate dead code from the library. It can specialize generic types based on how you use them. The library isn't a black box — the compiler sees through it.
+
+## Why Other Languages Have Binary Libraries
 
 The library/executable split exists for three reasons:
 
@@ -49,9 +53,9 @@ Because there's no binary artifact, there's no ABI to break. If you update a dep
 
 There's no such thing as "runtime dependency resolution failure." There's no `LD_LIBRARY_PATH` to configure. There's no version of a library loaded at runtime that's incompatible with what you compiled against. **If it compiles, the dependencies are correct.**
 
-## Packages are Not Libraries
+## How Pluto Libraries Work
 
-A Pluto package is a collection of source files with `pub` declarations. It's not a compiled artifact. It's not a binary. It's source code that the compiler integrates into your program.
+A Pluto library (or package) is a collection of source files with `pub` declarations. It's not a compiled artifact. It's not a binary. It's source code that the compiler integrates into your program.
 
 ```
 // In package "payments"
@@ -64,7 +68,7 @@ fn process_transaction(amount: int) Receipt {
 }
 ```
 
-When you import this package, the compiler sees both functions — `charge` (public) and `process_transaction` (internal). It knows that `process_transaction` is only called from within the `payments` package. If it's small, it might inline it into `charge`. If it's never called, it won't generate code for it.
+When you import this library, the compiler sees both functions — `charge` (public) and `process_transaction` (internal). It knows that `process_transaction` is only called from within the `payments` library. If it's small, it might inline it into `charge`. If it's never called, it won't generate code for it.
 
 The consumer sees:
 
@@ -180,15 +184,15 @@ You never ship a `.pluto` file to users as a "library." You always share source.
 
 If you're coming from Go, Java, or Rust, this is a mental shift:
 
-**You don't build libraries.** You write packages (collections of `.pluto` files with `pub` declarations), but you don't compile them into standalone artifacts. The compiler sees them as source.
+**You DO write libraries.** But you write them as collections of `.pluto` source files with `pub` declarations. You don't compile them into standalone binary artifacts.
 
-**You don't link binaries.** The compiler generates one self-contained binary for your app. All dependencies are compiled in. There's no runtime linker, no `LD_LIBRARY_PATH`, no classpath.
+**You don't link binaries.** The compiler generates one self-contained binary for your app. All dependencies are compiled in (from source). There's no runtime linker, no `LD_LIBRARY_PATH`, no classpath.
 
-**You don't publish binaries.** If you want to share code, you publish source (via git repos or a future package registry). The consumer's compiler pulls your source and integrates it into their program.
+**You don't publish binary artifacts.** If you want to share a library, you publish source code (via git repos or a future package registry). The consumer's compiler pulls your source and integrates it into their program.
 
-**You don't version ABIs.** There's no ABI. If you change your `pub` API, consumers recompile and get immediate feedback if the change broke them. Semantic versioning still matters (breaking changes vs. non-breaking changes), but there's no "runtime version mismatch."
+**You don't version ABIs.** There's no ABI because there's no binary artifact. If you change your library's `pub` API, consumers recompile and get immediate feedback if the change broke them. Semantic versioning still matters (breaking changes vs. non-breaking changes), but there's no "runtime version mismatch" or "DLL hell."
 
-The benefit: **the compiler always sees your entire program, from main() to the deepest dependency, and can optimize accordingly.**
+The benefit: **the compiler always sees your entire program, from main() to the deepest dependency, and can optimize accordingly.** Libraries aren't black boxes. They're transparent to the compiler.
 
 ## The Vision
 

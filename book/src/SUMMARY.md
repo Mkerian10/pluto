@@ -10,7 +10,7 @@
 # What Sets Pluto Apart
 
 - [Whole-Program Compilation](whats-different/whole-program.md)
-- [No Libraries, No Binaries](whats-different/no-libraries.md)
+- [Source-Level Libraries](whats-different/no-libraries.md)
 - [Error Handling](whats-different/errors.md)
 - [Dependency Injection](whats-different/di.md)
 - [The App Model](whats-different/app.md)
