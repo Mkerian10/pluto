@@ -1,0 +1,10 @@
+{
+  "source_hash": "b87c9b80c2574cd4",
+  "test_hashes": {
+    "templates.home_page generates hero section": "1a5658715df9f608",
+    "templates.base_layout generates valid HTML": "47a4728fcd853b6d",
+    "templates.sidebar_home generates navigation links": "61201181896df9a4",
+    "templates.badge generates span with class": "4d587e4474b115c9"
+  },
+  "timestamp": 1770805608
+}
