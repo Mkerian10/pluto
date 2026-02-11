@@ -534,6 +534,27 @@ path = "tests/typeck/di_graph/dependency_resolution.rs"
 name = "typeck_app_validation"
 path = "tests/typeck/di_graph/app_validation.rs"
 
+# Typeck edge case tests - scope & variables category
+[[test]]
+name = "typeck_shadowing"
+path = "tests/typeck/scope_vars/shadowing.rs"
+
+[[test]]
+name = "typeck_lifetime_errors"
+path = "tests/typeck/scope_vars/lifetime_errors.rs"
+
+[[test]]
+name = "typeck_scope_resolution"
+path = "tests/typeck/scope_vars/scope_resolution.rs"
+
+[[test]]
+name = "typeck_variable_capture"
+path = "tests/typeck/scope_vars/variable_capture.rs"
+
+[[test]]
+name = "typeck_temporal_errors"
+path = "tests/typeck/scope_vars/temporal_errors.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false
