@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770703954110,
+  "lastUpdate": 1770789848932,
   "repoUrl": "https://github.com/Mkerian10/pluto",
   "entries": {
     "Benchmark": [
@@ -476,6 +476,170 @@ window.BENCHMARK_DATA = {
           {
             "name": "lu",
             "value": 4049,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "33331268+Mkerian10@users.noreply.github.com",
+            "name": "Matthew Kerian",
+            "username": "Mkerian10"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c956c11ea3e3b5f820d6f4b3b3d1e9408969c6f9",
+          "message": "Add generators (stream T + yield + for-in-stream)\n\n- Adds stream T return type, yield statement, and for x in stream iteration to Pluto\n- Generator functions compile to a state machine: creator + next functions\n- 24 integration tests covering all generator features\n- Example at examples/generators/main.pluto\n- Fix mutability errors in 4 benchmarks (class_method, trait_dispatch, bounce, nbody)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>",
+          "timestamp": "2026-02-11T00:02:09-06:00",
+          "tree_id": "e3656a92e96068c9eb8faab936623cf84948f146",
+          "url": "https://github.com/Mkerian10/pluto/commit/c956c11ea3e3b5f820d6f4b3b3d1e9408969c6f9"
+        },
+        "date": 1770789848122,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "fib",
+            "value": 72,
+            "unit": "ms"
+          },
+          {
+            "name": "loop_sum",
+            "value": 64,
+            "unit": "ms"
+          },
+          {
+            "name": "string_concat",
+            "value": 573,
+            "unit": "ms"
+          },
+          {
+            "name": "array_push",
+            "value": 5,
+            "unit": "ms"
+          },
+          {
+            "name": "array_iter",
+            "value": 2,
+            "unit": "ms"
+          },
+          {
+            "name": "class_method",
+            "value": 6,
+            "unit": "ms"
+          },
+          {
+            "name": "closure_call",
+            "value": 21,
+            "unit": "ms"
+          },
+          {
+            "name": "trait_dispatch",
+            "value": 1428,
+            "unit": "ms"
+          },
+          {
+            "name": "gc_churn",
+            "value": 142,
+            "unit": "ms"
+          },
+          {
+            "name": "gc_binary_trees",
+            "value": 2029,
+            "unit": "ms"
+          },
+          {
+            "name": "gc_string_pressure",
+            "value": 74,
+            "unit": "ms"
+          },
+          {
+            "name": "sieve",
+            "value": 10,
+            "unit": "ms"
+          },
+          {
+            "name": "bounce",
+            "value": 47,
+            "unit": "ms"
+          },
+          {
+            "name": "towers",
+            "value": 1725,
+            "unit": "ms"
+          },
+          {
+            "name": "permute",
+            "value": 99,
+            "unit": "ms"
+          },
+          {
+            "name": "queens",
+            "value": 156,
+            "unit": "ms"
+          },
+          {
+            "name": "fannkuch_redux",
+            "value": 1317,
+            "unit": "ms"
+          },
+          {
+            "name": "spectral_norm",
+            "value": 47,
+            "unit": "ms"
+          },
+          {
+            "name": "nbody",
+            "value": 10622,
+            "unit": "ms"
+          },
+          {
+            "name": "mandelbrot",
+            "value": 286,
+            "unit": "ms"
+          },
+          {
+            "name": "monte_carlo",
+            "value": 1433,
+            "unit": "ms"
+          },
+          {
+            "name": "storage",
+            "value": 801,
+            "unit": "ms"
+          },
+          {
+            "name": "list",
+            "value": 91,
+            "unit": "ms"
+          },
+          {
+            "name": "fft",
+            "value": 2343,
+            "unit": "ms"
+          },
+          {
+            "name": "sor",
+            "value": 595,
+            "unit": "ms"
+          },
+          {
+            "name": "sparse_matmul",
+            "value": 538,
+            "unit": "ms"
+          },
+          {
+            "name": "lu",
+            "value": 4022,
+            "unit": "ms"
+          },
+          {
+            "name": "json_parse",
+            "value": 1170,
             "unit": "ms"
           }
         ]
