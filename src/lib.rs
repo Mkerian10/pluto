@@ -26,6 +26,12 @@ use diagnostics::{CompileError, CompileWarning};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+/// Resolve the effective stdlib root path from an explicit argument or PLUTO_STDLIB env var.
+fn resolve_stdlib(stdlib_root: Option<&Path>) -> Option<PathBuf> {
+    let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
+    stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib)
+}
+
 /// Parse source for editing — no transforms (no monomorphize, no closure lift, no spawn desugar).
 /// Does NOT inject prelude (avoids serializing Option<T> etc. into user source).
 /// Resolves cross-references so xref IDs are available for user-defined declarations.
@@ -175,8 +181,7 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
-    let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
-    let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
+    let effective_stdlib = resolve_stdlib(stdlib_root);
 
     let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
     let pkg_graph = manifest::find_and_resolve(entry_dir)?;
@@ -251,8 +256,7 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
-    let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
-    let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
+    let effective_stdlib = resolve_stdlib(stdlib_root);
 
     let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
     let pkg_graph = manifest::find_and_resolve(entry_dir)?;
@@ -295,8 +299,7 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
-    let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
-    let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
+    let effective_stdlib = resolve_stdlib(stdlib_root);
 
     let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
     let pkg_graph = manifest::find_and_resolve(entry_dir)?;
@@ -361,33 +364,42 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
     Ok(())
 }
 
+/// Compile builtins.c to an object file. In test mode, adds -DPLUTO_TEST_MODE
+/// for sequential task execution and no-mutex channels.
+fn compile_runtime_object(test_mode: bool) -> Result<PathBuf, CompileError> {
+    let runtime_src = include_str!("../runtime/builtins.c");
+    let dir_suffix = if test_mode { "pluto_test_runtime" } else { "pluto_runtime" };
+    let dir = std::env::temp_dir().join(format!("{}_{}", dir_suffix, std::process::id()));
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| CompileError::link(format!("failed to create runtime cache dir: {e}")))?;
+    let runtime_c = dir.join("builtins.c");
+    let o_name = if test_mode { "builtins_test.o" } else { "builtins.o" };
+    let runtime_o = dir.join(o_name);
+    std::fs::write(&runtime_c, runtime_src)
+        .map_err(|e| CompileError::link(format!("failed to write runtime source: {e}")))?;
+    let mut cmd = std::process::Command::new("cc");
+    cmd.arg("-c");
+    if test_mode {
+        cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
+    }
+    cmd.arg(&runtime_c).arg("-o").arg(&runtime_o);
+    #[cfg(target_os = "linux")]
+    if !test_mode {
+        cmd.arg("-pthread");
+    }
+    let status = cmd.status()
+        .map_err(|e| CompileError::link(format!("failed to compile runtime: {e}")))?;
+    let _ = std::fs::remove_file(&runtime_c);
+    if !status.success() {
+        return Err(CompileError::link("failed to compile runtime"));
+    }
+    Ok(runtime_o)
+}
+
 /// Compile builtins.c once per process and cache the resulting .o path.
 fn cached_runtime_object() -> Result<&'static Path, CompileError> {
     static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-    let result = CACHE.get_or_init(|| {
-        (|| -> Result<PathBuf, CompileError> {
-            let runtime_src = include_str!("../runtime/builtins.c");
-            let dir = std::env::temp_dir().join(format!("pluto_runtime_{}", std::process::id()));
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| CompileError::link(format!("failed to create runtime cache dir: {e}")))?;
-            let runtime_c = dir.join("builtins.c");
-            let runtime_o = dir.join("builtins.o");
-            std::fs::write(&runtime_c, runtime_src)
-                .map_err(|e| CompileError::link(format!("failed to write runtime source: {e}")))?;
-            let mut cmd = std::process::Command::new("cc");
-            cmd.arg("-c").arg(&runtime_c).arg("-o").arg(&runtime_o);
-            #[cfg(target_os = "linux")]
-            cmd.arg("-pthread");
-            let status = cmd.status()
-                .map_err(|e| CompileError::link(format!("failed to compile runtime: {e}")))?;
-            let _ = std::fs::remove_file(&runtime_c);
-            if !status.success() {
-                return Err(CompileError::link("failed to compile runtime"));
-            }
-            Ok(runtime_o)
-        })()
-        .map_err(|e| e.to_string())
-    });
+    let result = CACHE.get_or_init(|| compile_runtime_object(false).map_err(|e| e.to_string()));
     match result {
         Ok(path) => Ok(path.as_path()),
         Err(msg) => Err(CompileError::link(msg.clone())),
@@ -395,37 +407,9 @@ fn cached_runtime_object() -> Result<&'static Path, CompileError> {
 }
 
 /// Compile builtins.c with -DPLUTO_TEST_MODE once per process and cache the resulting .o path.
-/// The test runtime uses sequential task execution and no-mutex channels.
 fn cached_test_runtime_object() -> Result<&'static Path, CompileError> {
     static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-    let result = CACHE.get_or_init(|| {
-        (|| -> Result<PathBuf, CompileError> {
-            let runtime_src = include_str!("../runtime/builtins.c");
-            let dir = std::env::temp_dir().join(format!("pluto_test_runtime_{}", std::process::id()));
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| CompileError::link(format!("failed to create test runtime cache dir: {e}")))?;
-            let runtime_c = dir.join("builtins.c");
-            let runtime_o = dir.join("builtins_test.o");
-            std::fs::write(&runtime_c, runtime_src)
-                .map_err(|e| CompileError::link(format!("failed to write test runtime source: {e}")))?;
-            let mut cmd = std::process::Command::new("cc");
-            cmd.arg("-c")
-               .arg("-DPLUTO_TEST_MODE")
-               .arg("-Wno-deprecated-declarations")
-               .arg(&runtime_c)
-               .arg("-o")
-               .arg(&runtime_o);
-            // No -pthread in test mode (single-threaded)
-            let status = cmd.status()
-                .map_err(|e| CompileError::link(format!("failed to compile test runtime: {e}")))?;
-            let _ = std::fs::remove_file(&runtime_c);
-            if !status.success() {
-                return Err(CompileError::link("failed to compile test runtime"));
-            }
-            Ok(runtime_o)
-        })()
-        .map_err(|e| e.to_string())
-    });
+    let result = CACHE.get_or_init(|| compile_runtime_object(true).map_err(|e| e.to_string()));
     match result {
         Ok(path) => Ok(path.as_path()),
         Err(msg) => Err(CompileError::link(msg.clone())),
@@ -557,8 +541,7 @@ pub fn compile_system_file_with_stdlib(
     }
 
     // Resolve modules to validate that member modules contain apps
-    let env_stdlib = std::env::var("PLUTO_STDLIB").ok().map(PathBuf::from);
-    let effective_stdlib = stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib);
+    let effective_stdlib = resolve_stdlib(stdlib_root);
 
     let pkg_graph = manifest::find_and_resolve(system_dir)?;
     let graph = modules::resolve_modules(&system_file, effective_stdlib.as_deref(), &pkg_graph)?;
