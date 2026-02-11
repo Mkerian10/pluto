@@ -1,0 +1,17 @@
+import std.log
+
+fn main() void {
+    // Basic logging with different levels
+    log.debug("Debug message (not shown by default)")
+    log.info("Application started")
+    log.warn("This is a warning")
+    log.log_error("This is an error")
+
+    // Change log level to see debug messages
+    log.set_level(log.Level.Debug)
+    log.debug("Debug message now visible")
+
+    // Check current log level
+    let level = log.get_level()
+    log.info("Current log level set")
+}

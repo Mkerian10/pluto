@@ -8,6 +8,14 @@ Demonstrates built-in string methods (`contains`, `starts_with`, `trim`, `to_upp
 cargo run -- run examples/strings/main.pluto
 ```
 
+## logging
+
+Demonstrates structured logging with `std.log`: setting log levels (`DEBUG`, `INFO`, `WARN`, `ERROR`), logging messages at different levels, and controlling which messages are displayed based on the current log level.
+
+```bash
+cargo run -- run examples/logging/main.pluto --stdlib stdlib
+```
+
 ## channels
 
 Demonstrates channels for inter-task communication: `let (tx, rx) = chan<T>(capacity)`, blocking `send`/`recv`, non-blocking `try_send`/`try_recv`, `close()`, `for-in` iteration on receivers, and error handling with `catch`.

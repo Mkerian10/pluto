@@ -1,0 +1,97 @@
+import std.time
+
+pub enum Level {
+    Debug
+    Info
+    Warn
+    Error
+}
+
+fn level_to_int(level: Level) int {
+    match level {
+        Level.Debug {
+            return 0
+        }
+        Level.Info {
+            return 1
+        }
+        Level.Warn {
+            return 2
+        }
+        Level.Error {
+            return 3
+        }
+    }
+}
+
+fn level_str(level: Level) string {
+    match level {
+        Level.Debug {
+            return "DEBUG"
+        }
+        Level.Info {
+            return "INFO"
+        }
+        Level.Warn {
+            return "WARN"
+        }
+        Level.Error {
+            return "ERROR"
+        }
+    }
+}
+
+extern fn __pluto_log_write(level_str: string, timestamp: int, message: string) void
+extern fn __pluto_log_get_level() int
+extern fn __pluto_log_set_level(level: int) void
+
+pub fn set_level(level: Level) void {
+    __pluto_log_set_level(level_to_int(level))
+}
+
+pub fn get_level() Level {
+    let level_int = __pluto_log_get_level()
+    if level_int == 0 {
+        return Level.Debug
+    }
+    if level_int == 1 {
+        return Level.Info
+    }
+    if level_int == 2 {
+        return Level.Warn
+    }
+    if level_int == 3 {
+        return Level.Error
+    }
+    return Level.Error
+}
+
+fn should_log(level: Level) bool {
+    let curr_level = level_to_int(level)
+    let min_level = __pluto_log_get_level()
+    return curr_level >= min_level
+}
+
+fn log_internal(level: Level, message: string) void {
+    if !should_log(level) {
+        return
+    }
+    let timestamp = time.now()
+    __pluto_log_write(level_str(level), timestamp, message)
+}
+
+pub fn debug(message: string) void {
+    log_internal(Level.Debug, message)
+}
+
+pub fn info(message: string) void {
+    log_internal(Level.Info, message)
+}
+
+pub fn warn(message: string) void {
+    log_internal(Level.Warn, message)
+}
+
+pub fn log_error(message: string) void {
+    log_internal(Level.Error, message)
+}
