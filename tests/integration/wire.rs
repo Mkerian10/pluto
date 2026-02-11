@@ -40,6 +40,21 @@ fn run_wire_test(source: &str) -> String {
     String::from_utf8_lossy(&run_output.stdout).to_string()
 }
 
+fn compile_serializable_test(source: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("main.pluto");
+    std::fs::write(&path, source).unwrap();
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let stdlib_src = manifest_dir.join("stdlib");
+    let stdlib_dst = dir.path().join("stdlib");
+    copy_dir_recursive(&stdlib_src, &stdlib_dst);
+
+    let bin_path = dir.path().join("test_bin");
+    plutoc::compile_file_with_stdlib(&path, &bin_path, Some(&stdlib_dst))
+        .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+}
+
 // ── Primitive round-trips ──────────────────────────────────────────────────────
 
 #[test]
@@ -48,7 +63,7 @@ fn wire_int_roundtrip() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let v = wire.wire_int(42)
     let s = fmt.serialize(v)
     let r = fmt.deserialize(s) catch wire.wire_null()
@@ -73,7 +88,7 @@ fn wire_negative_int_roundtrip() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let v = wire.wire_int(-99)
     let s = fmt.serialize(v)
     let r = fmt.deserialize(s) catch wire.wire_null()
@@ -98,7 +113,7 @@ fn wire_float_roundtrip() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let v = wire.wire_float(3.14)
     let s = fmt.serialize(v)
     print(s)
@@ -113,7 +128,7 @@ fn wire_bool_roundtrip() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let v1 = wire.wire_bool(true)
     let s1 = fmt.serialize(v1)
     let r1 = fmt.deserialize(s1) catch wire.wire_null()
@@ -155,7 +170,7 @@ fn wire_string_roundtrip() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let v = wire.wire_string("hello world")
     let s = fmt.serialize(v)
     let r = fmt.deserialize(s) catch wire.wire_null()
@@ -180,7 +195,7 @@ fn wire_null_roundtrip() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let v = wire.wire_null()
     let s = fmt.serialize(v)
     print(s)
@@ -208,7 +223,7 @@ fn wire_array_roundtrip() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let elems: [wire.WireValue] = []
     elems.push(wire.wire_int(1))
     elems.push(wire.wire_int(2))
@@ -240,7 +255,7 @@ fn wire_empty_array_roundtrip() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let elems: [wire.WireValue] = []
     let v = wire.wire_array(elems)
     let s = fmt.serialize(v)
@@ -269,7 +284,7 @@ fn wire_record_roundtrip() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let keys: [string] = []
     keys.push("name")
     keys.push("age")
@@ -305,7 +320,7 @@ fn wire_empty_record_roundtrip() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let keys: [string] = []
     let vals: [wire.WireValue] = []
     let v = wire.wire_record(keys, vals)
@@ -335,7 +350,7 @@ fn wire_variant_roundtrip() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let v = wire.wire_variant("Ok", wire.wire_int(200))
     let s = fmt.serialize(v)
     print(s)
@@ -376,7 +391,7 @@ fn wire_nested_array_in_record() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let items: [wire.WireValue] = []
     items.push(wire.wire_int(10))
     items.push(wire.wire_int(20))
@@ -425,7 +440,7 @@ fn wire_mixed_array_types() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     let elems: [wire.WireValue] = []
     elems.push(wire.wire_int(1))
     elems.push(wire.wire_string("two"))
@@ -446,7 +461,7 @@ fn wire_serialize_format() {
 import std.wire
 
 fn main() {
-    let fmt = wire.JsonWireFormat { _unused: 0 }
+    let fmt = wire.json_wire_format()
     print(fmt.serialize(wire.wire_int(0)))
     print(fmt.serialize(wire.wire_bool(false)))
     print(fmt.serialize(wire.wire_string("")))
@@ -814,9 +829,7 @@ stage Api {
 #[test]
 fn serializable_validation_primitives_pass() {
     // This should compile successfully (no assertion needed, compile failure would fail the test)
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("main.pluto");
-    std::fs::write(&path, r#"
+    compile_serializable_test(r#"
 stage Api {
     pub fn get_int(self) int {
         return 42
@@ -834,17 +847,12 @@ stage Api {
         print("ok")
     }
 }
-"#).unwrap();
-
-    let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&path, &bin_path).unwrap();
+"#);
 }
 
 #[test]
 fn serializable_validation_class_with_serializable_fields_pass() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("main.pluto");
-    std::fs::write(&path, r#"
+    compile_serializable_test(r#"
 class Order {
     id: int
     name: string
@@ -870,17 +878,12 @@ stage Api {
         print("ok")
     }
 }
-"#).unwrap();
-
-    let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&path, &bin_path).unwrap();
+"#);
 }
 
 #[test]
 fn serializable_validation_nullable_and_collections_pass() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("main.pluto");
-    std::fs::write(&path, r#"
+    compile_serializable_test(r#"
 class Data {
     optional_name: string?
     tags: [string]
@@ -906,17 +909,12 @@ stage Api {
         print("ok")
     }
 }
-"#).unwrap();
-
-    let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&path, &bin_path).unwrap();
+"#);
 }
 
 #[test]
 fn serializable_validation_enum_pass() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("main.pluto");
-    std::fs::write(&path, r#"
+    compile_serializable_test(r#"
 enum Status {
     Pending
     Active { id: int }
@@ -932,19 +930,14 @@ stage Api {
         print("ok")
     }
 }
-"#).unwrap();
-
-    let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&path, &bin_path).unwrap();
+"#);
 }
 
 #[test]
 fn serializable_validation_injected_fields_ignored() {
     // Classes with injected fields (bracket deps) should pass validation
     // because injected fields are excluded from serialization
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("main.pluto");
-    std::fs::write(&path, r#"
+    compile_serializable_test(r#"
 class Database {
     connection_string: string
 }
@@ -967,8 +960,5 @@ stage Api[db: Database, repo: Repository] {
         print("ok")
     }
 }
-"#).unwrap();
-
-    let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&path, &bin_path).unwrap();
+"#);
 }
