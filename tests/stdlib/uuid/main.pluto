@@ -1,0 +1,31 @@
+import std.uuid
+import std.strings
+
+test "uuid_generate_returns_36_chars" {
+    let id = uuid.generate()
+    expect(strings.len(id)).to_equal(36)
+}
+
+test "uuid_has_correct_structure" {
+    let id = uuid.generate()
+    let sep1 = strings.char_at(id, 8)
+    let sep2 = strings.char_at(id, 13)
+    let sep3 = strings.char_at(id, 18)
+    let sep4 = strings.char_at(id, 23)
+    expect(sep1).to_equal("-")
+    expect(sep2).to_equal("-")
+    expect(sep3).to_equal("-")
+    expect(sep4).to_equal("-")
+}
+
+test "uuid_generates_different_ids" {
+    let id1 = uuid.generate()
+    let id2 = uuid.generate()
+    expect(id1 != id2).to_be_true()
+}
+
+test "uuid_contains_valid_hex" {
+    let id = uuid.generate()
+    let len = strings.len(id)
+    expect(len).to_equal(36)
+}

@@ -1,0 +1,80 @@
+import std.random
+
+extern fn __pluto_codepoint_to_string(cp: int) string
+
+// Generate a UUID v4 (random) as a string in the format: 8-4-4-4-12 hex digits
+pub fn generate() string {
+    // Generate 16 random bytes (128 bits)
+    let b1 = random.next()
+    let b2 = random.next()
+    let b3 = random.next()
+    let b4 = random.next()
+
+    // Extract bytes from the random integers
+    let bytes = [
+        b1 & 0xFF,
+        (b1 >> 8) & 0xFF,
+        (b1 >> 16) & 0xFF,
+        (b1 >> 24) & 0xFF,
+        b2 & 0xFF,
+        (b2 >> 8) & 0xFF,
+        (b2 >> 16) & 0xFF,
+        (b2 >> 24) & 0xFF,
+        b3 & 0xFF,
+        (b3 >> 8) & 0xFF,
+        (b3 >> 16) & 0xFF,
+        (b3 >> 24) & 0xFF,
+        b4 & 0xFF,
+        (b4 >> 8) & 0xFF,
+        (b4 >> 16) & 0xFF,
+        (b4 >> 24) & 0xFF,
+    ]
+
+    // Set version to 4 (bits 12-15 of time_hi_and_version)
+    bytes[6] = (bytes[6] & 0x0F) | 0x40
+
+    // Set variant to RFC 4122 (bits 6-7 of clock_seq_hi_and_reserved)
+    bytes[8] = (bytes[8] & 0x3F) | 0x80
+
+    // Format as: 8-4-4-4-12
+    return format_uuid_bytes(bytes)
+}
+
+fn format_uuid_bytes(bytes: [int]) string {
+    let result = ""
+
+    // First 4 bytes (8 hex chars)
+    result = result + byte_to_hex(bytes[0]) + byte_to_hex(bytes[1]) + byte_to_hex(bytes[2]) + byte_to_hex(bytes[3])
+    result = result + "-"
+
+    // Next 2 bytes (4 hex chars)
+    result = result + byte_to_hex(bytes[4]) + byte_to_hex(bytes[5])
+    result = result + "-"
+
+    // Next 2 bytes (4 hex chars)
+    result = result + byte_to_hex(bytes[6]) + byte_to_hex(bytes[7])
+    result = result + "-"
+
+    // Next 2 bytes (4 hex chars)
+    result = result + byte_to_hex(bytes[8]) + byte_to_hex(bytes[9])
+    result = result + "-"
+
+    // Last 6 bytes (12 hex chars)
+    result = result + byte_to_hex(bytes[10]) + byte_to_hex(bytes[11]) + byte_to_hex(bytes[12]) + byte_to_hex(bytes[13]) + byte_to_hex(bytes[14]) + byte_to_hex(bytes[15])
+
+    return result
+}
+
+fn byte_to_hex(b: int) string {
+    let b_clean = b & 0xFF
+    let high = (b_clean >> 4) & 0x0F
+    let low = b_clean & 0x0F
+    return int_to_hex_digit(high) + int_to_hex_digit(low)
+}
+
+fn int_to_hex_digit(n: int) string {
+    if n < 10 {
+        return __pluto_codepoint_to_string(48 + n)
+    }
+    return __pluto_codepoint_to_string(97 + n - 10)
+}
