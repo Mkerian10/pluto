@@ -177,6 +177,13 @@ impl PrettyPrinter {
             self.newline();
         }
 
+        // 9b. Stages
+        for stage in &program.stages {
+            sep!(self, has_output);
+            self.emit_stage_decl(&stage.node);
+            self.newline();
+        }
+
         // 10. Test blocks
         if let Some(tests_decl) = &program.tests {
             sep!(self, has_output);
@@ -532,6 +539,69 @@ impl PrettyPrinter {
 
         // Methods
         for (i, method) in app.methods.iter().enumerate() {
+            if i > 0 {
+                self.newline();
+            }
+            self.write_indent();
+            self.emit_function_header(&method.node);
+            self.write(" ");
+            self.emit_block(&method.node.body.node);
+            self.newline();
+        }
+
+        self.dedent();
+        self.write("}");
+    }
+
+    fn emit_stage_decl(&mut self, stage: &StageDecl) {
+        self.write("stage ");
+        self.write(&stage.name.node);
+
+        // Bracket deps
+        if !stage.inject_fields.is_empty() {
+            self.write("[");
+            for (i, f) in stage.inject_fields.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.write(&f.name.node);
+                self.write(": ");
+                self.emit_type_expr(&f.ty.node);
+            }
+            self.write("]");
+        }
+
+        self.write(" {");
+        self.newline();
+        self.indent();
+
+        // Ambient types
+        for amb in &stage.ambient_types {
+            self.write_indent();
+            self.write("ambient ");
+            self.write(&amb.node);
+            self.newline();
+        }
+
+        // Lifecycle overrides
+        for (name, lifecycle) in &stage.lifecycle_overrides {
+            self.write_indent();
+            match lifecycle {
+                crate::parser::ast::Lifecycle::Scoped => self.write("scoped "),
+                crate::parser::ast::Lifecycle::Transient => self.write("transient "),
+                crate::parser::ast::Lifecycle::Singleton => self.write("singleton "),
+            }
+            self.write(&name.node);
+            self.newline();
+        }
+
+        // Blank line between directives and methods
+        if (!stage.ambient_types.is_empty() || !stage.lifecycle_overrides.is_empty()) && !stage.methods.is_empty() {
+            self.newline();
+        }
+
+        // Methods
+        for (i, method) in stage.methods.iter().enumerate() {
             if i > 0 {
                 self.newline();
             }

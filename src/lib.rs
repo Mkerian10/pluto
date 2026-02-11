@@ -317,6 +317,11 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
             "test files should not contain an app declaration".to_string()
         ));
     }
+    if !program.stages.is_empty() {
+        return Err(CompileError::codegen(
+            "test files should not contain a stage declaration".to_string()
+        ));
+    }
 
     // Resolve extern rust crates
     let rust_artifacts = if program.extern_rust_crates.is_empty() {

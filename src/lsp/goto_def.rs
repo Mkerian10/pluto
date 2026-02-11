@@ -53,6 +53,10 @@ impl DefinitionIndex {
             defs.insert(app.node.name.node.clone(), (app.node.name.span.file_id, app.span));
         }
 
+        for stage in &program.stages {
+            defs.insert(stage.node.name.node.clone(), (stage.node.name.span.file_id, stage.span));
+        }
+
         Self { defs }
     }
 }

@@ -59,6 +59,13 @@ impl DeclIndex {
             }
         }
 
+        for stage in &program.stages {
+            for m in &stage.node.methods {
+                let mangled = mangle_method(&stage.node.name.node, &m.node.name.node);
+                fn_index.insert(mangled, m.node.id);
+            }
+        }
+
         // Also index extern functions (they have no UUID in the AST, so skip them)
         // Trait methods have bodies but are indexed through class impls, not directly callable by name
 
@@ -99,6 +106,13 @@ pub fn resolve_cross_refs(program: &mut Program) {
     // Walk app methods
     if let Some(app) = &mut program.app {
         for m in &mut app.node.methods {
+            resolve_block(&mut m.node.body.node, &index);
+        }
+    }
+
+    // Walk stage methods
+    for stage in &mut program.stages {
+        for m in &mut stage.node.methods {
             resolve_block(&mut m.node.body.node, &index);
         }
     }
