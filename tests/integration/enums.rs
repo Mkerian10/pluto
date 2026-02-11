@@ -31,8 +31,9 @@ fn enum_as_function_param() {
 
 #[test]
 fn enum_non_exhaustive_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "enum Color {\n    Red\n    Blue\n    Green\n}\n\nfn main() {\n    let c = Color.Red\n    match c {\n        Color.Red {\n            print(1)\n        }\n        Color.Blue {\n            print(2)\n        }\n    }\n}",
+        "non-exhaustive match",
     );
 }
 

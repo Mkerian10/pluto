@@ -75,7 +75,7 @@ fn string_empty() {
 
 #[test]
 fn string_concat_not_int() {
-    compile_should_fail("fn main() {\n    let s = \"hello\" + 42\n}");
+    compile_should_fail_with("fn main() {\n    let s = \"hello\" + 42\n}", "type mismatch");
 }
 
 #[test]
