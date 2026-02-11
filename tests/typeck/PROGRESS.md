@@ -114,12 +114,21 @@
 
 **Subtotal:** 80/80 ✅ **TARGET MET**
 
-### 11-15. Remaining Categories
+### 11. Scope & Variables ✅ COMPLETE (Target: 80+, Actual: 80)
+- ✅ `scope_vars/shadowing.rs` - 20 tests
+- ✅ `scope_vars/lifetime_errors.rs` - 20 tests
+- ✅ `scope_vars/scope_resolution.rs` - 15 tests
+- ✅ `scope_vars/variable_capture.rs` - 15 tests
+- ✅ `scope_vars/temporal_errors.rs` - 10 tests
+
+**Subtotal:** 80/80 ✅ **TARGET MET**
+
+### 12-15. Remaining Categories
 - 🚧 All TODO
 
 ---
 
-## TOTAL PROGRESS: 1,343/1,730 tests (77.6%)
+## TOTAL PROGRESS: 1,423/1,730 tests (82.2%)
 
 ## Key Achievements
 - ✅ Inference category complete and exceeded target (213 tests)
@@ -139,13 +148,13 @@
 - ✅ Complete method resolution testing (vtables, trait dispatch, lookup, overloading, self types)
 - ✅ Complete declaration registration testing (forward refs, circular deps, duplicates, init order)
 - ✅ Complete DI graph testing (topological sort, cycles, scoping, dependency resolution, app validation)
+- ✅ Complete scope & variables testing (shadowing, lifetime errors, scope resolution, variable capture, temporal ordering)
 
 ## Next Priorities
-1. **Scope & Variables** (80 tests) - MEDIUM priority, shadowing, lifetime edge cases
-2. **Mutability** (60 tests) - MEDIUM priority, mut self enforcement, immutability violations
-3. **Contract Tests** (100 tests) - MEDIUM priority, invariant violations, requires/ensures
-4. **Concurrency Tests** (100 tests) - MEDIUM priority, task errors, race conditions
-5. Continue through remaining 4 categories systematically
+1. **Mutability** (60 tests) - MEDIUM priority, mut self enforcement, immutability violations
+2. **Contract Tests** (100 tests) - MEDIUM priority, invariant violations, requires/ensures
+3. **Concurrency Tests** (100 tests) - MEDIUM priority, task errors, race conditions
+4. Continue through remaining 3 categories systematically
 
 ## Testing Strategy Notes
 - Using inline `compile_should_fail_with(code, expected_msg)` pattern
