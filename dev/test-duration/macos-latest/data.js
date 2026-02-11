@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770793134131,
+  "lastUpdate": 1770797618576,
   "repoUrl": "https://github.com/Mkerian10/pluto",
   "entries": {
     "Benchmark": [
@@ -202,6 +202,35 @@ window.BENCHMARK_DATA = {
           {
             "name": "cargo_test",
             "value": 204376,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "33331268+Mkerian10@users.noreply.github.com",
+            "name": "Matthew Kerian",
+            "username": "Mkerian10"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bb5faccfd867747a6d8568028ad06d7d9a3a46ec",
+          "message": "Add watch test mode for TDD workflow (#25)\n\nImplement watch test mode to automatically detect file changes and rerun tests. This enables a TDD workflow with instant feedback.\n\nFeatures:\n- Automatic test rerunning on file changes\n- Debouncing (100ms window)\n- Test status indicators (✓ TESTS PASSED / ✗ TESTS FAILED)\n- Transitive import tracking (watches all imported modules)\n- Continues watching even on compilation/test failures\n- Optional --no-clear flag\n- Optional --no-cache flag for test caching control\n\nUsage:\n  plutoc watch test <file> [--stdlib <path>] [--no-clear] [--no-cache]\n\nImplementation:\n- New function in watch.rs: watch_test()\n- CLI integration: watch test subcommand\n- Reuses file watching infrastructure from watch run\n\nTesting:\n- ✓ Initial test run detection\n- ✓ File change detection and test rerun\n- ✓ Multiple test runs with different test counts\n- ✓ Test status indicators\n\nCo-authored-by: Test <test@test.com>\nCo-authored-by: Claude Sonnet 4.5 <noreply@anthropic.com>",
+          "timestamp": "2026-02-11T08:08:53Z",
+          "tree_id": "d2717d91b1a159c82d7081e8fde4297c0e46b643",
+          "url": "https://github.com/Mkerian10/pluto/commit/bb5faccfd867747a6d8568028ad06d7d9a3a46ec"
+        },
+        "date": 1770797617621,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cargo_test",
+            "value": 267880,
             "unit": "ms"
           }
         ]
