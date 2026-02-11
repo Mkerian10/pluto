@@ -1,157 +1,128 @@
 # Next Steps: Runtime Error Testing & Compiler Bugs
 
 **Date:** 2026-02-11
-**Status:** 4 tests blocked by 2 compiler bugs
+**Status:** ✅ ALL BUGS FIXED - All 21 tests passing!
 
 ## Current State
 
 ### Tests Implemented: 21 total
-- ✅ **17 passing** - Runtime is solid, zero bugs found
-- 🔴 **4 blocked** - Compiler bugs prevent these from running
+- ✅ **21 passing** - Runtime is solid, zero bugs found
+- ✅ **All compiler bugs fixed** - Parser now respects newlines as statement boundaries
 
-### Passing Tests (17)
+### All Tests Passing (21)
 **P0 - Core Validation (13 tests)**
 - TLS isolation: 5 tests ✅
 - Error GC: 3 tests ✅
 - Error lifecycle: 3 tests ✅
 - Edge cases: 2 tests ✅
 
-**P1 - Stress & Propagation (4 tests)**
+**P1 - Stress & Propagation (8 tests)**
 - `stress_rapid_spawn_under_error_load` ✅
 - `stress_error_object_field_diversity` ✅
 - `stress_burst_error_creation` ✅
 - `propagation_task_fanout_all_fail` ✅
+- `stress_100_concurrent_tasks_mixed_errors` ✅ (unblocked!)
+- `stress_1000_sequential_spawn_error_cycles` ✅ (unblocked!)
+- `propagation_multi_layer_task_chain` ✅ (unblocked!)
+- `propagation_mixed_success_failure_fanout` ✅ (unblocked!)
 
-### Blocked Tests (4)
-**All blocked by Compiler Bug #1 (multi-statement catch blocks)**
-1. `stress_100_concurrent_tasks_mixed_errors` - 100 tasks, mixed errors
-2. `stress_1000_sequential_spawn_error_cycles` - 1000 sequential cycles
-3. `propagation_multi_layer_task_chain` - 3-layer task chain
-4. `propagation_mixed_success_failure_fanout` - Also affected by Bug #2
+## Compiler Bugs - ✅ ALL FIXED!
 
-## Compiler Bugs to Fix
-
-### Bug #1: Multi-Statement Catch Blocks Typed as Void (HIGH PRIORITY)
+### Bug #1: Multi-Statement Catch Blocks Typed as Void ✅ FIXED
 
 **File:** `docs/bugs/COMPILER-BUGS.md` Bug #1
-**Blocks:** 4 tests
-**Severity:** HIGH
+**Status:** ✅ Fixed in commit 384ea61
+**Unblocked:** 4 tests
 
-**Problem:**
-```pluto
-let result = task.get() catch err {
-    failures = failures + 1  // Assignment (void)
-    -1                        // Expression (int)
-}
-// Should be typed as int, but typechecker sees void
-```
+**Root Cause:**
+Parser was treating expressions across newlines as a single expression because `peek()` skips newlines.
 
-**Error:** `Type error: catch handler type mismatch: expected int, found void`
+**Fix Applied:**
+- Location: `src/parser/mod.rs` (Pratt parser)
+- Added newline detection before parsing infix operators
+- Parser now checks `peek_raw()` for newlines and stops expression parsing when newline precedes binary operator
 
-**Fix needed:**
-- Location: `src/typeck/infer.rs` or `src/typeck/check.rs`
-- Catch blocks are block expressions, should use last expression's type
-- Similar to how function bodies work
-
-**Test after fix:**
+**Verification:**
 ```bash
-cargo test --test runtime_error_state stress_100_concurrent_tasks_mixed_errors
-cargo test --test runtime_error_state stress_1000_sequential_spawn_error_cycles
-cargo test --test runtime_error_state propagation_multi_layer_task_chain
-cargo test --test runtime_error_state propagation_mixed_success_failure_fanout
+cargo test --test runtime_error_state
+# Result: 21 passed; 0 failed ✅
 ```
 
-### Bug #2: `if` Without `else` Containing `raise` Typed as Void (MEDIUM PRIORITY)
+### Bug #2: `if` Without `else` Containing `raise` Typed as Void ✅ FIXED
 
 **File:** `docs/bugs/COMPILER-BUGS.md` Bug #2
-**Blocks:** 1 test (also blocked by Bug #1)
-**Severity:** MEDIUM
+**Status:** ✅ Fixed by same parser fix (commit 384ea61)
+**Unblocked:** 1 test (propagation_mixed_success_failure_fanout)
 
-**Problem:**
-```pluto
-fn maybe_fail(n: int) int {
-    if n % 2 == 0 { raise MyError { n: n } }
-    // raise never returns, but typechecker sees if as void
-    return n
-}
-```
+**Root Cause:**
+Same as Bug #1 - parser bug, not a diverging control flow issue.
 
-**Fix needed:**
-- Location: `src/typeck/infer.rs`
-- Implement "never" type (`!`) for diverging expressions
-- Mark `raise`, `return` as diverging
-- If branch diverges, don't require it to match expected type
+**Fix Applied:**
+Same parser fix in `src/parser/mod.rs` resolved both bugs.
 
-**Test after fix:**
-```bash
-cargo test --test runtime_error_state propagation_mixed_success_failure_fanout
-```
+## ✅ Completed Phases
 
-## Action Plan
+### Phase 1: Fix Bug #1 (Multi-Statement Catch Blocks) ✅ COMPLETE
+**Status:** ✅ Fixed in commit 384ea61
+**Actual approach:** Parser fix, not typechecker change
+**Result:** 20/21 tests passing
 
-### Phase 1: Fix Bug #1 (Multi-Statement Catch Blocks)
-**Priority:** CRITICAL
-**Estimated effort:** 4-8 hours
-**Expected result:** 3/4 blocked tests will pass
+**What was done:**
+1. ✅ Investigated root cause using debug output
+2. ✅ Discovered parser was treating newlines as whitespace in expressions
+3. ✅ Added newline detection in `src/parser/mod.rs`
+4. ✅ Verified fix with minimal test cases
+5. ✅ Ran full test suite - no regressions
 
-**Steps:**
-1. Read `src/typeck/infer.rs` - find catch block type inference
-2. Locate where catch handler blocks are typed
-3. Change to use last expression's type (like function bodies)
-4. Run blocked tests to verify fix
-5. Run full test suite to ensure no regressions
+### Phase 2: Fix Bug #2 (Diverging Control Flow) ✅ COMPLETE
+**Status:** ✅ Fixed by same parser fix
+**Result:** 21/21 tests passing
 
-### Phase 2: Fix Bug #2 (Diverging Control Flow)
-**Priority:** HIGH
-**Estimated effort:** 8-16 hours
-**Expected result:** 4/4 blocked tests will pass
+**What was done:**
+Bug #2 was actually the same root cause as Bug #1. The parser fix resolved both bugs simultaneously.
 
-**Steps:**
-1. Add `PlutoType::Never` to type system
-2. Mark `raise` and `return` as returning `Never`
-3. Update type checking for `if` expressions:
-   - If condition branch is `Never`, don't require type match
-   - If both branches are `Never`, result is `Never`
-   - If one branch is `Never`, use other branch's type
-4. Run blocked tests to verify fix
-5. Run full test suite to ensure no regressions
+### Phase 3: Validation ✅ COMPLETE
 
-### Phase 3: Validation
-**After both bugs fixed**
-
-1. All 21 runtime error state tests should pass:
+1. ✅ All 21 runtime error state tests passing:
    ```bash
    cargo test --test runtime_error_state
-   # Expected: 21 passed; 0 failed
+   # Result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
    ```
 
-2. Update documentation:
-   - Mark bugs as fixed in `docs/bugs/COMPILER-BUGS.md`
-   - Update `docs/testing/runtime-error-testing-results.md`
-   - Celebrate! 🎉
+2. ✅ Documentation updated:
+   - `docs/bugs/COMPILER-BUGS.md` - Both bugs marked as fixed
+   - `docs/testing/runtime-error-testing-results.md` - Updated to 21/21 passing
+   - `docs/bugs/NEXT-STEPS.md` - This file
 
-3. Continue with P2 tests (feature interactions):
-   - Error + channel blocking
-   - Error + map concurrent iteration
-   - Error + contract invariant
-   - Error + nullable interaction
+3. ✅ PR created and merged:
+   - PR #34: Fix parser bug: respect newlines as statement boundaries
+   - Merged to master
 
-## Success Criteria
+## Next: P2 Tests (Feature Interactions)
 
-✅ **Phase 1 Complete When:**
-- Bug #1 fixed
-- 20/21 tests passing (only propagation_mixed blocked by Bug #2)
-- No regressions in other tests
+Ready to implement P2 tests for feature interactions:
+- Error + channel blocking
+- Error + map concurrent iteration
+- Error + contract invariant
+- Error + nullable interaction
 
-✅ **Phase 2 Complete When:**
-- Bug #2 fixed
-- 21/21 tests passing
-- No regressions in other tests
+## Success Criteria - ✅ ALL MET
 
-✅ **Phase 3 Complete When:**
-- All 21 tests passing
-- Documentation updated
-- Ready for P2 tests
+✅ **Phase 1 Complete:**
+- ✅ Bug #1 fixed
+- ✅ 20/21 tests passing
+- ✅ No regressions in other tests
+
+✅ **Phase 2 Complete:**
+- ✅ Bug #2 fixed (same fix as Bug #1)
+- ✅ 21/21 tests passing
+- ✅ No regressions in other tests
+
+✅ **Phase 3 Complete:**
+- ✅ All 21 tests passing
+- ✅ Documentation updated
+- ✅ PR merged to master
+- ✅ Ready for P2 tests
 
 ## Files to Read
 
