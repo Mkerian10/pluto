@@ -214,6 +214,10 @@ name = "error_snapshots"
 path = "tests/integration/error_snapshots.rs"
 
 [[test]]
+name = "error_messages"
+path = "tests/integration/error_messages.rs"
+
+[[test]]
 name = "lexer_tests"
 path = "tests/integration/lexer_tests.rs"
 

@@ -736,7 +736,9 @@ impl<'a> LowerContext<'a> {
             PlutoType::String => self.lower_for_string(var, iterable, body),
             PlutoType::Receiver(_) => self.lower_for_receiver(var, iterable, body),
             PlutoType::Stream(_) => self.lower_for_stream(var, iterable, body),
-            _ => Err(CompileError::codegen("for loop requires array, range, string, receiver, or stream".to_string())),
+            other => Err(CompileError::codegen(
+                format!("for loop requires array, range, string, bytes, receiver, or stream, found {}", other)
+            )),
         }
     }
 
@@ -844,7 +846,9 @@ impl<'a> LowerContext<'a> {
         let iter_type = infer_type_for_expr(&iterable.node, self.env, &self.var_types);
         let elem_type = match &iter_type {
             PlutoType::Array(elem) => *elem.clone(),
-            _ => return Err(CompileError::codegen("for loop requires array".to_string())),
+            other => return Err(CompileError::codegen(
+                format!("for loop requires array, found {}", other)
+            )),
         };
 
         // Call len() on the array
@@ -1115,7 +1119,9 @@ impl<'a> LowerContext<'a> {
         let iter_type = infer_type_for_expr(&iterable.node, self.env, &self.var_types);
         let elem_type = match &iter_type {
             PlutoType::Receiver(elem) => *elem.clone(),
-            _ => return Err(CompileError::codegen("for-in requires receiver".to_string())),
+            other => return Err(CompileError::codegen(
+                format!("for-in requires receiver, found {}", other)
+            )),
         };
 
         // Blocks: header tries recv, check_err tests for error, body runs loop, exit leaves
@@ -1199,7 +1205,9 @@ impl<'a> LowerContext<'a> {
         let iter_type = infer_type_for_expr(&iterable.node, self.env, &self.var_types);
         let elem_type = match &iter_type {
             PlutoType::Stream(elem) => *elem.clone(),
-            _ => return Err(CompileError::codegen("for-in requires stream".to_string())),
+            other => return Err(CompileError::codegen(
+                format!("for-in requires stream, found {}", other)
+            )),
         };
 
         // Blocks: header calls next, body processes value, exit leaves loop
@@ -1289,7 +1297,9 @@ impl<'a> LowerContext<'a> {
 
         let enum_name = match infer_type_for_expr(&expr.node, self.env, &self.var_types) {
             PlutoType::Enum(name) => name,
-            _ => return Err(CompileError::codegen("match on non-enum".to_string())),
+            other_type => return Err(CompileError::codegen(
+                format!("match requires enum type, found {}", other_type)
+            )),
         };
         let enum_info = self.env.enums.get(&enum_name).ok_or_else(|| {
             CompileError::codegen(format!("unknown enum '{enum_name}'"))
@@ -1880,7 +1890,7 @@ impl<'a> LowerContext<'a> {
                 let val = self.lower_expr(&inner.node)?;
                 let source_type = infer_type_for_expr(&inner.node, self.env, &self.var_types);
                 let target_type = resolve_type_expr_to_pluto(&target_type.node, self.env);
-                match (source_type, target_type) {
+                match (source_type.clone(), target_type.clone()) {
                     (PlutoType::Int, PlutoType::Float) => Ok(self.builder.ins().fcvt_from_sint(types::F64, val)),
                     (PlutoType::Float, PlutoType::Int) => Ok(self.builder.ins().fcvt_to_sint_sat(types::I64, val)),
                     (PlutoType::Int, PlutoType::Bool) => {
@@ -1890,7 +1900,9 @@ impl<'a> LowerContext<'a> {
                     (PlutoType::Bool, PlutoType::Int) => Ok(self.builder.ins().uextend(types::I64, val)),
                     (PlutoType::Int, PlutoType::Byte) => Ok(self.builder.ins().ireduce(types::I8, val)),
                     (PlutoType::Byte, PlutoType::Int) => Ok(self.builder.ins().uextend(types::I64, val)),
-                    _ => Err(CompileError::codegen("invalid cast in lowered AST".to_string())),
+                    (src, tgt) => Err(CompileError::codegen(
+                        format!("invalid cast from {} to {} in lowered AST", src, tgt)
+                    )),
                 }
             }
             Expr::Call { name, args, .. } => self.lower_call(name, args),
