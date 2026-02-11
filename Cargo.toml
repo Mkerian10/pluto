@@ -176,3 +176,7 @@ path = "tests/integration/system.rs"
 [[test]]
 name = "deterministic"
 path = "tests/integration/deterministic.rs"
+
+[[test]]
+name = "stages"
+path = "tests/integration/stages.rs"

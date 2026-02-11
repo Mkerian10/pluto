@@ -833,7 +833,16 @@ impl<'a> Parser<'a> {
                 lifecycle_overrides.push((class_name, Lifecycle::Transient));
                 self.consume_statement_end();
             } else {
-                methods.push(self.parse_method()?);
+                // Parse optional 'pub' before methods
+                let is_pub = if matches!(self.peek().expect("token should exist after is_some check").node, Token::Pub) {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
+                let mut method = self.parse_method()?;
+                method.node.is_pub = is_pub;
+                methods.push(method);
             }
             self.skip_newlines();
         }
