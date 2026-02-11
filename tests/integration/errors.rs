@@ -392,3 +392,27 @@ fn catch_wildcard_multi_stmt_no_error() {
     );
     assert_eq!(out, "10\n");
 }
+
+#[test]
+fn builtin_network_error() {
+    let out = compile_and_run_stdout(
+        "fn test_network() {\n    raise NetworkError { message: \"connection failed\" }\n}\n\nfn main() {\n    test_network() catch NetworkError {\n        print(\"caught network error\")\n    }\n}",
+    );
+    assert_eq!(out, "caught network error\n");
+}
+
+#[test]
+fn builtin_timeout_error() {
+    let out = compile_and_run_stdout(
+        "fn test_timeout() {\n    raise TimeoutError { millis: 5000 }\n}\n\nfn main() {\n    test_timeout() catch TimeoutError {\n        print(\"caught timeout\")\n    }\n}",
+    );
+    assert_eq!(out, "caught timeout\n");
+}
+
+#[test]
+fn builtin_service_unavailable() {
+    let out = compile_and_run_stdout(
+        "fn test_service() {\n    raise ServiceUnavailable { service: \"api\" }\n}\n\nfn main() {\n    test_service() catch ServiceUnavailable {\n        print(\"service unavailable\")\n    }\n}",
+    );
+    assert_eq!(out, "service unavailable\n");
+}

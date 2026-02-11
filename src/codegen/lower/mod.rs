@@ -108,6 +108,18 @@ impl<'a> LowerContext<'a> {
         Ok(self.builder.ins().load(types::I64, MemFlags::new(), addr, Offset32::new(0)))
     }
 
+    /// Check if a class is a stage (for RPC routing).
+    fn is_stage(&self, class_name: &str) -> bool {
+        self.env.stages.iter().any(|(name, _)| name == class_name)
+    }
+
+    /// Create a string literal value at runtime.
+    fn make_string_literal(&mut self, s: &str) -> Result<Value, CompileError> {
+        let raw_ptr = self.create_data_str(s)?;
+        let len_val = self.builder.ins().iconst(types::I64, s.len() as i64);
+        Ok(self.call_runtime("__pluto_string_new", &[raw_ptr, len_val]))
+    }
+
     /// Emit a return with the default value for the current function's return type.
     /// Used by raise and propagation to exit the function when an error occurs.
     fn emit_default_return(&mut self) {
@@ -2934,6 +2946,16 @@ impl<'a> LowerContext<'a> {
             }
         } else if let PlutoType::Class(class_name) = &obj_type {
             let class_name = class_name.clone();
+
+            // Check if this is a cross-stage RPC call
+            // Only generate RPC if:
+            //   1. The target class is a stage
+            //   2. The object is NOT 'self' (to avoid RPC for same-stage calls)
+            let is_self_call = matches!(&object.node, Expr::Ident(name) if name == "self");
+            if self.is_stage(&class_name) && !is_self_call {
+                return self.lower_rpc_call(&class_name, &method.node, args, object);
+            }
+
             let mangled = mangle_method(&class_name, &method.node);
             let func_id = self.func_ids.get(&mangled).ok_or_else(|| {
                 CompileError::codegen(format!("undefined method '{}'", method.node))
@@ -3000,6 +3022,115 @@ impl<'a> LowerContext<'a> {
         } else {
             Err(CompileError::codegen(format!("method call on non-class type {obj_type}")))
         }
+    }
+
+    /// Generate RPC call for cross-stage method invocation.
+    /// For MVP: supports simple types (int, string, bool, float) in args and return value.
+    fn lower_rpc_call(
+        &mut self,
+        stage_name: &str,
+        method_name: &str,
+        args: &[crate::span::Spanned<Expr>],
+        _object: &crate::span::Spanned<Expr>,
+    ) -> Result<Value, CompileError> {
+        // 1. Build endpoint URL: "http://localhost:8000/{stage_name}/{method_name}"
+        let endpoint = format!("http://localhost:8000/{}/{}", stage_name, method_name);
+        let endpoint_str = self.make_string_literal(&endpoint)?;
+
+        // 2. Build JSON request body (simplified for MVP - just serialize args as JSON array)
+        // For MVP: build a simple JSON array by concatenating strings
+        // This is inefficient but works for prototype
+        let mut body_val = self.make_string_literal("[")?;
+
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                let comma = self.make_string_literal(",")?;
+                body_val = self.call_runtime("__pluto_string_concat", &[body_val, comma]);
+            }
+
+            let arg_val = self.lower_expr(&arg.node)?;
+            let arg_type = infer_type_for_expr(&arg.node, self.env, &self.var_types);
+
+            let json_val = match arg_type {
+                PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[arg_val]),
+                PlutoType::String => {
+                    let quote = self.make_string_literal("\"")?;
+                    let concat1 = self.call_runtime("__pluto_string_concat", &[quote, arg_val]);
+                    self.call_runtime("__pluto_string_concat", &[concat1, quote])
+                }
+                PlutoType::Bool => {
+                    let true_str = self.make_string_literal("true")?;
+                    let false_str = self.make_string_literal("false")?;
+                    let extended = self.builder.ins().uextend(types::I64, arg_val);
+                    let zero = self.builder.ins().iconst(types::I64, 0);
+                    let is_true = self.builder.ins().icmp(IntCC::NotEqual, extended, zero);
+                    self.builder.ins().select(is_true, true_str, false_str)
+                }
+                PlutoType::Float => self.call_runtime("__pluto_float_to_string", &[arg_val]),
+                _ => {
+                    return Err(CompileError::codegen(format!(
+                        "RPC MVP does not support argument type {:?}", arg_type
+                    )));
+                }
+            };
+
+            body_val = self.call_runtime("__pluto_string_concat", &[body_val, json_val]);
+        }
+
+        let close_bracket = self.make_string_literal("]")?;
+        body_val = self.call_runtime("__pluto_string_concat", &[body_val, close_bracket]);
+
+        // 3. Call std.rpc.http_post(endpoint, body)
+        // This is an external function call to "rpc.http_post"
+        let rpc_func_name = "rpc.http_post";
+        let rpc_func_id = self.func_ids.get(rpc_func_name).ok_or_else(|| {
+            CompileError::codegen(format!(
+                "std.rpc module not found - ensure 'import std.rpc' is included"
+            ))
+        })?;
+        let rpc_func_ref = self.module.declare_func_in_func(*rpc_func_id, self.builder.func);
+
+        let call = self.builder.ins().call(rpc_func_ref, &[endpoint_str, body_val]);
+        let response = self.builder.inst_results(call)[0];
+
+        // 4. Unmarshal response based on method's return type
+        // Look up the method signature to get the return type
+        let mangled_method = mangle_method(stage_name, method_name);
+        let return_type = self.env.functions.get(&mangled_method)
+            .map(|sig| sig.return_type.clone())
+            .ok_or_else(|| CompileError::codegen(format!(
+                "Could not find method signature for {}", mangled_method
+            )))?;
+
+        // Extract the result value from the JSON response based on return type
+        let result = match return_type {
+            PlutoType::Int => {
+                self.call_runtime("__pluto_rpc_extract_int", &[response])
+            }
+            PlutoType::Float => {
+                self.call_runtime("__pluto_rpc_extract_float", &[response])
+            }
+            PlutoType::String => {
+                self.call_runtime("__pluto_rpc_extract_string", &[response])
+            }
+            PlutoType::Bool => {
+                let extracted = self.call_runtime("__pluto_rpc_extract_bool", &[response]);
+                // Convert i64 to i8 for bool
+                self.builder.ins().ireduce(types::I8, extracted)
+            }
+            PlutoType::Void => {
+                // For void return, we don't need to extract anything
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                zero
+            }
+            _ => {
+                return Err(CompileError::codegen(format!(
+                    "RPC MVP does not support return type {:?}", return_type
+                )));
+            }
+        };
+
+        Ok(result)
     }
 
     fn lower_closure_create(

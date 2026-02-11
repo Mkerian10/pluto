@@ -75,6 +75,15 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     env.errors.entry("TaskCancelled".to_string()).or_insert(ErrorInfo {
         fields: vec![("message".to_string(), PlutoType::String)],
     });
+    env.errors.entry("NetworkError".to_string()).or_insert(ErrorInfo {
+        fields: vec![("message".to_string(), PlutoType::String)],
+    });
+    env.errors.entry("TimeoutError".to_string()).or_insert(ErrorInfo {
+        fields: vec![("millis".to_string(), PlutoType::Int)],
+    });
+    env.errors.entry("ServiceUnavailable".to_string()).or_insert(ErrorInfo {
+        fields: vec![("service".to_string(), PlutoType::String)],
+    });
     register::register_class_names(program, &mut env)?;
 
     // Pass 1: Resolve types now that all names are registered

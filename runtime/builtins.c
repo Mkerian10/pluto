@@ -4417,3 +4417,139 @@ long __pluto_env_clear(void *name_ptr) {
     // unsetenv returns 0 on success, -1 on error
     return unsetenv(name_buf) == 0 ? 1 : 0;
 }
+
+// HTTP POST for RPC calls
+// For MVP/testing: returns a dummy JSON response
+// TODO: Implement actual HTTP client with libcurl or sockets
+void *__pluto_http_post(void *url_ptr, void *body_ptr, long timeout_ms) {
+    // Extract URL string
+    long *url_header = (long *)url_ptr;
+    long url_len = url_header[0];
+    char *url_data = (char *)&url_header[1];
+
+    // Extract body string
+    long *body_header = (long *)body_ptr;
+    long body_len = body_header[0];
+    char *body_data = (char *)&body_header[1];
+
+    // For MVP: just return a dummy JSON response for testing
+    // In test mode, this will be intercepted before actual HTTP happens
+    // Return quoted value so both int and string extraction can work
+    char *response = "{\"status\":\"ok\",\"result\":\"42\"}";
+    return __pluto_make_string(response);
+}
+
+// ── RPC Response Parsing ───────────────────────────────────────────────────────
+// For MVP: Simple JSON parsing to extract "result" field from response
+// Assumes format: {"status":"ok","result":VALUE}
+
+// Extract int from JSON response
+long __pluto_rpc_extract_int(void *response_ptr) {
+    long *header = (long *)response_ptr;
+    long len = header[0];
+    const char *data = (const char *)&header[1];
+
+    // Find "result": in the JSON
+    const char *result_key = "\"result\":";
+    const char *pos = strstr(data, result_key);
+    if (!pos) {
+        fprintf(stderr, "RPC Error: could not find 'result' in JSON response\n");
+        exit(1);
+    }
+
+    // Skip the "result": part
+    pos += strlen(result_key);
+
+    // Skip opening quote if present (handles both "42" and 42)
+    if (*pos == '"') {
+        pos++;
+    }
+
+    // Parse the integer value
+    long value = strtol(pos, NULL, 10);
+    return value;
+}
+
+// Extract float from JSON response
+double __pluto_rpc_extract_float(void *response_ptr) {
+    long *header = (long *)response_ptr;
+    long len = header[0];
+    const char *data = (const char *)&header[1];
+
+    const char *result_key = "\"result\":";
+    const char *pos = strstr(data, result_key);
+    if (!pos) {
+        fprintf(stderr, "RPC Error: could not find 'result' in JSON response\n");
+        exit(1);
+    }
+
+    pos += strlen(result_key);
+
+    // Skip opening quote if present
+    if (*pos == '"') {
+        pos++;
+    }
+
+    double value = strtod(pos, NULL);
+    return value;
+}
+
+// Extract string from JSON response (handles quoted strings)
+void *__pluto_rpc_extract_string(void *response_ptr) {
+    long *header = (long *)response_ptr;
+    long len = header[0];
+    const char *data = (const char *)&header[1];
+
+    const char *result_key = "\"result\":\"";
+    const char *pos = strstr(data, result_key);
+    if (!pos) {
+        fprintf(stderr, "RPC Error: could not find 'result' in JSON response\n");
+        exit(1);
+    }
+
+    // Skip the "result":" part
+    pos += strlen(result_key);
+
+    // Find the closing quote
+    const char *end = strchr(pos, '"');
+    if (!end) {
+        fprintf(stderr, "RPC Error: malformed string in JSON response\n");
+        exit(1);
+    }
+
+    // Extract the string value
+    long str_len = end - pos;
+    char *str_buf = (char *)malloc(str_len + 1);
+    memcpy(str_buf, pos, str_len);
+    str_buf[str_len] = '\0';
+
+    void *result = __pluto_make_string(str_buf);
+    free(str_buf);
+    return result;
+}
+
+// Extract bool from JSON response
+long __pluto_rpc_extract_bool(void *response_ptr) {
+    long *header = (long *)response_ptr;
+    long len = header[0];
+    const char *data = (const char *)&header[1];
+
+    const char *result_key = "\"result\":";
+    const char *pos = strstr(data, result_key);
+    if (!pos) {
+        fprintf(stderr, "RPC Error: could not find 'result' in JSON response\n");
+        exit(1);
+    }
+
+    pos += strlen(result_key);
+
+    // Check for "true" or "false"
+    if (strncmp(pos, "true", 4) == 0) {
+        return 1;
+    } else if (strncmp(pos, "false", 5) == 0) {
+        return 0;
+    } else {
+        fprintf(stderr, "RPC Error: expected boolean in JSON response\n");
+        exit(1);
+    }
+}
