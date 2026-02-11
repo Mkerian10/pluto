@@ -77,3 +77,4 @@ mod errors;
 mod spans;
 mod stress;
 mod real_world;
+mod edge_cases;
