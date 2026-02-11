@@ -641,6 +641,7 @@ fn resolve_modules_inner(
                 }
                 root.system = Some(system_decl);
             }
+            root.stages.extend(program.stages);
             root.errors.extend(program.errors);
         }
     }
@@ -1253,6 +1254,15 @@ fn rewrite_program(program: &mut Program, import_names: &HashSet<String>) {
         }
         // Rewrite app inject field types
         for field in &mut app.node.inject_fields {
+            rewrite_type_expr(&mut field.ty, import_names);
+        }
+    }
+    for stage in &mut program.stages {
+        for method in &mut stage.node.methods {
+            rewrite_function_body(&mut method.node, import_names);
+        }
+        // Rewrite stage inject field types
+        for field in &mut stage.node.inject_fields {
             rewrite_type_expr(&mut field.ty, import_names);
         }
     }
