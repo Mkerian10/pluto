@@ -189,6 +189,102 @@ fn create_watcher(tx: Sender<Event>) -> Result<notify::RecommendedWatcher, Compi
     .map_err(|e| CompileError::codegen(format!("failed to create file watcher: {}", e)))
 }
 
+/// Watch a Pluto file and automatically recompile and rerun tests when changes are detected
+pub fn watch_test(
+    entry_file: &Path,
+    stdlib: Option<&Path>,
+    no_clear: bool,
+    use_cache: bool,
+) -> Result<(), CompileError> {
+    println!("Watching {} for test changes...", entry_file.display());
+
+    // Initial compile and run tests
+    let binary = compile_test_file(entry_file, stdlib, use_cache)?;
+    let exit_code = run_tests(&binary)
+        .map_err(|e| CompileError::codegen(format!("failed to run tests: {}", e)))?;
+    print_test_separator(exit_code);
+
+    // Get all files to watch (entry + transitive imports)
+    let watched_files = get_watched_files(entry_file, stdlib)?;
+
+    // Setup file watcher
+    let (tx, rx) = unbounded();
+    let mut watcher = create_watcher(tx)?;
+
+    for file in &watched_files {
+        watcher.watch(file, RecursiveMode::NonRecursive)
+            .map_err(|e| CompileError::codegen(format!("failed to watch file {}: {}", file.display(), e)))?;
+    }
+
+    // Event loop
+    loop {
+        // Wait for file change
+        wait_for_change(&rx);
+
+        // Debounce
+        debounce_events(&rx);
+
+        // Clear terminal
+        if !no_clear {
+            clearscreen::clear().ok();
+        }
+
+        // Recompile and run tests
+        println!("File changed, recompiling tests...");
+        match compile_test_file(entry_file, stdlib, use_cache) {
+            Ok(new_binary) => {
+                match run_tests(&new_binary) {
+                    Ok(exit_code) => {
+                        print_test_separator(exit_code);
+                    }
+                    Err(e) => {
+                        eprintln!("Error running tests: {}", e);
+                        print_test_separator(1);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Compilation failed: {}", e);
+                print_test_separator(1);
+                // Continue watching even on compilation error
+            }
+        }
+    }
+}
+
+/// Compile the entry file for tests and return the path to the binary
+fn compile_test_file(entry_file: &Path, stdlib: Option<&Path>, use_cache: bool) -> Result<PathBuf, CompileError> {
+    // Use a temporary output file
+    let output = std::env::temp_dir().join(format!(
+        "pluto_watch_test_{}",
+        entry_file.file_stem().unwrap().to_string_lossy()
+    ));
+
+    crate::compile_file_for_tests(entry_file, &output, stdlib, use_cache)?;
+    Ok(output)
+}
+
+/// Run tests and return the exit code
+fn run_tests(binary: &Path) -> std::io::Result<i32> {
+    let status = Command::new(binary)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()?;
+
+    Ok(status.code().unwrap_or(1))
+}
+
+/// Print a separator line with test status
+fn print_test_separator(exit_code: i32) {
+    let status = if exit_code == 0 {
+        "✓ TESTS PASSED"
+    } else {
+        "✗ TESTS FAILED"
+    };
+    println!("\n{} {}\n", "=".repeat(25), status);
+}
+
 /// Print a separator line
 fn print_separator() {
     println!("\n{}\n", "=".repeat(60));

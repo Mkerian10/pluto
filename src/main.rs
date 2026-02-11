@@ -91,6 +91,19 @@ enum WatchCommands {
         #[arg(long)]
         no_clear: bool,
     },
+    /// Watch and automatically re-run tests
+    Test {
+        /// The Pluto file to watch and test
+        file: PathBuf,
+
+        /// Don't clear terminal between runs
+        #[arg(long)]
+        no_clear: bool,
+
+        /// Disable test caching, run all tests
+        #[arg(long)]
+        no_cache: bool,
+    },
 }
 
 fn main() {
@@ -178,6 +191,13 @@ fn main() {
             WatchCommands::Run { file, no_clear } => {
                 if let Err(err) = plutoc::watch::watch_run(&file, stdlib, no_clear) {
                     eprintln!("Watch error: {err}");
+                    std::process::exit(1);
+                }
+            }
+            WatchCommands::Test { file, no_clear, no_cache } => {
+                let use_cache = !no_cache;
+                if let Err(err) = plutoc::watch::watch_test(&file, stdlib, no_clear, use_cache) {
+                    eprintln!("Watch test error: {err}");
                     std::process::exit(1);
                 }
             }
