@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770795457698,
+  "lastUpdate": 1770796603937,
   "repoUrl": "https://github.com/Mkerian10/pluto",
   "entries": {
     "Benchmark": [
@@ -968,6 +968,170 @@ window.BENCHMARK_DATA = {
           {
             "name": "json_parse",
             "value": 1163,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "33331268+Mkerian10@users.noreply.github.com",
+            "name": "Matthew Kerian",
+            "username": "Mkerian10"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "835942ecf4fc6ce8510210b20d43544b4e1c1a4c",
+          "message": "Add watch mode for automatic recompilation (#24)\n\nImplement watch mode to automatically detect file changes and recompile/rerun Pluto programs. This significantly reduces the feedback loop during development.\n\nFeatures:\n- File watching with notify crate (cross-platform)\n- Debouncing (100ms window after last change)\n- Graceful process termination (SIGTERM → SIGKILL)\n- Transitive import tracking via module resolution\n- Continue watching even on compilation errors\n- Optional --no-clear flag to preserve output\n\nUsage:\n  plutoc watch run <file> [--stdlib <path>] [--no-clear]\n\nCo-authored-by: Test <test@test.com>\nCo-authored-by: Claude Sonnet 4.5 <noreply@anthropic.com>",
+          "timestamp": "2026-02-11T07:54:38Z",
+          "tree_id": "2c43bc85d6b830792ee27e147c6d1328418a8512",
+          "url": "https://github.com/Mkerian10/pluto/commit/835942ecf4fc6ce8510210b20d43544b4e1c1a4c"
+        },
+        "date": 1770796603229,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "fib",
+            "value": 71,
+            "unit": "ms"
+          },
+          {
+            "name": "loop_sum",
+            "value": 62,
+            "unit": "ms"
+          },
+          {
+            "name": "string_concat",
+            "value": 578,
+            "unit": "ms"
+          },
+          {
+            "name": "array_push",
+            "value": 5,
+            "unit": "ms"
+          },
+          {
+            "name": "array_iter",
+            "value": 3,
+            "unit": "ms"
+          },
+          {
+            "name": "class_method",
+            "value": 6,
+            "unit": "ms"
+          },
+          {
+            "name": "closure_call",
+            "value": 25,
+            "unit": "ms"
+          },
+          {
+            "name": "trait_dispatch",
+            "value": 1428,
+            "unit": "ms"
+          },
+          {
+            "name": "gc_churn",
+            "value": 138,
+            "unit": "ms"
+          },
+          {
+            "name": "gc_binary_trees",
+            "value": 2050,
+            "unit": "ms"
+          },
+          {
+            "name": "gc_string_pressure",
+            "value": 75,
+            "unit": "ms"
+          },
+          {
+            "name": "sieve",
+            "value": 10,
+            "unit": "ms"
+          },
+          {
+            "name": "bounce",
+            "value": 47,
+            "unit": "ms"
+          },
+          {
+            "name": "towers",
+            "value": 1765,
+            "unit": "ms"
+          },
+          {
+            "name": "permute",
+            "value": 103,
+            "unit": "ms"
+          },
+          {
+            "name": "queens",
+            "value": 157,
+            "unit": "ms"
+          },
+          {
+            "name": "fannkuch_redux",
+            "value": 1330,
+            "unit": "ms"
+          },
+          {
+            "name": "spectral_norm",
+            "value": 52,
+            "unit": "ms"
+          },
+          {
+            "name": "nbody",
+            "value": 8985,
+            "unit": "ms"
+          },
+          {
+            "name": "mandelbrot",
+            "value": 287,
+            "unit": "ms"
+          },
+          {
+            "name": "monte_carlo",
+            "value": 1435,
+            "unit": "ms"
+          },
+          {
+            "name": "storage",
+            "value": 821,
+            "unit": "ms"
+          },
+          {
+            "name": "list",
+            "value": 91,
+            "unit": "ms"
+          },
+          {
+            "name": "fft",
+            "value": 2381,
+            "unit": "ms"
+          },
+          {
+            "name": "sor",
+            "value": 576,
+            "unit": "ms"
+          },
+          {
+            "name": "sparse_matmul",
+            "value": 545,
+            "unit": "ms"
+          },
+          {
+            "name": "lu",
+            "value": 4071,
+            "unit": "ms"
+          },
+          {
+            "name": "json_parse",
+            "value": 1153,
             "unit": "ms"
           }
         ]
