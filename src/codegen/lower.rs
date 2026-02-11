@@ -3630,7 +3630,8 @@ pub fn lower_generator_next(
     let mut var_types = HashMap::new();
     let mut next_var_id = 1u32; // 0 is gen_ptr_var
 
-    // Load params from gen object
+    // Load params from gen object and build param_slots for save/restore across yields
+    let mut param_slots: Vec<(String, PlutoType, Variable)> = Vec::new();
     for (i, param) in func.params.iter().enumerate() {
         let param_type = resolve_type_expr_to_pluto(&param.ty.node, env);
         let gen_ptr = builder.use_var(gen_ptr_var);
@@ -3643,7 +3644,8 @@ pub fn lower_generator_next(
         builder.declare_var(var, pluto_to_cranelift(&param_type));
         builder.def_var(var, val);
         variables.insert(param.name.node.clone(), var);
-        var_types.insert(param.name.node.clone(), param_type);
+        var_types.insert(param.name.node.clone(), param_type.clone());
+        param_slots.push((param.name.node.clone(), param_type, var));
     }
 
     // Pre-declare all local variables (so they exist across all yield points)
@@ -3700,6 +3702,7 @@ pub fn lower_generator_next(
         &mut terminated,
         &mut yield_counter,
         &resume_blocks,
+        &param_slots,
         &local_slots,
         num_params,
         gen_ptr_var,
@@ -3708,6 +3711,17 @@ pub fn lower_generator_next(
 
     // If body didn't terminate, set done and return
     if !terminated {
+        let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+        let one = ctx.builder.ins().iconst(types::I64, 1);
+        ctx.builder.ins().store(MemFlags::new(), one, gen_ptr, Offset32::new(16));
+        ctx.builder.ins().return_(&[]);
+    }
+
+    // Fill any unused resume blocks (e.g., yields after an early return are dead code,
+    // but we pre-created resume blocks for them — they need valid terminators).
+    for i in (yield_counter as usize)..resume_blocks.len() {
+        ctx.builder.switch_to_block(resume_blocks[i]);
+        ctx.builder.seal_block(resume_blocks[i]);
         let gen_ptr = ctx.builder.use_var(gen_ptr_var);
         let one = ctx.builder.ins().iconst(types::I64, 1);
         ctx.builder.ins().store(MemFlags::new(), one, gen_ptr, Offset32::new(16));
@@ -3725,6 +3739,7 @@ fn lower_generator_block(
     terminated: &mut bool,
     yield_counter: &mut u32,
     resume_blocks: &[cranelift_codegen::ir::Block],
+    param_slots: &[(String, PlutoType, Variable)],
     local_slots: &[(String, PlutoType, Variable)],
     num_params: usize,
     gen_ptr_var: Variable,
@@ -3745,7 +3760,16 @@ fn lower_generator_block(
                 let gen_ptr = ctx.builder.use_var(gen_ptr_var);
                 ctx.builder.ins().store(MemFlags::new(), slot_val, gen_ptr, Offset32::new(24));
 
-                // 3. Save ALL locals to gen object
+                // 3. Save params to gen object (needed for resume across yield points)
+                for (i, (_, ty, var)) in param_slots.iter().enumerate() {
+                    let param_val = ctx.builder.use_var(*var);
+                    let slot = to_array_slot(param_val, ty, &mut ctx.builder);
+                    let offset = (4 + i) as i32 * POINTER_SIZE;
+                    let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+                    ctx.builder.ins().store(MemFlags::new(), slot, gen_ptr, Offset32::new(offset));
+                }
+
+                // 4. Save ALL locals to gen object
                 for (i, (_, ty, var)) in local_slots.iter().enumerate() {
                     let local_val = ctx.builder.use_var(*var);
                     let slot = to_array_slot(local_val, ty, &mut ctx.builder);
@@ -3753,10 +3777,6 @@ fn lower_generator_block(
                     let gen_ptr = ctx.builder.use_var(gen_ptr_var);
                     ctx.builder.ins().store(MemFlags::new(), slot, gen_ptr, Offset32::new(offset));
                 }
-
-                // 4. Save params to gen object (they may have been mutated via reassignment)
-                // Actually params are immutable in Pluto, so we only need to save locals.
-                // But to be safe with for-loop vars etc., we save all vars including params.
 
                 // 5. Store next state
                 let yield_idx = *yield_counter;
@@ -3773,22 +3793,22 @@ fn lower_generator_block(
                 ctx.builder.switch_to_block(resume_bb);
                 ctx.builder.seal_block(resume_bb);
 
-                // 8. Restore ALL locals from gen object
-                for (i, (_, ty, var)) in local_slots.iter().enumerate() {
-                    let offset = (4 + num_params + i) as i32 * POINTER_SIZE;
+                // 8. Restore params from gen object
+                for (i, (_, ty, var)) in param_slots.iter().enumerate() {
+                    let offset = (4 + i) as i32 * POINTER_SIZE;
                     let gen_ptr = ctx.builder.use_var(gen_ptr_var);
                     let raw = ctx.builder.ins().load(types::I64, MemFlags::new(), gen_ptr, Offset32::new(offset));
                     let val = from_array_slot(raw, ty, &mut ctx.builder);
                     ctx.builder.def_var(*var, val);
                 }
 
-                // Also restore params from gen object
-                for (i, param) in std::iter::empty::<(usize, &Param)>().enumerate() {
-                    // Params are loaded in state_0 and don't change, but since we
-                    // pre-declared them, they're still accessible across resume points.
-                    // No need to reload params — they're in Cranelift variables already
-                    // and the SSA framework handles the phi nodes.
-                    let _ = (i, param);
+                // 9. Restore ALL locals from gen object
+                for (i, (_, ty, var)) in local_slots.iter().enumerate() {
+                    let offset = (4 + num_params + i) as i32 * POINTER_SIZE;
+                    let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+                    let raw = ctx.builder.ins().load(types::I64, MemFlags::new(), gen_ptr, Offset32::new(offset));
+                    let val = from_array_slot(raw, ty, &mut ctx.builder);
+                    ctx.builder.def_var(*var, val);
                 }
             }
             Stmt::Return(_) => {
@@ -3799,14 +3819,40 @@ fn lower_generator_block(
                 ctx.builder.ins().return_(&[]);
                 *terminated = true;
             }
+            Stmt::Let { name, value, ty, .. } => {
+                // In generators, local variables are pre-declared in local_slots.
+                // We must NOT call lower_let() because it creates a new Cranelift Variable,
+                // which would shadow the pre-declared one used for save/restore across yields.
+                // Instead, evaluate the value and def_var on the existing pre-declared variable.
+                let val = ctx.lower_expr(&value.node)?;
+                let val_type = infer_type_for_expr(&value.node, ctx.env, &ctx.var_types);
+
+                // Handle type coercions (trait wrapping, nullable boxing)
+                let declared_type = ty.as_ref().map(|t| resolve_type_expr_to_pluto(&t.node, ctx.env));
+                let final_val = match (&val_type, &declared_type) {
+                    (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
+                        ctx.wrap_class_as_trait(val, cn, tn)?
+                    }
+                    (inner, Some(PlutoType::Nullable(expected_inner))) if !matches!(inner, PlutoType::Nullable(_)) && **expected_inner != PlutoType::Void => {
+                        ctx.emit_nullable_wrap(val, inner)
+                    }
+                    _ => val,
+                };
+
+                // Use the pre-declared variable from local_slots
+                let var = ctx.variables.get(&name.node).ok_or_else(|| {
+                    CompileError::codegen(format!("generator local variable '{}' not found in pre-declared slots", name.node))
+                })?;
+                ctx.builder.def_var(*var, final_val);
+            }
             Stmt::If { condition, then_block, else_block } => {
-                lower_generator_if(ctx, condition, then_block, else_block.as_ref(), terminated, yield_counter, resume_blocks, local_slots, num_params, gen_ptr_var, done_bb)?;
+                lower_generator_if(ctx, condition, then_block, else_block.as_ref(), terminated, yield_counter, resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb)?;
             }
             Stmt::While { condition, body } => {
-                lower_generator_while(ctx, condition, body, terminated, yield_counter, resume_blocks, local_slots, num_params, gen_ptr_var, done_bb)?;
+                lower_generator_while(ctx, condition, body, terminated, yield_counter, resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb)?;
             }
             Stmt::For { var, iterable, body } => {
-                lower_generator_for(ctx, var, iterable, body, terminated, yield_counter, resume_blocks, local_slots, num_params, gen_ptr_var, done_bb)?;
+                lower_generator_for(ctx, var, iterable, body, terminated, yield_counter, resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb)?;
             }
             _ => {
                 // For all other statements, delegate to the normal lower_stmt
@@ -3827,6 +3873,7 @@ fn lower_generator_if(
     terminated: &mut bool,
     yield_counter: &mut u32,
     resume_blocks: &[cranelift_codegen::ir::Block],
+    param_slots: &[(String, PlutoType, Variable)],
     local_slots: &[(String, PlutoType, Variable)],
     num_params: usize,
     gen_ptr_var: Variable,
@@ -3857,7 +3904,7 @@ fn lower_generator_if(
     let mut then_terminated = false;
     lower_generator_block(
         &then_body.node.stmts, ctx, &mut then_terminated, yield_counter,
-        resume_blocks, local_slots, num_params, gen_ptr_var, done_bb,
+        resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
     )?;
     if !then_terminated {
         ctx.builder.ins().jump(merge_bb, &[]);
@@ -3870,7 +3917,7 @@ fn lower_generator_if(
         let mut else_terminated = false;
         lower_generator_block(
             &eb.node.stmts, ctx, &mut else_terminated, yield_counter,
-            resume_blocks, local_slots, num_params, gen_ptr_var, done_bb,
+            resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
         )?;
         if !else_terminated {
             ctx.builder.ins().jump(merge_bb, &[]);
@@ -3894,6 +3941,7 @@ fn lower_generator_while(
     _terminated: &mut bool,
     yield_counter: &mut u32,
     resume_blocks: &[cranelift_codegen::ir::Block],
+    param_slots: &[(String, PlutoType, Variable)],
     local_slots: &[(String, PlutoType, Variable)],
     num_params: usize,
     gen_ptr_var: Variable,
@@ -3925,7 +3973,7 @@ fn lower_generator_while(
     let mut body_terminated = false;
     lower_generator_block(
         &body.node.stmts, ctx, &mut body_terminated, yield_counter,
-        resume_blocks, local_slots, num_params, gen_ptr_var, done_bb,
+        resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
     )?;
     ctx.loop_stack.pop();
 
@@ -3949,6 +3997,7 @@ fn lower_generator_for(
     _terminated: &mut bool,
     yield_counter: &mut u32,
     resume_blocks: &[cranelift_codegen::ir::Block],
+    param_slots: &[(String, PlutoType, Variable)],
     local_slots: &[(String, PlutoType, Variable)],
     num_params: usize,
     gen_ptr_var: Variable,
@@ -3996,7 +4045,7 @@ fn lower_generator_for(
             let mut body_terminated = false;
             lower_generator_block(
                 &body.node.stmts, ctx, &mut body_terminated, yield_counter,
-                resume_blocks, local_slots, num_params, gen_ptr_var, done_bb,
+                resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
             )?;
             ctx.loop_stack.pop();
 
@@ -4066,7 +4115,7 @@ fn lower_generator_for(
             let mut body_terminated = false;
             lower_generator_block(
                 &body.node.stmts, ctx, &mut body_terminated, yield_counter,
-                resume_blocks, local_slots, num_params, gen_ptr_var, done_bb,
+                resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
             )?;
             ctx.loop_stack.pop();
 
