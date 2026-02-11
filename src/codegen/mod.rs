@@ -17,7 +17,7 @@ use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::typeck::env::{mangle_method, TypeEnv};
 use crate::typeck::types::PlutoType;
-use lower::{lower_function, pluto_to_cranelift, resolve_type_expr_to_pluto, FnContracts, POINTER_SIZE};
+use lower::{lower_function, lower_generator_creator, lower_generator_next, pluto_to_cranelift, resolve_type_expr_to_pluto, FnContracts, POINTER_SIZE};
 use runtime::RuntimeRegistry;
 
 fn host_target_triple() -> Result<&'static str, CompileError> {
@@ -152,6 +152,17 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             .map_err(|e| CompileError::codegen(format!("declare function error: {e}")))?;
 
         func_ids.insert(f.name.node.clone(), func_id);
+
+        // For generators, also declare the __gen_next_{name} function: (I64) -> void
+        if env.generators.contains(&f.name.node) {
+            let next_name = format!("__gen_next_{}", f.name.node);
+            let mut next_sig = module.make_signature();
+            next_sig.params.push(AbiParam::new(types::I64)); // gen_ptr
+            let next_id = module
+                .declare_function(&next_name, Linkage::Local, &next_sig)
+                .map_err(|e| CompileError::codegen(format!("declare generator next error: {e}")))?;
+            func_ids.insert(next_name, next_id);
+        }
     }
 
     // Pass 1b: Declare all methods with mangled names
@@ -395,26 +406,60 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
     for func in &program.functions {
         let f = &func.node;
         let func_id = func_ids[&f.name.node];
-        let mut sig = build_signature(f, &module, env);
 
-        // Spawn closure functions must return I64 (matches declaration)
-        if spawn_closure_fns.contains(&f.name.node) && !sig.returns.is_empty() {
-            sig.returns.clear();
-            sig.returns.push(AbiParam::new(types::I64));
+        if env.generators.contains(&f.name.node) {
+            // Generator: define creator function
+            let sig = build_signature(f, &module, env);
+            let mut fn_ctx = Context::new();
+            fn_ctx.func.signature = sig;
+
+            let mut builder_ctx = FunctionBuilderContext::new();
+            {
+                let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
+                lower_generator_creator(f, builder, env, &mut module, &func_ids, &runtime)?;
+            }
+            module
+                .define_function(func_id, &mut fn_ctx)
+                .map_err(|e| CompileError::codegen(format!("define generator creator error for '{}': {e}", f.name.node)))?;
+
+            // Generator: define next function
+            let next_name = format!("__gen_next_{}", f.name.node);
+            let next_id = func_ids[&next_name];
+            let mut next_sig = module.make_signature();
+            next_sig.params.push(AbiParam::new(types::I64)); // gen_ptr
+            let mut next_ctx = Context::new();
+            next_ctx.func.signature = next_sig;
+
+            let mut next_builder_ctx = FunctionBuilderContext::new();
+            {
+                let builder = cranelift_frontend::FunctionBuilder::new(&mut next_ctx.func, &mut next_builder_ctx);
+                lower_generator_next(f, builder, env, &mut module, &func_ids, &runtime, &vtable_ids, source, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
+            }
+            module
+                .define_function(next_id, &mut next_ctx)
+                .map_err(|e| CompileError::codegen(format!("define generator next error for '{}': {e}", f.name.node)))?;
+        } else {
+            // Normal function
+            let mut sig = build_signature(f, &module, env);
+
+            // Spawn closure functions must return I64 (matches declaration)
+            if spawn_closure_fns.contains(&f.name.node) && !sig.returns.is_empty() {
+                sig.returns.clear();
+                sig.returns.push(AbiParam::new(types::I64));
+            }
+            let mut fn_ctx = Context::new();
+            fn_ctx.func.signature = sig;
+
+            let mut builder_ctx = FunctionBuilderContext::new();
+            {
+                let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
+                lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
+            }
+
+            module
+                .define_function(func_id, &mut fn_ctx)
+                .map_err(|e| CompileError::codegen(format!("define function error for '{}': {e}", f.name.node)))?;
         }
-
-        let mut fn_ctx = Context::new();
-        fn_ctx.func.signature = sig;
-
-        let mut builder_ctx = FunctionBuilderContext::new();
-        {
-            let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
-        }
-
-        module
-            .define_function(func_id, &mut fn_ctx)
-            .map_err(|e| CompileError::codegen(format!("define function error for '{}': {e}", f.name.node)))?;
     }
 
     // Pass 2b: Define all methods
