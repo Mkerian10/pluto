@@ -301,6 +301,26 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             }
         }
     }
+    for stage_spanned in &program.stages {
+        let stage = &stage_spanned.node;
+        for method in &stage.methods {
+            let m = &method.node;
+            if !m.contracts.is_empty() {
+                let mangled = mangle_method(&stage.name.node, &m.name.node);
+                let requires: Vec<(Expr, String)> = m.contracts.iter()
+                    .filter(|c| c.node.kind == ContractKind::Requires)
+                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                    .collect();
+                let ensures: Vec<(Expr, String)> = m.contracts.iter()
+                    .filter(|c| c.node.kind == ContractKind::Ensures)
+                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+                    .collect();
+                if !requires.is_empty() || !ensures.is_empty() {
+                    fn_contracts.insert(mangled, FnContracts { requires, ensures });
+                }
+            }
+        }
+    }
     // Trait default methods — contracts from default method declarations
     for class in &program.classes {
         let c = &class.node;
@@ -483,6 +503,21 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
         }
     }
 
+    // Pass 1e: Declare stage methods
+    for stage_spanned in &program.stages {
+        let stage = &stage_spanned.node;
+        let stage_name = &stage.name.node;
+        for method in &stage.methods {
+            let m = &method.node;
+            let mangled = mangle_method(stage_name, &m.name.node);
+            let sig = build_method_signature(m, &module, stage_name, env);
+            let func_id = module
+                .declare_function(&mangled, Linkage::Local, &sig)
+                .map_err(|e| CompileError::codegen(format!("declare stage method error: {e}")))?;
+            func_ids.insert(mangled, func_id);
+        }
+    }
+
     // Pass 2d: Define app method bodies
     if let Some(app_spanned) = &program.app {
         let app = &app_spanned.node;
@@ -505,6 +540,31 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             module
                 .define_function(func_id, &mut fn_ctx)
                 .map_err(|e| CompileError::codegen(format!("define app method error for '{mangled}': {e}")))?;
+        }
+    }
+
+    // Pass 2e: Define stage method bodies
+    for stage_spanned in &program.stages {
+        let stage = &stage_spanned.node;
+        let stage_name = &stage.name.node;
+        for method in &stage.methods {
+            let m = &method.node;
+            let mangled = mangle_method(stage_name, &m.name.node);
+            let func_id = func_ids[&mangled];
+            let sig = build_method_signature(m, &module, stage_name, env);
+
+            let mut fn_ctx = Context::new();
+            fn_ctx.func.signature = sig;
+
+            let mut builder_ctx = FunctionBuilderContext::new();
+            {
+                let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(stage_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
+            }
+
+            module
+                .define_function(func_id, &mut fn_ctx)
+                .map_err(|e| CompileError::codegen(format!("define stage method error for '{mangled}': {e}")))?;
         }
     }
 
@@ -723,6 +783,126 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             .map_err(|e| CompileError::codegen(format!("define synthetic main error: {e}")))?;
     }
 
+    // Generate synthetic main for stage (Phase 0: single stage → standalone binary)
+    if !program.stages.is_empty() && program.app.is_none() {
+        let stage = &program.stages[0].node;
+        let stage_name = &stage.name.node;
+
+        let mut main_sig = module.make_signature();
+        main_sig.returns.push(AbiParam::new(types::I64));
+        let main_id = module
+            .declare_function("main", Linkage::Export, &main_sig)
+            .map_err(|e| CompileError::codegen(format!("declare synthetic main error: {e}")))?;
+
+        let mut fn_ctx = Context::new();
+        fn_ctx.func.signature = main_sig;
+
+        let mut builder_ctx = FunctionBuilderContext::new();
+        {
+            let mut builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
+            let entry_block = builder.create_block();
+            builder.switch_to_block(entry_block);
+            builder.seal_block(entry_block);
+
+            // Initialize GC before any allocations
+            let gc_init_ref = module.declare_func_in_func(runtime.get("__pluto_gc_init"), builder.func);
+            builder.ins().call(gc_init_ref, &[]);
+
+            let alloc_ref = module.declare_func_in_func(runtime.get("__pluto_alloc"), builder.func);
+
+            // Create singletons in topological order
+            let mut singletons: HashMap<String, Value> = HashMap::new();
+
+            for class_name in &env.di_order {
+                let class_info = env.classes.get(class_name).ok_or_else(|| {
+                    CompileError::codegen(format!("DI: unknown class '{}'", class_name))
+                })?;
+                let size = class_info.fields.len() as i64 * POINTER_SIZE as i64;
+                let size_val = builder.ins().iconst(types::I64, size);
+                let call = builder.ins().call(alloc_ref, &[size_val]);
+                let ptr = builder.inst_results(call)[0];
+
+                // Wire injected fields
+                for (i, (_, field_ty, is_injected)) in class_info.fields.iter().enumerate() {
+                    if *is_injected
+                        && let PlutoType::Class(dep_name) = field_ty
+                        && let Some(&dep_ptr) = singletons.get(dep_name)
+                    {
+                        let offset = (i as i32) * POINTER_SIZE;
+                        builder.ins().store(
+                            MemFlags::new(),
+                            dep_ptr,
+                            ptr,
+                            Offset32::new(offset),
+                        );
+                    }
+                }
+
+                singletons.insert(class_name.clone(), ptr);
+
+                if let Some(&data_id) = singleton_data_ids.get(class_name) {
+                    let gv = module.declare_data_in_func(data_id, builder.func);
+                    let addr = builder.ins().global_value(types::I64, gv);
+                    builder.ins().store(MemFlags::new(), ptr, addr, Offset32::new(0));
+                }
+            }
+
+            // Initialize rwlocks for synchronized singletons
+            for class_name in &env.synchronized_singletons {
+                if let Some(&data_id) = rwlock_data_ids.get(class_name) {
+                    let rwlock_init_ref = module.declare_func_in_func(runtime.get("__pluto_rwlock_init"), builder.func);
+                    let call = builder.ins().call(rwlock_init_ref, &[]);
+                    let lock_ptr = builder.inst_results(call)[0];
+                    let gv = module.declare_data_in_func(data_id, builder.func);
+                    let addr = builder.ins().global_value(types::I64, gv);
+                    builder.ins().store(MemFlags::new(), lock_ptr, addr, Offset32::new(0));
+                }
+            }
+
+            // Allocate and wire the stage itself
+            let stage_info = env.classes.get(stage_name).ok_or_else(|| {
+                CompileError::codegen(format!("DI: unknown stage class '{}'", stage_name))
+            })?;
+            let stage_size = stage_info.fields.len() as i64 * POINTER_SIZE as i64;
+            let stage_size_val = builder.ins().iconst(types::I64, stage_size);
+            let stage_call = builder.ins().call(alloc_ref, &[stage_size_val]);
+            let stage_ptr = builder.inst_results(stage_call)[0];
+
+            for (i, (_, field_ty, is_injected)) in stage_info.fields.iter().enumerate() {
+                if *is_injected
+                    && let PlutoType::Class(dep_name) = field_ty
+                    && let Some(&dep_ptr) = singletons.get(dep_name)
+                {
+                    let offset = (i as i32) * POINTER_SIZE;
+                    builder.ins().store(
+                        MemFlags::new(),
+                        dep_ptr,
+                        stage_ptr,
+                        Offset32::new(offset),
+                    );
+                }
+            }
+
+            // Call StageName$main(stage_ptr)
+            let stage_main_mangled = mangle_method(stage_name, "main");
+            let stage_main_id = func_ids.get(&stage_main_mangled).ok_or_else(|| {
+                CompileError::codegen(format!("DI: missing stage main function '{}'", stage_main_mangled))
+            })?;
+            let stage_main_ref = module.declare_func_in_func(*stage_main_id, builder.func);
+            builder.ins().call(stage_main_ref, &[stage_ptr]);
+
+            // Return 0
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder.ins().return_(&[zero]);
+
+            builder.finalize();
+        }
+
+        module
+            .define_function(main_id, &mut fn_ctx)
+            .map_err(|e| CompileError::codegen(format!("define synthetic main error: {e}")))?;
+    }
+
     let object = module.finish();
     let bytes = object.emit().map_err(|e| CompileError::codegen(format!("emit error: {e}")))?;
 
@@ -906,6 +1086,11 @@ fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
     }
     if let Some(app) = &program.app {
         for method in &app.node.methods {
+            walk_function(&method.node, &mut result);
+        }
+    }
+    for stage in &program.stages {
+        for method in &stage.node.methods {
             walk_function(&method.node, &mut result);
         }
     }
