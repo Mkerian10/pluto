@@ -5,5 +5,5 @@
 #[path = "../integration/common/mod.rs"]
 mod integration_common;
 
-// Re-export the compile_should_fail_with helper
-pub use integration_common::compile_should_fail_with;
+// Re-export test helpers
+pub use integration_common::{compile_and_run, compile_should_fail_with};
