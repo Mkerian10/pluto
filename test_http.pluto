@@ -1,5 +1,0 @@
-import std.http
-
-fn main() void {
-    let resp = http.ok("hello")
-}

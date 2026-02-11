@@ -1,5 +1,0 @@
-extern fn __pluto_log_write(level_str: string, timestamp: int, message: string) void
-
-fn main() void {
-    __pluto_log_write("INFO", 0, "test")
-}
