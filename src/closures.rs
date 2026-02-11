@@ -280,6 +280,11 @@ fn lift_in_expr(
                 // Build the return type annotation (None → codegen will use env.functions)
                 let ret_type_expr = pluto_type_to_type_expr(&ret_type);
 
+                // IMPORTANT: Recursively lift nested closures in the body before creating the function
+                // This handles cases like: (x: int) => (y: int) => x + y
+                let mut lifted_body = body;
+                lift_in_block(&mut lifted_body.node, env, counter, new_fns)?;
+
                 // Create the lifted Function
                 let lifted = Function {
                     id: Uuid::new_v4(),
@@ -293,7 +298,7 @@ fn lift_in_expr(
                         Some(Spanned::dummy(ret_type_expr))
                     },
                     contracts: vec![],
-                    body,
+                    body: lifted_body,
                     is_pub: false,
                     is_override: false,
                     is_generator: false,
