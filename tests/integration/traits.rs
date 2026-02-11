@@ -4943,3 +4943,556 @@ fn main() {
 "#);
     assert_eq!(out, "1\n0\n0\n");
 }
+
+// ===== Batch 9: Corner cases, unusual patterns, more negative tests =====
+
+#[test]
+fn trait_same_trait_variable_reassigned_three_times() {
+    // Reassign trait variable to three different concrete types
+    let out = compile_and_run_stdout(r#"
+trait Id {
+    fn id(self) int
+}
+
+class A impl Id { val: int  fn id(self) int { return 1 } }
+class B impl Id { val: int  fn id(self) int { return 2 } }
+class C impl Id { val: int  fn id(self) int { return 3 } }
+
+fn main() {
+    let x: Id = A { val: 0 }
+    print(x.id())
+    x = B { val: 0 }
+    print(x.id())
+    x = C { val: 0 }
+    print(x.id())
+}
+"#);
+    assert_eq!(out, "1\n2\n3\n");
+}
+
+#[test]
+fn trait_method_calls_math_builtin() {
+    // Trait method body uses math builtins
+    let out = compile_and_run_stdout(r#"
+trait Compute {
+    fn compute(self, x: int) int
+}
+
+class AbsComputer impl Compute {
+    val: int
+
+    fn compute(self, x: int) int {
+        return abs(x) + self.val
+    }
+}
+
+fn run(c: Compute) {
+    print(c.compute(-5))
+    print(c.compute(3))
+}
+
+fn main() {
+    run(AbsComputer { val: 10 })
+}
+"#);
+    assert_eq!(out, "15\n13\n");
+}
+
+#[test]
+fn trait_method_uses_min_max() {
+    // Trait method uses min/max builtins
+    let out = compile_and_run_stdout(r#"
+trait Clamper {
+    fn clamp(self, x: int) int
+}
+
+class Range impl Clamper {
+    lo: int
+    hi: int
+
+    fn clamp(self, x: int) int {
+        return min(max(x, self.lo), self.hi)
+    }
+}
+
+fn run(c: Clamper) {
+    print(c.clamp(5))
+    print(c.clamp(-10))
+    print(c.clamp(100))
+}
+
+fn main() {
+    run(Range { lo: 0, hi: 50 })
+}
+"#);
+    assert_eq!(out, "5\n0\n50\n");
+}
+
+#[test]
+fn trait_dispatch_in_ternary_style() {
+    // Simulated ternary using if expression (Pluto has no ternary op)
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn pick(v: Valued) int {
+    if v.val() > 5 {
+        return v.val() * 2
+    }
+    return v.val()
+}
+
+fn main() {
+    print(pick(X { n: 10 }))
+    print(pick(X { n: 3 }))
+}
+"#);
+    assert_eq!(out, "20\n3\n");
+}
+
+#[test]
+fn trait_two_methods_same_name_different_traits_class_both() {
+    // Two traits both require "name()", class implements both — should satisfy both
+    let out = compile_and_run_stdout(r#"
+trait TraitA {
+    fn name(self) string
+}
+
+trait TraitB {
+    fn name(self) string
+}
+
+class X impl TraitA, TraitB {
+    n: string
+
+    fn name(self) string {
+        return self.n
+    }
+}
+
+fn show_a(a: TraitA) {
+    print(a.name())
+}
+
+fn show_b(b: TraitB) {
+    print(b.name())
+}
+
+fn main() {
+    let x = X { n: "hello" }
+    show_a(x)
+    show_b(x)
+}
+"#);
+    assert_eq!(out, "hello\nhello\n");
+}
+
+#[test]
+fn trait_default_with_nested_calls() {
+    // Default method calls another method which calls another
+    let out = compile_and_run_stdout(r#"
+trait Chain {
+    fn a(self) int {
+        return self.b() + 1
+    }
+
+    fn b(self) int {
+        return self.c() + 1
+    }
+
+    fn c(self) int {
+        return 0
+    }
+}
+
+class X impl Chain {
+    val: int
+}
+
+fn run(ch: Chain) {
+    print(ch.a())
+}
+
+fn main() {
+    run(X { val: 0 })
+}
+"#);
+    assert_eq!(out, "2\n");
+}
+
+#[test]
+fn trait_override_middle_in_chain() {
+    // Default method chain a->b->c, class overrides only b
+    let out = compile_and_run_stdout(r#"
+trait Chain {
+    fn a(self) int {
+        return self.b() + 1
+    }
+
+    fn b(self) int {
+        return self.c() + 1
+    }
+
+    fn c(self) int {
+        return 0
+    }
+}
+
+class X impl Chain {
+    val: int
+
+    fn b(self) int {
+        return 100
+    }
+}
+
+fn run(ch: Chain) {
+    print(ch.a())
+}
+
+fn main() {
+    run(X { val: 0 })
+}
+"#);
+    assert_eq!(out, "101\n");
+}
+
+#[test]
+fn trait_dispatch_result_negated() {
+    // Negate the result of a trait dispatch
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn main() {
+    let v: Valued = X { n: 5 }
+    print(-v.val())
+}
+"#);
+    assert_eq!(out, "-5\n");
+}
+
+#[test]
+fn trait_dispatch_result_compared() {
+    // Compare two trait dispatch results
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class A impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+class B impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn main() {
+    let a: Valued = A { n: 10 }
+    let b: Valued = B { n: 5 }
+    if a.val() > b.val() {
+        print("a wins")
+    } else {
+        print("b wins")
+    }
+}
+"#);
+    assert_eq!(out, "a wins\n");
+}
+
+#[test]
+fn trait_class_method_calls_non_trait_method() {
+    // Class has both trait and non-trait methods; trait method calls non-trait one
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+
+    fn helper(self) int {
+        return self.n * 3
+    }
+
+    fn val(self) int {
+        return self.helper()
+    }
+}
+
+fn show(v: Valued) {
+    print(v.val())
+}
+
+fn main() {
+    show(X { n: 4 })
+}
+"#);
+    assert_eq!(out, "12\n");
+}
+
+#[test]
+fn trait_default_method_returns_empty_string() {
+    // Default method returning empty string
+    let out = compile_and_run_stdout(r#"
+trait Named {
+    fn name(self) string {
+        return ""
+    }
+}
+
+class Anon impl Named {
+    val: int
+}
+
+class Named2 impl Named {
+    n: string
+
+    fn name(self) string {
+        return self.n
+    }
+}
+
+fn show(n: Named) {
+    let s = n.name()
+    if s.len() == 0 {
+        print("anonymous")
+    } else {
+        print(s)
+    }
+}
+
+fn main() {
+    show(Anon { val: 0 })
+    show(Named2 { n: "alice" })
+}
+"#);
+    assert_eq!(out, "anonymous\nalice\n");
+}
+
+#[test]
+fn trait_method_returns_zero() {
+    // Ensure zero return value is correctly passed through dispatch
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class Zero impl Valued {
+    padding: int
+    fn val(self) int { return 0 }
+}
+
+fn show(v: Valued) {
+    print(v.val())
+}
+
+fn main() {
+    show(Zero { padding: 999 })
+}
+"#);
+    assert_eq!(out, "0\n");
+}
+
+#[test]
+fn trait_method_returns_max_int() {
+    // Return a large integer through dispatch
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class Big impl Valued {
+    n: int
+    fn val(self) int { return 9999999 }
+}
+
+fn show(v: Valued) {
+    print(v.val())
+}
+
+fn main() {
+    show(Big { n: 0 })
+}
+"#);
+    assert_eq!(out, "9999999\n");
+}
+
+#[test]
+fn trait_two_classes_same_fields_different_behavior() {
+    // Two classes with identical field layout but different method behavior
+    let out = compile_and_run_stdout(r#"
+trait Transform {
+    fn transform(self) int
+}
+
+class Adder impl Transform {
+    a: int
+    b: int
+
+    fn transform(self) int {
+        return self.a + self.b
+    }
+}
+
+class Multiplier impl Transform {
+    a: int
+    b: int
+
+    fn transform(self) int {
+        return self.a * self.b
+    }
+}
+
+fn run(t: Transform) {
+    print(t.transform())
+}
+
+fn main() {
+    run(Adder { a: 3, b: 4 })
+    run(Multiplier { a: 3, b: 4 })
+}
+"#);
+    assert_eq!(out, "7\n12\n");
+}
+
+#[test]
+fn trait_dispatch_with_unary_not() {
+    // Trait method returns bool, negated with !
+    let out = compile_and_run_stdout(r#"
+trait Checker {
+    fn is_valid(self) bool
+}
+
+class AlwaysTrue impl Checker {
+    val: int
+    fn is_valid(self) bool { return true }
+}
+
+fn main() {
+    let c: Checker = AlwaysTrue { val: 0 }
+    if !c.is_valid() {
+        print(0)
+    } else {
+        print(1)
+    }
+}
+"#);
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn trait_three_traits_one_class_dispatch_all() {
+    // Class implements 3 traits, each dispatched independently
+    let out = compile_and_run_stdout(r#"
+trait Alpha {
+    fn a(self) int
+}
+
+trait Beta {
+    fn b(self) int
+}
+
+trait Gamma {
+    fn g(self) int
+}
+
+class Triple impl Alpha, Beta, Gamma {
+    val: int
+
+    fn a(self) int { return self.val + 1 }
+    fn b(self) int { return self.val + 2 }
+    fn g(self) int { return self.val + 3 }
+}
+
+fn use_alpha(a: Alpha) { print(a.a()) }
+fn use_beta(b: Beta) { print(b.b()) }
+fn use_gamma(g: Gamma) { print(g.g()) }
+
+fn main() {
+    let t = Triple { val: 10 }
+    use_alpha(t)
+    use_beta(t)
+    use_gamma(t)
+}
+"#);
+    assert_eq!(out, "11\n12\n13\n");
+}
+
+#[test]
+fn trait_method_body_with_break() {
+    // Trait method body uses break in a while loop
+    let out = compile_and_run_stdout(r#"
+trait Finder {
+    fn find_first_gt(self, arr: [int], threshold: int) int
+}
+
+class LinearFinder impl Finder {
+    default_val: int
+
+    fn find_first_gt(self, arr: [int], threshold: int) int {
+        let i = 0
+        while i < arr.len() {
+            if arr[i] > threshold {
+                return arr[i]
+            }
+            i = i + 1
+        }
+        return self.default_val
+    }
+}
+
+fn run(f: Finder) {
+    let arr: [int] = [1, 3, 7, 2, 9]
+    print(f.find_first_gt(arr, 5))
+    print(f.find_first_gt(arr, 100))
+}
+
+fn main() {
+    run(LinearFinder { default_val: -1 })
+}
+"#);
+    assert_eq!(out, "7\n-1\n");
+}
+
+#[test]
+fn fail_call_trait_method_on_wrong_trait() {
+    // Method exists on trait A but called through trait B handle
+    compile_should_fail(r#"
+trait Alpha {
+    fn a_method(self) int
+}
+
+trait Beta {
+    fn b_method(self) int
+}
+
+class X impl Alpha, Beta {
+    val: int
+    fn a_method(self) int { return 1 }
+    fn b_method(self) int { return 2 }
+}
+
+fn use_beta(b: Beta) {
+    print(b.a_method())
+}
+
+fn main() {
+}
+"#);
+}
