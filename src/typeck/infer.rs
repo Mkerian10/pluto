@@ -2015,6 +2015,34 @@ fn infer_method_call(
             super::env::MethodResolution::Class { mangled_name: mangled.clone() },
         );
     }
+
+    // Cross-stage call detection (RPC Phase 2)
+    // If the target is a stage and we're in a different stage, enforce pub visibility
+    if env.stage_names.contains(&class_name) {
+        if let Some(ref current_stage) = env.current_stage {
+            if current_stage != &class_name {
+                // This is a cross-stage call - record it
+                env.cross_stage_calls.push(super::env::CrossStageCall {
+                    from_stage: current_stage.clone(),
+                    to_stage: class_name.clone(),
+                    method_name: method.node.clone(),
+                    span: method.span,
+                });
+
+                // Enforce pub visibility
+                if !env.pub_methods.contains(&mangled) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "method '{}' is not public; only pub methods can be called across stages (from {} to {})",
+                            method.node, current_stage, class_name
+                        ),
+                        method.span,
+                    ));
+                }
+            }
+        }
+    }
+
     // Check caller-side mutability: cannot call mut self method on immutable binding
     if env.mut_self_methods.contains(&mangled) && let Some(root) = super::check::root_variable(&object.node) && root != "self" && env.is_immutable(root) {
         return Err(CompileError::type_err(
