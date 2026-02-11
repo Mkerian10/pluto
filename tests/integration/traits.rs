@@ -13720,7 +13720,7 @@ trait Foo {
 fn main() {
     let f = Foo { }
 }
-"#, "unexpected token { in expression");
+"#, "unknown class");
 }
 
 #[test]
