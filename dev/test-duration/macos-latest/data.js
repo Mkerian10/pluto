@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770759508846,
+  "lastUpdate": 1770789870855,
   "repoUrl": "https://github.com/Mkerian10/pluto",
   "entries": {
     "Benchmark": [
@@ -144,6 +144,35 @@ window.BENCHMARK_DATA = {
           {
             "name": "cargo_test",
             "value": 143678,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "33331268+Mkerian10@users.noreply.github.com",
+            "name": "Matthew Kerian",
+            "username": "Mkerian10"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c956c11ea3e3b5f820d6f4b3b3d1e9408969c6f9",
+          "message": "Add generators (stream T + yield + for-in-stream)\n\n- Adds stream T return type, yield statement, and for x in stream iteration to Pluto\n- Generator functions compile to a state machine: creator + next functions\n- 24 integration tests covering all generator features\n- Example at examples/generators/main.pluto\n- Fix mutability errors in 4 benchmarks (class_method, trait_dispatch, bounce, nbody)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>",
+          "timestamp": "2026-02-11T00:02:09-06:00",
+          "tree_id": "e3656a92e96068c9eb8faab936623cf84948f146",
+          "url": "https://github.com/Mkerian10/pluto/commit/c956c11ea3e3b5f820d6f4b3b3d1e9408969c6f9"
+        },
+        "date": 1770789870049,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cargo_test",
+            "value": 127497,
             "unit": "ms"
           }
         ]
