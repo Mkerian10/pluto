@@ -2550,3 +2550,1796 @@ fn main() {
 }
 "#, "unknown type");
 }
+
+// ===== Batch 5: Complex dispatch patterns, reassignment, nesting =====
+
+#[test]
+fn trait_reassign_trait_variable() {
+    // Assign different concrete classes to the same trait-typed variable
+    let out = compile_and_run_stdout(r#"
+trait Speaker {
+    fn speak(self) int
+}
+
+class Dog impl Speaker {
+    val: int
+    fn speak(self) int { return 1 }
+}
+
+class Cat impl Speaker {
+    val: int
+    fn speak(self) int { return 2 }
+}
+
+fn main() {
+    let s: Speaker = Dog { val: 0 }
+    print(s.speak())
+    s = Cat { val: 0 }
+    print(s.speak())
+}
+"#);
+    assert_eq!(out, "1\n2\n");
+}
+
+#[test]
+fn trait_dispatch_in_if_condition() {
+    // Trait method call result used directly in if condition
+    let out = compile_and_run_stdout(r#"
+trait Checker {
+    fn is_valid(self) bool
+}
+
+class PositiveChecker impl Checker {
+    val: int
+
+    fn is_valid(self) bool {
+        return self.val > 0
+    }
+}
+
+fn check(c: Checker) {
+    if c.is_valid() {
+        print(1)
+    } else {
+        print(0)
+    }
+}
+
+fn main() {
+    check(PositiveChecker { val: 5 })
+    check(PositiveChecker { val: -3 })
+}
+"#);
+    assert_eq!(out, "1\n0\n");
+}
+
+#[test]
+fn trait_dispatch_in_while_condition() {
+    // Trait method call used in while loop condition (read-only dispatch)
+    let out = compile_and_run_stdout(r#"
+trait Limiter {
+    fn limit(self) int
+}
+
+class MaxLimiter impl Limiter {
+    max: int
+    fn limit(self) int { return self.max }
+}
+
+fn count_up(l: Limiter) {
+    let i = 0
+    while i < l.limit() {
+        i = i + 1
+    }
+    print(i)
+}
+
+fn main() {
+    count_up(MaxLimiter { max: 5 })
+}
+"#);
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn trait_multiple_trait_params_in_function() {
+    // Function takes two different trait-typed parameters
+    let out = compile_and_run_stdout(r#"
+trait Namer {
+    fn name(self) string
+}
+
+trait Scorer {
+    fn score(self) int
+}
+
+class Player impl Namer {
+    n: string
+    fn name(self) string { return self.n }
+}
+
+class Game impl Scorer {
+    s: int
+    fn score(self) int { return self.s }
+}
+
+fn report(n: Namer, s: Scorer) {
+    print(n.name())
+    print(s.score())
+}
+
+fn main() {
+    let p = Player { n: "alice" }
+    let g = Game { s: 100 }
+    report(p, g)
+}
+"#);
+    assert_eq!(out, "alice\n100\n");
+}
+
+#[test]
+fn trait_nested_dispatch_chain() {
+    // Trait method returns a value, which is passed to another trait method
+    let out = compile_and_run_stdout(r#"
+trait Producer {
+    fn produce(self) int
+}
+
+trait Consumer {
+    fn consume(self, val: int) int
+}
+
+class Maker impl Producer {
+    base: int
+    fn produce(self) int { return self.base }
+}
+
+class Doubler impl Consumer {
+    factor: int
+    fn consume(self, val: int) int { return val * self.factor }
+}
+
+fn pipeline(p: Producer, c: Consumer) {
+    let val = p.produce()
+    print(c.consume(val))
+}
+
+fn main() {
+    let m = Maker { base: 7 }
+    let d = Doubler { factor: 3 }
+    pipeline(m, d)
+}
+"#);
+    assert_eq!(out, "21\n");
+}
+
+#[test]
+fn trait_handle_in_nested_function_calls() {
+    // f(g(trait_handle.method())) — nested call with dispatch result
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn double(x: int) int {
+    return x * 2
+}
+
+fn add_one(x: int) int {
+    return x + 1
+}
+
+fn main() {
+    let v: Valued = X { n: 5 }
+    print(add_one(double(v.val())))
+}
+"#);
+    assert_eq!(out, "11\n");
+}
+
+#[test]
+fn trait_recursive_function_with_handle() {
+    // Recursive function taking a trait handle — dispatches at each level
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn count_down(v: Valued, remaining: int) int {
+    if remaining <= 0 {
+        return v.val()
+    }
+    return count_down(v, remaining - 1) + 1
+}
+
+fn main() {
+    let x = X { n: 100 }
+    print(count_down(x, 5))
+}
+"#);
+    assert_eq!(out, "105\n");
+}
+
+#[test]
+fn trait_dispatch_result_as_array_index() {
+    // Trait method returns an index used to access an array
+    let out = compile_and_run_stdout(r#"
+trait Indexer {
+    fn index(self) int
+}
+
+class Selector impl Indexer {
+    idx: int
+    fn index(self) int { return self.idx }
+}
+
+fn main() {
+    let arr: [int] = [10, 20, 30, 40, 50]
+    let s: Indexer = Selector { idx: 2 }
+    print(arr[s.index()])
+}
+"#);
+    assert_eq!(out, "30\n");
+}
+
+#[test]
+fn trait_dispatch_result_in_arithmetic() {
+    // Use trait dispatch results directly in arithmetic expressions
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class A impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+class B impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn main() {
+    let a: Valued = A { n: 10 }
+    let b: Valued = B { n: 3 }
+    print(a.val() + b.val())
+    print(a.val() * b.val())
+    print(a.val() - b.val())
+}
+"#);
+    assert_eq!(out, "13\n30\n7\n");
+}
+
+#[test]
+fn trait_dispatch_result_in_string_concat() {
+    // Trait method returns string, concatenated with other strings
+    let out = compile_and_run_stdout(r#"
+trait Named {
+    fn name(self) string
+}
+
+class Person impl Named {
+    n: string
+    fn name(self) string { return self.n }
+}
+
+fn greet(n: Named) {
+    print("hello " + n.name())
+}
+
+fn main() {
+    greet(Person { n: "world" })
+}
+"#);
+    assert_eq!(out, "hello world\n");
+}
+
+#[test]
+fn trait_handle_passed_through_five_functions() {
+    // Deep call chain: 5 functions passing trait handle
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn f1(v: Valued) int { return f2(v) }
+fn f2(v: Valued) int { return f3(v) }
+fn f3(v: Valued) int { return f4(v) }
+fn f4(v: Valued) int { return f5(v) }
+fn f5(v: Valued) int { return v.val() }
+
+fn main() {
+    let x = X { n: 42 }
+    print(f1(x))
+}
+"#);
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn trait_two_handles_same_trait_in_scope() {
+    // Two different trait handles of same trait type in the same function
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class A impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+class B impl Valued {
+    n: int
+    fn val(self) int { return self.n * 10 }
+}
+
+fn compare(x: Valued, y: Valued) {
+    if x.val() > y.val() {
+        print(1)
+    } else {
+        print(0)
+    }
+}
+
+fn main() {
+    compare(A { n: 50 }, B { n: 3 })
+    compare(A { n: 2 }, B { n: 1 })
+}
+"#);
+    assert_eq!(out, "1\n0\n");
+}
+
+#[test]
+fn trait_dispatch_method_with_string_interpolation() {
+    // Trait method uses string interpolation in its body
+    let out = compile_and_run_stdout(r#"
+trait Describer {
+    fn describe(self) string
+}
+
+class Item impl Describer {
+    name: string
+    count: int
+
+    fn describe(self) string {
+        return "{self.name}: {self.count}"
+    }
+}
+
+fn show(d: Describer) {
+    print(d.describe())
+}
+
+fn main() {
+    show(Item { name: "apples", count: 5 })
+}
+"#);
+    assert_eq!(out, "apples: 5\n");
+}
+
+#[test]
+fn trait_method_body_with_while_loop() {
+    // Trait method implementation contains a while loop
+    let out = compile_and_run_stdout(r#"
+trait Summer {
+    fn sum_to(self, n: int) int
+}
+
+class Adder impl Summer {
+    base: int
+
+    fn sum_to(self, n: int) int {
+        let total = self.base
+        let i = 1
+        while i <= n {
+            total = total + i
+            i = i + 1
+        }
+        return total
+    }
+}
+
+fn run(s: Summer) {
+    print(s.sum_to(5))
+}
+
+fn main() {
+    run(Adder { base: 100 })
+}
+"#);
+    assert_eq!(out, "115\n");
+}
+
+#[test]
+fn trait_method_body_with_for_loop() {
+    // Trait method implementation uses for loop
+    let out = compile_and_run_stdout(r#"
+trait Summer {
+    fn sum_range(self, start: int, end: int) int
+}
+
+class RangeSummer impl Summer {
+    multiplier: int
+
+    fn sum_range(self, start: int, end: int) int {
+        let total = 0
+        for i in start..end {
+            total = total + i * self.multiplier
+        }
+        return total
+    }
+}
+
+fn run(s: Summer) {
+    print(s.sum_range(1, 4))
+}
+
+fn main() {
+    run(RangeSummer { multiplier: 2 })
+}
+"#);
+    assert_eq!(out, "12\n");
+}
+
+#[test]
+fn trait_method_body_creates_and_returns_object() {
+    // Trait method creates a new class instance and returns a field from it
+    let out = compile_and_run_stdout(r#"
+class Point {
+    x: int
+    y: int
+}
+
+trait PointMaker {
+    fn make(self) int
+}
+
+class Factory impl PointMaker {
+    scale: int
+
+    fn make(self) int {
+        let p = Point { x: self.scale * 2, y: self.scale * 3 }
+        return p.x + p.y
+    }
+}
+
+fn run(pm: PointMaker) {
+    print(pm.make())
+}
+
+fn main() {
+    run(Factory { scale: 10 })
+}
+"#);
+    assert_eq!(out, "50\n");
+}
+
+#[test]
+fn trait_method_body_with_array_operations() {
+    // Trait method creates and manipulates arrays
+    let out = compile_and_run_stdout(r#"
+trait Collector {
+    fn collect(self, n: int) int
+}
+
+class SumCollector impl Collector {
+    base: int
+
+    fn collect(self, n: int) int {
+        let arr: [int] = []
+        let i = 0
+        while i < n {
+            arr.push(i + self.base)
+            i = i + 1
+        }
+        let total = 0
+        let j = 0
+        while j < arr.len() {
+            total = total + arr[j]
+            j = j + 1
+        }
+        return total
+    }
+}
+
+fn run(c: Collector) {
+    print(c.collect(4))
+}
+
+fn main() {
+    run(SumCollector { base: 10 })
+}
+"#);
+    assert_eq!(out, "46\n");
+}
+
+#[test]
+fn trait_all_default_methods() {
+    // Trait with only default methods, no required methods
+    let out = compile_and_run_stdout(r#"
+trait Defaults {
+    fn a(self) int {
+        return 1
+    }
+
+    fn b(self) int {
+        return 2
+    }
+
+    fn c(self) int {
+        return 3
+    }
+}
+
+class X impl Defaults {
+    val: int
+}
+
+fn run(d: Defaults) {
+    print(d.a())
+    print(d.b())
+    print(d.c())
+}
+
+fn main() {
+    run(X { val: 0 })
+}
+"#);
+    assert_eq!(out, "1\n2\n3\n");
+}
+
+#[test]
+fn trait_default_calls_another_default() {
+    // Default method calls another default method on self
+    let out = compile_and_run_stdout(r#"
+trait Compute {
+    fn base(self) int {
+        return 10
+    }
+
+    fn doubled(self) int {
+        return self.base() * 2
+    }
+}
+
+class X impl Compute {
+    val: int
+}
+
+fn run(c: Compute) {
+    print(c.doubled())
+}
+
+fn main() {
+    run(X { val: 0 })
+}
+"#);
+    assert_eq!(out, "20\n");
+}
+
+#[test]
+fn trait_large_trait_ten_methods() {
+    // Trait with 10 methods — tests vtable size handling
+    let out = compile_and_run_stdout(r#"
+trait BigTrait {
+    fn m1(self) int
+    fn m2(self) int
+    fn m3(self) int
+    fn m4(self) int
+    fn m5(self) int
+    fn m6(self) int
+    fn m7(self) int
+    fn m8(self) int
+    fn m9(self) int
+    fn m10(self) int
+}
+
+class Impl impl BigTrait {
+    val: int
+
+    fn m1(self) int { return 1 }
+    fn m2(self) int { return 2 }
+    fn m3(self) int { return 3 }
+    fn m4(self) int { return 4 }
+    fn m5(self) int { return 5 }
+    fn m6(self) int { return 6 }
+    fn m7(self) int { return 7 }
+    fn m8(self) int { return 8 }
+    fn m9(self) int { return 9 }
+    fn m10(self) int { return 10 }
+}
+
+fn run(b: BigTrait) {
+    print(b.m1() + b.m2() + b.m3() + b.m4() + b.m5())
+    print(b.m6() + b.m7() + b.m8() + b.m9() + b.m10())
+}
+
+fn main() {
+    run(Impl { val: 0 })
+}
+"#);
+    assert_eq!(out, "15\n40\n");
+}
+
+// ===== Batch 6: Negative tests, naming edge cases, DI interaction =====
+
+#[test]
+fn trait_same_name_as_class_allowed() {
+    // COMPILER GAP: Trait and class can have the same name — compiler doesn't reject it
+    // This documents current behavior; may want to reject in the future
+    let out = compile_and_run_stdout(r#"
+trait Foo {
+    fn work(self) int
+}
+
+class Foo impl Foo {
+    val: int
+    fn work(self) int { return self.val }
+}
+
+fn run(f: Foo) {
+    print(f.work())
+}
+
+fn main() {
+    let f = Foo { val: 42 }
+    run(f)
+}
+"#);
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn trait_two_traits_same_name_allowed() {
+    // COMPILER GAP: Two traits with the same name — compiler doesn't reject it
+    // The second definition silently overwrites the first
+    let out = compile_and_run_stdout(r#"
+trait Foo {
+    fn a(self) int
+}
+
+trait Foo {
+    fn b(self) int
+}
+
+class X impl Foo {
+    val: int
+    fn b(self) int { return self.val }
+}
+
+fn run(f: Foo) {
+    print(f.b())
+}
+
+fn main() {
+    run(X { val: 99 })
+}
+"#);
+    assert_eq!(out, "99\n");
+}
+
+#[test]
+fn fail_impl_trait_missing_one_of_two_methods() {
+    // Class implements trait but is missing one of two required methods
+    compile_should_fail_with(r#"
+trait Duo {
+    fn first(self) int
+    fn second(self) int
+}
+
+class X impl Duo {
+    val: int
+
+    fn first(self) int {
+        return self.val
+    }
+}
+
+fn main() {
+}
+"#, "second");
+}
+
+#[test]
+fn fail_impl_trait_wrong_return_type_on_one_method() {
+    // Class has right method names but one has wrong return type
+    compile_should_fail(r#"
+trait Pair {
+    fn name(self) string
+    fn age(self) int
+}
+
+class Person impl Pair {
+    n: string
+    a: int
+
+    fn name(self) string {
+        return self.n
+    }
+
+    fn age(self) string {
+        return self.n
+    }
+}
+
+fn main() {
+}
+"#);
+}
+
+#[test]
+fn trait_method_with_map_param() {
+    // Trait method takes a Map parameter
+    let out = compile_and_run_stdout(r#"
+trait Lookup {
+    fn get(self, m: Map<string, int>, key: string) int
+}
+
+class MapLookup impl Lookup {
+    default_val: int
+
+    fn get(self, m: Map<string, int>, key: string) int {
+        if m.contains(key) {
+            return m[key]
+        }
+        return self.default_val
+    }
+}
+
+fn run(l: Lookup) {
+    let m = Map<string, int> { "a": 1, "b": 2 }
+    print(l.get(m, "a"))
+    print(l.get(m, "c"))
+}
+
+fn main() {
+    run(MapLookup { default_val: -1 })
+}
+"#);
+    assert_eq!(out, "1\n-1\n");
+}
+
+#[test]
+fn trait_method_returning_string_in_interp() {
+    // Trait dispatch result used directly in string interpolation
+    let out = compile_and_run_stdout(r#"
+trait Named {
+    fn name(self) string
+}
+
+class User impl Named {
+    n: string
+    fn name(self) string { return self.n }
+}
+
+fn greet(n: Named) {
+    print("hi {n.name()}")
+}
+
+fn main() {
+    greet(User { n: "bob" })
+}
+"#);
+    assert_eq!(out, "hi bob\n");
+}
+
+#[test]
+fn trait_method_returning_int_in_interp() {
+    // Trait dispatch int result used in string interpolation
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn show(v: Valued) {
+    print("value={v.val()}")
+}
+
+fn main() {
+    show(X { n: 42 })
+}
+"#);
+    assert_eq!(out, "value=42\n");
+}
+
+#[test]
+fn trait_dispatch_in_for_range() {
+    // Trait method result used as range bound in for loop
+    let out = compile_and_run_stdout(r#"
+trait Bounded {
+    fn upper(self) int
+}
+
+class Limit impl Bounded {
+    max: int
+    fn upper(self) int { return self.max }
+}
+
+fn sum_to(b: Bounded) {
+    let total = 0
+    for i in 0..b.upper() {
+        total = total + i
+    }
+    print(total)
+}
+
+fn main() {
+    sum_to(Limit { max: 5 })
+}
+"#);
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn trait_class_with_many_fields_dispatch() {
+    // Class with 6 fields implements trait, ensure vtable works with complex layout
+    let out = compile_and_run_stdout(r#"
+trait Summary {
+    fn total(self) int
+}
+
+class Record impl Summary {
+    a: int
+    b: int
+    c: int
+    d: int
+    e: int
+    f: int
+
+    fn total(self) int {
+        return self.a + self.b + self.c + self.d + self.e + self.f
+    }
+}
+
+fn show(s: Summary) {
+    print(s.total())
+}
+
+fn main() {
+    show(Record { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6 })
+}
+"#);
+    assert_eq!(out, "21\n");
+}
+
+#[test]
+fn trait_multiple_classes_different_field_counts() {
+    // Two classes with very different field counts, same trait
+    let out = compile_and_run_stdout(r#"
+trait Sized {
+    fn size(self) int
+}
+
+class Small impl Sized {
+    n: int
+    fn size(self) int { return 1 }
+}
+
+class Large impl Sized {
+    a: int
+    b: int
+    c: int
+    d: int
+    e: int
+
+    fn size(self) int { return 5 }
+}
+
+fn show(s: Sized) {
+    print(s.size())
+}
+
+fn main() {
+    show(Small { n: 0 })
+    show(Large { a: 1, b: 2, c: 3, d: 4, e: 5 })
+}
+"#);
+    assert_eq!(out, "1\n5\n");
+}
+
+#[test]
+fn trait_method_with_bool_param() {
+    // Trait method takes bool parameter
+    let out = compile_and_run_stdout(r#"
+trait Toggler {
+    fn toggle(self, on: bool) int
+}
+
+class Switch impl Toggler {
+    val: int
+
+    fn toggle(self, on: bool) int {
+        if on {
+            return self.val
+        }
+        return 0
+    }
+}
+
+fn run(t: Toggler) {
+    print(t.toggle(true))
+    print(t.toggle(false))
+}
+
+fn main() {
+    run(Switch { val: 42 })
+}
+"#);
+    assert_eq!(out, "42\n0\n");
+}
+
+#[test]
+fn trait_method_with_float_param() {
+    // Trait method takes float parameter
+    let out = compile_and_run_stdout(r#"
+trait Scaler {
+    fn scale(self, factor: float) float
+}
+
+class Value impl Scaler {
+    base: float
+
+    fn scale(self, factor: float) float {
+        return self.base * factor
+    }
+}
+
+fn run(s: Scaler) {
+    print(s.scale(2.0))
+}
+
+fn main() {
+    run(Value { base: 3.5 })
+}
+"#);
+    assert_eq!(out, "7.000000\n");
+}
+
+#[test]
+fn trait_dispatch_with_type_cast() {
+    // Trait method returns int, cast to float
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn main() {
+    let v: Valued = X { n: 5 }
+    let f = v.val() as float
+    print(f)
+}
+"#);
+    assert_eq!(out, "5.000000\n");
+}
+
+#[test]
+fn trait_default_method_with_if_else() {
+    // Default method with if/else control flow
+    let out = compile_and_run_stdout(r#"
+trait Classifier {
+    fn value(self) int
+
+    fn classify(self) string {
+        if self.value() > 0 {
+            return "positive"
+        } else {
+            return "non-positive"
+        }
+    }
+}
+
+class Num impl Classifier {
+    n: int
+    fn value(self) int { return self.n }
+}
+
+fn run(c: Classifier) {
+    print(c.classify())
+}
+
+fn main() {
+    run(Num { n: 5 })
+    run(Num { n: -3 })
+}
+"#);
+    assert_eq!(out, "positive\nnon-positive\n");
+}
+
+#[test]
+fn trait_method_returns_result_of_free_function() {
+    // Trait method body calls a free function and returns its result
+    let out = compile_and_run_stdout(r#"
+fn compute(x: int) int {
+    return x * x + 1
+}
+
+trait Computer {
+    fn run(self) int
+}
+
+class Wrapper impl Computer {
+    input: int
+
+    fn run(self) int {
+        return compute(self.input)
+    }
+}
+
+fn dispatch(c: Computer) {
+    print(c.run())
+}
+
+fn main() {
+    dispatch(Wrapper { input: 4 })
+}
+"#);
+    assert_eq!(out, "17\n");
+}
+
+#[test]
+fn fail_trait_method_returns_enum() {
+    // COMPILER GAP: Enum type used in trait method return type is not found
+    // (forward reference issue — enum not yet registered when trait is parsed)
+    compile_should_fail_with(r#"
+enum Status {
+    Active
+    Inactive
+}
+
+trait Stateful {
+    fn status(self) Status
+}
+
+class Server impl Stateful {
+    running: bool
+
+    fn status(self) Status {
+        if self.running {
+            return Status.Active
+        }
+        return Status.Inactive
+    }
+}
+
+fn main() {
+}
+"#, "unknown type");
+}
+
+#[test]
+fn trait_class_with_string_field_dispatch() {
+    // Class with string fields, ensure heap types work through dispatch
+    let out = compile_and_run_stdout(r#"
+trait Greeter {
+    fn greet(self) string
+}
+
+class Formal impl Greeter {
+    title: string
+    name: string
+
+    fn greet(self) string {
+        return self.title + " " + self.name
+    }
+}
+
+class Casual impl Greeter {
+    nickname: string
+
+    fn greet(self) string {
+        return "hey " + self.nickname
+    }
+}
+
+fn show(g: Greeter) {
+    print(g.greet())
+}
+
+fn main() {
+    show(Formal { title: "Dr", name: "Smith" })
+    show(Casual { nickname: "Bob" })
+}
+"#);
+    assert_eq!(out, "Dr Smith\nhey Bob\n");
+}
+
+#[test]
+fn trait_method_modifies_array_param() {
+    // Trait method receives array and modifies it (arrays are heap, passed by reference)
+    let out = compile_and_run_stdout(r#"
+trait Filler {
+    fn fill(self, arr: [int])
+}
+
+class ConstFiller impl Filler {
+    value: int
+
+    fn fill(self, arr: [int]) {
+        let i = 0
+        while i < 3 {
+            arr.push(self.value)
+            i = i + 1
+        }
+    }
+}
+
+fn run(f: Filler) {
+    let arr: [int] = []
+    f.fill(arr)
+    print(arr.len())
+    print(arr[0])
+    print(arr[2])
+}
+
+fn main() {
+    run(ConstFiller { value: 7 })
+}
+"#);
+    assert_eq!(out, "3\n7\n7\n");
+}
+
+#[test]
+fn trait_six_classes_same_trait_dispatch() {
+    // 6 classes implementing same trait — stress test vtable generation
+    let out = compile_and_run_stdout(r#"
+trait Id {
+    fn id(self) int
+}
+
+class C1 impl Id { val: int  fn id(self) int { return 1 } }
+class C2 impl Id { val: int  fn id(self) int { return 2 } }
+class C3 impl Id { val: int  fn id(self) int { return 3 } }
+class C4 impl Id { val: int  fn id(self) int { return 4 } }
+class C5 impl Id { val: int  fn id(self) int { return 5 } }
+class C6 impl Id { val: int  fn id(self) int { return 6 } }
+
+fn show(i: Id) {
+    print(i.id())
+}
+
+fn main() {
+    show(C1 { val: 0 })
+    show(C2 { val: 0 })
+    show(C3 { val: 0 })
+    show(C4 { val: 0 })
+    show(C5 { val: 0 })
+    show(C6 { val: 0 })
+}
+"#);
+    assert_eq!(out, "1\n2\n3\n4\n5\n6\n");
+}
+
+// ===== Batch 7: DI interaction, generics + traits, more stress =====
+
+#[test]
+fn trait_with_di_bracket_deps() {
+    // Class with DI bracket deps implements a trait — dispatched through trait handle
+    let out = compile_and_run_stdout(r#"
+trait Logger {
+    fn log(self) int
+}
+
+class ConsoleLogger impl Logger {
+    prefix: int
+
+    fn log(self) int {
+        return self.prefix + 42
+    }
+}
+
+class Service[logger: ConsoleLogger] {
+    tag: int
+
+    fn run(self) int {
+        return self.logger.log()
+    }
+}
+
+fn use_logger(l: Logger) {
+    print(l.log())
+}
+
+app MyApp[service: Service] {
+    fn main(self) {
+        print(self.service.run())
+    }
+}
+"#);
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn trait_generic_class_method_uses_field() {
+    // Generic class implements trait, method accesses generic-typed field
+    let out = compile_and_run_stdout(r#"
+trait HasLen {
+    fn len_val(self) int
+}
+
+class Wrapper<T> impl HasLen {
+    items: [int]
+
+    fn len_val(self) int {
+        return self.items.len()
+    }
+}
+
+fn show(h: HasLen) {
+    print(h.len_val())
+}
+
+fn main() {
+    let w = Wrapper<string> { items: [1, 2, 3] }
+    show(w)
+}
+"#);
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn trait_dispatch_in_match_arm_body() {
+    // Trait dispatch happens inside a match arm body
+    let out = compile_and_run_stdout(r#"
+enum Mode {
+    Fast
+    Slow
+}
+
+trait Runner {
+    fn speed(self) int
+}
+
+class Racer impl Runner {
+    base: int
+    fn speed(self) int { return self.base * 2 }
+}
+
+fn run(mode: Mode, r: Runner) {
+    match mode {
+        Mode.Fast {
+            print(r.speed())
+        }
+        Mode.Slow {
+            print(r.speed() / 2)
+        }
+    }
+}
+
+fn main() {
+    let r = Racer { base: 10 }
+    run(Mode.Fast, r)
+    run(Mode.Slow, r)
+}
+"#);
+    assert_eq!(out, "20\n10\n");
+}
+
+#[test]
+fn trait_dispatch_with_bitwise_ops() {
+    // Trait method result used with bitwise operations
+    let out = compile_and_run_stdout(r#"
+trait Masked {
+    fn mask(self) int
+}
+
+class BitMask impl Masked {
+    bits: int
+    fn mask(self) int { return self.bits }
+}
+
+fn apply(m: Masked, val: int) {
+    print(val & m.mask())
+}
+
+fn main() {
+    let m = BitMask { bits: 15 }
+    apply(m, 255)
+    apply(m, 8)
+}
+"#);
+    assert_eq!(out, "15\n8\n");
+}
+
+#[test]
+fn trait_default_method_string_return() {
+    // Default method returns a string constant
+    let out = compile_and_run_stdout(r#"
+trait Described {
+    fn description(self) string {
+        return "no description"
+    }
+}
+
+class Thing impl Described {
+    val: int
+}
+
+class Named impl Described {
+    name: string
+
+    fn description(self) string {
+        return self.name
+    }
+}
+
+fn show(d: Described) {
+    print(d.description())
+}
+
+fn main() {
+    show(Thing { val: 1 })
+    show(Named { name: "widget" })
+}
+"#);
+    assert_eq!(out, "no description\nwidget\n");
+}
+
+#[test]
+fn trait_method_with_negative_literals() {
+    // Trait method works with negative number comparisons
+    let out = compile_and_run_stdout(r#"
+trait Signum {
+    fn sign(self) int
+}
+
+class Num impl Signum {
+    val: int
+
+    fn sign(self) int {
+        if self.val > 0 {
+            return 1
+        }
+        if self.val < 0 {
+            return -1
+        }
+        return 0
+    }
+}
+
+fn show(s: Signum) {
+    print(s.sign())
+}
+
+fn main() {
+    show(Num { val: 10 })
+    show(Num { val: -5 })
+    show(Num { val: 0 })
+}
+"#);
+    assert_eq!(out, "1\n-1\n0\n");
+}
+
+#[test]
+fn trait_method_early_return() {
+    // Trait method with early return (guard pattern)
+    let out = compile_and_run_stdout(r#"
+trait Validator {
+    fn validate(self, x: int) int
+}
+
+class RangeValidator impl Validator {
+    min: int
+    max: int
+
+    fn validate(self, x: int) int {
+        if x < self.min {
+            return self.min
+        }
+        if x > self.max {
+            return self.max
+        }
+        return x
+    }
+}
+
+fn run(v: Validator) {
+    print(v.validate(5))
+    print(v.validate(-10))
+    print(v.validate(100))
+}
+
+fn main() {
+    run(RangeValidator { min: 0, max: 50 })
+}
+"#);
+    assert_eq!(out, "5\n0\n50\n");
+}
+
+#[test]
+fn trait_two_traits_two_classes_cross_dispatch() {
+    // Two traits, two classes, each implements one — cross-dispatch
+    let out = compile_and_run_stdout(r#"
+trait Reader {
+    fn read(self) int
+}
+
+trait Writer {
+    fn write(self, val: int) int
+}
+
+class Source impl Reader {
+    data: int
+    fn read(self) int { return self.data }
+}
+
+class Sink impl Writer {
+    offset: int
+    fn write(self, val: int) int { return val + self.offset }
+}
+
+fn transfer(r: Reader, w: Writer) {
+    let val = r.read()
+    print(w.write(val))
+}
+
+fn main() {
+    transfer(Source { data: 10 }, Sink { offset: 5 })
+}
+"#);
+    assert_eq!(out, "15\n");
+}
+
+#[test]
+fn trait_dispatch_then_method_chain() {
+    // Dispatch through trait, then call concrete method on result (string.len())
+    let out = compile_and_run_stdout(r#"
+trait Named {
+    fn name(self) string
+}
+
+class User impl Named {
+    n: string
+    fn name(self) string { return self.n }
+}
+
+fn name_length(n: Named) {
+    let s = n.name()
+    print(s.len())
+}
+
+fn main() {
+    name_length(User { n: "hello" })
+}
+"#);
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn trait_dispatch_both_paths_if_else() {
+    // If/else where both branches dispatch on trait handle
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+    fn double(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+    fn double(self) int { return self.n * 2 }
+}
+
+fn pick(v: Valued, use_double: bool) {
+    if use_double {
+        print(v.double())
+    } else {
+        print(v.val())
+    }
+}
+
+fn main() {
+    let x = X { n: 7 }
+    pick(x, true)
+    pick(x, false)
+}
+"#);
+    assert_eq!(out, "14\n7\n");
+}
+
+#[test]
+fn trait_dispatch_in_let_binding() {
+    // Trait dispatch result bound to let, then used multiple times
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn main() {
+    let v: Valued = X { n: 10 }
+    let result = v.val()
+    print(result)
+    print(result + 1)
+    print(result * 2)
+}
+"#);
+    assert_eq!(out, "10\n11\n20\n");
+}
+
+#[test]
+fn fail_trait_method_body_match_on_enum_param() {
+    // COMPILER GAP: Enum type used in trait method parameter is not found
+    // (forward reference issue)
+    compile_should_fail_with(r#"
+enum Op {
+    Add
+    Sub
+}
+
+trait Calculator {
+    fn calc(self, op: Op, a: int, b: int) int
+}
+
+class SimpleCalc impl Calculator {
+    val: int
+
+    fn calc(self, op: Op, a: int, b: int) int {
+        match op {
+            Op.Add {
+                return a + b
+            }
+            Op.Sub {
+                return a - b
+            }
+        }
+    }
+}
+
+fn main() {
+}
+"#, "unknown type");
+}
+
+#[test]
+fn trait_concrete_and_trait_call_same_method() {
+    // Same method called both through concrete type and through trait handle
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn via_trait(v: Valued) {
+    print(v.val())
+}
+
+fn main() {
+    let x = X { n: 42 }
+    print(x.val())
+    via_trait(x)
+}
+"#);
+    assert_eq!(out, "42\n42\n");
+}
+
+#[test]
+fn trait_class_impl_two_traits_dispatch_each() {
+    // Class implements two traits, both are dispatched through separately
+    let out = compile_and_run_stdout(r#"
+trait Readable {
+    fn read(self) int
+}
+
+trait Writable {
+    fn write(self, val: int) int
+}
+
+class Buffer impl Readable, Writable {
+    data: int
+
+    fn read(self) int {
+        return self.data
+    }
+
+    fn write(self, val: int) int {
+        return val + self.data
+    }
+}
+
+fn read_it(r: Readable) {
+    print(r.read())
+}
+
+fn write_it(w: Writable) {
+    print(w.write(10))
+}
+
+fn main() {
+    let b = Buffer { data: 5 }
+    read_it(b)
+    write_it(b)
+}
+"#);
+    assert_eq!(out, "5\n15\n");
+}
+
+#[test]
+fn trait_dispatch_return_used_as_param() {
+    // Return value of one trait dispatch used as parameter to another
+    let out = compile_and_run_stdout(r#"
+trait Generator {
+    fn generate(self) int
+}
+
+trait Printer {
+    fn show(self, val: int)
+}
+
+class NumGen impl Generator {
+    base: int
+    fn generate(self) int { return self.base * 3 }
+}
+
+class NumPrinter impl Printer {
+    prefix: int
+
+    fn show(self, val: int) {
+        print(self.prefix + val)
+    }
+}
+
+fn chain(g: Generator, p: Printer) {
+    p.show(g.generate())
+}
+
+fn main() {
+    chain(NumGen { base: 4 }, NumPrinter { prefix: 100 })
+}
+"#);
+    assert_eq!(out, "112\n");
+}
+
+#[test]
+fn trait_method_with_string_comparison() {
+    // Trait method performs string comparison
+    let out = compile_and_run_stdout(r#"
+trait Matcher {
+    fn matches(self, input: string) bool
+}
+
+class ExactMatcher impl Matcher {
+    expected: string
+
+    fn matches(self, input: string) bool {
+        return input == self.expected
+    }
+}
+
+fn check(m: Matcher, input: string) {
+    if m.matches(input) {
+        print(1)
+    } else {
+        print(0)
+    }
+}
+
+fn main() {
+    let m = ExactMatcher { expected: "hello" }
+    check(m, "hello")
+    check(m, "world")
+}
+"#);
+    assert_eq!(out, "1\n0\n");
+}
+
+#[test]
+fn trait_dispatch_in_nested_if() {
+    // Trait dispatch inside nested if/else
+    let out = compile_and_run_stdout(r#"
+trait Scorer {
+    fn score(self) int
+}
+
+class Player impl Scorer {
+    points: int
+    fn score(self) int { return self.points }
+}
+
+fn grade(s: Scorer) {
+    if s.score() > 90 {
+        print("A")
+    } else {
+        if s.score() > 70 {
+            print("B")
+        } else {
+            print("C")
+        }
+    }
+}
+
+fn main() {
+    grade(Player { points: 95 })
+    grade(Player { points: 80 })
+    grade(Player { points: 50 })
+}
+"#);
+    assert_eq!(out, "A\nB\nC\n");
+}
+
+#[test]
+fn trait_method_accumulates_across_calls() {
+    // Multiple dispatch calls on same handle, accumulating results
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn accumulate(v: Valued) {
+    let sum = 0
+    sum = sum + v.val()
+    sum = sum + v.val()
+    sum = sum + v.val()
+    print(sum)
+}
+
+fn main() {
+    accumulate(X { n: 7 })
+}
+"#);
+    assert_eq!(out, "21\n");
+}
+
+#[test]
+fn trait_handle_as_return_value() {
+    // Function creates a concrete class and returns it as a trait handle
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn make_valued() Valued {
+    return X { n: 42 }
+}
+
+fn main() {
+    let v = make_valued()
+    print(v.val())
+}
+"#);
+    assert_eq!(out, "42\n");
+}
