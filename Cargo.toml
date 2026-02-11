@@ -593,6 +593,31 @@ path = "tests/typeck/contracts/contract_inheritance.rs"
 name = "typeck_temporal_contracts"
 path = "tests/typeck/contracts/temporal_contracts.rs"
 
+# Typeck edge case tests - concurrency category
+[[test]]
+name = "typeck_task_error_handling"
+path = "tests/typeck/concurrency/task_error_handling.rs"
+
+[[test]]
+name = "typeck_spawn_errors"
+path = "tests/typeck/concurrency/spawn_validation.rs"
+
+[[test]]
+name = "typeck_task_lifecycle"
+path = "tests/typeck/concurrency/task_lifecycle.rs"
+
+[[test]]
+name = "typeck_race_conditions"
+path = "tests/typeck/concurrency/race_conditions.rs"
+
+[[test]]
+name = "typeck_channel_errors"
+path = "tests/typeck/concurrency/channel_errors.rs"
+
+[[test]]
+name = "typeck_concurrent_mutations"
+path = "tests/typeck/concurrency/concurrent_mutations.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false
