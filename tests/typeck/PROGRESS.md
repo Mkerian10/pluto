@@ -43,21 +43,23 @@
 
 **Subtotal:** 200/200 ✅ **TARGET MET**
 
-### 4. Nullable Types (Target: 100+)
-- 🚧 `nullable/nested_nullable.rs` - TODO (T?? rejection)
-- 🚧 `nullable/void_nullable.rs` - TODO (void? rejection)
-- 🚧 `nullable/implicit_wrapping.rs` - TODO (T → T? coercion)
-- 🚧 `nullable/none_inference.rs` - TODO (none literal contexts)
-- 🚧 `nullable/propagation_chain.rs` - TODO (x?.y?.z)
-- 🚧 `nullable/in_containers.rs` - TODO ([int?], Map<K, V?>)
-- 🚧 `nullable/with_generics.rs` - TODO (Box<int?>)
+### 4. Nullable Types ✅ COMPLETE (Target: 100+, Actual: 100)
+- ✅ `nullable/nested_nullable.rs` - 15 tests
+- ✅ `nullable/void_nullable.rs` - 10 tests
+- ✅ `nullable/implicit_wrapping.rs` - 15 tests
+- ✅ `nullable/none_inference.rs` - 15 tests
+- ✅ `nullable/propagation_chain.rs` - 15 tests
+- ✅ `nullable/in_containers.rs` - 15 tests
+- ✅ `nullable/with_generics.rs` - 15 tests
+
+**Subtotal:** 100/100 ✅ **TARGET MET**
 
 ### 5-15. Remaining Categories
 - 🚧 All TODO
 
 ---
 
-## TOTAL PROGRESS: 563/1,730 tests (32.5%)
+## TOTAL PROGRESS: 663/1,730 tests (38.3%)
 
 ## Key Achievements
 - ✅ Inference category complete and exceeded target (213 tests)
