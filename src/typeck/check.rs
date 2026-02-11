@@ -1110,6 +1110,22 @@ pub(crate) fn enforce_mut_self(program: &Program, env: &TypeEnv) -> Result<(), C
         }
     }
 
+    // Check stage methods
+    for stage_spanned in &program.stages {
+        let stage = &stage_spanned.node;
+        let stage_name = &stage.name.node;
+        for method in &stage.methods {
+            let m = &method.node;
+            if m.params.is_empty() || m.params[0].name.node != "self" {
+                continue;
+            }
+            if m.params[0].is_mut {
+                continue;
+            }
+            check_body_for_self_mutation(&m.body.node, stage_name, env)?;
+        }
+    }
+
     Ok(())
 }
 

@@ -53,6 +53,7 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     register::register_traits(program, &mut env)?;
     register::register_enums(program, &mut env)?;
     register::register_app_placeholder(program, &mut env)?;
+    register::register_stage_placeholders(program, &mut env)?;
     register::register_errors(program, &mut env)?;
     env.errors.entry("MathError".to_string()).or_insert(ErrorInfo {
         fields: vec![("message".to_string(), PlutoType::String)],
@@ -78,6 +79,7 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     register::register_functions(program, &mut env)?;
     register::register_method_sigs(program, &mut env)?;
     register::register_app_fields_and_methods(program, &mut env)?;
+    register::register_stage_fields_and_methods(program, &mut env)?;
     register::validate_di_graph(program, &mut env)?;
     register::check_trait_conformance(program, &mut env)?;
     register::check_all_bodies(program, &mut env)?;
@@ -109,6 +111,13 @@ fn generate_warnings(env: &TypeEnv, program: &Program) -> Vec<CompileWarning> {
     }
     if let Some(app) = &program.app {
         for m in &app.node.methods {
+            for p in &m.node.params {
+                param_names.insert(p.name.node.clone());
+            }
+        }
+    }
+    for stage in &program.stages {
+        for m in &stage.node.methods {
             for p in &m.node.params {
                 param_names.insert(p.name.node.clone());
             }

@@ -220,6 +220,33 @@ pub(crate) fn register_app_placeholder(program: &Program, env: &mut TypeEnv) -> 
     Ok(())
 }
 
+pub(crate) fn register_stage_placeholders(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for stage_spanned in &program.stages {
+        let stage = &stage_spanned.node;
+        let stage_name = stage.name.node.clone();
+
+        // Conflict check: stage + top-level main
+        if program.functions.iter().any(|f| f.node.name.node == "main") {
+            return Err(CompileError::type_err(
+                "cannot have both a stage declaration and a top-level main function".to_string(),
+                stage_spanned.span,
+            ));
+        }
+
+        // Register stage as a class so method mangling/self resolution works identically.
+        env.classes.insert(
+            stage_name.clone(),
+            ClassInfo {
+                fields: Vec::new(),
+                methods: Vec::new(),
+                impl_traits: Vec::new(),
+                lifecycle: Lifecycle::Singleton,
+            },
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn register_errors(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     for error_decl in &program.errors {
         let e = &error_decl.node;
@@ -661,18 +688,114 @@ pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeE
     Ok(())
 }
 
+pub(crate) fn register_stage_fields_and_methods(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for stage_spanned in &program.stages {
+        let stage = &stage_spanned.node;
+        let stage_name = stage.name.node.clone();
+
+        // Resolve inject field types
+        let mut fields = Vec::new();
+        for f in &stage.inject_fields {
+            let ty = resolve_type(&f.ty, env)?;
+            fields.push((f.name.node.clone(), ty, f.is_injected));
+        }
+
+        // Update the ClassInfo with resolved fields
+        if let Some(info) = env.classes.get_mut(&stage_name) {
+            info.fields = fields.clone();
+        }
+
+        // Populate ambient_types and validate each is a known class
+        for ambient_type in &stage.ambient_types {
+            if !env.classes.contains_key(&ambient_type.node) {
+                return Err(CompileError::type_err(
+                    format!("ambient type '{}' is not a known class", ambient_type.node),
+                    ambient_type.span,
+                ));
+            }
+            env.ambient_types.insert(ambient_type.node.clone());
+        }
+
+        // Register stage methods (mangled as StageName_methodname)
+        let mut method_names = Vec::new();
+        let mut has_main = false;
+        for method in &stage.methods {
+            let m = &method.node;
+            let mangled = mangle_method(&stage_name, &m.name.node);
+            method_names.push(m.name.node.clone());
+
+            if m.name.node == "main" {
+                has_main = true;
+                if m.params.is_empty() || m.params[0].name.node != "self" {
+                    return Err(CompileError::type_err(
+                        "stage main method must take 'self' as first parameter".to_string(),
+                        m.name.span,
+                    ));
+                }
+                if m.return_type.is_some() {
+                    return Err(CompileError::type_err(
+                        "stage main method must not have a return type".to_string(),
+                        m.name.span,
+                    ));
+                }
+            }
+
+            let mut param_types = Vec::new();
+            for p in &m.params {
+                if p.name.node == "self" {
+                    param_types.push(PlutoType::Class(stage_name.clone()));
+                } else {
+                    param_types.push(resolve_type(&p.ty, env)?);
+                }
+            }
+            let return_type = match &m.return_type {
+                Some(t) => resolve_type(t, env)?,
+                None => PlutoType::Void,
+            };
+            if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
+                env.mut_self_methods.insert(mangled.clone());
+            }
+            env.functions.insert(
+                mangled,
+                FuncSig { params: param_types, return_type },
+            );
+        }
+
+        if !has_main {
+            return Err(CompileError::type_err(
+                "stage must have a 'main' method".to_string(),
+                stage.name.span,
+            ));
+        }
+
+        // Update class info with method names
+        if let Some(info) = env.classes.get_mut(&stage_name) {
+            info.methods = method_names.clone();
+        }
+
+        // Store in env.stages
+        env.stages.push((stage_name.clone(), ClassInfo {
+            fields: fields.clone(),
+            methods: method_names,
+            impl_traits: Vec::new(),
+            lifecycle: Lifecycle::Singleton,
+        }));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     use std::collections::{HashMap as DMap, HashSet as DSet, VecDeque};
 
-    // Validate `uses` on classes — each used type must be declared `ambient` in the app
+    // Validate `uses` on classes — each used type must be declared `ambient` in the app or stage
     for class in &program.classes {
         let c = &class.node;
         if c.uses.is_empty() {
             continue;
         }
-        if program.app.is_none() {
+        if program.app.is_none() && program.stages.is_empty() {
             return Err(CompileError::type_err(
-                format!("class '{}' uses ambient types, but no app declaration exists", c.name.node),
+                format!("class '{}' uses ambient types, but no app or stage declaration exists", c.name.node),
                 class.span,
             ));
         }
@@ -800,6 +923,7 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
             let cycle_str = remaining.join(" -> ");
             let span = program.app.as_ref()
                 .map(|a| a.span)
+                .or_else(|| program.stages.first().map(|s| s.span))
                 .or_else(|| program.classes.first().map(|c| c.span))
                 .unwrap_or(crate::span::Span { start: 0, end: 0, file_id: 0 });
             return Err(CompileError::type_err(
@@ -829,10 +953,11 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
             }
         }
 
-        // Filter out the app name from di_order (app is wired separately)
+        // Filter out the app/stage names from di_order (app/stage are wired separately)
         let app_name_opt = env.app.as_ref().map(|(n, _)| n.clone());
+        let stage_names: HashSet<String> = env.stages.iter().map(|(n, _)| n.clone()).collect();
         env.di_order = order.into_iter()
-            .filter(|n| Some(n) != app_name_opt.as_ref())
+            .filter(|n| Some(n) != app_name_opt.as_ref() && !stage_names.contains(n))
             .collect();
     }
 
@@ -915,6 +1040,84 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
         }
 
         // Remove overridden classes from di_order
+        env.di_order.retain(|n| !env.lifecycle_overridden.contains(n));
+    }
+
+    // Apply stage-level lifecycle overrides (parallel to app lifecycle overrides)
+    for stage_spanned in &program.stages {
+        for (class_name, target_lifecycle) in &stage_spanned.node.lifecycle_overrides {
+            let class_info = env.classes.get(&class_name.node).ok_or_else(|| {
+                CompileError::type_err(
+                    format!("lifecycle override: unknown class '{}'", class_name.node),
+                    class_name.span,
+                )
+            })?;
+
+            let current = class_info.lifecycle;
+            let lifecycle_rank = |l: Lifecycle| -> u8 {
+                match l {
+                    Lifecycle::Transient => 0,
+                    Lifecycle::Scoped => 1,
+                    Lifecycle::Singleton => 2,
+                }
+            };
+            if lifecycle_rank(*target_lifecycle) > lifecycle_rank(current) {
+                return Err(CompileError::type_err(
+                    format!(
+                        "lifecycle override: cannot lengthen lifecycle of '{}' from {} to {}; \
+                         overrides can only shorten lifecycle (singleton -> scoped -> transient)",
+                        class_name.node, current, *target_lifecycle
+                    ),
+                    class_name.span,
+                ));
+            }
+
+            if let Some(info) = env.classes.get_mut(&class_name.node) {
+                info.lifecycle = *target_lifecycle;
+            }
+            env.lifecycle_overridden.insert(class_name.node.clone());
+        }
+
+        // Re-run lifecycle inference to propagate overrides
+        let di_order_snapshot = env.di_order.clone();
+        for class_name in &di_order_snapshot {
+            if let Some(class_info) = env.classes.get(class_name) {
+                let deps: Vec<String> = class_info.fields.iter()
+                    .filter(|(_, _, inj)| *inj)
+                    .filter_map(|(_, ty, _)| {
+                        if let PlutoType::Class(name) = ty { Some(name.clone()) } else { None }
+                    })
+                    .collect();
+                let mut inferred = class_info.lifecycle;
+                for dep_name in &deps {
+                    if let Some(dep_info) = env.classes.get(dep_name) {
+                        inferred = min_lifecycle(inferred, dep_info.lifecycle);
+                    }
+                }
+                if let Some(info) = env.classes.get_mut(class_name) {
+                    if inferred != info.lifecycle {
+                        info.lifecycle = inferred;
+                        env.lifecycle_overridden.insert(class_name.clone());
+                    }
+                }
+            }
+        }
+
+        // Validate stage bracket deps don't reference overridden classes
+        for field in &stage_spanned.node.inject_fields {
+            if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node {
+                if env.lifecycle_overridden.contains(type_name) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "stage bracket dependency '{}' has overridden lifecycle; use scope blocks to access scoped/transient instances",
+                            field.name.node
+                        ),
+                        field.ty.span,
+                    ));
+                }
+            }
+        }
+
         env.di_order.retain(|n| !env.lifecycle_overridden.contains(n));
     }
 
@@ -1245,6 +1448,16 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
         for method in &app.methods {
             check_function(&method.node, env, Some(app_name))?;
             check_function_contracts(&method.node, env, Some(app_name))?;
+        }
+    }
+
+    // Type-check stage method bodies and contracts
+    for stage_spanned in &program.stages {
+        let stage = &stage_spanned.node;
+        let stage_name = &stage.name.node;
+        for method in &stage.methods {
+            check_function(&method.node, env, Some(stage_name))?;
+            check_function_contracts(&method.node, env, Some(stage_name))?;
         }
     }
     Ok(())

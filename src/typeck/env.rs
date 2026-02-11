@@ -136,6 +136,7 @@ pub struct TypeEnv {
     /// Lifted closure function name → captured variable names and types
     pub closure_fns: HashMap<String, Vec<(String, PlutoType)>>,
     pub app: Option<(String, ClassInfo)>,
+    pub stages: Vec<(String, ClassInfo)>,
     pub di_order: Vec<String>,
     /// DI singletons that need rwlock synchronization (accessed concurrently from spawn + main)
     pub synchronized_singletons: HashSet<String>,
@@ -229,6 +230,7 @@ impl TypeEnv {
             closure_captures: HashMap::new(),
             closure_fns: HashMap::new(),
             app: None,
+            stages: Vec::new(),
             di_order: Vec::new(),
             synchronized_singletons: HashSet::new(),
             fn_errors: HashMap::new(),

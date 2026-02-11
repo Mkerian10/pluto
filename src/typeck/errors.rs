@@ -63,6 +63,17 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
         }
     }
 
+    // Collect effects from stage methods
+    for stage_spanned in &program.stages {
+        let stage_name = &stage_spanned.node.name.node;
+        for method in &stage_spanned.node.methods {
+            let mangled = mangle_method(stage_name, &method.node.name.node);
+            let (directs, edges) = collect_block_effects(&method.node.body.node, &mangled, env);
+            direct_errors.insert(mangled.clone(), directs);
+            propagation_edges.insert(mangled, edges);
+        }
+    }
+
     // Fixed-point iteration: propagate error sets through call edges.
     // Start from pre-existing fn_errors (e.g. seeded FFI fallible functions).
     let mut fn_errors: HashMap<String, HashSet<String>> = env.fn_errors.clone();
@@ -452,6 +463,14 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
         let app_name = &app_spanned.node.name.node;
         for method in &app_spanned.node.methods {
             let current_fn = mangle_method(app_name, &method.node.name.node);
+            enforce_block(&method.node.body.node, &current_fn, env)?;
+        }
+    }
+    // Enforce error handling in stage methods
+    for stage_spanned in &program.stages {
+        let stage_name = &stage_spanned.node.name.node;
+        for method in &stage_spanned.node.methods {
+            let current_fn = mangle_method(stage_name, &method.node.name.node);
             enforce_block(&method.node.body.node, &current_fn, env)?;
         }
     }
