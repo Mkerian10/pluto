@@ -8,6 +8,22 @@ Demonstrates built-in string methods (`contains`, `starts_with`, `trim`, `to_upp
 cargo run -- run examples/strings/main.pluto
 ```
 
+## logging
+
+Demonstrates structured logging with `std.log`: setting log levels (`DEBUG`, `INFO`, `WARN`, `ERROR`), logging messages at different levels, and controlling which messages are displayed based on the current log level.
+
+```bash
+cargo run -- run examples/logging/main.pluto --stdlib stdlib
+```
+
+## modules
+
+Demonstrates the module system: `import` for importing modules, `pub` visibility for exported items, module organization with separate files, and accessing public functions and classes from imported modules.
+
+```bash
+cargo run -- run examples/modules/main.pluto
+```
+
 ## channels
 
 Demonstrates channels for inter-task communication: `let (tx, rx) = chan<T>(capacity)`, blocking `send`/`recv`, non-blocking `try_send`/`try_recv`, `close()`, `for-in` iteration on receivers, and error handling with `catch`.
@@ -81,6 +97,14 @@ Demonstrates local path dependencies via `pluto.toml`. A project declares a `mat
 cargo run -- run examples/packages/main.pluto
 ```
 
+## pattern_matching
+
+Demonstrates enum pattern matching: unit variants (no data), data-carrying variants with field destructuring, mixed variants (unit and data), exhaustiveness checking, and nested pattern matching within match arms.
+
+```bash
+cargo run -- run examples/pattern_matching/main.pluto
+```
+
 ## git-packages
 
 Demonstrates git-based dependencies via `pluto.toml`. A project declares a `strutils` dependency pointing to a git repository, then imports and uses string utility functions from it.
@@ -95,6 +119,14 @@ Demonstrates Pluto's contract system: `requires` (preconditions), `ensures` (pos
 
 ```bash
 cargo run -- run examples/contracts/main.pluto
+```
+
+## errors
+
+Demonstrates Pluto's typed error system: error declarations with multiple error types, `raise` to throw errors, `!` postfix for error propagation, `catch` with wildcard error handling, shorthand catch with default values, and compiler-inferred error-ability (no annotations needed on intermediate functions).
+
+```bash
+cargo run -- run examples/errors/main.pluto
 ```
 
 ## binary-ast

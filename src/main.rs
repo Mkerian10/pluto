@@ -37,6 +37,9 @@ enum Commands {
         /// Override number of iterations for random test strategies
         #[arg(long)]
         iterations: Option<u64>,
+        /// Disable test caching, run all tests
+        #[arg(long)]
+        no_cache: bool,
     },
     /// Analyze a .pt source file and emit a .pluto binary AST
     EmitAst {
@@ -153,9 +156,10 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Test { file, seed, iterations } => {
+        Commands::Test { file, seed, iterations, no_cache } => {
             let tmp = std::env::temp_dir().join("pluto_test");
-            if let Err(err) = plutoc::compile_file_for_tests(&file, &tmp, stdlib) {
+            let use_cache = !no_cache;
+            if let Err(err) = plutoc::compile_file_for_tests(&file, &tmp, stdlib, use_cache) {
                 let filename = file.to_string_lossy().to_string();
                 eprintln!("error [{}]: {err}", filename);
                 std::process::exit(1);

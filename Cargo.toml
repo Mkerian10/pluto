@@ -82,6 +82,10 @@ name = "modules"
 path = "tests/integration/modules.rs"
 
 [[test]]
+name = "mutability"
+path = "tests/integration/mutability.rs"
+
+[[test]]
 name = "prelude"
 path = "tests/integration/prelude.rs"
 

@@ -33,4 +33,8 @@ impl<T> Spanned<T> {
     pub fn new(node: T, span: Span) -> Self {
         Self { node, span }
     }
+
+    pub fn dummy(node: T) -> Self {
+        Self { node, span: Span::dummy() }
+    }
 }

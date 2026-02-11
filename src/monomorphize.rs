@@ -87,7 +87,7 @@ fn instantiate_function(
         .functions
         .iter()
         .find(|f| f.node.name.node == name && !f.node.type_params.is_empty())
-        .ok_or_else(|| CompileError::type_err(format!("generic function '{}' not found", name), Span::new(0, 0)))?
+        .ok_or_else(|| CompileError::type_err(format!("generic function '{}' not found", name), Span::dummy()))?
         .clone();
 
     let type_params: Vec<String> = template.node.type_params.iter().map(|tp| tp.node.clone()).collect();
@@ -102,10 +102,11 @@ fn instantiate_function(
     substitute_in_function(&mut func, &bindings);
     offset_function_spans(&mut func, span_offset);
 
-    // Add to program
-    let spanned_func = Spanned::new(func.clone(), Span::new(
+    // Add to program (preserve template's file_id for DeclKeyMap)
+    let spanned_func = Spanned::new(func.clone(), Span::with_file(
         template.span.start + span_offset,
         template.span.end + span_offset,
+        template.span.file_id,
     ));
     program.functions.push(spanned_func);
 
@@ -127,7 +128,7 @@ fn instantiate_class(
         .classes
         .iter()
         .find(|c| c.node.name.node == name && !c.node.type_params.is_empty())
-        .ok_or_else(|| CompileError::type_err(format!("generic class '{}' not found", name), Span::new(0, 0)))?
+        .ok_or_else(|| CompileError::type_err(format!("generic class '{}' not found", name), Span::dummy()))?
         .clone();
 
     let type_params: Vec<String> = template.node.type_params.iter().map(|tp| tp.node.clone()).collect();
@@ -141,10 +142,11 @@ fn instantiate_class(
     substitute_in_class(&mut class, &bindings);
     offset_class_spans(&mut class, span_offset);
 
-    // Add to program
-    let spanned_class = Spanned::new(class.clone(), Span::new(
+    // Add to program (preserve template's file_id for DeclKeyMap)
+    let spanned_class = Spanned::new(class.clone(), Span::with_file(
         template.span.start + span_offset,
         template.span.end + span_offset,
+        template.span.file_id,
     ));
     program.classes.push(spanned_class);
 
@@ -253,9 +255,10 @@ fn instantiate_enum(
     substitute_in_enum(&mut edecl, &bindings);
     offset_enum_spans(&mut edecl, span_offset);
 
-    let spanned_enum = Spanned::new(edecl, Span::new(
+    let spanned_enum = Spanned::new(edecl, Span::with_file(
         template.span.start + span_offset,
         template.span.end + span_offset,
+        template.span.file_id,
     ));
     program.enums.push(spanned_enum);
 }
@@ -1480,7 +1483,7 @@ fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), Compil
             } else {
                 return Err(CompileError::type_err(
                     format!("unknown generic type '{}'", name),
-                    Span::new(0, 0),
+                    Span::dummy(),
                 ));
             };
             *te = TypeExpr::Named(mangled);

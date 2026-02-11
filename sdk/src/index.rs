@@ -288,6 +288,9 @@ fn collect_stmt_xrefs(
             }
             collect_block_xrefs(&body.node, fn_name, callers, constructors, enum_usages, raise_sites);
         }
+        Stmt::Yield { value } => {
+            collect_expr_xrefs(&value.node, value.span, fn_name, callers, constructors, enum_usages, raise_sites);
+        }
     }
 }
 

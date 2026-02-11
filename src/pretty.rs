@@ -92,6 +92,7 @@ impl PrettyPrinter {
 
     // ── Program ──────────────────────────────────────────────────────
 
+    #[allow(unused_assignments)]
     fn emit_program(&mut self, program: &Program) {
         let mut has_output = false;
 

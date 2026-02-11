@@ -1,3 +1,5 @@
+import std.log
+
 error ComputeError {
     message: string
 }
@@ -17,29 +19,46 @@ fn checked_fib(n: int) int {
 }
 
 fn main() {
+    log.info("Starting concurrent computations example")
+    log.set_level(log.Level.Debug)
+
     // Spawn three computations concurrently
+    log.debug("Spawning three fibonacci tasks")
     let t1 = spawn fib(30)
     let t2 = spawn fib(25)
     let t3 = spawn fib(20)
 
     // .get() blocks until the result is ready
+    log.debug("Waiting for task 1 (fib 30)")
     let r1 = t1.get()
-    let r2 = t2.get()
-    let r3 = t3.get()
+    log.debug("Task 1 complete")
 
+    log.debug("Waiting for task 2 (fib 25)")
+    let r2 = t2.get()
+    log.debug("Task 2 complete")
+
+    log.debug("Waiting for task 3 (fib 20)")
+    let r3 = t3.get()
+    log.debug("Task 3 complete")
+
+    log.info("Fibonacci results computed")
     print("fib(30) = {r1}")
     print("fib(25) = {r2}")
     print("fib(20) = {r3}")
     print("sum     = {r1 + r2 + r3}")
 
     // Error handling: spawned function raises, .get() catch handles it
+    log.debug("Testing error handling")
     let t4 = spawn checked_fib(-1)
     let result = t4.get() catch -1
+    log.warn("checked_fib(-1) raised error, caught and returned: {result}")
     print("checked_fib(-1) caught: {result}")
 
     // Void spawn: fire and forget, .get() just waits
+    log.debug("Spawning void task")
     let t5 = spawn do_work()
     t5.get()
+    log.info("All tasks complete")
     print("done")
 }
 

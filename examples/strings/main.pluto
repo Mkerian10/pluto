@@ -35,4 +35,17 @@ fn main() {
 
     // Method chaining
     print("  Hello World  ".trim().to_lower().contains("hello"))
+
+    // New string functions
+    print("--- New Functions ---")
+    let padded = "  hello  "
+    print(padded.trim_start())
+    print(padded.trim_end())
+    print("x".repeat(5))
+    print("hello".last_index_of("l"))
+    print("hello".count("l"))
+    print("".is_empty())
+    print("hello".is_empty())
+    print("   ".is_whitespace())
+    print(" a ".is_whitespace())
 }

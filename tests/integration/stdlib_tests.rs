@@ -18,7 +18,7 @@ fn run_pluto_test_file(name: &str) -> (String, String, i32) {
     let dir = tempfile::tempdir().unwrap();
     let bin_path = dir.path().join("test_bin");
 
-    plutoc::compile_file_for_tests(&test_file, &bin_path, Some(&stdlib_root()))
+    plutoc::compile_file_for_tests(&test_file, &bin_path, Some(&stdlib_root()), false)
         .unwrap_or_else(|e| panic!("Failed to compile {name}: {e}"));
 
     let output = Command::new(&bin_path).output().unwrap();
@@ -98,7 +98,6 @@ fn stdlib_random() {
 }
 
 #[test]
-#[ignore] // TODO: flaky in CI — re-enable once investigated
 fn stdlib_json_conformance() {
     let (stdout, stderr, code) = run_pluto_file("json");
     if code != 0 {

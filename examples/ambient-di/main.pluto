@@ -1,16 +1,19 @@
-// Ambient DI example
+// Ambient DI example with std.log
 //
 // `uses` on a class declares ambient dependencies — they're automatically
 // injected and accessible as bare variables (no `self.` prefix needed).
 // `ambient Type` in the app registers the type for ambient injection.
+// Here we use a Logger wrapper around std.log as an ambient dependency.
+
+import std.log
 
 class Logger {
     fn info(self, msg: string) {
-        print("[INFO] {msg}")
+        log.info(msg)
     }
 
     fn warn(self, msg: string) {
-        print("[WARN] {msg}")
+        log.warn(msg)
     }
 }
 

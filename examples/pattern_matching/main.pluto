@@ -1,0 +1,116 @@
+// Pattern Matching Example
+// Demonstrates enum pattern matching with exhaustiveness checking
+
+// Enum with unit variants (no data)
+enum Color {
+    Red
+    Green
+    Blue
+}
+
+// Enum with data-carrying variants
+enum Shape {
+    Circle { radius: int }
+    Rectangle { width: int, height: int }
+    Triangle { base: int, height: int }
+}
+
+// Enum with mixed variants (unit and data)
+enum Result {
+    Ok { value: int }
+    Err { code: int }
+    Pending
+}
+
+// Pattern matching on unit variants
+fn color_name(c: Color) string {
+    match c {
+        Color.Red {
+            return "red"
+        }
+        Color.Green {
+            return "green"
+        }
+        Color.Blue {
+            return "blue"
+        }
+    }
+}
+
+// Pattern matching on data variants with field destructuring
+fn area(s: Shape) int {
+    match s {
+        Shape.Circle { radius } {
+            return 3 * radius * radius
+        }
+        Shape.Rectangle { width, height } {
+            return width * height
+        }
+        Shape.Triangle { base, height } {
+            return base * height / 2
+        }
+    }
+}
+
+// Pattern matching on mixed variants
+fn process_result(r: Result) string {
+    match r {
+        Result.Ok { value } {
+            return "Success: {value}"
+        }
+        Result.Err { code } {
+            return "Error code: {code}"
+        }
+        Result.Pending {
+            return "Still processing"
+        }
+    }
+}
+
+// Nested pattern matching
+fn classify_shape(s: Shape) string {
+    match s {
+        Shape.Circle { radius } {
+            if radius > 10 {
+                return "Large circle"
+            }
+            return "Small circle"
+        }
+        Shape.Rectangle { width, height } {
+            if width == height {
+                return "Square"
+            }
+            return "Rectangle"
+        }
+        Shape.Triangle { base, height } {
+            return "Triangle"
+        }
+    }
+}
+
+fn main() {
+    // Unit variant matching
+    print(color_name(Color.Red))
+    print(color_name(Color.Blue))
+
+    // Data variant matching with destructuring
+    let circle = Shape.Circle { radius: 5 }
+    print(area(circle))
+
+    let rect = Shape.Rectangle { width: 4, height: 6 }
+    print(area(rect))
+
+    let tri = Shape.Triangle { base: 8, height: 3 }
+    print(area(tri))
+
+    // Mixed variant matching
+    print(process_result(Result.Ok { value: 42 }))
+    print(process_result(Result.Err { code: 404 }))
+    print(process_result(Result.Pending))
+
+    // Nested matching
+    print(classify_shape(Shape.Circle { radius: 15 }))
+    print(classify_shape(Shape.Rectangle { width: 5, height: 5 }))
+
+    print("Pattern matching complete")
+}

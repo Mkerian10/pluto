@@ -4125,3 +4125,43 @@ void __pluto_rwlock_unlock(long lock_ptr) {
     pthread_rwlock_unlock((pthread_rwlock_t *)lock_ptr);
 }
 #endif
+
+// ── Logging ────────────────────────────────────────────────────────────────
+
+static int __pluto_global_log_level = 1;  // Default to INFO (1)
+
+long __pluto_log_get_level(void) {
+    return __pluto_global_log_level;
+}
+
+void __pluto_log_set_level(long level) {
+    __pluto_global_log_level = (int)level;
+}
+
+void __pluto_log_write(void *level_str, long timestamp, void *message) {
+    const char *level = (const char *)level_str + 8;
+    const char *msg = (const char *)message + 8;
+    fprintf(stderr, "[%s] %ld %s\n", level, timestamp, msg);
+    fflush(stderr);
+}
+
+void __pluto_log_write_structured(void *level_str, long timestamp, void *message, long fields_ptr) {
+    const char *level = (const char *)level_str + 8;
+    const char *msg = (const char *)message + 8;
+    fprintf(stderr, "[%s] %ld %s", level, timestamp, msg);
+    
+    long *arr_header = (long *)fields_ptr;
+    long len = arr_header[0];
+    long *data = (long *)arr_header[2];
+    
+    for (long i = 0; i < len; i++) {
+        long *field_obj = (long *)data[i];
+        void *key_ptr = (void *)field_obj[1];
+        void *value_ptr = (void *)field_obj[2];
+        const char *key = (const char *)key_ptr + 8;
+        const char *value = (const char *)value_ptr + 8;
+        fprintf(stderr, " %s=%s", key, value);
+    }
+    fprintf(stderr, "\n");
+    fflush(stderr);
+}
