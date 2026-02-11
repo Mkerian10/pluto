@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run, compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
+use common::{compile_and_run, compile_and_run_stdout, compile_should_fail_with};
 
 #[test]
 fn app_basic() {
@@ -43,29 +43,33 @@ fn app_class_with_regular_and_inject_fields() {
 
 #[test]
 fn di_cycle_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "class A[b: B] {\n}\n\nclass B[a: A] {\n}\n\napp MyApp[a: A] {\n    fn main(self) {\n    }\n}",
+        "circular dependency detected",
     );
 }
 
 #[test]
 fn di_struct_lit_rejected() {
-    compile_should_fail(
-        "class Database {\n}\n\nclass UserService[db: Database] {\n}\n\nfn main() {\n    let u = UserService { db: Database { } }\n}",
+    compile_should_fail_with(
+        "class Database {\n    dummy: int\n}\n\nclass UserService[db: Database] {\n}\n\nfn main() {\n    let u = UserService { db: Database { dummy: 42 } }\n}",
+        "cannot manually construct class 'UserService' with injected dependencies",
     );
 }
 
 #[test]
 fn app_and_main_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "fn main() {\n}\n\napp MyApp {\n    fn main(self) {\n    }\n}",
+        "cannot have both an app declaration and a top-level main function",
     );
 }
 
 #[test]
 fn app_main_signature_errors() {
-    compile_should_fail(
+    compile_should_fail_with(
         "app MyApp {\n    fn main() {\n    }\n}",
+        "app main method must take 'self' as first parameter",
     );
 }
 
