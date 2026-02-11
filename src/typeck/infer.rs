@@ -831,7 +831,25 @@ fn infer_struct_lit(
                 )
             })?;
         let val_type = infer_expr(&lit_val.node, lit_val.span, env)?;
-        if val_type != field_type {
+
+        // Check type compatibility with nullable coercion
+        let types_match = if val_type == field_type {
+            true
+        } else if let PlutoType::Nullable(inner) = &field_type {
+            // Allow T -> T? (auto-wrap)
+            if **inner == val_type {
+                true
+            // Allow none -> T? (context inference: none infers as Nullable(Void))
+            } else if let PlutoType::Nullable(void_box) = &val_type {
+                matches!(**void_box, PlutoType::Void)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !types_match {
             return Err(CompileError::type_err(
                 format!(
                     "field '{}': expected {field_type}, found {val_type}",
@@ -973,7 +991,25 @@ fn infer_enum_data(
                         )
                     })?;
                 let val_type = infer_expr(&lit_val.node, lit_val.span, env)?;
-                if val_type != field_type {
+
+                // Check type compatibility with nullable coercion
+                let types_match = if val_type == field_type {
+                    true
+                } else if let PlutoType::Nullable(inner) = &field_type {
+                    // Allow T -> T? (auto-wrap)
+                    if **inner == val_type {
+                        true
+                    // Allow none -> T? (context inference: none infers as Nullable(Void))
+                    } else if let PlutoType::Nullable(void_box) = &val_type {
+                        matches!(**void_box, PlutoType::Void)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if !types_match {
                     return Err(CompileError::type_err(
                         format!("field '{}': expected {field_type}, found {val_type}", lit_name.node),
                         lit_val.span,

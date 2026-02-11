@@ -43,7 +43,6 @@ fn run_marshal_test(source: &str) -> String {
 // ── Class marshaling tests ──────────────────────────────────────────────────────
 
 #[test]
-#[ignore]
 fn marshal_simple_class() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -57,22 +56,22 @@ stage Api {
     pub fn get_order(self) Order {
         return Order { id: 123, total: 45.67 }
     }
-}
 
-fn main() {
-    let order = Order { id: 123, total: 45.67 }
-    let enc = wire.wire_value_encoder()
-    __marshal_Order(order, enc)
-    let value = enc.result()
+    fn main(self) {
+        let order = Order { id: 123, total: 45.67 }
+        let enc = wire.wire_value_encoder()
+        __marshal_Order(order, enc)
+        let value = enc.result()
 
-    let dec = wire.wire_value_decoder(value)
-    let decoded = __unmarshal_Order(dec) catch err {
-        print("decode failed")
-        return
+        let dec = wire.wire_value_decoder(value)
+        let decoded = __unmarshal_Order(dec) catch err {
+            print("decode failed")
+            return
+        }
+
+        print(decoded.id)
+        print(decoded.total)
     }
-
-    print(decoded.id)
-    print(decoded.total)
 }
 "#);
     assert!(out.contains("123"));
@@ -80,7 +79,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn marshal_class_with_string() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -117,7 +115,6 @@ stage Api {
 }
 
 #[test]
-#[ignore]
 fn marshal_class_with_array() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -156,7 +153,6 @@ stage Api {
 // ── Enum marshaling tests ────────────────────────────────────────────────────────
 
 #[test]
-#[ignore]
 fn marshal_enum_unit_variant() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -171,9 +167,7 @@ stage Api {
         return Status.Active
     }
 
-}
-
-fn main() {
+    fn main(self) {
         let status = Status.Active
         let enc = wire.wire_value_encoder()
         __marshal_Status(status, enc)
@@ -186,14 +180,13 @@ fn main() {
         }
 
         print("ok")
-   
+    }
 }
 "#);
     assert!(out.contains("ok"));
 }
 
 #[test]
-#[ignore]
 fn marshal_enum_data_variant() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -230,7 +223,6 @@ stage Api {
 // ── Nullable type tests ──────────────────────────────────────────────────────────
 
 #[test]
-#[ignore]
 fn marshal_nullable_some() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -264,7 +256,6 @@ stage Api {
 }
 
 #[test]
-#[ignore]
 fn marshal_nullable_none() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -300,7 +291,6 @@ stage Api {
 // ── Generic type tests ────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore]
 fn marshal_generic_class() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -336,7 +326,6 @@ stage Api {
 // ── Nested type tests ─────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore]
 fn marshal_nested_class() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -379,7 +368,6 @@ stage Api {
 }
 
 #[test]
-#[ignore]
 fn test_hand_written_unmarshal() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -390,10 +378,10 @@ class Point {
 }
 
 fn unmarshal_point(dec: wire.WireValueDecoder) Point {
-    dec.decode_record_start("Point", 2)
-    dec.decode_field("x", 0)
+    dec.decode_record_start("Point", 2)!
+    dec.decode_field("x", 0)!
     let x = dec.decode_int()!
-    dec.decode_field("y", 1)
+    dec.decode_field("y", 1)!
     let y = dec.decode_int()!
     dec.decode_record_end()
     return Point { x: x, y: y }
