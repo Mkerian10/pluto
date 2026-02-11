@@ -23,6 +23,7 @@ pub mod xref;
 pub mod sync;
 pub mod stages;
 pub mod cache;
+pub mod watch;
 
 use diagnostics::{CompileError, CompileWarning};
 use std::path::{Path, PathBuf};

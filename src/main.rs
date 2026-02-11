@@ -73,6 +73,24 @@ enum Commands {
     },
     /// Start the LSP server (communicates over stdin/stdout)
     Lsp,
+    /// Watch files and automatically recompile/rerun on changes
+    Watch {
+        #[command(subcommand)]
+        command: WatchCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum WatchCommands {
+    /// Watch and automatically re-run a Pluto program
+    Run {
+        /// The Pluto file to watch and run
+        file: PathBuf,
+
+        /// Don't clear terminal between runs
+        #[arg(long)]
+        no_clear: bool,
+    },
 }
 
 fn main() {
@@ -156,6 +174,14 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::Watch { command } => match command {
+            WatchCommands::Run { file, no_clear } => {
+                if let Err(err) = plutoc::watch::watch_run(&file, stdlib, no_clear) {
+                    eprintln!("Watch error: {err}");
+                    std::process::exit(1);
+                }
+            }
+        },
         Commands::Test { file, seed, iterations, no_cache } => {
             let tmp = std::env::temp_dir().join("pluto_test");
             let use_cache = !no_cache;
