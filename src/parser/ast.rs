@@ -14,6 +14,7 @@ pub struct Program {
     pub traits: Vec<Spanned<TraitDecl>>,
     pub enums: Vec<Spanned<EnumDecl>>,
     pub app: Option<Spanned<AppDecl>>,
+    pub stages: Vec<Spanned<StageDecl>>,
     pub system: Option<Spanned<SystemDecl>>,
     pub errors: Vec<Spanned<ErrorDecl>>,
     pub test_info: Vec<TestInfo>,
@@ -110,6 +111,16 @@ pub struct Field {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppDecl {
+    pub id: Uuid,
+    pub name: Spanned<String>,
+    pub inject_fields: Vec<Field>,
+    pub ambient_types: Vec<Spanned<String>>,
+    pub lifecycle_overrides: Vec<(Spanned<String>, Lifecycle)>,
+    pub methods: Vec<Spanned<Function>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageDecl {
     pub id: Uuid,
     pub name: Spanned<String>,
     pub inject_fields: Vec<Field>,

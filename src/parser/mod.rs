@@ -235,6 +235,7 @@ impl<'a> Parser<'a> {
         let mut traits = Vec::new();
         let mut enums = Vec::new();
         let mut app = None;
+        let mut stages = Vec::new();
         let mut system = None;
         let mut errors = Vec::new();
         let mut test_info: Vec<TestInfo> = Vec::new();
@@ -460,9 +461,25 @@ impl<'a> Parser<'a> {
                     }
                     system = Some(system_decl);
                 }
+                Token::Stage => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
+                    if is_pub {
+                        return Err(CompileError::syntax(
+                            "stage declarations cannot be pub",
+                            tok.span,
+                        ));
+                    }
+                    let stage_decl = self.parse_stage_decl()?;
+                    stages.push(stage_decl);
+                }
                 _ => {
                     return Err(CompileError::syntax(
-                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'system', 'test', 'tests', 'extern fn', or 'extern rust', found {}", tok.node),
+                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'stage', 'system', 'test', 'tests', 'extern fn', or 'extern rust', found {}", tok.node),
                         tok.span,
                     ));
                 }
@@ -497,7 +514,25 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, system, errors, test_info, tests, fallible_extern_fns: Vec::new() })
+        // Reject stage + app in same file
+        if !stages.is_empty() && app.is_some() {
+            let app_span = app.as_ref().unwrap().span;
+            return Err(CompileError::syntax(
+                "a file cannot contain both 'stage' and 'app' declarations",
+                app_span,
+            ));
+        }
+
+        // Reject stage + system in same file
+        if !stages.is_empty() && system.is_some() {
+            let system_span = system.as_ref().unwrap().span;
+            return Err(CompileError::syntax(
+                "a file cannot contain both 'stage' and 'system' declarations",
+                system_span,
+            ));
+        }
+
+        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, stages, system, errors, test_info, tests, fallible_extern_fns: Vec::new() })
     }
 
     /// Parse a bare `test "name" { body }` block into a TestInfo + synthetic Function.
@@ -766,6 +801,47 @@ impl<'a> Parser<'a> {
         let end = close.span.end;
 
         Ok(Spanned::new(AppDecl { id: Uuid::new_v4(), name, inject_fields, ambient_types, lifecycle_overrides, methods }, Span::new(start, end)))
+    }
+
+    fn parse_stage_decl(&mut self) -> Result<Spanned<StageDecl>, CompileError> {
+        let stage_tok = self.expect(&Token::Stage)?;
+        let start = stage_tok.span.start;
+        let name = self.expect_ident()?;
+
+        let inject_fields = self.parse_bracket_deps()?;
+
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        // Parse ambient declarations, lifecycle overrides, and methods (mirrors parse_app_decl)
+        let mut ambient_types = Vec::new();
+        let mut lifecycle_overrides = Vec::new();
+        let mut methods = Vec::new();
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+            if matches!(self.peek().expect("token should exist after is_some check").node, Token::Ambient) {
+                self.advance(); // consume 'ambient'
+                ambient_types.push(self.expect_ident()?);
+                self.consume_statement_end();
+            } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Scoped) {
+                self.advance(); // consume 'scoped'
+                let class_name = self.expect_ident()?;
+                lifecycle_overrides.push((class_name, Lifecycle::Scoped));
+                self.consume_statement_end();
+            } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Transient) {
+                self.advance(); // consume 'transient'
+                let class_name = self.expect_ident()?;
+                lifecycle_overrides.push((class_name, Lifecycle::Transient));
+                self.consume_statement_end();
+            } else {
+                methods.push(self.parse_method()?);
+            }
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+
+        Ok(Spanned::new(StageDecl { id: Uuid::new_v4(), name, inject_fields, ambient_types, lifecycle_overrides, methods }, Span::new(start, end)))
     }
 
     fn parse_system_decl(&mut self) -> Result<Spanned<SystemDecl>, CompileError> {

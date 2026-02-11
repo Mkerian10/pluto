@@ -86,6 +86,7 @@ fn load_directory_module(
             traits: Vec::new(),
             enums: Vec::new(),
             app: None,
+            stages: Vec::new(),
             system: None,
             errors: Vec::new(),
             test_info: Vec::new(),
@@ -130,6 +131,7 @@ fn load_directory_module(
                 }
                 merged.system = Some(system_decl);
             }
+            merged.stages.extend(program.stages);
             merged.errors.extend(program.errors);
             merged.test_info.extend(program.test_info);
             if let Some(tests_decl) = program.tests {
