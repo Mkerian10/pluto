@@ -1,0 +1,57 @@
+import std.path
+
+fn main() {
+    print("=== Path Module Example ===")
+
+    // Test join
+    print("\n--- join() ---")
+    print(path.join("/usr", "bin"))
+    print(path.join("/usr/", "bin"))
+    print(path.join("/usr", "/bin"))
+    print(path.join("relative", "path"))
+
+    // Test basename
+    print("\n--- basename() ---")
+    print(path.basename("/usr/bin/python"))
+    print(path.basename("/usr/local/bin/"))
+    print(path.basename("filename.txt"))
+    print(path.basename("/"))
+
+    // Test dirname
+    print("\n--- dirname() ---")
+    print(path.dirname("/usr/bin/python"))
+    print(path.dirname("/usr/"))
+    print(path.dirname("filename.txt"))
+    print(path.dirname("/"))
+
+    // Test ext
+    print("\n--- ext() ---")
+    print(path.ext("/usr/bin/script.py"))
+    print(path.ext("archive.tar.gz"))
+    print(path.ext("README"))
+
+    // Test is_absolute
+    print("\n--- is_absolute() ---")
+    print(path.is_absolute("/usr/bin"))
+    print(path.is_absolute("relative/path"))
+    print(path.is_absolute(""))
+
+    // Test has_trailing_slash
+    print("\n--- has_trailing_slash() ---")
+    print(path.has_trailing_slash("/usr/bin/"))
+    print(path.has_trailing_slash("/usr/bin"))
+    print(path.has_trailing_slash("/"))
+
+    // Test normalize
+    print("\n--- normalize() ---")
+    print(path.normalize("/usr//bin"))
+    print(path.normalize("/usr/./bin"))
+    print(path.normalize("/usr/bin/../lib"))
+    print(path.normalize("//absolute//path"))
+
+    // Test split_ext
+    print("\n--- split_ext() ---")
+    print(path.split_ext("/path/to/script.py"))
+    print(path.split_ext("archive.tar.gz"))
+    print(path.split_ext("README"))
+}
