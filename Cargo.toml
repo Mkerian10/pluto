@@ -513,6 +513,27 @@ path = "tests/typeck/methods/self_type_errors.rs"
 name = "typeck_method_visibility"
 path = "tests/typeck/methods/visibility.rs"
 
+# Typeck edge case tests - DI graph category
+[[test]]
+name = "typeck_topological_sort"
+path = "tests/typeck/di_graph/topological_sort.rs"
+
+[[test]]
+name = "typeck_cycle_detection"
+path = "tests/typeck/di_graph/cycle_detection.rs"
+
+[[test]]
+name = "typeck_scoping_errors"
+path = "tests/typeck/di_graph/scoping_errors.rs"
+
+[[test]]
+name = "typeck_dependency_resolution"
+path = "tests/typeck/di_graph/dependency_resolution.rs"
+
+[[test]]
+name = "typeck_app_validation"
+path = "tests/typeck/di_graph/app_validation.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false

@@ -105,12 +105,21 @@
 
 **Subtotal:** 100/100 ✅ **TARGET MET**
 
-### 10-15. Remaining Categories
+### 10. DI Graph ✅ COMPLETE (Target: 80+, Actual: 80)
+- ✅ `di_graph/topological_sort.rs` - 20 tests
+- ✅ `di_graph/cycle_detection.rs` - 20 tests
+- ✅ `di_graph/scoping_errors.rs` - 15 tests
+- ✅ `di_graph/dependency_resolution.rs` - 15 tests
+- ✅ `di_graph/app_validation.rs` - 10 tests
+
+**Subtotal:** 80/80 ✅ **TARGET MET**
+
+### 11-15. Remaining Categories
 - 🚧 All TODO
 
 ---
 
-## TOTAL PROGRESS: 1,263/1,730 tests (73.0%)
+## TOTAL PROGRESS: 1,343/1,730 tests (77.6%)
 
 ## Key Achievements
 - ✅ Inference category complete and exceeded target (213 tests)
@@ -129,13 +138,14 @@
 - ✅ Complete closure system testing (capture, type checking, lifting, recursion edge cases)
 - ✅ Complete method resolution testing (vtables, trait dispatch, lookup, overloading, self types)
 - ✅ Complete declaration registration testing (forward refs, circular deps, duplicates, init order)
+- ✅ Complete DI graph testing (topological sort, cycles, scoping, dependency resolution, app validation)
 
 ## Next Priorities
-1. **DI Graph** (80 tests) - MEDIUM priority, topological sort, cycle detection
-2. **Scope & Variables** (80 tests) - MEDIUM priority, shadowing, lifetime edge cases
-3. **Mutability** (60 tests) - MEDIUM priority, mut self enforcement, immutability violations
-4. **Contract Tests** (100 tests) - MEDIUM priority, invariant violations, requires/ensures
-5. Continue through remaining 5 categories systematically
+1. **Scope & Variables** (80 tests) - MEDIUM priority, shadowing, lifetime edge cases
+2. **Mutability** (60 tests) - MEDIUM priority, mut self enforcement, immutability violations
+3. **Contract Tests** (100 tests) - MEDIUM priority, invariant violations, requires/ensures
+4. **Concurrency Tests** (100 tests) - MEDIUM priority, task errors, race conditions
+5. Continue through remaining 4 categories systematically
 
 ## Testing Strategy Notes
 - Using inline `compile_should_fail_with(code, expected_msg)` pattern
