@@ -1,8 +1,10 @@
 # AI-Native Development
 
-Most compilers treat source code as text. The compiler reads characters, builds a rich internal representation (types, call graphs, error sets, dependency wiring), generates code, and discards all that knowledge. Next compilation, it starts from scratch. No one else gets to use what the compiler learned.
+Whole-program compilation means the Pluto compiler builds a complete understanding of your program: resolved types for every expression, inferred error sets for every function, the full call graph, the dependency wiring topology, cross-references between every declaration and its usage sites.
 
-Pluto takes a different approach. The compiler's internal representation is a first-class artifact: serializable, queryable, and designed for AI agents to read and write directly.
+Most compilers throw this knowledge away after code generation. Pluto keeps it.
+
+The compiler's internal representation — the AST, the type information, the analysis results — is a first-class artifact: serializable, queryable, and designed for AI agents to read and write directly. The compiler sees your entire program and understands it deeply. AI agents get access to that same understanding through a structured API.
 
 This chapter covers what is implemented today and where the design is headed.
 

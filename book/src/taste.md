@@ -1,6 +1,8 @@
 # A Taste of Pluto
 
-This chapter walks through a complete Pluto program -- an order-processing service with dependency injection, error handling, and an app entry point. The goal is to show how Pluto's features work together in practice, not to explain every detail. Subsequent chapters cover each construct in depth.
+This chapter walks through a complete Pluto program — an order-processing service with dependency injection, error handling, and an app entry point. Pay attention to what you *don't* write: no manual wiring in `main()`, no error annotations on functions, no `@Inject` decorators, no framework initialization. The compiler handles it by seeing your entire program at compile time.
+
+The goal is to show how Pluto's features work together in practice, not to explain every detail. Subsequent chapters cover each construct in depth.
 
 ## The program
 
@@ -157,8 +159,41 @@ func main() {
 
 The Go version is roughly twice as long, and the additional lines are not doing interesting work. They are: implementing the `error` interface, returning tuples, writing `if err != nil`, and manually constructing and wiring dependencies in `main`. Every Go backend team writes this scaffolding, and every team writes it slightly differently.
 
-In Pluto, these decisions are made once -- in the language -- and enforced by the compiler. The error interface is replaced by a typed error declaration. The tuple return is replaced by compiler-tracked fallibility. The `if err != nil` is replaced by `!` and `catch`. The manual wiring in `main` is replaced by bracket dependencies and the `app` construct.
+In Pluto, these decisions are made once — in the language — and enforced by the compiler. The error interface is replaced by a typed error declaration. The tuple return is replaced by compiler-tracked fallibility. The `if err != nil` is replaced by `!` and `catch`. The manual wiring in `main` is replaced by bracket dependencies and the `app` construct.
 
-## What comes next
+## What the Compiler Generated
+
+The Pluto program above compiles to a self-contained native binary. Here's what the compiler generated behind the scenes:
+
+**Dependency graph resolution:** The compiler saw that `OrderSystem` depends on `OrderService`, which depends on `OrderValidator`. It performed a topological sort: `OrderValidator` first, then `OrderService`, then `OrderSystem`. It generated a synthetic `main()` function that allocates them in order and wires the dependencies:
+
+```c
+// Generated C-like pseudocode (actual output is Cranelift IR)
+int main() {
+    OrderValidator *validator = calloc(1, sizeof(OrderValidator));
+    OrderService *svc = calloc(1, sizeof(OrderService));
+    svc->validator = validator;  // wire the dependency
+    svc->processed = 0;
+    OrderSystem *app = calloc(1, sizeof(OrderSystem));
+    app->svc = svc;  // wire the dependency
+    OrderSystem_main(app);  // call app.main(self)
+    return 0;
+}
+```
+
+No container. No reflection. No service locator. Just allocation and wiring, all resolved at compile time.
+
+**Error set inference:** The compiler walked the call graph:
+- `OrderValidator.validate` contains `raise OrderError` → inferred as fallible, error set = `{OrderError}`
+- `OrderService.process` calls `validate!` → propagates errors → inferred as fallible, error set = `{OrderError}`
+- `OrderSystem.main` calls `process` with `catch` → handles errors → inferred as non-fallible
+
+The compiler enforced that every fallible call site has either `!` (propagate) or `catch` (handle). If you removed the `!` from line 24 or the `catch` from line 31, compilation would fail with: `error: unhandled fallible call to 'validate'`.
+
+**Dead code elimination:** If you added a `BillingService` class but never referenced it in `OrderSystem`'s dependencies, it wouldn't be in the final binary. The compiler only allocates and wires what you actually use.
+
+This is what whole-program compilation gives you: the compiler sees everything, understands the structure of your program, and generates exactly the code you need.
+
+## What Comes Next
 
 The chapters in Part 2 cover each of Pluto's distinguishing features in detail: error handling, dependency injection, the app model, concurrency, and contracts. If you need a quick refresher on variables, functions, or control flow, see Chapter 8: Syntax at a Glance.

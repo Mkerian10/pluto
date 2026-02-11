@@ -9,6 +9,7 @@
 
 # What Sets Pluto Apart
 
+- [Whole-Program Compilation](whats-different/whole-program.md)
 - [Error Handling](whats-different/errors.md)
 - [Dependency Injection](whats-different/di.md)
 - [The App Model](whats-different/app.md)
