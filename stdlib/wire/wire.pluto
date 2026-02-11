@@ -1,0 +1,640 @@
+import std.json
+import std.strings
+
+pub error WireError {
+    message: string
+}
+
+pub enum WireValue {
+    Int { value: int }
+    Float { value: float }
+    Bool { value: bool }
+    Str { value: string }
+    Array { elements: [WireValue] }
+    Record { keys: [string], values: [WireValue] }
+    Variant { name: string, data: WireValue }
+    Null
+}
+
+// ── Factory functions ──────────────────────────────────────────────────────────
+
+pub fn wire_int(v: int) WireValue {
+    return WireValue.Int { value: v }
+}
+
+pub fn wire_float(v: float) WireValue {
+    return WireValue.Float { value: v }
+}
+
+pub fn wire_bool(v: bool) WireValue {
+    return WireValue.Bool { value: v }
+}
+
+pub fn wire_string(v: string) WireValue {
+    return WireValue.Str { value: v }
+}
+
+pub fn wire_array(elems: [WireValue]) WireValue {
+    return WireValue.Array { elements: elems }
+}
+
+pub fn wire_record(keys: [string], values: [WireValue]) WireValue {
+    return WireValue.Record { keys: keys, values: values }
+}
+
+pub fn wire_variant(name: string, data: WireValue) WireValue {
+    return WireValue.Variant { name: name, data: data }
+}
+
+pub fn wire_null() WireValue {
+    return WireValue.Null
+}
+
+// ── WireFormat trait ───────────────────────────────────────────────────────────
+
+pub trait WireFormat {
+    fn serialize(self, value: WireValue) string
+    fn deserialize(self, data: string) WireValue
+}
+
+// ── Encoder trait ─────────────────────────────────────────────────────────────
+
+pub trait Encoder {
+    fn encode_int(mut self, value: int)
+    fn encode_float(mut self, value: float)
+    fn encode_bool(mut self, value: bool)
+    fn encode_string(mut self, value: string)
+    fn encode_null(mut self)
+    fn encode_array_start(mut self, len: int)
+    fn encode_array_end(mut self)
+    fn encode_map_start(mut self, len: int)
+    fn encode_map_end(mut self)
+    fn encode_record_start(mut self, type_name: string, num_fields: int)
+    fn encode_field(mut self, name: string, index: int)
+    fn encode_record_end(mut self)
+    fn encode_variant_start(mut self, type_name: string, variant_name: string, variant_index: int, num_fields: int)
+    fn encode_variant_end(mut self)
+}
+
+// ── Decoder trait ─────────────────────────────────────────────────────────────
+
+pub trait Decoder {
+    fn decode_int(mut self) int
+    fn decode_float(mut self) float
+    fn decode_bool(mut self) bool
+    fn decode_string(mut self) string
+    fn decode_null(mut self)
+    fn decode_nullable(mut self) bool
+    fn decode_array_start(mut self) int
+    fn decode_array_end(mut self)
+    fn decode_map_start(mut self) int
+    fn decode_map_end(mut self)
+    fn decode_record_start(mut self, type_name: string, num_fields: int)
+    fn decode_field(mut self, name: string, index: int)
+    fn decode_record_end(mut self)
+    fn decode_variant(mut self, type_name: string, variant_names: [string]) int
+    fn decode_variant_end(mut self)
+}
+
+// ── WireValueEncoder ───────────────────────────────────────────────────────────
+
+enum EncoderFrame {
+    ArrayFrame { elements: [WireValue] }
+    RecordFrame { keys: [string], values: [WireValue], next_field: string }
+    VariantFrame { variant_name: string, keys: [string], values: [WireValue], next_field: string }
+}
+
+pub class WireValueEncoder impl Encoder {
+    stack: [EncoderFrame]
+    root: WireValue?
+
+    fn encode_int(mut self, value: int) {
+        self.push_value(wire_int(value))
+    }
+
+    fn encode_float(mut self, value: float) {
+        self.push_value(wire_float(value))
+    }
+
+    fn encode_bool(mut self, value: bool) {
+        self.push_value(wire_bool(value))
+    }
+
+    fn encode_string(mut self, value: string) {
+        self.push_value(wire_string(value))
+    }
+
+    fn encode_null(mut self) {
+        self.push_value(wire_null())
+    }
+
+    fn encode_array_start(mut self, len: int) {
+        let elements: [WireValue] = []
+        let frame = EncoderFrame.ArrayFrame { elements: elements }
+        self.stack.push(frame)
+    }
+
+    fn encode_array_end(mut self) {
+        let frame = self.stack.pop()
+        match frame {
+            EncoderFrame.ArrayFrame { elements } {
+                self.push_value(wire_array(elements))
+            }
+            EncoderFrame.RecordFrame { keys, values, next_field } {
+            }
+            EncoderFrame.VariantFrame { variant_name, keys, values, next_field } {
+            }
+        }
+    }
+
+    fn encode_map_start(mut self, len: int) {
+        let keys: [string] = []
+        let values: [WireValue] = []
+        let frame = EncoderFrame.RecordFrame { keys: keys, values: values, next_field: "" }
+        self.stack.push(frame)
+    }
+
+    fn encode_map_end(mut self) {
+        let frame = self.stack.pop()
+        match frame {
+            EncoderFrame.RecordFrame { keys, values, next_field } {
+                self.push_value(wire_record(keys, values))
+            }
+            EncoderFrame.ArrayFrame { elements } {
+            }
+            EncoderFrame.VariantFrame { variant_name, keys, values, next_field } {
+            }
+        }
+    }
+
+    fn encode_record_start(mut self, type_name: string, num_fields: int) {
+        let keys: [string] = []
+        let values: [WireValue] = []
+        let frame = EncoderFrame.RecordFrame { keys: keys, values: values, next_field: "" }
+        self.stack.push(frame)
+    }
+
+    fn encode_field(mut self, name: string, index: int) {
+        let len = self.stack.len()
+        let frame = self.stack[len - 1]
+        match frame {
+            EncoderFrame.RecordFrame { keys, values, next_field } {
+                let new_frame = EncoderFrame.RecordFrame { keys: keys, values: values, next_field: name }
+                self.stack[len - 1] = new_frame
+            }
+            EncoderFrame.VariantFrame { variant_name, keys, values, next_field } {
+                let new_frame = EncoderFrame.VariantFrame { variant_name: variant_name, keys: keys, values: values, next_field: name }
+                self.stack[len - 1] = new_frame
+            }
+            EncoderFrame.ArrayFrame { elements } {
+            }
+        }
+    }
+
+    fn encode_record_end(mut self) {
+        let frame = self.stack.pop()
+        match frame {
+            EncoderFrame.RecordFrame { keys, values, next_field } {
+                self.push_value(wire_record(keys, values))
+            }
+            EncoderFrame.ArrayFrame { elements } {
+            }
+            EncoderFrame.VariantFrame { variant_name, keys, values, next_field } {
+            }
+        }
+    }
+
+    fn encode_variant_start(mut self, type_name: string, variant_name: string, variant_index: int, num_fields: int) {
+        let keys: [string] = []
+        let values: [WireValue] = []
+        let frame = EncoderFrame.VariantFrame { variant_name: variant_name, keys: keys, values: values, next_field: "" }
+        self.stack.push(frame)
+    }
+
+    fn encode_variant_end(mut self) {
+        let frame = self.stack.pop()
+        match frame {
+            EncoderFrame.VariantFrame { variant_name, keys, values, next_field } {
+                let data = wire_record(keys, values)
+                self.push_value(wire_variant(variant_name, data))
+            }
+            EncoderFrame.ArrayFrame { elements } {
+            }
+            EncoderFrame.RecordFrame { keys, values, next_field } {
+            }
+        }
+    }
+
+    fn push_value(mut self, value: WireValue) {
+        if self.stack.len() == 0 {
+            let wrapped: WireValue? = value
+            self.root = wrapped
+            return
+        }
+        let len = self.stack.len()
+        let frame = self.stack[len - 1]
+        match frame {
+            EncoderFrame.ArrayFrame { elements } {
+                elements.push(value)
+                let new_frame = EncoderFrame.ArrayFrame { elements: elements }
+                self.stack[len - 1] = new_frame
+            }
+            EncoderFrame.RecordFrame { keys, values, next_field } {
+                keys.push(next_field)
+                values.push(value)
+                let new_frame = EncoderFrame.RecordFrame { keys: keys, values: values, next_field: next_field }
+                self.stack[len - 1] = new_frame
+            }
+            EncoderFrame.VariantFrame { variant_name, keys, values, next_field } {
+                keys.push(next_field)
+                values.push(value)
+                let new_frame = EncoderFrame.VariantFrame { variant_name: variant_name, keys: keys, values: values, next_field: next_field }
+                self.stack[len - 1] = new_frame
+            }
+        }
+    }
+
+    fn result(self) WireValue {
+        return self.root?
+    }
+}
+
+pub fn wire_value_encoder() WireValueEncoder {
+    let stack: [EncoderFrame] = []
+    let root: WireValue? = none
+    return WireValueEncoder { stack: stack, root: root }
+}
+
+// ── WireValueDecoder ───────────────────────────────────────────────────────────
+
+enum DecoderFrame {
+    ArrayCursor { elements: [WireValue], index: int }
+    RecordCursor { keys: [string], values: [WireValue], index: int }
+}
+
+pub class WireValueDecoder impl Decoder {
+    stack: [DecoderFrame]
+    current: WireValue
+
+    fn decode_int(mut self) int {
+        match self.current {
+            WireValue.Int { value } {
+                return value
+            }
+            WireValue.Float { value } {
+                raise WireError { message: "expected int, got float" }
+            }
+            WireValue.Bool { value } {
+                raise WireError { message: "expected int, got bool" }
+            }
+            WireValue.Str { value } {
+                raise WireError { message: "expected int, got string" }
+            }
+            WireValue.Array { elements } {
+                raise WireError { message: "expected int, got array" }
+            }
+            WireValue.Record { keys, values } {
+                raise WireError { message: "expected int, got record" }
+            }
+            WireValue.Variant { name, data } {
+                raise WireError { message: "expected int, got variant" }
+            }
+            WireValue.Null {
+                raise WireError { message: "expected int, got null" }
+            }
+        }
+    }
+
+    fn decode_float(mut self) float {
+        match self.current {
+            WireValue.Float { value } {
+                return value
+            }
+            WireValue.Int { value } { raise WireError { message: "expected float" } }
+            WireValue.Bool { value } { raise WireError { message: "expected float" } }
+            WireValue.Str { value } { raise WireError { message: "expected float" } }
+            WireValue.Array { elements } { raise WireError { message: "expected float" } }
+            WireValue.Record { keys, values } { raise WireError { message: "expected float" } }
+            WireValue.Variant { name, data } { raise WireError { message: "expected float" } }
+            WireValue.Null { raise WireError { message: "expected float" } }
+        }
+    }
+
+    fn decode_bool(mut self) bool {
+        match self.current {
+            WireValue.Bool { value } {
+                return value
+            }
+            WireValue.Int { value } { raise WireError { message: "expected bool" } }
+            WireValue.Float { value } { raise WireError { message: "expected bool" } }
+            WireValue.Str { value } { raise WireError { message: "expected bool" } }
+            WireValue.Array { elements } { raise WireError { message: "expected bool" } }
+            WireValue.Record { keys, values } { raise WireError { message: "expected bool" } }
+            WireValue.Variant { name, data } { raise WireError { message: "expected bool" } }
+            WireValue.Null { raise WireError { message: "expected bool" } }
+        }
+    }
+
+    fn decode_string(mut self) string {
+        match self.current {
+            WireValue.Str { value } {
+                return value
+            }
+            WireValue.Int { value } { raise WireError { message: "expected string" } }
+            WireValue.Float { value } { raise WireError { message: "expected string" } }
+            WireValue.Bool { value } { raise WireError { message: "expected string" } }
+            WireValue.Array { elements } { raise WireError { message: "expected string" } }
+            WireValue.Record { keys, values } { raise WireError { message: "expected string" } }
+            WireValue.Variant { name, data } { raise WireError { message: "expected string" } }
+            WireValue.Null { raise WireError { message: "expected string" } }
+        }
+    }
+
+    fn decode_null(mut self) {
+        match self.current {
+            WireValue.Null {
+                return
+            }
+            WireValue.Int { value } { raise WireError { message: "expected null" } }
+            WireValue.Float { value } { raise WireError { message: "expected null" } }
+            WireValue.Bool { value } { raise WireError { message: "expected null" } }
+            WireValue.Str { value } { raise WireError { message: "expected null" } }
+            WireValue.Array { elements } { raise WireError { message: "expected null" } }
+            WireValue.Record { keys, values } { raise WireError { message: "expected null" } }
+            WireValue.Variant { name, data } { raise WireError { message: "expected null" } }
+        }
+    }
+
+    fn decode_nullable(mut self) bool {
+        match self.current {
+            WireValue.Null {
+                return false
+            }
+            WireValue.Int { value } { return true }
+            WireValue.Float { value } { return true }
+            WireValue.Bool { value } { return true }
+            WireValue.Str { value } { return true }
+            WireValue.Array { elements } { return true }
+            WireValue.Record { keys, values } { return true }
+            WireValue.Variant { name, data } { return true }
+        }
+    }
+
+    fn decode_array_start(mut self) int {
+        match self.current {
+            WireValue.Array { elements } {
+                let len = elements.len()
+                let frame = DecoderFrame.ArrayCursor { elements: elements, index: 0 }
+                self.stack.push(frame)
+                return len
+            }
+            WireValue.Int { value } { raise WireError { message: "expected array" } }
+            WireValue.Float { value } { raise WireError { message: "expected array" } }
+            WireValue.Bool { value } { raise WireError { message: "expected array" } }
+            WireValue.Str { value } { raise WireError { message: "expected array" } }
+            WireValue.Record { keys, values } { raise WireError { message: "expected array" } }
+            WireValue.Variant { name, data } { raise WireError { message: "expected array" } }
+            WireValue.Null { raise WireError { message: "expected array" } }
+        }
+    }
+
+    fn decode_array_end(mut self) {
+        self.stack.pop()
+    }
+
+    fn decode_map_start(mut self) int {
+        match self.current {
+            WireValue.Record { keys, values } {
+                let len = keys.len()
+                let frame = DecoderFrame.RecordCursor { keys: keys, values: values, index: 0 }
+                self.stack.push(frame)
+                return len
+            }
+            WireValue.Int { value } { raise WireError { message: "expected record/map" } }
+            WireValue.Float { value } { raise WireError { message: "expected record/map" } }
+            WireValue.Bool { value } { raise WireError { message: "expected record/map" } }
+            WireValue.Str { value } { raise WireError { message: "expected record/map" } }
+            WireValue.Array { elements } { raise WireError { message: "expected record/map" } }
+            WireValue.Variant { name, data } { raise WireError { message: "expected record/map" } }
+            WireValue.Null { raise WireError { message: "expected record/map" } }
+        }
+    }
+
+    fn decode_map_end(mut self) {
+        self.stack.pop()
+    }
+
+    fn decode_record_start(mut self, type_name: string, num_fields: int) {
+        match self.current {
+            WireValue.Record { keys, values } {
+                let frame = DecoderFrame.RecordCursor { keys: keys, values: values, index: 0 }
+                self.stack.push(frame)
+                return
+            }
+            WireValue.Int { value } { raise WireError { message: "expected record" } }
+            WireValue.Float { value } { raise WireError { message: "expected record" } }
+            WireValue.Bool { value } { raise WireError { message: "expected record" } }
+            WireValue.Str { value } { raise WireError { message: "expected record" } }
+            WireValue.Array { elements } { raise WireError { message: "expected record" } }
+            WireValue.Variant { name, data } { raise WireError { message: "expected record" } }
+            WireValue.Null { raise WireError { message: "expected record" } }
+        }
+    }
+
+    fn decode_field(mut self, name: string, index: int) {
+        let stack_len = self.stack.len()
+        let frame = self.stack[stack_len - 1]
+        match frame {
+            DecoderFrame.RecordCursor { keys, values, index } {
+                self.current = values[index]
+                let new_frame = DecoderFrame.RecordCursor { keys: keys, values: values, index: index + 1 }
+                self.stack[stack_len - 1] = new_frame
+            }
+            DecoderFrame.ArrayCursor { elements, index } {
+                raise WireError { message: "decode_field called on array cursor" }
+            }
+        }
+    }
+
+    fn decode_record_end(mut self) {
+        self.stack.pop()
+    }
+
+    fn decode_variant(mut self, type_name: string, variant_names: [string]) int {
+        match self.current {
+            WireValue.Variant { name, data } {
+                let i = 0
+                while i < variant_names.len() {
+                    if variant_names[i] == name {
+                        match data {
+                            WireValue.Record { keys, values } {
+                                let frame = DecoderFrame.RecordCursor { keys: keys, values: values, index: 0 }
+                                self.stack.push(frame)
+                                self.current = data
+                                return i
+                            }
+                            WireValue.Int { value } {
+                                self.current = data
+                                return i
+                            }
+                            WireValue.Float { value } {
+                                self.current = data
+                                return i
+                            }
+                            WireValue.Bool { value } {
+                                self.current = data
+                                return i
+                            }
+                            WireValue.Str { value } {
+                                self.current = data
+                                return i
+                            }
+                            WireValue.Array { elements } {
+                                self.current = data
+                                return i
+                            }
+                            WireValue.Variant { name, data } {
+                                self.current = data
+                                return i
+                            }
+                            WireValue.Null {
+                                self.current = data
+                                return i
+                            }
+                        }
+                    }
+                    i = i + 1
+                }
+                raise WireError { message: "unknown variant" }
+            }
+            WireValue.Int { value } { raise WireError { message: "expected variant" } }
+            WireValue.Float { value } { raise WireError { message: "expected variant" } }
+            WireValue.Bool { value } { raise WireError { message: "expected variant" } }
+            WireValue.Str { value } { raise WireError { message: "expected variant" } }
+            WireValue.Array { elements } { raise WireError { message: "expected variant" } }
+            WireValue.Record { keys, values } { raise WireError { message: "expected variant" } }
+            WireValue.Null { raise WireError { message: "expected variant" } }
+        }
+    }
+
+    fn decode_variant_end(mut self) {
+        if self.stack.len() > 0 {
+            self.stack.pop()
+        }
+    }
+}
+
+pub fn wire_value_decoder(value: WireValue) WireValueDecoder {
+    let stack: [DecoderFrame] = []
+    return WireValueDecoder { stack: stack, current: value }
+}
+
+// ── JsonWireFormat ─────────────────────────────────────────────────────────────
+
+pub class JsonWireFormat impl WireFormat {
+    _unused: int
+
+    fn serialize(self, value: WireValue) string {
+        let j = wire_to_json(value)
+        return j.to_string()
+    }
+
+    fn deserialize(self, data: string) WireValue {
+        let j = json.parse(data)!
+        return json_to_wire(j)
+    }
+}
+
+// ── Internal helpers ───────────────────────────────────────────────────────────
+
+fn wire_to_json(w: WireValue) json.Json {
+    match w {
+        WireValue.Int { value } {
+            return json.int(value)
+        }
+        WireValue.Float { value } {
+            return json.float(value)
+        }
+        WireValue.Bool { value } {
+            return json.bool(value)
+        }
+        WireValue.Str { value } {
+            return json.string(value)
+        }
+        WireValue.Array { elements } {
+            let arr = json.array()
+            let i = 0
+            while i < elements.len() {
+                arr.push(wire_to_json(elements[i]))
+                i = i + 1
+            }
+            return arr
+        }
+        WireValue.Record { keys, values } {
+            let obj = json.object()
+            let i = 0
+            while i < keys.len() {
+                obj.set(keys[i], wire_to_json(values[i]))
+                i = i + 1
+            }
+            return obj
+        }
+        WireValue.Variant { name, data } {
+            let obj = json.object()
+            obj.set("__variant", json.string(name))
+            obj.set("__data", wire_to_json(data))
+            return obj
+        }
+        WireValue.Null {
+            return json.null()
+        }
+    }
+}
+
+fn json_to_wire(j: json.Json) WireValue {
+    if j.is_null() {
+        return wire_null()
+    }
+    if j.is_bool() {
+        return wire_bool(j.get_bool())
+    }
+    if j.is_int() {
+        return wire_int(j.get_int())
+    }
+    if j.is_float() {
+        return wire_float(j.get_float())
+    }
+    if j.is_string() {
+        return wire_string(j.get_string())
+    }
+    if j.is_array() {
+        let elems: [WireValue] = []
+        let i = 0
+        while i < j.len() {
+            elems.push(json_to_wire(j.at(i)))
+            i = i + 1
+        }
+        return wire_array(elems)
+    }
+    // Object: check for variant encoding
+    if j.is_object() {
+        let variant_tag = j.get("__variant")
+        if !variant_tag.is_null() {
+            let name = variant_tag.get_string()
+            let data = json_to_wire(j.get("__data"))
+            return wire_variant(name, data)
+        }
+        // Regular record
+        let keys: [string] = []
+        let vals: [WireValue] = []
+        let i = 0
+        while i < j.len() {
+            keys.push(j.keys[i])
+            vals.push(json_to_wire(j.children[i]))
+            i = i + 1
+        }
+        return wire_record(keys, vals)
+    }
+    // Fallback
+    return wire_null()
+}

@@ -1,5 +1,6 @@
 pub mod env;
 pub mod types;
+pub mod serializable;
 mod register;
 mod resolve;
 mod infer;
