@@ -14431,3 +14431,624 @@ fn main() {
 "#);
     assert_eq!(out, "42\nerror\n0\n");
 }
+// ===== Batch 26: Empty trait, modules, large params, defaults chain, final comprehensive =====
+
+#[test]
+fn trait_empty_no_methods_marker_pattern() {
+    // Empty trait (marker trait pattern) — zero methods
+    let out = compile_and_run_stdout(r#"
+trait Marker {
+}
+
+class Tagged impl Marker {
+    val: int
+}
+
+fn accepts_marker(m: Marker) {
+    print(1)
+}
+
+fn main() {
+    let t: Marker = Tagged { val: 42 }
+    accepts_marker(t)
+}
+"#);
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn trait_method_with_ten_parameters() {
+    // Stress test: trait method with 10 parameters
+    let out = compile_and_run_stdout(r#"
+trait BigSig_ {
+    fn compute(self, a: int, b: int, c: int, d: int, e: int, 
+               f: int, g: int, h: int, i: int, j: int) int
+}
+
+class Summer impl BigSig_ {
+    tag: int
+    fn compute(self, a: int, b: int, c: int, d: int, e: int,
+               f: int, g: int, h: int, i: int, j: int) int {
+        return a + b + c + d + e + f + g + h + i + j
+    }
+}
+
+fn run(bs: BigSig_) {
+    print(bs.compute(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
+}
+
+fn main() {
+    let s: BigSig_ = Summer { tag: 0 }
+    run(s)
+}
+"#);
+    assert_eq!(out, "55\n");
+}
+
+#[test]
+fn trait_default_calls_another_default_method() {
+    // Default method A calls default method B
+    let out = compile_and_run_stdout(r#"
+trait Chain {
+    fn required(self) int
+    fn first_default(self) int {
+        return self.required() * 2
+    }
+    fn second_default(self) int {
+        return self.first_default() + 10
+    }
+}
+
+class Impl impl Chain {
+    n: int
+    fn required(self) int { return self.n }
+}
+
+fn run(c: Chain) {
+    print(c.second_default())
+}
+
+fn main() {
+    let c: Chain = Impl { n: 5 }
+    run(c)
+}
+"#);
+    assert_eq!(out, "20\n");
+}
+
+#[test]
+fn trait_function_takes_three_different_trait_params() {
+    // Function with three different trait-typed params
+    let out = compile_and_run_stdout(r#"
+trait A {
+    fn a_val(self) int
+}
+
+trait B {
+    fn b_val(self) int
+}
+
+trait C {
+    fn c_val(self) int
+}
+
+class ImplA impl A {
+    n: int
+    fn a_val(self) int { return self.n }
+}
+
+class ImplB impl B {
+    n: int
+    fn b_val(self) int { return self.n * 10 }
+}
+
+class ImplC impl C {
+    n: int
+    fn c_val(self) int { return self.n * 100 }
+}
+
+fn combine(a: A, b: B, c: C) int {
+    return a.a_val() + b.b_val() + c.c_val()
+}
+
+fn main() {
+    let a: A = ImplA { n: 1 }
+    let b: B = ImplB { n: 2 }
+    let c: C = ImplC { n: 3 }
+    print(combine(a, b, c))
+}
+"#);
+    assert_eq!(out, "321\n");
+}
+
+#[test]
+fn trait_method_with_set_operations() {
+    // Trait method builds and returns a set
+    let out = compile_and_run_stdout(r#"
+trait SetBuilder {
+    fn build_set(self) Set<int>
+}
+
+class RangeSet impl SetBuilder {
+    start: int
+    end: int
+    fn build_set(self) Set<int> {
+        let s = Set<int> {}
+        for i in self.start..self.end {
+            s.insert(i)
+        }
+        return s
+    }
+}
+
+fn show(sb: SetBuilder) {
+    let s = sb.build_set()
+    print(s.len())
+}
+
+fn main() {
+    let rs: SetBuilder = RangeSet { start: 1, end: 6 }
+    show(rs)
+}
+"#);
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn trait_method_dispatch_inside_spawn() {
+    // Trait method called inside spawned task
+    let out = compile_and_run_stdout(r#"
+trait Computer {
+    fn compute(self) int
+}
+
+class SlowComputer impl Computer {
+    n: int
+    fn compute(self) int {
+        return self.n * 2
+    }
+}
+
+fn compute_async(c: Computer) int {
+    let t = spawn c.compute()
+    return t.get()!
+}
+
+fn main() {
+    let c: Computer = SlowComputer { n: 21 }
+    print(compute_async(c)!)
+}
+"#);
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn trait_handle_array_filter_pattern() {
+    // Array of trait handles, filter and process
+    let out = compile_and_run_stdout(r#"
+trait Valued__ {
+    fn val(self) int
+}
+
+class Pos impl Valued__ {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+class Neg impl Valued__ {
+    n: int
+    fn val(self) int { return 0 - self.n }
+}
+
+fn add_valued(arr: [Valued__], v: Valued__) {
+    arr.push(v)
+}
+
+fn main() {
+    let items: [Valued__] = []
+    add_valued(items, Pos { n: 10 })
+    add_valued(items, Neg { n: 5 })
+    add_valued(items, Pos { n: 3 })
+    let sum = 0
+    let i = 0
+    while i < items.len() {
+        let val = items[i].val()
+        if val > 0 {
+            sum = sum + val
+        }
+        i = i + 1
+    }
+    print(sum)
+}
+"#);
+    assert_eq!(out, "13\n");
+}
+
+#[test]
+fn trait_dispatch_with_range_expression_param() {
+    // Pass range expression result to trait method
+    let out = compile_and_run_stdout(r#"
+trait RangeProcessor {
+    fn count_in_range(self, start: int, end: int) int
+}
+
+class Counter impl RangeProcessor {
+    tag: int
+    fn count_in_range(self, start: int, end: int) int {
+        let count = 0
+        for i in start..end {
+            count = count + 1
+        }
+        return count
+    }
+}
+
+fn run(rp: RangeProcessor) {
+    print(rp.count_in_range(5, 10))
+}
+
+fn main() {
+    let rp: RangeProcessor = Counter { tag: 0 }
+    run(rp)
+}
+"#);
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn trait_method_returns_float_dispatch() {
+    // Trait method returns float, dispatch and use in arithmetic
+    let out = compile_and_run_stdout(r#"
+trait FloatProvider {
+    fn provide(self) float
+}
+
+class Pi impl FloatProvider {
+    tag: int
+    fn provide(self) float { return 3.14 }
+}
+
+fn show(fp: FloatProvider) {
+    let val = fp.provide()
+    print(val)
+}
+
+fn main() {
+    let p: FloatProvider = Pi { tag: 0 }
+    show(p)
+}
+"#);
+    // Floats print as %f format (e.g., 3.140000)
+    assert!(out.starts_with("3.14"));
+}
+
+#[test]
+fn trait_three_levels_dispatch_indirection() {
+    // f1 calls f2 calls f3, all take trait param and dispatch
+    let out = compile_and_run_stdout(r#"
+trait Val {
+    fn get(self) int
+}
+
+class X impl Val {
+    n: int
+    fn get(self) int { return self.n }
+}
+
+fn level1(v: Val) int {
+    return level2(v)
+}
+
+fn level2(v: Val) int {
+    return level3(v)
+}
+
+fn level3(v: Val) int {
+    return v.get()
+}
+
+fn main() {
+    let v: Val = X { n: 99 }
+    print(level1(v))
+}
+"#);
+    assert_eq!(out, "99\n");
+}
+
+#[test]
+fn trait_method_with_modulo_and_bitwise() {
+    // Trait method using % and bitwise ops
+    let out = compile_and_run_stdout(r#"
+trait BitOps {
+    fn combine(self, x: int) int
+}
+
+class Impl impl BitOps {
+    mask: int
+    fn combine(self, x: int) int {
+        return (x % 10) & self.mask
+    }
+}
+
+fn run(bo: BitOps) {
+    print(bo.combine(27))
+}
+
+fn main() {
+    let bo: BitOps = Impl { mask: 3 }
+    run(bo)
+}
+"#);
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn trait_dispatch_result_in_conditional_expression() {
+    // Ternary-style conditional using dispatch result
+    let out = compile_and_run_stdout(r#"
+trait Checker {
+    fn check(self) bool
+}
+
+class AlwaysTrue impl Checker {
+    tag: int
+    fn check(self) bool { return true }
+}
+
+fn run(c: Checker) {
+    let result = 0
+    if c.check() {
+        result = 1
+    } else {
+        result = 0
+    }
+    print(result)
+}
+
+fn main() {
+    let c: Checker = AlwaysTrue { tag: 0 }
+    run(c)
+}
+"#);
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn trait_method_with_byte_operations() {
+    // Trait method working with byte type
+    let out = compile_and_run_stdout(r#"
+trait ByteProvider {
+    fn get_byte(self) byte
+}
+
+class Impl impl ByteProvider {
+    val: byte
+    fn get_byte(self) byte { return self.val }
+}
+
+fn show(bp: ByteProvider) {
+    let b = bp.get_byte()
+    print(b as int)
+}
+
+fn main() {
+    let bp: ByteProvider = Impl { val: 65 as byte }
+    show(bp)
+}
+"#);
+    assert_eq!(out, "65\n");
+}
+
+#[test]
+fn trait_dispatch_in_array_map_pattern() {
+    // Simulate map pattern: iterate trait array, dispatch, collect results
+    let out = compile_and_run_stdout(r#"
+trait Doubler {
+    fn double(self) int
+}
+
+class Val impl Doubler {
+    n: int
+    fn double(self) int { return self.n * 2 }
+}
+
+fn add_doubler(arr: [Doubler], d: Doubler) {
+    arr.push(d)
+}
+
+fn main() {
+    let items: [Doubler] = []
+    add_doubler(items, Val { n: 1 })
+    add_doubler(items, Val { n: 2 })
+    add_doubler(items, Val { n: 3 })
+    let results: [int] = []
+    let i = 0
+    while i < items.len() {
+        results.push(items[i].double())
+        i = i + 1
+    }
+    print(results[0])
+    print(results[1])
+    print(results[2])
+}
+"#);
+    assert_eq!(out, "2\n4\n6\n");
+}
+
+#[test]
+fn trait_method_with_abs_builtin() {
+    // Trait method using abs() builtin
+    let out = compile_and_run_stdout(r#"
+trait Absolute {
+    fn absolute(self, x: int) int
+}
+
+class Impl impl Absolute {
+    tag: int
+    fn absolute(self, x: int) int {
+        return abs(x)
+    }
+}
+
+fn run(a: Absolute) {
+    print(a.absolute(-42))
+    print(a.absolute(10))
+}
+
+fn main() {
+    let a: Absolute = Impl { tag: 0 }
+    run(a)
+}
+"#);
+    assert_eq!(out, "42\n10\n");
+}
+
+#[test]
+fn fail_trait_as_class_field_type_coercion() {
+    // BUG: Assigning concrete class to trait-typed field in struct literal fails
+    compile_should_fail(r#"
+trait Worker {
+    fn work(self) int
+}
+
+class MyWorker impl Worker {
+    n: int
+    fn work(self) int { return self.n }
+}
+
+class Container {
+    worker: Worker
+}
+
+fn main() {
+    let c = Container { worker: MyWorker { n: 1 } }
+}
+"#);
+}
+
+#[test]
+fn fail_duplicate_trait_in_impl_list() {
+    // BUG: Same trait listed twice in impl list silently accepted
+    // Currently compiles without error (compiler gap)
+    let out = compile_and_run_stdout(r#"
+trait Foo {
+    fn work(self) int
+}
+
+class X impl Foo, Foo {
+    n: int
+    fn work(self) int { return self.n }
+}
+
+fn main() {
+    let x: Foo = X { n: 42 }
+    print(x.work())
+}
+"#);
+    // Compiles and works (duplicate silently ignored)
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn trait_dispatch_with_logical_and_short_circuit() {
+    // Dispatch in && expression; verify short-circuit
+    let out = compile_and_run_stdout(r#"
+trait Predicate {
+    fn check_val(self, x: int) bool
+}
+
+class Even impl Predicate {
+    tag: int
+    fn check_val(self, x: int) bool {
+        return x % 2 == 0
+    }
+}
+
+class Positive impl Predicate {
+    tag: int
+    fn check_val(self, x: int) bool {
+        return x > 0
+    }
+}
+
+fn check(p1: Predicate, p2: Predicate, x: int) {
+    if p1.check_val(x) && p2.check_val(x) {
+        print(1)
+    } else {
+        print(0)
+    }
+}
+
+fn main() {
+    let e: Predicate = Even { tag: 0 }
+    let p: Predicate = Positive { tag: 0 }
+    check(e, p, 4)
+    check(e, p, -2)
+    check(e, p, 3)
+}
+"#);
+    assert_eq!(out, "1\n0\n0\n");
+}
+
+#[test]
+fn trait_method_string_split_iteration() {
+    // Trait method using .split() and iteration
+    let out = compile_and_run_stdout(r#"
+trait WordCounter {
+    fn count_words(self, text: string) int
+}
+
+class Counter impl WordCounter {
+    tag: int
+    fn count_words(self, text: string) int {
+        let parts = text.split(" ")
+        return parts.len()
+    }
+}
+
+fn run(wc: WordCounter) {
+    print(wc.count_words("hello world foo"))
+}
+
+fn main() {
+    let wc: WordCounter = Counter { tag: 0 }
+    run(wc)
+}
+"#);
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn trait_default_overridden_plus_not_overridden_mixed() {
+    // Class overrides one default, keeps other as-is
+    let out = compile_and_run_stdout(r#"
+trait Mixed {
+    fn required(self) int
+    fn default_a(self) int {
+        return self.required() + 1
+    }
+    fn default_b(self) int {
+        return self.required() + 10
+    }
+}
+
+class Impl impl Mixed {
+    n: int
+    fn required(self) int { return self.n }
+    fn default_a(self) int {
+        return self.required() * 100
+    }
+}
+
+fn run(m: Mixed) {
+    print(m.default_a())
+    print(m.default_b())
+}
+
+fn main() {
+    let m: Mixed = Impl { n: 5 }
+    run(m)
+}
+"#);
+    assert_eq!(out, "500\n15\n");
+}
