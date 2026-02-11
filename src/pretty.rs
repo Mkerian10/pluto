@@ -557,6 +557,12 @@ impl PrettyPrinter {
         self.write("stage ");
         self.write(&stage.name.node);
 
+        // Parent
+        if let Some(ref parent) = stage.parent {
+            self.write(" : ");
+            self.write(&parent.node);
+        }
+
         // Bracket deps
         if !stage.inject_fields.is_empty() {
             self.write("[");
@@ -595,8 +601,35 @@ impl PrettyPrinter {
             self.newline();
         }
 
-        // Blank line between directives and methods
-        if (!stage.ambient_types.is_empty() || !stage.lifecycle_overrides.is_empty()) && !stage.methods.is_empty() {
+        // Blank line between directives and methods/requires
+        let has_directives = !stage.ambient_types.is_empty() || !stage.lifecycle_overrides.is_empty();
+        let has_body = !stage.required_methods.is_empty() || !stage.methods.is_empty();
+        if has_directives && has_body {
+            self.newline();
+        }
+
+        // Required methods
+        for (i, req) in stage.required_methods.iter().enumerate() {
+            if i > 0 {
+                self.newline();
+            }
+            self.write_indent();
+            if req.node.is_pub {
+                self.write("pub ");
+            }
+            self.write("requires fn ");
+            self.write(&req.node.name.node);
+            self.write("(");
+            self.emit_params(&req.node.params);
+            self.write(")");
+            if let Some(ref ret) = req.node.return_type {
+                self.write(" ");
+                self.emit_type_expr(&ret.node);
+            }
+            self.newline();
+        }
+
+        if !stage.required_methods.is_empty() && !stage.methods.is_empty() {
             self.newline();
         }
 
@@ -606,6 +639,9 @@ impl PrettyPrinter {
                 self.newline();
             }
             self.write_indent();
+            if method.node.is_override {
+                self.write("override ");
+            }
             self.emit_function_header(&method.node);
             self.write(" ");
             self.emit_block(&method.node.body.node);

@@ -1,3 +1,8 @@
+// Stage inheritance: abstract base stage with concrete implementation.
+//
+// Daemon defines a template lifecycle: main() calls start(), run(), stop().
+// The concrete Worker stage provides the actual implementations.
+
 class Config {
     fn db_url(self) string {
         return "postgres://localhost/mydb"
@@ -6,35 +11,34 @@ class Config {
 
 class Database[config: Config] {
     fn query(self, sql: string) string {
-        return "result for: {sql} (db={self.config.db_url()})"
+        return "result: {sql} (db={self.config.db_url()})"
     }
 }
 
-class UserService[db: Database] {
-    fn get_user(self, id: int) string {
-        return self.db.query("SELECT * FROM users WHERE id = {id}")
-    }
-
-    fn list_users(self) string {
-        return self.db.query("SELECT * FROM users")
-    }
-}
-
-stage Api[users: UserService] {
-    fn handle_request(self, path: string) string {
-        if path == "/users" {
-            return self.users.list_users()
-        }
-        return self.users.get_user(1)
-    }
-
-    pub fn greet(self) string {
-        return "Welcome to the API"
-    }
+// Abstract base stage — defines lifecycle template
+stage Daemon {
+    requires fn start(self)
+    requires fn run(self)
+    requires fn stop(self)
 
     fn main(self) {
-        print(self.greet())
-        print(self.handle_request("/users"))
-        print(self.handle_request("/user/1"))
+        self.start()
+        self.run()
+        self.stop()
+    }
+}
+
+// Concrete stage — inherits lifecycle from Daemon, adds DI
+stage Worker : Daemon [db: Database] {
+    override fn start(self) {
+        print("Worker starting...")
+    }
+
+    override fn run(self) {
+        print(self.db.query("SELECT * FROM jobs"))
+    }
+
+    override fn stop(self) {
+        print("Worker stopped.")
     }
 }

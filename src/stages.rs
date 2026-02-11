@@ -163,7 +163,26 @@ pub fn flatten_stage_hierarchy(program: &mut Program) -> Result<(), CompileError
             .collect();
     }
 
-    // Remove abstract stages (those with remaining required methods)
+    // Identify which stages are used as parents (templates)
+    let parent_names: HashSet<String> = program.stages.iter()
+        .filter_map(|s| s.node.parent.as_ref().map(|p| p.node.clone()))
+        .collect();
+
+    // Leaf stages with unresolved requires are errors
+    for stage in &program.stages {
+        if !stage.node.required_methods.is_empty() && !parent_names.contains(&stage.node.name.node) {
+            let unresolved: Vec<&str> = stage.node.required_methods.iter()
+                .map(|r| r.node.name.node.as_str())
+                .collect();
+            return Err(CompileError::type_err(
+                format!("stage '{}' has unimplemented required methods: {}",
+                    stage.node.name.node, unresolved.join(", ")),
+                stage.node.name.span,
+            ));
+        }
+    }
+
+    // Remove abstract stages (templates that are parents of other stages)
     program.stages.retain(|s| s.node.required_methods.is_empty());
 
     Ok(())

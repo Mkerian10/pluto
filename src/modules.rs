@@ -1170,6 +1170,15 @@ fn rewrite_program(program: &mut Program, import_names: &HashSet<String>) {
         for method in &mut stage.node.methods {
             rewrite_function_body(&mut method.node, import_names);
         }
+        // Rewrite required method param/return types
+        for req in &mut stage.node.required_methods {
+            for param in &mut req.node.params {
+                rewrite_type_expr(&mut param.ty, import_names);
+            }
+            if let Some(ret) = &mut req.node.return_type {
+                rewrite_type_expr(ret, import_names);
+            }
+        }
         // Rewrite stage inject field types
         for field in &mut stage.node.inject_fields {
             rewrite_type_expr(&mut field.ty, import_names);
