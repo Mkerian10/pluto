@@ -2,9 +2,45 @@ use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::TypeExpr;
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 use super::env::{self, mangle_method, ClassInfo, EnumInfo, FuncSig, InstKind, Instantiation, TypeEnv};
 use super::types::{GenericKind, PlutoType};
+
+/// Try to resolve a built-in generic type (Map, Set, Task, Sender, Receiver).
+/// Returns `Some(Ok(...))` on success, `Some(Err(...))` on arity mismatch, `None` if not a builtin.
+fn resolve_builtin_generic(name: &str, resolved_args: &[PlutoType], span: Span) -> Option<Result<PlutoType, CompileError>> {
+    match name {
+        "Map" => {
+            if resolved_args.len() != 2 {
+                return Some(Err(CompileError::type_err(
+                    format!("Map expects 2 type arguments, got {}", resolved_args.len()),
+                    span,
+                )));
+            }
+            Some(Ok(PlutoType::Map(
+                Box::new(resolved_args[0].clone()),
+                Box::new(resolved_args[1].clone()),
+            )))
+        }
+        "Set" | "Task" | "Sender" | "Receiver" => {
+            if resolved_args.len() != 1 {
+                return Some(Err(CompileError::type_err(
+                    format!("{name} expects 1 type argument, got {}", resolved_args.len()),
+                    span,
+                )));
+            }
+            let inner = Box::new(resolved_args[0].clone());
+            let ty = match name {
+                "Set" => PlutoType::Set(inner),
+                "Task" => PlutoType::Task(inner),
+                "Sender" => PlutoType::Sender(inner),
+                _ => PlutoType::Receiver(inner),
+            };
+            Some(Ok(ty))
+        }
+        _ => None,
+    }
+}
 
 pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<PlutoType, CompileError> {
     match &ty.node {
@@ -63,54 +99,9 @@ pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<
             let resolved_args: Vec<PlutoType> = type_args.iter()
                 .map(|a| resolve_type(a, env))
                 .collect::<Result<Vec<_>, _>>()?;
-            // Built-in generic types: Map<K,V> and Set<T>
-            if name == "Map" {
-                if resolved_args.len() != 2 {
-                    return Err(CompileError::type_err(
-                        format!("Map expects 2 type arguments, got {}", resolved_args.len()),
-                        ty.span,
-                    ));
-                }
-                return Ok(PlutoType::Map(
-                    Box::new(resolved_args[0].clone()),
-                    Box::new(resolved_args[1].clone()),
-                ));
-            }
-            if name == "Set" {
-                if resolved_args.len() != 1 {
-                    return Err(CompileError::type_err(
-                        format!("Set expects 1 type argument, got {}", resolved_args.len()),
-                        ty.span,
-                    ));
-                }
-                return Ok(PlutoType::Set(Box::new(resolved_args[0].clone())));
-            }
-            if name == "Task" {
-                if resolved_args.len() != 1 {
-                    return Err(CompileError::type_err(
-                        format!("Task expects 1 type argument, got {}", resolved_args.len()),
-                        ty.span,
-                    ));
-                }
-                return Ok(PlutoType::Task(Box::new(resolved_args[0].clone())));
-            }
-            if name == "Sender" {
-                if resolved_args.len() != 1 {
-                    return Err(CompileError::type_err(
-                        format!("Sender expects 1 type argument, got {}", resolved_args.len()),
-                        ty.span,
-                    ));
-                }
-                return Ok(PlutoType::Sender(Box::new(resolved_args[0].clone())));
-            }
-            if name == "Receiver" {
-                if resolved_args.len() != 1 {
-                    return Err(CompileError::type_err(
-                        format!("Receiver expects 1 type argument, got {}", resolved_args.len()),
-                        ty.span,
-                    ));
-                }
-                return Ok(PlutoType::Receiver(Box::new(resolved_args[0].clone())));
+            // Built-in generic types
+            if let Some(result) = resolve_builtin_generic(name, &resolved_args, ty.span) {
+                return result;
             }
             // Check if already instantiated
             let mangled = env::mangle_name(name, &resolved_args);
@@ -176,58 +167,15 @@ pub(crate) fn resolve_type_with_params(
             let ret = resolve_type_with_params(return_type, env, type_param_names)?;
             Ok(PlutoType::Fn(param_types, Box::new(ret)))
         }
-        TypeExpr::Generic { name, type_args } if name == "Map" || name == "Set" || name == "Task" || name == "Sender" || name == "Receiver" => {
-            let resolved_args: Vec<PlutoType> = type_args.iter()
-                .map(|a| resolve_type_with_params(a, env, type_param_names))
-                .collect::<Result<Vec<_>, _>>()?;
-            if name == "Map" {
-                if resolved_args.len() != 2 {
-                    return Err(CompileError::type_err(
-                        format!("Map expects 2 type arguments, got {}", resolved_args.len()),
-                        ty.span,
-                    ));
-                }
-                Ok(PlutoType::Map(Box::new(resolved_args[0].clone()), Box::new(resolved_args[1].clone())))
-            } else if name == "Set" {
-                if resolved_args.len() != 1 {
-                    return Err(CompileError::type_err(
-                        format!("Set expects 1 type argument, got {}", resolved_args.len()),
-                        ty.span,
-                    ));
-                }
-                Ok(PlutoType::Set(Box::new(resolved_args[0].clone())))
-            } else if name == "Task" {
-                if resolved_args.len() != 1 {
-                    return Err(CompileError::type_err(
-                        format!("Task expects 1 type argument, got {}", resolved_args.len()),
-                        ty.span,
-                    ));
-                }
-                Ok(PlutoType::Task(Box::new(resolved_args[0].clone())))
-            } else if name == "Sender" {
-                if resolved_args.len() != 1 {
-                    return Err(CompileError::type_err(
-                        format!("Sender expects 1 type argument, got {}", resolved_args.len()),
-                        ty.span,
-                    ));
-                }
-                Ok(PlutoType::Sender(Box::new(resolved_args[0].clone())))
-            } else {
-                // Receiver
-                if resolved_args.len() != 1 {
-                    return Err(CompileError::type_err(
-                        format!("Receiver expects 1 type argument, got {}", resolved_args.len()),
-                        ty.span,
-                    ));
-                }
-                Ok(PlutoType::Receiver(Box::new(resolved_args[0].clone())))
-            }
-        }
         TypeExpr::Generic { name, type_args } => {
-            // User-defined generic types (e.g., Pair<A, B>) — resolve args with params context
             let resolved_args: Vec<PlutoType> = type_args.iter()
                 .map(|a| resolve_type_with_params(a, env, type_param_names))
                 .collect::<Result<Vec<_>, _>>()?;
+            // Built-in generic types
+            if let Some(result) = resolve_builtin_generic(name, &resolved_args, ty.span) {
+                return result;
+            }
+            // User-defined generic types (e.g., Pair<A, B>)
             if resolved_args.iter().any(contains_type_param) {
                 // Still has unresolved type params — store as GenericInstance
                 // substitute_pluto_type will resolve when concrete types are bound
@@ -289,15 +237,7 @@ pub(crate) fn resolve_type_with_params(
 }
 
 fn contains_type_param(ty: &PlutoType) -> bool {
-    match ty {
-        PlutoType::TypeParam(_) => true,
-        PlutoType::Array(inner) => contains_type_param(inner),
-        PlutoType::Fn(params, ret) => params.iter().any(contains_type_param) || contains_type_param(ret),
-        PlutoType::Map(k, v) => contains_type_param(k) || contains_type_param(v),
-        PlutoType::Set(t) | PlutoType::Task(t) | PlutoType::Sender(t) | PlutoType::Receiver(t) | PlutoType::Nullable(t) | PlutoType::Stream(t) => contains_type_param(t),
-        PlutoType::GenericInstance(_, _, args) => args.iter().any(contains_type_param),
-        _ => false,
-    }
+    matches!(ty, PlutoType::TypeParam(_)) || ty.any_inner_type(&contains_type_param)
 }
 
 /// Resolve a TypeExpr to a PlutoType — thin wrapper for use by monomorphize.
@@ -306,33 +246,10 @@ pub(crate) fn resolve_type_for_monomorphize(ty: &Spanned<TypeExpr>, env: &mut Ty
 }
 
 pub(crate) fn substitute_pluto_type(ty: &PlutoType, bindings: &HashMap<String, PlutoType>) -> PlutoType {
-    match ty {
-        PlutoType::TypeParam(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
-        PlutoType::Array(inner) => PlutoType::Array(Box::new(substitute_pluto_type(inner, bindings))),
-        PlutoType::Fn(ps, r) => PlutoType::Fn(
-            ps.iter().map(|p| substitute_pluto_type(p, bindings)).collect(),
-            Box::new(substitute_pluto_type(r, bindings)),
-        ),
-        PlutoType::Map(k, v) => PlutoType::Map(
-            Box::new(substitute_pluto_type(k, bindings)),
-            Box::new(substitute_pluto_type(v, bindings)),
-        ),
-        PlutoType::Set(t) => PlutoType::Set(Box::new(substitute_pluto_type(t, bindings))),
-        PlutoType::Task(t) => PlutoType::Task(Box::new(substitute_pluto_type(t, bindings))),
-        PlutoType::Sender(t) => PlutoType::Sender(Box::new(substitute_pluto_type(t, bindings))),
-        PlutoType::Receiver(t) => PlutoType::Receiver(Box::new(substitute_pluto_type(t, bindings))),
-        PlutoType::Nullable(inner) => PlutoType::Nullable(Box::new(substitute_pluto_type(inner, bindings))),
-        PlutoType::Stream(inner) => PlutoType::Stream(Box::new(substitute_pluto_type(inner, bindings))),
-        PlutoType::GenericInstance(kind, name, args) => {
-            let substituted_args: Vec<PlutoType> = args.iter()
-                .map(|a| substitute_pluto_type(a, bindings))
-                .collect();
-            // Always keep as GenericInstance — resolve_generic_instances will
-            // instantiate concrete types when env is available
-            PlutoType::GenericInstance(kind.clone(), name.clone(), substituted_args)
-        }
-        _ => ty.clone(),
+    if let PlutoType::TypeParam(name) = ty {
+        return bindings.get(name).cloned().unwrap_or_else(|| ty.clone());
     }
+    ty.map_inner_types(&|inner| substitute_pluto_type(inner, bindings))
 }
 
 pub(crate) fn unify(pattern: &PlutoType, concrete: &PlutoType, bindings: &mut HashMap<String, PlutoType>) -> bool {

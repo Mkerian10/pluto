@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
+use crate::span::Spanned;
 use crate::typeck::env::{mangle_method, TypeEnv};
 use crate::typeck::types::PlutoType;
 use lower::{lower_function, lower_generator_creator, lower_generator_next, pluto_to_cranelift, resolve_type_expr_to_pluto, FnContracts, POINTER_SIZE};
@@ -38,48 +39,43 @@ fn host_target_triple() -> Result<&'static str, CompileError> {
     }
 }
 
-/// Declare a writable, zero-initialized 8-byte global for each DI singleton.
-/// These globals hold singleton pointers so that scope block codegen (Phase 3)
-/// can load them when wiring scoped instances.
-fn declare_singleton_globals(
-    env: &TypeEnv,
+/// Declare a writable, zero-initialized 8-byte global for each name in the iterator.
+fn declare_global_data<'a>(
+    names: impl Iterator<Item = &'a String>,
+    prefix: &str,
     module: &mut ObjectModule,
 ) -> Result<HashMap<String, DataId>, CompileError> {
     let mut globals = HashMap::new();
-    for class_name in &env.di_order {
-        let data_name = format!("__pluto_singleton_{}", class_name);
+    for name in names {
+        let data_name = format!("{prefix}{name}");
         let data_id = module
             .declare_data(&data_name, Linkage::Local, true, false)
-            .map_err(|e| CompileError::codegen(format!("declare singleton global: {e}")))?;
+            .map_err(|e| CompileError::codegen(format!("declare {prefix} global: {e}")))?;
         let mut data_desc = DataDescription::new();
         data_desc.define_zeroinit(8);
         module
             .define_data(data_id, &data_desc)
-            .map_err(|e| CompileError::codegen(format!("define singleton global: {e}")))?;
-        globals.insert(class_name.clone(), data_id);
+            .map_err(|e| CompileError::codegen(format!("define {prefix} global: {e}")))?;
+        globals.insert(name.clone(), data_id);
     }
     Ok(globals)
 }
 
-/// Declare a writable, zero-initialized 8-byte global for each synchronized singleton's rwlock.
-fn declare_rwlock_globals(
-    env: &TypeEnv,
-    module: &mut ObjectModule,
-) -> Result<HashMap<String, DataId>, CompileError> {
-    let mut globals = HashMap::new();
-    for class_name in &env.synchronized_singletons {
-        let data_name = format!("__pluto_rwlock_{}", class_name);
-        let data_id = module
-            .declare_data(&data_name, Linkage::Local, true, false)
-            .map_err(|e| CompileError::codegen(format!("declare rwlock global: {e}")))?;
-        let mut data_desc = DataDescription::new();
-        data_desc.define_zeroinit(8);
-        module
-            .define_data(data_id, &data_desc)
-            .map_err(|e| CompileError::codegen(format!("define rwlock global: {e}")))?;
-        globals.insert(class_name.clone(), data_id);
+/// Extract requires/ensures contracts from a contract list into a FnContracts, if any exist.
+fn extract_fn_contracts(contracts: &[Spanned<ContractClause>]) -> Option<FnContracts> {
+    let requires: Vec<(Expr, String)> = contracts.iter()
+        .filter(|c| c.node.kind == ContractKind::Requires)
+        .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+        .collect();
+    let ensures: Vec<(Expr, String)> = contracts.iter()
+        .filter(|c| c.node.kind == ContractKind::Ensures)
+        .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
+        .collect();
+    if requires.is_empty() && ensures.is_empty() {
+        None
+    } else {
+        Some(FnContracts { requires, ensures })
     }
-    Ok(globals)
 }
 
 pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>, CompileError> {
@@ -104,10 +100,10 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
     let mut func_ids = HashMap::new();
 
     // Declare module-level globals for DI singleton pointers (Phase 2)
-    let singleton_data_ids = declare_singleton_globals(env, &mut module)?;
+    let singleton_data_ids = declare_global_data(env.di_order.iter(), "__pluto_singleton_", &mut module)?;
 
     // Declare module-level globals for rwlock pointers (Phase 4b)
-    let rwlock_data_ids = declare_rwlock_globals(env, &mut module)?;
+    let rwlock_data_ids = declare_global_data(env.synchronized_singletons.iter(), "__pluto_rwlock_", &mut module)?;
 
     // Pre-pass: collect spawn closure function names (needed before declarations)
     let spawn_closure_fns = collect_spawn_closure_names(program);
@@ -263,78 +259,31 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
     // Build function contracts map for codegen
     let mut fn_contracts: HashMap<String, FnContracts> = HashMap::new();
     for func in &program.functions {
-        let f = &func.node;
-        if !f.contracts.is_empty() {
-            let requires: Vec<(Expr, String)> = f.contracts.iter()
-                .filter(|c| c.node.kind == ContractKind::Requires)
-                .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                .collect();
-            let ensures: Vec<(Expr, String)> = f.contracts.iter()
-                .filter(|c| c.node.kind == ContractKind::Ensures)
-                .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                .collect();
-            if !requires.is_empty() || !ensures.is_empty() {
-                fn_contracts.insert(f.name.node.clone(), FnContracts { requires, ensures });
-            }
+        if let Some(fc) = extract_fn_contracts(&func.node.contracts) {
+            fn_contracts.insert(func.node.name.node.clone(), fc);
         }
     }
     for class in &program.classes {
         let c = &class.node;
         for method in &c.methods {
-            let m = &method.node;
-            if !m.contracts.is_empty() {
-                let mangled = mangle_method(&c.name.node, &m.name.node);
-                let requires: Vec<(Expr, String)> = m.contracts.iter()
-                    .filter(|c| c.node.kind == ContractKind::Requires)
-                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                    .collect();
-                let ensures: Vec<(Expr, String)> = m.contracts.iter()
-                    .filter(|c| c.node.kind == ContractKind::Ensures)
-                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                    .collect();
-                if !requires.is_empty() || !ensures.is_empty() {
-                    fn_contracts.insert(mangled, FnContracts { requires, ensures });
-                }
+            if let Some(fc) = extract_fn_contracts(&method.node.contracts) {
+                fn_contracts.insert(mangle_method(&c.name.node, &method.node.name.node), fc);
             }
         }
     }
     if let Some(app_spanned) = &program.app {
         let app = &app_spanned.node;
         for method in &app.methods {
-            let m = &method.node;
-            if !m.contracts.is_empty() {
-                let mangled = mangle_method(&app.name.node, &m.name.node);
-                let requires: Vec<(Expr, String)> = m.contracts.iter()
-                    .filter(|c| c.node.kind == ContractKind::Requires)
-                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                    .collect();
-                let ensures: Vec<(Expr, String)> = m.contracts.iter()
-                    .filter(|c| c.node.kind == ContractKind::Ensures)
-                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                    .collect();
-                if !requires.is_empty() || !ensures.is_empty() {
-                    fn_contracts.insert(mangled, FnContracts { requires, ensures });
-                }
+            if let Some(fc) = extract_fn_contracts(&method.node.contracts) {
+                fn_contracts.insert(mangle_method(&app.name.node, &method.node.name.node), fc);
             }
         }
     }
     for stage_spanned in &program.stages {
         let stage = &stage_spanned.node;
         for method in &stage.methods {
-            let m = &method.node;
-            if !m.contracts.is_empty() {
-                let mangled = mangle_method(&stage.name.node, &m.name.node);
-                let requires: Vec<(Expr, String)> = m.contracts.iter()
-                    .filter(|c| c.node.kind == ContractKind::Requires)
-                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                    .collect();
-                let ensures: Vec<(Expr, String)> = m.contracts.iter()
-                    .filter(|c| c.node.kind == ContractKind::Ensures)
-                    .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                    .collect();
-                if !requires.is_empty() || !ensures.is_empty() {
-                    fn_contracts.insert(mangled, FnContracts { requires, ensures });
-                }
+            if let Some(fc) = extract_fn_contracts(&method.node.contracts) {
+                fn_contracts.insert(mangle_method(&stage.name.node, &method.node.name.node), fc);
             }
         }
     }
@@ -347,20 +296,9 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == *trait_name {
                     for trait_method in &trait_decl.node.methods {
-                        if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node)
-                            && !trait_method.contracts.is_empty()
-                        {
-                            let mangled = mangle_method(&c.name.node, &trait_method.name.node);
-                            let requires: Vec<(Expr, String)> = trait_method.contracts.iter()
-                                .filter(|c| c.node.kind == ContractKind::Requires)
-                                .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                                .collect();
-                            let ensures: Vec<(Expr, String)> = trait_method.contracts.iter()
-                                .filter(|c| c.node.kind == ContractKind::Ensures)
-                                .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                                .collect();
-                            if !requires.is_empty() || !ensures.is_empty() {
-                                fn_contracts.insert(mangled, FnContracts { requires, ensures });
+                        if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node) {
+                            if let Some(fc) = extract_fn_contracts(&trait_method.contracts) {
+                                fn_contracts.insert(mangle_method(&c.name.node, &trait_method.name.node), fc);
                             }
                         }
                     }

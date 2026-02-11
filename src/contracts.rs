@@ -1,60 +1,42 @@
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use crate::span::Span;
+use crate::span::{Span, Spanned};
+
+/// Validate that every contract in a list is within the decidable fragment.
+fn validate_contract_list(contracts: &[Spanned<ContractClause>]) -> Result<(), CompileError> {
+    for contract in contracts {
+        validate_decidable_fragment(&contract.node.expr.node, contract.node.expr.span, contract.node.kind)?;
+    }
+    Ok(())
+}
 
 /// Validate that all contract expressions in the program are within the decidable fragment.
 /// Called after parsing, before typeck.
 pub fn validate_contracts(program: &Program) -> Result<(), CompileError> {
-    // Validate class invariants
     for class in &program.classes {
-        for inv in &class.node.invariants {
-            validate_decidable_fragment(&inv.node.expr.node, inv.node.expr.span, inv.node.kind)?;
-        }
-    }
-
-    // Validate function contracts (requires/ensures)
-    for func in &program.functions {
-        for contract in &func.node.contracts {
-            validate_decidable_fragment(&contract.node.expr.node, contract.node.expr.span, contract.node.kind)?;
-        }
-    }
-
-    // Validate method contracts on classes
-    for class in &program.classes {
+        validate_contract_list(&class.node.invariants)?;
         for method in &class.node.methods {
-            for contract in &method.node.contracts {
-                validate_decidable_fragment(&contract.node.expr.node, contract.node.expr.span, contract.node.kind)?;
-            }
+            validate_contract_list(&method.node.contracts)?;
         }
     }
-
-    // Validate app method contracts
+    for func in &program.functions {
+        validate_contract_list(&func.node.contracts)?;
+    }
     if let Some(app) = &program.app {
         for method in &app.node.methods {
-            for contract in &method.node.contracts {
-                validate_decidable_fragment(&contract.node.expr.node, contract.node.expr.span, contract.node.kind)?;
-            }
+            validate_contract_list(&method.node.contracts)?;
         }
     }
-
-    // Validate stage method contracts
     for stage in &program.stages {
         for method in &stage.node.methods {
-            for contract in &method.node.contracts {
-                validate_decidable_fragment(&contract.node.expr.node, contract.node.expr.span, contract.node.kind)?;
-            }
+            validate_contract_list(&method.node.contracts)?;
         }
     }
-
-    // Validate trait method contracts
     for tr in &program.traits {
         for method in &tr.node.methods {
-            for contract in &method.contracts {
-                validate_decidable_fragment(&contract.node.expr.node, contract.node.expr.span, contract.node.kind)?;
-            }
+            validate_contract_list(&method.contracts)?;
         }
     }
-
     Ok(())
 }
 
