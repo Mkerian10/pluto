@@ -21,13 +21,15 @@ Created systematic test coverage across 10 categories:
 | **Operators** | 47 | 100% | Token boundaries work |
 | **Errors** | 27 | 89% | Good error handling |
 | **Spans** | 33 | 95% | Mostly accurate |
-| **Stress** | 30 | 97% | Handles large inputs |
+| **Stress** | 30 | 93% | Handles large inputs* |
 | **Real World** | 15 | 100% | Full code samples work |
-| **TOTAL** | **301** | **96.0%** | **12 bugs found** |
+| **TOTAL** | **301** | **94.4%** | **13 failures (~10 bugs)** |
 
-### 2. Bug Report: 12 Bugs Documented
+*Two stress tests (very long strings) cause stack overflow and are marked `#[ignore]`
 
-See `bugs/lexer-gaps.md` for full details.
+### 2. Bug Report: ~10 Distinct Bugs Documented
+
+See `bugs/lexer-gaps.md` for full details. Note: 13 test failures map to ~10 distinct bugs (some bugs are tested multiple ways).
 
 **P1 (Critical - Should Fix):**
 - BUG-LEX-001: Hex invalid digits lex as multiple tokens (`0xG` → `0` + `xG`)
@@ -107,10 +109,12 @@ tests/integration/lexer/
 - **Test files created:** 11
 - **Lines of test code:** ~2,870
 - **Tests written:** 301
-- **Bugs found:** 12
-- **Pass rate:** 96.0%
-- **No crashes:** ✅
-- **No panics:** ✅
+- **Tests passing:** 284 (94.4%)
+- **Tests failing:** 13 (document ~10 distinct bugs)
+- **Tests ignored:** 4 (2 for stack overflow, 2 for performance)
+- **Distinct bugs found:** ~10
+- **Test suite completes without crash:** ✅
+- **No panics (except documented overflow tests):** ✅
 - **No security issues:** ✅
 
 ### Test Additions
