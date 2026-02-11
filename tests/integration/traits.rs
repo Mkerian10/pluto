@@ -12099,3 +12099,507 @@ fn main() {
 "#);
     assert_eq!(out, "3\n");
 }
+
+// ===== Batch 22: Type casting, map ops, bitwise, string ops, spawn, more negatives =====
+
+#[test]
+fn trait_method_result_cast_to_float() {
+    // Trait dispatch result cast with `as float`
+    let out = compile_and_run_stdout(r#"
+trait IntSource {
+    fn get(self) int
+}
+
+class FixedSource impl IntSource {
+    val: int
+    fn get(self) int { return self.val }
+}
+
+fn main() {
+    let s: IntSource = FixedSource { val: 7 }
+    let f = s.get() as float
+    print(f)
+}
+"#);
+    assert_eq!(out, "7.000000\n");
+}
+
+#[test]
+fn trait_method_result_with_bitwise_ops() {
+    // Trait dispatch result used in bitwise operations
+    let out = compile_and_run_stdout(r#"
+trait Flags {
+    fn flags(self) int
+}
+
+class ReadWrite impl Flags {
+    tag: int
+    fn flags(self) int { return 6 }
+}
+
+fn main() {
+    let f: Flags = ReadWrite { tag: 0 }
+    let val = f.flags()
+    print(val & 2)
+    print(val | 1)
+    print(val ^ 3)
+}
+"#);
+    assert_eq!(out, "2\n7\n5\n");
+}
+
+#[test]
+fn trait_method_modifies_map() {
+    // Trait method takes a map and modifies it
+    let out = compile_and_run_stdout(r#"
+trait MapWriter {
+    fn fill(self, m: Map<string, int>)
+}
+
+class DefaultWriter impl MapWriter {
+    val: int
+    fn fill(self, m: Map<string, int>) {
+        m["a"] = self.val
+        m["b"] = self.val * 2
+    }
+}
+
+fn main() {
+    let w: MapWriter = DefaultWriter { val: 5 }
+    let m = Map<string, int> {}
+    w.fill(m)
+    print(m["a"])
+    print(m["b"])
+}
+"#);
+    assert_eq!(out, "5\n10\n");
+}
+
+#[test]
+fn trait_method_result_as_array_index() {
+    // Trait dispatch result used to index into an array
+    let out = compile_and_run_stdout(r#"
+trait Indexer {
+    fn idx(self) int
+}
+
+class ConstIndex impl Indexer {
+    i: int
+    fn idx(self) int { return self.i }
+}
+
+fn main() {
+    let data: [int] = [10, 20, 30, 40]
+    let ix: Indexer = ConstIndex { i: 2 }
+    print(data[ix.idx()])
+}
+"#);
+    assert_eq!(out, "30\n");
+}
+
+#[test]
+fn trait_method_string_concatenation() {
+    // Trait method returns string that gets concatenated
+    let out = compile_and_run_stdout(r#"
+trait Prefix {
+    fn prefix(self) string
+}
+
+class BangPrefix impl Prefix {
+    tag: int
+    fn prefix(self) string { return "!" }
+}
+
+class StarPrefix impl Prefix {
+    tag: int
+    fn prefix(self) string { return "*" }
+}
+
+fn format(p: Prefix, msg: string) string {
+    return p.prefix() + msg
+}
+
+fn main() {
+    let b: Prefix = BangPrefix { tag: 0 }
+    let s: Prefix = StarPrefix { tag: 0 }
+    print(format(b, "urgent"))
+    print(format(s, "tag"))
+}
+"#);
+    assert_eq!(out, "!urgent\n*tag\n");
+}
+
+#[test]
+fn trait_method_called_multiple_times_same_object() {
+    // Call same trait method multiple times on same handle (tests vtable caching)
+    let out = compile_and_run_stdout(r#"
+trait RNG {
+    fn next(self) int
+}
+
+class ConstRNG impl RNG {
+    val: int
+    fn next(self) int { return self.val }
+}
+
+fn main() {
+    let r: RNG = ConstRNG { val: 7 }
+    let a = r.next()
+    let b = r.next()
+    let c = r.next()
+    print(a + b + c)
+}
+"#);
+    assert_eq!(out, "21\n");
+}
+
+#[test]
+fn trait_dispatch_in_spawn_with_join() {
+    // Trait dispatch inside a spawned function, result retrieved via .get()
+    let out = compile_and_run_stdout(r#"
+trait Computable {
+    fn compute(self) int
+}
+
+class Squarer impl Computable {
+    val: int
+    fn compute(self) int { return self.val * self.val }
+}
+
+fn do_compute(c: Computable) int {
+    return c.compute()
+}
+
+fn main() {
+    let c: Computable = Squarer { val: 6 }
+    let task = spawn do_compute(c)
+    print(task.get())
+}
+"#);
+    assert_eq!(out, "36\n");
+}
+
+#[test]
+fn trait_method_with_modulo_operation() {
+    // Trait method uses modulo in its computation
+    let out = compile_and_run_stdout(r#"
+trait Classifier {
+    fn classify(self, x: int) string
+}
+
+class ParityChecker impl Classifier {
+    tag: int
+    fn classify(self, x: int) string {
+        if x % 2 == 0 {
+            return "even"
+        }
+        return "odd"
+    }
+}
+
+fn main() {
+    let c: Classifier = ParityChecker { tag: 0 }
+    print(c.classify(4))
+    print(c.classify(7))
+}
+"#);
+    assert_eq!(out, "even\nodd\n");
+}
+
+#[test]
+fn trait_dispatch_result_negated_unary() {
+    // Trait dispatch result negated with unary minus (0 - x pattern)
+    let out = compile_and_run_stdout(r#"
+trait SignedVal {
+    fn val(self) int
+}
+
+class Pos impl SignedVal {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+fn main() {
+    let s: SignedVal = Pos { n: 42 }
+    print(0 - s.val())
+}
+"#);
+    assert_eq!(out, "-42\n");
+}
+
+#[test]
+fn trait_method_with_string_equality_check() {
+    // Trait method compares strings with exact match pattern
+    let out = compile_and_run_stdout(r#"
+trait Matcher {
+    fn matches(self, input: string) bool
+}
+
+class ExactMatcher impl Matcher {
+    target: string
+    fn matches(self, input: string) bool {
+        return input == self.target
+    }
+}
+
+fn main() {
+    let m: Matcher = ExactMatcher { target: "hello" }
+    print(m.matches("hello"))
+    print(m.matches("world"))
+}
+"#);
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn trait_two_methods_same_return_type_different_semantics() {
+    // Trait with two methods that return the same type but have different meanings
+    let out = compile_and_run_stdout(r#"
+trait Bounds {
+    fn min_val(self) int
+    fn max_val(self) int
+}
+
+class Range_ impl Bounds {
+    lo: int
+    hi: int
+    fn min_val(self) int { return self.lo }
+    fn max_val(self) int { return self.hi }
+}
+
+fn span(b: Bounds) int {
+    return b.max_val() - b.min_val()
+}
+
+fn main() {
+    print(span(Range_ { lo: 3, hi: 10 }))
+}
+"#);
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn trait_dispatch_with_nested_method_calls() {
+    // Trait method result used as argument to another method on same object
+    let out = compile_and_run_stdout(r#"
+trait Ops {
+    fn base(self) int
+    fn scale(self, x: int) int
+}
+
+class Scaler impl Ops {
+    factor: int
+    fn base(self) int { return self.factor }
+    fn scale(self, x: int) int { return x * self.factor }
+}
+
+fn run(o: Ops) {
+    print(o.scale(o.base()))
+}
+
+fn main() {
+    run(Scaler { factor: 5 })
+}
+"#);
+    assert_eq!(out, "25\n");
+}
+
+#[test]
+fn trait_handle_stored_in_array_then_dispatched() {
+    // Build array of trait handles via helper, then dispatch on each
+    let out = compile_and_run_stdout(r#"
+trait Greeter_ {
+    fn greet(self) string
+}
+
+class Hello_ impl Greeter_ {
+    name: string
+    fn greet(self) string { return "hi {self.name}" }
+}
+
+fn add(arr: [Greeter_], g: Greeter_) {
+    arr.push(g)
+}
+
+fn main() {
+    let greeters: [Greeter_] = []
+    add(greeters, Hello_ { name: "alice" })
+    add(greeters, Hello_ { name: "bob" })
+    let i = 0
+    while i < greeters.len() {
+        print(greeters[i].greet())
+        i = i + 1
+    }
+}
+"#);
+    assert_eq!(out, "hi alice\nhi bob\n");
+}
+
+#[test]
+fn trait_dispatch_result_compared_to_literal() {
+    // Compare trait method result directly to a literal in if condition
+    let out = compile_and_run_stdout(r#"
+trait StatusCode {
+    fn code(self) int
+}
+
+class OkStatus impl StatusCode {
+    tag: int
+    fn code(self) int { return 200 }
+}
+
+class NotFoundStatus impl StatusCode {
+    tag: int
+    fn code(self) int { return 404 }
+}
+
+fn is_ok(s: StatusCode) bool {
+    return s.code() == 200
+}
+
+fn main() {
+    let ok: StatusCode = OkStatus { tag: 0 }
+    let nf: StatusCode = NotFoundStatus { tag: 0 }
+    print(is_ok(ok))
+    print(is_ok(nf))
+}
+"#);
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn trait_method_using_for_range_internally() {
+    // Trait method body uses for-range loop
+    let out = compile_and_run_stdout(r#"
+trait Summer_ {
+    fn sum_to(self, n: int) int
+}
+
+class NaiveSummer impl Summer_ {
+    tag: int
+    fn sum_to(self, n: int) int {
+        let total = 0
+        for i in 1..n + 1 {
+            total = total + i
+        }
+        return total
+    }
+}
+
+fn run(s: Summer_) {
+    print(s.sum_to(5))
+    print(s.sum_to(10))
+}
+
+fn main() {
+    run(NaiveSummer { tag: 0 })
+}
+"#);
+    assert_eq!(out, "15\n55\n");
+}
+
+#[test]
+fn fail_call_method_not_in_trait_via_handle() {
+    // Calling a method through trait handle that exists on class but not in trait
+    compile_should_fail(r#"
+trait Basic {
+    fn basic(self) int
+}
+
+class Full impl Basic {
+    tag: int
+    fn basic(self) int { return 1 }
+    fn extra(self) int { return 2 }
+}
+
+fn run(b: Basic) {
+    print(b.extra())
+}
+
+fn main() {
+    run(Full { tag: 0 })
+}
+"#);
+}
+
+#[test]
+fn fail_trait_method_nullable_return_mismatch() {
+    // Trait expects int return, class returns int? — should fail
+    compile_should_fail(r#"
+trait Getter {
+    fn get(self) int
+}
+
+class NullableGetter impl Getter {
+    tag: int
+    fn get(self) int? {
+        return none
+    }
+}
+
+fn main() {
+    let g: Getter = NullableGetter { tag: 0 }
+    print(g.get())
+}
+"#);
+}
+
+#[test]
+fn trait_four_classes_round_robin_dispatch() {
+    // Four different classes implementing same trait, dispatched in round-robin
+    let out = compile_and_run_stdout(r#"
+trait Ident {
+    fn id(self) int
+}
+
+class C1 impl Ident { tag: int fn id(self) int { return 1 } }
+class C2 impl Ident { tag: int fn id(self) int { return 2 } }
+class C3 impl Ident { tag: int fn id(self) int { return 3 } }
+class C4 impl Ident { tag: int fn id(self) int { return 4 } }
+
+fn add_ident(arr: [Ident], item: Ident) {
+    arr.push(item)
+}
+
+fn main() {
+    let items: [Ident] = []
+    add_ident(items, C1 { tag: 0 })
+    add_ident(items, C2 { tag: 0 })
+    add_ident(items, C3 { tag: 0 })
+    add_ident(items, C4 { tag: 0 })
+    let i = 0
+    while i < items.len() {
+        print(items[i].id())
+        i = i + 1
+    }
+}
+"#);
+    assert_eq!(out, "1\n2\n3\n4\n");
+}
+
+#[test]
+fn trait_method_with_deeply_nested_arithmetic() {
+    // Trait method doing complex nested arithmetic (stress codegen)
+    let out = compile_and_run_stdout(r#"
+trait MathOps {
+    fn complex(self, x: int) int
+}
+
+class BigCalc impl MathOps {
+    offset: int
+    fn complex(self, x: int) int {
+        return ((x + self.offset) * 2 + 1) * (x - self.offset + 3) + self.offset
+    }
+}
+
+fn run(m: MathOps) {
+    print(m.complex(10))
+}
+
+fn main() {
+    run(BigCalc { offset: 3 })
+}
+"#);
+    // (10 + 3) * 2 + 1 = 27, (10 - 3 + 3) = 10, 27 * 10 + 3 = 273
+    assert_eq!(out, "273\n");
+}
