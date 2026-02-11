@@ -30,12 +30,12 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
         return Ok(()); // No stages, no marshaling needed
     }
 
-    // Skip marshaler generation if std.wire isn't imported (validation will still run)
-    let has_wire_import = program.imports.iter().any(|imp| {
-        let path_str = imp.node.path.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join(".");
-        path_str == "wire" || path_str == "std.wire"
+    // Skip marshaler generation if wire module isn't available
+    // Check for wire.wire_value_encoder function (proves wire module was imported and flattened)
+    let has_wire = program.functions.iter().any(|f| {
+        f.node.name.node == "wire.wire_value_encoder"
     });
-    if !has_wire_import {
+    if !has_wire {
         return Ok(());
     }
 
@@ -85,12 +85,12 @@ pub fn generate_marshalers_phase_b(
         return Ok(());
     }
 
-    // Skip marshaler generation if std.wire isn't imported (validation will still run)
-    let has_wire_import = program.imports.iter().any(|imp| {
-        let path_str = imp.node.path.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join(".");
-        path_str == "wire" || path_str == "std.wire"
+    // Skip marshaler generation if wire module isn't available
+    // Check for wire.wire_value_encoder function (proves wire module was imported and flattened)
+    let has_wire = program.functions.iter().any(|f| {
+        f.node.name.node == "wire.wire_value_encoder"
     });
-    if !has_wire_import {
+    if !has_wire {
         return Ok(());
     }
 
@@ -286,7 +286,7 @@ fn generate_marshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>, C
                     span: Span { start: 0, end: 0, file_id: 0 },
                 },
                 ty: Spanned {
-                    node: TypeExpr::Named("wire.Encoder".to_string()),
+                    node: TypeExpr::Named("wire.WireValueEncoder".to_string()),
                     span: Span { start: 0, end: 0, file_id: 0 },
                 },
                 is_mut: true,
@@ -344,7 +344,7 @@ fn generate_unmarshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>,
     }
 
     // dec.decode_record_end()
-    stmts.push(mk_stmt_expr(mk_propagate(mk_method_call("dec", "decode_record_end", vec![]))));
+    stmts.push(mk_stmt_expr(mk_method_call("dec", "decode_record_end", vec![])));
 
     // return ClassName { field1: field1, field2: field2, ... }
     let field_inits: Vec<_> = data_fields.iter()
@@ -372,7 +372,7 @@ fn generate_unmarshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>,
                 span: Span { start: 0, end: 0, file_id: 0 },
             },
             ty: Spanned {
-                node: TypeExpr::Named("wire.Decoder".to_string()),
+                node: TypeExpr::Named("wire.WireValueDecoder".to_string()),
                 span: Span { start: 0, end: 0, file_id: 0 },
             },
             is_mut: true,
@@ -496,7 +496,7 @@ fn generate_marshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<Spa
                 id: Uuid::new_v4(),
                 name: Spanned { node: "enc".to_string(), span: mk_span() },
                 ty: Spanned {
-                    node: TypeExpr::Named("wire.Encoder".to_string()),
+                    node: TypeExpr::Named("wire.WireValueEncoder".to_string()),
                     span: mk_span(),
                 },
                 is_mut: true,
@@ -556,10 +556,10 @@ fn generate_unmarshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<S
                 span: mk_span(),
             }),
             value: Spanned {
-                node: mk_propagate(mk_method_call("dec", "decode_variant", vec![
+                node: mk_method_call("dec", "decode_variant", vec![
                     mk_string_lit(enum_name),
                     mk_var("names"),
-                ])),
+                ]),
                 span: mk_span(),
             },
             is_mut: false,
@@ -591,8 +591,8 @@ fn generate_unmarshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<S
             variant_stmts.extend(mk_let_decode(&field.name.node, &field.ty.node)?);
         }
 
-        // dec.decode_variant_end()!
-        variant_stmts.push(mk_stmt_expr(mk_propagate(mk_method_call("dec", "decode_variant_end", vec![]))));
+        // dec.decode_variant_end()
+        variant_stmts.push(mk_stmt_expr(mk_method_call("dec", "decode_variant_end", vec![])));
 
         // Build enum variant literal
         let variant_expr = if variant.fields.is_empty() {
@@ -691,7 +691,7 @@ fn generate_unmarshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<S
             id: Uuid::new_v4(),
             name: Spanned { node: "dec".to_string(), span: mk_span() },
             ty: Spanned {
-                node: TypeExpr::Named("wire.Decoder".to_string()),
+                node: TypeExpr::Named("wire.WireValueDecoder".to_string()),
                 span: mk_span(),
             },
             is_mut: true,
@@ -1322,13 +1322,13 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
 
             let mut stmts = Vec::new();
 
-            // let __len = dec.decode_array_start()!
+            // let __len = dec.decode_array_start() (infallible)
             stmts.push(Spanned {
                 node: Stmt::Let {
                     name: Spanned { node: "__len".to_string(), span: mk_span() },
                     ty: None,
                     value: Spanned {
-                        node: mk_propagate(mk_method_call("dec", "decode_array_start", vec![])),
+                        node: mk_method_call("dec", "decode_array_start", vec![]),
                         span: mk_span(),
                     },
                     is_mut: false,
@@ -1405,8 +1405,8 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
             };
             stmts.push(Spanned { node: while_stmt, span: mk_span() });
 
-            // dec.decode_array_end()!
-            stmts.push(mk_stmt_expr(mk_propagate(mk_method_call("dec", "decode_array_end", vec![]))));
+            // dec.decode_array_end()
+            stmts.push(mk_stmt_expr(mk_method_call("dec", "decode_array_end", vec![])));
 
             // let var_name = __result
             stmts.push(Spanned {
@@ -1439,7 +1439,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                     name: Spanned { node: "__is_present".to_string(), span: mk_span() },
                     ty: None,
                     value: Spanned {
-                        node: mk_propagate(mk_method_call("dec", "decode_nullable", vec![])),
+                        node: mk_method_call("dec", "decode_nullable", vec![]),
                         span: mk_span(),
                     },
                     is_mut: false,
@@ -1466,13 +1466,13 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                 TypeExpr::Named(name) if matches!(name.as_str(), "int" | "float" | "bool" | "string" | "byte") => {
                     // Simple types - decode directly into __result
                     let decode_expr = match name.as_str() {
-                        "int" => mk_propagate(mk_method_call("dec", "decode_int", vec![])),
-                        "float" => mk_propagate(mk_method_call("dec", "decode_float", vec![])),
-                        "bool" => mk_propagate(mk_method_call("dec", "decode_bool", vec![])),
-                        "string" => mk_propagate(mk_method_call("dec", "decode_string", vec![])),
+                        "int" => mk_method_call("dec", "decode_int", vec![]),
+                        "float" => mk_method_call("dec", "decode_float", vec![]),
+                        "bool" => mk_method_call("dec", "decode_bool", vec![]),
+                        "string" => mk_method_call("dec", "decode_string", vec![]),
                         "byte" => Expr::Cast {
                             expr: Box::new(Spanned {
-                                node: mk_propagate(mk_method_call("dec", "decode_int", vec![])),
+                                node: mk_method_call("dec", "decode_int", vec![]),
                                 span: mk_span(),
                             }),
                             target_type: Spanned {
@@ -1564,7 +1564,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                             name: Spanned { node: "__len".to_string(), span: mk_span() },
                             ty: None,
                             value: Spanned {
-                                node: mk_propagate(mk_method_call("dec", "decode_map_start", vec![])),
+                                node: mk_method_call("dec", "decode_map_start", vec![]),
                                 span: mk_span(),
                             },
                             is_mut: false,
@@ -1648,8 +1648,8 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                     };
                     stmts.push(Spanned { node: while_stmt, span: mk_span() });
 
-                    // dec.decode_map_end()!
-                    stmts.push(mk_stmt_expr(mk_propagate(mk_method_call("dec", "decode_map_end", vec![]))));
+                    // dec.decode_map_end()
+                    stmts.push(mk_stmt_expr(mk_method_call("dec", "decode_map_end", vec![])));
 
                     // let var_name = __result
                     stmts.push(Spanned {
@@ -1681,7 +1681,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                             name: Spanned { node: "__len".to_string(), span: mk_span() },
                             ty: None,
                             value: Spanned {
-                                node: mk_propagate(mk_method_call("dec", "decode_array_start", vec![])),
+                                node: mk_method_call("dec", "decode_array_start", vec![]),
                                 span: mk_span(),
                             },
                             is_mut: false,
@@ -1761,8 +1761,8 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                     };
                     stmts.push(Spanned { node: while_stmt, span: mk_span() });
 
-                    // dec.decode_array_end()!
-                    stmts.push(mk_stmt_expr(mk_propagate(mk_method_call("dec", "decode_array_end", vec![]))));
+                    // dec.decode_array_end()
+                    stmts.push(mk_stmt_expr(mk_method_call("dec", "decode_array_end", vec![])));
 
                     // let var_name = __result
                     stmts.push(Spanned {
