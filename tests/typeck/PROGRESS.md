@@ -85,12 +85,22 @@
 
 **Subtotal:** 100/100 ✅ **TARGET MET**
 
-### 8-15. Remaining Categories
+### 8. Method Resolution ✅ COMPLETE (Target: 100+, Actual: 100)
+- ✅ `methods/vtable_generation.rs` - 20 tests
+- ✅ `methods/trait_dispatch.rs` - 20 tests
+- ✅ `methods/method_lookup.rs` - 20 tests
+- ✅ `methods/overloading.rs` - 15 tests
+- ✅ `methods/self_type_errors.rs` - 15 tests
+- ✅ `methods/visibility.rs` - 10 tests
+
+**Subtotal:** 100/100 ✅ **TARGET MET**
+
+### 9-15. Remaining Categories
 - 🚧 All TODO
 
 ---
 
-## TOTAL PROGRESS: 1,063/1,730 tests (61.4%)
+## TOTAL PROGRESS: 1,163/1,730 tests (67.2%)
 
 ## Key Achievements
 - ✅ Inference category complete and exceeded target (213 tests)
@@ -107,13 +117,14 @@
 - ✅ Complete trait system coverage (Liskov, signatures, trait objects, generic traits)
 - ✅ Complete control flow validation (unreachable code, return paths, break/continue, scopes)
 - ✅ Complete closure system testing (capture, type checking, lifting, recursion edge cases)
+- ✅ Complete method resolution testing (vtables, trait dispatch, lookup, overloading, self types)
 
 ## Next Priorities
-1. **Method Resolution** (100 tests) - HIGH priority, vtable generation, trait dispatch
-2. **Declaration Registration** (100 tests) - HIGH priority, forward references, circular deps
-3. **DI Graph** (80 tests) - MEDIUM priority, topological sort, cycle detection
-4. **Scope & Variables** (80 tests) - MEDIUM priority, shadowing, lifetime edge cases
-5. Continue through remaining 7 categories systematically
+1. **Declaration Registration** (100 tests) - HIGH priority, forward references, circular deps
+2. **DI Graph** (80 tests) - MEDIUM priority, topological sort, cycle detection
+3. **Scope & Variables** (80 tests) - MEDIUM priority, shadowing, lifetime edge cases
+4. **Mutability** (60 tests) - MEDIUM priority, mut self enforcement, immutability violations
+5. Continue through remaining 6 categories systematically
 
 ## Testing Strategy Notes
 - Using inline `compile_should_fail_with(code, expected_msg)` pattern

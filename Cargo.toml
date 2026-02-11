@@ -488,6 +488,31 @@ path = "tests/typeck/closures/recursive_closures.rs"
 name = "typeck_closure_edge_cases"
 path = "tests/typeck/closures/edge_cases.rs"
 
+# Typeck edge case tests - method resolution category
+[[test]]
+name = "typeck_vtable_generation"
+path = "tests/typeck/methods/vtable_generation.rs"
+
+[[test]]
+name = "typeck_trait_dispatch"
+path = "tests/typeck/methods/trait_dispatch.rs"
+
+[[test]]
+name = "typeck_method_lookup"
+path = "tests/typeck/methods/method_lookup.rs"
+
+[[test]]
+name = "typeck_method_overloading"
+path = "tests/typeck/methods/overloading.rs"
+
+[[test]]
+name = "typeck_self_type_errors"
+path = "tests/typeck/methods/self_type_errors.rs"
+
+[[test]]
+name = "typeck_method_visibility"
+path = "tests/typeck/methods/visibility.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false
