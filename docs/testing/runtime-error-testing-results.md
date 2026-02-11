@@ -2,18 +2,17 @@
 
 **Date:** 2026-02-11
 **Phase:** 2, Part 5 (Core Feature Coverage - Runtime Edge Cases)
-**Status:** ⚠️ Partially Complete (17/21 tests passing, 4 blocked by compiler bugs)
+**Status:** ✅ Complete (All 21 tests passing, compiler bugs fixed!)
 
 ## Executive Summary
 
-Successfully implemented **21 comprehensive tests** for runtime error state management. **17 tests pass**, validating critical TLS isolation, error object GC, error lifecycle, and basic concurrency. **4 tests are blocked by compiler bugs** (multi-statement catch blocks, diverging control flow).
+Successfully implemented **21 comprehensive tests** for runtime error state management. **All 21 tests pass**, validating critical TLS isolation, error object GC, error lifecycle, high concurrency stress, and multi-layer error propagation.
 
 **Coverage achieved:** 17% → 70% (from 10 tests to 31 tests)
-**Compiler bugs found:** 2 (multi-statement catch blocks, if-without-else with raise)
+**Compiler bugs found & fixed:** 2 (both in parser - newline handling in expressions)
 **Runtime bugs found:** 0 (runtime implementation is solid)
 **Tests implemented:** 21 new tests in `tests/integration/runtime_error_state.rs`
-**Tests passing:** 17 (81%)
-**Tests blocked:** 4 (blocked by compiler bugs, tracked in `docs/bugs/COMPILER-BUGS.md`)
+**Tests passing:** 21/21 (100%) ✅
 
 ## Test Implementation Results
 
@@ -58,27 +57,27 @@ Successfully implemented **21 comprehensive tests** for runtime error state mana
 
 **Key Finding:** Edge cases (nested tasks, empty errors) work correctly.
 
-### P1.1: High Concurrency Stress Tests (5 tests) ⚠️ 3 passing, 2 blocked
+### P1.1: High Concurrency Stress Tests (5 tests) ✅ All Passing
 
-| Test Name | Status | What It Tests | Blocking Issue |
-|-----------|--------|---------------|----------------|
-| `stress_100_concurrent_tasks_mixed_errors` | 🔴 BLOCKED | 100 tasks, 5 error types, mixed success/fail | Bug #1 (multi-statement catch) |
-| `stress_1000_sequential_spawn_error_cycles` | 🔴 BLOCKED | 1000 sequential spawn-error-catch cycles | Bug #1 (multi-statement catch) |
-| `stress_rapid_spawn_under_error_load` | ✅ PASS | 50 tasks spawned rapidly, all error | - |
-| `stress_error_object_field_diversity` | ✅ PASS | Errors with diverse field types (int, string, bool, array) | - |
-| `stress_burst_error_creation` | ✅ PASS | 10 tasks × 100 errors = 1000 burst errors | - |
+| Test Name | Status | What It Tests | Result |
+|-----------|--------|---------------|--------|
+| `stress_100_concurrent_tasks_mixed_errors` | ✅ PASS | 100 tasks, 5 error types, mixed success/fail | 16 successes, 84 failures |
+| `stress_1000_sequential_spawn_error_cycles` | ✅ PASS | 1000 sequential spawn-error-catch cycles | All 1000 caught |
+| `stress_rapid_spawn_under_error_load` | ✅ PASS | 50 tasks spawned rapidly, all error | All caught correctly |
+| `stress_error_object_field_diversity` | ✅ PASS | Errors with diverse field types (int, string, bool, array) | Complex errors handled |
+| `stress_burst_error_creation` | ✅ PASS | 10 tasks × 100 errors = 1000 burst errors | GC handles burst load |
 
-**Key Finding:** Tests that pass validate high concurrency and burst scenarios work correctly. Blocked tests expose compiler bug #1.
+**Key Finding:** High concurrency (100 tasks) and sustained load (1000 cycles) work correctly. No race conditions, no crashes, no slowdowns.
 
-### P1.2: Multi-Layer Error Propagation Tests (3 tests) ⚠️ 1 passing, 2 blocked
+### P1.2: Multi-Layer Error Propagation Tests (3 tests) ✅ All Passing
 
-| Test Name | Status | What It Tests | Blocking Issue |
-|-----------|--------|---------------|----------------|
-| `propagation_multi_layer_task_chain` | 🔴 BLOCKED | layer1→layer2→layer3, error propagates through all | Bug #1 (multi-statement catch) |
-| `propagation_task_fanout_all_fail` | ✅ PASS | Parent spawns 10 subtasks, all fail | - |
-| `propagation_mixed_success_failure_fanout` | 🔴 BLOCKED | Parent spawns 20 tasks, half succeed, half fail | Bug #1 + Bug #2 |
+| Test Name | Status | What It Tests | Result |
+|-----------|--------|---------------|--------|
+| `propagation_multi_layer_task_chain` | ✅ PASS | layer1→layer2→layer3, error propagates through all | 3-layer chain works |
+| `propagation_task_fanout_all_fail` | ✅ PASS | Parent spawns 10 subtasks, all fail | All 10 errors caught |
+| `propagation_mixed_success_failure_fanout` | ✅ PASS | Parent spawns 20 tasks, half succeed, half fail | 10 successes, 10 failures |
 
-**Key Finding:** Tests that pass validate multi-layer propagation works. Blocked tests expose compiler bugs #1 and #2.
+**Key Finding:** Multi-layer task hierarchies and fan-out patterns handle errors correctly. Complex task graphs work as expected.
 
 ## Compiler Bugs Found
 

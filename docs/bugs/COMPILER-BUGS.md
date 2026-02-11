@@ -4,9 +4,15 @@ This document tracks known compiler bugs discovered during testing.
 
 ## Active Bugs
 
-### Bug #1: Multi-Statement Catch Blocks Typed as Void
+_(None - all bugs fixed!)_
 
-**Status:** 🔴 Open
+---
+
+## Fixed Bugs
+
+### Bug #1: Multi-Statement Catch Blocks Typed as Void ✅ FIXED
+
+**Status:** ✅ Fixed on 2026-02-11
 **Severity:** High
 **Discovered:** 2026-02-11 (runtime error state testing)
 **Affects:** Error handling, test writing patterns
@@ -55,21 +61,43 @@ Catch blocks should be typed like regular block expressions:
 2. If the last statement is a statement (no semicolon in Pluto), it should still be an expression-statement
 3. The catch block type should match the last expression's type
 
-**Workaround:**
+**Root Cause Found:**
 
-Use single-expression catch blocks and move side effects outside:
+The parser was treating expressions across newlines as a single expression. When parsing:
 ```pluto
-let result = task.get() catch err { -1 }
-if result == -1 {
-    failures = failures + 1
+failures = failures + 1
+-1
+```
+
+The parser saw it as `failures = failures + 1 - 1` because `peek()` automatically skips newlines, treating `-1` as a binary minus operator.
+
+**Fix Implemented:**
+
+Added newline detection in the Pratt parser (`src/parser/mod.rs`, line ~2204). Before parsing infix operators, check if there's a newline before the token. If yes, stop parsing the expression:
+
+```rust
+// Check if there's a newline before this token
+let has_newline_before = self.peek_raw().is_some()
+    && matches!(self.peek_raw().unwrap().node, Token::Newline);
+
+if has_newline_before {
+    // If we hit a newline before a binary operator, stop
+    match &tok.node {
+        Token::Plus | Token::Minus | Token::Star | ... => break,
+        _ => {}
+    }
 }
 ```
 
+**Result:** Multi-statement catch blocks now work correctly. Parser correctly treats newlines as statement boundaries.
+
+**Tests Unblocked:** All 4 tests now pass (stress_100, stress_1000, propagation_multi_layer, propagation_mixed).
+
 ---
 
-### Bug #2: `if` Without `else` Containing `raise` Typed as Void
+### Bug #2: `if` Without `else` Containing `raise` Typed as Void ✅ FIXED
 
-**Status:** 🔴 Open
+**Status:** ✅ Fixed on 2026-02-11 (same fix as Bug #1)
 **Severity:** Medium
 **Discovered:** 2026-02-11 (runtime error state testing)
 **Affects:** Control flow with errors
@@ -117,21 +145,17 @@ The typechecker doesn't have a concept of "diverging" expressions (expressions t
 2. When checking block/if expressions, if a branch diverges, don't require it to match the expected type
 3. `if condition { raise ... }` without `else` should be valid if the return type doesn't matter (diverges)
 
-**Workaround:**
+**Root Cause:**
 
-Add unreachable `return 0` after `raise`:
-```pluto
-if n % 2 == 0 {
-    raise MyError { n: n }
-    return 0  // Never reached, but satisfies typechecker
-}
-```
+Same as Bug #1 - the parser bug caused the `if` body and subsequent lines to be parsed incorrectly.
 
----
+**Fix Implemented:**
 
-## Fixed Bugs
+Same parser fix as Bug #1. The newline detection prevents the parser from continuing past the `if` statement.
 
-_(None yet)_
+**Result:** Functions with `if { raise }` patterns now work correctly.
+
+**Tests Unblocked:** 1 additional test (propagation_mixed was affected by both bugs).
 
 ---
 

@@ -2205,6 +2205,23 @@ impl<'a> Parser<'a> {
         let mut lhs = self.parse_prefix()?;
 
         while let Some(tok) = self.peek().cloned() {
+            // Check if there's a newline before this token
+            // If yes, and the token could start a new statement, stop parsing
+            let has_newline_before = self.peek_raw().is_some()
+                && matches!(self.peek_raw().unwrap().node, Token::Newline);
+
+            if has_newline_before {
+                // Check if the next token (after newlines) could start a new statement
+                // For now, if we hit a newline before a binary operator, stop
+                // This prevents `expr\n-1` from being parsed as `expr - 1`
+                match &tok.node {
+                    Token::Plus | Token::Minus | Token::Star | Token::Slash | Token::Percent |
+                    Token::EqEq | Token::BangEq | Token::Lt | Token::Gt | Token::LtEq | Token::GtEq |
+                    Token::AmpAmp | Token::PipePipe | Token::Amp | Token::Pipe | Token::Caret |
+                    Token::Shl => break,
+                    _ => {}
+                }
+            }
 
             // Dot notation (postfix) — highest precedence
             if matches!(tok.node, Token::Dot) {
