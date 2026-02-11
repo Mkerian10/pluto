@@ -245,6 +245,8 @@ plutoc generate-pt main.pluto               # Binary AST → readable source
 
 ## Book
 
+**Read online:** [mkerian10.github.io/pluto](https://mkerian10.github.io/pluto/)
+
 The [Pluto Book](book/) is a comprehensive guide written for experienced developers. It covers everything from the language's differentiating features to the full standard library reference.
 
 ```bash
