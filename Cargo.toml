@@ -32,6 +32,10 @@ nix = { version = "0.27", features = ["signal", "process"] }
 [dev-dependencies]
 tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
+proptest = "1.0"
+insta = "1.34"
+criterion = "0.5"
+arbitrary = "1.3"
 
 [[test]]
 name = "basics"
@@ -200,3 +204,15 @@ path = "tests/integration/wire.rs"
 [[test]]
 name = "marshaling"
 path = "tests/integration/marshaling.rs"
+
+[[test]]
+name = "ast"
+path = "tests/property/ast.rs"
+
+[[test]]
+name = "error_snapshots"
+path = "tests/integration/error_snapshots.rs"
+
+[[bench]]
+name = "compile_time"
+harness = false

@@ -4,6 +4,9 @@ use std::io::Read as _;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+mod compiler;
+pub use compiler::{CompiledTestBinary, TestCompiler, TestOutput};
+
 /// Returns a Command for the plutoc binary. Use for CLI smoke tests only —
 /// most tests should use the library-call helpers below instead.
 pub fn plutoc() -> Command {

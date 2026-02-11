@@ -1,0 +1,6 @@
+---
+source: tests/integration/error_snapshots.rs
+assertion_line: 50
+expression: format_error(&err.to_string())
+---
+Type error: operand type mismatch: string vs int

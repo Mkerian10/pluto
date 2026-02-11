@@ -1,0 +1,6 @@
+---
+source: tests/integration/error_snapshots.rs
+assertion_line: 26
+expression: format_error(&err.to_string())
+---
+Type error: return type mismatch: expected string, found int

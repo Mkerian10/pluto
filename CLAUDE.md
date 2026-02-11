@@ -77,6 +77,33 @@ Test files: `basics`, `operators`, `control_flow`, `strings`, `arrays`, `classes
 - `run_project(files) -> String` — writes multiple files to temp dir, compiles entry, returns stdout
 - `compile_project_should_fail(files)` — asserts multi-file compilation fails
 
+**Property tests** — `tests/property/` directory. Run with `cargo test --test ast`.
+Use `proptest` to verify compiler invariants (spans, determinism, no panics).
+
+**Snapshot tests** — `tests/integration/error_snapshots.rs`. Run with `cargo test error_snapshots`.
+Use `insta` to validate error messages. Review changes with `cargo insta review`.
+
+**Fuzzing** — `fuzz/` directory. Requires `cargo install cargo-fuzz`. Run lexer fuzzer: `cargo fuzz run lex`. Run parser fuzzer: `cargo fuzz run parse`.
+Store crash cases in `fuzz/artifacts/`. Fuzzing discovers edge cases through random input generation.
+
+**Compiler benchmarks** — `benches/` directory. Run with `cargo bench`.
+Measures compilation speed using criterion. Baseline results stored in `target/criterion/`.
+These measure how fast the **compiler** runs (lex, parse, typecheck, codegen).
+
+**Runtime benchmarks** — `benchmarks/` directory. Run with `./benchmarks/run_benchmarks.sh`.
+Measures execution speed of Pluto programs (how fast compiled code runs).
+Already exists, documented in `benchmarks/BENCHMARKS.md`.
+
+**TestCompiler API** — Programmatic access to compiler stages. Import from `tests/integration/common`:
+```rust
+use common::TestCompiler;
+
+let tc = TestCompiler::new("fn main() {}");
+let tokens = tc.lex().unwrap();
+let ast = tc.parse().unwrap();
+let output = tc.run().unwrap();
+```
+
 **Pre-commit hook** — A git pre-commit hook runs `cargo test` before every commit. All tests must pass for a commit to succeed.
 
 **Running the full test suite** — Do NOT run `cargo test` (all tests) locally when verifying a feature branch. Instead, push the branch, create a PR, and let CI run the full test suite. Running all tests locally is slow and CI is the source of truth. You may run individual test files locally for quick iteration (e.g., `cargo test --test generators`).
