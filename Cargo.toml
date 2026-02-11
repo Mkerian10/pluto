@@ -221,6 +221,30 @@ path = "tests/integration/lexer_tests.rs"
 name = "rpc"
 path = "tests/integration/rpc.rs"
 
+[[test]]
+name = "parser_precedence"
+path = "tests/integration/precedence.rs"
+
+[[test]]
+name = "parser_generics"
+path = "tests/integration/generics_syntax.rs"
+
+[[test]]
+name = "parser_arrows"
+path = "tests/integration/arrow_functions.rs"
+
+[[test]]
+name = "parser_structs"
+path = "tests/integration/struct_literals.rs"
+
+[[test]]
+name = "parser_edges"
+path = "tests/integration/edge_cases.rs"
+
+[[test]]
+name = "parser_property"
+path = "tests/property/parser.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false
