@@ -154,10 +154,361 @@ Create a 15×15 matrix where each cell represents a test for the interaction bet
 - Concurrent GC: spawn 100 tasks, each allocating 10K objects
 - String ops: empty strings, very long strings (1MB), UTF-8 edge cases
 - Array ops: empty arrays, single-element, resizing, bounds violations
-- Error state: concurrent errors (different errors in different threads)
+- **Error state: concurrent errors (different errors in different threads)** ⬅️ CURRENT
 - Task lifecycle: spawn, get, get twice (idempotent), task outlives parent
 - Channels: blocking send/recv, non-blocking, full/empty, close semantics
 - Contracts: invariant violations, requires failures, ensures failures
+
+#### 5a. Error State: Thread-Local Error Isolation
+
+**Goal:** Verify that TLS error state (`__pluto_current_error`) is properly isolated between threads and doesn't leak across task boundaries.
+
+**Critical Properties:**
+1. Each thread has its own independent error state
+2. Errors raised in one task don't affect other concurrent tasks
+3. Error state is cleared after catch, doesn't persist
+4. Multiple tasks can raise different errors simultaneously without interference
+
+**Test Cases:**
+
+```pluto
+// Test 1: Concurrent different errors in separate tasks
+error ErrorA {}
+error ErrorB {}
+
+fn raise_a() int raises ErrorA {
+    raise ErrorA
+}
+
+fn raise_b() int raises ErrorB {
+    raise ErrorB
+}
+
+test "concurrent tasks with different errors" {
+    let task_a = spawn raise_a()
+    let task_b = spawn raise_b()
+
+    // Both should fail with their respective errors
+    let result_a = task_a.get() catch e {
+        expect(e).to_be_instance_of(ErrorA)
+        return -1
+    }
+
+    let result_b = task_b.get() catch e {
+        expect(e).to_be_instance_of(ErrorB)
+        return -2
+    }
+
+    expect(result_a).to_equal(-1)
+    expect(result_b).to_equal(-2)
+}
+
+// Test 2: Error state doesn't leak between sequential task gets
+error NetworkError {}
+
+fn maybe_fail(should_fail: bool) int raises NetworkError {
+    if should_fail { raise NetworkError }
+    return 42
+}
+
+test "error state isolated between task gets" {
+    let task_fail = spawn maybe_fail(true)
+    let task_success = spawn maybe_fail(false)
+
+    // Get failing task first
+    let _ = task_fail.get() catch e { -1 }
+
+    // Error state should not affect second task
+    let result = task_success.get()
+    expect(result).to_equal(42) // Should succeed, not inherit error
+}
+
+// Test 3: Stress test with 100 concurrent tasks raising different errors
+error Error0 {}
+error Error1 {}
+error Error2 {}
+error Error3 {}
+error Error4 {}
+
+fn raise_by_id(id: int) int {
+    if id % 5 == 0 { raise Error0 }
+    if id % 5 == 1 { raise Error1 }
+    if id % 5 == 2 { raise Error2 }
+    if id % 5 == 3 { raise Error3 }
+    raise Error4
+}
+
+test "100 concurrent tasks with mixed errors" {
+    let mut tasks: [Task<int>] = []
+    for i in 0..100 {
+        tasks = tasks + [spawn raise_by_id(i)]
+    }
+
+    let mut caught = 0
+    for task in tasks {
+        let _ = task.get() catch e { caught = caught + 1; -1 }
+    }
+
+    expect(caught).to_equal(100) // All should raise errors
+}
+
+// Test 4: Error cleared after catch doesn't persist
+error TransientError {}
+
+fn fail_once() int raises TransientError {
+    raise TransientError
+}
+
+test "error state cleared after catch" {
+    // First call fails and is caught
+    let _ = fail_once() catch e { -1 }
+
+    // Error state should be cleared - verify by checking no residual error
+    // This requires spawning a task that would be affected if error persisted
+    let task = spawn return_42()
+    let result = task.get()
+    expect(result).to_equal(42) // Should work cleanly
+}
+
+fn return_42() int {
+    return 42
+}
+
+// Test 5: Main thread error doesn't affect spawned tasks
+error MainError {}
+
+fn safe_work() int {
+    return 100
+}
+
+test "main thread error isolated from spawned tasks" {
+    // Spawn task before raising error
+    let task = spawn safe_work()
+
+    // Raise and catch error in main thread
+    let _ = (raise MainError) catch e { -1 }
+
+    // Task should complete successfully despite main thread error
+    let result = task.get()
+    expect(result).to_equal(100)
+}
+```
+
+#### 5b. Error State: Propagation Correctness
+
+**Goal:** Verify that error propagation (`!`) works correctly in concurrent contexts and doesn't cause state corruption.
+
+**Test Cases:**
+
+```pluto
+// Test 6: Nested error propagation in spawned task
+error DBError {}
+error ValidationError {}
+
+fn validate(x: int) int raises ValidationError {
+    if x < 0 { raise ValidationError }
+    return x
+}
+
+fn db_save(x: int) int raises DBError, ValidationError {
+    let validated = validate(x)! // Propagate ValidationError
+    if validated > 1000 { raise DBError }
+    return validated
+}
+
+test "nested error propagation in task" {
+    let task_val = spawn db_save(-5)
+    let task_db = spawn db_save(2000)
+    let task_ok = spawn db_save(50)
+
+    // Validation error
+    let r1 = task_val.get() catch e {
+        expect(e).to_be_instance_of(ValidationError)
+        return -1
+    }
+
+    // DB error
+    let r2 = task_db.get() catch e {
+        expect(e).to_be_instance_of(DBError)
+        return -2
+    }
+
+    // Success
+    let r3 = task_ok.get()
+
+    expect(r1).to_equal(-1)
+    expect(r2).to_equal(-2)
+    expect(r3).to_equal(50)
+}
+
+// Test 7: Error propagation through multiple task layers
+error LayerError {}
+
+fn layer3() int raises LayerError {
+    raise LayerError
+}
+
+fn layer2() int raises LayerError {
+    return layer3()!
+}
+
+fn layer1() int raises LayerError {
+    return layer2()!
+}
+
+test "multi-layer error propagation in tasks" {
+    let task = spawn layer1()
+    let result = task.get() catch e {
+        expect(e).to_be_instance_of(LayerError)
+        return -99
+    }
+    expect(result).to_equal(-99)
+}
+```
+
+#### 5c. Error State: Race Conditions and Data Races
+
+**Goal:** Ensure no race conditions in TLS error state management under high concurrency.
+
+**Test Cases:**
+
+```pluto
+// Test 8: Rapid task spawning and error raising
+error RaceError {}
+
+fn maybe_fail_random(seed: int) int raises RaceError {
+    if seed % 3 == 0 { raise RaceError }
+    return seed
+}
+
+test "rapid concurrent error raising" {
+    let mut tasks: [Task<int>] = []
+
+    // Spawn 1000 tasks rapidly
+    for i in 0..1000 {
+        tasks = tasks + [spawn maybe_fail_random(i)]
+    }
+
+    // Collect results
+    let mut successes = 0
+    let mut failures = 0
+
+    for task in tasks {
+        let r = task.get() catch e {
+            failures = failures + 1
+            return -1
+        }
+        successes = successes + 1
+    }
+
+    // ~333 should fail, ~667 should succeed
+    expect(failures).to_be_greater_than(300)
+    expect(successes).to_be_greater_than(600)
+}
+
+// Test 9: Concurrent error set/clear cycles
+error CycleError {}
+
+fn error_cycle(iterations: int) int raises CycleError {
+    for i in 0..iterations {
+        if i % 2 == 0 {
+            let _ = (raise CycleError) catch e { 0 }
+        }
+    }
+    return iterations
+}
+
+test "concurrent error set clear cycles" {
+    let mut tasks: [Task<int>] = []
+    for i in 0..50 {
+        tasks = tasks + [spawn error_cycle(100)]
+    }
+
+    for task in tasks {
+        let result = task.get()
+        expect(result).to_equal(100)
+    }
+}
+```
+
+#### 5d. Error State: Memory Safety and Cleanup
+
+**Goal:** Verify that error objects are properly allocated, tracked by GC, and don't leak memory under concurrent error conditions.
+
+**Test Cases:**
+
+```pluto
+// Test 10: Error objects collected by GC
+error HeapError {
+    message: string
+}
+
+fn create_heap_error(id: int) int raises HeapError {
+    raise HeapError { message: "Error {id}" }
+}
+
+test "error objects garbage collected" {
+    let mut tasks: [Task<int>] = []
+
+    // Create 10K errors (should not OOM if GC works)
+    for i in 0..10000 {
+        tasks = tasks + [spawn create_heap_error(i)]
+    }
+
+    let mut caught = 0
+    for task in tasks {
+        let _ = task.get() catch e { caught = caught + 1; -1 }
+    }
+
+    expect(caught).to_equal(10000)
+    // If we reach here without OOM, GC is collecting error objects
+}
+
+// Test 11: Error state cleanup on task exit
+error ExitError {}
+
+fn fail_and_exit() int raises ExitError {
+    raise ExitError
+}
+
+test "task exit cleans up error state" {
+    let mut tasks: [Task<int>] = []
+
+    // Spawn 100 tasks that raise errors and exit
+    for i in 0..100 {
+        tasks = tasks + [spawn fail_and_exit()]
+    }
+
+    // Let tasks complete
+    for task in tasks {
+        let _ = task.get() catch e { -1 }
+    }
+
+    // Spawn new task - should have clean error state
+    let clean_task = spawn return_42()
+    let result = clean_task.get()
+    expect(result).to_equal(42)
+}
+```
+
+**Expected Behavior:**
+1. All tests pass without race conditions or data corruption
+2. No memory leaks detected by valgrind
+3. Error state properly isolated between threads
+4. TLS cleanup happens correctly on thread exit
+
+**Failure Modes to Test:**
+- Error from one task affecting another task (TLS leak)
+- Memory corruption when multiple threads set error state simultaneously
+- Error objects not being GC'd (memory leak)
+- Error state persisting after catch (state leak)
+- Crashes due to accessing freed error objects
+
+**Validation Tools:**
+- Run under `valgrind --leak-check=full` (no leaks)
+- Run under `valgrind --tool=helgrind` (no data races)
+- Run with AddressSanitizer (no use-after-free)
+- Run with ThreadSanitizer (no race conditions)
 
 **Stress Tests:**
 - 10K concurrent tasks
