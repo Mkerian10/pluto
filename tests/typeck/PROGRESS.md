@@ -123,12 +123,20 @@
 
 **Subtotal:** 80/80 ✅ **TARGET MET**
 
-### 12-15. Remaining Categories
+### 12. Mutability ✅ COMPLETE (Target: 60+, Actual: 60)
+- ✅ `mutability/mut_self_enforcement.rs` - 20 tests
+- ✅ `mutability/immutability_violations.rs` - 20 tests
+- ✅ `mutability/const_correctness.rs` - 10 tests
+- ✅ `mutability/closure_mutation.rs` - 10 tests
+
+**Subtotal:** 60/60 ✅ **TARGET MET**
+
+### 13-15. Remaining Categories
 - 🚧 All TODO
 
 ---
 
-## TOTAL PROGRESS: 1,423/1,730 tests (82.2%)
+## TOTAL PROGRESS: 1,483/1,730 tests (85.7%)
 
 ## Key Achievements
 - ✅ Inference category complete and exceeded target (213 tests)
@@ -149,11 +157,12 @@
 - ✅ Complete declaration registration testing (forward refs, circular deps, duplicates, init order)
 - ✅ Complete DI graph testing (topological sort, cycles, scoping, dependency resolution, app validation)
 - ✅ Complete scope & variables testing (shadowing, lifetime errors, scope resolution, variable capture, temporal ordering)
+- ✅ Complete mutability testing (mut self enforcement, immutability violations, const correctness, closure mutation)
 
 ## Next Priorities
-1. **Mutability** (60 tests) - MEDIUM priority, mut self enforcement, immutability violations
-2. **Contract Tests** (100 tests) - MEDIUM priority, invariant violations, requires/ensures
-3. **Concurrency Tests** (100 tests) - MEDIUM priority, task errors, race conditions
+1. **Contract Tests** (100 tests) - MEDIUM priority, invariant violations, requires/ensures
+2. **Concurrency Tests** (100 tests) - MEDIUM priority, task errors, race conditions
+3. **Generator/Stream Tests** (60 tests) - MEDIUM priority, yield semantics, stream composition
 4. Continue through remaining 3 categories systematically
 
 ## Testing Strategy Notes

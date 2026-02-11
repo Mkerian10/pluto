@@ -559,6 +559,23 @@ path = "tests/typeck/scope_vars/variable_capture.rs"
 name = "typeck_temporal_errors"
 path = "tests/typeck/scope_vars/temporal_errors.rs"
 
+# Typeck edge case tests - mutability category
+[[test]]
+name = "typeck_mut_self_enforcement"
+path = "tests/typeck/mutability/mut_self_enforcement.rs"
+
+[[test]]
+name = "typeck_immutability_violations"
+path = "tests/typeck/mutability/immutability_violations.rs"
+
+[[test]]
+name = "typeck_const_correctness"
+path = "tests/typeck/mutability/const_correctness.rs"
+
+[[test]]
+name = "typeck_closure_mutation"
+path = "tests/typeck/mutability/closure_mutation.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false
