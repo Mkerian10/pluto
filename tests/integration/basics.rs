@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run, compile_batch_stdout, compile_should_fail, plutoc};
+use common::{compile_and_run, compile_batch_stdout, compile_should_fail_with, plutoc};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -297,68 +297,74 @@ fn nested_function_calls() {
 
 #[test]
 fn type_error_rejected() {
-    compile_should_fail("fn main() {\n    let x: int = true\n}");
+    compile_should_fail_with("fn main() {\n    let x: int = true\n}", "type mismatch: expected int, found bool");
 }
 
 #[test]
 fn undefined_variable_rejected() {
-    compile_should_fail("fn main() {\n    let x = y\n}");
+    compile_should_fail_with("fn main() {\n    let x = y\n}", "undefined variable 'y'");
 }
 
 #[test]
 fn undefined_function_rejected() {
-    compile_should_fail("fn main() {\n    let x = foo(1)\n}");
+    compile_should_fail_with("fn main() {\n    let x = foo(1)\n}", "undefined function 'foo'");
 }
 
 #[test]
 fn print_wrong_arg_count() {
-    compile_should_fail("fn main() {\n    print(1, 2)\n}");
+    compile_should_fail_with("fn main() {\n    print(1, 2)\n}", "print() expects 1 argument, got 2");
 }
 
 #[test]
 fn print_no_args() {
-    compile_should_fail("fn main() {\n    print()\n}");
+    compile_should_fail_with("fn main() {\n    print()\n}", "print() expects 1 argument, got 0");
 }
 
 #[test]
 fn wrong_arg_count_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "fn add(a: int, b: int) int {\n    return a + b\n}\n\nfn main() {\n    let x = add(1)\n}",
+        "function 'add' expects 2 arguments, got 1",
     );
 }
 
 #[test]
 fn return_type_mismatch_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "fn foo() int {\n    return true\n}\n\nfn main() {\n    foo()\n}",
+        "return type mismatch: expected int, found bool",
     );
 }
 
 #[test]
 fn arg_type_mismatch_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "fn foo(x: int) int {\n    return x\n}\n\nfn main() {\n    foo(\"hello\")\n}",
+        "argument 1 of 'foo': expected int, found string",
     );
 }
 
 #[test]
 fn assign_type_mismatch_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "fn main() {\n    let x = 42\n    x = true\n}",
+        "type mismatch in assignment: expected int, found bool",
     );
 }
 
 #[test]
 fn extern_fn_class_param_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "class Foo {\n    x: int\n}\n\nextern fn bad(f: Foo)\n\nfn main() {\n}",
+        "extern functions only support primitive types and arrays",
     );
 }
 
 #[test]
 fn extern_fn_duplicate_name_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "extern fn foo(x: int)\n\nfn foo(x: int) {\n}\n\nfn main() {\n}",
+        "duplicate function name 'foo': defined as both fn and extern fn",
     );
 }
 

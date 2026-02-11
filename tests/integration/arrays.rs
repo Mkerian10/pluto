@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail};
+use common::{compile_and_run_stdout, compile_should_fail_with};
 
 #[test]
 fn array_literal_and_index() {
@@ -91,17 +91,17 @@ fn array_in_struct_field() {
 
 #[test]
 fn array_mixed_types_rejected() {
-    compile_should_fail("fn main() {\n    let a = [1, true]\n}");
+    compile_should_fail_with("fn main() {\n    let a = [1, true]\n}", "array element type mismatch: expected int, found bool");
 }
 
 #[test]
 fn array_index_non_int_rejected() {
-    compile_should_fail("fn main() {\n    let a = [1, 2, 3]\n    let x = a[true]\n}");
+    compile_should_fail_with("fn main() {\n    let a = [1, 2, 3]\n    let x = a[true]\n}", "array index must be int, found bool");
 }
 
 #[test]
 fn array_push_wrong_type_rejected() {
-    compile_should_fail("fn main() {\n    let a = [1, 2]\n    a.push(\"x\")\n}");
+    compile_should_fail_with("fn main() {\n    let a = [1, 2]\n    a.push(\"x\")\n}", "push(): expected int, found string");
 }
 
 // ── pop ──────────────────────────────────────────────────────────────────────
@@ -344,20 +344,20 @@ fn array_index_of_string() {
 
 #[test]
 fn array_contains_wrong_type_rejected() {
-    compile_should_fail("fn main() {\n    let a = [1, 2]\n    a.contains(\"x\")\n}");
+    compile_should_fail_with("fn main() {\n    let a = [1, 2]\n    a.contains(\"x\")\n}", "contains(): expected int, found string");
 }
 
 #[test]
 fn array_index_of_wrong_type_rejected() {
-    compile_should_fail("fn main() {\n    let a = [1, 2]\n    a.index_of(\"x\")\n}");
+    compile_should_fail_with("fn main() {\n    let a = [1, 2]\n    a.index_of(\"x\")\n}", "index_of(): expected int, found string");
 }
 
 #[test]
 fn array_remove_at_wrong_type_rejected() {
-    compile_should_fail("fn main() {\n    let a = [1, 2]\n    a.remove_at(\"x\")\n}");
+    compile_should_fail_with("fn main() {\n    let a = [1, 2]\n    a.remove_at(\"x\")\n}", "remove_at(): expected int index, found string");
 }
 
 #[test]
 fn array_insert_at_wrong_value_type_rejected() {
-    compile_should_fail("fn main() {\n    let a = [1, 2]\n    a.insert_at(0, \"x\")\n}");
+    compile_should_fail_with("fn main() {\n    let a = [1, 2]\n    a.insert_at(0, \"x\")\n}", "insert_at(): expected int, found string");
 }
