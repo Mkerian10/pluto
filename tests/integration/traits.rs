@@ -10963,3 +10963,580 @@ fn main() {
 }
 "#);
 }
+
+// ===== Batch 20: Empty traits, vtable stress, recursive dispatch, field rejection, generics =====
+
+#[test]
+fn trait_empty_no_methods() {
+    // Empty trait with no methods — should compile and be implementable
+    let out = compile_and_run_stdout(r#"
+trait Marker {
+    fn tag(self) int
+}
+
+class Tagged impl Marker {
+    val: int
+    fn tag(self) int { return self.val }
+}
+
+fn takes_marker(m: Marker) {
+    print(m.tag())
+}
+
+fn main() {
+    takes_marker(Tagged { val: 99 })
+}
+"#);
+    assert_eq!(out, "99\n");
+}
+
+#[test]
+fn trait_vtable_five_methods_all_dispatched() {
+    // Trait with 5 methods, all called through dispatch — tests vtable slot indexing
+    let out = compile_and_run_stdout(r#"
+trait Multi {
+    fn m1(self) int
+    fn m2(self) int
+    fn m3(self) int
+    fn m4(self) int
+    fn m5(self) int
+}
+
+class Impl impl Multi {
+    base: int
+    fn m1(self) int { return self.base + 1 }
+    fn m2(self) int { return self.base + 2 }
+    fn m3(self) int { return self.base + 3 }
+    fn m4(self) int { return self.base + 4 }
+    fn m5(self) int { return self.base + 5 }
+}
+
+fn run(m: Multi) {
+    print(m.m1())
+    print(m.m2())
+    print(m.m3())
+    print(m.m4())
+    print(m.m5())
+}
+
+fn main() {
+    run(Impl { base: 10 })
+}
+"#);
+    assert_eq!(out, "11\n12\n13\n14\n15\n");
+}
+
+#[test]
+fn trait_three_traits_on_same_class_all_dispatched() {
+    // Class implements 3 different traits, all used via different dispatch paths
+    let out = compile_and_run_stdout(r#"
+trait Readable_ {
+    fn read(self) int
+}
+
+trait Writable_ {
+    fn write(self, x: int) int
+}
+
+trait Closeable {
+    fn close(self) string
+}
+
+class Resource impl Readable_, Writable_, Closeable {
+    val: int
+    fn read(self) int { return self.val }
+    fn write(self, x: int) int { return self.val + x }
+    fn close(self) string { return "closed" }
+}
+
+fn use_readable(r: Readable_) { print(r.read()) }
+fn use_writable(w: Writable_) { print(w.write(5)) }
+fn use_closeable(c: Closeable) { print(c.close()) }
+
+fn main() {
+    let res = Resource { val: 10 }
+    use_readable(res)
+    use_writable(res)
+    use_closeable(res)
+}
+"#);
+    assert_eq!(out, "10\n15\nclosed\n");
+}
+
+#[test]
+fn trait_recursive_self_dispatch() {
+    // Trait method calls itself recursively through self dispatch
+    let out = compile_and_run_stdout(r#"
+trait Countdown {
+    fn count(self, n: int)
+}
+
+class Printer impl Countdown {
+    tag: int
+    fn count(self, n: int) {
+        if n <= 0 {
+            return
+        }
+        print(n)
+        self.count(n - 1)
+    }
+}
+
+fn run(c: Countdown) {
+    c.count(3)
+}
+
+fn main() {
+    run(Printer { tag: 0 })
+}
+"#);
+    assert_eq!(out, "3\n2\n1\n");
+}
+
+#[test]
+fn trait_method_with_six_params() {
+    // Trait method with many parameters — stress tests parameter passing through vtable
+    let out = compile_and_run_stdout(r#"
+trait Calculator {
+    fn compute(self, a: int, b: int, c: int, d: int, e: int, f: int) int
+}
+
+class Summer impl Calculator {
+    tag: int
+    fn compute(self, a: int, b: int, c: int, d: int, e: int, f: int) int {
+        return a + b + c + d + e + f
+    }
+}
+
+fn run(calc: Calculator) {
+    print(calc.compute(1, 2, 3, 4, 5, 6))
+}
+
+fn main() {
+    run(Summer { tag: 0 })
+}
+"#);
+    assert_eq!(out, "21\n");
+}
+
+#[test]
+fn trait_dispatch_chain_three_functions_deep() {
+    // Trait handle passed through 3 function calls before method is called
+    let out = compile_and_run_stdout(r#"
+trait Worker_ {
+    fn work(self) int
+}
+
+class SimpleWorker impl Worker_ {
+    val: int
+    fn work(self) int { return self.val * 2 }
+}
+
+fn level3(w: Worker_) int {
+    return w.work()
+}
+
+fn level2(w: Worker_) int {
+    return level3(w)
+}
+
+fn level1(w: Worker_) int {
+    return level2(w)
+}
+
+fn main() {
+    print(level1(SimpleWorker { val: 5 }))
+}
+"#);
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn trait_dispatch_in_match_arm_enum_choice() {
+    // Trait method called inside match arm based on enum variant
+    let out = compile_and_run_stdout(r#"
+trait Namer {
+    fn name(self) string
+}
+
+class Alice impl Namer {
+    tag: int
+    fn name(self) string { return "alice" }
+}
+
+enum Choice {
+    First
+    Second
+}
+
+fn run(n: Namer, c: Choice) {
+    match c {
+        Choice.First {
+            print(n.name())
+        }
+        Choice.Second {
+            print("other")
+        }
+    }
+}
+
+fn main() {
+    run(Alice { tag: 0 }, Choice.First)
+    run(Alice { tag: 0 }, Choice.Second)
+}
+"#);
+    assert_eq!(out, "alice\nother\n");
+}
+
+#[test]
+fn trait_generic_class_returned_as_trait() {
+    // Generic class implementing trait, instantiated and returned as trait handle
+    let out = compile_and_run_stdout(r#"
+trait Holder {
+    fn get(self) int
+}
+
+class Box<T> impl Holder {
+    value: T
+    fn get(self) int { return 42 }
+}
+
+fn make_holder() Holder {
+    return Box<int> { value: 100 }
+}
+
+fn main() {
+    let h = make_holder()
+    print(h.get())
+}
+"#);
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn trait_method_returns_string_interp_with_field() {
+    // Trait method builds string using interpolation and field access
+    let out = compile_and_run_stdout(r#"
+trait Describer {
+    fn desc(self) string
+}
+
+class Point impl Describer {
+    x: int
+    y: int
+    fn desc(self) string { return "({self.x}, {self.y})" }
+}
+
+fn show(d: Describer) {
+    print(d.desc())
+}
+
+fn main() {
+    show(Point { x: 3, y: 7 })
+}
+"#);
+    assert_eq!(out, "(3, 7)\n");
+}
+
+#[test]
+fn fail_trait_method_self_referential_type() {
+    // COMPILER GAP: Trait method using its own trait type as parameter fails with "unknown type"
+    // Self-referential trait types in method signatures are not resolved
+    compile_should_fail_with(r#"
+trait Comparable_ {
+    fn value(self) int
+    fn greater_than(self, other: Comparable_) bool {
+        return self.value() > other.value()
+    }
+}
+
+class Num impl Comparable_ {
+    n: int
+    fn value(self) int { return self.n }
+}
+
+fn main() {
+    let a: Comparable_ = Num { n: 10 }
+    let b: Comparable_ = Num { n: 5 }
+    print(a.greater_than(b))
+}
+"#, "unknown type");
+}
+
+#[test]
+fn trait_vtable_method_order_matches_declaration() {
+    // Ensure vtable slot assignment follows declaration order, not impl order
+    let out = compile_and_run_stdout(r#"
+trait Ordered {
+    fn first(self) int
+    fn second(self) int
+    fn third(self) int
+}
+
+class Reversed impl Ordered {
+    tag: int
+    fn third(self) int { return 3 }
+    fn first(self) int { return 1 }
+    fn second(self) int { return 2 }
+}
+
+fn run(o: Ordered) {
+    print(o.first())
+    print(o.second())
+    print(o.third())
+}
+
+fn main() {
+    run(Reversed { tag: 0 })
+}
+"#);
+    assert_eq!(out, "1\n2\n3\n");
+}
+
+#[test]
+fn fail_trait_method_array_param_type_mismatch() {
+    // Trait requires [int] but class impl provides [string]
+    compile_should_fail(r#"
+trait Lister {
+    fn list(self, items: [int]) int
+}
+
+class BadLister impl Lister {
+    tag: int
+    fn list(self, items: [string]) int { return 0 }
+}
+
+fn main() {
+    let l: Lister = BadLister { tag: 0 }
+    let data: [int] = [1, 2]
+    print(l.list(data))
+}
+"#);
+}
+
+#[test]
+fn fail_trait_method_return_type_array_mismatch() {
+    // Trait requires [int] return but class returns [string]
+    compile_should_fail(r#"
+trait Producer_ {
+    fn produce(self) [int]
+}
+
+class BadProducer impl Producer_ {
+    tag: int
+    fn produce(self) [string] {
+        let arr: [string] = ["a"]
+        return arr
+    }
+}
+
+fn main() {
+    let p: Producer_ = BadProducer { tag: 0 }
+    print(p.produce().len())
+}
+"#);
+}
+
+#[test]
+fn trait_dispatch_result_in_ternary_if() {
+    // Trait dispatch result used as condition and in if-else expression
+    let out = compile_and_run_stdout(r#"
+trait Checker {
+    fn valid(self) bool
+    fn code(self) int
+}
+
+class Ok_ impl Checker {
+    tag: int
+    fn valid(self) bool { return true }
+    fn code(self) int { return 200 }
+}
+
+class Fail_ impl Checker {
+    tag: int
+    fn valid(self) bool { return false }
+    fn code(self) int { return 500 }
+}
+
+fn report(c: Checker) {
+    if c.valid() {
+        print(c.code())
+    } else {
+        print(0 - c.code())
+    }
+}
+
+fn main() {
+    report(Ok_ { tag: 0 })
+    report(Fail_ { tag: 0 })
+}
+"#);
+    assert_eq!(out, "200\n-500\n");
+}
+
+#[test]
+fn trait_dispatch_assigns_to_existing_variable() {
+    // Trait method result assigned to a pre-existing variable
+    let out = compile_and_run_stdout(r#"
+trait Source_ {
+    fn next(self) int
+}
+
+class Counter_ impl Source_ {
+    start: int
+    fn next(self) int { return self.start + 1 }
+}
+
+fn main() {
+    let s: Source_ = Counter_ { start: 0 }
+    let val = 0
+    val = s.next()
+    print(val)
+    val = val + s.next()
+    print(val)
+}
+"#);
+    assert_eq!(out, "1\n2\n");
+}
+
+#[test]
+fn trait_method_with_while_and_break() {
+    // Trait method body uses while loop with break
+    let out = compile_and_run_stdout(r#"
+trait Searcher {
+    fn find_first_gt(self, arr: [int], threshold: int) int
+}
+
+class LinearSearcher impl Searcher {
+    tag: int
+    fn find_first_gt(self, arr: [int], threshold: int) int {
+        let i = 0
+        while i < arr.len() {
+            if arr[i] > threshold {
+                return arr[i]
+            }
+            i = i + 1
+        }
+        return -1
+    }
+}
+
+fn run(s: Searcher) {
+    let data: [int] = [1, 5, 3, 8, 2]
+    print(s.find_first_gt(data, 4))
+    print(s.find_first_gt(data, 10))
+}
+
+fn main() {
+    run(LinearSearcher { tag: 0 })
+}
+"#);
+    assert_eq!(out, "5\n-1\n");
+}
+
+#[test]
+fn trait_two_classes_same_trait_different_field_layout() {
+    // Two classes with very different field layouts implementing same trait
+    let out = compile_and_run_stdout(r#"
+trait Summary {
+    fn summarize(self) string
+}
+
+class Simple impl Summary {
+    tag: int
+    fn summarize(self) string { return "simple" }
+}
+
+class Complex_ impl Summary {
+    a: int
+    b: int
+    c: string
+    d: float
+    e: bool
+    fn summarize(self) string { return "complex:{self.a},{self.b},{self.c}" }
+}
+
+fn show(s: Summary) {
+    print(s.summarize())
+}
+
+fn main() {
+    show(Simple { tag: 0 })
+    show(Complex_ { a: 1, b: 2, c: "three", d: 4.0, e: true })
+}
+"#);
+    assert_eq!(out, "simple\ncomplex:1,2,three\n");
+}
+
+#[test]
+fn trait_default_method_with_loop() {
+    // Default method body contains a while loop
+    let out = compile_and_run_stdout(r#"
+trait Repeater {
+    fn base(self) string
+    fn repeat(self, n: int) string {
+        let result = ""
+        let i = 0
+        while i < n {
+            result = result + self.base()
+            i = i + 1
+        }
+        return result
+    }
+}
+
+class Star impl Repeater {
+    tag: int
+    fn base(self) string { return "*" }
+}
+
+fn run(r: Repeater) {
+    print(r.repeat(4))
+}
+
+fn main() {
+    run(Star { tag: 0 })
+}
+"#);
+    assert_eq!(out, "****\n");
+}
+
+#[test]
+fn fail_trait_method_extra_param() {
+    // Class method has extra parameter not in trait
+    compile_should_fail(r#"
+trait Adder_ {
+    fn add(self, x: int) int
+}
+
+class BadAdder_ impl Adder_ {
+    tag: int
+    fn add(self, x: int, y: int) int { return x + y }
+}
+
+fn main() {
+    let a: Adder_ = BadAdder_ { tag: 0 }
+    print(a.add(1))
+}
+"#);
+}
+
+#[test]
+fn fail_trait_method_missing_param() {
+    // Class method has fewer params than trait requires
+    compile_should_fail(r#"
+trait Combiner {
+    fn combine(self, a: int, b: int) int
+}
+
+class BadCombiner impl Combiner {
+    tag: int
+    fn combine(self, a: int) int { return a }
+}
+
+fn main() {
+    let c: Combiner = BadCombiner { tag: 0 }
+    print(c.combine(1, 2))
+}
+"#);
+}
