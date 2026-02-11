@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770793023070,
+  "lastUpdate": 1770795457698,
   "repoUrl": "https://github.com/Mkerian10/pluto",
   "entries": {
     "Benchmark": [
@@ -804,6 +804,170 @@ window.BENCHMARK_DATA = {
           {
             "name": "json_parse",
             "value": 1178,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "33331268+Mkerian10@users.noreply.github.com",
+            "name": "Matthew Kerian",
+            "username": "Mkerian10"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bd64d0222b5f4372adcd8436550de121184e9ffd",
+          "message": "Merge pull request #23 from Mkerian10/stdlib-modules\n\nAdd stdlib modules and examples: strings, paths, env",
+          "timestamp": "2026-02-11T01:35:45-06:00",
+          "tree_id": "8ee25b34e18707715f9b55c2438c1b001ba91c1d",
+          "url": "https://github.com/Mkerian10/pluto/commit/bd64d0222b5f4372adcd8436550de121184e9ffd"
+        },
+        "date": 1770795457253,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "fib",
+            "value": 71,
+            "unit": "ms"
+          },
+          {
+            "name": "loop_sum",
+            "value": 62,
+            "unit": "ms"
+          },
+          {
+            "name": "string_concat",
+            "value": 749,
+            "unit": "ms"
+          },
+          {
+            "name": "array_push",
+            "value": 5,
+            "unit": "ms"
+          },
+          {
+            "name": "array_iter",
+            "value": 3,
+            "unit": "ms"
+          },
+          {
+            "name": "class_method",
+            "value": 6,
+            "unit": "ms"
+          },
+          {
+            "name": "closure_call",
+            "value": 25,
+            "unit": "ms"
+          },
+          {
+            "name": "trait_dispatch",
+            "value": 1419,
+            "unit": "ms"
+          },
+          {
+            "name": "gc_churn",
+            "value": 142,
+            "unit": "ms"
+          },
+          {
+            "name": "gc_binary_trees",
+            "value": 2024,
+            "unit": "ms"
+          },
+          {
+            "name": "gc_string_pressure",
+            "value": 74,
+            "unit": "ms"
+          },
+          {
+            "name": "sieve",
+            "value": 10,
+            "unit": "ms"
+          },
+          {
+            "name": "bounce",
+            "value": 47,
+            "unit": "ms"
+          },
+          {
+            "name": "towers",
+            "value": 1762,
+            "unit": "ms"
+          },
+          {
+            "name": "permute",
+            "value": 103,
+            "unit": "ms"
+          },
+          {
+            "name": "queens",
+            "value": 157,
+            "unit": "ms"
+          },
+          {
+            "name": "fannkuch_redux",
+            "value": 1357,
+            "unit": "ms"
+          },
+          {
+            "name": "spectral_norm",
+            "value": 52,
+            "unit": "ms"
+          },
+          {
+            "name": "nbody",
+            "value": 9073,
+            "unit": "ms"
+          },
+          {
+            "name": "mandelbrot",
+            "value": 286,
+            "unit": "ms"
+          },
+          {
+            "name": "monte_carlo",
+            "value": 1434,
+            "unit": "ms"
+          },
+          {
+            "name": "storage",
+            "value": 810,
+            "unit": "ms"
+          },
+          {
+            "name": "list",
+            "value": 88,
+            "unit": "ms"
+          },
+          {
+            "name": "fft",
+            "value": 2387,
+            "unit": "ms"
+          },
+          {
+            "name": "sor",
+            "value": 576,
+            "unit": "ms"
+          },
+          {
+            "name": "sparse_matmul",
+            "value": 542,
+            "unit": "ms"
+          },
+          {
+            "name": "lu",
+            "value": 4068,
+            "unit": "ms"
+          },
+          {
+            "name": "json_parse",
+            "value": 1163,
             "unit": "ms"
           }
         ]
