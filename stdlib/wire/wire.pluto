@@ -86,6 +86,7 @@ pub trait Decoder {
     fn decode_null(mut self)
     fn decode_nullable(mut self) bool
     fn decode_array_start(mut self) int
+    fn decode_array_element(mut self, index: int)
     fn decode_array_end(mut self)
     fn decode_map_start(mut self) int
     fn decode_map_end(mut self)
@@ -395,6 +396,19 @@ pub class WireValueDecoder impl Decoder {
             WireValue.Record { keys, values } { raise WireError { message: "expected array" } }
             WireValue.Variant { name, data } { raise WireError { message: "expected array" } }
             WireValue.Null { raise WireError { message: "expected array" } }
+        }
+    }
+
+    fn decode_array_element(mut self, idx: int) {
+        let stack_len = self.stack.len()
+        let frame = self.stack[stack_len - 1]
+        match frame {
+            DecoderFrame.ArrayCursor { elements, index } {
+                self.current = elements[idx]
+            }
+            DecoderFrame.RecordCursor { keys, values, index } {
+                raise WireError { message: "decode_array_element called on record cursor" }
+            }
         }
     }
 

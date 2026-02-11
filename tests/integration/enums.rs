@@ -511,12 +511,11 @@ fn nullable_enum_basic() {
 
 #[test]
 fn enum_with_nullable_field() {
-    // COMPILER GAP: `none` literal infers as Nullable(Void) and doesn't coerce
-    // to Nullable(String) in enum variant field construction context
-    compile_should_fail_with(
+    // none literal now properly coerces to T? in enum variant fields
+    let out = compile_and_run_stdout(
         "enum Entry {\n    Named { name: string, nickname: string? }\n    Anonymous\n}\n\nfn main() {\n    let e = Entry.Named { name: \"Alice\", nickname: none }\n    match e {\n        Entry.Named { name, nickname } {\n            print(name)\n        }\n        Entry.Anonymous { print(\"anon\") }\n    }\n}",
-        "expected string?, found void?",
     );
+    assert_eq!(out, "Alice\n");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

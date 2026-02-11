@@ -2344,10 +2344,24 @@ impl<'a> LowerContext<'a> {
 
         for (lit_name, lit_val) in fields {
             let val = self.lower_expr(&lit_val.node)?;
-            let offset = field_info.iter()
+            let val_type = infer_type_for_expr(&lit_val.node, self.env, &self.var_types);
+
+            let field_idx = field_info.iter()
                 .position(|(n, _, _)| *n == lit_name.node)
-                .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", lit_name.node, name.node)))? as i32 * POINTER_SIZE;
-            self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
+                .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", lit_name.node, name.node)))?;
+            let field_type = &field_info[field_idx].1;
+
+            // Handle T → T? coercion
+            let final_val = match (&val_type, field_type) {
+                (inner, PlutoType::Nullable(expected_inner))
+                    if !matches!(inner, PlutoType::Nullable(_)) && **expected_inner != PlutoType::Void => {
+                    self.emit_nullable_wrap(val, inner)
+                }
+                _ => val,
+            };
+
+            let offset = (field_idx as i32) * POINTER_SIZE;
+            self.builder.ins().store(MemFlags::new(), final_val, ptr, Offset32::new(offset));
         }
 
         // Emit invariant checks after struct construction
@@ -2379,10 +2393,21 @@ impl<'a> LowerContext<'a> {
 
         for (lit_name, lit_val) in fields {
             let val = self.lower_expr(&lit_val.node)?;
+            let val_type = infer_type_for_expr(&lit_val.node, self.env, &self.var_types);
+
             let field_idx = variant_fields.iter().position(|(n, _)| *n == lit_name.node)
                 .expect("field should exist after typeck validation");
             let field_type = &variant_fields[field_idx].1;
-            let slot = to_array_slot(val, field_type, &mut self.builder);
+
+            // Handle T → T? coercion first, then array slot conversion
+            let wrapped_val = match (&val_type, field_type) {
+                (inner, PlutoType::Nullable(expected_inner))
+                    if !matches!(inner, PlutoType::Nullable(_)) && **expected_inner != PlutoType::Void => {
+                    self.emit_nullable_wrap(val, inner)
+                }
+                _ => val,
+            };
+            let slot = to_array_slot(wrapped_val, field_type, &mut self.builder);
             let offset = ((1 + field_idx) as i32) * POINTER_SIZE;
             self.builder.ins().store(MemFlags::new(), slot, ptr, Offset32::new(offset));
         }
