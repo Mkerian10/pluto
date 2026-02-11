@@ -127,6 +127,15 @@ pub struct ScopeResolution {
     pub binding_sources: Vec<FieldWiring>,
 }
 
+/// Cross-stage call information for RPC Phase 2
+#[derive(Debug, Clone)]
+pub struct CrossStageCall {
+    pub from_stage: String,
+    pub to_stage: String,
+    pub method_name: String,
+    pub span: crate::span::Span,
+}
+
 #[derive(Debug)]
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, PlutoType>>,
@@ -200,6 +209,16 @@ pub struct TypeEnv {
     pub generators: HashSet<String>,
     /// When type-checking a generator body, holds the element type T from `stream T`
     pub current_generator_elem: Option<PlutoType>,
+
+    // ── RPC Phase 2: Cross-stage visibility enforcement ──
+    /// Currently being type-checked stage name (for cross-stage call detection)
+    pub current_stage: Option<String>,
+    /// Set of stage names (for cross-stage call detection)
+    pub stage_names: HashSet<String>,
+    /// Cross-stage calls detected during typechecking
+    pub cross_stage_calls: Vec<CrossStageCall>,
+    /// Mangled names of methods marked as `pub`
+    pub pub_methods: HashSet<String>,
 }
 
 impl Default for TypeEnv {
@@ -271,6 +290,10 @@ impl TypeEnv {
             scope_body_depths: Vec::new(),
             generators: HashSet::new(),
             current_generator_elem: None,
+            current_stage: None,
+            stage_names: HashSet::new(),
+            cross_stage_calls: Vec::new(),
+            pub_methods: HashSet::new(),
         }
     }
 
