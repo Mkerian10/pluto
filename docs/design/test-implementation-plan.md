@@ -127,246 +127,336 @@ cargo bench
 
 ### Phase 2: Core Feature Coverage (Weeks 3-4)
 
-**Goal:** Systematically test all implemented features through multiple test runs, fixing bugs between each run.
+**Goal:** Systematically test all implemented features through parallel agent exploration.
 
-**Strategy:** Run tests in batches, triage failures, fix bugs, then proceed to next batch. Each run validates previous fixes before adding new tests.
+**Strategy:** Deploy multiple agents concurrently to explore different compiler areas. Each agent writes tests, finds bugs, and documents their findings independently. Merge and integrate at week boundaries.
 
-#### Run 1 (Week 3, Days 1-2): Lexer + Parser
+**Parallelization Model:**
+- 6 agents working concurrently on different areas
+- Each agent has independent test suite and bug tracking
+- Weekly sync points to merge findings and resolve conflicts
+- Shared bug tracker to avoid duplicate work
 
-**Tasks:**
-1. Audit existing tests, create coverage matrix spreadsheet (`docs/testing/coverage-matrix.csv`)
+## Parallel Agent Workstreams (Week 3-4)
 
-2. Write lexer edge case tests (`tests/integration/lexer/`):
+**Coordination:** All agents start simultaneously at Week 3, Day 1. Sync points at end of Week 3 and Week 4.
+
+**IMPORTANT FOR AGENTS:** The user will handle parallelization and coordination. Each agent should work normally on their assigned scope without worrying about other agents. The user will manage branch merging, conflict resolution, and cross-agent synchronization.
+
+---
+
+### Agent 1: Lexer Explorer
+
+**Scope:** Lexer (tokenization) testing and bug fixing
+
+**Branch:** `test-phase2-lexer`
+
+**Responsibilities:**
+1. Write lexer edge case tests in `tests/integration/lexer/`:
    - Unicode identifiers (15 tests)
    - Edge tokens (10 tests)
    - Number formats (10 tests)
    - String escapes (10 tests)
-   Total: 45 tests
+   - **Target: 45 tests**
 
-3. Write parser edge case tests (`tests/integration/parser/`):
-   - Precedence (15 tests)
-   - Generics (10 tests)
+2. Explore edge cases:
+   - Fuzz lexer with arbitrary bytes (find crashes)
+   - Test UTF-8 boundary conditions
+   - Test number overflow/underflow
+   - Test comment nesting
+
+3. Bug tracking:
+   - File all lexer bugs in `bugs/lexer-agent1.md`
+   - Fix P0 bugs immediately
+   - Document P1/P2 bugs for later
+
+**Deliverables:**
+- [ ] 45+ lexer tests written
+- [ ] 90%+ tests passing
+- [ ] Lexer bugs documented (estimate: 3-5 bugs)
+- [ ] P0 bugs fixed
+
+**Validation:**
+```bash
+cargo test --test lexer
+# Target: 90%+ pass rate, 0 panics
+```
+
+---
+
+### Agent 2: Parser Explorer
+
+**Scope:** Parser (AST construction) testing and bug fixing
+
+**Branch:** `test-phase2-parser`
+
+**Responsibilities:**
+1. Write parser edge case tests in `tests/integration/parser/`:
+   - Precedence and associativity (15 tests)
+   - Generics syntax (10 tests)
    - Arrow functions (10 tests)
    - Struct literals (10 tests)
-   Total: 45 tests
+   - **Target: 45 tests**
 
-4. Run full test suite:
-   ```bash
-   cargo test --test lexer
-   cargo test --test parser
-   ```
+2. Explore edge cases:
+   - Deeply nested expressions (100+ levels)
+   - Edge whitespace/newline handling
+   - Generics with complex nesting `Map<K, Pair<A, B>>`
+   - Error recovery (does parser crash or give good errors?)
 
-5. Triage failures:
-   - Categorize: real bugs vs bad tests
-   - File issues for bugs (estimate: 5-10 bugs)
-   - Fix critical bugs blocking other tests
+3. Property tests:
+   - Parse roundtrip: `parse(source).pretty_print()` parses identically
+   - Span coverage: All AST nodes have spans
 
 **Deliverables:**
-- [ ] Coverage matrix created
-- [ ] 45 lexer tests written
-- [ ] 45 parser tests written
-- [ ] Lexer tests: 90%+ passing (allow 4-5 failures for bugs)
-- [ ] Parser tests: 85%+ passing (allow 6-7 failures for bugs)
-- [ ] Bugs filed and P0 bugs fixed
+- [ ] 45+ parser tests written
+- [ ] 2 property tests written
+- [ ] 85%+ tests passing
+- [ ] Parser bugs documented (estimate: 5-8 bugs)
+- [ ] P0 bugs fixed
 
-**Validation Gate:**
+**Validation:**
 ```bash
-cargo test --test lexer --test parser
-# Allow up to 10 test failures total (known bugs)
-# No panics or segfaults allowed
+cargo test --test parser
+cargo test --test property::parser
+# Target: 85%+ pass rate, 0 panics
 ```
-
-**Proceed to Run 2 if:**
-- ✅ <10 test failures
-- ✅ All P0 bugs fixed
-- ✅ No compiler panics
 
 ---
 
-#### Run 2 (Week 3, Days 3-4): Typeck + Bug Fixes
+### Agent 3: Typeck Explorer
 
-**Entry Criteria:** Run 1 validation gate passed
+**Scope:** Type checker testing and bug fixing
 
-**Tasks:**
-1. Fix remaining bugs from Run 1 (P1/P2 priority)
+**Branch:** `test-phase2-typeck`
 
-2. Write typeck edge case tests (`tests/integration/typeck/`):
-   - Inference (20 tests)
+**Responsibilities:**
+1. Write typeck edge case tests in `tests/integration/typeck/`:
+   - Type inference (20 tests)
    - Generics (15 tests)
    - Traits (15 tests)
-   - Errors (15 tests)
-   - Nullable (10 tests)
-   Total: 75 tests
+   - Error propagation (15 tests)
+   - Nullable types (10 tests)
+   - **Target: 75 tests**
 
-3. Re-run lexer + parser tests to ensure fixes didn't regress:
-   ```bash
-   cargo test --test lexer --test parser
-   ```
+2. Explore edge cases:
+   - Generic inference edge cases
+   - Trait object edge cases
+   - Error type inference across complex call graphs
+   - Nullable coercion edge cases
 
-4. Run typeck tests:
-   ```bash
-   cargo test --test typeck
-   ```
-
-5. Install tarpaulin and generate first coverage report:
-   ```bash
-   cargo install cargo-tarpaulin
-   cargo tarpaulin --out Html --output-dir coverage
-   ```
-
-6. Triage typeck failures:
-   - Estimate: 10-15 new bugs found
-   - Fix critical blocking bugs
+3. Coverage focus:
+   - Target 85%+ coverage of `src/typeck/`
+   - Run `cargo tarpaulin --lib src/typeck`
+   - Document untested paths
 
 **Deliverables:**
-- [ ] Run 1 bugs fixed (90%+)
-- [ ] 75 typeck tests written
-- [ ] Typeck tests: 80%+ passing
-- [ ] Lexer + parser tests still passing (no regressions)
-- [ ] Coverage report: 75%+ line coverage
-- [ ] Typeck bugs filed and P0 fixed
+- [ ] 75+ typeck tests written
+- [ ] 80%+ tests passing
+- [ ] Typeck coverage: 85%+
+- [ ] Typeck bugs documented (estimate: 10-15 bugs)
+- [ ] P0 bugs fixed
 
-**Validation Gate:**
+**Validation:**
 ```bash
-cargo test --test lexer --test parser --test typeck
-cargo tarpaulin --out Html
-# Target: 75%+ coverage, <15 test failures total
+cargo test --test typeck
+cargo tarpaulin --lib -- typeck
+# Target: 80%+ pass rate, 85%+ coverage
 ```
-
-**Proceed to Run 3 if:**
-- ✅ 75%+ code coverage
-- ✅ <15 test failures across all runs
-- ✅ No new panics introduced
 
 ---
 
-#### Run 3 (Week 4, Days 1-2): Codegen + Runtime
+### Agent 4: Codegen Explorer
 
-**Entry Criteria:** Run 2 validation gate passed
+**Scope:** Code generation (Cranelift IR) testing and bug fixing
 
-**Tasks:**
-1. Fix remaining bugs from Run 2 (P1/P2)
+**Branch:** `test-phase2-codegen`
 
-2. Write codegen edge case tests (`tests/integration/codegen/`):
+**Responsibilities:**
+1. Write codegen edge case tests in `tests/integration/codegen/`:
    - All PlutoType variants (20 tests)
    - Calling conventions (15 tests)
    - Memory layout (10 tests)
-   Total: 45 tests
+   - **Target: 45 tests**
 
-3. Write runtime edge case tests (`tests/integration/runtime/`):
-   - GC basic cases (15 tests)
-   - Error handling (10 tests)
-   - Task lifecycle (10 tests)
-   Total: 35 tests
+2. Explore edge cases:
+   - Large struct sizes (>100 fields)
+   - Deeply nested calls (100+ stack frames)
+   - All error handling paths (raise, propagate, catch)
+   - Closure calling conventions
 
-4. Re-run all previous tests:
-   ```bash
-   cargo test --test lexer --test parser --test typeck
-   ```
-
-5. Run new tests:
-   ```bash
-   cargo test --test codegen --test runtime
-   ```
-
-6. Generate updated coverage report, compare to Run 2:
-   ```bash
-   cargo tarpaulin --out Html --output-dir coverage
-   ```
-
-7. Triage failures:
-   - Estimate: 8-12 new bugs (codegen is critical)
-   - Fix all codegen panics immediately
+3. Critical focus:
+   - **Zero panics allowed in codegen**
+   - **Zero segfaults in generated binaries**
+   - Run generated binaries under valgrind
 
 **Deliverables:**
-- [ ] Run 2 bugs fixed (85%+)
-- [ ] 45 codegen tests written
-- [ ] 35 runtime tests written
-- [ ] Codegen tests: 85%+ passing
-- [ ] Runtime tests: 90%+ passing
-- [ ] Coverage: 80%+ line coverage
-- [ ] No regressions in previous tests
+- [ ] 45+ codegen tests written
+- [ ] 85%+ tests passing
+- [ ] Codegen coverage: 80%+
+- [ ] Codegen bugs documented (estimate: 8-12 bugs)
+- [ ] **Zero panics** (critical)
 
-**Validation Gate:**
+**Validation:**
 ```bash
-cargo test --test lexer --test parser --test typeck --test codegen --test runtime
-cargo tarpaulin
-# Target: 80%+ coverage, <15 failures, 0 codegen panics
+cargo test --test codegen
+# Zero panics allowed, 85%+ pass rate
 ```
-
-**Proceed to Run 4 if:**
-- ✅ 80%+ code coverage
-- ✅ <15 failures total
-- ✅ Zero codegen panics
-- ✅ Zero runtime segfaults
 
 ---
 
-#### Run 4 (Week 4, Days 3-5): Modules + Property Tests + Final Polish
+### Agent 5: Runtime Explorer
 
-**Entry Criteria:** Run 3 validation gate passed
+**Scope:** Runtime builtins (GC, errors, tasks) testing and bug fixing
 
-**Tasks:**
-1. Fix all remaining P0 and P1 bugs from Runs 1-3
+**Branch:** `test-phase2-runtime`
 
-2. Write module system tests (`tests/integration/modules/`):
-   - Transitive imports (10 tests)
-   - Circular imports (5 tests)
-   - Visibility rules (10 tests)
-   Total: 25 tests
+**Responsibilities:**
+1. Write runtime edge case tests in `tests/integration/runtime/`:
+   - GC basic cases (15 tests)
+   - Error handling (10 tests)
+   - Task lifecycle (10 tests)
+   - **Target: 35 tests**
 
-3. Add property tests for transformations (`tests/property/transforms.rs`):
-   - Monomorphize idempotence (1 test)
-   - Closure lift preserves semantics (1 test)
-   - Module flatten preserves names (1 test)
-   Total: 3 property tests
+2. Explore edge cases:
+   - GC stress: allocate 100K objects
+   - Concurrent GC: 100 tasks × 10K allocations
+   - Error state across threads
+   - Task spawn/get edge cases
 
-4. Run FULL test suite:
-   ```bash
-   cargo test  # All tests
-   cargo test --test property
-   ```
-
-5. Final coverage report:
-   ```bash
-   cargo tarpaulin --out Html --output-dir coverage
-   ```
-
-6. Bug fixing sprint:
-   - Fix all P0 bugs (target: 100%)
-   - Fix 80%+ of P1 bugs
-   - Document P2 bugs as known issues
-
-7. Document coverage gaps:
-   - Review tarpaulin HTML report
-   - Add TODO comments in code for untested paths
-   - Update coverage matrix
+3. Memory safety focus:
+   - Run all tests under valgrind
+   - **Zero memory leaks allowed**
+   - **Zero data races** (ThreadSanitizer)
 
 **Deliverables:**
-- [ ] All P0 bugs fixed (100%)
-- [ ] 80%+ P1 bugs fixed
-- [ ] 25 module tests written and 95%+ passing
-- [ ] 3 property tests written and 100% passing
-- [ ] Coverage: 85%+ line coverage (stretch: 90%)
-- [ ] Full test suite passing rate: 95%+
-- [ ] Coverage gaps documented
-- [ ] Known bugs documented with GitHub issues
+- [ ] 35+ runtime tests written
+- [ ] 90%+ tests passing
+- [ ] Runtime bugs documented (estimate: 5-8 bugs)
+- [ ] **Zero valgrind errors**
+- [ ] **Zero TSAN warnings**
+
+**Validation:**
+```bash
+cargo test --test runtime
+./scripts/run_valgrind.sh runtime
+# 90%+ pass, 0 leaks, 0 races
+```
+
+---
+
+### Agent 6: Modules Explorer
+
+**Scope:** Module system testing and bug fixing
+
+**Branch:** `test-phase2-modules`
+
+**Responsibilities:**
+1. Write module system tests in `tests/integration/modules/`:
+   - Transitive imports (10 tests)
+   - Circular import detection (5 tests)
+   - Visibility rules (10 tests)
+   - **Target: 25 tests**
+
+2. Explore edge cases:
+   - Deep import chains (A→B→C→D→E)
+   - Diamond dependencies (A→B,C; B,C→D)
+   - Name collision resolution
+   - Stdlib imports
+
+3. Property tests:
+   - Module flatten is deterministic
+   - Visibility rules never violated
+
+**Deliverables:**
+- [ ] 25+ module tests written
+- [ ] 95%+ tests passing
+- [ ] Module bugs documented (estimate: 3-5 bugs)
+- [ ] 2 property tests written
+
+**Validation:**
+```bash
+cargo test --test modules
+cargo test --test property::modules
+# 95%+ pass rate
+```
+
+---
+
+## Sync Points
+
+### Week 3 End: Mid-Phase Sync
+
+**All agents stop work, sync findings:**
+
+1. **Bug consolidation:**
+   - Merge all `bugs/agent*.md` files
+   - Deduplicate bugs (multiple agents may find same bug)
+   - Prioritize: P0 → P1 → P2
+   - Estimated total: 30-50 unique bugs
+
+2. **Cross-agent bug fixing sprint:**
+   - All agents switch to bug fixing
+   - Focus on P0 bugs blocking other agents
+   - Target: Fix 100% of P0, 50% of P1
+
+3. **Merge branches:**
+   - Each agent rebases on master
+   - Merge test suites into master
+   - Resolve test conflicts
+
+4. **Coverage check:**
+   ```bash
+   cargo test --all
+   cargo tarpaulin --out Html
+   # Target: 75%+ coverage, <20 failures
+   ```
+
+**Proceed to Week 4 if:**
+- ✅ All P0 bugs fixed
+- ✅ 75%+ code coverage
+- ✅ All branches merged
+- ✅ <20 test failures total
+
+---
+
+### Week 4 End: Final Phase Sync
+
+**All agents complete final work:**
+
+1. **Final bug sweep:**
+   - Fix remaining P1 bugs (target: 80%+)
+   - Document all P2 bugs as known issues
+   - Create GitHub issues for all unfixed bugs
+
+2. **Property tests (Agent 2 & 6):**
+   - Monomorphize idempotence
+   - Closure lift preserves semantics
+   - Module flatten preserves names
+
+3. **Coverage push:**
+   - Each agent targets 90%+ coverage in their area
+   - Combined target: 85%+ overall
+
+4. **Documentation:**
+   - Create coverage matrix (`docs/testing/coverage-matrix.csv`)
+   - Document all known bugs
+   - Update CLAUDE.md
 
 **Final Validation:**
 ```bash
 cargo test --all
 cargo test --test property
-cargo tarpaulin --out Html --output-dir coverage
+cargo tarpaulin --out Html
 ```
 
 **Success Metrics:**
-- ✅ 300+ new tests written (45+45+75+45+35+25+3 = 273 minimum)
+- ✅ 300+ tests written (45+45+75+45+35+25+property)
 - ✅ 85%+ line coverage
 - ✅ 95%+ test pass rate
-- ✅ <10 known bugs remaining (all P2)
-- ✅ 0 panics, 0 segfaults
+- ✅ <10 known bugs (all P2)
+- ✅ 0 panics, 0 segfaults, 0 leaks
 - ✅ All property tests passing
-- ✅ Coverage matrix complete
 
 ---
 
