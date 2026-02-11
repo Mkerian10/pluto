@@ -923,6 +923,24 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
         }
     }
 
+    // Add app dependencies to the graph
+    if let Some(app_spanned) = &program.app {
+        for field in &app_spanned.node.inject_fields {
+            if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node {
+                all_di_classes.insert(type_name.clone());
+            }
+        }
+    }
+
+    // Add stage dependencies to the graph
+    for stage_spanned in &program.stages {
+        for field in &stage_spanned.node.inject_fields {
+            if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node {
+                all_di_classes.insert(type_name.clone());
+            }
+        }
+    }
+
     // Also add classes that are deps but have no deps themselves
     for c in &all_di_classes {
         graph.entry(c.clone()).or_default();
