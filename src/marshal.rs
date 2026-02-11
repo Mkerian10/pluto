@@ -30,6 +30,15 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
         return Ok(()); // No stages, no marshaling needed
     }
 
+    // Skip marshaler generation if std.wire isn't imported (validation will still run)
+    let has_wire_import = program.imports.iter().any(|imp| {
+        let path_str = imp.node.path.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join(".");
+        path_str == "wire" || path_str == "std.wire"
+    });
+    if !has_wire_import {
+        return Ok(());
+    }
+
     // Collect all types that need marshalers
     let types_to_marshal = collect_types_from_stage_methods(program)?;
 
@@ -73,6 +82,15 @@ pub fn generate_marshalers_phase_b(
     _env: &TypeEnv,
 ) -> Result<(), CompileError> {
     if program.stages.is_empty() {
+        return Ok(());
+    }
+
+    // Skip marshaler generation if std.wire isn't imported (validation will still run)
+    let has_wire_import = program.imports.iter().any(|imp| {
+        let path_str = imp.node.path.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join(".");
+        path_str == "wire" || path_str == "std.wire"
+    });
+    if !has_wire_import {
         return Ok(());
     }
 

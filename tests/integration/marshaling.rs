@@ -1,11 +1,34 @@
 mod common;
 
+use std::path::Path;
 use std::process::Command;
+
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for entry in std::fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let ty = entry.file_type().unwrap();
+        let dest_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest_path);
+        } else {
+            std::fs::copy(entry.path(), &dest_path).unwrap();
+        }
+    }
+}
 
 fn run_marshal_test(source: &str) -> String {
     let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("main.pluto");
+    std::fs::write(&path, source).unwrap();
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let stdlib_src = manifest_dir.join("stdlib");
+    let stdlib_dst = dir.path().join("stdlib");
+    copy_dir_recursive(&stdlib_src, &stdlib_dst);
+
     let bin_path = dir.path().join("test_bin");
-    plutoc::compile(source, &bin_path)
+    plutoc::compile_file_with_stdlib(&path, &bin_path, Some(&stdlib_dst))
         .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
 
     let run_output = Command::new(&bin_path).output().unwrap();
