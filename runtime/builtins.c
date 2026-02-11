@@ -1415,6 +1415,113 @@ void *__pluto_string_to_float(void *s) {
     return obj;
 }
 
+void *__pluto_string_trim_start(void *s) {
+    long slen = *(long *)s;
+    const char *data = (const char *)s + 8;
+    // Skip leading whitespace
+    long start_idx = 0;
+    while (start_idx < slen && (data[start_idx] == ' ' || data[start_idx] == '\t' || data[start_idx] == '\n' || data[start_idx] == '\r')) {
+        start_idx++;
+    }
+    long new_len = slen - start_idx;
+    void *obj = gc_alloc(8 + new_len + 1, GC_TAG_STRING, 0);
+    *(long *)obj = new_len;
+    memcpy((char *)obj + 8, data + start_idx, new_len);
+    ((char *)obj + 8)[new_len] = '\0';
+    return obj;
+}
+
+void *__pluto_string_trim_end(void *s) {
+    long slen = *(long *)s;
+    const char *data = (const char *)s + 8;
+    // Skip trailing whitespace
+    long end_idx = slen - 1;
+    while (end_idx >= 0 && (data[end_idx] == ' ' || data[end_idx] == '\t' || data[end_idx] == '\n' || data[end_idx] == '\r')) {
+        end_idx--;
+    }
+    long new_len = end_idx + 1;
+    if (new_len < 0) new_len = 0;
+    void *obj = gc_alloc(8 + new_len + 1, GC_TAG_STRING, 0);
+    *(long *)obj = new_len;
+    if (new_len > 0) memcpy((char *)obj + 8, data, new_len);
+    ((char *)obj + 8)[new_len] = '\0';
+    return obj;
+}
+
+long __pluto_string_last_index_of(void *haystack, void *needle) {
+    long hlen = *(long *)haystack;
+    long nlen = *(long *)needle;
+    if (nlen == 0) return hlen;
+    if (nlen > hlen) return -1;
+
+    const char *hdata = (const char *)haystack + 8;
+    const char *ndata = (const char *)needle + 8;
+
+    for (long i = hlen - nlen; i >= 0; i--) {
+        if (memcmp(hdata + i, ndata, nlen) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+long __pluto_string_count(void *haystack, void *needle) {
+    long hlen = *(long *)haystack;
+    long nlen = *(long *)needle;
+    if (nlen == 0) return 0;
+    if (nlen > hlen) return 0;
+
+    const char *hdata = (const char *)haystack + 8;
+    const char *ndata = (const char *)needle + 8;
+
+    long count = 0;
+    for (long i = 0; i <= hlen - nlen; i++) {
+        if (memcmp(hdata + i, ndata, nlen) == 0) {
+            count++;
+            i += nlen - 1;
+        }
+    }
+    return count;
+}
+
+long __pluto_string_is_empty(void *s) {
+    long slen = *(long *)s;
+    return slen == 0 ? 1 : 0;
+}
+
+long __pluto_string_is_whitespace(void *s) {
+    long slen = *(long *)s;
+    const char *data = (const char *)s + 8;
+    if (slen == 0) return 1;
+    for (long i = 0; i < slen; i++) {
+        if (data[i] != ' ' && data[i] != '\t' && data[i] != '\n' && data[i] != '\r') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+void *__pluto_string_repeat(void *s, long count) {
+    long slen = *(long *)s;
+    const char *data = (const char *)s + 8;
+    if (count <= 0) {
+        void *obj = gc_alloc(8 + 1, GC_TAG_STRING, 0);
+        *(long *)obj = 0;
+        ((char *)obj + 8)[0] = '\0';
+        return obj;
+    }
+
+    long new_len = slen * count;
+    void *obj = gc_alloc(8 + new_len + 1, GC_TAG_STRING, 0);
+    *(long *)obj = new_len;
+    char *result = (char *)obj + 8;
+    for (long i = 0; i < count; i++) {
+        memcpy(result + i * slen, data, slen);
+    }
+    result[new_len] = '\0';
+    return obj;
+}
+
 long __pluto_json_parse_int(void *s) {
     long slen = *(long *)s;
     const char *data = (const char *)s + 8;
@@ -4164,4 +4271,149 @@ void __pluto_log_write_structured(void *level_str, long timestamp, void *message
     }
     fprintf(stderr, "\n");
     fflush(stderr);
+}
+
+// ── Environment Variables ──────────────────────────────────────────────────
+
+extern char **environ;
+
+static void *__pluto_make_string(const char *c_str) {
+    if (!c_str) {
+        void *header = gc_alloc(8 + 1, GC_TAG_STRING, 0);
+        *(long *)header = 0;
+        ((char *)header)[8] = '\0';
+        return header;
+    }
+    long len = (long)strlen(c_str);
+    void *header = gc_alloc(8 + len + 1, GC_TAG_STRING, 0);
+    *(long *)header = len;
+    memcpy((char *)header + 8, c_str, len);
+    ((char *)header)[8 + len] = '\0';
+    return header;
+}
+
+void *__pluto_env_get(void *name_ptr) {
+    long *name_header = (long *)name_ptr;
+    long name_len = name_header[0];
+    char *name_data = (char *)&name_header[1];
+
+    char name_buf[1024];
+    if (name_len >= 1024) {
+        return __pluto_make_string("");
+    }
+    memcpy(name_buf, name_data, name_len);
+    name_buf[name_len] = '\0';
+
+    const char *val = getenv(name_buf);
+    return __pluto_make_string(val);
+}
+
+void *__pluto_env_get_or(void *name_ptr, void *default_ptr) {
+    long *name_header = (long *)name_ptr;
+    long name_len = name_header[0];
+    char *name_data = (char *)&name_header[1];
+
+    char name_buf[1024];
+    if (name_len >= 1024) {
+        return default_ptr;
+    }
+    memcpy(name_buf, name_data, name_len);
+    name_buf[name_len] = '\0';
+
+    const char *val = getenv(name_buf);
+    if (!val) {
+        return default_ptr;
+    }
+    return __pluto_make_string(val);
+}
+
+void __pluto_env_set(void *name_ptr, void *value_ptr) {
+    long *name_header = (long *)name_ptr;
+    long name_len = name_header[0];
+    char *name_data = (char *)&name_header[1];
+
+    long *val_header = (long *)value_ptr;
+    long val_len = val_header[0];
+    char *val_data = (char *)&val_header[1];
+
+    char name_buf[1024];
+    char val_buf[4096];
+
+    if (name_len >= 1024 || val_len >= 4096) {
+        return;
+    }
+
+    memcpy(name_buf, name_data, name_len);
+    name_buf[name_len] = '\0';
+    memcpy(val_buf, val_data, val_len);
+    val_buf[val_len] = '\0';
+
+    setenv(name_buf, val_buf, 1);
+}
+
+long __pluto_env_exists(void *name_ptr) {
+    long *name_header = (long *)name_ptr;
+    long name_len = name_header[0];
+    char *name_data = (char *)&name_header[1];
+
+    char name_buf[1024];
+    if (name_len >= 1024) {
+        return 0;
+    }
+    memcpy(name_buf, name_data, name_len);
+    name_buf[name_len] = '\0';
+
+    return getenv(name_buf) != NULL ? 1 : 0;
+}
+
+void *__pluto_env_list_names() {
+    // Count environment variables
+    int count = 0;
+    for (int i = 0; environ[i] != NULL; i++) {
+        count++;
+    }
+
+    // Create array of strings
+    void *arr = __pluto_array_new(count);
+
+    for (int i = 0; i < count; i++) {
+        char *env_str = environ[i];
+        // Find the '=' separator
+        char *eq = strchr(env_str, '=');
+        if (!eq) {
+            __pluto_array_push(arr, (long)__pluto_make_string(""));
+            continue;
+        }
+
+        // Extract variable name (everything before '=')
+        int name_len = (int)(eq - env_str);
+        char name_buf[1024];
+        if (name_len >= 1024) {
+            __pluto_array_push(arr, (long)__pluto_make_string(""));
+            continue;
+        }
+
+        memcpy(name_buf, env_str, name_len);
+        name_buf[name_len] = '\0';
+
+        __pluto_array_push(arr, (long)__pluto_make_string(name_buf));
+    }
+
+    return arr;
+}
+
+long __pluto_env_clear(void *name_ptr) {
+    long *name_header = (long *)name_ptr;
+    long name_len = name_header[0];
+    char *name_data = (char *)&name_header[1];
+
+    char name_buf[1024];
+    if (name_len >= 1024) {
+        return 0;
+    }
+    memcpy(name_buf, name_data, name_len);
+    name_buf[name_len] = '\0';
+
+    // unsetenv returns 0 on success, -1 on error
+    return unsetenv(name_buf) == 0 ? 1 : 0;
 }

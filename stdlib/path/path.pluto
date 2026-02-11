@@ -1,0 +1,136 @@
+// Path manipulation utilities
+
+pub fn join(base: string, rel: string) string {
+    if base.len() == 0 {
+        return rel
+    }
+    if rel.len() == 0 {
+        return base
+    }
+    let sep = "/"
+    if base.ends_with(sep) {
+        if rel.starts_with(sep) {
+            return base + rel.substring(1, rel.len() - 1)
+        }
+        return base + rel
+    } else {
+        if rel.starts_with(sep) {
+            return base + rel
+        }
+        return base + sep + rel
+    }
+}
+
+pub fn basename(p: string) string {
+    if p.len() == 0 {
+        return ""
+    }
+    let sep = "/"
+    let last_idx = p.last_index_of(sep)
+    if last_idx < 0 {
+        return p
+    }
+    return p.substring(last_idx + 1, p.len() - last_idx - 1)
+}
+
+pub fn dirname(p: string) string {
+    if p.len() == 0 {
+        return "."
+    }
+    let sep = "/"
+    let last_idx = p.last_index_of(sep)
+    if last_idx < 0 {
+        return "."
+    }
+    if last_idx == 0 {
+        return sep
+    }
+    return p.substring(0, last_idx)
+}
+
+pub fn ext(p: string) string {
+    let filename = basename(p)
+    let dot_idx = filename.last_index_of(".")
+    if dot_idx < 0 {
+        return ""
+    }
+    return filename.substring(dot_idx, filename.len() - dot_idx)
+}
+
+pub fn is_absolute(p: string) bool {
+    if p.len() == 0 {
+        return false
+    }
+    return p.starts_with("/")
+}
+
+pub fn has_trailing_slash(p: string) bool {
+    if p.len() == 0 {
+        return false
+    }
+    return p.ends_with("/")
+}
+
+pub fn normalize(p: string) string {
+    if p.len() == 0 {
+        return "."
+    }
+
+    // Split by separator and process components
+    let parts = p.split("/")
+    let result = ""
+    let is_abs = p.starts_with("/")
+
+    for i in 0..parts.len() {
+        let part = parts[i]
+
+        // Skip empty parts (from double slashes) and current directory references
+        if part.len() == 0 {
+            continue
+        }
+        if part == "." {
+            continue
+        }
+
+        // Handle parent directory references (simplified - doesn't handle going above root)
+        if part == ".." {
+            // Find last slash and remove everything after it
+            let last_slash = result.last_index_of("/")
+            if last_slash < 0 {
+                result = ""
+            } else {
+                result = result.substring(0, last_slash)
+            }
+            continue
+        }
+
+        // Add the component
+        if result.len() == 0 {
+            if is_abs {
+                result = "/" + part
+            } else {
+                result = part
+            }
+        } else {
+            result = result + "/" + part
+        }
+    }
+
+    // Return root or normalized path
+    if result.len() == 0 {
+        if is_abs {
+            return "/"
+        }
+        return "."
+    }
+    return result
+}
+
+pub fn split_ext(p: string) string {
+    let filename = basename(p)
+    let dot_idx = filename.last_index_of(".")
+    if dot_idx < 0 {
+        return filename
+    }
+    return filename.substring(0, dot_idx)
+}

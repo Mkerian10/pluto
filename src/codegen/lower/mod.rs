@@ -2819,6 +2819,10 @@ impl<'a> LowerContext<'a> {
                     let idx = self.lower_expr(&args[0].node)?;
                     Ok(self.call_runtime("__pluto_string_char_at", &[obj_ptr, idx]))
                 }
+                "byte_at" => {
+                    let idx = self.lower_expr(&args[0].node)?;
+                    Ok(self.call_runtime("__pluto_string_byte_at", &[obj_ptr, idx]))
+                }
                 "to_bytes" => Ok(self.call_runtime("__pluto_string_to_bytes", &[obj_ptr])),
                 "to_int" => Ok(self.call_runtime("__pluto_string_to_int", &[obj_ptr])),
                 "to_float" => Ok(self.call_runtime("__pluto_string_to_float", &[obj_ptr])),
@@ -4498,9 +4502,9 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
             if obj_type == PlutoType::String {
                 return match method.node.as_str() {
-                    "len" | "index_of" => PlutoType::Int,
-                    "contains" | "starts_with" | "ends_with" => PlutoType::Bool,
-                    "substring" | "trim" | "to_upper" | "to_lower" | "replace" | "char_at" => PlutoType::String,
+                    "len" | "index_of" | "last_index_of" | "count" | "byte_at" => PlutoType::Int,
+                    "contains" | "starts_with" | "ends_with" | "is_empty" | "is_whitespace" => PlutoType::Bool,
+                    "substring" | "trim" | "to_upper" | "to_lower" | "replace" | "char_at" | "trim_start" | "trim_end" | "repeat" => PlutoType::String,
                     "split" => PlutoType::Array(Box::new(PlutoType::String)),
                     "to_bytes" => PlutoType::Bytes,
                     "to_int" => PlutoType::Nullable(Box::new(PlutoType::Int)),

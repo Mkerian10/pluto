@@ -44,6 +44,7 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_string_replace", &[types::I64, types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_string_split", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_string_char_at", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_string_byte_at", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_int_to_string", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_float_to_string", &[types::F64], &[types::I64])?;
         reg.declare(module, "__pluto_bool_to_string", &[types::I32], &[types::I64])?; // I32 for C ABI
@@ -72,6 +73,14 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_random_seed", &[types::I64], &[])?;
         reg.declare(module, "__pluto_random_int", &[], &[types::I64])?;
         reg.declare(module, "__pluto_random_float", &[], &[types::F64])?;
+
+        // Environment variables
+        reg.declare(module, "__pluto_env_get", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_env_get_or", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_env_set", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_env_exists", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_env_list_names", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_env_clear", &[types::I64], &[types::I64])?;
 
         // Math builtins
         reg.declare(module, "__pluto_abs_int", &[types::I64], &[types::I64])?;

@@ -1,51 +1,214 @@
+// Comprehensive string manipulation examples
+
 fn main() {
-    let s = "Hello, World!"
+    print("=== String Manipulation Examples ===\n")
 
-    // Built-in methods
-    print(s.len())
-    print(s.contains("World"))
-    print(s.starts_with("Hello"))
-    print(s.ends_with("!"))
-    print(s.index_of("World"))
+    // ─── Basic String Operations ─────────────────────────────────────
+    print("--- Basic Operations ---")
+    let greeting = "Hello, World!"
+    print(greeting)
+    print(greeting.len())
 
-    // Transformation
-    print(s.to_upper())
-    print(s.to_lower())
-    print("  spaces  ".trim())
-    print(s.replace("World", "Pluto"))
-    print(s.substring(7, 5))
+    // ─── Case Conversion ─────────────────────────────────────────────
+    print("\n--- Case Conversion ---")
+    let text = "Pluto Programming Language"
+    print("Original: ")
+    print(text)
+    print("Uppercase: ")
+    print(text.to_upper())
+    print("Lowercase: ")
+    print(text.to_lower())
 
-    // Indexing
-    print(s[0])
-    print(s[s.len() - 1])
-
-    // Splitting
-    let csv = "alice,bob,charlie"
-    let names = csv.split(",")
-    for name in names {
-        print(name)
-    }
-
-    // Iterating over characters
-    let result = ""
-    for c in "abc" {
-        result = result + c + "-"
-    }
-    print(result)
-
-    // Method chaining
-    print("  Hello World  ".trim().to_lower().contains("hello"))
-
-    // New string functions
-    print("--- New Functions ---")
-    let padded = "  hello  "
+    // ─── Trimming Whitespace ────────────────────────────────────────
+    print("\n--- Trimming Whitespace ---")
+    let padded = "   hello world   "
+    print("Original: [")
+    print(padded)
+    print("]")
+    print("Trimmed: [")
+    print(padded.trim())
+    print("]")
+    print("Trim start: [")
     print(padded.trim_start())
+    print("]")
+    print("Trim end: [")
     print(padded.trim_end())
-    print("x".repeat(5))
-    print("hello".last_index_of("l"))
-    print("hello".count("l"))
-    print("".is_empty())
-    print("hello".is_empty())
-    print("   ".is_whitespace())
-    print(" a ".is_whitespace())
+    print("]")
+
+    // ─── Substring Operations ───────────────────────────────────────
+    print("\n--- Substring Operations ---")
+    let word = "programming"
+    print("Original: ")
+    print(word)
+    print("First 5 chars: ")
+    print(word.substring(0, 5))
+    print("Middle (4 chars from index 3): ")
+    print(word.substring(3, 4))
+    print("Last 4 chars: ")
+    let start = word.len() - 4
+    print(word.substring(start, 4))
+
+    // ─── Character Access ───────────────────────────────────────────
+    print("\n--- Character Access ---")
+    let str = "Pluto"
+    print("String: ")
+    print(str)
+    print("Character at index 0: ")
+    print(str.char_at(0))
+    print("Character at index 2: ")
+    print(str.char_at(2))
+    print("Byte value at index 1: ")
+    print(str.byte_at(1))
+
+    // ─── String Searching ───────────────────────────────────────────
+    print("\n--- String Searching ---")
+    let sentence = "The quick brown fox jumps over the lazy dog"
+    print("Sentence: ")
+    print(sentence)
+    print("Contains 'quick': ")
+    print(sentence.contains("quick"))
+    print("Contains 'slow': ")
+    print(sentence.contains("slow"))
+    print("Index of 'fox': ")
+    print(sentence.index_of("fox"))
+    print("Index of 'missing': ")
+    print(sentence.index_of("missing"))
+    print("Last index of 'the': ")
+    print(sentence.last_index_of("the"))
+    print("Count of 'o': ")
+    print(sentence.count("o"))
+
+    // ─── String Prefix and Suffix ───────────────────────────────────
+    print("\n--- Prefix and Suffix ---")
+    let url = "https://example.com/api"
+    print("URL: ")
+    print(url)
+    print("Starts with 'https': ")
+    print(url.starts_with("https"))
+    print("Starts with 'http': ")
+    print(url.starts_with("http"))
+    print("Ends with '/api': ")
+    print(url.ends_with("/api"))
+    print("Ends with '/web': ")
+    print(url.ends_with("/web"))
+
+    // ─── String Replacement ─────────────────────────────────────────
+    print("\n--- String Replacement ---")
+    let original = "apple orange apple banana apple"
+    print("Original: ")
+    print(original)
+    print("Replace 'apple' with 'fruit': ")
+    print(original.replace("apple", "fruit"))
+    print("Original unchanged: ")
+    print(original)
+
+    // ─── String Splitting ───────────────────────────────────────────
+    print("\n--- String Splitting ---")
+    let csv = "John,Jane,Bob,Alice"
+    print("CSV: ")
+    print(csv)
+    print("Split by ',':")
+    let names = csv.split(",")
+    for i in 0..names.len() {
+        print(names[i])
+    }
+
+    let path = "/home/user/documents/file.txt"
+    print("\nPath: ")
+    print(path)
+    print("Split by '/':")
+    let parts = path.split("/")
+    for i in 0..parts.len() {
+        print(parts[i])
+    }
+
+    // ─── String Repetition ──────────────────────────────────────────
+    print("\n--- String Repetition ---")
+    let pattern = "Ha"
+    print("Pattern: ")
+    print(pattern)
+    print("Repeated 3 times: ")
+    print(pattern.repeat(3))
+
+    let dash = "-"
+    print("Separator: ")
+    print(dash.repeat(20))
+
+    // ─── String Concatenation ───────────────────────────────────────
+    print("\n--- String Concatenation ---")
+    let first = "Hello"
+    let second = "World"
+    print("Concatenation: ")
+    print(first + " " + second)
+
+    let result = "The answer is "
+    let answer = "42"
+    print(result + answer)
+
+    // ─── Empty String Checking ──────────────────────────────────────
+    print("\n--- Empty String Checking ---")
+    let empty = ""
+    let nonempty = "content"
+    print("Is empty string empty? ")
+    print(empty.is_empty())
+    print("Is 'content' empty? ")
+    print(nonempty.is_empty())
+
+    // ─── Whitespace Checking ───────────────────────────────────────
+    print("\n--- Whitespace Checking ---")
+    let spaces = "   "
+    let mixed = "a b c"
+    print("'   ' is whitespace: ")
+    print(spaces.is_whitespace())
+    print("'a b c' is whitespace: ")
+    print(mixed.is_whitespace())
+
+    // ─── Parsing Numbers ────────────────────────────────────────────
+    print("\n--- Parsing Numbers ---")
+    let num_str1 = "42"
+    let num_str2 = "3.14"
+    let invalid = "not_a_number"
+
+    print("Parse '")
+    print(num_str1)
+    print("' to int: ")
+    let int_result = num_str1.to_int()
+    if int_result != none {
+        print(int_result?)
+    } else {
+        print("Failed to parse")
+    }
+
+    print("Parse '")
+    print(num_str2)
+    print("' to float: ")
+    let float_result = num_str2.to_float()
+    if float_result != none {
+        print(float_result?)
+    } else {
+        print("Failed to parse")
+    }
+
+    print("Parse '")
+    print(invalid)
+    print("' to int: ")
+    let invalid_result = invalid.to_int()
+    if invalid_result != none {
+        print(invalid_result?)
+    } else {
+        print("Failed to parse (as expected)")
+    }
+
+    // ─── Practical Example: Email Validation ────────────────────────
+    print("\n--- Practical: Simple Email Check ---")
+    let email = "user@example.com"
+    print("Email: ")
+    print(email)
+    print("Contains '@': ")
+    print(email.contains("@"))
+    print("Contains '.': ")
+    print(email.contains("."))
+    let at_index = email.index_of("@")
+    print("'@' at index: ")
+    print(at_index)
 }
