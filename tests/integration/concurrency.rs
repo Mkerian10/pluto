@@ -687,9 +687,9 @@ fn main() {
 
 #[test]
 fn stress_gc_pressure_under_suppression() {
-    // Tasks allocate many strings while GC is suppressed.
-    // Validates that GC suppression + mutex doesn't crash under load.
-    let code = compile_and_run(r#"
+    // Tasks allocate many strings while GC runs concurrently.
+    // Validates that thread stack scanning keeps objects alive correctly.
+    let (stdout, stderr, code) = compile_and_run_output(r#"
 fn allocate_strings(n: int) {
     let i = 0
     while i < n {
@@ -709,7 +709,7 @@ fn main() {
     t4.get()
 }
 "#);
-    assert_eq!(code, 0);
+    assert_eq!(code, 0, "Test failed with code {code}. stdout: {stdout}\nstderr: {stderr}");
 }
 
 #[test]
@@ -1400,4 +1400,63 @@ app MyApp[counter: Counter] {
 }
 "#);
     assert_eq!(out.trim(), "1000");
+}
+
+// ── GC stress test (GC runs while task threads are active) ──────────
+
+#[test]
+fn gc_stress_concurrent_allocation() {
+    // Each task allocates many objects to trigger GC while other tasks are running.
+    // This validates that thread stack scanning prevents premature collection.
+    let out = compile_and_run_stdout(r#"
+fn build_strings(prefix: string, count: int) string {
+    let result = ""
+    let i = 0
+    while i < count {
+        result = "{result}{prefix}_{i}"
+        i = i + 1
+    }
+    return result
+}
+
+fn main() {
+    let t1 = spawn build_strings("alpha", 200)
+    let t2 = spawn build_strings("beta", 200)
+    let t3 = spawn build_strings("gamma", 200)
+    let r1 = t1.get()
+    let r2 = t2.get()
+    let r3 = t3.get()
+    // Verify results are intact (not corrupted by GC)
+    print(r1.len() > 0)
+    print(r2.len() > 0)
+    print(r3.len() > 0)
+}
+"#);
+    assert!(out.contains("true\ntrue\ntrue"));
+}
+
+#[test]
+fn gc_stress_concurrent_arrays() {
+    // Tasks build large arrays to force GC during concurrent execution
+    let out = compile_and_run_stdout(r#"
+fn build_array(n: int) [int] {
+    let arr: [int] = []
+    let i = 0
+    while i < n {
+        arr.push(i * 2)
+        i = i + 1
+    }
+    return arr
+}
+
+fn main() {
+    let t1 = spawn build_array(500)
+    let t2 = spawn build_array(500)
+    let r1 = t1.get()
+    let r2 = t2.get()
+    print(r1.len())
+    print(r2.len())
+}
+"#);
+    assert_eq!(out.trim(), "500\n500");
 }

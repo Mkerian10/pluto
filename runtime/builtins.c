@@ -116,8 +116,50 @@ static struct {
 #ifndef PLUTO_TEST_MODE
 static pthread_mutex_t gc_mutex = PTHREAD_MUTEX_INITIALIZER;
 static atomic_int __pluto_active_tasks = 0;
+
+// Thread registry for signal-based stop-the-world GC.
+// Each spawned thread registers itself so the GC can send SIGUSR1 to pause it.
+#define GC_MAX_THREAD_STACKS 64
+typedef struct {
+    pthread_t thread;
+    void *stack_lo;
+    void *stack_hi;
+    int active;
+} GCThreadStack;
+static GCThreadStack gc_thread_stacks[GC_MAX_THREAD_STACKS];
+static int gc_thread_stack_count = 0;
+
+// Signal-based stop-the-world state.
+// GC sends SIGUSR1 to each thread; the handler flushes registers (setjmp),
+// increments gc_stw_stopped, and spins until gc_stw_resume is set.
+static volatile int gc_stw_stopped = 0;
+static volatile int gc_stw_resume = 0;
+
+static void gc_stw_signal_handler(int sig) {
+    (void)sig;
+    // Flush registers to stack so GC can scan them
+    jmp_buf regs;
+    setjmp(regs);
+    (void)regs;  // prevent optimization
+
+    // Signal that we've stopped
+    __sync_fetch_and_add(&gc_stw_stopped, 1);
+
+    // Spin-wait until GC is done (memory barrier to see the update)
+    while (!gc_stw_resume) {
+        __sync_synchronize();
+    }
+}
+
+static void gc_stw_install_handler(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = gc_stw_signal_handler;
+    sa.sa_flags = SA_RESTART;
+    sigfillset(&sa.sa_mask);  // block all signals during handler
+    sigaction(SIGUSR1, &sa, NULL);
+}
 #endif
-#define PLUTO_MAX_HEAP_BYTES (1024L * 1024L * 1024L)  // 1 GB
 
 static inline GCHeader *gc_get_header(void *user_ptr) {
     return (GCHeader *)((char *)user_ptr - sizeof(GCHeader));
@@ -143,20 +185,48 @@ static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) 
     return (char *)h + sizeof(GCHeader);
 }
 #else
+// Stop all registered task threads via SIGUSR1 and wait for them to acknowledge.
+// Returns the number of threads that were stopped. Caller must call gc_stw_resume_threads() after GC.
+// Stop all registered task threads via SIGUSR1 and wait for them to acknowledge.
+// Returns the number of threads that were stopped. Caller must call gc_stw_resume_threads() after GC.
+static int gc_stw_stop_threads(void) {
+    int count = 0;
+    gc_stw_stopped = 0;
+    gc_stw_resume = 0;
+    __sync_synchronize();  // memory barrier
+
+    pthread_t self = pthread_self();
+    for (int i = 0; i < gc_thread_stack_count; i++) {
+        if (!gc_thread_stacks[i].active) continue;
+        if (pthread_equal(gc_thread_stacks[i].thread, self)) continue;  // skip self
+        pthread_kill(gc_thread_stacks[i].thread, SIGUSR1);
+        count++;
+    }
+
+    if (count > 0) {
+        // Wait for all threads to acknowledge (with timeout)
+        int spins = 0;
+        while (__sync_fetch_and_add(&gc_stw_stopped, 0) < count) {
+            __sync_synchronize();
+            if (++spins > 1000000) break;  // ~1s timeout — give up
+        }
+    }
+    return count;
+}
+
+static void gc_stw_resume_threads(void) {
+    gc_stw_resume = 1;
+    __sync_synchronize();  // ensure visibility
+}
+
 static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
     pthread_mutex_lock(&gc_mutex);
     if (gc_stack_bottom && !gc_collecting
-        && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold
-        && atomic_load(&__pluto_active_tasks) == 0) {
+        && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold) {
+        // Stop all other task threads via SIGUSR1 so we can safely scan their stacks
+        int stopped = gc_stw_stop_threads();
         __pluto_gc_collect();
-    }
-    // Heap ceiling guardrail when GC is suppressed
-    if (atomic_load(&__pluto_active_tasks) > 0
-        && gc_bytes_allocated + user_size + sizeof(GCHeader) > PLUTO_MAX_HEAP_BYTES) {
-        pthread_mutex_unlock(&gc_mutex);
-        fprintf(stderr, "pluto: heap exceeded %ld bytes while GC suppressed by active tasks\n",
-                (long)PLUTO_MAX_HEAP_BYTES);
-        exit(1);
+        if (stopped > 0) gc_stw_resume_threads();
     }
     size_t total = sizeof(GCHeader) + user_size;
     GCHeader *h = (GCHeader *)calloc(1, total);
@@ -471,17 +541,35 @@ void __pluto_gc_collect(void) {
         }
     }
 
-    // 3. Scan stack (direction-agnostic)
+    // 3. Scan the GC-initiating thread's own stack.
+    // In production mode, we find this thread's registered stack_hi.
+    // In test mode, we use gc_stack_bottom (always main thread, single-threaded).
     {
         void *stack_top;
-        // Get current stack pointer
         volatile long anchor = 0;
         (void)anchor;
         stack_top = (void *)&anchor;
 
+#ifndef PLUTO_TEST_MODE
+        // Find this thread's registered stack entry to get the correct stack_hi.
+        // Without this, a task thread would scan from its stack to gc_stack_bottom
+        // (the main thread's stack), crossing unmapped memory → SEGFAULT.
+        pthread_t self = pthread_self();
+        void *hi = gc_stack_bottom;  // fallback for main thread
+        for (int i = 0; i < gc_thread_stack_count; i++) {
+            if (pthread_equal(gc_thread_stacks[i].thread, self)) {
+                hi = gc_thread_stacks[i].stack_hi;
+                break;
+            }
+        }
+        void *lo = stack_top;
+        // On most platforms stacks grow down, so stack_top < stack_hi.
+        // Handle either direction just in case.
+        if (lo > hi) { void *tmp = lo; lo = hi; hi = tmp; }
+#else
         void *lo = stack_top < gc_stack_bottom ? stack_top : gc_stack_bottom;
         void *hi = stack_top < gc_stack_bottom ? gc_stack_bottom : stack_top;
-        // Align to 8-byte boundary
+#endif
         lo = (void *)(((size_t)lo) & ~7UL);
         for (long *p = (long *)lo; (void *)p < hi; p++) {
             gc_mark_candidate((void *)*p);
@@ -504,6 +592,27 @@ void __pluto_gc_collect(void) {
             void *flo = (void *)(((size_t)base) & ~7UL);
             void *fhi = (void *)(base + sz);
             for (long *p = (long *)flo; (void *)p < fhi; p++) {
+                gc_mark_candidate((void *)*p);
+            }
+        }
+    }
+#endif
+
+#ifndef PLUTO_TEST_MODE
+    // 3c. Scan all OTHER registered thread stacks as additional GC roots.
+    // The GC-initiating thread was already scanned in section 3 above.
+    // Stopped threads (paused by SIGUSR1) have their full register state
+    // saved on their stacks via the kernel signal frame + setjmp in the handler.
+    {
+        pthread_t gc_self = pthread_self();
+        for (int ti = 0; ti < gc_thread_stack_count; ti++) {
+            if (!gc_thread_stacks[ti].active) continue;
+            if (pthread_equal(gc_thread_stacks[ti].thread, gc_self)) continue;
+            void *tlo = gc_thread_stacks[ti].stack_lo;
+            void *thi = gc_thread_stacks[ti].stack_hi;
+            if (!tlo || !thi) continue;
+            tlo = (void *)(((size_t)tlo) & ~7UL);
+            for (long *p = (long *)tlo; (void *)p < thi; p++) {
                 gc_mark_candidate((void *)*p);
             }
         }
@@ -614,6 +723,32 @@ void __pluto_gc_init(void) {
     volatile long anchor = 0;
     (void)anchor;
     gc_stack_bottom = (void *)&anchor;
+#ifndef PLUTO_TEST_MODE
+    gc_stw_install_handler();
+    // Register main thread's stack for GC root scanning
+    {
+        pthread_t self = pthread_self();
+        void *stack_lo = NULL;
+        void *stack_hi = NULL;
+#ifdef __APPLE__
+        stack_hi = pthread_get_stackaddr_np(self);
+        size_t stack_sz = pthread_get_stacksize_np(self);
+        stack_lo = (char *)stack_hi - stack_sz;
+#else
+        pthread_attr_t pattr;
+        pthread_getattr_np(self, &pattr);
+        size_t stack_sz;
+        pthread_attr_getstack(&pattr, &stack_lo, &stack_sz);
+        stack_hi = (char *)stack_lo + stack_sz;
+        pthread_attr_destroy(&pattr);
+#endif
+        gc_thread_stacks[0].thread = self;
+        gc_thread_stacks[0].stack_lo = stack_lo;
+        gc_thread_stacks[0].stack_hi = stack_hi;
+        gc_thread_stacks[0].active = 1;
+        gc_thread_stack_count = 1;
+    }
+#endif
 }
 
 // ── Print functions ───────────────────────────────────────────────────────────
@@ -2304,7 +2439,7 @@ static void task_raise_cancelled(void) {
 #define FIBER_STACK_SIZE (64 * 1024)   // 64KB per fiber stack
 #define MAX_FIBERS 256
 
-typedef enum { STRATEGY_SEQUENTIAL=0, STRATEGY_ROUND_ROBIN=1, STRATEGY_RANDOM=2 } Strategy;
+typedef enum { STRATEGY_SEQUENTIAL=0, STRATEGY_ROUND_ROBIN=1, STRATEGY_RANDOM=2, STRATEGY_EXHAUSTIVE=3 } Strategy;
 typedef enum {
     FIBER_READY=0, FIBER_RUNNING=1,
     FIBER_BLOCKED_TASK=2, FIBER_BLOCKED_CHAN_SEND=3,
@@ -2338,6 +2473,45 @@ typedef struct {
 } Scheduler;
 
 static Scheduler *g_scheduler = NULL;
+
+// ── Exhaustive (DPOR) state ─────────────────────────────────────────────────
+
+#define EXHST_MAX_DEPTH 200
+#define EXHST_MAX_CHANNELS_PER_FIBER 32
+#define EXHST_MAX_FAILURES 64
+
+typedef struct {
+    // Current schedule trace
+    int choices[EXHST_MAX_DEPTH];                  // fiber index chosen at each yield point
+    int ready[EXHST_MAX_DEPTH][MAX_FIBERS];        // ready fibers at each yield point
+    int ready_count[EXHST_MAX_DEPTH];              // count of ready fibers at each yield
+    int depth;                                      // current yield point index
+
+    // Replay state for backtracking
+    int replay_prefix[EXHST_MAX_DEPTH];            // choices to replay
+    int replay_len;                                 // how many choices to replay
+    int replay_next_choice;                         // forced choice after replay
+
+    // DPOR: channel dependency tracking per fiber (per-schedule, reset each run)
+    void *fiber_channels[MAX_FIBERS][EXHST_MAX_CHANNELS_PER_FIBER];
+    int fiber_channel_count[MAX_FIBERS];
+
+    // DPOR: accumulated dependency matrix (persistent across schedules)
+    int dep_matrix[MAX_FIBERS][MAX_FIBERS];        // 1 = fibers share channels
+    int dep_valid;                                  // 1 once first schedule observed
+
+    // Bookkeeping
+    int schedules_explored;
+    int max_schedules;
+    int max_depth;
+    int fiber_count_snapshot;                       // fiber count for dep matrix update
+
+    // Failure collection
+    int failure_count;
+    char *failure_messages[EXHST_MAX_FAILURES];
+} ExhaustiveState;
+
+static ExhaustiveState *g_exhaustive = NULL;
 
 // Forward declarations for fiber scheduler
 static void scheduler_run(void);
@@ -2388,6 +2562,75 @@ static uint64_t lcg_next(uint64_t *seed) {
     return *seed;
 }
 
+// ── Exhaustive helper functions ─────────────────────────────────────────────
+
+static void exhaustive_record_channel(int fiber_id, void *channel) {
+    if (!g_exhaustive) return;
+    ExhaustiveState *es = g_exhaustive;
+    if (fiber_id < 0 || fiber_id >= MAX_FIBERS) return;
+    // Deduplicate
+    for (int i = 0; i < es->fiber_channel_count[fiber_id]; i++) {
+        if (es->fiber_channels[fiber_id][i] == channel) return;
+    }
+    if (es->fiber_channel_count[fiber_id] < EXHST_MAX_CHANNELS_PER_FIBER) {
+        es->fiber_channels[fiber_id][es->fiber_channel_count[fiber_id]++] = channel;
+    }
+}
+
+static void exhaustive_update_dep_matrix(ExhaustiveState *es, int fiber_count) {
+    // After a complete schedule, update the dependency matrix.
+    // Two fibers are dependent if they share at least one channel.
+    for (int a = 0; a < fiber_count; a++) {
+        for (int b = a + 1; b < fiber_count; b++) {
+            int shared = 0;
+            for (int ci = 0; ci < es->fiber_channel_count[a] && !shared; ci++) {
+                for (int cj = 0; cj < es->fiber_channel_count[b] && !shared; cj++) {
+                    if (es->fiber_channels[a][ci] == es->fiber_channels[b][cj])
+                        shared = 1;
+                }
+            }
+            if (shared) {
+                es->dep_matrix[a][b] = 1;
+                es->dep_matrix[b][a] = 1;
+            }
+        }
+    }
+    es->dep_valid = 1;
+}
+
+static int exhaustive_find_backtrack(ExhaustiveState *es) {
+    // Walk backward through yield points to find an unexplored alternative.
+    // With DPOR: skip alternatives that are independent of the chosen fiber.
+    for (int i = es->depth - 1; i >= 0; i--) {
+        int chosen = es->choices[i];
+        int *rdy = es->ready[i];
+        int rc = es->ready_count[i];
+
+        if (rc <= 1) continue;  // only one choice at this yield point
+
+        // Find position of chosen fiber in the ready set
+        int pos = -1;
+        for (int j = 0; j < rc; j++) {
+            if (rdy[j] == chosen) { pos = j; break; }
+        }
+        if (pos < 0 || pos >= rc - 1) continue;  // no more alternatives
+
+        // Try subsequent alternatives
+        for (int j = pos + 1; j < rc; j++) {
+            int alt = rdy[j];
+            // DPOR pruning: skip if we know they're independent
+            if (es->dep_valid && !es->dep_matrix[chosen][alt]) continue;
+
+            // Found a viable backtrack point
+            memcpy(es->replay_prefix, es->choices, i * sizeof(int));
+            es->replay_len = i;
+            es->replay_next_choice = alt;
+            return 1;
+        }
+    }
+    return 0;  // all schedules explored
+}
+
 static int pick_next_fiber(void) {
     if (!g_scheduler) return -1;
     int n = g_scheduler->fiber_count;
@@ -2399,6 +2642,45 @@ static int pick_next_fiber(void) {
             if (g_scheduler->fibers[idx].state == FIBER_READY) return idx;
         }
         return -1;
+    } else if (g_scheduler->strategy == STRATEGY_EXHAUSTIVE && g_exhaustive) {
+        // Exhaustive: DFS over schedule tree with DPOR pruning
+        ExhaustiveState *es = g_exhaustive;
+
+        // Collect ready fibers
+        int ready[MAX_FIBERS];
+        int ready_count = 0;
+        for (int i = 0; i < n; i++) {
+            if (g_scheduler->fibers[i].state == FIBER_READY) {
+                ready[ready_count++] = i;
+            }
+        }
+        if (ready_count == 0) return -1;
+
+        if (es->depth >= es->max_depth) {
+            // Past depth limit: pick first ready without recording
+            return ready[0];
+        }
+
+        // Record the ready set at this yield point
+        memcpy(es->ready[es->depth], ready, ready_count * sizeof(int));
+        es->ready_count[es->depth] = ready_count;
+
+        int choice;
+        if (es->depth < es->replay_len) {
+            // Replaying a prefix: use the predetermined choice
+            choice = es->replay_prefix[es->depth];
+        } else if (es->depth == es->replay_len && es->replay_next_choice >= 0) {
+            // First new choice after replay: use the forced alternative
+            choice = es->replay_next_choice;
+            es->replay_next_choice = -1;
+        } else {
+            // New territory: pick the first ready fiber (DFS order)
+            choice = ready[0];
+        }
+
+        es->choices[es->depth] = choice;
+        es->depth++;
+        return choice;
     } else {
         // Random: collect all READY fibers, pick one using LCG
         int ready[MAX_FIBERS];
@@ -2527,14 +2809,146 @@ static void scheduler_run(void) {
 
 // ── __pluto_test_run: entry point called by codegen ──
 
+// Helper: create a fresh scheduler with fiber 0 and run it.
+// Returns 1 if deadlock occurred, 0 otherwise.
+static int test_run_single(long fn_ptr, Strategy strategy, uint64_t run_seed) {
+    g_scheduler = (Scheduler *)calloc(1, sizeof(Scheduler));
+    g_scheduler->strategy = strategy;
+    g_scheduler->seed = run_seed;
+    g_scheduler->main_fn_ptr = fn_ptr;
+
+    // Create fiber 0 for the test body
+    Fiber *f = &g_scheduler->fibers[0];
+    f->id = 0;
+    f->state = FIBER_READY;
+    f->stack = (char *)malloc(FIBER_STACK_SIZE);
+    f->task = NULL;
+    f->closure_ptr = 0;
+    f->saved_error = NULL;
+    f->saved_current_task = NULL;
+    getcontext(&f->context);
+    f->context.uc_stack.ss_sp = f->stack;
+    f->context.uc_stack.ss_size = FIBER_STACK_SIZE;
+    f->context.uc_link = &g_scheduler->scheduler_ctx;
+    makecontext(&f->context, (void(*)(void))test_main_fiber_entry, 0);
+    g_scheduler->fiber_count = 1;
+
+    // Register fiber 0 with GC fiber stack scanner
+    memset(&gc_fiber_stacks, 0, sizeof(gc_fiber_stacks));
+    gc_fiber_stacks.stacks[0].base = f->stack;
+    gc_fiber_stacks.stacks[0].size = FIBER_STACK_SIZE;
+    gc_fiber_stacks.stacks[0].active = 1;
+    gc_fiber_stacks.count = 1;
+    gc_fiber_stacks.current_fiber = -1;
+    gc_fiber_stacks.enabled = 1;
+
+    scheduler_run();
+
+    gc_fiber_stacks.enabled = 0;
+    int had_deadlock = g_scheduler->deadlock;
+    int fiber_count = g_scheduler->fiber_count;
+
+    for (int i = 0; i < fiber_count; i++)
+        free(g_scheduler->fibers[i].stack);
+    free(g_scheduler);
+    g_scheduler = NULL;
+
+    return had_deadlock;
+}
+
 void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations) {
     if (strategy == STRATEGY_SEQUENTIAL) {
-        // Phase A behavior: just call the function directly
         ((void(*)(void))fn_ptr)();
         return;
     }
 
-    // Check env var overrides for seed and iterations
+    if (strategy == STRATEGY_EXHAUSTIVE) {
+        // ── Exhaustive strategy: DFS over all interleavings with DPOR pruning ──
+        int max_schedules = 10000;
+        int max_depth = EXHST_MAX_DEPTH;
+        char *env;
+        env = getenv("PLUTO_MAX_SCHEDULES");
+        if (env) max_schedules = (int)strtol(env, NULL, 0);
+        env = getenv("PLUTO_MAX_DEPTH");
+        if (env) {
+            max_depth = (int)strtol(env, NULL, 0);
+            if (max_depth > EXHST_MAX_DEPTH) max_depth = EXHST_MAX_DEPTH;
+        }
+
+        ExhaustiveState *es = (ExhaustiveState *)calloc(1, sizeof(ExhaustiveState));
+        es->max_schedules = max_schedules;
+        es->max_depth = max_depth;
+        es->replay_len = 0;
+        es->replay_next_choice = -1;  // first run: no forced choice, DFS picks first ready
+
+        while (es->schedules_explored < es->max_schedules) {
+            // Reset per-schedule state
+            es->depth = 0;
+            memset(es->fiber_channel_count, 0, sizeof(es->fiber_channel_count));
+            g_exhaustive = es;
+
+            int had_deadlock = test_run_single(fn_ptr, STRATEGY_EXHAUSTIVE, 0);
+
+            es->fiber_count_snapshot = 0;  // infer from depth info
+            g_exhaustive = NULL;
+
+            // Collect failure info
+            if (had_deadlock && es->failure_count < EXHST_MAX_FAILURES) {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "deadlock in schedule %d (depth %d)",
+                         es->schedules_explored, es->depth);
+                es->failure_messages[es->failure_count++] = strdup(msg);
+            }
+
+            // Update DPOR dependency matrix from this schedule's channel accesses.
+            // We need the fiber count — infer it from the scheduler that was just freed.
+            // Since fibers are created incrementally (0..N-1), count from channel tracking.
+            {
+                int max_fiber = 0;
+                for (int i = 0; i < MAX_FIBERS; i++) {
+                    if (es->fiber_channel_count[i] > 0 && i + 1 > max_fiber)
+                        max_fiber = i + 1;
+                }
+                // Also check the depth records for fibers that never touched channels
+                for (int d = 0; d < es->depth; d++) {
+                    for (int j = 0; j < es->ready_count[d]; j++) {
+                        if (es->ready[d][j] + 1 > max_fiber)
+                            max_fiber = es->ready[d][j] + 1;
+                    }
+                }
+                if (max_fiber > 0)
+                    exhaustive_update_dep_matrix(es, max_fiber);
+            }
+
+            es->schedules_explored++;
+
+            // Find next unexplored schedule via backtracking
+            if (!exhaustive_find_backtrack(es)) break;
+        }
+
+        // Report results
+        fprintf(stderr, "  Exhaustive: %d schedule%s explored",
+                es->schedules_explored, es->schedules_explored == 1 ? "" : "s");
+        if (es->schedules_explored >= es->max_schedules) {
+            fprintf(stderr, " (limit reached)");
+        }
+        fprintf(stderr, "\n");
+
+        if (es->failure_count > 0) {
+            fprintf(stderr, "  %d failure%s found:\n",
+                    es->failure_count, es->failure_count == 1 ? "" : "s");
+            for (int i = 0; i < es->failure_count; i++) {
+                fprintf(stderr, "    - %s\n", es->failure_messages[i]);
+                free(es->failure_messages[i]);
+            }
+            free(es);
+            exit(1);
+        }
+        free(es);
+        return;
+    }
+
+    // ── RoundRobin / Random strategies ──
     char *env_seed = getenv("PLUTO_TEST_SEED");
     if (env_seed) seed = (long)strtoull(env_seed, NULL, 0);
     char *env_iters = getenv("PLUTO_TEST_ITERATIONS");
@@ -2545,50 +2959,7 @@ void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations) {
 
     for (int run = 0; run < num_runs; run++) {
         uint64_t run_seed = (uint64_t)seed + (uint64_t)run;
-
-        g_scheduler = (Scheduler *)calloc(1, sizeof(Scheduler));
-        g_scheduler->strategy = (Strategy)strategy;
-        g_scheduler->seed = run_seed;
-        g_scheduler->main_fn_ptr = fn_ptr;
-
-        // Create fiber 0 for the test body
-        Fiber *f = &g_scheduler->fibers[0];
-        f->id = 0;
-        f->state = FIBER_READY;
-        f->stack = (char *)malloc(FIBER_STACK_SIZE);
-        f->task = NULL;
-        f->closure_ptr = 0;
-        f->saved_error = NULL;
-        f->saved_current_task = NULL;
-        getcontext(&f->context);
-        f->context.uc_stack.ss_sp = f->stack;
-        f->context.uc_stack.ss_size = FIBER_STACK_SIZE;
-        f->context.uc_link = &g_scheduler->scheduler_ctx;
-        makecontext(&f->context, (void(*)(void))test_main_fiber_entry, 0);
-        g_scheduler->fiber_count = 1;
-
-        // Register fiber 0 with GC fiber stack scanner
-        memset(&gc_fiber_stacks, 0, sizeof(gc_fiber_stacks));
-        gc_fiber_stacks.stacks[0].base = f->stack;
-        gc_fiber_stacks.stacks[0].size = FIBER_STACK_SIZE;
-        gc_fiber_stacks.stacks[0].active = 1;
-        gc_fiber_stacks.count = 1;
-        gc_fiber_stacks.current_fiber = -1;
-        gc_fiber_stacks.enabled = 1;
-
-        scheduler_run();
-
-        // Disable GC fiber scanning before cleanup
-        gc_fiber_stacks.enabled = 0;
-
-        int had_deadlock = g_scheduler->deadlock;
-
-        // Cleanup
-        for (int i = 0; i < g_scheduler->fiber_count; i++)
-            free(g_scheduler->fibers[i].stack);
-        free(g_scheduler);
-        g_scheduler = NULL;
-
+        int had_deadlock = test_run_single(fn_ptr, (Strategy)strategy, run_seed);
         if (had_deadlock) {
             fprintf(stderr, "  (seed: 0x%llx, iteration: %d)\n",
                     (unsigned long long)run_seed, run);
@@ -2746,6 +3117,35 @@ static void *__pluto_spawn_trampoline(void *arg) {
     __pluto_current_error = NULL;  // clean TLS for new thread
     __pluto_current_task = task;   // set TLS for cancellation checks
 
+    // Register this thread's stack with GC for root scanning
+    int my_stack_slot = -1;
+    {
+        pthread_t self = pthread_self();
+        void *stack_lo = NULL;
+        void *stack_hi = NULL;
+#ifdef __APPLE__
+        stack_hi = pthread_get_stackaddr_np(self);
+        size_t stack_sz = pthread_get_stacksize_np(self);
+        stack_lo = (char *)stack_hi - stack_sz;
+#else
+        pthread_attr_t pattr;
+        pthread_getattr_np(self, &pattr);
+        size_t stack_sz;
+        pthread_attr_getstack(&pattr, &stack_lo, &stack_sz);
+        stack_hi = (char *)stack_lo + stack_sz;
+        pthread_attr_destroy(&pattr);
+#endif
+        pthread_mutex_lock(&gc_mutex);
+        if (gc_thread_stack_count < GC_MAX_THREAD_STACKS) {
+            my_stack_slot = gc_thread_stack_count++;
+            gc_thread_stacks[my_stack_slot].thread = self;
+            gc_thread_stacks[my_stack_slot].stack_lo = stack_lo;
+            gc_thread_stacks[my_stack_slot].stack_hi = stack_hi;
+            gc_thread_stacks[my_stack_slot].active = 1;
+        }
+        pthread_mutex_unlock(&gc_mutex);
+    }
+
     long fn_ptr = *(long *)closure_ptr;
     long result = ((long(*)(long))fn_ptr)(closure_ptr);
 
@@ -2771,6 +3171,13 @@ static void *__pluto_spawn_trampoline(void *arg) {
     }
     pthread_cond_signal(&sync->cond);
     pthread_mutex_unlock(&sync->mutex);
+
+    // Deregister thread stack from GC
+    if (my_stack_slot >= 0) {
+        pthread_mutex_lock(&gc_mutex);
+        gc_thread_stacks[my_stack_slot].active = 0;
+        pthread_mutex_unlock(&gc_mutex);
+    }
 
     __pluto_current_task = NULL;
     atomic_fetch_sub(&__pluto_active_tasks, 1);
@@ -3117,6 +3524,9 @@ long __pluto_chan_send(long handle, long value) {
     long *ch = (long *)handle;
 
     if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+        // Record channel access for DPOR dependency tracking
+        exhaustive_record_channel(g_scheduler->current_fiber, (void *)ch);
+
         // Fiber mode: yield when buffer is full
         while (1) {
             if (ch[6]) {
@@ -3164,6 +3574,9 @@ long __pluto_chan_recv(long handle) {
     long *ch = (long *)handle;
 
     if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+        // Record channel access for DPOR dependency tracking
+        exhaustive_record_channel(g_scheduler->current_fiber, (void *)ch);
+
         // Fiber mode: yield when buffer is empty
         while (1) {
             if (ch[3] > 0) {
@@ -3520,6 +3933,11 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
     }
 
     if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+        // Record all channels in this select for DPOR dependency tracking
+        for (int si = 0; si < n; si++) {
+            exhaustive_record_channel(g_scheduler->current_fiber, (void *)handles[si]);
+        }
+
         // Fiber mode: loop with yield
         while (1) {
             long result = select_try_arms(handles, ops, values, n, indices);

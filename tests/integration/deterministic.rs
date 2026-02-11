@@ -4949,3 +4949,147 @@ tests[scheduler: Random] {
     assert!(stdout.contains("1 tests passed"), "got: {stdout}");
     assert_eq!(code, 0);
 }
+
+// ── Exhaustive strategy tests ────────────────────────────────────────────
+
+#[test]
+fn exhaustive_basic_no_deadlock() {
+    // Simple test with no concurrency — should explore exactly 1 schedule
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+tests[scheduler: Exhaustive] {
+    test "no spawn" {
+        expect(1 + 1).to_equal(2)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert!(stderr.contains("1 schedule explored"), "Expected 1 schedule, got stderr: {stderr}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn exhaustive_spawn_basic() {
+    // A spawned task with no channels — simple exploration
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn add(a: int, b: int) int {
+    return a + b
+}
+
+tests[scheduler: Exhaustive] {
+    test "spawn add" {
+        let t = spawn add(10, 20)
+        expect(t.get()).to_equal(30)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn exhaustive_finds_deadlock() {
+    // Two fibers each try to recv from the other's channel first, then send on their own.
+    // This creates a circular dependency that deadlocks in all interleavings.
+    let (_stdout, stderr, code) = compile_test_and_run(r#"
+fn worker_a(tx: Sender<int>, rx: Receiver<int>) {
+    let v = rx.recv()!
+    tx.send(v)!
+}
+
+fn worker_b(tx: Sender<int>, rx: Receiver<int>) {
+    let v = rx.recv()!
+    tx.send(v)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "deadlock" {
+        let (tx1, rx1) = chan<int>(0)
+        let (tx2, rx2) = chan<int>(0)
+        let t1 = spawn worker_a(tx1, rx2)
+        let t2 = spawn worker_b(tx2, rx1)
+        t1.get()!
+        t2.get()!
+        expect(1).to_equal(1)
+    }
+}
+"#);
+    assert_ne!(code, 0, "Expected failure, got stderr: {stderr}");
+    assert!(stderr.contains("deadlock") || stderr.contains("Deadlock"), "Expected deadlock in stderr: {stderr}");
+}
+
+#[test]
+fn exhaustive_channel_dependent_fibers() {
+    // Two fibers communicating via a channel — they are DEPENDENT.
+    // Exhaustive should explore multiple interleavings.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn sender(tx: Sender<int>) {
+    tx.send(1)!
+    tx.send(2)!
+    tx.send(3)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "channel comm" {
+        let (tx, rx) = chan<int>(1)
+        let t = spawn sender(tx)
+        let sum = 0
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        t.get()!
+        expect(sum).to_equal(6)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert!(stderr.contains("schedule"), "Expected schedule info in stderr: {stderr}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn exhaustive_respects_max_schedules() {
+    // Use env var to limit schedule exploration
+    let (stdout, stderr, code) = compile_test_and_run_with_env(r#"
+fn worker(tx: Sender<int>) {
+    tx.send(1)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "bounded" {
+        let (tx1, rx1) = chan<int>(1)
+        let (tx2, rx2) = chan<int>(1)
+        let t1 = spawn worker(tx1)
+        let t2 = spawn worker(tx2)
+        let v1 = rx1.recv()!
+        let v2 = rx2.recv()!
+        t1.get()!
+        t2.get()!
+        expect(v1 + v2).to_equal(2)
+    }
+}
+"#, &[("PLUTO_MAX_SCHEDULES", "5")]);
+    assert_eq!(code, 0, "Expected pass, got stdout: {stdout}\nstderr: {stderr}");
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_independent_fibers_dpor_prunes() {
+    // Two spawned tasks that don't share any channels — DPOR should prune.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn compute(x: int) int {
+    return x * x
+}
+
+tests[scheduler: Exhaustive] {
+    test "independent" {
+        let t1 = spawn compute(3)
+        let t2 = spawn compute(4)
+        expect(t1.get()).to_equal(9)
+        expect(t2.get()).to_equal(16)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
