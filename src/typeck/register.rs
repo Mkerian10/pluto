@@ -297,6 +297,9 @@ pub(crate) fn register_stage_placeholders(program: &Program, env: &mut TypeEnv) 
         let stage = &stage_spanned.node;
         let stage_name = stage.name.node.clone();
 
+        // Track stage name for cross-stage call detection (RPC Phase 2)
+        env.stage_names.insert(stage_name.clone());
+
         // Conflict check: stage + top-level main
         if program.functions.iter().any(|f| f.node.name.node == "main") {
             return Err(CompileError::type_err(
@@ -829,6 +832,10 @@ pub(crate) fn register_stage_fields_and_methods(program: &Program, env: &mut Typ
             };
             if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
                 env.mut_self_methods.insert(mangled.clone());
+            }
+            // Track pub methods for cross-stage visibility enforcement (RPC Phase 2)
+            if m.is_pub {
+                env.pub_methods.insert(mangled.clone());
             }
             env.functions.insert(
                 mangled,
