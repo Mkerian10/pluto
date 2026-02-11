@@ -584,6 +584,8 @@ impl<'a> Parser<'a> {
             contracts: Vec::new(),
             body,
             is_pub: false,
+            is_override: false,
+            is_generator: false,
         }, Span::new(start, end));
 
         Ok((info, func))
@@ -809,14 +811,23 @@ impl<'a> Parser<'a> {
         let start = stage_tok.span.start;
         let name = self.expect_ident()?;
 
+        // Parse optional parent: `stage Worker : Daemon`
+        let parent = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Colon) {
+            self.advance(); // consume ':'
+            Some(self.expect_ident()?)
+        } else {
+            None
+        };
+
         let inject_fields = self.parse_bracket_deps()?;
 
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
-        // Parse ambient declarations, lifecycle overrides, and methods (mirrors parse_app_decl)
+        // Parse ambient declarations, lifecycle overrides, required methods, and methods
         let mut ambient_types = Vec::new();
         let mut lifecycle_overrides = Vec::new();
+        let mut required_methods = Vec::new();
         let mut methods = Vec::new();
         while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
             if matches!(self.peek().expect("token should exist after is_some check").node, Token::Ambient) {
@@ -834,16 +845,31 @@ impl<'a> Parser<'a> {
                 lifecycle_overrides.push((class_name, Lifecycle::Transient));
                 self.consume_statement_end();
             } else {
-                // Parse optional 'pub' before methods
+                // Parse optional 'pub' before methods/requires
                 let is_pub = if matches!(self.peek().expect("token should exist after is_some check").node, Token::Pub) {
                     self.advance();
                     true
                 } else {
                     false
                 };
-                let mut method = self.parse_method()?;
-                method.node.is_pub = is_pub;
-                methods.push(method);
+
+                if matches!(self.peek().expect("token should exist after is_some check").node, Token::Requires) {
+                    // `requires fn name(self, ...) ReturnType`
+                    let mut req = self.parse_required_method()?;
+                    req.node.is_pub = is_pub;
+                    required_methods.push(req);
+                } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Override) {
+                    // `override fn name(self, ...) { ... }`
+                    self.advance(); // consume 'override'
+                    let mut method = self.parse_method()?;
+                    method.node.is_pub = is_pub;
+                    method.node.is_override = true;
+                    methods.push(method);
+                } else {
+                    let mut method = self.parse_method()?;
+                    method.node.is_pub = is_pub;
+                    methods.push(method);
+                }
             }
             self.skip_newlines();
         }
@@ -851,7 +877,76 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(StageDecl { id: Uuid::new_v4(), name, inject_fields, ambient_types, lifecycle_overrides, methods }, Span::new(start, end)))
+        Ok(Spanned::new(StageDecl { id: Uuid::new_v4(), name, parent, inject_fields, ambient_types, lifecycle_overrides, required_methods, methods }, Span::new(start, end)))
+    }
+
+    fn parse_required_method(&mut self) -> Result<Spanned<RequiredMethod>, CompileError> {
+        let req_tok = self.expect(&Token::Requires)?;
+        let start = req_tok.span.start;
+        self.expect(&Token::Fn)?;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LParen)?;
+
+        let mut params = Vec::new();
+        let mut first = true;
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RParen) {
+            if !params.is_empty() || !first {
+                self.expect(&Token::Comma)?;
+            }
+            first = false;
+
+            // Handle `self` / `mut self` as first param
+            if params.is_empty() && self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Mut) {
+                let mut_tok = self.advance().expect("token should exist after peek");
+                let mut_span = mut_tok.span;
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::SelfVal) {
+                    let self_tok = self.advance().expect("token should exist after peek");
+                    params.push(Param {
+                        id: Uuid::new_v4(),
+                        name: Spanned::new("self".to_string(), self_tok.span),
+                        ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
+                        is_mut: true,
+                    });
+                } else {
+                    return Err(CompileError::syntax("expected 'self' after 'mut'", mut_span));
+                }
+            } else if params.is_empty() && self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::SelfVal) {
+                let self_tok = self.advance().expect("token should exist after peek");
+                params.push(Param {
+                    id: Uuid::new_v4(),
+                    name: Spanned::new("self".to_string(), self_tok.span),
+                    ty: Spanned::new(TypeExpr::Named("Self".to_string()), self_tok.span),
+                    is_mut: false,
+                });
+            } else {
+                let pname = self.expect_ident()?;
+                self.expect(&Token::Colon)?;
+                let pty = self.parse_type()?;
+                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
+            }
+        }
+        let rparen = self.expect(&Token::RParen)?;
+        let rparen_end = rparen.span.end;
+
+        // Optional return type — anything that's NOT a newline, `{`, `}`, `requires`, `ensures`, `fn`, `override`, `pub`
+        let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node,
+            Token::Newline | Token::LBrace | Token::RBrace | Token::Requires | Token::Ensures | Token::Fn | Token::Override | Token::Pub
+        ) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        let end = return_type.as_ref().map(|rt| rt.span.end).unwrap_or(rparen_end);
+        self.consume_statement_end();
+
+        Ok(Spanned::new(RequiredMethod {
+            id: Uuid::new_v4(),
+            name,
+            params,
+            return_type,
+            is_pub: false,
+        }, Span::new(start, end)))
     }
 
     fn parse_system_decl(&mut self) -> Result<Spanned<SystemDecl>, CompileError> {
@@ -1176,13 +1271,21 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // Reject generator methods (Phase 1: generators are top-level functions only)
+        if return_type.as_ref().is_some_and(|rt| matches!(rt.node, TypeExpr::Stream(_))) {
+            return Err(CompileError::syntax(
+                "generator methods are not supported; generators must be top-level functions".to_string(),
+                return_type.as_ref().unwrap().span,
+            ));
+        }
+
         let contracts = self.parse_contracts()?;
 
         let body = self.parse_block()?;
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { id: Uuid::new_v4(), name, type_params: vec![], type_param_bounds: HashMap::new(), params, return_type, contracts, body, is_pub: false },
+            Function { id: Uuid::new_v4(), name, type_params: vec![], type_param_bounds: HashMap::new(), params, return_type, contracts, body, is_pub: false, is_override: false, is_generator: false },
             Span::new(start, end),
         ))
     }
@@ -1293,14 +1396,25 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { id: Uuid::new_v4(), name, type_params, type_param_bounds, params, return_type, contracts, body, is_pub: false },
+            Function {
+                id: Uuid::new_v4(), name, type_params, type_param_bounds, params,
+                is_generator: return_type.as_ref().is_some_and(|rt| matches!(rt.node, TypeExpr::Stream(_))),
+                return_type, contracts, body, is_pub: false, is_override: false,
+            },
             Span::new(start, end),
         ))
     }
 
     fn parse_type(&mut self) -> Result<Spanned<TypeExpr>, CompileError> {
         self.skip_newlines();
-        let mut result = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBracket) {
+        let mut result = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Stream) {
+            // Stream type: stream T
+            let stream_tok = self.advance().expect("token should exist after peek");
+            let start = stream_tok.span.start;
+            let inner = self.parse_type()?;
+            let end = inner.span.end;
+            Ok(Spanned::new(TypeExpr::Stream(Box::new(inner)), Span::new(start, end)))
+        } else if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBracket) {
             let open = self.advance().expect("token should exist after peek");
             let start = open.span.start;
             let inner = self.parse_type()?;
@@ -1390,6 +1504,7 @@ impl<'a> Parser<'a> {
         match &tok.node {
             Token::Let => self.parse_let_stmt(),
             Token::Return => self.parse_return_stmt(),
+            Token::Yield => self.parse_yield_stmt(),
             Token::If => self.parse_if_stmt(),
             Token::While => self.parse_while_stmt(),
             Token::For => self.parse_for_stmt(),
@@ -1632,6 +1747,18 @@ impl<'a> Parser<'a> {
         self.consume_statement_end();
 
         Ok(Spanned::new(Stmt::Return(value), Span::new(start, end)))
+    }
+
+    fn parse_yield_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let yield_span = self.expect(&Token::Yield)?.span;
+        let start = yield_span.start;
+
+        // yield always requires a value expression
+        let value = self.parse_expr(0)?;
+        let end = value.span.end;
+        self.consume_statement_end();
+
+        Ok(Spanned::new(Stmt::Yield { value }, Span::new(start, end)))
     }
 
     fn parse_if_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {

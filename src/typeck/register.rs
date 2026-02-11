@@ -537,6 +537,9 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
             Some(t) => resolve_type(t, env)?,
             None => PlutoType::Void,
         };
+        if matches!(&return_type, PlutoType::Stream(_)) {
+            env.generators.insert(f.name.node.clone());
+        }
         env.functions.insert(
             f.name.node.clone(),
             FuncSig { params: param_types, return_type },
@@ -1432,6 +1435,8 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
                                 contracts: trait_method.contracts.clone(),
                                 body: body.clone(),
                                 is_pub: false,
+                                is_override: false,
+                                is_generator: false,
                             };
                             check_function(&tmp_func, env, Some(class_name))?;
                         }

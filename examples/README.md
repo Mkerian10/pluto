@@ -183,6 +183,14 @@ Demonstrates the `stage` language construct — a deployable unit for distribute
 cargo run -- run examples/stages/main.pluto
 ```
 
+## generators
+
+Demonstrates generators with `stream T` return types and `yield`: lazy integer ranges, infinite Fibonacci sequence with early `break`, and composing multiple generators.
+
+```bash
+cargo run -- run examples/generators/main.pluto
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.

@@ -148,6 +148,9 @@ fn lift_in_stmt(
             }
             lift_in_block(&mut body.node, env, counter, new_fns)?;
         }
+        Stmt::Yield { value, .. } => {
+            lift_in_expr(&mut value.node, value.span, env, counter, new_fns)?;
+        }
         Stmt::Break | Stmt::Continue => {}
     }
     Ok(())
@@ -292,6 +295,8 @@ fn lift_in_expr(
                     contracts: vec![],
                     body,
                     is_pub: false,
+                    is_override: false,
+                    is_generator: false,
                 };
 
                 new_fns.push(Spanned::new(lifted, span));
@@ -389,6 +394,7 @@ fn resolve_type_for_lift(ty: &TypeExpr) -> PlutoType {
             }
         }
         TypeExpr::Nullable(inner) => PlutoType::Nullable(Box::new(resolve_type_for_lift(&inner.node))),
+        TypeExpr::Stream(inner) => PlutoType::Stream(Box::new(resolve_type_for_lift(&inner.node))),
     }
 }
 

@@ -94,6 +94,12 @@ pub enum Token {
     System,
     #[token("stage")]
     Stage,
+    #[token("override")]
+    Override,
+    #[token("yield")]
+    Yield,
+    #[token("stream")]
+    Stream,
 
     // Literals
     #[regex(r"0[xX][0-9a-fA-F_]+|[0-9][0-9_]*", |lex| {
@@ -245,7 +251,8 @@ pub fn is_keyword(s: &str) -> bool {
         | "enum" | "impl" | "self" | "pub" | "for" | "in" | "break" | "continue"
         | "match" | "import" | "as" | "extern" | "uses" | "ambient" | "tests" | "test"
         | "invariant" | "requires" | "ensures" | "select" | "default"
-        | "scope" | "scoped" | "transient" | "none" | "system" | "stage")
+        | "scope" | "scoped" | "transient" | "none" | "system" | "stage" | "override"
+        | "yield" | "stream")
 }
 
 impl std::fmt::Display for Token {
@@ -295,6 +302,9 @@ impl std::fmt::Display for Token {
             Token::None => write!(f, "none"),
             Token::System => write!(f, "system"),
             Token::Stage => write!(f, "stage"),
+            Token::Override => write!(f, "override"),
+            Token::Yield => write!(f, "yield"),
+            Token::Stream => write!(f, "stream"),
             Token::IntLit(n) => write!(f, "{n}"),
             Token::FloatLit(n) => write!(f, "{n}"),
             Token::StringLit(s) => write!(f, "\"{s}\""),

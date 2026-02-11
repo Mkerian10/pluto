@@ -6,11 +6,11 @@ class Ball {
 }
 
 fn bounce_sim(steps: int) int {
-    let b = Ball { x: 0.0, y: 0.0, vx: 1.5, vy: 2.3 }
+    let mut b = Ball { x: 0.0, y: 0.0, vx: 1.5, vy: 2.3 }
     let box_size = 100.0
 
-    let i = 0
-    let bounces = 0
+    let mut i = 0
+    let mut bounces = 0
     while i < steps {
         b.x = b.x + b.vx
         b.y = b.y + b.vy

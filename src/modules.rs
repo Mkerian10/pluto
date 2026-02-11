@@ -860,6 +860,9 @@ fn prefix_type_expr(ty: &mut TypeExpr, module_name: &str, module_prog: &Program)
         TypeExpr::Nullable(inner) => {
             prefix_type_expr(&mut inner.node, module_name, module_prog);
         }
+        TypeExpr::Stream(inner) => {
+            prefix_type_expr(&mut inner.node, module_name, module_prog);
+        }
     }
 }
 
@@ -978,6 +981,9 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
                 prefix_type_expr(&mut binding.ty.node, module_name, module_prog);
             }
             rewrite_block_for_module(&mut body.node, module_name, module_prog);
+        }
+        Stmt::Yield { value, .. } => {
+            rewrite_expr_for_module(&mut value.node, module_name, module_prog);
         }
         Stmt::Break | Stmt::Continue => {}
     }
@@ -1170,6 +1176,15 @@ fn rewrite_program(program: &mut Program, import_names: &HashSet<String>) {
         for method in &mut stage.node.methods {
             rewrite_function_body(&mut method.node, import_names);
         }
+        // Rewrite required method param/return types
+        for req in &mut stage.node.required_methods {
+            for param in &mut req.node.params {
+                rewrite_type_expr(&mut param.ty, import_names);
+            }
+            if let Some(ret) = &mut req.node.return_type {
+                rewrite_type_expr(ret, import_names);
+            }
+        }
         // Rewrite stage inject field types
         for field in &mut stage.node.inject_fields {
             rewrite_type_expr(&mut field.ty, import_names);
@@ -1218,6 +1233,9 @@ fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, import_names: &HashSet<String>)
             }
         }
         TypeExpr::Nullable(inner) => {
+            rewrite_type_expr(inner, import_names);
+        }
+        TypeExpr::Stream(inner) => {
             rewrite_type_expr(inner, import_names);
         }
     }
@@ -1317,6 +1335,9 @@ fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
                 rewrite_type_expr(&mut binding.ty, import_names);
             }
             rewrite_block(&mut body.node, import_names);
+        }
+        Stmt::Yield { value, .. } => {
+            rewrite_expr(&mut value.node, value.span, import_names);
         }
         Stmt::Break | Stmt::Continue => {}
     }

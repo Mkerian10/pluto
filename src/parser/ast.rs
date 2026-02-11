@@ -120,12 +120,23 @@ pub struct AppDecl {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequiredMethod {
+    pub id: Uuid,
+    pub name: Spanned<String>,
+    pub params: Vec<Param>,
+    pub return_type: Option<Spanned<TypeExpr>>,
+    pub is_pub: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StageDecl {
     pub id: Uuid,
     pub name: Spanned<String>,
+    pub parent: Option<Spanned<String>>,
     pub inject_fields: Vec<Field>,
     pub ambient_types: Vec<Spanned<String>>,
     pub lifecycle_overrides: Vec<(Spanned<String>, Lifecycle)>,
+    pub required_methods: Vec<Spanned<RequiredMethod>>,
     pub methods: Vec<Spanned<Function>>,
 }
 
@@ -154,6 +165,8 @@ pub struct Function {
     pub contracts: Vec<Spanned<ContractClause>>,
     pub body: Spanned<Block>,
     pub is_pub: bool,
+    pub is_override: bool,
+    pub is_generator: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +191,7 @@ pub enum TypeExpr {
         type_args: Vec<Spanned<TypeExpr>>,
     },
     Nullable(Box<Spanned<TypeExpr>>),
+    Stream(Box<Spanned<TypeExpr>>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,6 +259,9 @@ pub enum Stmt {
         seeds: Vec<Spanned<Expr>>,
         bindings: Vec<ScopeBinding>,
         body: Spanned<Block>,
+    },
+    Yield {
+        value: Spanned<Expr>,
     },
     Break,
     Continue,

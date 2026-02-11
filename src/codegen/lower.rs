@@ -537,6 +537,10 @@ impl<'a> LowerContext<'a> {
             }
             Stmt::Select { arms, default } => self.lower_select(arms, default, terminated),
             Stmt::Scope { seeds, bindings, body } => self.lower_scope(seeds, bindings, body),
+            Stmt::Yield { .. } => {
+                // Generator yield is handled by lower_generator_next, not lower_stmt
+                unreachable!("Stmt::Yield should only appear in generator next function codegen")
+            }
             Stmt::Expr(expr) => {
                 self.lower_expr(&expr.node)?;
                 Ok(())
@@ -731,7 +735,8 @@ impl<'a> LowerContext<'a> {
             PlutoType::Bytes => self.lower_for_bytes(var, iterable, body),
             PlutoType::String => self.lower_for_string(var, iterable, body),
             PlutoType::Receiver(_) => self.lower_for_receiver(var, iterable, body),
-            _ => Err(CompileError::codegen("for loop requires array, range, string, or receiver".to_string())),
+            PlutoType::Stream(_) => self.lower_for_stream(var, iterable, body),
+            _ => Err(CompileError::codegen("for loop requires array, range, string, receiver, or stream".to_string())),
         }
     }
 
@@ -1154,6 +1159,96 @@ impl<'a> LowerContext<'a> {
         self.var_types.insert(var.node.clone(), elem_type);
 
         // Push loop stack: continue goes to header (re-recv), break goes to exit
+        self.loop_stack.push((header_bb, exit_bb));
+        let mut body_terminated = false;
+        for s in &body.node.stmts {
+            self.lower_stmt(&s.node, &mut body_terminated)?;
+        }
+        self.loop_stack.pop();
+
+        // Restore prior variable binding
+        if let Some(pv) = prev_var {
+            self.variables.insert(var.node.clone(), pv);
+        } else {
+            self.variables.remove(&var.node);
+        }
+        if let Some(pt) = prev_type {
+            self.var_types.insert(var.node.clone(), pt);
+        } else {
+            self.var_types.remove(&var.node);
+        }
+
+        if !body_terminated {
+            self.builder.ins().jump(header_bb, &[]);
+        }
+
+        self.builder.seal_block(header_bb);
+        self.builder.switch_to_block(exit_bb);
+        self.builder.seal_block(exit_bb);
+        Ok(())
+    }
+
+    fn lower_for_stream(
+        &mut self,
+        var: &crate::span::Spanned<String>,
+        iterable: &crate::span::Spanned<Expr>,
+        body: &crate::span::Spanned<Block>,
+    ) -> Result<(), CompileError> {
+        let gen_ptr = self.lower_expr(&iterable.node)?;
+
+        let iter_type = infer_type_for_expr(&iterable.node, self.env, &self.var_types);
+        let elem_type = match &iter_type {
+            PlutoType::Stream(elem) => *elem.clone(),
+            _ => return Err(CompileError::codegen("for-in requires stream".to_string())),
+        };
+
+        // Blocks: header calls next, body processes value, exit leaves loop
+        let header_bb = self.builder.create_block();
+        let body_bb = self.builder.create_block();
+        let exit_bb = self.builder.create_block();
+
+        self.builder.ins().jump(header_bb, &[]);
+
+        // Header: load next_fn_ptr from gen_ptr[0], call indirect, check done flag
+        self.builder.switch_to_block(header_bb);
+
+        // Load the next function pointer from offset 0
+        let next_fn_ptr = self.builder.ins().load(types::I64, MemFlags::new(), gen_ptr, Offset32::new(0));
+
+        // Build signature for the next function: (I64) -> void
+        let mut next_sig = self.module.make_signature();
+        next_sig.params.push(AbiParam::new(types::I64));
+        let next_sig_ref = self.builder.func.import_signature(next_sig);
+
+        // Call next function indirectly
+        self.builder.ins().call_indirect(next_sig_ref, next_fn_ptr, &[gen_ptr]);
+
+        // Check done flag at offset 16
+        let done = self.builder.ins().load(types::I64, MemFlags::new(), gen_ptr, Offset32::new(16));
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let is_done = self.builder.ins().icmp(IntCC::NotEqual, done, zero);
+        self.builder.ins().brif(is_done, exit_bb, &[], body_bb, &[]);
+
+        // Body: load result from gen_ptr[24], convert to typed value
+        self.builder.switch_to_block(body_bb);
+        self.builder.seal_block(body_bb);
+
+        let raw_result = self.builder.ins().load(types::I64, MemFlags::new(), gen_ptr, Offset32::new(24));
+        let elem_val = from_array_slot(raw_result, &elem_type, &mut self.builder);
+
+        // Create loop variable
+        let prev_var = self.variables.get(&var.node).cloned();
+        let prev_type = self.var_types.get(&var.node).cloned();
+
+        let loop_var = Variable::from_u32(self.next_var);
+        self.next_var += 1;
+        let cl_elem_type = pluto_to_cranelift(&elem_type);
+        self.builder.declare_var(loop_var, cl_elem_type);
+        self.builder.def_var(loop_var, elem_val);
+        self.variables.insert(var.node.clone(), loop_var);
+        self.var_types.insert(var.node.clone(), elem_type);
+
+        // Push loop stack: continue goes to header (re-call next), break goes to exit
         self.loop_stack.push((header_bb, exit_bb));
         let mut body_terminated = false;
         for s in &body.node.stmts {
@@ -2904,7 +2999,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I64, arg_val);
                 self.call_runtime_void("__pluto_print_int", &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes | PlutoType::GenericInstance(_, _, _) | PlutoType::Nullable(_) => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes | PlutoType::GenericInstance(_, _, _) | PlutoType::Nullable(_) | PlutoType::Stream(_) => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -3278,6 +3373,773 @@ pub fn lower_function(
     Ok(())
 }
 
+// ── Generator codegen ────────────────────────────────────────────────────
+
+/// Count yield points in a block (recursively enters if/while/for/match bodies).
+fn count_yields_in_block(stmts: &[crate::span::Spanned<Stmt>]) -> u32 {
+    let mut count = 0;
+    for stmt in stmts {
+        count += count_yields_in_stmt(&stmt.node);
+    }
+    count
+}
+
+fn count_yields_in_stmt(stmt: &Stmt) -> u32 {
+    match stmt {
+        Stmt::Yield { .. } => 1,
+        Stmt::If { then_block, else_block, .. } => {
+            let mut c = count_yields_in_block(&then_block.node.stmts);
+            if let Some(eb) = else_block {
+                c += count_yields_in_block(&eb.node.stmts);
+            }
+            c
+        }
+        Stmt::While { body, .. } => count_yields_in_block(&body.node.stmts),
+        Stmt::For { body, .. } => count_yields_in_block(&body.node.stmts),
+        Stmt::Match { arms, .. } => {
+            let mut c = 0;
+            for arm in arms {
+                c += count_yields_in_block(&arm.body.node.stmts);
+            }
+            c
+        }
+        _ => 0,
+    }
+}
+
+/// Collect all local variable declarations in a function body.
+/// Returns (name, type) pairs. Walks into if/while/for/match bodies.
+fn collect_local_decls(stmts: &[crate::span::Spanned<Stmt>], env: &TypeEnv) -> Vec<(String, PlutoType)> {
+    let mut locals = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    collect_local_decls_inner(stmts, env, &mut locals, &mut seen);
+    locals
+}
+
+fn collect_local_decls_inner(
+    stmts: &[crate::span::Spanned<Stmt>],
+    env: &TypeEnv,
+    locals: &mut Vec<(String, PlutoType)>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    for stmt in stmts {
+        match &stmt.node {
+            Stmt::Let { name, ty, value, .. } => {
+                if seen.insert(name.node.clone()) {
+                    let pty = if let Some(t) = ty {
+                        resolve_type_expr_to_pluto(&t.node, env)
+                    } else {
+                        infer_type_for_expr(&value.node, env, &HashMap::new())
+                    };
+                    locals.push((name.node.clone(), pty));
+                }
+            }
+            Stmt::For { var, iterable, body, .. } => {
+                if seen.insert(var.node.clone()) {
+                    let iter_type = infer_type_for_expr(&iterable.node, env, &HashMap::new());
+                    let elem_type = match iter_type {
+                        PlutoType::Array(e) => *e,
+                        PlutoType::Range => PlutoType::Int,
+                        PlutoType::String => PlutoType::String,
+                        PlutoType::Bytes => PlutoType::Byte,
+                        PlutoType::Receiver(e) => *e,
+                        PlutoType::Stream(e) => *e,
+                        _ => PlutoType::Int,
+                    };
+                    locals.push((var.node.clone(), elem_type));
+                }
+                collect_local_decls_inner(&body.node.stmts, env, locals, seen);
+            }
+            Stmt::If { then_block, else_block, .. } => {
+                collect_local_decls_inner(&then_block.node.stmts, env, locals, seen);
+                if let Some(eb) = else_block {
+                    collect_local_decls_inner(&eb.node.stmts, env, locals, seen);
+                }
+            }
+            Stmt::While { body, .. } => {
+                collect_local_decls_inner(&body.node.stmts, env, locals, seen);
+            }
+            Stmt::Match { arms, .. } => {
+                for arm in arms {
+                    collect_local_decls_inner(&arm.body.node.stmts, env, locals, seen);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Lower the generator creator function.
+/// Allocates a generator object with [next_fn_ptr, state, done, result, params..., locals...]
+/// and stores the next function pointer + initial parameter values.
+#[allow(clippy::too_many_arguments)]
+pub fn lower_generator_creator(
+    func: &Function,
+    mut builder: FunctionBuilder<'_>,
+    env: &TypeEnv,
+    module: &mut dyn Module,
+    func_ids: &HashMap<String, FuncId>,
+    runtime: &RuntimeRegistry,
+) -> Result<(), CompileError> {
+    let entry_block = builder.create_block();
+    builder.append_block_params_for_function_params(entry_block);
+    builder.switch_to_block(entry_block);
+    builder.seal_block(entry_block);
+
+    let num_params = func.params.len();
+    let local_decls = collect_local_decls(&func.body.node.stmts, env);
+    let num_locals = local_decls.len();
+
+    // Layout: [next_fn_ptr(0) | state(8) | done(16) | result(24) | params(32..) | locals(32+P*8..)]
+    let total_slots = 4 + num_params + num_locals;
+    let alloc_size = (total_slots as i64) * POINTER_SIZE as i64;
+
+    // Allocate generator object
+    let size_val = builder.ins().iconst(types::I64, alloc_size);
+    let alloc_ref = module.declare_func_in_func(runtime.get("__pluto_alloc"), builder.func);
+    let call = builder.ins().call(alloc_ref, &[size_val]);
+    let gen_ptr = builder.inst_results(call)[0];
+
+    // Store next function pointer at offset 0
+    let next_name = format!("__gen_next_{}", func.name.node);
+    let next_func_id = func_ids.get(&next_name).ok_or_else(|| {
+        CompileError::codegen(format!("missing generator next function '{next_name}'"))
+    })?;
+    let next_func_ref = module.declare_func_in_func(*next_func_id, builder.func);
+    let next_fn_addr = builder.ins().func_addr(types::I64, next_func_ref);
+    builder.ins().store(MemFlags::new(), next_fn_addr, gen_ptr, Offset32::new(0));
+
+    // Store state = 0 at offset 8
+    let zero = builder.ins().iconst(types::I64, 0);
+    builder.ins().store(MemFlags::new(), zero, gen_ptr, Offset32::new(8));
+
+    // Store done = 0 at offset 16
+    builder.ins().store(MemFlags::new(), zero, gen_ptr, Offset32::new(16));
+
+    // Store params at offsets 32+
+    for (i, _param) in func.params.iter().enumerate() {
+        let param_val = builder.block_params(entry_block)[i];
+        let param_type = resolve_type_expr_to_pluto(&func.params[i].ty.node, env);
+        let slot_val = to_array_slot(param_val, &param_type, &mut builder);
+        let offset = (4 + i) as i32 * POINTER_SIZE;
+        builder.ins().store(MemFlags::new(), slot_val, gen_ptr, Offset32::new(offset));
+    }
+
+    // Initialize local slots to 0
+    for i in 0..num_locals {
+        let offset = (4 + num_params + i) as i32 * POINTER_SIZE;
+        builder.ins().store(MemFlags::new(), zero, gen_ptr, Offset32::new(offset));
+    }
+
+    // Return gen_ptr
+    builder.ins().return_(&[gen_ptr]);
+    builder.finalize();
+    Ok(())
+}
+
+/// Lower the generator next function (state machine).
+/// Takes gen_ptr as the single parameter. On each call:
+/// - Dispatches to the correct resume point based on state
+/// - Executes until the next yield (stores result, saves locals, sets next state)
+/// - Or runs to completion (sets done flag)
+#[allow(clippy::too_many_arguments)]
+pub fn lower_generator_next(
+    func: &Function,
+    mut builder: FunctionBuilder<'_>,
+    env: &TypeEnv,
+    module: &mut dyn Module,
+    func_ids: &HashMap<String, FuncId>,
+    runtime: &RuntimeRegistry,
+    vtable_ids: &HashMap<(String, String), DataId>,
+    source: &str,
+    class_invariants: &HashMap<String, Vec<(Expr, String)>>,
+    fn_contracts: &HashMap<String, FnContracts>,
+    singleton_globals: &HashMap<String, DataId>,
+    rwlock_globals: &HashMap<String, DataId>,
+) -> Result<(), CompileError> {
+    let entry_block = builder.create_block();
+    builder.append_block_params_for_function_params(entry_block);
+    builder.switch_to_block(entry_block);
+
+    let num_params = func.params.len();
+    let local_decls = collect_local_decls(&func.body.node.stmts, env);
+    let _num_locals = local_decls.len();
+    let num_yields = count_yields_in_block(&func.body.node.stmts);
+
+    // gen_ptr is the single parameter
+    let gen_ptr_val = builder.block_params(entry_block)[0];
+    let gen_ptr_var = Variable::from_u32(0);
+    builder.declare_var(gen_ptr_var, types::I64);
+    builder.def_var(gen_ptr_var, gen_ptr_val);
+
+    // Create dispatch blocks
+    let state_0_bb = builder.create_block();
+    let done_bb = builder.create_block();
+    let mut resume_blocks = Vec::new();
+    for _ in 0..num_yields {
+        resume_blocks.push(builder.create_block());
+    }
+
+    // Dispatch: load state, branch to appropriate block
+    let gen_ptr = builder.use_var(gen_ptr_var);
+    let state = builder.ins().load(types::I64, MemFlags::new(), gen_ptr, Offset32::new(8));
+
+    // Chain of brif comparisons: if state == 0 → state_0, if state == 1 → resume_1, ...
+    let zero = builder.ins().iconst(types::I64, 0);
+    let is_state_0 = builder.ins().icmp(IntCC::Equal, state, zero);
+    if num_yields > 0 {
+        let mut next_check = builder.create_block();
+        builder.ins().brif(is_state_0, state_0_bb, &[], next_check, &[]);
+
+        // Generate comparison chain for each resume block
+        for (i, resume_bb) in resume_blocks.iter().enumerate() {
+            builder.switch_to_block(next_check);
+            builder.seal_block(next_check);
+            let state_val = builder.ins().iconst(types::I64, (i + 1) as i64);
+            let gen_ptr = builder.use_var(gen_ptr_var);
+            let state = builder.ins().load(types::I64, MemFlags::new(), gen_ptr, Offset32::new(8));
+            let is_this_state = builder.ins().icmp(IntCC::Equal, state, state_val);
+            if i + 1 < resume_blocks.len() {
+                let next_next_check = builder.create_block();
+                builder.ins().brif(is_this_state, *resume_bb, &[], next_next_check, &[]);
+                next_check = next_next_check;
+            } else {
+                builder.ins().brif(is_this_state, *resume_bb, &[], done_bb, &[]);
+            }
+        }
+    } else {
+        builder.ins().brif(is_state_0, state_0_bb, &[], done_bb, &[]);
+    }
+
+    builder.seal_block(entry_block);
+
+    // Done block: set done flag and return
+    builder.switch_to_block(done_bb);
+    builder.seal_block(done_bb);
+    let gen_ptr = builder.use_var(gen_ptr_var);
+    let one = builder.ins().iconst(types::I64, 1);
+    builder.ins().store(MemFlags::new(), one, gen_ptr, Offset32::new(16));
+    builder.ins().return_(&[]);
+
+    // State 0: load params from gen object, then execute body
+    builder.switch_to_block(state_0_bb);
+    builder.seal_block(state_0_bb);
+
+    // Set up LowerContext for the generator body
+    let mut variables = HashMap::new();
+    let mut var_types = HashMap::new();
+    let mut next_var_id = 1u32; // 0 is gen_ptr_var
+
+    // Load params from gen object and build param_slots for save/restore across yields
+    let mut param_slots: Vec<(String, PlutoType, Variable)> = Vec::new();
+    for (i, param) in func.params.iter().enumerate() {
+        let param_type = resolve_type_expr_to_pluto(&param.ty.node, env);
+        let gen_ptr = builder.use_var(gen_ptr_var);
+        let offset = (4 + i) as i32 * POINTER_SIZE;
+        let raw = builder.ins().load(types::I64, MemFlags::new(), gen_ptr, Offset32::new(offset));
+        let val = from_array_slot(raw, &param_type, &mut builder);
+
+        let var = Variable::from_u32(next_var_id);
+        next_var_id += 1;
+        builder.declare_var(var, pluto_to_cranelift(&param_type));
+        builder.def_var(var, val);
+        variables.insert(param.name.node.clone(), var);
+        var_types.insert(param.name.node.clone(), param_type.clone());
+        param_slots.push((param.name.node.clone(), param_type, var));
+    }
+
+    // Pre-declare all local variables (so they exist across all yield points)
+    let local_slots: Vec<(String, PlutoType, Variable)> = local_decls.iter().enumerate().map(|(_i, (name, ty))| {
+        let var = Variable::from_u32(next_var_id);
+        next_var_id += 1;
+        builder.declare_var(var, pluto_to_cranelift(ty));
+        // Initialize to zero
+        let init_val = match ty {
+            PlutoType::Float => builder.ins().f64const(0.0),
+            PlutoType::Bool | PlutoType::Byte => builder.ins().iconst(types::I8, 0),
+            _ => builder.ins().iconst(types::I64, 0),
+        };
+        builder.def_var(var, init_val);
+        variables.insert(name.clone(), var);
+        var_types.insert(name.clone(), ty.clone());
+        (name.clone(), ty.clone(), var)
+    }).collect();
+
+    // Build context
+    let mut ctx = LowerContext {
+        builder,
+        module,
+        env,
+        func_ids,
+        runtime,
+        vtable_ids,
+        source,
+        class_invariants,
+        fn_contracts,
+        singleton_globals,
+        rwlock_globals,
+        variables,
+        var_types,
+        next_var: next_var_id,
+        expected_return_type: Some(PlutoType::Void),
+        loop_stack: Vec::new(),
+        sender_cleanup_vars: Vec::new(),
+        exit_block: None,
+        old_snapshots: HashMap::new(),
+        ensures_block: None,
+        fn_display_name: func.name.node.clone(),
+        is_spawn_closure: false,
+    };
+
+    // Generator-specific state
+    let mut yield_counter = 0u32;
+
+    // Lower the body with generator-aware statement handling
+    let mut terminated = false;
+    lower_generator_block(
+        &func.body.node.stmts,
+        &mut ctx,
+        &mut terminated,
+        &mut yield_counter,
+        &resume_blocks,
+        &param_slots,
+        &local_slots,
+        num_params,
+        gen_ptr_var,
+        done_bb,
+    )?;
+
+    // If body didn't terminate, set done and return
+    if !terminated {
+        let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+        let one = ctx.builder.ins().iconst(types::I64, 1);
+        ctx.builder.ins().store(MemFlags::new(), one, gen_ptr, Offset32::new(16));
+        ctx.builder.ins().return_(&[]);
+    }
+
+    // Fill any unused resume blocks (e.g., yields after an early return are dead code,
+    // but we pre-created resume blocks for them — they need valid terminators).
+    for i in (yield_counter as usize)..resume_blocks.len() {
+        ctx.builder.switch_to_block(resume_blocks[i]);
+        ctx.builder.seal_block(resume_blocks[i]);
+        let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+        let one = ctx.builder.ins().iconst(types::I64, 1);
+        ctx.builder.ins().store(MemFlags::new(), one, gen_ptr, Offset32::new(16));
+        ctx.builder.ins().return_(&[]);
+    }
+
+    ctx.finalize();
+    Ok(())
+}
+
+/// Lower a block of statements inside a generator, handling Yield specially.
+fn lower_generator_block(
+    stmts: &[crate::span::Spanned<Stmt>],
+    ctx: &mut LowerContext<'_>,
+    terminated: &mut bool,
+    yield_counter: &mut u32,
+    resume_blocks: &[cranelift_codegen::ir::Block],
+    param_slots: &[(String, PlutoType, Variable)],
+    local_slots: &[(String, PlutoType, Variable)],
+    num_params: usize,
+    gen_ptr_var: Variable,
+    done_bb: cranelift_codegen::ir::Block,
+) -> Result<(), CompileError> {
+    for stmt in stmts {
+        if *terminated {
+            break;
+        }
+        match &stmt.node {
+            Stmt::Yield { value } => {
+                // 1. Lower the yield value expression
+                let val = ctx.lower_expr(&value.node)?;
+                let val_type = infer_type_for_expr(&value.node, ctx.env, &ctx.var_types);
+
+                // 2. Store result at gen_ptr[24]
+                let slot_val = to_array_slot(val, &val_type, &mut ctx.builder);
+                let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+                ctx.builder.ins().store(MemFlags::new(), slot_val, gen_ptr, Offset32::new(24));
+
+                // 3. Save params to gen object (needed for resume across yield points)
+                for (i, (_, ty, var)) in param_slots.iter().enumerate() {
+                    let param_val = ctx.builder.use_var(*var);
+                    let slot = to_array_slot(param_val, ty, &mut ctx.builder);
+                    let offset = (4 + i) as i32 * POINTER_SIZE;
+                    let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+                    ctx.builder.ins().store(MemFlags::new(), slot, gen_ptr, Offset32::new(offset));
+                }
+
+                // 4. Save ALL locals to gen object
+                for (i, (_, ty, var)) in local_slots.iter().enumerate() {
+                    let local_val = ctx.builder.use_var(*var);
+                    let slot = to_array_slot(local_val, ty, &mut ctx.builder);
+                    let offset = (4 + num_params + i) as i32 * POINTER_SIZE;
+                    let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+                    ctx.builder.ins().store(MemFlags::new(), slot, gen_ptr, Offset32::new(offset));
+                }
+
+                // 5. Store next state
+                let yield_idx = *yield_counter;
+                *yield_counter += 1;
+                let next_state = ctx.builder.ins().iconst(types::I64, (yield_idx + 1) as i64);
+                let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+                ctx.builder.ins().store(MemFlags::new(), next_state, gen_ptr, Offset32::new(8));
+
+                // 6. Return (yield point)
+                ctx.builder.ins().return_(&[]);
+
+                // 7. Switch to the resume block for this yield
+                let resume_bb = resume_blocks[yield_idx as usize];
+                ctx.builder.switch_to_block(resume_bb);
+                ctx.builder.seal_block(resume_bb);
+
+                // 8. Restore params from gen object
+                for (i, (_, ty, var)) in param_slots.iter().enumerate() {
+                    let offset = (4 + i) as i32 * POINTER_SIZE;
+                    let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+                    let raw = ctx.builder.ins().load(types::I64, MemFlags::new(), gen_ptr, Offset32::new(offset));
+                    let val = from_array_slot(raw, ty, &mut ctx.builder);
+                    ctx.builder.def_var(*var, val);
+                }
+
+                // 9. Restore ALL locals from gen object
+                for (i, (_, ty, var)) in local_slots.iter().enumerate() {
+                    let offset = (4 + num_params + i) as i32 * POINTER_SIZE;
+                    let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+                    let raw = ctx.builder.ins().load(types::I64, MemFlags::new(), gen_ptr, Offset32::new(offset));
+                    let val = from_array_slot(raw, ty, &mut ctx.builder);
+                    ctx.builder.def_var(*var, val);
+                }
+            }
+            Stmt::Return(_) => {
+                // Bare return in generator means "done"
+                let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+                let one = ctx.builder.ins().iconst(types::I64, 1);
+                ctx.builder.ins().store(MemFlags::new(), one, gen_ptr, Offset32::new(16));
+                ctx.builder.ins().return_(&[]);
+                *terminated = true;
+            }
+            Stmt::Let { name, value, ty, .. } => {
+                // In generators, local variables are pre-declared in local_slots.
+                // We must NOT call lower_let() because it creates a new Cranelift Variable,
+                // which would shadow the pre-declared one used for save/restore across yields.
+                // Instead, evaluate the value and def_var on the existing pre-declared variable.
+                let val = ctx.lower_expr(&value.node)?;
+                let val_type = infer_type_for_expr(&value.node, ctx.env, &ctx.var_types);
+
+                // Handle type coercions (trait wrapping, nullable boxing)
+                let declared_type = ty.as_ref().map(|t| resolve_type_expr_to_pluto(&t.node, ctx.env));
+                let final_val = match (&val_type, &declared_type) {
+                    (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
+                        ctx.wrap_class_as_trait(val, cn, tn)?
+                    }
+                    (inner, Some(PlutoType::Nullable(expected_inner))) if !matches!(inner, PlutoType::Nullable(_)) && **expected_inner != PlutoType::Void => {
+                        ctx.emit_nullable_wrap(val, inner)
+                    }
+                    _ => val,
+                };
+
+                // Use the pre-declared variable from local_slots
+                let var = ctx.variables.get(&name.node).ok_or_else(|| {
+                    CompileError::codegen(format!("generator local variable '{}' not found in pre-declared slots", name.node))
+                })?;
+                ctx.builder.def_var(*var, final_val);
+            }
+            Stmt::If { condition, then_block, else_block } => {
+                lower_generator_if(ctx, condition, then_block, else_block.as_ref(), terminated, yield_counter, resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb)?;
+            }
+            Stmt::While { condition, body } => {
+                lower_generator_while(ctx, condition, body, terminated, yield_counter, resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb)?;
+            }
+            Stmt::For { var, iterable, body } => {
+                lower_generator_for(ctx, var, iterable, body, terminated, yield_counter, resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb)?;
+            }
+            _ => {
+                // For all other statements, delegate to the normal lower_stmt
+                ctx.lower_stmt(&stmt.node, terminated)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Lower an if statement inside a generator body, handling yields in branches.
+#[allow(clippy::too_many_arguments)]
+fn lower_generator_if(
+    ctx: &mut LowerContext<'_>,
+    condition: &crate::span::Spanned<Expr>,
+    then_body: &crate::span::Spanned<Block>,
+    else_body: Option<&crate::span::Spanned<Block>>,
+    terminated: &mut bool,
+    yield_counter: &mut u32,
+    resume_blocks: &[cranelift_codegen::ir::Block],
+    param_slots: &[(String, PlutoType, Variable)],
+    local_slots: &[(String, PlutoType, Variable)],
+    num_params: usize,
+    gen_ptr_var: Variable,
+    done_bb: cranelift_codegen::ir::Block,
+) -> Result<(), CompileError> {
+    let cond_val = ctx.lower_expr(&condition.node)?;
+    let cond_type = infer_type_for_expr(&condition.node, ctx.env, &ctx.var_types);
+    let cond_i8 = if cond_type == PlutoType::Bool {
+        cond_val
+    } else {
+        let zero = ctx.builder.ins().iconst(types::I64, 0);
+        ctx.builder.ins().icmp(IntCC::NotEqual, cond_val, zero)
+    };
+
+    let then_bb = ctx.builder.create_block();
+    let merge_bb = ctx.builder.create_block();
+    let else_bb = if else_body.is_some() {
+        ctx.builder.create_block()
+    } else {
+        merge_bb
+    };
+
+    ctx.builder.ins().brif(cond_i8, then_bb, &[], else_bb, &[]);
+
+    // Then branch
+    ctx.builder.switch_to_block(then_bb);
+    ctx.builder.seal_block(then_bb);
+    let mut then_terminated = false;
+    lower_generator_block(
+        &then_body.node.stmts, ctx, &mut then_terminated, yield_counter,
+        resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
+    )?;
+    if !then_terminated {
+        ctx.builder.ins().jump(merge_bb, &[]);
+    }
+
+    // Else branch
+    if let Some(eb) = else_body {
+        ctx.builder.switch_to_block(else_bb);
+        ctx.builder.seal_block(else_bb);
+        let mut else_terminated = false;
+        lower_generator_block(
+            &eb.node.stmts, ctx, &mut else_terminated, yield_counter,
+            resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
+        )?;
+        if !else_terminated {
+            ctx.builder.ins().jump(merge_bb, &[]);
+        }
+        *terminated = then_terminated && else_terminated;
+    } else {
+        *terminated = false;
+    }
+
+    ctx.builder.switch_to_block(merge_bb);
+    ctx.builder.seal_block(merge_bb);
+    Ok(())
+}
+
+/// Lower a while loop inside a generator body, handling yields in the loop body.
+#[allow(clippy::too_many_arguments)]
+fn lower_generator_while(
+    ctx: &mut LowerContext<'_>,
+    condition: &crate::span::Spanned<Expr>,
+    body: &crate::span::Spanned<Block>,
+    _terminated: &mut bool,
+    yield_counter: &mut u32,
+    resume_blocks: &[cranelift_codegen::ir::Block],
+    param_slots: &[(String, PlutoType, Variable)],
+    local_slots: &[(String, PlutoType, Variable)],
+    num_params: usize,
+    gen_ptr_var: Variable,
+    done_bb: cranelift_codegen::ir::Block,
+) -> Result<(), CompileError> {
+    let header_bb = ctx.builder.create_block();
+    let body_bb = ctx.builder.create_block();
+    let exit_bb = ctx.builder.create_block();
+
+    ctx.builder.ins().jump(header_bb, &[]);
+
+    // Header: evaluate condition
+    ctx.builder.switch_to_block(header_bb);
+    let cond_val = ctx.lower_expr(&condition.node)?;
+    let cond_type = infer_type_for_expr(&condition.node, ctx.env, &ctx.var_types);
+    let cond_i8 = if cond_type == PlutoType::Bool {
+        cond_val
+    } else {
+        let zero = ctx.builder.ins().iconst(types::I64, 0);
+        ctx.builder.ins().icmp(IntCC::NotEqual, cond_val, zero)
+    };
+    ctx.builder.ins().brif(cond_i8, body_bb, &[], exit_bb, &[]);
+
+    // Body
+    ctx.builder.switch_to_block(body_bb);
+    ctx.builder.seal_block(body_bb);
+
+    ctx.loop_stack.push((header_bb, exit_bb));
+    let mut body_terminated = false;
+    lower_generator_block(
+        &body.node.stmts, ctx, &mut body_terminated, yield_counter,
+        resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
+    )?;
+    ctx.loop_stack.pop();
+
+    if !body_terminated {
+        ctx.builder.ins().jump(header_bb, &[]);
+    }
+
+    ctx.builder.seal_block(header_bb);
+    ctx.builder.switch_to_block(exit_bb);
+    ctx.builder.seal_block(exit_bb);
+    Ok(())
+}
+
+/// Lower a for loop inside a generator body, handling yields in the loop body.
+#[allow(clippy::too_many_arguments)]
+fn lower_generator_for(
+    ctx: &mut LowerContext<'_>,
+    var: &crate::span::Spanned<String>,
+    iterable: &crate::span::Spanned<Expr>,
+    body: &crate::span::Spanned<Block>,
+    _terminated: &mut bool,
+    yield_counter: &mut u32,
+    resume_blocks: &[cranelift_codegen::ir::Block],
+    param_slots: &[(String, PlutoType, Variable)],
+    local_slots: &[(String, PlutoType, Variable)],
+    num_params: usize,
+    gen_ptr_var: Variable,
+    done_bb: cranelift_codegen::ir::Block,
+) -> Result<(), CompileError> {
+    // For loops in generators: delegate to normal for-loop lowering for the iteration
+    // mechanism, but the body needs generator-aware handling.
+    // For simplicity in Phase 1, we only support range-based for loops in generators
+    // with yields. The for-loop variable is already pre-declared as a local slot.
+
+    let iter_type = infer_type_for_expr(&iterable.node, ctx.env, &ctx.var_types);
+
+    match &iter_type {
+        PlutoType::Range => {
+            // Lower range for loop with generator-aware body
+            let range_val = ctx.lower_expr(&iterable.node)?;
+
+            // Extract start and end from Range struct
+            let start = ctx.builder.ins().load(types::I64, MemFlags::new(), range_val, Offset32::new(0));
+            let end = ctx.builder.ins().load(types::I64, MemFlags::new(), range_val, Offset32::new(8));
+
+            // The loop variable should already exist in variables from local_slots
+            let loop_var = *ctx.variables.get(&var.node).ok_or_else(|| {
+                CompileError::codegen(format!("generator for-loop variable '{}' not found", var.node))
+            })?;
+            ctx.builder.def_var(loop_var, start);
+
+            let header_bb = ctx.builder.create_block();
+            let body_bb = ctx.builder.create_block();
+            let exit_bb = ctx.builder.create_block();
+
+            ctx.builder.ins().jump(header_bb, &[]);
+
+            // Header: check i < end
+            ctx.builder.switch_to_block(header_bb);
+            let i_val = ctx.builder.use_var(loop_var);
+            let cond = ctx.builder.ins().icmp(IntCC::SignedLessThan, i_val, end);
+            ctx.builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
+
+            // Body
+            ctx.builder.switch_to_block(body_bb);
+            ctx.builder.seal_block(body_bb);
+
+            ctx.loop_stack.push((header_bb, exit_bb));
+            let mut body_terminated = false;
+            lower_generator_block(
+                &body.node.stmts, ctx, &mut body_terminated, yield_counter,
+                resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
+            )?;
+            ctx.loop_stack.pop();
+
+            if !body_terminated {
+                // Increment loop variable
+                let i_val = ctx.builder.use_var(loop_var);
+                let one = ctx.builder.ins().iconst(types::I64, 1);
+                let next_i = ctx.builder.ins().iadd(i_val, one);
+                ctx.builder.def_var(loop_var, next_i);
+                ctx.builder.ins().jump(header_bb, &[]);
+            }
+
+            ctx.builder.seal_block(header_bb);
+            ctx.builder.switch_to_block(exit_bb);
+            ctx.builder.seal_block(exit_bb);
+            Ok(())
+        }
+        PlutoType::Array(_) => {
+            // Array for loop: use index-based iteration
+            let arr_val = ctx.lower_expr(&iterable.node)?;
+            let elem_type = match &iter_type {
+                PlutoType::Array(e) => *e.clone(),
+                _ => unreachable!(),
+            };
+
+            // Get array length
+            let len_ref = ctx.module.declare_func_in_func(ctx.runtime.get("__pluto_array_len"), ctx.builder.func);
+            let call = ctx.builder.ins().call(len_ref, &[arr_val]);
+            let len = ctx.builder.inst_results(call)[0];
+
+            // Index variable
+            let idx_var = Variable::from_u32(ctx.next_var);
+            ctx.next_var += 1;
+            ctx.builder.declare_var(idx_var, types::I64);
+            let zero = ctx.builder.ins().iconst(types::I64, 0);
+            ctx.builder.def_var(idx_var, zero);
+
+            let loop_var = *ctx.variables.get(&var.node).ok_or_else(|| {
+                CompileError::codegen(format!("generator for-loop variable '{}' not found", var.node))
+            })?;
+
+            let header_bb = ctx.builder.create_block();
+            let body_bb = ctx.builder.create_block();
+            let exit_bb = ctx.builder.create_block();
+
+            ctx.builder.ins().jump(header_bb, &[]);
+
+            // Header
+            ctx.builder.switch_to_block(header_bb);
+            let i_val = ctx.builder.use_var(idx_var);
+            let cond = ctx.builder.ins().icmp(IntCC::SignedLessThan, i_val, len);
+            ctx.builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
+
+            // Body
+            ctx.builder.switch_to_block(body_bb);
+            ctx.builder.seal_block(body_bb);
+
+            // Load element: array_get(arr, idx)
+            let get_ref = ctx.module.declare_func_in_func(ctx.runtime.get("__pluto_array_get"), ctx.builder.func);
+            let i_val = ctx.builder.use_var(idx_var);
+            let get_call = ctx.builder.ins().call(get_ref, &[arr_val, i_val]);
+            let raw_elem = ctx.builder.inst_results(get_call)[0];
+            let elem_val = from_array_slot(raw_elem, &elem_type, &mut ctx.builder);
+            ctx.builder.def_var(loop_var, elem_val);
+
+            ctx.loop_stack.push((header_bb, exit_bb));
+            let mut body_terminated = false;
+            lower_generator_block(
+                &body.node.stmts, ctx, &mut body_terminated, yield_counter,
+                resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
+            )?;
+            ctx.loop_stack.pop();
+
+            if !body_terminated {
+                let i_val = ctx.builder.use_var(idx_var);
+                let one = ctx.builder.ins().iconst(types::I64, 1);
+                let next_i = ctx.builder.ins().iadd(i_val, one);
+                ctx.builder.def_var(idx_var, next_i);
+                ctx.builder.ins().jump(header_bb, &[]);
+            }
+
+            ctx.builder.seal_block(header_bb);
+            ctx.builder.switch_to_block(exit_bb);
+            ctx.builder.seal_block(exit_bb);
+            Ok(())
+        }
+        _ => {
+            // For other iterable types in generators, fall back to normal lowering
+            // (no yields expected inside)
+            ctx.lower_for(var, iterable, body)
+        }
+    }
+}
+
 fn resolve_param_type(param: &Param, env: &TypeEnv) -> PlutoType {
     resolve_type_expr_to_pluto(&param.ty.node, env)
 }
@@ -3351,6 +4213,10 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
             let inner_ty = resolve_type_expr_to_pluto(&inner.node, env);
             PlutoType::Nullable(Box::new(inner_ty))
         }
+        TypeExpr::Stream(inner) => {
+            let inner_ty = resolve_type_expr_to_pluto(&inner.node, env);
+            PlutoType::Stream(Box::new(inner_ty))
+        }
     }
 }
 
@@ -3367,6 +4233,7 @@ fn needs_deep_copy(ty: &PlutoType) -> bool {
         | PlutoType::Set(_) | PlutoType::Enum(_) | PlutoType::Bytes
         | PlutoType::Fn(..) | PlutoType::Trait(_) => true,
         PlutoType::Nullable(inner) => needs_deep_copy(inner),
+        PlutoType::Stream(_) => false, // generator pointer, not deep-copied
     }
 }
 
@@ -3411,6 +4278,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Byte => types::I8,          // unsigned 8-bit value
         PlutoType::Bytes => types::I64,        // pointer to bytes handle
         PlutoType::Nullable(_) => types::I64,   // pointer (0 = none)
+        PlutoType::Stream(_) => types::I64,    // pointer to generator object
         PlutoType::GenericInstance(_, name, _) => panic!("ICE: generic instance '{name}' reached codegen unresolved"),
     }
 }

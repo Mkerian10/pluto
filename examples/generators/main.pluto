@@ -1,0 +1,33 @@
+fn range(start: int, end: int) stream int {
+    let mut i = start
+    while i < end {
+        yield i
+        i = i + 1
+    }
+}
+
+fn fibonacci() stream int {
+    let mut a = 0
+    let mut b = 1
+    while true {
+        yield a
+        let next = a + b
+        a = b
+        b = next
+    }
+}
+
+fn main() {
+    print("Range 0..10:")
+    for n in range(0, 10) {
+        print(n)
+    }
+
+    print("Fibonacci up to 100:")
+    for f in fibonacci() {
+        if f > 100 {
+            break
+        }
+        print(f)
+    }
+}

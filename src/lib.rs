@@ -21,6 +21,7 @@ pub mod derived;
 pub mod pretty;
 pub mod xref;
 pub mod sync;
+pub mod stages;
 
 use diagnostics::{CompileError, CompileWarning};
 use std::path::{Path, PathBuf};
@@ -41,6 +42,7 @@ struct FrontendResult {
 /// contracts → typeck → monomorphize → trait conformance → closures → xref.
 fn run_frontend(program: &mut Program, test_mode: bool) -> Result<FrontendResult, CompileError> {
     prelude::inject_prelude(program)?;
+    stages::flatten_stage_hierarchy(program)?;
     ambient::desugar_ambient(program)?;
     spawn::desugar_spawn(program)?;
     if !test_mode {
