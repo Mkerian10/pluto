@@ -74,6 +74,14 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_random_int", &[], &[types::I64])?;
         reg.declare(module, "__pluto_random_float", &[], &[types::F64])?;
 
+        // Environment variables
+        reg.declare(module, "__pluto_env_get", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_env_get_or", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_env_set", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_env_exists", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_env_list_names", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_env_clear", &[types::I64], &[types::I64])?;
+
         // Math builtins
         reg.declare(module, "__pluto_abs_int", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_min_int", &[types::I64, types::I64], &[types::I64])?;
