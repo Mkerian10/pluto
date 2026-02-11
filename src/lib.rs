@@ -251,8 +251,59 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
     Ok((program, source, derived, result.warnings))
 }
 
+/// Filter tests based on cache - keeps only tests with changed dependencies.
+/// Returns the number of tests to run (after filtering).
+fn filter_tests_by_cache(
+    entry_file: &Path,
+    source: &str,
+    program: &mut parser::ast::Program,
+    derived_info: &derived::DerivedInfo,
+) -> Result<usize, CompileError> {
+    // Try to load cache
+    let cached = cache::load_cache(entry_file, source);
+
+    if let Some(cache_entry) = cached {
+        // Compare current hashes with cached hashes
+        let mut tests_to_run = Vec::new();
+
+        for test_info in &program.test_info {
+            let current_hash = derived_info
+                .test_dep_hashes
+                .get(&test_info.display_name);
+            let cached_hash = cache_entry.test_hashes.get(&test_info.display_name);
+
+            // Run test if:
+            // 1. It's a new test (not in cache)
+            // 2. Its hash has changed
+            // 3. Current hash is missing (shouldn't happen, but be safe)
+            let should_run = match (current_hash, cached_hash) {
+                (Some(curr), Some(cached)) => curr != cached,
+                _ => true, // New test or missing hash
+            };
+
+            if should_run {
+                tests_to_run.push(test_info.clone());
+            }
+        }
+
+        let count = tests_to_run.len();
+        // Replace test_info with filtered list
+        program.test_info = tests_to_run;
+        Ok(count)
+    } else {
+        // No cache, run all tests
+        Ok(program.test_info.len())
+    }
+}
+
 /// Compile a file in test mode. Tests are preserved and a test runner main is generated.
-pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<(), CompileError> {
+/// If `use_cache` is true, only tests with changed dependencies will be run.
+pub fn compile_file_for_tests(
+    entry_file: &Path,
+    output_path: &Path,
+    stdlib_root: Option<&Path>,
+    use_cache: bool,
+) -> Result<(), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)
@@ -289,7 +340,50 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
     for w in &result.warnings {
         diagnostics::render_warning(&source, &entry_file.display().to_string(), w);
     }
+
+    // Build derived info to get test dependency hashes
+    let derived_info = derived::DerivedInfo::build(&result.env, &program);
+
+    // Load cache and filter tests if caching is enabled
+    let original_test_count = program.test_info.len();
+    let tests_to_run = if use_cache {
+        filter_tests_by_cache(&entry_file, &source, &mut program, &derived_info)?
+    } else {
+        // Run all tests
+        program.test_info.len()
+    };
+
+    // If all tests are skipped, exit early with success
+    if tests_to_run == 0 {
+        eprintln!("All {} tests unchanged, skipping execution", original_test_count);
+        // Still save the cache for next run
+        let _ = cache::save_cache(
+            &entry_file,
+            &source,
+            derived_info.test_dep_hashes.clone().into_iter().collect(),
+        );
+        return Ok(());
+    }
+
+    if use_cache && tests_to_run < original_test_count {
+        eprintln!(
+            "Running {} of {} tests ({} skipped, unchanged)",
+            tests_to_run,
+            original_test_count,
+            original_test_count - tests_to_run
+        );
+    }
+
     let object_bytes = codegen::codegen(&program, &result.env, &source)?;
+
+    // Save cache after successful compilation
+    if use_cache {
+        let _ = cache::save_cache(
+            &entry_file,
+            &source,
+            derived_info.test_dep_hashes.into_iter().collect(),
+        );
+    }
 
     let obj_path = output_path.with_extension("o");
     std::fs::write(&obj_path, &object_bytes)
