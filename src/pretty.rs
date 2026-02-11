@@ -178,11 +178,29 @@ impl PrettyPrinter {
         }
 
         // 10. Test blocks
-        for test in &program.test_info {
-            if let Some(func) = program.functions.iter().find(|f| f.node.name.node == test.fn_name) {
-                sep!(self, has_output);
-                self.emit_test_info(test, &func.node);
-                self.newline();
+        if let Some(tests_decl) = &program.tests {
+            sep!(self, has_output);
+            self.write(&format!("tests[scheduler: {}]", tests_decl.node.strategy));
+            self.write(" {");
+            self.newline();
+            self.indent();
+            for test in &program.test_info {
+                if let Some(func) = program.functions.iter().find(|f| f.node.name.node == test.fn_name) {
+                    self.write_indent();
+                    self.emit_test_info(test, &func.node);
+                    self.newline();
+                }
+            }
+            self.dedent();
+            self.write("}");
+            self.newline();
+        } else {
+            for test in &program.test_info {
+                if let Some(func) = program.functions.iter().find(|f| f.node.name.node == test.fn_name) {
+                    sep!(self, has_output);
+                    self.emit_test_info(test, &func.node);
+                    self.newline();
+                }
             }
         }
 
@@ -533,21 +551,7 @@ impl PrettyPrinter {
     fn emit_test_info(&mut self, test: &crate::parser::ast::TestInfo, func: &Function) {
         self.write("test \"");
         self.write(&escape_string(&test.display_name));
-        self.write("\"");
-        match test.strategy {
-            crate::parser::ast::TestStrategy::Sequential => {}
-            crate::parser::ast::TestStrategy::RoundRobin => {
-                self.write(" @round_robin");
-            }
-            crate::parser::ast::TestStrategy::Random => {
-                self.write(&format!(" @random(iterations: {}", test.iterations));
-                if test.seed != 0 {
-                    self.write(&format!(", seed: {}", test.seed));
-                }
-                self.write(")");
-            }
-        }
-        self.write(" ");
+        self.write("\" ");
         self.emit_block(&func.body.node);
     }
 

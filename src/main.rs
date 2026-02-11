@@ -34,6 +34,9 @@ enum Commands {
         /// Override seed for random test strategies (for reproducibility)
         #[arg(long)]
         seed: Option<u64>,
+        /// Override number of iterations for random test strategies
+        #[arg(long)]
+        iterations: Option<u64>,
     },
     /// Analyze a .pt source file and emit a .pluto binary AST
     EmitAst {
@@ -150,7 +153,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Test { file, seed } => {
+        Commands::Test { file, seed, iterations } => {
             let tmp = std::env::temp_dir().join("pluto_test");
             if let Err(err) = plutoc::compile_file_for_tests(&file, &tmp, stdlib) {
                 let filename = file.to_string_lossy().to_string();
@@ -161,6 +164,9 @@ fn main() {
             let mut cmd = std::process::Command::new(&tmp);
             if let Some(s) = seed {
                 cmd.env("PLUTO_TEST_SEED", s.to_string());
+            }
+            if let Some(i) = iterations {
+                cmd.env("PLUTO_TEST_ITERATIONS", i.to_string());
             }
             let status = cmd
                 .status()

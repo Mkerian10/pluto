@@ -349,6 +349,7 @@ mod tests {
             system: None,
             errors: vec![],
             test_info: vec![],
+            tests: None,
             fallible_extern_fns: vec![],
         }
     }

@@ -64,6 +64,8 @@ mod tests {
             app: None,
             errors: vec![],
             test_info: vec![],
+            tests: None,
+            system: None,
             fallible_extern_fns: vec![],
         }
     }

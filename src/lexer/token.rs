@@ -68,6 +68,8 @@ pub enum Token {
     Uses,
     #[token("ambient")]
     Ambient,
+    #[token("tests")]
+    Tests,
     #[token("test")]
     Test,
     #[token("invariant")]
@@ -224,8 +226,6 @@ pub enum Token {
     Dot,
     #[token("?")]
     Question,
-    #[token("@")]
-    At,
 
     // Newline (significant for statement termination)
     #[regex(r"\n[\n]*")]
@@ -241,7 +241,7 @@ pub fn is_keyword(s: &str) -> bool {
     matches!(s, "fn" | "let" | "mut" | "return" | "if" | "else" | "while" | "true" | "false"
         | "class" | "trait" | "app" | "inject" | "error" | "raise" | "catch" | "spawn"
         | "enum" | "impl" | "self" | "pub" | "for" | "in" | "break" | "continue"
-        | "match" | "import" | "as" | "extern" | "uses" | "ambient" | "test"
+        | "match" | "import" | "as" | "extern" | "uses" | "ambient" | "tests" | "test"
         | "invariant" | "requires" | "ensures" | "select" | "default"
         | "scope" | "scoped" | "transient" | "none" | "system")
 }
@@ -280,6 +280,7 @@ impl std::fmt::Display for Token {
             Token::Extern => write!(f, "extern"),
             Token::Uses => write!(f, "uses"),
             Token::Ambient => write!(f, "ambient"),
+            Token::Tests => write!(f, "tests"),
             Token::Test => write!(f, "test"),
             Token::Invariant => write!(f, "invariant"),
             Token::Requires => write!(f, "requires"),
@@ -336,7 +337,6 @@ impl std::fmt::Display for Token {
             Token::DotDot => write!(f, ".."),
             Token::Dot => write!(f, "."),
             Token::Question => write!(f, "?"),
-            Token::At => write!(f, "@"),
             Token::Newline => write!(f, "newline"),
             Token::Comment => write!(f, "comment"),
         }

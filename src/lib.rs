@@ -58,6 +58,7 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
         .map(|t| t.fn_name.clone()).collect();
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
+    program.tests = None;
     contracts::validate_contracts(&program)?;
     let (mut env, _warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
@@ -85,6 +86,7 @@ pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<Com
         .map(|t| t.fn_name.clone()).collect();
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
+    program.tests = None;
     contracts::validate_contracts(&program)?;
     let (mut env, warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;
@@ -205,6 +207,7 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
         .map(|t| t.fn_name.clone()).collect();
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
+    program.tests = None;
     contracts::validate_contracts(&program)?;
     let (mut env, warnings) = typeck::type_check(&program)?;
     for w in &warnings {
@@ -274,6 +277,7 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
         .map(|t| t.fn_name.clone()).collect();
     program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
+    program.tests = None;
     contracts::validate_contracts(&program)?;
     let (mut env, warnings) = typeck::type_check(&program)?;
     monomorphize::monomorphize(&mut program, &mut env)?;

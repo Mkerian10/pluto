@@ -17,23 +17,20 @@ pub struct Program {
     pub system: Option<Spanned<SystemDecl>>,
     pub errors: Vec<Spanned<ErrorDecl>>,
     pub test_info: Vec<TestInfo>,
+    pub tests: Option<Spanned<TestsDecl>>,
     pub fallible_extern_fns: Vec<String>,  // populated by rust_ffi::inject_extern_fns for Result-returning FFI fns
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TestStrategy {
-    Sequential,    // default — inline execution (Phase A behavior)
-    RoundRobin,    // deterministic interleaving
-    Random,        // seed-based random fiber selection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestsDecl {
+    pub id: Uuid,
+    pub strategy: String,  // "Sequential", "RoundRobin", "Random"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestInfo {
     pub display_name: String,
     pub fn_name: String,
-    pub strategy: TestStrategy,
-    pub seed: u64,        // 0 = use default/time-based
-    pub iterations: u64,  // only for Random (default 100)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

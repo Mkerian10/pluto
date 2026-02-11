@@ -2534,9 +2534,11 @@ void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations) {
         return;
     }
 
-    // Check env var override for seed
+    // Check env var overrides for seed and iterations
     char *env_seed = getenv("PLUTO_TEST_SEED");
     if (env_seed) seed = (long)strtoull(env_seed, NULL, 0);
+    char *env_iters = getenv("PLUTO_TEST_ITERATIONS");
+    if (env_iters) iterations = (long)strtoull(env_iters, NULL, 0);
 
     int num_runs = (strategy == STRATEGY_RANDOM) ? (int)iterations : 1;
     if (num_runs < 1) num_runs = 1;

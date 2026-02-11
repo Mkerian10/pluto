@@ -89,6 +89,7 @@ fn load_directory_module(
             system: None,
             errors: Vec::new(),
             test_info: Vec::new(),
+            tests: None,
             fallible_extern_fns: Vec::new(),
         };
 
@@ -131,6 +132,15 @@ fn load_directory_module(
             }
             merged.errors.extend(program.errors);
             merged.test_info.extend(program.test_info);
+            if let Some(tests_decl) = program.tests {
+                if merged.tests.is_some() {
+                    return Err(CompileError::codegen(format!(
+                        "multiple tests declarations in module directory '{}'",
+                        dir.display()
+                    )));
+                }
+                merged.tests = Some(tests_decl);
+            }
             merged.imports.extend(program.imports);
         }
 
@@ -795,6 +805,7 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
             .map(|t| t.fn_name.clone()).collect();
         module_prog.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
         module_prog.test_info.clear();
+        module_prog.tests = None;
     }
 
     // Add prefixed items from imports

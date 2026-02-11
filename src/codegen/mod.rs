@@ -535,6 +535,22 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let string_new_ref = module.declare_func_in_func(runtime.get("__pluto_string_new"), builder.func);
             let test_run_ref = module.declare_func_in_func(runtime.get("__pluto_test_run"), builder.func);
 
+            // Determine strategy from program.tests (or default to Sequential for bare tests)
+            let (strategy_int, seed_int, iterations_int) = if let Some(tests_decl) = &program.tests {
+                let s = match tests_decl.node.strategy.as_str() {
+                    "RoundRobin" => 1i64,
+                    "Random" => 2i64,
+                    _ => 0i64, // Sequential
+                };
+                (s, 0i64, 100i64) // seed + iterations come from CLI env vars at runtime
+            } else {
+                (0i64, 0i64, 1i64) // bare tests → Sequential, 1 iteration
+            };
+
+            let strategy_val = builder.ins().iconst(types::I64, strategy_int);
+            let seed_val = builder.ins().iconst(types::I64, seed_int);
+            let iterations_val = builder.ins().iconst(types::I64, iterations_int);
+
             for test in &program.test_info {
                 // Create Pluto string for the test name
                 let mut data_desc = DataDescription::new();
@@ -560,11 +576,6 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                 })?;
                 let test_func_ref = module.declare_func_in_func(*test_func_id, builder.func);
                 let fn_addr = builder.ins().func_addr(types::I64, test_func_ref);
-
-                // Strategy, seed, iterations as constants
-                let strategy_val = builder.ins().iconst(types::I64, test.strategy as i64);
-                let seed_val = builder.ins().iconst(types::I64, test.seed as i64);
-                let iterations_val = builder.ins().iconst(types::I64, test.iterations as i64);
 
                 // call __pluto_test_run(fn_ptr, strategy, seed, iterations)
                 builder.ins().call(test_run_ref, &[fn_addr, strategy_val, seed_val, iterations_val]);

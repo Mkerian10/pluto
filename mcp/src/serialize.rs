@@ -546,6 +546,8 @@ fn pretty_print_function(func: &Function) -> String {
         app: None,
         errors: vec![],
         test_info: vec![],
+        tests: None,
+        system: None,
         fallible_extern_fns: vec![],
     };
     plutoc::pretty::pretty_print(&program)
@@ -561,8 +563,10 @@ fn pretty_print_class(cls: &ClassDecl) -> String {
         traits: vec![],
         enums: vec![],
         app: None,
+        system: None,
         errors: vec![],
         test_info: vec![],
+        tests: None,
         fallible_extern_fns: vec![],
     };
     plutoc::pretty::pretty_print(&program)
@@ -578,8 +582,10 @@ fn pretty_print_enum(en: &EnumDecl) -> String {
         traits: vec![],
         enums: vec![plutoc::span::Spanned::new(en.clone(), plutoc::span::Span::dummy())],
         app: None,
+        system: None,
         errors: vec![],
         test_info: vec![],
+        tests: None,
         fallible_extern_fns: vec![],
     };
     plutoc::pretty::pretty_print(&program)
@@ -595,8 +601,10 @@ fn pretty_print_trait(tr: &TraitDecl) -> String {
         traits: vec![plutoc::span::Spanned::new(tr.clone(), plutoc::span::Span::dummy())],
         enums: vec![],
         app: None,
+        system: None,
         errors: vec![],
         test_info: vec![],
+        tests: None,
         fallible_extern_fns: vec![],
     };
     plutoc::pretty::pretty_print(&program)
@@ -612,8 +620,10 @@ fn pretty_print_error_decl(err: &ErrorDecl) -> String {
         traits: vec![],
         enums: vec![],
         app: None,
+        system: None,
         errors: vec![plutoc::span::Spanned::new(err.clone(), plutoc::span::Span::dummy())],
         test_info: vec![],
+        tests: None,
         fallible_extern_fns: vec![],
     };
     plutoc::pretty::pretty_print(&program)
@@ -629,8 +639,10 @@ fn pretty_print_app(app: &AppDecl) -> String {
         traits: vec![],
         enums: vec![],
         app: Some(plutoc::span::Spanned::new(app.clone(), plutoc::span::Span::dummy())),
+        system: None,
         errors: vec![],
         test_info: vec![],
+        tests: None,
         fallible_extern_fns: vec![],
     };
     plutoc::pretty::pretty_print(&program)

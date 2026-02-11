@@ -238,6 +238,7 @@ impl<'a> Parser<'a> {
         let mut system = None;
         let mut errors = Vec::new();
         let mut test_info: Vec<TestInfo> = Vec::new();
+        let mut tests: Option<Spanned<TestsDecl>> = None;
         self.skip_newlines();
 
         // Parse imports first
@@ -390,6 +391,30 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                Token::Tests => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
+                    if is_pub {
+                        return Err(CompileError::syntax(
+                            "tests declarations cannot be pub",
+                            tok.span,
+                        ));
+                    }
+                    let (tests_decl, block_tests, block_functions) = self.parse_tests_decl(&test_info, &functions)?;
+                    if !test_info.is_empty() {
+                        return Err(CompileError::syntax(
+                            "cannot mix bare 'test' blocks with 'tests' declarations",
+                            tests_decl.span,
+                        ));
+                    }
+                    test_info.extend(block_tests);
+                    functions.extend(block_functions);
+                    tests = Some(tests_decl);
+                }
                 Token::Test => {
                     if lifecycle != Lifecycle::Singleton {
                         return Err(CompileError::syntax(
@@ -403,52 +428,15 @@ impl<'a> Parser<'a> {
                             tok.span,
                         ));
                     }
-                    let test_tok = self.expect(&Token::Test)?;
-                    let test_start = test_tok.span.start;
-                    let name_tok = self.expect(&Token::StringLit(String::new()))?;
-                    let display_name = match &name_tok.node {
-                        Token::StringLit(s) => s.clone(),
-                        _ => unreachable!(),
-                    };
-                    let name_span = name_tok.span;
-                    // Check for duplicate test names
-                    if test_info.iter().any(|t| t.display_name == display_name) {
+                    if tests.is_some() {
                         return Err(CompileError::syntax(
-                            format!("duplicate test name: \"{}\"", display_name),
-                            name_span,
+                            "cannot mix bare 'test' blocks with 'tests' declarations",
+                            tok.span,
                         ));
                     }
-
-                    // Parse optional strategy annotation: @sequential | @round_robin | @random(...)
-                    let (strategy, seed, iterations) = self.parse_test_strategy()?;
-
-                    // Generate unique fn_name with collision avoidance
-                    let mut idx = test_info.len();
-                    let mut fn_name = format!("__test_{}", idx);
-                    while functions.iter().any(|f| f.node.name.node == fn_name) {
-                        idx += 1;
-                        fn_name = format!("__test_{}", idx);
-                    }
-                    let body = self.parse_block()?;
-                    let end = body.span.end;
-                    functions.push(Spanned::new(Function {
-                        id: Uuid::new_v4(),
-                        name: Spanned::new(fn_name.clone(), name_span),
-                        type_params: vec![],
-                        type_param_bounds: HashMap::new(),
-                        params: vec![],
-                        return_type: None,
-                        contracts: vec![],
-                        body,
-                        is_pub: false,
-                    }, Span::new(test_start, end)));
-                    test_info.push(TestInfo {
-                        display_name,
-                        fn_name,
-                        strategy,
-                        seed,
-                        iterations,
-                    });
+                    let (info, func) = self.parse_single_test(&test_info, &functions)?;
+                    test_info.push(info);
+                    functions.push(func);
                 }
                 Token::System => {
                     if lifecycle != Lifecycle::Singleton {
@@ -474,7 +462,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     return Err(CompileError::syntax(
-                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'system', 'test', 'extern fn', or 'extern rust', found {}", tok.node),
+                        format!("expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'system', 'test', 'tests', 'extern fn', or 'extern rust', found {}", tok.node),
                         tok.span,
                     ));
                 }
@@ -491,77 +479,146 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, system, errors, test_info, fallible_extern_fns: Vec::new() })
-    }
-
-    /// Parse an optional test strategy annotation: @sequential | @round_robin | @random(...)
-    /// Returns (strategy, seed, iterations).
-    fn parse_test_strategy(&mut self) -> Result<(TestStrategy, u64, u64), CompileError> {
-        // Check for '@' token (without skipping newlines — annotation must be on same line)
-        if self.peek_raw().is_none() || !matches!(self.peek_raw().unwrap().node, Token::At) {
-            return Ok((TestStrategy::Sequential, 0, 100));
-        }
-        let at_tok = self.advance().unwrap(); // consume '@'
-        let at_span = at_tok.span;
-
-        // Expect identifier: sequential, round_robin, random
-        let ident_tok = self.peek_raw().ok_or_else(|| {
-            CompileError::syntax("expected strategy name after '@'", at_span)
-        })?;
-        if !matches!(ident_tok.node, Token::Ident) {
+        // Reject tests + app in same file
+        if tests.is_some() && app.is_some() {
+            let tests_span = tests.as_ref().unwrap().span;
             return Err(CompileError::syntax(
-                "expected strategy name after '@' (sequential, round_robin, or random)",
-                ident_tok.span,
+                "a file cannot contain both 'tests' and 'app' declarations",
+                tests_span,
             ));
         }
-        let ident_span = ident_tok.span;
-        let strategy_name = self.source[ident_span.start..ident_span.end].to_string();
-        self.advance(); // consume identifier
 
-        match strategy_name.as_str() {
-            "sequential" => Ok((TestStrategy::Sequential, 0, 100)),
-            "round_robin" => Ok((TestStrategy::RoundRobin, 0, 1)),
-            "random" => {
-                // Expect (iterations: N) or (iterations: N, seed: S)
-                self.expect(&Token::LParen)?;
-                let mut iterations: u64 = 100;
-                let mut seed: u64 = 0;
-
-                // Parse key: value pairs
-                loop {
-                    let key_tok = self.expect_ident()?;
-                    let key = key_tok.node.clone();
-                    self.expect(&Token::Colon)?;
-                    let val_tok = self.expect(&Token::IntLit(0))?;
-                    let val = match &val_tok.node {
-                        Token::IntLit(n) => *n as u64,
-                        _ => unreachable!(),
-                    };
-                    match key.as_str() {
-                        "iterations" => iterations = val,
-                        "seed" => seed = val,
-                        other => {
-                            return Err(CompileError::syntax(
-                                format!("unknown @random parameter '{}' (expected 'iterations' or 'seed')", other),
-                                key_tok.span,
-                            ));
-                        }
-                    }
-                    // Check for comma (more params) or closing paren
-                    if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Comma) {
-                        self.advance(); // consume ','
-                    } else {
-                        break;
-                    }
-                }
-                self.expect(&Token::RParen)?;
-                Ok((TestStrategy::Random, seed, iterations))
-            }
-            _ => Err(CompileError::syntax(
-                format!("unknown test strategy '{}' (expected sequential, round_robin, or random)", strategy_name),
-                ident_span,
-            )),
+        // Reject tests + system in same file
+        if tests.is_some() && system.is_some() {
+            let tests_span = tests.as_ref().unwrap().span;
+            return Err(CompileError::syntax(
+                "a file cannot contain both 'tests' and 'system' declarations",
+                tests_span,
+            ));
         }
+
+        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, system, errors, test_info, tests, fallible_extern_fns: Vec::new() })
+    }
+
+    /// Parse a bare `test "name" { body }` block into a TestInfo + synthetic Function.
+    fn parse_single_test(&mut self, existing_tests: &[TestInfo], _existing_fns: &[Spanned<Function>]) -> Result<(TestInfo, Spanned<Function>), CompileError> {
+        let test_tok = self.expect(&Token::Test)?;
+        let start = test_tok.span.start;
+        let test_span = test_tok.span;
+
+        // Expect string literal for test name
+        let name_tok = self.advance().ok_or_else(|| {
+            CompileError::syntax("expected test name (string literal) after 'test'", test_span)
+        })?;
+        let display_name = match &name_tok.node {
+            Token::StringLit(s) => s.clone(),
+            _ => {
+                return Err(CompileError::syntax(
+                    "expected test name (string literal) after 'test'",
+                    name_tok.span,
+                ));
+            }
+        };
+
+        // Check for duplicate test names
+        if existing_tests.iter().any(|t| t.display_name == display_name) {
+            return Err(CompileError::syntax(
+                format!("duplicate test name '{}'", display_name),
+                name_tok.span,
+            ));
+        }
+
+        // Parse test body
+        self.skip_newlines();
+        let body = self.parse_block()?;
+        let end = body.span.end;
+
+        let test_index = existing_tests.len();
+        let fn_name = format!("__test_{}", test_index);
+        let info = TestInfo {
+            display_name,
+            fn_name: fn_name.clone(),
+        };
+        let func = Spanned::new(Function {
+            id: Uuid::new_v4(),
+            name: Spanned::new(fn_name, Span::new(start, end)),
+            type_params: Vec::new(),
+            type_param_bounds: HashMap::new(),
+            params: Vec::new(),
+            return_type: None,
+            contracts: Vec::new(),
+            body,
+            is_pub: false,
+        }, Span::new(start, end));
+
+        Ok((info, func))
+    }
+
+    /// Parse `tests[scheduler: Strategy] { test "name" { ... } ... }`
+    fn parse_tests_decl(&mut self, existing_tests: &[TestInfo], existing_fns: &[Spanned<Function>]) -> Result<(Spanned<TestsDecl>, Vec<TestInfo>, Vec<Spanned<Function>>), CompileError> {
+        let tests_tok = self.expect(&Token::Tests)?;
+        let start = tests_tok.span.start;
+
+        // Parse bracket dep: [scheduler: Ident]
+        self.expect(&Token::LBracket)?;
+        let key_tok = self.expect_ident()?;
+        if key_tok.node != "scheduler" {
+            return Err(CompileError::syntax(
+                format!("expected 'scheduler' in tests bracket, found '{}'", key_tok.node),
+                key_tok.span,
+            ));
+        }
+        self.expect(&Token::Colon)?;
+
+        // Expect strategy name: Sequential, RoundRobin, Random
+        let strategy_tok = self.expect_ident()?;
+        let strategy = match strategy_tok.node.as_str() {
+            "Sequential" => "Sequential".to_string(),
+            "RoundRobin" => "RoundRobin".to_string(),
+            "Random" => "Random".to_string(),
+            other => {
+                return Err(CompileError::syntax(
+                    format!("unknown scheduler strategy '{}' (expected Sequential, RoundRobin, or Random)", other),
+                    strategy_tok.span,
+                ));
+            }
+        };
+        self.expect(&Token::RBracket)?;
+
+        // Parse body: { test "name" { ... } ... }
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut block_tests = Vec::new();
+        let mut block_functions = Vec::new();
+
+        while self.peek().is_some() && !matches!(self.peek().unwrap().node, Token::RBrace) {
+            // Only test blocks are allowed inside tests { ... }
+            let inner_tok = self.peek().unwrap();
+            if !matches!(inner_tok.node, Token::Test) {
+                return Err(CompileError::syntax(
+                    "only 'test' blocks are allowed inside a 'tests' declaration",
+                    inner_tok.span,
+                ));
+            }
+            let combined_tests: Vec<TestInfo> = existing_tests.iter().chain(block_tests.iter()).cloned().collect();
+            let combined_fns: Vec<Spanned<Function>> = existing_fns.iter().chain(block_functions.iter()).cloned().collect();
+            let (info, func) = self.parse_single_test(&combined_tests, &combined_fns)?;
+            block_tests.push(info);
+            block_functions.push(func);
+            self.skip_newlines();
+        }
+
+        let close = self.expect(&Token::RBrace)?;
+        let end = close.span.end;
+
+        let decl = Spanned::new(TestsDecl {
+            id: Uuid::new_v4(),
+            strategy,
+        }, Span::new(start, end));
+
+        Ok((decl, block_tests, block_functions))
     }
 
     fn parse_import(&mut self) -> Result<Spanned<ImportDecl>, CompileError> {
@@ -3721,29 +3778,40 @@ mod tests {
         assert_eq!(prog.test_info.len(), 1);
         assert_eq!(prog.test_info[0].display_name, "hello");
         assert_eq!(prog.test_info[0].fn_name, "__test_0");
-        assert_eq!(prog.test_info[0].strategy, crate::parser::ast::TestStrategy::Sequential);
+        assert!(prog.tests.is_none()); // bare test → no tests decl
         assert_eq!(prog.functions.len(), 1);
     }
 
     #[test]
-    fn parse_test_round_robin() {
-        let src = "test \"rr\" @round_robin {\n}\n";
+    fn parse_tests_decl_round_robin() {
+        let src = "tests[scheduler: RoundRobin] {\n    test \"rr\" {\n    }\n}\n";
         let tokens = lex(src).unwrap();
         let mut parser = Parser::new(&tokens, src);
         let prog = parser.parse_program().unwrap();
         assert_eq!(prog.test_info.len(), 1);
-        assert_eq!(prog.test_info[0].strategy, crate::parser::ast::TestStrategy::RoundRobin);
+        assert_eq!(prog.test_info[0].display_name, "rr");
+        let tests_decl = prog.tests.as_ref().unwrap();
+        assert_eq!(tests_decl.node.strategy, "RoundRobin");
     }
 
     #[test]
-    fn parse_test_random() {
-        let src = "test \"rand\" @random(iterations: 50, seed: 42) {\n}\n";
+    fn parse_tests_decl_random() {
+        let src = "tests[scheduler: Random] {\n    test \"rand\" {\n    }\n}\n";
         let tokens = lex(src).unwrap();
         let mut parser = Parser::new(&tokens, src);
         let prog = parser.parse_program().unwrap();
         assert_eq!(prog.test_info.len(), 1);
-        assert_eq!(prog.test_info[0].strategy, crate::parser::ast::TestStrategy::Random);
-        assert_eq!(prog.test_info[0].iterations, 50);
-        assert_eq!(prog.test_info[0].seed, 42);
+        assert_eq!(prog.test_info[0].display_name, "rand");
+        let tests_decl = prog.tests.as_ref().unwrap();
+        assert_eq!(tests_decl.node.strategy, "Random");
+    }
+
+    #[test]
+    fn parse_tests_decl_rejects_bare_mix() {
+        let src = "test \"bare\" {\n}\ntests[scheduler: RoundRobin] {\n    test \"rr\" {\n    }\n}\n";
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let result = parser.parse_program();
+        assert!(result.is_err());
     }
 }

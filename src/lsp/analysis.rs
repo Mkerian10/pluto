@@ -67,6 +67,7 @@ pub fn check_file(
         .functions
         .retain(|f| !test_fn_names.contains(&f.node.name.node));
     program.test_info.clear();
+    program.tests = None;
 
     let (env, _warnings) = crate::typeck::type_check(&program).map_err(AnalysisError::compile)?;
 

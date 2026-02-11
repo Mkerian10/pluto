@@ -268,9 +268,11 @@ fn add(a: int, b: int) int {
     return a + b
 }
 
-test "round robin spawn returns result" @round_robin {
-    let t = spawn add(1, 2)
-    expect(t.get()).to_equal(3)
+tests[scheduler: RoundRobin] {
+    test "round robin spawn returns result" {
+        let t = spawn add(1, 2)
+        expect(t.get()).to_equal(3)
+    }
 }
 "#);
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
@@ -284,13 +286,15 @@ fn double(x: int) int {
     return x * 2
 }
 
-test "round robin multiple spawns" @round_robin {
-    let t1 = spawn double(5)
-    let t2 = spawn double(10)
-    let t3 = spawn double(15)
-    expect(t1.get()).to_equal(10)
-    expect(t2.get()).to_equal(20)
-    expect(t3.get()).to_equal(30)
+tests[scheduler: RoundRobin] {
+    test "round robin multiple spawns" {
+        let t1 = spawn double(5)
+        let t2 = spawn double(10)
+        let t3 = spawn double(15)
+        expect(t1.get()).to_equal(10)
+        expect(t2.get()).to_equal(20)
+        expect(t3.get()).to_equal(30)
+    }
 }
 "#);
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
@@ -306,16 +310,18 @@ fn producer(tx: Sender<int>) {
     tx.send(30)!
 }
 
-test "round robin channel pipeline" @round_robin {
-    let (tx, rx) = chan<int>(1)
-    let t = spawn producer(tx)
-    let a = rx.recv()!
-    let b = rx.recv()!
-    let c = rx.recv()!
-    t.get()!
-    expect(a).to_equal(10)
-    expect(b).to_equal(20)
-    expect(c).to_equal(30)
+tests[scheduler: RoundRobin] {
+    test "round robin channel pipeline" {
+        let (tx, rx) = chan<int>(1)
+        let t = spawn producer(tx)
+        let a = rx.recv()!
+        let b = rx.recv()!
+        let c = rx.recv()!
+        t.get()!
+        expect(a).to_equal(10)
+        expect(b).to_equal(20)
+        expect(c).to_equal(30)
+    }
 }
 "#);
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
@@ -340,8 +346,10 @@ fn run() int {
     return result
 }
 
-test "round robin error propagation" @round_robin {
-    expect(run()).to_equal(-1)
+tests[scheduler: RoundRobin] {
+    test "round robin error propagation" {
+        expect(run()).to_equal(-1)
+    }
 }
 "#);
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
@@ -355,9 +363,11 @@ fn greet(name: string) string {
     return "hello " + name
 }
 
-test "round robin string result" @round_robin {
-    let t = spawn greet("world")
-    expect(t.get()).to_equal("hello world")
+tests[scheduler: RoundRobin] {
+    test "round robin string result" {
+        let t = spawn greet("world")
+        expect(t.get()).to_equal("hello world")
+    }
 }
 "#);
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
@@ -368,16 +378,18 @@ test "round robin string result" @round_robin {
 
 #[test]
 fn random_spawn_basic() {
-    let (stdout, _stderr, code) = compile_test_and_run(r#"
+    let (stdout, _stderr, code) = compile_test_and_run_with_env(r#"
 fn add(a: int, b: int) int {
     return a + b
 }
 
-test "random spawn basic" @random(iterations: 10) {
-    let t = spawn add(3, 4)
-    expect(t.get()).to_equal(7)
+tests[scheduler: Random] {
+    test "random spawn basic" {
+        let t = spawn add(3, 4)
+        expect(t.get()).to_equal(7)
+    }
 }
-"#);
+"#, &[("PLUTO_TEST_ITERATIONS", "10")]);
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
     assert_eq!(code, 0);
 }
@@ -385,75 +397,83 @@ test "random spawn basic" @random(iterations: 10) {
 #[test]
 fn random_seed_reproducibility() {
     // With a fixed seed, results should always be the same
-    let (stdout, _stderr, code) = compile_test_and_run(r#"
+    let (stdout, _stderr, code) = compile_test_and_run_with_env(r#"
 fn compute(x: int) int {
     return x * x + 1
 }
 
-test "random with seed" @random(iterations: 5, seed: 42) {
-    let t = spawn compute(7)
-    expect(t.get()).to_equal(50)
+tests[scheduler: Random] {
+    test "random with seed" {
+        let t = spawn compute(7)
+        expect(t.get()).to_equal(50)
+    }
 }
-"#);
+"#, &[("PLUTO_TEST_ITERATIONS", "5"), ("PLUTO_TEST_SEED", "42")]);
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
     assert_eq!(code, 0);
 }
 
 #[test]
 fn random_multiple_spawns() {
-    let (stdout, _stderr, code) = compile_test_and_run(r#"
+    let (stdout, _stderr, code) = compile_test_and_run_with_env(r#"
 fn double(x: int) int {
     return x * 2
 }
 
-test "random multiple spawns" @random(iterations: 10) {
-    let t1 = spawn double(5)
-    let t2 = spawn double(10)
-    expect(t1.get()).to_equal(10)
-    expect(t2.get()).to_equal(20)
+tests[scheduler: Random] {
+    test "random multiple spawns" {
+        let t1 = spawn double(5)
+        let t2 = spawn double(10)
+        expect(t1.get()).to_equal(10)
+        expect(t2.get()).to_equal(20)
+    }
 }
-"#);
+"#, &[("PLUTO_TEST_ITERATIONS", "10")]);
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
     assert_eq!(code, 0);
 }
 
 #[test]
 fn random_channel_pipeline() {
-    let (stdout, _stderr, code) = compile_test_and_run(r#"
+    let (stdout, _stderr, code) = compile_test_and_run_with_env(r#"
 fn producer(tx: Sender<int>) {
     tx.send(1)!
     tx.send(2)!
     tx.send(3)!
 }
 
-test "random channel" @random(iterations: 5) {
-    let (tx, rx) = chan<int>(1)
-    let t = spawn producer(tx)
-    let a = rx.recv()!
-    let b = rx.recv()!
-    let c = rx.recv()!
-    t.get()!
-    expect(a).to_equal(1)
-    expect(b).to_equal(2)
-    expect(c).to_equal(3)
+tests[scheduler: Random] {
+    test "random channel" {
+        let (tx, rx) = chan<int>(1)
+        let t = spawn producer(tx)
+        let a = rx.recv()!
+        let b = rx.recv()!
+        let c = rx.recv()!
+        t.get()!
+        expect(a).to_equal(1)
+        expect(b).to_equal(2)
+        expect(c).to_equal(3)
+    }
 }
-"#);
+"#, &[("PLUTO_TEST_ITERATIONS", "5")]);
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
     assert_eq!(code, 0);
 }
 
-// ── Sequential annotation (explicit) ───────────────────────────────────
+// ── Sequential tests declaration (explicit) ─────────────────────────────
 
 #[test]
-fn explicit_sequential_annotation() {
+fn explicit_sequential_tests_decl() {
     let (stdout, _stderr, code) = compile_test_and_run(r#"
 fn add(a: int, b: int) int {
     return a + b
 }
 
-test "explicit sequential" @sequential {
-    let t = spawn add(2, 3)
-    expect(t.get()).to_equal(5)
+tests[scheduler: Sequential] {
+    test "explicit sequential" {
+        let t = spawn add(2, 3)
+        expect(t.get()).to_equal(5)
+    }
 }
 "#);
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
@@ -463,21 +483,40 @@ test "explicit sequential" @sequential {
 // ── Parse error tests ──────────────────────────────────────────────────
 
 #[test]
-fn annotation_parse_error_unknown() {
+fn tests_decl_parse_error_unknown_scheduler() {
     compile_test_should_fail_with(r#"
-test "bad" @unknown {
-    expect(true).to_be_true()
+tests[scheduler: Unknown] {
+    test "bad" {
+        expect(true).to_be_true()
+    }
 }
-"#, "unknown test strategy");
+"#, "unknown scheduler strategy");
 }
 
 #[test]
-fn annotation_parse_error_random_missing_params() {
+fn tests_decl_parse_error_wrong_key() {
     compile_test_should_fail_with(r#"
-test "bad" @random {
+tests[strategy: RoundRobin] {
+    test "bad" {
+        expect(true).to_be_true()
+    }
+}
+"#, "expected 'scheduler'");
+}
+
+#[test]
+fn tests_decl_rejects_mixing_with_bare_tests() {
+    compile_test_should_fail_with(r#"
+test "bare" {
     expect(true).to_be_true()
 }
-"#, "expected (");
+
+tests[scheduler: RoundRobin] {
+    test "block" {
+        expect(true).to_be_true()
+    }
+}
+"#, "cannot mix bare 'test' blocks with 'tests' declarations");
 }
 
 // ── GC safety under fiber scheduling ──────────────────────────────────
@@ -505,16 +544,18 @@ fn allocate_arrays() [int] {
     return arr
 }
 
-test "gc safety with fiber stacks" @round_robin {
-    let t1 = spawn build_strings("alpha")
-    let t2 = spawn build_strings("beta")
-    let t3 = spawn allocate_arrays()
-    let s1 = t1.get()
-    let s2 = t2.get()
-    let a = t3.get()
-    expect(s1.len() > 0).to_be_true()
-    expect(s2.len() > 0).to_be_true()
-    expect(a.len()).to_equal(10)
+tests[scheduler: RoundRobin] {
+    test "gc safety with fiber stacks" {
+        let t1 = spawn build_strings("alpha")
+        let t2 = spawn build_strings("beta")
+        let t3 = spawn allocate_arrays()
+        let s1 = t1.get()
+        let s2 = t2.get()
+        let a = t3.get()
+        expect(s1.len() > 0).to_be_true()
+        expect(s2.len() > 0).to_be_true()
+        expect(a.len()).to_equal(10)
+    }
 }
 "#);
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
@@ -524,7 +565,7 @@ test "gc safety with fiber stacks" @round_robin {
 #[test]
 fn random_gc_fiber_stack_safety() {
     // Same as above but with random scheduling to exercise different interleavings
-    let (stdout, _stderr, code) = compile_test_and_run(r#"
+    let (stdout, _stderr, code) = compile_test_and_run_with_env(r#"
 fn build_large_string(n: int) string {
     let mut s = "start"
     for i in 0..n {
@@ -533,15 +574,17 @@ fn build_large_string(n: int) string {
     return s
 }
 
-test "gc safety random scheduling" @random(iterations: 10, seed: 12345) {
-    let t1 = spawn build_large_string(30)
-    let t2 = spawn build_large_string(40)
-    let r1 = t1.get()
-    let r2 = t2.get()
-    expect(r1.len() > 0).to_be_true()
-    expect(r2.len() > 0).to_be_true()
+tests[scheduler: Random] {
+    test "gc safety random scheduling" {
+        let t1 = spawn build_large_string(30)
+        let t2 = spawn build_large_string(40)
+        let r1 = t1.get()
+        let r2 = t2.get()
+        expect(r1.len() > 0).to_be_true()
+        expect(r2.len() > 0).to_be_true()
+    }
 }
-"#);
+"#, &[("PLUTO_TEST_ITERATIONS", "10"), ("PLUTO_TEST_SEED", "12345")]);
     assert!(stdout.contains("1 tests passed"), "Expected 1 tests passed, got: {stdout}");
     assert_eq!(code, 0);
 }
