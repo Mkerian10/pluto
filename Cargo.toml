@@ -277,6 +277,80 @@ path = "tests/integration/statement_boundaries.rs"
 name = "control_flow_extended"
 path = "tests/integration/control_flow_extended.rs"
 
+# Typeck edge case tests - inference category
+[[test]]
+name = "typeck_binop_type_mismatches"
+path = "tests/typeck/inference/binop_type_mismatches.rs"
+
+[[test]]
+name = "typeck_index_type_errors"
+path = "tests/typeck/inference/index_type_errors.rs"
+
+[[test]]
+name = "typeck_field_access_errors"
+path = "tests/typeck/inference/field_access_errors.rs"
+
+[[test]]
+name = "typeck_cast_errors"
+path = "tests/typeck/inference/cast_errors.rs"
+
+[[test]]
+name = "typeck_empty_array_inference"
+path = "tests/typeck/inference/empty_array_inference.rs"
+
+[[test]]
+name = "typeck_method_resolution_errors"
+path = "tests/typeck/inference/method_resolution_errors.rs"
+
+[[test]]
+name = "typeck_spawn_validation"
+path = "tests/typeck/inference/spawn_validation.rs"
+
+[[test]]
+name = "typeck_string_interpolation"
+path = "tests/typeck/inference/string_interpolation.rs"
+
+[[test]]
+name = "typeck_closure_inference"
+path = "tests/typeck/inference/closure_inference.rs"
+
+[[test]]
+name = "typeck_unary_op_errors"
+path = "tests/typeck/inference/unary_op_errors.rs"
+
+# Typeck edge case tests - error propagation category
+[[test]]
+name = "typeck_propagation_chain"
+path = "tests/typeck/errors/propagation_chain.rs"
+
+[[test]]
+name = "typeck_fixed_point_iteration"
+path = "tests/typeck/errors/fixed_point_iteration.rs"
+
+[[test]]
+name = "typeck_fallible_builtins"
+path = "tests/typeck/errors/fallible_builtins.rs"
+
+[[test]]
+name = "typeck_generic_error_sets"
+path = "tests/typeck/errors/generic_error_sets.rs"
+
+[[test]]
+name = "typeck_unhandled_errors"
+path = "tests/typeck/errors/unhandled_errors.rs"
+
+[[test]]
+name = "typeck_propagate_on_infallible"
+path = "tests/typeck/errors/propagate_on_infallible.rs"
+
+[[test]]
+name = "typeck_select_errors"
+path = "tests/typeck/errors/select_errors.rs"
+
+[[test]]
+name = "typeck_task_error_tracking"
+path = "tests/typeck/errors/task_error_tracking.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false

@@ -19,15 +19,17 @@
 
 **Subtotal:** 213/200+ ✅ **EXCEEDED TARGET**
 
-### 2. Error Propagation (Target: 150+)
-- 🚧 `errors/propagation_chain.rs` - TODO (multi-level propagation)
-- 🚧 `errors/fixed_point_iteration.rs` - TODO (recursive calls)
-- 🚧 `errors/fallible_builtins.rs` - TODO (pow, channel ops)
-- 🚧 `errors/generic_error_sets.rs` - TODO (error sets per instantiation)
-- 🚧 `errors/unhandled_errors.rs` - TODO (missing catch/propagate)
-- 🚧 `errors/propagate_on_infallible.rs` - TODO (invalid ! usage)
-- 🚧 `errors/select_errors.rs` - TODO (select without default)
-- 🚧 `errors/task_error_tracking.rs` - TODO (task.get() fallibility)
+### 2. Error Propagation ✅ COMPLETE (Target: 150+, Actual: 150)
+- ✅ `errors/propagation_chain.rs` - 25 tests
+- ✅ `errors/fixed_point_iteration.rs` - 20 tests
+- ✅ `errors/fallible_builtins.rs` - 15 tests
+- ✅ `errors/generic_error_sets.rs` - 20 tests
+- ✅ `errors/unhandled_errors.rs` - 30 tests
+- ✅ `errors/propagate_on_infallible.rs` - 15 tests
+- ✅ `errors/select_errors.rs` - 10 tests
+- ✅ `errors/task_error_tracking.rs` - 15 tests
+
+**Subtotal:** 150/150 ✅ **TARGET MET**
 
 ### 3. Generic Instantiation (Target: 200+)
 - 🚧 `generics/type_bounds_validation.rs` - TODO (constraint violations)
@@ -53,20 +55,22 @@
 
 ---
 
-## TOTAL PROGRESS: 213/1,730 tests (12.3%)
+## TOTAL PROGRESS: 363/1,730 tests (21.0%)
 
 ## Key Achievements
-- ✅ Inference category complete and exceeded target
+- ✅ Inference category complete and exceeded target (213 tests)
+- ✅ Error Propagation category complete and met target (150 tests)
 - ✅ Covered all fundamental type checking operations
 - ✅ Systematic edge case coverage (nullability, generics, collections)
 - ✅ Test organization follows Rust/Go best practices
+- ✅ Comprehensive error system testing (propagation chains, fixed-point, builtins)
 
 ## Next Priorities
-1. **Error Propagation** (150 tests) - HIGH priority, complex fixed-point logic
-2. **Generic Instantiation** (200 tests) - HIGH priority, unification/monomorphization
+1. **Generic Instantiation** (200 tests) - HIGH priority, unification/monomorphization
+2. **Trait Conformance** (150 tests) - HIGH priority, Liskov constraints
 3. **Nullable Types** (100 tests) - MEDIUM priority, interactions with other features
-4. **Trait Conformance** (150 tests) - HIGH priority, Liskov constraints
-5. Continue through remaining 11 categories systematically
+4. **Statement Checking** (150 tests) - HIGH priority, control flow validation
+5. Continue through remaining 10 categories systematically
 
 ## Testing Strategy Notes
 - Using inline `compile_should_fail_with(code, expected_msg)` pattern

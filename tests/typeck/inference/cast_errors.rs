@@ -5,6 +5,7 @@
 //! - Allowed: int↔float, int↔bool, int↔byte, float↔bool, float↔byte
 //! - Forbidden: any cast involving string, class, array, etc.
 
+#[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 

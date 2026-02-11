@@ -1,4 +1,5 @@
 //! Spawn validation tests - 12 tests
+#[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 

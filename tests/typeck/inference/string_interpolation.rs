@@ -1,4 +1,5 @@
 //! String interpolation type errors - 8 tests
+#[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 

@@ -1,4 +1,5 @@
 //! Empty array type inference tests - 15 tests
+#[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 

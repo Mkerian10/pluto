@@ -8,6 +8,7 @@
 //! - Bitwise (&, |, ^): int & int → int
 //! - Shifts (<<, >>): int << int → int
 
+#[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 

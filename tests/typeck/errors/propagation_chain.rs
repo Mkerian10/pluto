@@ -1,4 +1,5 @@
 //! Error propagation chain tests - 25 tests
+#[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 
