@@ -102,15 +102,34 @@ pub enum Token {
     Stream,
 
     // Literals
-    #[regex(r"0[xX][0-9a-fA-F_]+|[0-9][0-9_]*", |lex| {
+    // Note: hex pattern uses \w* to match any characters after 0x,
+    // which are then validated by the callback for better error messages
+    #[regex(r"0[xX][\w]*|[0-9][0-9_]*", |lex| {
         let s = lex.slice();
         if s.starts_with("0x") || s.starts_with("0X") {
             let hex_part = &s[2..];
-            let cleaned = hex_part.replace('_', "");
-            // Reject empty hex, leading/trailing underscore
-            if cleaned.is_empty() {
+
+            // Reject empty hex (just "0x")
+            if hex_part.is_empty() {
                 return None;
             }
+
+            // Reject leading underscore (0x_FF)
+            if hex_part.starts_with('_') {
+                return None;
+            }
+
+            // Reject trailing underscore (0xFF_)
+            if hex_part.ends_with('_') {
+                return None;
+            }
+
+            // Validate all characters are hex digits or underscores
+            if !hex_part.chars().all(|c| c.is_ascii_hexdigit() || c == '_') {
+                return None;
+            }
+
+            let cleaned = hex_part.replace('_', "");
             i64::from_str_radix(&cleaned, 16).ok()
         } else {
             s.replace('_', "").parse::<i64>().ok()
@@ -236,7 +255,8 @@ pub enum Token {
     Question,
 
     // Newline (significant for statement termination)
-    #[regex(r"\n[\n]*")]
+    // Supports both LF (\n) and CRLF (\r\n) line endings
+    #[regex(r"(\r\n|\n)+")]
     Newline,
 
     // Comments (skip)

@@ -201,8 +201,9 @@ fn span_string_with_escape() {
 #[test]
 fn span_string_with_multiple_escapes() {
     let src = r#""a\nb\tc""#;
-    // a + \n + b + \t + c = 9, plus quotes = 11
-    assert_span(src, 0, 0, 11);
+    // Source bytes: " + a + \ + n + b + \ + t + c + " = 9 bytes
+    // Previous test was wrong: expected 11 (counted processed string incorrectly)
+    assert_span(src, 0, 0, 9);
 }
 
 // ===== Comments =====

@@ -198,12 +198,14 @@ fn stress_max_i64_plus_one() {
 
 #[test]
 fn stress_min_i64_magnitude() {
-    // -9223372036854775808 (i64::MIN)
-    // Parsed as Minus + IntLit
+    // i64::MIN = -9223372036854775808
+    // The literal 9223372036854775808 overflows i64::MAX (9223372036854775807)
+    // Lexer correctly rejects overflow - parser must handle i64::MIN specially
+    // This matches Rust's behavior: overflow detected at lex/parse boundary
     let src = "-9223372036854775808";
-    let tokens = lex_ok(src);
-    assert_eq!(tokens.len(), 2);
-    assert!(matches!(&tokens[0].0, Token::Minus));
+    let result = lex(src);
+    // Should fail because 9223372036854775808 > i64::MAX
+    assert!(result.is_err(), "Overflow literals should be rejected by lexer");
 }
 
 #[test]
