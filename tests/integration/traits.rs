@@ -13196,3 +13196,591 @@ fn main() {
     assert_ne!(code, 0);
     assert!(stderr.contains("ensures"), "Expected ensures violation, got stderr: {}", stderr);
 }
+
+// ===== Batch 24: Array-of-traits deep, dispatch argument chains, void ordering, boundary =====
+
+#[test]
+fn trait_array_dispatch_all_elements() {
+    // Array of trait handles, dispatch on each via for loop with index
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class A impl Valued {
+    x: int
+    fn val(self) int { return self.x }
+}
+
+class B impl Valued {
+    x: int
+    fn val(self) int { return self.x * 10 }
+}
+
+fn add_item(arr: [Valued], v: Valued) {
+    arr.push(v)
+}
+
+fn main() {
+    let items: [Valued] = []
+    add_item(items, A { x: 1 })
+    add_item(items, B { x: 2 })
+    add_item(items, A { x: 3 })
+    let total = 0
+    let i = 0
+    while i < items.len() {
+        total = total + items[i].val()
+        i = i + 1
+    }
+    print(total)
+}
+"#);
+    assert_eq!(out, "24\n");
+}
+
+#[test]
+fn trait_dispatch_result_as_argument_to_dispatch() {
+    // Result of one dispatch used as argument to another dispatch
+    let out = compile_and_run_stdout(r#"
+trait Source {
+    fn produce(self) int
+}
+
+trait Transform {
+    fn apply(self, x: int) int
+}
+
+class NumSource impl Source {
+    n: int
+    fn produce(self) int { return self.n }
+}
+
+class Doubler impl Transform {
+    tag: int
+    fn apply(self, x: int) int { return x * 2 }
+}
+
+fn pipeline(s: Source, t: Transform) int {
+    return t.apply(s.produce())
+}
+
+fn main() {
+    let s: Source = NumSource { n: 7 }
+    let t: Transform = Doubler { tag: 0 }
+    print(pipeline(s, t))
+}
+"#);
+    assert_eq!(out, "14\n");
+}
+
+#[test]
+fn trait_void_methods_ordering_preserved() {
+    // Multiple void methods called in sequence, verifying execution order
+    let out = compile_and_run_stdout(r#"
+trait Logger {
+    fn log(self, msg: string)
+}
+
+class PrintLogger impl Logger {
+    prefix: string
+    fn log(self, msg: string) {
+        print("{self.prefix}: {msg}")
+    }
+}
+
+fn log_sequence(l: Logger) {
+    l.log("first")
+    l.log("second")
+    l.log("third")
+}
+
+fn main() {
+    let l: Logger = PrintLogger { prefix: "LOG" }
+    log_sequence(l)
+}
+"#);
+    assert_eq!(out, "LOG: first\nLOG: second\nLOG: third\n");
+}
+
+#[test]
+fn trait_dispatch_result_stored_then_used_later() {
+    // Store dispatch result in variable, use it several statements later
+    let out = compile_and_run_stdout(r#"
+trait Namer {
+    fn name(self) string
+}
+
+class Dog impl Namer {
+    tag: int
+    fn name(self) string { return "rex" }
+}
+
+fn main() {
+    let n: Namer = Dog { tag: 0 }
+    let stored = n.name()
+    let x = 42
+    let y = x + 1
+    print(stored)
+    print(y)
+}
+"#);
+    assert_eq!(out, "rex\n43\n");
+}
+
+#[test]
+fn trait_method_modifies_array_param_visible_to_caller() {
+    // Trait method pushes to array param; changes visible after dispatch
+    let out = compile_and_run_stdout(r#"
+trait Filler {
+    fn fill(self, arr: [int])
+}
+
+class TripleFiller impl Filler {
+    base: int
+    fn fill(self, arr: [int]) {
+        arr.push(self.base)
+        arr.push(self.base + 1)
+        arr.push(self.base + 2)
+    }
+}
+
+fn do_fill(f: Filler, arr: [int]) {
+    f.fill(arr)
+}
+
+fn main() {
+    let arr: [int] = []
+    let f: Filler = TripleFiller { base: 10 }
+    do_fill(f, arr)
+    print(arr.len())
+    print(arr[0])
+    print(arr[2])
+}
+"#);
+    assert_eq!(out, "3\n10\n12\n");
+}
+
+#[test]
+fn trait_method_returns_string_used_in_comparison() {
+    // Dispatch returns string, use in == comparison
+    let out = compile_and_run_stdout(r#"
+trait Labeled {
+    fn label(self) string
+}
+
+class Item impl Labeled {
+    name: string
+    fn label(self) string { return self.name }
+}
+
+fn check(l: Labeled) {
+    if l.label() == "hello" {
+        print(1)
+    } else {
+        print(0)
+    }
+}
+
+fn main() {
+    let a: Labeled = Item { name: "hello" }
+    let b: Labeled = Item { name: "world" }
+    check(a)
+    check(b)
+}
+"#);
+    assert_eq!(out, "1\n0\n");
+}
+
+#[test]
+fn trait_method_with_multiple_array_params() {
+    // Trait method takes two array params
+    let out = compile_and_run_stdout(r#"
+trait Merger {
+    fn merge(self, a: [int], b: [int]) int
+}
+
+class SumMerger impl Merger {
+    tag: int
+    fn merge(self, a: [int], b: [int]) int {
+        return a.len() + b.len()
+    }
+}
+
+fn do_merge(m: Merger) {
+    let x: [int] = [1, 2, 3]
+    let y: [int] = [4, 5]
+    print(m.merge(x, y))
+}
+
+fn main() {
+    let m: Merger = SumMerger { tag: 0 }
+    do_merge(m)
+}
+"#);
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn trait_dispatch_in_while_with_state_update() {
+    // Dispatch inside while loop where result updates loop variable
+    let out = compile_and_run_stdout(r#"
+trait Stepper {
+    fn step(self, current: int) int
+}
+
+class DoubleStepper impl Stepper {
+    tag: int
+    fn step(self, current: int) int { return current * 2 }
+}
+
+fn run(s: Stepper) {
+    let val = 1
+    while val < 100 {
+        val = s.step(val)
+    }
+    print(val)
+}
+
+fn main() {
+    let s: Stepper = DoubleStepper { tag: 0 }
+    run(s)
+}
+"#);
+    assert_eq!(out, "128\n");
+}
+
+#[test]
+fn trait_two_params_same_trait_different_instances() {
+    // Function takes two params of same trait type, different implementations
+    let out = compile_and_run_stdout(r#"
+trait Valued {
+    fn val(self) int
+}
+
+class X impl Valued {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+class Y impl Valued {
+    n: int
+    fn val(self) int { return self.n * 100 }
+}
+
+fn combine(a: Valued, b: Valued) int {
+    return a.val() + b.val()
+}
+
+fn main() {
+    let a: Valued = X { n: 3 }
+    let b: Valued = Y { n: 2 }
+    print(combine(a, b))
+}
+"#);
+    assert_eq!(out, "203\n");
+}
+
+#[test]
+fn trait_method_with_nested_for_loops() {
+    // Trait method body has nested for loops
+    let out = compile_and_run_stdout(r#"
+trait MatrixSum {
+    fn sum(self) int
+}
+
+class Grid impl MatrixSum {
+    rows: int
+    cols: int
+    fn sum(self) int {
+        let total = 0
+        for r in 0..self.rows {
+            for c in 0..self.cols {
+                total = total + 1
+            }
+        }
+        return total
+    }
+}
+
+fn run(m: MatrixSum) {
+    print(m.sum())
+}
+
+fn main() {
+    let g: MatrixSum = Grid { rows: 3, cols: 4 }
+    run(g)
+}
+"#);
+    assert_eq!(out, "12\n");
+}
+
+#[test]
+fn trait_method_returns_bool_used_in_while_condition() {
+    // Dispatch result (bool) used directly as while loop condition
+    let out = compile_and_run_stdout(r#"
+trait Gate {
+    fn is_open(self, counter: int) bool
+}
+
+class ThresholdGate impl Gate {
+    limit: int
+    fn is_open(self, counter: int) bool {
+        return counter < self.limit
+    }
+}
+
+fn count_through(g: Gate) {
+    let i = 0
+    while g.is_open(i) {
+        i = i + 1
+    }
+    print(i)
+}
+
+fn main() {
+    let g: Gate = ThresholdGate { limit: 5 }
+    count_through(g)
+}
+"#);
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn trait_dispatch_string_concatenation_chain() {
+    // Multiple dispatches, string results concatenated
+    let out = compile_and_run_stdout(r#"
+trait Part {
+    fn text(self) string
+}
+
+class Head impl Part {
+    tag: int
+    fn text(self) string { return "hello" }
+}
+
+class Tail impl Part {
+    tag: int
+    fn text(self) string { return "world" }
+}
+
+fn join(a: Part, b: Part) string {
+    return a.text() + " " + b.text()
+}
+
+fn main() {
+    let h: Part = Head { tag: 0 }
+    let t: Part = Tail { tag: 0 }
+    print(join(h, t))
+}
+"#);
+    assert_eq!(out, "hello world\n");
+}
+
+#[test]
+fn trait_method_with_string_len_check() {
+    // Trait method uses .len() on string field
+    let out = compile_and_run_stdout(r#"
+trait HasLength {
+    fn length(self) int
+}
+
+class Wrapper impl HasLength {
+    data: string
+    fn length(self) int { return self.data.len() }
+}
+
+fn show(h: HasLength) {
+    print(h.length())
+}
+
+fn main() {
+    let w: HasLength = Wrapper { data: "hello" }
+    show(w)
+}
+"#);
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn trait_dispatch_result_used_in_for_range_bound() {
+    // Dispatch result as upper bound of for range
+    let out = compile_and_run_stdout(r#"
+trait Limiter {
+    fn limit(self) int
+}
+
+class Fixed impl Limiter {
+    n: int
+    fn limit(self) int { return self.n }
+}
+
+fn count_to(l: Limiter) {
+    let sum = 0
+    for i in 0..l.limit() {
+        sum = sum + i
+    }
+    print(sum)
+}
+
+fn main() {
+    let l: Limiter = Fixed { n: 5 }
+    count_to(l)
+}
+"#);
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn crash_trait_method_missing_self_with_impl() {
+    // BUG: Trait method without self + class impl panics the compiler
+    // (register.rs:1194 — index out of range for empty params slice)
+    // Just declaring the trait is fine, but implementing triggers the panic.
+    // Using catch_unwind to document without crashing the test suite.
+    let result = std::panic::catch_unwind(|| {
+        plutoc::compile_to_object(r#"
+trait Bad {
+    fn compute() int
+}
+
+class Impl impl Bad {
+    tag: int
+    fn compute() int { return 42 }
+}
+
+fn main() {
+    let b: Bad = Impl { tag: 0 }
+    print(b.compute())
+}
+"#)
+    });
+    assert!(result.is_err(), "Expected compiler to panic on trait method without self");
+}
+
+#[test]
+fn fail_construct_trait_directly() {
+    // Cannot construct a trait as if it were a class
+    compile_should_fail(r#"
+trait Foo {
+    fn bar(self) int
+}
+
+fn main() {
+    let f = Foo { }
+}
+"#);
+}
+
+#[test]
+fn fail_trait_method_call_wrong_arg_count() {
+    // Calling trait method with wrong number of arguments
+    compile_should_fail(r#"
+trait Adder {
+    fn add(self, x: int) int
+}
+
+class Impl impl Adder {
+    tag: int
+    fn add(self, x: int) int { return x + 1 }
+}
+
+fn main() {
+    let a: Adder = Impl { tag: 0 }
+    print(a.add(1, 2))
+}
+"#);
+}
+
+#[test]
+fn fail_trait_method_call_wrong_arg_type() {
+    // Calling trait method with wrong argument type
+    compile_should_fail(r#"
+trait Adder {
+    fn add(self, x: int) int
+}
+
+class Impl impl Adder {
+    tag: int
+    fn add(self, x: int) int { return x + 1 }
+}
+
+fn main() {
+    let a: Adder = Impl { tag: 0 }
+    print(a.add("hello"))
+}
+"#);
+}
+
+#[test]
+fn trait_default_method_uses_two_required_methods() {
+    // Default method calls two different required methods
+    let out = compile_and_run_stdout(r#"
+trait Stats {
+    fn min_val(self) int
+    fn max_val(self) int
+    fn range(self) int {
+        return self.max_val() - self.min_val()
+    }
+}
+
+class Data impl Stats {
+    lo: int
+    hi: int
+    fn min_val(self) int { return self.lo }
+    fn max_val(self) int { return self.hi }
+}
+
+fn show(s: Stats) {
+    print(s.range())
+}
+
+fn main() {
+    let d: Stats = Data { lo: 3, hi: 10 }
+    show(d)
+}
+"#);
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn trait_dispatch_alternating_three_classes_in_loop() {
+    // Array of 3 different implementations, dispatched in loop
+    let out = compile_and_run_stdout(r#"
+trait Numbered {
+    fn num(self) int
+}
+
+class One impl Numbered {
+    tag: int
+    fn num(self) int { return 1 }
+}
+
+class Two impl Numbered {
+    tag: int
+    fn num(self) int { return 2 }
+}
+
+class Three impl Numbered {
+    tag: int
+    fn num(self) int { return 3 }
+}
+
+fn add_item(arr: [Numbered], n: Numbered) {
+    arr.push(n)
+}
+
+fn main() {
+    let items: [Numbered] = []
+    add_item(items, One { tag: 0 })
+    add_item(items, Two { tag: 0 })
+    add_item(items, Three { tag: 0 })
+    let sum = 0
+    let i = 0
+    while i < items.len() {
+        sum = sum + items[i].num()
+        i = i + 1
+    }
+    print(sum)
+}
+"#);
+    assert_eq!(out, "6\n");
+}
