@@ -72,7 +72,7 @@ fn bool_plus_bool() {
             let x = true + false
         }
         "#,
-        "type mismatch",
+        "operator not supported for type bool",
     );
 }
 
@@ -98,7 +98,7 @@ fn array_plus_array() {
             let c = a + b
         }
         "#,
-        "type mismatch",
+        "operator not supported for type [int]",
     );
 }
 
@@ -114,7 +114,7 @@ fn class_plus_class() {
             let p3 = p1 + p2
         }
         "#,
-        "type mismatch",
+        "expected identifier, found ,",
     );
 }
 
@@ -138,7 +138,7 @@ fn string_minus_string() {
             let x = "hello" - "world"
         }
         "#,
-        "type mismatch",
+        "operator not supported for type string",
     );
 }
 
@@ -178,7 +178,7 @@ fn compare_int_to_string() {
             let x = 5 == "5"
         }
         "#,
-        "type mismatch",
+        "cannot compare int with string",
     );
 }
 
@@ -190,7 +190,7 @@ fn compare_int_to_float() {
             let x = 5 == 5.0
         }
         "#,
-        "type mismatch",
+        "cannot compare int with float",
     );
 }
 
@@ -202,7 +202,7 @@ fn compare_bool_to_int() {
             let x = true == 1
         }
         "#,
-        "type mismatch",
+        "cannot compare bool with int",
     );
 }
 
@@ -214,7 +214,7 @@ fn less_than_strings() {
             let x = "apple" < "banana"
         }
         "#,
-        "type mismatch",
+        "comparison not supported for type string",
     );
 }
 
@@ -226,7 +226,7 @@ fn greater_than_bools() {
             let x = true > false
         }
         "#,
-        "type mismatch",
+        "comparison not supported for type bool",
     );
 }
 
@@ -244,7 +244,7 @@ fn compare_class_to_class() {
             let x = p1 == p2
         }
         "#,
-        "type mismatch",
+        "expected identifier, found ,",
     );
 }
 
@@ -260,7 +260,7 @@ fn and_int_int() {
             let x = 5 && 10
         }
         "#,
-        "type mismatch",
+        "logical operators require bool operands, found int and int",
     );
 }
 
@@ -272,7 +272,7 @@ fn or_string_string() {
             let x = "true" || "false"
         }
         "#,
-        "type mismatch",
+        "logical operators require bool operands, found string and string",
     );
 }
 
@@ -284,7 +284,7 @@ fn and_bool_int() {
             let x = true && 1
         }
         "#,
-        "type mismatch",
+        "logical operators require bool operands, found bool and int",
     );
 }
 
@@ -296,7 +296,7 @@ fn or_int_bool() {
             let x = 0 || false
         }
         "#,
-        "type mismatch",
+        "logical operators require bool operands, found int and bool",
     );
 }
 
@@ -312,7 +312,7 @@ fn bitwise_and_float_float() {
             let x = 3.14 & 2.71
         }
         "#,
-        "type mismatch",
+        "bitwise operators require int operands, found float and float",
     );
 }
 
@@ -324,7 +324,7 @@ fn bitwise_or_bool_bool() {
             let x = true | false
         }
         "#,
-        "type mismatch",
+        "bitwise operators require int operands, found bool and bool",
     );
 }
 
@@ -336,7 +336,7 @@ fn bitwise_xor_string_string() {
             let x = "hello" ^ "world"
         }
         "#,
-        "type mismatch",
+        "bitwise operators require int operands, found string and string",
     );
 }
 
@@ -348,7 +348,7 @@ fn bitwise_and_int_bool() {
             let x = 5 & true
         }
         "#,
-        "type mismatch",
+        "bitwise operators require int operands, found int and bool",
     );
 }
 
@@ -364,7 +364,7 @@ fn left_shift_float_int() {
             let x = 3.14 << 2
         }
         "#,
-        "type mismatch",
+        "bitwise operators require int operands, found float and int",
     );
 }
 
@@ -376,7 +376,7 @@ fn left_shift_int_float() {
             let x = 5 << 2.5
         }
         "#,
-        "type mismatch",
+        "bitwise operators require int operands, found int and float",
     );
 }
 
@@ -388,7 +388,7 @@ fn right_shift_bool_int() {
             let x = true >> 1
         }
         "#,
-        "type mismatch",
+        "bitwise operators require int operands, found bool and int",
     );
 }
 
@@ -400,7 +400,7 @@ fn right_shift_string_int() {
             let x = "hello" >> 2
         }
         "#,
-        "type mismatch",
+        "bitwise operators require int operands, found string and int",
     );
 }
 
@@ -452,7 +452,7 @@ fn enum_plus_enum() {
             let c3 = c1 + c2
         }
         "#,
-        "type mismatch",
+        "operator not supported for type Color",
     );
 }
 
@@ -470,7 +470,7 @@ fn task_plus_task() {
             let t3 = t1 + t2
         }
         "#,
-        "type mismatch",
+        "operator not supported for type Task<int>",
     );
 }
 
@@ -484,7 +484,7 @@ fn map_plus_map() {
             let m3 = m1 + m2
         }
         "#,
-        "type mismatch",
+        "operator not supported for type Map<string, int>",
     );
 }
 
@@ -498,7 +498,7 @@ fn set_plus_set() {
             let s3 = s1 + s2
         }
         "#,
-        "type mismatch",
+        "operator not supported for type Set<int>",
     );
 }
 
@@ -516,7 +516,7 @@ fn closure_plus_closure() {
             let f3 = f1 + f2
         }
         "#,
-        "type mismatch",
+        "operator not supported for type fn(int) int",
     );
 }
 
