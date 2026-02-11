@@ -142,6 +142,10 @@ name = "concurrency"
 path = "tests/integration/concurrency.rs"
 
 [[test]]
+name = "runtime_error_state"
+path = "tests/integration/runtime_error_state.rs"
+
+[[test]]
 name = "bytes"
 path = "tests/integration/bytes.rs"
 

@@ -300,7 +300,10 @@ fn main() {
     let i = 0
     let caught = 0
     while i < 1000 {
-        let _ = create_error(i) catch err { caught = caught + 1; 0 }
+        let _ = create_error(i) catch err {
+            caught = caught + 1
+            0
+        }
         i = i + 1
     }
     print(caught)
