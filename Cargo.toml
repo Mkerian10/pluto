@@ -314,6 +314,39 @@ path = "tests/typeck/inference/closure_inference.rs"
 name = "typeck_unary_op_errors"
 path = "tests/typeck/inference/unary_op_errors.rs"
 
+# Typeck edge case tests - generics category
+[[test]]
+name = "typeck_type_bounds_validation"
+path = "tests/typeck/generics/type_bounds_validation.rs"
+
+[[test]]
+name = "typeck_explicit_type_args"
+path = "tests/typeck/generics/explicit_type_args.rs"
+
+[[test]]
+name = "typeck_unification_failures"
+path = "tests/typeck/generics/unification_failures.rs"
+
+[[test]]
+name = "typeck_nested_generics"
+path = "tests/typeck/generics/nested_generics.rs"
+
+[[test]]
+name = "typeck_generic_di"
+path = "tests/typeck/generics/generic_di.rs"
+
+[[test]]
+name = "typeck_monomorphization_spans"
+path = "tests/typeck/generics/monomorphization_spans.rs"
+
+[[test]]
+name = "typeck_forward_references"
+path = "tests/typeck/generics/forward_references.rs"
+
+[[test]]
+name = "typeck_recursive_generics"
+path = "tests/typeck/generics/recursive_generics.rs"
+
 # Typeck edge case tests - error propagation category
 [[test]]
 name = "typeck_propagation_chain"
