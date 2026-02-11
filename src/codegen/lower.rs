@@ -56,6 +56,8 @@ struct LowerContext<'a> {
     ensures_block: Option<cranelift_codegen::ir::Block>,
     /// Display name for the current function (for contract violation messages)
     fn_display_name: String,
+    /// Whether this function is a spawn closure (return values must be I64-encoded)
+    is_spawn_closure: bool,
 }
 
 impl<'a> LowerContext<'a> {
@@ -109,6 +111,16 @@ impl<'a> LowerContext<'a> {
     /// Emit a return with the default value for the current function's return type.
     /// Used by raise and propagation to exit the function when an error occurs.
     fn emit_default_return(&mut self) {
+        // Spawn closures always return I64, so default is always iconst 0
+        if self.is_spawn_closure && !matches!(&self.expected_return_type, Some(PlutoType::Void) | None) {
+            let val = self.builder.ins().iconst(types::I64, 0);
+            if let Some(exit_bb) = self.exit_block {
+                self.builder.ins().jump(exit_bb, &[val]);
+            } else {
+                self.builder.ins().return_(&[val]);
+            }
+            return;
+        }
         match &self.expected_return_type {
             Some(PlutoType::Void) | None => {
                 if let Some(exit_bb) = self.exit_block {
@@ -422,6 +434,12 @@ impl<'a> LowerContext<'a> {
                                     self.emit_nullable_wrap(val, inner)
                                 }
                                 _ => val,
+                            };
+                            // Spawn closures must return I64 (C runtime reads integer register)
+                            let final_val = if self.is_spawn_closure && val_type != PlutoType::Void {
+                                to_array_slot(final_val, &val_type, &mut self.builder)
+                            } else {
+                                final_val
                             };
                             if let Some(bb) = target_block {
                                 self.builder.ins().jump(bb, &[final_val]);
@@ -3044,14 +3062,21 @@ pub fn lower_function(
         env.functions.get(&lookup_name).map(|s| s.return_type.clone())
     };
 
+    let is_spawn_closure = spawn_closure_fns.contains(&func.name.node);
+
     // Create exit block if we have sender cleanup vars
     let exit_block = if !sender_cleanup_vars.is_empty() {
         let exit_bb = builder.create_block();
         // Add return value as block param if function returns non-void
         let is_void_return = matches!(&expected_return_type, Some(PlutoType::Void) | None);
         if !is_void_return {
-            let ret_cl_type = pluto_to_cranelift(expected_return_type.as_ref()
-                .expect("non-void return type should be set"));
+            // Spawn closures return I64 regardless of actual type
+            let ret_cl_type = if is_spawn_closure {
+                types::I64
+            } else {
+                pluto_to_cranelift(expected_return_type.as_ref()
+                    .expect("non-void return type should be set"))
+            };
             builder.append_block_param(exit_bb, ret_cl_type);
         }
         Some(exit_bb)
@@ -3075,8 +3100,12 @@ pub fn lower_function(
     let ensures_block = if has_ensures {
         let ens_bb = builder.create_block();
         if !is_void_return {
-            let ret_cl_type = pluto_to_cranelift(expected_return_type.as_ref()
-                .expect("non-void return type should be set"));
+            let ret_cl_type = if is_spawn_closure {
+                types::I64
+            } else {
+                pluto_to_cranelift(expected_return_type.as_ref()
+                    .expect("non-void return type should be set"))
+            };
             builder.append_block_param(ens_bb, ret_cl_type);
         }
         Some(ens_bb)
@@ -3108,6 +3137,7 @@ pub fn lower_function(
         old_snapshots: HashMap::new(),
         ensures_block,
         fn_display_name,
+        is_spawn_closure,
     };
 
     // Initialize GC at start of non-app main
@@ -3189,8 +3219,12 @@ pub fn lower_function(
             let ret_val = ctx.builder.block_params(ens_bb)[0];
             let var = Variable::from_u32(ctx.next_var);
             ctx.next_var += 1;
-            let ret_cl_type = pluto_to_cranelift(ctx.expected_return_type.as_ref()
-                .expect("non-void return type should be set"));
+            let ret_cl_type = if ctx.is_spawn_closure {
+                types::I64
+            } else {
+                pluto_to_cranelift(ctx.expected_return_type.as_ref()
+                    .expect("non-void return type should be set"))
+            };
             ctx.builder.declare_var(var, ret_cl_type);
             ctx.builder.def_var(var, ret_val);
             Some(var)

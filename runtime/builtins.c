@@ -3524,12 +3524,11 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
         while (1) {
             long result = select_try_arms(handles, ops, values, n, indices);
             if (result >= 0) return result;
+            if (has_default) return -1;
             if (result == -2) {
                 chan_raise_error("channel closed");
                 return -2;
             }
-            // -3: no ready arm, not all closed
-            if (has_default) return -1;
             // Block and yield
             Fiber *cur = &g_scheduler->fibers[g_scheduler->current_fiber];
             cur->state = FIBER_BLOCKED_SELECT;

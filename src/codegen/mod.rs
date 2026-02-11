@@ -109,6 +109,9 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
     // Declare module-level globals for rwlock pointers (Phase 4b)
     let rwlock_data_ids = declare_rwlock_globals(env, &mut module)?;
 
+    // Pre-pass: collect spawn closure function names (needed before declarations)
+    let spawn_closure_fns = collect_spawn_closure_names(program);
+
     // Pass 0: Declare extern fns with Import linkage
     for ext in &program.extern_fns {
         let e = &ext.node;
@@ -130,7 +133,13 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
     // Pass 1: Declare all top-level functions
     for func in &program.functions {
         let f = &func.node;
-        let sig = build_signature(f, &module, env);
+        let mut sig = build_signature(f, &module, env);
+
+        // Spawn closure functions must return I64 so the C runtime reads the integer register
+        if spawn_closure_fns.contains(&f.name.node) && !sig.returns.is_empty() {
+            sig.returns.clear();
+            sig.returns.push(AbiParam::new(types::I64));
+        }
 
         let linkage = if f.name.node == "main" {
             Linkage::Export
@@ -226,9 +235,6 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             }
         }
     }
-
-    // Pre-pass: collect spawn closure function names for sender cleanup
-    let spawn_closure_fns = collect_spawn_closure_names(program);
 
     // Build class invariants map for codegen
     let class_invariants: HashMap<String, Vec<(Expr, String)>> = program.classes.iter()
@@ -389,7 +395,13 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
     for func in &program.functions {
         let f = &func.node;
         let func_id = func_ids[&f.name.node];
-        let sig = build_signature(f, &module, env);
+        let mut sig = build_signature(f, &module, env);
+
+        // Spawn closure functions must return I64 (matches declaration)
+        if spawn_closure_fns.contains(&f.name.node) && !sig.returns.is_empty() {
+            sig.returns.clear();
+            sig.returns.push(AbiParam::new(types::I64));
+        }
 
         let mut fn_ctx = Context::new();
         fn_ctx.func.signature = sig;

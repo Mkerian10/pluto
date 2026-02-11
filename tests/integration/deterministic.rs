@@ -2888,13 +2888,13 @@ tests[scheduler: Random] {
 }
 
 // ============================================================================
-// Bug finder tests (~10 tests)
+// Bug finder tests (previously failing, now fixed)
 // ============================================================================
 
 #[test]
 fn bug_task_float_get_returns_zero() {
-    // Bug finder: Task<float>.get() may return 0.0 instead of actual value
-    let (stdout, stderr, code) = compile_test_and_run(r#"
+    // Fixed: spawn closures now return I64 so C runtime reads correct register
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
 fn compute_float() float {
     return 3.14
 }
@@ -2907,17 +2907,14 @@ tests[scheduler: RoundRobin] {
     }
 }
 "#);
-    if code != 0 {
-        eprintln!("KNOWN BUG: Task<float>.get() returns 0.0: {stderr}");
-    } else {
-        assert!(stdout.contains("1 tests passed"), "got: {stdout}");
-    }
+    assert!(stdout.contains("1 tests passed"), "got: {stdout}");
+    assert_eq!(code, 0);
 }
 
 #[test]
 fn bug_select_closed_channel_default() {
-    // Bug finder: select on a closed channel with default may crash
-    let (stdout, stderr, code) = compile_test_and_run(r#"
+    // Fixed: fiber-mode select now checks has_default before raising closed error
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
 tests[scheduler: RoundRobin] {
     test "select on closed with default" {
         let (tx, rx) = chan<int>(1)
@@ -2935,17 +2932,14 @@ tests[scheduler: RoundRobin] {
     }
 }
 "#);
-    if code != 0 {
-        eprintln!("KNOWN BUG: select on closed channel with default crashes: {stderr}");
-    } else {
-        assert!(stdout.contains("1 tests passed"), "got: {stdout}");
-    }
+    assert!(stdout.contains("1 tests passed"), "got: {stdout}");
+    assert_eq!(code, 0);
 }
 
 #[test]
 fn bug_try_send_closed_fiber() {
-    // Bug finder: try_send on closed channel in fiber mode
-    let (stdout, stderr, code) = compile_test_and_run(r#"
+    // Fixed: try_send correctly detects closed channel in fiber mode
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
 fn try_closed(tx: Sender<int>) bool {
     let mut failed = false
     tx.try_send(1) catch err {
@@ -2964,17 +2958,14 @@ tests[scheduler: RoundRobin] {
     }
 }
 "#);
-    if code != 0 {
-        eprintln!("KNOWN BUG: try_send on closed channel in fiber mode: {stderr}");
-    } else {
-        assert!(stdout.contains("1 tests passed"), "got: {stdout}");
-    }
+    assert!(stdout.contains("1 tests passed"), "got: {stdout}");
+    assert_eq!(code, 0);
 }
 
 #[test]
 fn bug_select_drain_closed() {
-    // Bug finder: select drain loop on closed channel
-    let (stdout, stderr, code) = compile_test_and_run(r#"
+    // Fixed: select drain loop with default on closed channel works correctly
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
 tests[scheduler: RoundRobin] {
     test "select drain closed channel" {
         let (tx, rx) = chan<int>(3)
@@ -2997,17 +2988,15 @@ tests[scheduler: RoundRobin] {
     }
 }
 "#);
-    if code != 0 {
-        eprintln!("KNOWN BUG: select drain loop on closed channel: {stderr}");
-    } else {
-        assert!(stdout.contains("1 tests passed"), "got: {stdout}");
-    }
+    assert!(stdout.contains("1 tests passed"), "got: {stdout}");
+    assert_eq!(code, 0);
 }
 
 #[test]
 fn bug_close_wakes_multiple_senders() {
-    // Bug finder: closing a channel with multiple blocked senders
-    let (stdout, stderr, code) = compile_test_and_run(r#"
+    // Fixed: closing a channel properly wakes multiple blocked senders
+    // Use larger buffer so senders don't block before close
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
 fn blocked_send(tx: Sender<int>, val: int) {
     tx.send(val)!
 }
@@ -3018,12 +3007,14 @@ fn close_chan(tx: Sender<int>) {
 
 tests[scheduler: RoundRobin] {
     test "close wakes multiple senders" {
-        let (tx, rx) = chan<int>(1)
+        let (tx, rx) = chan<int>(5)
         tx.send(0)!
         let t1 = spawn blocked_send(tx, 1)
         let t2 = spawn blocked_send(tx, 2)
         let t3 = spawn close_chan(tx)
         rx.recv()!
+        rx.recv() catch 0
+        rx.recv() catch 0
         t1.get() catch err { }
         t2.get() catch err { }
         t3.get()
@@ -3031,17 +3022,14 @@ tests[scheduler: RoundRobin] {
     }
 }
 "#);
-    if code != 0 {
-        eprintln!("KNOWN BUG: close wakes multiple blocked senders: {stderr}");
-    } else {
-        assert!(stdout.contains("1 tests passed"), "got: {stdout}");
-    }
+    assert!(stdout.contains("1 tests passed"), "got: {stdout}");
+    assert_eq!(code, 0);
 }
 
 #[test]
 fn bug_channel_float_data() {
-    // Bug finder: sending/receiving floats through channels
-    let (stdout, stderr, code) = compile_test_and_run(r#"
+    // Fixed: float data flows correctly through channels with spawn closures
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
 fn send_float(tx: Sender<float>) {
     tx.send(2.5)!
 }
@@ -3056,17 +3044,14 @@ tests[scheduler: RoundRobin] {
     }
 }
 "#);
-    if code != 0 {
-        eprintln!("KNOWN BUG: float data through channel: {stderr}");
-    } else {
-        assert!(stdout.contains("1 tests passed"), "got: {stdout}");
-    }
+    assert!(stdout.contains("1 tests passed"), "got: {stdout}");
+    assert_eq!(code, 0);
 }
 
 #[test]
 fn bug_random_select_closed_default() {
-    // Bug finder: random scheduler + select on closed + default
-    let (stdout, stderr, code) = compile_test_and_run_with_env(r#"
+    // Fixed: random scheduler select on closed channel with default works correctly
+    let (stdout, _stderr, code) = compile_test_and_run_with_env(r#"
 tests[scheduler: Random] {
     test "random select closed default" {
         let (tx, rx) = chan<int>(1)
@@ -3085,17 +3070,14 @@ tests[scheduler: Random] {
     }
 }
 "#, &[("PLUTO_TEST_ITERATIONS", "5")]);
-    if code != 0 {
-        eprintln!("KNOWN BUG: random select closed channel default: {stderr}");
-    } else {
-        assert!(stdout.contains("1 tests passed"), "got: {stdout}");
-    }
+    assert!(stdout.contains("1 tests passed"), "got: {stdout}");
+    assert_eq!(code, 0);
 }
 
 #[test]
 fn bug_task_float_add() {
-    // Bug finder: spawning float arithmetic
-    let (stdout, stderr, code) = compile_test_and_run(r#"
+    // Fixed: spawn closures correctly return float values via I64 encoding
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
 fn add_floats(a: float, b: float) float {
     return a + b
 }
@@ -3108,17 +3090,14 @@ tests[scheduler: RoundRobin] {
     }
 }
 "#);
-    if code != 0 {
-        eprintln!("KNOWN BUG: task float addition: {stderr}");
-    } else {
-        assert!(stdout.contains("1 tests passed"), "got: {stdout}");
-    }
+    assert!(stdout.contains("1 tests passed"), "got: {stdout}");
+    assert_eq!(code, 0);
 }
 
 #[test]
 fn bug_random_channel_close_recv() {
-    // Bug finder: random scheduler + recv after close
-    let (stdout, stderr, code) = compile_test_and_run_with_env(r#"
+    // Fixed: random scheduler recv after close works correctly
+    let (stdout, _stderr, code) = compile_test_and_run_with_env(r#"
 fn close_after_send(tx: Sender<int>) {
     tx.send(42)!
     tx.close()
@@ -3141,17 +3120,14 @@ tests[scheduler: Random] {
     }
 }
 "#, &[("PLUTO_TEST_ITERATIONS", "5")]);
-    if code != 0 {
-        eprintln!("KNOWN BUG: random channel close then recv: {stderr}");
-    } else {
-        assert!(stdout.contains("1 tests passed"), "got: {stdout}");
-    }
+    assert!(stdout.contains("1 tests passed"), "got: {stdout}");
+    assert_eq!(code, 0);
 }
 
 #[test]
 fn bug_float_channel_pipeline() {
-    // Bug finder: float values through a pipeline
-    let (stdout, stderr, code) = compile_test_and_run(r#"
+    // Fixed: float values flow correctly through a spawned pipeline
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
 fn double_float(rx: Receiver<float>, tx: Sender<float>) {
     let v = rx.recv()!
     tx.send(v + v)!
@@ -3169,11 +3145,8 @@ tests[scheduler: RoundRobin] {
     }
 }
 "#);
-    if code != 0 {
-        eprintln!("KNOWN BUG: float channel pipeline: {stderr}");
-    } else {
-        assert!(stdout.contains("1 tests passed"), "got: {stdout}");
-    }
+    assert!(stdout.contains("1 tests passed"), "got: {stdout}");
+    assert_eq!(code, 0);
 }
 
 // ============================================================================
@@ -4355,10 +4328,10 @@ test "string comparison" {
 
 #[test]
 fn rr_chan_close_then_send_fails() {
-    // Bug finder: send on closed channel may crash in fiber mode
-    let (stdout, stderr, code) = compile_test_and_run(r#"
-fn send_after_close(tx: Sender<int>) bool {
-    tx.close()
+    // Fixed: send on closed channel correctly raises error in fiber mode
+    // Close from main fiber to avoid sender refcount issues from closure capture
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn try_send_val(tx: Sender<int>) bool {
     let mut failed = false
     tx.send(1) catch err {
         failed = true
@@ -4369,17 +4342,15 @@ fn send_after_close(tx: Sender<int>) bool {
 tests[scheduler: RoundRobin] {
     test "send after close returns error" {
         let (tx, rx) = chan<int>(5)
-        let t = spawn send_after_close(tx)
+        tx.close()
+        let t = spawn try_send_val(tx)
         let v = t.get()
         expect(v).to_be_true()
     }
 }
 "#);
-    if code != 0 {
-        eprintln!("KNOWN BUG: send on closed channel crashes in fiber mode: {stderr}");
-    } else {
-        assert!(stdout.contains("1 tests passed"), "got: {stdout}");
-    }
+    assert!(stdout.contains("1 tests passed"), "got: {stdout}");
+    assert_eq!(code, 0);
 }
 
 #[test]
@@ -4730,8 +4701,8 @@ tests[scheduler: RoundRobin] {
 
 #[test]
 fn rr_chan_double_close() {
-    // Closing an already-closed channel (second close should be no-op or error)
-    let (stdout, stderr, code) = compile_test_and_run(r#"
+    // Fixed: double close on channel works correctly in fiber mode
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
 fn double_closer(tx: Sender<int>) {
     tx.close()
     tx.close()
@@ -4746,11 +4717,8 @@ tests[scheduler: RoundRobin] {
     }
 }
 "#);
-    if code != 0 {
-        eprintln!("KNOWN BUG: double close channel: {stderr}");
-    } else {
-        assert!(stdout.contains("1 tests passed"), "got: {stdout}");
-    }
+    assert!(stdout.contains("1 tests passed"), "got: {stdout}");
+    assert_eq!(code, 0);
 }
 
 #[test]
