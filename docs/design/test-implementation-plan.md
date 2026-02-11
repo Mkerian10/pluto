@@ -127,9 +127,11 @@ cargo bench
 
 ### Phase 2: Core Feature Coverage (Weeks 3-4)
 
-**Goal:** Systematically test all implemented features and fill coverage gaps.
+**Goal:** Systematically test all implemented features through multiple test runs, fixing bugs between each run.
 
-#### Week 3: Lexer + Parser + Typeck
+**Strategy:** Run tests in batches, triage failures, fix bugs, then proceed to next batch. Each run validates previous fixes before adding new tests.
+
+#### Run 1 (Week 3, Days 1-2): Lexer + Parser
 
 **Tasks:**
 1. Audit existing tests, create coverage matrix spreadsheet (`docs/testing/coverage-matrix.csv`)
@@ -148,7 +150,47 @@ cargo bench
    - Struct literals (10 tests)
    Total: 45 tests
 
-4. Write typeck edge case tests (`tests/integration/typeck/`):
+4. Run full test suite:
+   ```bash
+   cargo test --test lexer
+   cargo test --test parser
+   ```
+
+5. Triage failures:
+   - Categorize: real bugs vs bad tests
+   - File issues for bugs (estimate: 5-10 bugs)
+   - Fix critical bugs blocking other tests
+
+**Deliverables:**
+- [ ] Coverage matrix created
+- [ ] 45 lexer tests written
+- [ ] 45 parser tests written
+- [ ] Lexer tests: 90%+ passing (allow 4-5 failures for bugs)
+- [ ] Parser tests: 85%+ passing (allow 6-7 failures for bugs)
+- [ ] Bugs filed and P0 bugs fixed
+
+**Validation Gate:**
+```bash
+cargo test --test lexer --test parser
+# Allow up to 10 test failures total (known bugs)
+# No panics or segfaults allowed
+```
+
+**Proceed to Run 2 if:**
+- ✅ <10 test failures
+- ✅ All P0 bugs fixed
+- ✅ No compiler panics
+
+---
+
+#### Run 2 (Week 3, Days 3-4): Typeck + Bug Fixes
+
+**Entry Criteria:** Run 1 validation gate passed
+
+**Tasks:**
+1. Fix remaining bugs from Run 1 (P1/P2 priority)
+
+2. Write typeck edge case tests (`tests/integration/typeck/`):
    - Inference (20 tests)
    - Generics (15 tests)
    - Traits (15 tests)
@@ -156,80 +198,192 @@ cargo bench
    - Nullable (10 tests)
    Total: 75 tests
 
-5. Run coverage report:
+3. Re-run lexer + parser tests to ensure fixes didn't regress:
+   ```bash
+   cargo test --test lexer --test parser
+   ```
+
+4. Run typeck tests:
+   ```bash
+   cargo test --test typeck
+   ```
+
+5. Install tarpaulin and generate first coverage report:
    ```bash
    cargo install cargo-tarpaulin
    cargo tarpaulin --out Html --output-dir coverage
    ```
 
-**Deliverables:**
-- [ ] Coverage matrix created with all features mapped
-- [ ] 45 lexer tests written and passing
-- [ ] 45 parser tests written and passing
-- [ ] 75 typeck tests written and passing
-- [ ] Coverage report generated (target: 75%+)
-- [ ] Gaps identified and documented
+6. Triage typeck failures:
+   - Estimate: 10-15 new bugs found
+   - Fix critical blocking bugs
 
-**Validation:**
+**Deliverables:**
+- [ ] Run 1 bugs fixed (90%+)
+- [ ] 75 typeck tests written
+- [ ] Typeck tests: 80%+ passing
+- [ ] Lexer + parser tests still passing (no regressions)
+- [ ] Coverage report: 75%+ line coverage
+- [ ] Typeck bugs filed and P0 fixed
+
+**Validation Gate:**
 ```bash
-cargo test --test lexer
-cargo test --test parser
-cargo test --test typeck
-cargo tarpaulin
+cargo test --test lexer --test parser --test typeck
+cargo tarpaulin --out Html
+# Target: 75%+ coverage, <15 test failures total
 ```
 
-#### Week 4: Codegen + Runtime + Modules
+**Proceed to Run 3 if:**
+- ✅ 75%+ code coverage
+- ✅ <15 test failures across all runs
+- ✅ No new panics introduced
+
+---
+
+#### Run 3 (Week 4, Days 1-2): Codegen + Runtime
+
+**Entry Criteria:** Run 2 validation gate passed
 
 **Tasks:**
-1. Write codegen edge case tests (`tests/integration/codegen/`):
+1. Fix remaining bugs from Run 2 (P1/P2)
+
+2. Write codegen edge case tests (`tests/integration/codegen/`):
    - All PlutoType variants (20 tests)
    - Calling conventions (15 tests)
    - Memory layout (10 tests)
    Total: 45 tests
 
-2. Write runtime edge case tests (`tests/integration/runtime/`):
+3. Write runtime edge case tests (`tests/integration/runtime/`):
    - GC basic cases (15 tests)
    - Error handling (10 tests)
    - Task lifecycle (10 tests)
    Total: 35 tests
 
-3. Write module system tests (`tests/integration/modules/`):
+4. Re-run all previous tests:
+   ```bash
+   cargo test --test lexer --test parser --test typeck
+   ```
+
+5. Run new tests:
+   ```bash
+   cargo test --test codegen --test runtime
+   ```
+
+6. Generate updated coverage report, compare to Run 2:
+   ```bash
+   cargo tarpaulin --out Html --output-dir coverage
+   ```
+
+7. Triage failures:
+   - Estimate: 8-12 new bugs (codegen is critical)
+   - Fix all codegen panics immediately
+
+**Deliverables:**
+- [ ] Run 2 bugs fixed (85%+)
+- [ ] 45 codegen tests written
+- [ ] 35 runtime tests written
+- [ ] Codegen tests: 85%+ passing
+- [ ] Runtime tests: 90%+ passing
+- [ ] Coverage: 80%+ line coverage
+- [ ] No regressions in previous tests
+
+**Validation Gate:**
+```bash
+cargo test --test lexer --test parser --test typeck --test codegen --test runtime
+cargo tarpaulin
+# Target: 80%+ coverage, <15 failures, 0 codegen panics
+```
+
+**Proceed to Run 4 if:**
+- ✅ 80%+ code coverage
+- ✅ <15 failures total
+- ✅ Zero codegen panics
+- ✅ Zero runtime segfaults
+
+---
+
+#### Run 4 (Week 4, Days 3-5): Modules + Property Tests + Final Polish
+
+**Entry Criteria:** Run 3 validation gate passed
+
+**Tasks:**
+1. Fix all remaining P0 and P1 bugs from Runs 1-3
+
+2. Write module system tests (`tests/integration/modules/`):
    - Transitive imports (10 tests)
    - Circular imports (5 tests)
    - Visibility rules (10 tests)
    Total: 25 tests
 
-4. Add property tests for transformations (`tests/property/transforms.rs`):
-   - Monomorphize idempotence
-   - Closure lift preserves semantics
-   - Module flatten preserves names
+3. Add property tests for transformations (`tests/property/transforms.rs`):
+   - Monomorphize idempotence (1 test)
+   - Closure lift preserves semantics (1 test)
+   - Module flatten preserves names (1 test)
+   Total: 3 property tests
 
-5. Run coverage report again, compare to Week 3:
+4. Run FULL test suite:
+   ```bash
+   cargo test  # All tests
+   cargo test --test property
+   ```
+
+5. Final coverage report:
    ```bash
    cargo tarpaulin --out Html --output-dir coverage
    ```
 
-**Deliverables:**
-- [ ] 45 codegen tests written and passing
-- [ ] 35 runtime tests written and passing
-- [ ] 25 module tests written and passing
-- [ ] 3 transformation property tests written
-- [ ] Coverage report shows 80%+ (target: 85%)
-- [ ] Remaining gaps documented with TODO comments
+6. Bug fixing sprint:
+   - Fix all P0 bugs (target: 100%)
+   - Fix 80%+ of P1 bugs
+   - Document P2 bugs as known issues
 
-**Validation:**
+7. Document coverage gaps:
+   - Review tarpaulin HTML report
+   - Add TODO comments in code for untested paths
+   - Update coverage matrix
+
+**Deliverables:**
+- [ ] All P0 bugs fixed (100%)
+- [ ] 80%+ P1 bugs fixed
+- [ ] 25 module tests written and 95%+ passing
+- [ ] 3 property tests written and 100% passing
+- [ ] Coverage: 85%+ line coverage (stretch: 90%)
+- [ ] Full test suite passing rate: 95%+
+- [ ] Coverage gaps documented
+- [ ] Known bugs documented with GitHub issues
+
+**Final Validation:**
 ```bash
-cargo test --test codegen
-cargo test --test runtime
-cargo test --test modules
-cargo tarpaulin
+cargo test --all
+cargo test --test property
+cargo tarpaulin --out Html --output-dir coverage
 ```
 
-**Checkpoint:** At end of Week 4, we should have:
-- 300+ new tests written
-- 80%+ code coverage
-- All individual features tested in isolation
-- Ready to test feature interactions
+**Success Metrics:**
+- ✅ 300+ new tests written (45+45+75+45+35+25+3 = 273 minimum)
+- ✅ 85%+ line coverage
+- ✅ 95%+ test pass rate
+- ✅ <10 known bugs remaining (all P2)
+- ✅ 0 panics, 0 segfaults
+- ✅ All property tests passing
+- ✅ Coverage matrix complete
+
+---
+
+**Phase 2 Checkpoint Summary:**
+
+At end of Week 4, we should have:
+- **4 test runs completed** with validation gates between each
+- **300+ new tests** across lexer, parser, typeck, codegen, runtime, modules, property
+- **85%+ code coverage** (up from ~70% baseline)
+- **All individual features tested** in isolation
+- **Bug count reduced** from ~30-50 found to <10 remaining (P2 only)
+- **Ready for Phase 3:** Feature interaction testing
+
+**Adaptation Policy:**
+- If any run finds >20 bugs: Add 2-3 days for bug fixing before next run
+- If coverage stuck <80%: Review untested paths, add targeted tests
+- If test suite >5 minutes: Parallelize or split into fast/full tiers
 
 ### Phase 3: Feature Interaction Testing (Weeks 5-6)
 
