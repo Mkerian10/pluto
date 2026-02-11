@@ -1,0 +1,79 @@
+import std.regex
+
+app RegexExample {
+    fn main(self) {
+        print("=== Regex Pattern Matching Examples ===")
+        print("")
+
+        // Example 1: Simple matching
+        print("--- Basic Matching ---")
+        let text1 = "hello world"
+        if regex.matches("hello", text1) {
+            print("✓ Found 'hello' in '{text1}'")
+        }
+
+        if regex.matches("^hello", text1) {
+            print("✓ Text starts with 'hello'")
+        }
+
+        if regex.matches("world$", text1) {
+            print("✓ Text ends with 'world'")
+        }
+        print("")
+
+        // Example 2: Finding patterns
+        print("--- Finding Patterns ---")
+        let email = "Contact: alice@example.com or bob@test.org"
+        let at_pos = regex.find("@", email)
+        if at_pos >= 0 {
+            print("Found @ at position {at_pos}")
+        }
+
+        let all_at = regex.find_all("@", email)
+        print("Found {all_at.len()} @ symbols")
+        print("")
+
+        // Example 3: Wildcards and quantifiers
+        print("--- Wildcards and Quantifiers ---")
+        if regex.matches("h.llo", "hello") {
+            print("✓ 'h.llo' matches 'hello' (. matches any char)")
+        }
+
+        if regex.matches("ab+c", "abbc") {
+            print("✓ 'ab+c' matches 'abbc' (+ means one or more)")
+        }
+
+        if regex.matches("ab*c", "ac") {
+            print("✓ 'ab*c' matches 'ac' (* means zero or more)")
+        }
+        print("")
+
+        // Example 4: Replacement
+        print("--- Text Replacement ---")
+        let original = "foo bar foo baz foo"
+        let replaced = regex.replace_all("foo", "FOO", original)
+        print("Original: {original}")
+        print("Replaced: {replaced}")
+        print("")
+
+        // Example 5: Splitting
+        print("--- Splitting Text ---")
+        let csv = "apple,banana,cherry,date"
+        let items = regex.split(",", csv)
+        print("Items: {items.len()} pieces")
+        for i in 0..items.len() {
+            print("  [{i}] = {items[i]}")
+        }
+        print("")
+
+        // Example 6: Character classes
+        print("--- Character Classes ---")
+        if regex.matches("\\d\\d\\d", "123") {
+            print("✓ Found 3 digits")
+        }
+
+        if regex.matches("\\w+", "hello_world123") {
+            print("✓ Word pattern matches alphanumerics and underscore")
+        }
+    }
+}

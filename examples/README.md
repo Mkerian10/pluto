@@ -265,3 +265,11 @@ Demonstrates the `std.base64` module for encoding and decoding Base64: basic enc
 ```bash
 cargo run -- run examples/base64/main.pluto --stdlib stdlib
 ```
+
+## regex
+
+Demonstrates the `std.regex` module for pattern matching: literal matching (`matches`), finding patterns (`find`, `find_all`), text replacement (`replace`, `replace_all`), splitting text by pattern (`split`), wildcards (`.`), quantifiers (`*`, `+`, `?`), anchors (`^`, `$`), and character shortcuts (`\d`, `\w`, `\s`).
+
+```bash
+cargo run -- run examples/regex/main.pluto --stdlib stdlib
+```

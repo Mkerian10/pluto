@@ -1,0 +1,220 @@
+// Simple regex pattern matcher
+// Supports: literals, . (any char), ^ $ anchors
+// Limited quantifier support
+
+pub fn matches(pattern: string, text: string) bool {
+    let i = 0
+    while i <= text.len() {
+        if pattern_at(pattern, 0, text, i) >= 0 {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn find(pattern: string, text: string) int {
+    let i = 0
+    while i <= text.len() {
+        let result = pattern_at(pattern, 0, text, i)
+        if result >= 0 {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+pub fn find_all(pattern: string, text: string) [int] {
+    let results: [int] = []
+    let pos = 0
+    while pos <= text.len() {
+        let result = pattern_at(pattern, 0, text, pos)
+        if result >= 0 {
+            results.push(pos)
+            if result == 0 {
+                pos = pos + 1
+            } else {
+                pos = pos + result
+            }
+        } else {
+            pos = pos + 1
+        }
+    }
+    return results
+}
+
+pub fn replace(pattern: string, replacement: string, text: string) string {
+    let pos = find(pattern, text)
+    if pos < 0 {
+        return text
+    }
+    let plen = get_match_len(pattern, text, pos)
+    let before = text.substring(0, pos)
+    let after = text.substring(pos + plen, text.len() - pos - plen)
+    return before + replacement + after
+}
+
+pub fn replace_all(pattern: string, replacement: string, text: string) string {
+    let result = text
+    let iterations = 0
+    while iterations < 100 {
+        let pos = find(pattern, result)
+        if pos < 0 {
+            break
+        }
+        let plen = get_match_len(pattern, result, pos)
+        let before = result.substring(0, pos)
+        let after = result.substring(pos + plen, result.len() - pos - plen)
+        result = before + replacement + after
+        iterations = iterations + 1
+        if plen == 0 {
+            break
+        }
+    }
+    return result
+}
+
+pub fn split(pattern: string, text: string) [string] {
+    let results: [string] = []
+    let pos = 0
+    let prev = 0
+    while pos <= text.len() {
+        let result = pattern_at(pattern, 0, text, pos)
+        if result >= 0 {
+            results.push(text.substring(prev, pos - prev))
+            let plen = get_match_len(pattern, text, pos)
+            pos = pos + plen
+            if plen == 0 {
+                pos = pos + 1
+            }
+            prev = pos
+        } else {
+            pos = pos + 1
+        }
+    }
+    if prev < text.len() {
+        results.push(text.substring(prev, text.len() - prev))
+    }
+    return results
+}
+
+// ─── Internals ──────────────────────────────────────────────────────
+
+fn pattern_at(pattern: string, p_idx: int, text: string, t_idx: int) int {
+    let p = p_idx
+    let t = t_idx
+
+    while p < pattern.len() && t <= text.len() {
+        let pc = pattern.char_at(p)
+
+        // Handle anchors
+        if pc == "^" {
+            if t == 0 {
+                p = p + 1
+                continue
+            } else {
+                return -1
+            }
+        }
+
+        if pc == "$" {
+            if t == text.len() {
+                p = p + 1
+                continue
+            } else {
+                return -1
+            }
+        }
+
+        // Check for quantifier
+        let has_star = false
+        let has_plus = false
+        let has_question = false
+        if p + 1 < pattern.len() {
+            let next = pattern.char_at(p + 1)
+            has_star = next == "*"
+            has_plus = next == "+"
+            has_question = next == "?"
+        }
+
+        if has_star {
+            // * = zero or more
+            let matched = false
+            while t < text.len() {
+                let tc = text.char_at(t)
+                if !single_match(pc, tc) {
+                    break
+                }
+                t = t + 1
+                matched = true
+            }
+            p = p + 2
+        } else if has_plus {
+            // + = one or more
+            if t >= text.len() {
+                return -1
+            }
+            let tc = text.char_at(t)
+            if !single_match(pc, tc) {
+                return -1
+            }
+            t = t + 1
+            while t < text.len() {
+                tc = text.char_at(t)
+                if !single_match(pc, tc) {
+                    break
+                }
+                t = t + 1
+            }
+            p = p + 2
+        } else if has_question {
+            // ? = zero or one
+            if t < text.len() {
+                let tc = text.char_at(t)
+                if single_match(pc, tc) {
+                    t = t + 1
+                }
+            }
+            p = p + 2
+        } else {
+            // Regular character
+            if t >= text.len() {
+                return -1
+            }
+            let tc = text.char_at(t)
+            if !single_match(pc, tc) {
+                return -1
+            }
+            t = t + 1
+            p = p + 1
+        }
+    }
+
+    if p >= pattern.len() {
+        return t - t_idx
+    }
+
+    return -1
+}
+
+fn single_match(p: string, t: string) bool {
+    if p == "." {
+        return true
+    }
+    if p == t {
+        return true
+    }
+    return false
+}
+
+fn get_match_len(pattern: string, text: string, start: int) int {
+    let result = pattern_at(pattern, 0, text, start)
+    if result < 0 {
+        return 1
+    }
+    if result == 0 {
+        return 1
+    }
+    return result
+}
