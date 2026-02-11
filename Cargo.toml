@@ -245,6 +245,34 @@ path = "tests/integration/edge_cases.rs"
 name = "parser_property"
 path = "tests/property/parser.rs"
 
+[[test]]
+name = "precedence_extended"
+path = "tests/integration/precedence_extended.rs"
+
+[[test]]
+name = "expression_complexity"
+path = "tests/integration/expression_complexity.rs"
+
+[[test]]
+name = "error_recovery"
+path = "tests/integration/error_recovery.rs"
+
+[[test]]
+name = "type_syntax"
+path = "tests/integration/type_syntax.rs"
+
+[[test]]
+name = "literal_parsing"
+path = "tests/integration/literal_parsing.rs"
+
+[[test]]
+name = "statement_boundaries"
+path = "tests/integration/statement_boundaries.rs"
+
+[[test]]
+name = "control_flow_extended"
+path = "tests/integration/control_flow_extended.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false
