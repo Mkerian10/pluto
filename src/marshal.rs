@@ -289,7 +289,7 @@ fn generate_marshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>, C
                     node: TypeExpr::Named("wire.WireValueEncoder".to_string()),
                     span: Span { start: 0, end: 0, file_id: 0 },
                 },
-                is_mut: true,
+                is_mut: false,
             },
         ],
         return_type: None, // void
@@ -375,7 +375,7 @@ fn generate_unmarshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>,
                 node: TypeExpr::Named("wire.WireValueDecoder".to_string()),
                 span: Span { start: 0, end: 0, file_id: 0 },
             },
-            is_mut: true,
+            is_mut: false,
         }],
         return_type: Some(Spanned {
             node: TypeExpr::Named(class_name.clone()),
@@ -499,7 +499,7 @@ fn generate_marshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<Spa
                     node: TypeExpr::Named("wire.WireValueEncoder".to_string()),
                     span: mk_span(),
                 },
-                is_mut: true,
+                is_mut: false,
             },
         ],
         return_type: None, // void
@@ -694,7 +694,7 @@ fn generate_unmarshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<S
                 node: TypeExpr::Named("wire.WireValueDecoder".to_string()),
                 span: mk_span(),
             },
-            is_mut: true,
+            is_mut: false,
         }],
         return_type: Some(Spanned {
             node: TypeExpr::Named(enum_name.clone()),
@@ -876,7 +876,7 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
                         span: mk_span(),
                     }),
                     value: Spanned { node: mk_int_lit(0), span: mk_span() },
-                    is_mut: true,
+                    is_mut: false,
                 },
                 span: mk_span(),
             });
@@ -1027,7 +1027,7 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
                                 span: mk_span(),
                             }),
                             value: Spanned { node: mk_int_lit(0), span: mk_span() },
-                            is_mut: true,
+                            is_mut: false,
                         },
                         span: mk_span(),
                     });
@@ -1152,7 +1152,7 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
                                 span: mk_span(),
                             }),
                             value: Spanned { node: mk_int_lit(0), span: mk_span() },
-                            is_mut: true,
+                            is_mut: false,
                         },
                         span: mk_span(),
                     });
@@ -1345,7 +1345,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                         node: Expr::ArrayLit { elements: vec![] },
                         span: mk_span(),
                     },
-                    is_mut: true,
+                    is_mut: false,
                 },
                 span: mk_span(),
             });
@@ -1359,7 +1359,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                         span: mk_span(),
                     }),
                     value: Spanned { node: mk_int_lit(0), span: mk_span() },
-                    is_mut: true,
+                    is_mut: false,
                 },
                 span: mk_span(),
             });
@@ -1453,7 +1453,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                     name: Spanned { node: "__result".to_string(), span: mk_span() },
                     ty: Some(Spanned { node: ty.clone(), span: mk_span() }),
                     value: Spanned { node: Expr::NoneLit, span: mk_span() },
-                    is_mut: true,
+                    is_mut: false,
                 },
                 span: mk_span(),
             });
@@ -1585,7 +1585,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                                 },
                                 span: mk_span(),
                             },
-                            is_mut: true,
+                            is_mut: false,
                         },
                         span: mk_span(),
                     });
@@ -1599,7 +1599,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                                 span: mk_span(),
                             }),
                             value: Spanned { node: mk_int_lit(0), span: mk_span() },
-                            is_mut: true,
+                            is_mut: false,
                         },
                         span: mk_span(),
                     });
@@ -1701,7 +1701,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                                 },
                                 span: mk_span(),
                             },
-                            is_mut: true,
+                            is_mut: false,
                         },
                         span: mk_span(),
                     });
@@ -1715,7 +1715,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                                 span: mk_span(),
                             }),
                             value: Spanned { node: mk_int_lit(0), span: mk_span() },
-                            is_mut: true,
+                            is_mut: false,
                         },
                         span: mk_span(),
                     });

@@ -368,3 +368,30 @@ stage Api {
     assert!(out.contains("bob"));
     assert!(out.contains("ok"));
 }
+
+#[test]
+fn test_hand_written_unmarshal() {
+    let out = run_marshal_test(r#"
+import std.wire
+
+class Point {
+    x: int
+    y: int
+}
+
+fn unmarshal_point(dec: wire.WireValueDecoder) Point {
+    dec.decode_record_start("Point", 2)
+    dec.decode_field("x", 0)
+    let x = dec.decode_int()!
+    dec.decode_field("y", 1)
+    let y = dec.decode_int()!
+    dec.decode_record_end()
+    return Point { x: x, y: y }
+}
+
+fn main() {
+    print("ok")
+}
+"#);
+    assert!(out.contains("ok"));
+}
