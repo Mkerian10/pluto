@@ -1415,6 +1415,113 @@ void *__pluto_string_to_float(void *s) {
     return obj;
 }
 
+void *__pluto_string_trim_start(void *s) {
+    long slen = *(long *)s;
+    const char *data = (const char *)s + 8;
+    // Skip leading whitespace
+    long start_idx = 0;
+    while (start_idx < slen && (data[start_idx] == ' ' || data[start_idx] == '\t' || data[start_idx] == '\n' || data[start_idx] == '\r')) {
+        start_idx++;
+    }
+    long new_len = slen - start_idx;
+    void *obj = gc_alloc(8 + new_len + 1, GC_TAG_STRING, 0);
+    *(long *)obj = new_len;
+    memcpy((char *)obj + 8, data + start_idx, new_len);
+    ((char *)obj + 8)[new_len] = '\0';
+    return obj;
+}
+
+void *__pluto_string_trim_end(void *s) {
+    long slen = *(long *)s;
+    const char *data = (const char *)s + 8;
+    // Skip trailing whitespace
+    long end_idx = slen - 1;
+    while (end_idx >= 0 && (data[end_idx] == ' ' || data[end_idx] == '\t' || data[end_idx] == '\n' || data[end_idx] == '\r')) {
+        end_idx--;
+    }
+    long new_len = end_idx + 1;
+    if (new_len < 0) new_len = 0;
+    void *obj = gc_alloc(8 + new_len + 1, GC_TAG_STRING, 0);
+    *(long *)obj = new_len;
+    if (new_len > 0) memcpy((char *)obj + 8, data, new_len);
+    ((char *)obj + 8)[new_len] = '\0';
+    return obj;
+}
+
+long __pluto_string_last_index_of(void *haystack, void *needle) {
+    long hlen = *(long *)haystack;
+    long nlen = *(long *)needle;
+    if (nlen == 0) return hlen;
+    if (nlen > hlen) return -1;
+
+    const char *hdata = (const char *)haystack + 8;
+    const char *ndata = (const char *)needle + 8;
+
+    for (long i = hlen - nlen; i >= 0; i--) {
+        if (memcmp(hdata + i, ndata, nlen) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+long __pluto_string_count(void *haystack, void *needle) {
+    long hlen = *(long *)haystack;
+    long nlen = *(long *)needle;
+    if (nlen == 0) return 0;
+    if (nlen > hlen) return 0;
+
+    const char *hdata = (const char *)haystack + 8;
+    const char *ndata = (const char *)needle + 8;
+
+    long count = 0;
+    for (long i = 0; i <= hlen - nlen; i++) {
+        if (memcmp(hdata + i, ndata, nlen) == 0) {
+            count++;
+            i += nlen - 1;
+        }
+    }
+    return count;
+}
+
+long __pluto_string_is_empty(void *s) {
+    long slen = *(long *)s;
+    return slen == 0 ? 1 : 0;
+}
+
+long __pluto_string_is_whitespace(void *s) {
+    long slen = *(long *)s;
+    const char *data = (const char *)s + 8;
+    if (slen == 0) return 1;
+    for (long i = 0; i < slen; i++) {
+        if (data[i] != ' ' && data[i] != '\t' && data[i] != '\n' && data[i] != '\r') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+void *__pluto_string_repeat(void *s, long count) {
+    long slen = *(long *)s;
+    const char *data = (const char *)s + 8;
+    if (count <= 0) {
+        void *obj = gc_alloc(8 + 1, GC_TAG_STRING, 0);
+        *(long *)obj = 0;
+        ((char *)obj + 8)[0] = '\0';
+        return obj;
+    }
+
+    long new_len = slen * count;
+    void *obj = gc_alloc(8 + new_len + 1, GC_TAG_STRING, 0);
+    *(long *)obj = new_len;
+    char *result = (char *)obj + 8;
+    for (long i = 0; i < count; i++) {
+        memcpy(result + i * slen, data, slen);
+    }
+    result[new_len] = '\0';
+    return obj;
+}
+
 long __pluto_json_parse_int(void *s) {
     long slen = *(long *)s;
     const char *data = (const char *)s + 8;

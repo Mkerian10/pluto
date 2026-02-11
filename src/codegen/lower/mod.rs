@@ -4498,9 +4498,9 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
             if obj_type == PlutoType::String {
                 return match method.node.as_str() {
-                    "len" | "index_of" => PlutoType::Int,
-                    "contains" | "starts_with" | "ends_with" => PlutoType::Bool,
-                    "substring" | "trim" | "to_upper" | "to_lower" | "replace" | "char_at" => PlutoType::String,
+                    "len" | "index_of" | "last_index_of" | "count" => PlutoType::Int,
+                    "contains" | "starts_with" | "ends_with" | "is_empty" | "is_whitespace" => PlutoType::Bool,
+                    "substring" | "trim" | "to_upper" | "to_lower" | "replace" | "char_at" | "trim_start" | "trim_end" | "repeat" => PlutoType::String,
                     "split" => PlutoType::Array(Box::new(PlutoType::String)),
                     "to_bytes" => PlutoType::Bytes,
                     "to_int" => PlutoType::Nullable(Box::new(PlutoType::Int)),

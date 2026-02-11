@@ -12,6 +12,13 @@ extern fn __pluto_string_char_at(s: string, index: int) string
 extern fn __pluto_string_len(s: string) int
 extern fn __pluto_string_byte_at(s: string, index: int) int
 extern fn __pluto_string_format_float(v: float) string
+extern fn __pluto_string_trim_start(s: string) string
+extern fn __pluto_string_trim_end(s: string) string
+extern fn __pluto_string_last_index_of(haystack: string, needle: string) int
+extern fn __pluto_string_count(haystack: string, needle: string) int
+extern fn __pluto_string_is_empty(s: string) int
+extern fn __pluto_string_is_whitespace(s: string) int
+extern fn __pluto_string_repeat(s: string, count: int) string
 
 pub fn substring(s: string, start: int, length: int) string {
     return __pluto_string_substring(s, start, length)
@@ -78,4 +85,32 @@ pub fn join(arr: [string], sep: string) string {
         result = result + sep + arr[i]
     }
     return result
+}
+
+pub fn trim_start(s: string) string {
+    return __pluto_string_trim_start(s)
+}
+
+pub fn trim_end(s: string) string {
+    return __pluto_string_trim_end(s)
+}
+
+pub fn last_index_of(s: string, needle: string) int {
+    return __pluto_string_last_index_of(s, needle)
+}
+
+pub fn count(s: string, needle: string) int {
+    return __pluto_string_count(s, needle)
+}
+
+pub fn is_empty(s: string) bool {
+    return __pluto_string_is_empty(s) != 0
+}
+
+pub fn is_whitespace(s: string) bool {
+    return __pluto_string_is_whitespace(s) != 0
+}
+
+pub fn repeat(s: string, count: int) string {
+    return __pluto_string_repeat(s, count)
 }
