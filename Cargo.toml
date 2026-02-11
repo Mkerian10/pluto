@@ -217,6 +217,10 @@ path = "tests/integration/error_snapshots.rs"
 name = "lexer_tests"
 path = "tests/integration/lexer_tests.rs"
 
+[[test]]
+name = "rpc"
+path = "tests/integration/rpc.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false
