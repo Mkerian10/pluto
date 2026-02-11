@@ -1,0 +1,6 @@
+---
+source: tests/integration/error_snapshots.rs
+assertion_line: 90
+expression: format_error(&err.to_string())
+---
+Type error: type int does not satisfy bound 'T: Printable' required by 'print_it'

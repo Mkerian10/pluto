@@ -889,7 +889,21 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
     let mut graph: DMap<String, Vec<String>> = DMap::new();
     let mut all_di_classes = DSet::new();
 
+    // Collect app and stage names to exclude from DI graph
+    let mut excluded_names = DSet::new();
+    if let Some(app_spanned) = &program.app {
+        excluded_names.insert(app_spanned.node.name.node.clone());
+    }
+    for stage_spanned in &program.stages {
+        excluded_names.insert(stage_spanned.node.name.node.clone());
+    }
+
     for (class_name, class_info) in &env.classes {
+        // Skip app and stages - they're top-level containers, not DI dependencies
+        if excluded_names.contains(class_name) {
+            continue;
+        }
+
         let deps: Vec<String> = class_info.fields.iter()
             .filter(|(_, _, inj)| *inj)
             .map(|(_, ty, _)| {
@@ -906,6 +920,24 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
                 all_di_classes.insert(d.clone());
             }
             graph.insert(class_name.clone(), deps);
+        }
+    }
+
+    // Add app dependencies to the graph
+    if let Some(app_spanned) = &program.app {
+        for field in &app_spanned.node.inject_fields {
+            if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node {
+                all_di_classes.insert(type_name.clone());
+            }
+        }
+    }
+
+    // Add stage dependencies to the graph
+    for stage_spanned in &program.stages {
+        for field in &stage_spanned.node.inject_fields {
+            if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node {
+                all_di_classes.insert(type_name.clone());
+            }
         }
     }
 
