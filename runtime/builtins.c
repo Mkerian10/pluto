@@ -4417,3 +4417,23 @@ long __pluto_env_clear(void *name_ptr) {
     // unsetenv returns 0 on success, -1 on error
     return unsetenv(name_buf) == 0 ? 1 : 0;
 }
+
+// HTTP POST for RPC calls
+// For MVP/testing: returns a dummy JSON response
+// TODO: Implement actual HTTP client with libcurl or sockets
+void *__pluto_http_post(void *url_ptr, void *body_ptr, long timeout_ms) {
+    // Extract URL string
+    long *url_header = (long *)url_ptr;
+    long url_len = url_header[0];
+    char *url_data = (char *)&url_header[1];
+
+    // Extract body string
+    long *body_header = (long *)body_ptr;
+    long body_len = body_header[0];
+    char *body_data = (char *)&body_header[1];
+
+    // For MVP: just return a dummy JSON response for testing
+    // In test mode, this will be intercepted before actual HTTP happens
+    char *response = "{\"status\":\"ok\",\"result\":42}";
+    return __pluto_make_string(response);
+}
