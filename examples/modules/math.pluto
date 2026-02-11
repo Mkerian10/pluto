@@ -1,0 +1,40 @@
+// Math module demonstrating pub visibility
+// Only items marked with `pub` are accessible from other modules
+
+// Public function - accessible from main
+pub fn add(a: int, b: int) int {
+    return a + b
+}
+
+// Public function - accessible from main
+pub fn multiply(a: int, b: int) int {
+    return a * b
+}
+
+// Private function - NOT accessible from main
+fn internal_helper(x: int) int {
+    return x * 2
+}
+
+// Public function that uses private helper
+pub fn double_add(a: int, b: int) int {
+    return internal_helper(a) + internal_helper(b)
+}
+
+// Public class - accessible from main
+pub class Point {
+    x: int
+    y: int
+}
+
+// Public method on Point
+pub fn distance_from_origin(p: Point) int {
+    let x_squared = p.x * p.x
+    let y_squared = p.y * p.y
+    return x_squared + y_squared
+}
+
+// Private class - NOT accessible from main
+class InternalData {
+    value: int
+}

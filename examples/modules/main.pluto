@@ -1,0 +1,28 @@
+// Module System Example
+// Demonstrates import, pub visibility, and module organization
+
+import math
+
+fn main() {
+    // Use public functions from math module
+    let sum = math.add(10, 20)
+    print(sum)
+
+    let product = math.multiply(5, 6)
+    print(product)
+
+    // Use public function that calls private helper
+    let result = math.double_add(3, 7)
+    print(result)
+
+    // Use public class from math module
+    let p = math.Point { x: 3, y: 4 }
+    let dist = math.distance_from_origin(p)
+    print(dist)
+
+    // Accessing private items would fail at compile time:
+    // let x = math.internal_helper(5)      // Error: not visible
+    // let d = math.InternalData { value: 1 }  // Error: not visible
+
+    print("Module system works")
+}
