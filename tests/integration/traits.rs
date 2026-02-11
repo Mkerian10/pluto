@@ -9716,3 +9716,580 @@ fn main() {
 "#);
     assert_eq!(out, "14\n");
 }
+
+// ===== Batch 18: Channels + traits, more negatives, remaining edge cases =====
+
+#[test]
+fn trait_method_sends_to_channel() {
+    // Trait method sends values to a Sender<int>
+    let out = compile_and_run_stdout(r#"
+trait Producer {
+    fn produce(self, tx: Sender<int>)
+}
+
+class NumberProducer impl Producer {
+    start: int
+    fn produce(self, tx: Sender<int>) {
+        tx.send(self.start)!
+        tx.send(self.start + 1)!
+    }
+}
+
+fn run(p: Producer) {
+    let (tx, rx) = chan<int>(2)
+    p.produce(tx)!
+    tx.close()
+    for v in rx {
+        print(v)
+    }
+}
+
+fn main() {
+    run(NumberProducer { start: 10 })!
+}
+"#);
+    assert_eq!(out, "10\n11\n");
+}
+
+#[test]
+fn trait_method_receives_from_channel() {
+    // Trait method reads from a Receiver<int>
+    let out = compile_and_run_stdout(r#"
+trait Consumer {
+    fn consume(self, rx: Receiver<int>) int
+}
+
+class Summer impl Consumer {
+    tag: int
+    fn consume(self, rx: Receiver<int>) int {
+        let total = 0
+        for v in rx {
+            total = total + v
+        }
+        return total
+    }
+}
+
+fn run(c: Consumer) {
+    let (tx, rx) = chan<int>(3)
+    tx.send(1)!
+    tx.send(2)!
+    tx.send(3)!
+    tx.close()
+    print(c.consume(rx))
+}
+
+fn main() {
+    run(Summer { tag: 0 })!
+}
+"#);
+    assert_eq!(out, "6\n");
+}
+
+#[test]
+fn trait_method_sends_string_to_channel() {
+    // Trait method sends strings through channel
+    let out = compile_and_run_stdout(r#"
+trait Emitter {
+    fn emit(self, tx: Sender<string>)
+}
+
+class HelloEmitter impl Emitter {
+    name: string
+    fn emit(self, tx: Sender<string>) {
+        tx.send("hello {self.name}")!
+    }
+}
+
+fn run(e: Emitter) {
+    let (tx, rx) = chan<string>(1)
+    e.emit(tx)!
+    tx.close()
+    for msg in rx {
+        print(msg)
+    }
+}
+
+fn main() {
+    run(HelloEmitter { name: "world" })!
+}
+"#);
+    assert_eq!(out, "hello world\n");
+}
+
+#[test]
+fn trait_multiple_implementors_same_channel() {
+    // Two different classes send to same channel through trait dispatch
+    let out = compile_and_run_stdout(r#"
+trait ValSender {
+    fn send_val(self, tx: Sender<int>)
+}
+
+class A impl ValSender {
+    v: int
+    fn send_val(self, tx: Sender<int>) { tx.send(self.v)! }
+}
+
+class B impl ValSender {
+    v: int
+    fn send_val(self, tx: Sender<int>) { tx.send(self.v * 10)! }
+}
+
+fn dispatch(s: ValSender, tx: Sender<int>) {
+    s.send_val(tx)!
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(2)
+    dispatch(A { v: 3 }, tx)!
+    dispatch(B { v: 3 }, tx)!
+    tx.close()
+    for v in rx {
+        print(v)
+    }
+}
+"#);
+    assert_eq!(out, "3\n30\n");
+}
+
+#[test]
+fn trait_method_with_nested_if_else() {
+    // Complex nested if-else in trait method body
+    let out = compile_and_run_stdout(r#"
+trait Grader {
+    fn grade(self, score: int) string
+}
+
+class LetterGrader impl Grader {
+    tag: int
+    fn grade(self, score: int) string {
+        if score >= 90 {
+            return "A"
+        } else {
+            if score >= 80 {
+                return "B"
+            } else {
+                if score >= 70 {
+                    return "C"
+                } else {
+                    return "F"
+                }
+            }
+        }
+    }
+}
+
+fn run(g: Grader) {
+    print(g.grade(95))
+    print(g.grade(85))
+    print(g.grade(75))
+    print(g.grade(50))
+}
+
+fn main() {
+    run(LetterGrader { tag: 0 })
+}
+"#);
+    assert_eq!(out, "A\nB\nC\nF\n");
+}
+
+#[test]
+fn trait_method_accumulates_string() {
+    // Trait method builds up a string through iteration
+    let out = compile_and_run_stdout(r#"
+trait Joiner {
+    fn join(self, parts: [string], sep: string) string
+}
+
+class SimpleJoiner impl Joiner {
+    tag: int
+    fn join(self, parts: [string], sep: string) string {
+        let result = ""
+        let i = 0
+        while i < parts.len() {
+            if i > 0 {
+                result = result + sep
+            }
+            result = result + parts[i]
+            i = i + 1
+        }
+        return result
+    }
+}
+
+fn run(j: Joiner) {
+    let parts: [string] = ["a", "b", "c"]
+    print(j.join(parts, "-"))
+}
+
+fn main() {
+    run(SimpleJoiner { tag: 0 })
+}
+"#);
+    assert_eq!(out, "a-b-c\n");
+}
+
+#[test]
+fn trait_dispatch_in_recursive_function() {
+    // Trait handle used in recursive function
+    let out = compile_and_run_stdout(r#"
+trait Stepper {
+    fn step(self, x: int) int
+}
+
+class Doubler impl Stepper {
+    tag: int
+    fn step(self, x: int) int { return x * 2 }
+}
+
+fn apply_n(s: Stepper, x: int, n: int) int {
+    if n == 0 {
+        return x
+    }
+    return apply_n(s, s.step(x), n - 1)
+}
+
+fn main() {
+    let d = Doubler { tag: 0 }
+    print(apply_n(d, 1, 4))
+}
+"#);
+    assert_eq!(out, "16\n");
+}
+
+#[test]
+fn trait_two_methods_called_in_sequence() {
+    // Trait with two methods, both called in sequence
+    let out = compile_and_run_stdout(r#"
+trait Transformer {
+    fn first(self, x: int) int
+    fn second(self, x: int) int
+}
+
+class Pipeline impl Transformer {
+    factor: int
+    fn first(self, x: int) int { return x + self.factor }
+    fn second(self, x: int) int { return x * self.factor }
+}
+
+fn run(t: Transformer) {
+    let v = 5
+    v = t.first(v)
+    v = t.second(v)
+    print(v)
+}
+
+fn main() {
+    run(Pipeline { factor: 3 })
+}
+"#);
+    assert_eq!(out, "24\n");
+}
+
+#[test]
+fn trait_method_with_early_return() {
+    // Trait method has early return (guard clause)
+    let out = compile_and_run_stdout(r#"
+trait Safeguard {
+    fn safe_div(self, a: int, b: int) int
+}
+
+class SafeDiv impl Safeguard {
+    default_val: int
+    fn safe_div(self, a: int, b: int) int {
+        if b == 0 {
+            return self.default_val
+        }
+        return a / b
+    }
+}
+
+fn run(s: Safeguard) {
+    print(s.safe_div(10, 3))
+    print(s.safe_div(10, 0))
+}
+
+fn main() {
+    run(SafeDiv { default_val: -1 })
+}
+"#);
+    assert_eq!(out, "3\n-1\n");
+}
+
+#[test]
+fn trait_method_return_value_in_let_binding() {
+    // Let binding from trait dispatch, then use in multiple places
+    let out = compile_and_run_stdout(r#"
+trait Source {
+    fn get(self) int
+}
+
+class Fixed impl Source {
+    v: int
+    fn get(self) int { return self.v }
+}
+
+fn run(s: Source) {
+    let val = s.get()
+    print(val)
+    print(val + 1)
+    print(val * val)
+}
+
+fn main() {
+    run(Fixed { v: 5 })
+}
+"#);
+    assert_eq!(out, "5\n6\n25\n");
+}
+
+#[test]
+fn fail_class_impl_nonexistent_trait() {
+    // Class implements a trait that doesn't exist
+    compile_should_fail(r#"
+class Foo impl NonexistentTrait {
+    val: int
+    fn bar(self) int { return 1 }
+}
+
+fn main() {}
+"#);
+}
+
+#[test]
+fn fail_trait_method_returns_wrong_type_string_vs_int() {
+    // Trait expects string return, class returns int
+    compile_should_fail(r#"
+trait Namer {
+    fn name(self) string
+}
+
+class Bad impl Namer {
+    val: int
+    fn name(self) int { return 42 }
+}
+
+fn main() {}
+"#);
+}
+
+#[test]
+fn fail_call_undeclared_method_on_trait() {
+    // Call a method that doesn't exist on the trait
+    compile_should_fail(r#"
+trait Foo {
+    fn bar(self) int
+}
+
+class X impl Foo {
+    val: int
+    fn bar(self) int { return 1 }
+}
+
+fn use_foo(f: Foo) {
+    print(f.baz())
+}
+
+fn main() {}
+"#);
+}
+
+#[test]
+fn fail_use_trait_as_type_without_impl() {
+    // Assign a class to trait-typed variable when class doesn't implement it
+    compile_should_fail(r#"
+trait Foo {
+    fn bar(self) int
+}
+
+class NotFoo {
+    val: int
+}
+
+fn main() {
+    let f: Foo = NotFoo { val: 1 }
+}
+"#);
+}
+
+#[test]
+fn trait_method_with_boolean_and_logic() {
+    // Trait method with complex boolean logic
+    let out = compile_and_run_stdout(r#"
+trait Filter {
+    fn accepts(self, x: int) bool
+}
+
+class RangeFilter impl Filter {
+    low: int
+    high: int
+    fn accepts(self, x: int) bool {
+        return x >= self.low && x <= self.high
+    }
+}
+
+fn count_accepted(f: Filter, arr: [int]) int {
+    let count = 0
+    let i = 0
+    while i < arr.len() {
+        if f.accepts(arr[i]) {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn main() {
+    let f = RangeFilter { low: 3, high: 7 }
+    let data: [int] = [1, 3, 5, 7, 9]
+    print(count_accepted(f, data))
+}
+"#);
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn trait_default_method_with_string_interpolation() {
+    // Default method using string interpolation to call required method
+    let out = compile_and_run_stdout(r#"
+trait Identifiable {
+    fn id(self) int
+
+    fn display(self) string {
+        return "ID={self.id()}"
+    }
+}
+
+class User impl Identifiable {
+    uid: int
+    fn id(self) int { return self.uid }
+}
+
+fn show(item: Identifiable) {
+    print(item.display())
+}
+
+fn main() {
+    show(User { uid: 42 })
+}
+"#);
+    assert_eq!(out, "ID=42\n");
+}
+
+#[test]
+fn trait_method_string_comparison() {
+    // Trait method compares strings
+    let out = compile_and_run_stdout(r#"
+trait Matcher {
+    fn matches(self, input: string) bool
+}
+
+class ExactMatcher impl Matcher {
+    pattern: string
+    fn matches(self, input: string) bool {
+        return input == self.pattern
+    }
+}
+
+fn run(m: Matcher) {
+    print(m.matches("hello"))
+    print(m.matches("world"))
+}
+
+fn main() {
+    run(ExactMatcher { pattern: "hello" })
+}
+"#);
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn trait_dispatch_two_methods_interleaved() {
+    // Call two trait methods alternating on same handle
+    let out = compile_and_run_stdout(r#"
+trait Dual {
+    fn left(self) int
+    fn right(self) int
+}
+
+class Pair impl Dual {
+    a: int
+    b: int
+    fn left(self) int { return self.a }
+    fn right(self) int { return self.b }
+}
+
+fn run(d: Dual) {
+    print(d.left())
+    print(d.right())
+    print(d.left())
+    print(d.right())
+}
+
+fn main() {
+    run(Pair { a: 1, b: 2 })
+}
+"#);
+    assert_eq!(out, "1\n2\n1\n2\n");
+}
+
+#[test]
+fn trait_factory_function_returns_trait() {
+    // Free function returns a trait-typed value
+    let out = compile_and_run_stdout(r#"
+trait Greeter {
+    fn greet(self) string
+}
+
+class Hello impl Greeter {
+    name: string
+    fn greet(self) string { return "hello {self.name}" }
+}
+
+fn make_greeter(name: string) Greeter {
+    return Hello { name: name }
+}
+
+fn main() {
+    let g = make_greeter("world")
+    print(g.greet())
+}
+"#);
+    assert_eq!(out, "hello world\n");
+}
+
+#[test]
+fn trait_factory_function_conditional() {
+    // Factory function returns different implementations based on input
+    let out = compile_and_run_stdout(r#"
+trait Formatter {
+    fn format(self, x: int) string
+}
+
+class PlainFormatter impl Formatter {
+    tag: int
+    fn format(self, x: int) string { return "{x}" }
+}
+
+class FancyFormatter impl Formatter {
+    tag: int
+    fn format(self, x: int) string { return "[{x}]" }
+}
+
+fn make_formatter(fancy: bool) Formatter {
+    if fancy {
+        return FancyFormatter { tag: 0 }
+    }
+    return PlainFormatter { tag: 0 }
+}
+
+fn main() {
+    let f1 = make_formatter(false)
+    let f2 = make_formatter(true)
+    print(f1.format(42))
+    print(f2.format(42))
+}
+"#);
+    assert_eq!(out, "42\n[42]\n");
+}
