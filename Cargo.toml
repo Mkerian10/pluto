@@ -463,6 +463,31 @@ path = "tests/typeck/statements/scope_violations.rs"
 name = "typeck_control_flow_edges"
 path = "tests/typeck/statements/control_flow_edges.rs"
 
+# Typeck edge case tests - closure system category
+[[test]]
+name = "typeck_capture_validation"
+path = "tests/typeck/closures/capture_validation.rs"
+
+[[test]]
+name = "typeck_closure_type_checking"
+path = "tests/typeck/closures/type_checking.rs"
+
+[[test]]
+name = "typeck_lifting_errors"
+path = "tests/typeck/closures/lifting_errors.rs"
+
+[[test]]
+name = "typeck_closures_in_expressions"
+path = "tests/typeck/closures/in_expressions.rs"
+
+[[test]]
+name = "typeck_recursive_closures"
+path = "tests/typeck/closures/recursive_closures.rs"
+
+[[test]]
+name = "typeck_closure_edge_cases"
+path = "tests/typeck/closures/edge_cases.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false
