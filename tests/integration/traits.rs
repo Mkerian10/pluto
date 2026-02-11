@@ -11540,3 +11540,562 @@ fn main() {
 }
 "#);
 }
+
+// ===== Batch 21: Reassignment, contracts, error combos, default-only, nested dispatch =====
+
+#[test]
+fn trait_handle_reassigned_to_different_implementor() {
+    // Variable holding trait handle reassigned to a different class
+    let out = compile_and_run_stdout(r#"
+trait Speaker {
+    fn speak(self) string
+}
+
+class Dog impl Speaker {
+    tag: int
+    fn speak(self) string { return "woof" }
+}
+
+class Cat impl Speaker {
+    tag: int
+    fn speak(self) string { return "meow" }
+}
+
+fn main() {
+    let s: Speaker = Dog { tag: 0 }
+    print(s.speak())
+    s = Cat { tag: 0 }
+    print(s.speak())
+}
+"#);
+    assert_eq!(out, "woof\nmeow\n");
+}
+
+#[test]
+fn trait_dispatch_result_as_arg_to_another_dispatch() {
+    // Chain: trait method result fed as argument to another trait method
+    let out = compile_and_run_stdout(r#"
+trait Provider {
+    fn provide(self) int
+}
+
+trait Consumer_ {
+    fn consume(self, val: int) string
+}
+
+class NumProvider impl Provider {
+    val: int
+    fn provide(self) int { return self.val }
+}
+
+class Printer_ impl Consumer_ {
+    prefix: string
+    fn consume(self, val: int) string { return "{self.prefix}{val}" }
+}
+
+fn main() {
+    let p: Provider = NumProvider { val: 42 }
+    let c: Consumer_ = Printer_ { prefix: "got:" }
+    print(c.consume(p.provide()))
+}
+"#);
+    assert_eq!(out, "got:42\n");
+}
+
+#[test]
+fn trait_all_default_methods_chained() {
+    // Trait with 3 default methods where one calls the other two
+    let out = compile_and_run_stdout(r#"
+trait Defaults {
+    fn a(self) int { return 1 }
+    fn b(self) int { return 2 }
+    fn c(self) int { return self.a() + self.b() }
+}
+
+class Empty impl Defaults {
+    tag: int
+}
+
+fn run(d: Defaults) {
+    print(d.a())
+    print(d.b())
+    print(d.c())
+}
+
+fn main() {
+    run(Empty { tag: 0 })
+}
+"#);
+    assert_eq!(out, "1\n2\n3\n");
+}
+
+#[test]
+fn trait_method_builds_and_returns_array() {
+    // Trait method creates and returns an array
+    let out = compile_and_run_stdout(r#"
+trait Lister_ {
+    fn items(self) [int]
+}
+
+class RangeList impl Lister_ {
+    count: int
+    fn items(self) [int] {
+        let arr: [int] = []
+        let i = 0
+        while i < self.count {
+            arr.push(i)
+            i = i + 1
+        }
+        return arr
+    }
+}
+
+fn run(l: Lister_) {
+    let arr = l.items()
+    print(arr.len())
+    let i = 0
+    while i < arr.len() {
+        print(arr[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    run(RangeList { count: 3 })
+}
+"#);
+    assert_eq!(out, "3\n0\n1\n2\n");
+}
+
+#[test]
+fn trait_method_with_error_propagation() {
+    // Trait method is fallible, called with ! propagation
+    let out = compile_and_run_stdout(r#"
+error NotFound { code: int }
+
+trait Repository {
+    fn get(self, id: int) int
+}
+
+class InMemoryRepo impl Repository {
+    data: int
+    fn get(self, id: int) int {
+        if id != 1 {
+            raise NotFound { code: id }
+        }
+        return self.data
+    }
+}
+
+fn fetch(r: Repository, id: int) int {
+    return r.get(id)!
+}
+
+fn main() {
+    let repo: Repository = InMemoryRepo { data: 42 }
+    let val = fetch(repo, 1) catch 0
+    print(val)
+    let missing = fetch(repo, 99) catch -1
+    print(missing)
+}
+"#);
+    assert_eq!(out, "42\n-1\n");
+}
+
+#[test]
+fn trait_method_with_catch_at_call_site() {
+    // Fallible trait method caught directly at the call site
+    let out = compile_and_run_stdout(r#"
+error ParseError { msg: string }
+
+trait Parser {
+    fn parse(self, input: string) int
+}
+
+class StrictParser impl Parser {
+    tag: int
+    fn parse(self, input: string) int {
+        if input == "bad" {
+            raise ParseError { msg: "invalid" }
+        }
+        return 42
+    }
+}
+
+fn main() {
+    let p: Parser = StrictParser { tag: 0 }
+    let v1 = p.parse("good") catch -1
+    print(v1)
+    let v2 = p.parse("bad") catch -1
+    print(v2)
+}
+"#);
+    assert_eq!(out, "42\n-1\n");
+}
+
+#[test]
+fn trait_with_invariant_on_implementing_class() {
+    // Class implementing trait also has invariant contract
+    let out = compile_and_run_stdout(r#"
+trait Bounded {
+    fn value(self) int
+}
+
+class PositiveInt impl Bounded {
+    n: int
+    invariant self.n > 0
+    fn value(self) int { return self.n }
+}
+
+fn run(b: Bounded) {
+    print(b.value())
+}
+
+fn main() {
+    run(PositiveInt { n: 5 })
+}
+"#);
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn trait_dispatch_result_in_map_key_position() {
+    // Trait method returns string, used as map key
+    let out = compile_and_run_stdout(r#"
+trait KeyMaker {
+    fn key(self) string
+}
+
+class Prefixer impl KeyMaker {
+    prefix: string
+    fn key(self) string { return "{self.prefix}_key" }
+}
+
+fn main() {
+    let k: KeyMaker = Prefixer { prefix: "user" }
+    let m = Map<string, int> {}
+    m[k.key()] = 100
+    print(m["user_key"])
+}
+"#);
+    assert_eq!(out, "100\n");
+}
+
+#[test]
+fn trait_dispatch_in_nested_function_call() {
+    // Trait dispatch result is argument to a regular function
+    let out = compile_and_run_stdout(r#"
+trait Measurable {
+    fn length(self) int
+}
+
+class Rope impl Measurable {
+    len: int
+    fn length(self) int { return self.len }
+}
+
+fn double(x: int) int {
+    return x * 2
+}
+
+fn main() {
+    let m: Measurable = Rope { len: 7 }
+    print(double(m.length()))
+}
+"#);
+    assert_eq!(out, "14\n");
+}
+
+#[test]
+fn fail_trait_method_returns_class_forward_ref() {
+    // COMPILER GAP: Class type defined before trait but not resolved in trait method signature
+    compile_should_fail_with(r#"
+class Result_ {
+    code: int
+    msg: string
+}
+
+trait Handler_ {
+    fn handle(self) Result_
+}
+
+class OkHandler impl Handler_ {
+    tag: int
+    fn handle(self) Result_ {
+        return Result_ { code: 200, msg: "ok" }
+    }
+}
+
+fn main() {
+    let h: Handler_ = OkHandler { tag: 0 }
+    print(h.handle().code)
+}
+"#, "unknown type");
+}
+
+#[test]
+fn trait_multiple_dispatch_results_combined() {
+    // Results from multiple different trait dispatches combined in arithmetic
+    let out = compile_and_run_stdout(r#"
+trait XCoord {
+    fn x(self) int
+}
+
+trait YCoord {
+    fn y(self) int
+}
+
+class Point_ impl XCoord, YCoord {
+    px: int
+    py: int
+    fn x(self) int { return self.px }
+    fn y(self) int { return self.py }
+}
+
+fn manhattan(p: XCoord, q: YCoord) int {
+    return p.x() + q.y()
+}
+
+fn main() {
+    let pt = Point_ { px: 3, py: 7 }
+    print(manhattan(pt, pt))
+}
+"#);
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn trait_dispatch_in_for_range_with_accumulator() {
+    // Trait dispatch called in each iteration of a for-range, accumulating results
+    let out = compile_and_run_stdout(r#"
+trait Scorer_ {
+    fn score(self, round: int) int
+}
+
+class LinearScorer impl Scorer_ {
+    multiplier: int
+    fn score(self, round: int) int { return round * self.multiplier }
+}
+
+fn total_score(s: Scorer_, rounds: int) int {
+    let total = 0
+    for i in 1..rounds + 1 {
+        total = total + s.score(i)
+    }
+    return total
+}
+
+fn main() {
+    print(total_score(LinearScorer { multiplier: 3 }, 4))
+}
+"#);
+    assert_eq!(out, "30\n");
+}
+
+#[test]
+fn trait_handle_in_array_iteration() {
+    // Array of trait handles, iterate and call method on each
+    let out = compile_and_run_stdout(r#"
+trait Valued_ {
+    fn val(self) int
+}
+
+class A_ impl Valued_ {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+class B_ impl Valued_ {
+    n: int
+    fn val(self) int { return self.n * 10 }
+}
+
+fn add_item(arr: [Valued_], item: Valued_) {
+    arr.push(item)
+}
+
+fn main() {
+    let items: [Valued_] = []
+    add_item(items, A_ { n: 1 })
+    add_item(items, B_ { n: 2 })
+    add_item(items, A_ { n: 3 })
+    let total = 0
+    let i = 0
+    while i < items.len() {
+        total = total + items[i].val()
+        i = i + 1
+    }
+    print(total)
+}
+"#);
+    assert_eq!(out, "24\n");
+}
+
+#[test]
+fn trait_default_overridden_partially() {
+    // Trait with 3 defaults, class overrides only 1
+    let out = compile_and_run_stdout(r#"
+trait Config {
+    fn host(self) string { return "localhost" }
+    fn port(self) int { return 8080 }
+    fn protocol(self) string { return "http" }
+}
+
+class ProdConfig impl Config {
+    tag: int
+    fn host(self) string { return "prod.example.com" }
+}
+
+fn show(c: Config) {
+    print(c.host())
+    print(c.port())
+    print(c.protocol())
+}
+
+fn main() {
+    show(ProdConfig { tag: 0 })
+}
+"#);
+    assert_eq!(out, "prod.example.com\n8080\nhttp\n");
+}
+
+#[test]
+fn trait_dispatch_in_nested_if_multilevel() {
+    // Trait dispatch deep inside nested if with multiple level thresholds
+    let out = compile_and_run_stdout(r#"
+trait Level {
+    fn level(self) int
+}
+
+class HighLevel impl Level {
+    tag: int
+    fn level(self) int { return 10 }
+}
+
+fn classify(l: Level) string {
+    if l.level() > 5 {
+        if l.level() > 8 {
+            return "very high"
+        }
+        return "high"
+    }
+    return "low"
+}
+
+fn main() {
+    print(classify(HighLevel { tag: 0 }))
+}
+"#);
+    assert_eq!(out, "very high\n");
+}
+
+#[test]
+fn trait_method_void_return() {
+    // Trait method with void return (no return type)
+    let out = compile_and_run_stdout(r#"
+trait Logger_ {
+    fn log(self, msg: string)
+}
+
+class StdoutLogger impl Logger_ {
+    prefix: string
+    fn log(self, msg: string) {
+        print("{self.prefix}: {msg}")
+    }
+}
+
+fn use_logger(l: Logger_) {
+    l.log("hello")
+    l.log("world")
+}
+
+fn main() {
+    use_logger(StdoutLogger { prefix: "INFO" })
+}
+"#);
+    assert_eq!(out, "INFO: hello\nINFO: world\n");
+}
+
+#[test]
+fn fail_trait_impl_with_requires_on_impl_method() {
+    // COMPILER GAP TEST: Class method adding requires to trait impl should be rejected (Liskov)
+    // If this passes compilation, it means requires enforcement on trait impls isn't checked
+    compile_should_fail(r#"
+trait Worker__ {
+    fn work(self, x: int) int
+}
+
+class RestrictedWorker impl Worker__ {
+    tag: int
+    fn work(self, x: int) int
+        requires x > 0
+    {
+        return x * 2
+    }
+}
+
+fn main() {
+    let w: Worker__ = RestrictedWorker { tag: 1 }
+    print(w.work(5))
+}
+"#);
+}
+
+#[test]
+fn trait_with_ensures_on_trait_method() {
+    // Trait method declares ensures, implementation must satisfy at runtime
+    let out = compile_and_run_stdout(r#"
+trait Positive {
+    fn make_positive(self, x: int) int
+        ensures result > 0
+}
+
+class AbsVal impl Positive {
+    tag: int
+    fn make_positive(self, x: int) int {
+        if x < 0 {
+            return 0 - x
+        }
+        if x == 0 {
+            return 1
+        }
+        return x
+    }
+}
+
+fn run(p: Positive) {
+    print(p.make_positive(-5))
+    print(p.make_positive(3))
+    print(p.make_positive(0))
+}
+
+fn main() {
+    run(AbsVal { tag: 0 })
+}
+"#);
+    assert_eq!(out, "5\n3\n1\n");
+}
+
+#[test]
+fn trait_with_requires_on_trait_method() {
+    // Trait method declares requires, checked at runtime on dispatch
+    let out = compile_and_run_stdout(r#"
+trait Divider {
+    fn divide(self, a: int, b: int) int
+        requires b != 0
+}
+
+class IntDivider impl Divider {
+    tag: int
+    fn divide(self, a: int, b: int) int {
+        return a / b
+    }
+}
+
+fn main() {
+    let d: Divider = IntDivider { tag: 0 }
+    print(d.divide(10, 3))
+}
+"#);
+    assert_eq!(out, "3\n");
+}
