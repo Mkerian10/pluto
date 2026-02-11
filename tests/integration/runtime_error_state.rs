@@ -544,6 +544,405 @@ fn main() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// P1: HIGH CONCURRENCY STRESS TESTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn stress_100_concurrent_tasks_mixed_errors() {
+    // STRESS TEST: 100 concurrent tasks, 5 different error types, mixed success/failure.
+    //
+    // This is the industry-standard scale test. Most production systems have
+    // 100+ concurrent operations. This verifies TLS isolation at scale.
+    //
+    // Test: 100 tasks, errors based on task_id % 6 (5 error types + 1 success).
+    // Expected: All errors caught correctly, no cross-contamination, no crashes.
+    let out = compile_and_run_stdout(r#"
+error ErrorType0 { id: int }
+error ErrorType1 { id: int }
+error ErrorType2 { id: int }
+error ErrorType3 { id: int }
+error ErrorType4 { id: int }
+
+fn maybe_fail(task_id: int) int {
+    if task_id % 6 == 0 { raise ErrorType0 { id: task_id } }
+    if task_id % 6 == 1 { raise ErrorType1 { id: task_id } }
+    if task_id % 6 == 2 { raise ErrorType2 { id: task_id } }
+    if task_id % 6 == 3 { raise ErrorType3 { id: task_id } }
+    if task_id % 6 == 4 { raise ErrorType4 { id: task_id } }
+    return task_id  // task_id % 6 == 5 succeeds
+}
+
+fn main() {
+    // Spawn 100 tasks
+    let tasks: [Task<int>] = []
+    let i = 0
+    while i < 100 {
+        tasks.push(spawn maybe_fail(i))
+        i = i + 1
+    }
+
+    // Collect results
+    let successes = 0
+    let failures = 0
+    let i = 0
+    while i < 100 {
+        let result = tasks[i].get() catch err {
+            failures = failures + 1
+            -1
+        }
+        if result >= 0 {
+            successes = successes + 1
+        }
+        i = i + 1
+    }
+
+    // 100 tasks: ~83 fail (task_id % 6 != 5), ~17 succeed (task_id % 6 == 5)
+    // Exact: 0-99, multiples of 6 plus offset:
+    // Fails: 0,1,2,3,4, 6,7,8,9,10, ... = 84 failures
+    // Succeeds: 5,11,17,23,29,35,41,47,53,59,65,71,77,83,89,95 = 16 successes
+    print(successes)
+    print(failures)
+}
+"#);
+    let lines: Vec<&str> = out.trim().split('\n').collect();
+    assert_eq!(lines.len(), 2);
+    let successes: i32 = lines[0].parse().unwrap();
+    let failures: i32 = lines[1].parse().unwrap();
+
+    // Should be 16 successes, 84 failures
+    assert_eq!(successes, 16, "Expected 16 successes");
+    assert_eq!(failures, 84, "Expected 84 failures");
+    assert_eq!(successes + failures, 100, "Total should be 100");
+}
+
+#[test]
+fn stress_1000_sequential_spawn_error_cycles() {
+    // STRESS TEST: 1000 sequential spawn-error-catch cycles.
+    //
+    // This tests error state cleanup over sustained load. If error state
+    // leaks even slightly, it will compound over 1000 iterations.
+    //
+    // Test: Loop 1000 times, each iteration spawns task that errors.
+    // Expected: All 1000 errors caught, no memory leak, no slowdown.
+    let out = compile_and_run_stdout(r#"
+error CycleError { iteration: int }
+
+fn fail_with_id(id: int) int {
+    raise CycleError { iteration: id }
+    return 0
+}
+
+fn main() {
+    let i = 0
+    let caught = 0
+    while i < 1000 {
+        let t = spawn fail_with_id(i)
+        let r = t.get() catch err {
+            caught = caught + 1
+            -1
+        }
+        i = i + 1
+    }
+    print(caught)
+}
+"#);
+    assert_eq!(out.trim(), "1000");
+}
+
+#[test]
+fn stress_rapid_spawn_under_error_load() {
+    // STRESS TEST: Rapid task spawning while errors are being raised.
+    //
+    // This tests thread creation + TLS initialization under load.
+    // Spawning 50 tasks in quick succession while all are erroring.
+    //
+    // Test: Spawn 50 tasks as fast as possible, all error immediately.
+    // Expected: All spawn successfully, all error correctly, no race conditions.
+    let out = compile_and_run_stdout(r#"
+error RapidError { n: int }
+
+fn instant_fail(n: int) int {
+    raise RapidError { n: n }
+    return 0
+}
+
+fn main() {
+    // Spawn all 50 tasks rapidly
+    let tasks: [Task<int>] = []
+    let i = 0
+    while i < 50 {
+        tasks.push(spawn instant_fail(i))
+        i = i + 1
+    }
+
+    // Now collect all results
+    let caught = 0
+    let i = 0
+    while i < 50 {
+        let _ = tasks[i].get() catch err {
+            caught = caught + 1
+            0
+        }
+        i = i + 1
+    }
+
+    print(caught)
+}
+"#);
+    assert_eq!(out.trim(), "50");
+}
+
+#[test]
+fn stress_error_object_field_diversity() {
+    // STRESS TEST: Errors with different field types to test GC tracing.
+    //
+    // Tests that GC correctly traces all field types in error objects.
+    //
+    // Test: Create errors with int, string, array fields across tasks.
+    // Expected: All fields traced correctly, no GC corruption.
+    let out = compile_and_run_stdout(r#"
+error ComplexError {
+    id: int
+    message: string
+    codes: [int]
+}
+
+fn create_complex_error(id: int) int {
+    let codes = [id, id * 2, id * 3]
+    raise ComplexError {
+        id: id,
+        message: "error message",
+        codes: codes
+    }
+    return 0
+}
+
+fn main() {
+    let tasks: [Task<int>] = []
+    let i = 0
+    while i < 30 {
+        tasks.push(spawn create_complex_error(i))
+        i = i + 1
+    }
+
+    let caught = 0
+    let i = 0
+    while i < 30 {
+        let _ = tasks[i].get() catch err {
+            caught = caught + 1
+            0
+        }
+        i = i + 1
+    }
+
+    print(caught)
+}
+"#);
+    assert_eq!(out.trim(), "30");
+}
+
+#[test]
+fn stress_burst_error_creation() {
+    // STRESS TEST: Burst scenario - many errors created very quickly.
+    //
+    // This tests GC under sudden allocation pressure.
+    //
+    // Test: 10 tasks, each creates 100 errors in tight loop = 1000 total errors.
+    // Expected: GC handles burst without crashing or leaking.
+    let out = compile_and_run_stdout(r#"
+error BurstError { task_id: int, iter: int }
+
+fn burst_errors(task_id: int) int {
+    let i = 0
+    let caught = 0
+    while i < 100 {
+        let _ = create_burst(task_id, i) catch err {
+            caught = caught + 1
+            0
+        }
+        i = i + 1
+    }
+    return caught
+}
+
+fn create_burst(task_id: int, iter: int) int {
+    raise BurstError { task_id: task_id, iter: iter }
+    return 0
+}
+
+fn main() {
+    let tasks: [Task<int>] = []
+    let i = 0
+    while i < 10 {
+        tasks.push(spawn burst_errors(i))
+        i = i + 1
+    }
+
+    let total = 0
+    let i = 0
+    while i < 10 {
+        let result = tasks[i].get() catch err { 0 }
+        total = total + result
+        i = i + 1
+    }
+
+    // Should be 10 tasks * 100 errors = 1000
+    print(total)
+}
+"#);
+    assert_eq!(out.trim(), "1000");
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// P1: MULTI-LAYER ERROR PROPAGATION TESTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn propagation_multi_layer_task_chain() {
+    // CRITICAL: Multi-layer task spawning with error propagation.
+    //
+    // Tests error propagation through nested task hierarchy.
+    // Layer 3 errors → Layer 2 propagates → Layer 1 propagates → Main catches.
+    //
+    // Test: main spawns layer1, layer1 spawns layer2, layer2 spawns layer3, layer3 errors.
+    // Expected: Error propagates back through all layers.
+    let out = compile_and_run_stdout(r#"
+error DeepError { depth: int }
+
+fn layer3() int {
+    raise DeepError { depth: 3 }
+    return 0
+}
+
+fn layer2() int {
+    let t = spawn layer3()
+    let result = t.get()!  // Propagate error up
+    return result
+}
+
+fn layer1() int {
+    let t = spawn layer2()
+    let result = t.get()!  // Propagate error up
+    return result
+}
+
+fn main() {
+    let t = spawn layer1()
+    let result = t.get() catch err {
+        print("caught")
+        -999
+    }
+    print(result)
+}
+"#);
+    assert_eq!(out.trim(), "caught\n-999");
+}
+
+#[test]
+fn propagation_task_fanout_all_fail() {
+    // CRITICAL: One task spawns 10 subtasks, all fail with different errors.
+    //
+    // Tests error handling when parent task coordinates multiple failing subtasks.
+    //
+    // Test: Parent spawns 10 tasks, each raises different error, parent catches all.
+    // Expected: All 10 errors caught independently.
+    let out = compile_and_run_stdout(r#"
+error SubtaskError { subtask_id: int }
+
+fn subtask(id: int) int {
+    raise SubtaskError { subtask_id: id }
+    return 0
+}
+
+fn parent_task() int {
+    let tasks: [Task<int>] = []
+    let i = 0
+    while i < 10 {
+        tasks.push(spawn subtask(i))
+        i = i + 1
+    }
+
+    let caught = 0
+    let i = 0
+    while i < 10 {
+        let _ = tasks[i].get() catch err {
+            caught = caught + 1
+            0
+        }
+        i = i + 1
+    }
+
+    return caught
+}
+
+fn main() {
+    let t = spawn parent_task()
+    let result = t.get()
+    print(result)
+}
+"#);
+    assert_eq!(out.trim(), "10");
+}
+
+#[test]
+fn propagation_mixed_success_failure_fanout() {
+    // Tests task fanout where some subtasks succeed, some fail.
+    //
+    // Test: Parent spawns 20 tasks, half succeed, half fail.
+    // Expected: All results collected correctly.
+    let out = compile_and_run_stdout(r#"
+error FailError { id: int }
+
+fn maybe_fail_subtask(id: int) int {
+    if id % 2 == 0 {
+        raise FailError { id: id }
+    }
+    return id
+}
+
+fn parent_with_mixed_subtasks() int {
+    let tasks: [Task<int>] = []
+    let i = 0
+    while i < 20 {
+        tasks.push(spawn maybe_fail_subtask(i))
+        i = i + 1
+    }
+
+    let successes = 0
+    let failures = 0
+    let i = 0
+    while i < 20 {
+        let r = tasks[i].get() catch err {
+            failures = failures + 1
+            -1
+        }
+        if r >= 0 {
+            successes = successes + 1
+        }
+        i = i + 1
+    }
+
+    // Return combined count: successes in high bits, failures in low bits
+    return successes * 100 + failures
+}
+
+fn main() {
+    let t = spawn parent_with_mixed_subtasks()
+    let result = t.get()
+
+    let successes = result / 100
+    let failures = result % 100
+
+    print(successes)
+    print(failures)
+}
+"#);
+    let lines: Vec<&str> = out.trim().split('\n').collect();
+    assert_eq!(lines[0], "10", "Should have 10 successes (odd numbers)");
+    assert_eq!(lines[1], "10", "Should have 10 failures (even numbers)");
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Additional: Edge Cases
 // ══════════════════════════════════════════════════════════════════════════════
 
