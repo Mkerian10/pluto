@@ -14,5 +14,5 @@ path = "plutoc"
 arguments = ["lsp"]
 
 [grammars.pluto]
-repository = "https://github.com/matthewkerian/tree-sitter-pluto"
+repository = "https://github.com/Mkerian10/tree-sitter-pluto"
 rev = "main"
