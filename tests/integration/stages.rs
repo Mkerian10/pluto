@@ -442,19 +442,19 @@ stage Impl : Base {
 #[test]
 fn cross_stage_call_to_pub_method_succeeds() {
     let output = compile_and_run_stdout(
-        "stage ServiceB {
+        "stage ServiceA[b: ServiceB] {
+    fn main(self) {
+        print(self.b.get_data())
+    }
+}
+
+stage ServiceB {
     pub fn get_data(self) string {
         return \"data from B\"
     }
 
     fn main(self) {
         print(\"never called\")
-    }
-}
-
-stage ServiceA[b: ServiceB] {
-    fn main(self) {
-        print(self.b.get_data())
     }
 }",
     );
@@ -464,19 +464,19 @@ stage ServiceA[b: ServiceB] {
 #[test]
 fn cross_stage_call_to_private_method_rejected() {
     compile_should_fail_with(
-        "stage ServiceB {
+        "stage ServiceA[b: ServiceB] {
+    fn main(self) {
+        print(self.b.internal())
+    }
+}
+
+stage ServiceB {
     fn internal(self) string {
         return \"secret\"
     }
 
     fn main(self) {
         print(\"never called\")
-    }
-}
-
-stage ServiceA[b: ServiceB] {
-    fn main(self) {
-        print(self.b.internal())
     }
 }",
         "method 'internal' is not public; only pub methods can be called across stages",
@@ -506,7 +506,14 @@ fn same_stage_call_to_private_method_succeeds() {
 #[test]
 fn multiple_cross_stage_calls_with_mixed_visibility() {
     compile_should_fail_with(
-        "stage ServiceB {
+        "stage ServiceA[b: ServiceB] {
+    fn main(self) {
+        print(self.b.public_method())
+        print(self.b.private_method())
+    }
+}
+
+stage ServiceB {
     pub fn public_method(self) string {
         return \"public\"
     }
@@ -517,13 +524,6 @@ fn multiple_cross_stage_calls_with_mixed_visibility() {
 
     fn main(self) {
         print(\"never called\")
-    }
-}
-
-stage ServiceA[b: ServiceB] {
-    fn main(self) {
-        print(self.b.public_method())
-        print(self.b.private_method())
     }
 }",
         "method 'private_method' is not public; only pub methods can be called across stages",
