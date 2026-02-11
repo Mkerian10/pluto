@@ -1,0 +1,79 @@
+import std.base64
+
+test "encode_empty_string" {
+    let encoded = base64.encode("")
+    expect(encoded).to_equal("")
+}
+
+test "encode_single_char_f" {
+    let encoded = base64.encode("f")
+    expect(encoded).to_equal("Zg==")
+}
+
+test "encode_two_chars" {
+    let encoded = base64.encode("fo")
+    expect(encoded).to_equal("Zm8=")
+}
+
+test "encode_three_chars" {
+    let encoded = base64.encode("foo")
+    expect(encoded).to_equal("Zm9v")
+}
+
+test "encode_hello_world" {
+    let encoded = base64.encode("hello world")
+    expect(encoded).to_equal("aGVsbG8gd29ybGQ=")
+}
+
+test "decode_empty_string" {
+    let decoded = base64.decode("")
+    expect(decoded).to_equal("")
+}
+
+test "decode_single_char" {
+    let decoded = base64.decode("Zg==")
+    expect(decoded).to_equal("f")
+}
+
+test "decode_two_chars" {
+    let decoded = base64.decode("Zm8=")
+    expect(decoded).to_equal("fo")
+}
+
+test "decode_three_chars" {
+    let decoded = base64.decode("Zm9v")
+    expect(decoded).to_equal("foo")
+}
+
+test "decode_hello_world" {
+    let decoded = base64.decode("aGVsbG8gd29ybGQ=")
+    expect(decoded).to_equal("hello world")
+}
+
+test "roundtrip_short_text" {
+    let original = "hello"
+    let encoded = base64.encode(original)
+    let decoded = base64.decode(encoded)
+    expect(decoded).to_equal(original)
+}
+
+test "roundtrip_longer_text" {
+    let original = "The quick brown fox jumps over the lazy dog"
+    let encoded = base64.encode(original)
+    let decoded = base64.decode(encoded)
+    expect(decoded).to_equal(original)
+}
+
+test "roundtrip_with_special_chars" {
+    let original = "Special!@#$%^&*()"
+    let encoded = base64.encode(original)
+    let decoded = base64.decode(encoded)
+    expect(decoded).to_equal(original)
+}
+
+test "url_safe_encode_decode_roundtrip" {
+    let original = "Test with URL safe encoding"
+    let encoded = base64.encode_url_safe(original)
+    let decoded = base64.decode_url_safe(encoded)
+    expect(decoded).to_equal(original)
+}

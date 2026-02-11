@@ -249,3 +249,19 @@ cargo run -- run examples/http-api/main.pluto --stdlib stdlib
 # curl http://localhost:8080/hello
 # curl -X POST -d '{"name":"Alice"}' http://localhost:8080/echo
 ```
+
+## uuid
+
+Demonstrates the `std.uuid` module for generating RFC 4122 v4 UUIDs: generating random UUIDs (`generate()`), checking UUID structure and uniqueness, and using UUIDs as identifiers.
+
+```bash
+cargo run -- run examples/uuid/main.pluto --stdlib stdlib
+```
+
+## base64
+
+Demonstrates the `std.base64` module for encoding and decoding Base64: basic encoding (`encode`), decoding (`decode`), URL-safe variants (`encode_url_safe`, `decode_url_safe`), and roundtrip encoding/decoding.
+
+```bash
+cargo run -- run examples/base64/main.pluto --stdlib stdlib
+```

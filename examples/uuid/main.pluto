@@ -1,0 +1,20 @@
+import std.uuid
+
+app UuidExample {
+    fn main(self) {
+        print("=== UUID Generation Examples ===")
+        print("")
+
+        // Generate a new UUID
+        let id = uuid.generate()
+        print("Generated UUID: {id}")
+
+        // Generate another UUID to show they're different
+        let id2 = uuid.generate()
+        print("Another UUID: {id2}")
+        print("")
+
+        // UUID format is always 36 characters (8-4-4-4-12)
+        print("UUID length: {id.len()} chars")
+    }
+}
