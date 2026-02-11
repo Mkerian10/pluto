@@ -314,6 +314,35 @@ path = "tests/typeck/inference/closure_inference.rs"
 name = "typeck_unary_op_errors"
 path = "tests/typeck/inference/unary_op_errors.rs"
 
+# Typeck edge case tests - nullable types category
+[[test]]
+name = "typeck_nested_nullable"
+path = "tests/typeck/nullable/nested_nullable.rs"
+
+[[test]]
+name = "typeck_void_nullable"
+path = "tests/typeck/nullable/void_nullable.rs"
+
+[[test]]
+name = "typeck_implicit_wrapping"
+path = "tests/typeck/nullable/implicit_wrapping.rs"
+
+[[test]]
+name = "typeck_none_inference"
+path = "tests/typeck/nullable/none_inference.rs"
+
+[[test]]
+name = "typeck_nullable_propagation_chain"
+path = "tests/typeck/nullable/propagation_chain.rs"
+
+[[test]]
+name = "typeck_nullable_in_containers"
+path = "tests/typeck/nullable/in_containers.rs"
+
+[[test]]
+name = "typeck_nullable_with_generics"
+path = "tests/typeck/nullable/with_generics.rs"
+
 # Typeck edge case tests - generics category
 [[test]]
 name = "typeck_type_bounds_validation"

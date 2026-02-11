@@ -3173,7 +3173,7 @@ impl<'a> Parser<'a> {
 
     /// Lookahead to determine if `{ ... }` is a struct literal (contains `ident :`)
     fn is_struct_lit_ahead(&self) -> bool {
-        // We're positioned at `{`. Look past it for `ident :`
+        // We're positioned at `{`. Look past it for `ident :` or `}`
         let mut i = self.pos + 1;
         // skip newlines
         while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
@@ -3181,6 +3181,10 @@ impl<'a> Parser<'a> {
         }
         if i >= self.tokens.len() {
             return false;
+        }
+        // Check for empty struct literal: Foo {}
+        if matches!(self.tokens[i].node, Token::RBrace) {
+            return true;
         }
         // Must be an identifier
         if !matches!(self.tokens[i].node, Token::Ident) {
