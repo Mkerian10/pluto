@@ -1,5 +1,5 @@
 use crate::parser::ast::TypeExpr;
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PlutoType {

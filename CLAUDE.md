@@ -79,6 +79,8 @@ Test files: `basics`, `operators`, `control_flow`, `strings`, `arrays`, `classes
 
 **Pre-commit hook** — A git pre-commit hook runs `cargo test` before every commit. All tests must pass for a commit to succeed.
 
+**Running the full test suite** — Do NOT run `cargo test` (all tests) locally when verifying a feature branch. Instead, push the branch, create a PR, and let CI run the full test suite. Running all tests locally is slow and CI is the source of truth. You may run individual test files locally for quick iteration (e.g., `cargo test --test generators`).
+
 ## Protected Feature Branches
 
 The following branches must NOT be merged into `master` until explicitly authorized by the user. Do not rebase them onto master, do not merge them, do not fast-forward them. They are long-lived feature branches with in-progress work:
