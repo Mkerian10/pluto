@@ -2948,7 +2948,11 @@ impl<'a> LowerContext<'a> {
             let class_name = class_name.clone();
 
             // Check if this is a cross-stage RPC call
-            if self.is_stage(&class_name) {
+            // Only generate RPC if:
+            //   1. The target class is a stage
+            //   2. The object is NOT 'self' (to avoid RPC for same-stage calls)
+            let is_self_call = matches!(&object.node, Expr::Ident(name) if name == "self");
+            if self.is_stage(&class_name) && !is_self_call {
                 return self.lower_rpc_call(&class_name, &method.node, args, object);
             }
 
