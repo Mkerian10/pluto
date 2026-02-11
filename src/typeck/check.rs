@@ -53,9 +53,20 @@ fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&s
         )
     })?.return_type.clone();
 
-    // Check body
-    check_block(&func.body.node, env, &expected_return)?;
+    // For generators, set the element type context and pass Void as expected return
+    // (generators don't return a value — they yield)
+    let prev_gen_elem = env.current_generator_elem.take();
+    let effective_return = if let PlutoType::Stream(ref elem) = expected_return {
+        env.current_generator_elem = Some(*elem.clone());
+        PlutoType::Void
+    } else {
+        expected_return.clone()
+    };
 
+    // Check body
+    check_block(&func.body.node, env, &effective_return)?;
+
+    env.current_generator_elem = prev_gen_elem;
     env.pop_scope();
     Ok(())
 }
@@ -134,6 +145,17 @@ fn check_stmt(
             }
         }
         Stmt::Return(value) => {
+            // Generators: bare return is allowed (means "done"), return with value is not
+            if env.current_generator_elem.is_some() {
+                if let Some(expr) = value {
+                    return Err(CompileError::type_err(
+                        "return with a value is not allowed in generator functions; use yield instead".to_string(),
+                        expr.span,
+                    ));
+                }
+                // bare return in generator — fine, means "done"
+                return Ok(());
+            }
             let actual = match value {
                 Some(expr) => infer_expr(&expr.node, expr.span, env)?,
                 None => PlutoType::Void,
@@ -235,9 +257,10 @@ fn check_stmt(
                 PlutoType::String => PlutoType::String,
                 PlutoType::Bytes => PlutoType::Byte,
                 PlutoType::Receiver(elem) => *elem,
+                PlutoType::Stream(elem) => *elem,
                 _ => {
                     return Err(CompileError::type_err(
-                        format!("for loop requires array, range, string, bytes, or receiver, found {iter_type}"),
+                        format!("for loop requires array, range, string, bytes, receiver, or stream, found {iter_type}"),
                         iterable.span,
                     ));
                 }

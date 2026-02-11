@@ -1271,6 +1271,14 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // Reject generator methods (Phase 1: generators are top-level functions only)
+        if return_type.as_ref().is_some_and(|rt| matches!(rt.node, TypeExpr::Stream(_))) {
+            return Err(CompileError::syntax(
+                "generator methods are not supported; generators must be top-level functions".to_string(),
+                return_type.as_ref().unwrap().span,
+            ));
+        }
+
         let contracts = self.parse_contracts()?;
 
         let body = self.parse_block()?;
@@ -1388,14 +1396,25 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { id: Uuid::new_v4(), name, type_params, type_param_bounds, params, return_type, contracts, body, is_pub: false, is_override: false, is_generator: false },
+            Function {
+                id: Uuid::new_v4(), name, type_params, type_param_bounds, params,
+                is_generator: return_type.as_ref().is_some_and(|rt| matches!(rt.node, TypeExpr::Stream(_))),
+                return_type, contracts, body, is_pub: false, is_override: false,
+            },
             Span::new(start, end),
         ))
     }
 
     fn parse_type(&mut self) -> Result<Spanned<TypeExpr>, CompileError> {
         self.skip_newlines();
-        let mut result = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBracket) {
+        let mut result = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Stream) {
+            // Stream type: stream T
+            let stream_tok = self.advance().expect("token should exist after peek");
+            let start = stream_tok.span.start;
+            let inner = self.parse_type()?;
+            let end = inner.span.end;
+            Ok(Spanned::new(TypeExpr::Stream(Box::new(inner)), Span::new(start, end)))
+        } else if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBracket) {
             let open = self.advance().expect("token should exist after peek");
             let start = open.span.start;
             let inner = self.parse_type()?;
@@ -1485,6 +1504,7 @@ impl<'a> Parser<'a> {
         match &tok.node {
             Token::Let => self.parse_let_stmt(),
             Token::Return => self.parse_return_stmt(),
+            Token::Yield => self.parse_yield_stmt(),
             Token::If => self.parse_if_stmt(),
             Token::While => self.parse_while_stmt(),
             Token::For => self.parse_for_stmt(),
@@ -1727,6 +1747,18 @@ impl<'a> Parser<'a> {
         self.consume_statement_end();
 
         Ok(Spanned::new(Stmt::Return(value), Span::new(start, end)))
+    }
+
+    fn parse_yield_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let yield_span = self.expect(&Token::Yield)?.span;
+        let start = yield_span.start;
+
+        // yield always requires a value expression
+        let value = self.parse_expr(0)?;
+        let end = value.span.end;
+        self.consume_statement_end();
+
+        Ok(Spanned::new(Stmt::Yield { value }, Span::new(start, end)))
     }
 
     fn parse_if_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
