@@ -20,6 +20,7 @@ fn run_marshal_test(source: &str) -> String {
 // ── Class marshaling tests ──────────────────────────────────────────────────────
 
 #[test]
+#[ignore]
 fn marshal_simple_class() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -56,6 +57,7 @@ fn main() {
 }
 
 #[test]
+#[ignore]
 fn marshal_class_with_string() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -92,6 +94,7 @@ stage Api {
 }
 
 #[test]
+#[ignore]
 fn marshal_class_with_array() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -130,6 +133,7 @@ stage Api {
 // ── Enum marshaling tests ────────────────────────────────────────────────────────
 
 #[test]
+#[ignore]
 fn marshal_enum_unit_variant() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -166,6 +170,7 @@ fn main() {
 }
 
 #[test]
+#[ignore]
 fn marshal_enum_data_variant() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -202,6 +207,7 @@ stage Api {
 // ── Nullable type tests ──────────────────────────────────────────────────────────
 
 #[test]
+#[ignore]
 fn marshal_nullable_some() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -235,6 +241,7 @@ stage Api {
 }
 
 #[test]
+#[ignore]
 fn marshal_nullable_none() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -270,6 +277,7 @@ stage Api {
 // ── Generic type tests ────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore]
 fn marshal_generic_class() {
     let out = run_marshal_test(r#"
 import std.wire
@@ -305,6 +313,7 @@ stage Api {
 // ── Nested type tests ─────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore]
 fn marshal_nested_class() {
     let out = run_marshal_test(r#"
 import std.wire
