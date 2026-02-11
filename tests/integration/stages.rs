@@ -436,3 +436,96 @@ stage Impl : Base {
     );
     assert_eq!(output.trim(), "42");
 }
+
+// ── Cross-Stage Visibility Tests (RPC Phase 2) ──────────────────────
+
+#[test]
+fn cross_stage_call_to_pub_method_succeeds() {
+    let output = compile_and_run_stdout(
+        "stage ServiceA {
+    pub fn get_data(self) string {
+        return \"data from A\"
+    }
+
+    fn main(self) {
+        print(\"never called\")
+    }
+}
+
+stage ServiceB[a: ServiceA] {
+    fn main(self) {
+        print(self.a.get_data())
+    }
+}",
+    );
+    assert_eq!(output.trim(), "data from A");
+}
+
+#[test]
+fn cross_stage_call_to_private_method_rejected() {
+    compile_should_fail_with(
+        "stage ServiceA {
+    fn internal(self) string {
+        return \"secret\"
+    }
+
+    fn main(self) {
+        print(\"never called\")
+    }
+}
+
+stage ServiceB[a: ServiceA] {
+    fn main(self) {
+        print(self.a.internal())
+    }
+}",
+        "method 'internal' is not public; only pub methods can be called across stages",
+    );
+}
+
+#[test]
+fn same_stage_call_to_private_method_succeeds() {
+    let output = compile_and_run_stdout(
+        "stage Service {
+    fn helper(self) string {
+        return \"helper result\"
+    }
+
+    fn process(self) string {
+        return self.helper()
+    }
+
+    fn main(self) {
+        print(self.process())
+    }
+}",
+    );
+    assert_eq!(output.trim(), "helper result");
+}
+
+#[test]
+fn multiple_cross_stage_calls_with_mixed_visibility() {
+    compile_should_fail_with(
+        "stage ServiceA {
+    pub fn public_method(self) string {
+        return \"public\"
+    }
+
+    fn private_method(self) string {
+        return \"private\"
+    }
+
+    fn main(self) {
+        print(\"never called\")
+    }
+}
+
+stage ServiceB[a: ServiceA] {
+    fn main(self) {
+        print(self.a.public_method())
+        print(self.a.private_method())
+    }
+}",
+        "method 'private_method' is not public; only pub methods can be called across stages",
+    );
+}
