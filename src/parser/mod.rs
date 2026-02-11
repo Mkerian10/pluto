@@ -605,15 +605,16 @@ impl<'a> Parser<'a> {
         }
         self.expect(&Token::Colon)?;
 
-        // Expect strategy name: Sequential, RoundRobin, Random
+        // Expect strategy name: Sequential, RoundRobin, Random, Exhaustive
         let strategy_tok = self.expect_ident()?;
         let strategy = match strategy_tok.node.as_str() {
             "Sequential" => "Sequential".to_string(),
             "RoundRobin" => "RoundRobin".to_string(),
             "Random" => "Random".to_string(),
+            "Exhaustive" => "Exhaustive".to_string(),
             other => {
                 return Err(CompileError::syntax(
-                    format!("unknown scheduler strategy '{}' (expected Sequential, RoundRobin, or Random)", other),
+                    format!("unknown scheduler strategy '{}' (expected Sequential, RoundRobin, Random, or Exhaustive)", other),
                     strategy_tok.span,
                 ));
             }

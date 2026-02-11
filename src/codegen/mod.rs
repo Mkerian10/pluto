@@ -612,6 +612,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                 let s = match tests_decl.node.strategy.as_str() {
                     "RoundRobin" => 1i64,
                     "Random" => 2i64,
+                    "Exhaustive" => 3i64,
                     _ => 0i64, // Sequential
                 };
                 (s, 0i64, 100i64) // seed + iterations come from CLI env vars at runtime
