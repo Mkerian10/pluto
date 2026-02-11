@@ -532,6 +532,70 @@ void __pluto_gc_collect(void) {
     jmp_buf regs;
     setjmp(regs);
 
+    // 1b. Explicit register scan on x86_64.
+    // On glibc, setjmp applies pointer mangling (PTR_MANGLE) to RSP, RBP, and
+    // the return address in the jmp_buf, making those values unrecognizable as
+    // pointers during conservative scanning. While RBX and R12-R15 are stored
+    // unmangled, this inline asm captures ALL GPRs to a stack buffer, ensuring
+    // no live pointer held in any register is missed during root scanning.
+#ifdef __x86_64__
+    {
+        long reg_buf[16];
+        __asm__ __volatile__(
+            "movq %%rax, 0(%0)\n"
+            "movq %%rbx, 8(%0)\n"
+            "movq %%rcx, 16(%0)\n"
+            "movq %%rdx, 24(%0)\n"
+            "movq %%rsi, 32(%0)\n"
+            "movq %%rdi, 40(%0)\n"
+            "movq %%rbp, 48(%0)\n"
+            "movq %%rsp, 56(%0)\n"
+            "movq %%r8, 64(%0)\n"
+            "movq %%r9, 72(%0)\n"
+            "movq %%r10, 80(%0)\n"
+            "movq %%r11, 88(%0)\n"
+            "movq %%r12, 96(%0)\n"
+            "movq %%r13, 104(%0)\n"
+            "movq %%r14, 112(%0)\n"
+            "movq %%r15, 120(%0)\n"
+            :
+            : "r" (reg_buf)
+            : "memory"
+        );
+        for (int i = 0; i < 16; i++) {
+            gc_mark_candidate((void *)reg_buf[i]);
+        }
+    }
+#elif defined(__aarch64__)
+    {
+        long reg_buf[31];  // x0-x30
+        __asm__ __volatile__(
+            "stp x0,  x1,  [%0, #0]\n"
+            "stp x2,  x3,  [%0, #16]\n"
+            "stp x4,  x5,  [%0, #32]\n"
+            "stp x6,  x7,  [%0, #48]\n"
+            "stp x8,  x9,  [%0, #64]\n"
+            "stp x10, x11, [%0, #80]\n"
+            "stp x12, x13, [%0, #96]\n"
+            "stp x14, x15, [%0, #112]\n"
+            "stp x16, x17, [%0, #128]\n"
+            "stp x18, x19, [%0, #144]\n"
+            "stp x20, x21, [%0, #160]\n"
+            "stp x22, x23, [%0, #176]\n"
+            "stp x24, x25, [%0, #192]\n"
+            "stp x26, x27, [%0, #208]\n"
+            "stp x28, x29, [%0, #224]\n"
+            "str x30,      [%0, #240]\n"
+            :
+            : "r" (reg_buf)
+            : "memory"
+        );
+        for (int i = 0; i < 31; i++) {
+            gc_mark_candidate((void *)reg_buf[i]);
+        }
+    }
+#endif
+
     // 2. Scan jmp_buf as potential roots
     {
         long *p = (long *)&regs;
