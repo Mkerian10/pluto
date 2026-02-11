@@ -106,3 +106,31 @@ fn stdlib_json_conformance() {
     assert!(!stdout.contains("FAIL"), "JSON conformance had failures:\n{stdout}");
     assert!(stdout.contains("JSON Conformance:"), "Expected summary in output:\n{stdout}");
 }
+
+#[test]
+fn stdlib_uuid() {
+    let (stdout, stderr, code) = run_pluto_test_file("uuid");
+    if code != 0 {
+        panic!("uuid tests failed (exit {code}):\nstdout: {stdout}\nstderr: {stderr}");
+    }
+    assert!(stdout.contains("tests passed"), "Expected test summary in output:\n{stdout}");
+}
+
+#[test]
+fn stdlib_base64() {
+    let (stdout, stderr, code) = run_pluto_test_file("base64");
+    if code != 0 {
+        panic!("base64 tests failed (exit {code}):\nstdout: {stdout}\nstderr: {stderr}");
+    }
+    assert!(stdout.contains("tests passed"), "Expected test summary in output:\n{stdout}");
+}
+
+// TODO: Full regex escape sequence support (\d, \w, \s) - Phase 2 work
+// #[test]
+// fn stdlib_regex() {
+//     let (stdout, stderr, code) = run_pluto_test_file("regex");
+//     if code != 0 {
+//         panic!("regex tests failed (exit {code}):\nstdout: {stdout}\nstderr: {stderr}");
+//     }
+//     assert!(stdout.contains("tests passed"), "Expected test summary in output:\n{stdout}");
+// }

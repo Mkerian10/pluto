@@ -1,0 +1,134 @@
+import std.regex
+
+test "matches_literal" {
+    expect(regex.matches("hello", "hello")).to_be_true()
+    expect(regex.matches("hello", "world")).to_be_false()
+}
+
+test "matches_dot_any_char" {
+    expect(regex.matches("h.llo", "hello")).to_be_true()
+    expect(regex.matches("h.llo", "hallo")).to_be_true()
+    expect(regex.matches("h.llo", "hllo")).to_be_false()
+}
+
+test "matches_anchor_start" {
+    expect(regex.matches("^hello", "hello world")).to_be_true()
+    expect(regex.matches("^hello", "world hello")).to_be_false()
+}
+
+test "matches_anchor_end" {
+    expect(regex.matches("world$", "hello world")).to_be_true()
+    expect(regex.matches("world$", "world hello")).to_be_false()
+}
+
+test "matches_digit_shortcut" {
+    expect(regex.matches("\\d", "5")).to_be_true()
+    expect(regex.matches("\\d", "a")).to_be_false()
+}
+
+test "matches_word_shortcut" {
+    expect(regex.matches("\\w", "a")).to_be_true()
+    expect(regex.matches("\\w", "5")).to_be_true()
+    expect(regex.matches("\\w", "_")).to_be_true()
+    expect(regex.matches("\\w", "-")).to_be_false()
+}
+
+test "matches_space_shortcut" {
+    expect(regex.matches("\\s", " ")).to_be_true()
+    expect(regex.matches("\\s", "a")).to_be_false()
+}
+
+test "find_literal" {
+    expect(regex.find("hello", "hello world")).to_equal(0)
+    expect(regex.find("world", "hello world")).to_equal(6)
+    expect(regex.find("xyz", "hello world")).to_equal(-1)
+}
+
+test "find_dot" {
+    expect(regex.find("h.llo", "hello")).to_equal(0)
+    expect(regex.find("h.llo", "hallo")).to_equal(0)
+}
+
+test "find_all_simple" {
+    let matches = regex.find_all("l", "hello")
+    expect(matches.len()).to_equal(2)
+    expect(matches[0]).to_equal(2)
+    expect(matches[1]).to_equal(3)
+}
+
+test "replace_simple" {
+    let result = regex.replace("hello", "hi", "hello world")
+    expect(result).to_equal("hi world")
+}
+
+test "replace_all_simple" {
+    let result = regex.replace_all("l", "L", "hello")
+    expect(result).to_equal("heLLo")
+}
+
+test "split_simple" {
+    let parts = regex.split(",", "a,b,c")
+    expect(parts.len()).to_equal(3)
+    expect(parts[0]).to_equal("a")
+    expect(parts[1]).to_equal("b")
+    expect(parts[2]).to_equal("c")
+}
+
+test "split_space" {
+    let parts = regex.split(" ", "hello world test")
+    expect(parts.len()).to_equal(3)
+    expect(parts[0]).to_equal("hello")
+    expect(parts[1]).to_equal("world")
+    expect(parts[2]).to_equal("test")
+}
+
+test "matches_star_zero_or_more" {
+    expect(regex.matches("ab*c", "ac")).to_be_true()
+    expect(regex.matches("ab*c", "abc")).to_be_true()
+    expect(regex.matches("ab*c", "abbc")).to_be_true()
+}
+
+test "matches_plus_one_or_more" {
+    expect(regex.matches("ab+c", "ac")).to_be_false()
+    expect(regex.matches("ab+c", "abc")).to_be_true()
+    expect(regex.matches("ab+c", "abbc")).to_be_true()
+}
+
+test "matches_question_zero_or_one" {
+    expect(regex.matches("ab?c", "ac")).to_be_true()
+    expect(regex.matches("ab?c", "abc")).to_be_true()
+    expect(regex.matches("ab?c", "abbc")).to_be_false()
+}
+
+test "find_with_dot" {
+    expect(regex.find("h.ll", "hello")).to_equal(0)
+    expect(regex.find("l.", "hello")).to_equal(2)
+}
+
+test "matches_combined_anchors" {
+    expect(regex.matches("^hello$", "hello")).to_be_true()
+    expect(regex.matches("^hello$", "hello world")).to_be_false()
+    expect(regex.matches("^hello$", "say hello")).to_be_false()
+}
+
+test "find_middle_of_string" {
+    expect(regex.find("ll", "hello")).to_equal(2)
+}
+
+test "split_with_dot" {
+    let parts = regex.split(".", "a.b.c")
+    expect(parts.len()).to_equal(3)
+}
+
+test "replace_multiple_same_pattern" {
+    let result = regex.replace_all("o", "0", "foo boo")
+    expect(result).to_equal("f00 b00")
+}
+
+test "matches_empty_pattern" {
+    expect(regex.matches("", "")).to_be_true()
+}
+
+test "find_empty_pattern" {
+    expect(regex.find("", "hello")).to_equal(0)
+}

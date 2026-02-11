@@ -2915,9 +2915,23 @@ impl<'a> LowerContext<'a> {
             })?;
             let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
 
+            // Look up the method signature to check parameter types
+            let method_sig = self.env.functions.get(&mangled).cloned();
+
             let mut arg_values = vec![obj_ptr];
-            for arg in args {
-                arg_values.push(self.lower_expr(&arg.node)?);
+            for (i, arg) in args.iter().enumerate() {
+                let val = self.lower_expr(&arg.node)?;
+                let arg_type = infer_type_for_expr(&arg.node, self.env, &self.var_types);
+
+                // Check if we're passing a class instance to a trait parameter
+                let param_expected = method_sig.as_ref().and_then(|sig| sig.params.get(i + 1)); // +1 to skip self
+                if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_type, param_expected) {
+                    // Wrap the class instance as a trait handle
+                    let wrapped = self.wrap_class_as_trait(val, &cn, &tn)?;
+                    arg_values.push(wrapped);
+                } else {
+                    arg_values.push(val);
+                }
             }
 
             // Acquire rwlock if this singleton is synchronized (Phase 4b)

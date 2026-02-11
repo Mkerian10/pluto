@@ -192,3 +192,11 @@ path = "tests/integration/stages.rs"
 [[test]]
 name = "generators"
 path = "tests/integration/generators.rs"
+
+[[test]]
+name = "wire"
+path = "tests/integration/wire.rs"
+
+[[test]]
+name = "marshaling"
+path = "tests/integration/marshaling.rs"

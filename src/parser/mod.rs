@@ -1115,13 +1115,16 @@ impl<'a> Parser<'a> {
         }
         self.expect(&Token::RParen)?;
 
-        let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Newline | Token::RBrace | Token::Requires | Token::Ensures) {
-            // Check if next non-newline token is '{' — if so, no return type
-            if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace) {
-                None
-            } else {
-                Some(self.parse_type()?)
-            }
+        // Check for return type - use peek_raw() to detect newline boundary
+        let return_type = if let Some(next_raw) = self.peek_raw() && matches!(next_raw.node, Token::Newline | Token::RBrace | Token::Requires | Token::Ensures) {
+            // Newline, closing brace, or contract - no return type
+            None
+        } else if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace) {
+            // Opening brace (method body) - no return type
+            None
+        } else if self.peek().is_some() {
+            // Parse return type
+            Some(self.parse_type()?)
         } else {
             None
         };

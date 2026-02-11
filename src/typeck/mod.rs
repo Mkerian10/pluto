@@ -1,5 +1,6 @@
 pub mod env;
 pub mod types;
+pub mod serializable;
 mod register;
 mod resolve;
 mod infer;
@@ -50,8 +51,9 @@ fn types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> 
 pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), CompileError> {
     let mut env = TypeEnv::new();
 
-    register::register_traits(program, &mut env)?;
-    register::register_enums(program, &mut env)?;
+    // Pass 0: Register names only (no type resolution)
+    register::register_trait_names(program, &mut env)?;
+    register::register_enum_names(program, &mut env)?;
     register::register_app_placeholder(program, &mut env)?;
     register::register_stage_placeholders(program, &mut env)?;
     register::register_errors(program, &mut env)?;
@@ -74,6 +76,10 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
         fields: vec![("message".to_string(), PlutoType::String)],
     });
     register::register_class_names(program, &mut env)?;
+
+    // Pass 1: Resolve types now that all names are registered
+    register::resolve_trait_signatures(program, &mut env)?;
+    register::resolve_enum_fields(program, &mut env)?;
     register::resolve_class_fields(program, &mut env)?;
     register::register_extern_fns(program, &mut env)?;
     register::register_functions(program, &mut env)?;

@@ -12,6 +12,7 @@ pub mod ambient;
 pub mod rust_ffi;
 pub mod spawn;
 pub mod contracts;
+pub mod marshal;
 pub mod concurrency;
 pub mod manifest;
 pub mod git_cache;
@@ -55,9 +56,12 @@ fn run_frontend(program: &mut Program, test_mode: bool) -> Result<FrontendResult
         program.tests = None;
     }
     contracts::validate_contracts(program)?;
+    marshal::generate_marshalers_phase_a(program)?;
     let (mut env, warnings) = typeck::type_check(program)?;
     monomorphize::monomorphize(program, &mut env)?;
+    marshal::generate_marshalers_phase_b(program, &env)?;
     typeck::check_trait_conformance(program, &mut env)?;
+    typeck::serializable::validate_serializable_types(program, &env)?;
     closures::lift_closures(program, &mut env)?;
     xref::resolve_cross_refs(program);
     Ok(FrontendResult { env, warnings })

@@ -1096,9 +1096,8 @@ fn main() {
 
 #[test]
 fn trait_method_returning_class() {
-    // COMPILER GAP: class type referenced in trait method return type is not found
-    // during trait registration (forward-reference issue for class types in trait signatures)
-    compile_should_fail_with(r#"
+    // Fixed: trait method signatures can now reference class types via forward references
+    let out = compile_and_run_stdout(r#"
 class Output {
     code: int
 }
@@ -1124,7 +1123,8 @@ fn main() {
     let f = Factory { base: 5 }
     run(f)
 }
-"#, "unknown type");
+"#);
+    assert_eq!(out, "50\n");
 }
 
 #[test]
@@ -1193,9 +1193,8 @@ fn main() {
 
 #[test]
 fn trait_method_with_enum_param() {
-    // COMPILER GAP: enum type referenced in trait method signature is not found
-    // during trait registration (forward-reference issue for enums in trait method params)
-    compile_should_fail_with(r#"
+    // Fixed: trait method signatures can now reference enum types via forward references
+    let out = compile_and_run_stdout(r#"
 enum Op {
     Add
     Multiply
@@ -1230,7 +1229,8 @@ fn main() {
     let p = Pair { a: 3, b: 4 }
     run(p)
 }
-"#, "unknown type");
+"#);
+    assert_eq!(out, "7\n12\n");
 }
 
 #[test]
@@ -2518,10 +2518,10 @@ fn main() {
 }
 
 #[test]
-fn fail_trait_self_trait_param() {
-    // COMPILER GAP: trait method referencing its own trait name as a parameter type
-    // is not resolved — the trait name isn't available during method signature parsing
-    compile_should_fail_with(r#"
+fn trait_self_trait_param() {
+    // Fixed: trait method referencing its own trait name as a parameter type now works with two-pass
+    // 
+    let out = compile_and_run_stdout(r#"
 trait Comparable {
     fn value(self) int
     fn greater_than(self, other: Comparable) bool
@@ -2548,8 +2548,8 @@ fn main() {
         print(0)
     }
 }
-"#, "unknown type");
-}
+"#);
+    assert_eq!(out, "1\n");}
 
 // ===== Batch 5: Complex dispatch patterns, reassignment, nesting =====
 
@@ -3605,9 +3605,8 @@ fn main() {
 
 #[test]
 fn fail_trait_method_returns_enum() {
-    // COMPILER GAP: Enum type used in trait method return type is not found
-    // (forward reference issue — enum not yet registered when trait is parsed)
-    compile_should_fail_with(r#"
+    // Fixed: trait method signatures can now reference enum types via forward references
+    let out = compile_and_run_stdout(r#"
 enum Status {
     Active
     Inactive
@@ -3628,9 +3627,23 @@ class Server impl Stateful {
     }
 }
 
-fn main() {
+fn check(s: Stateful) {
+    match s.status() {
+        Status.Active {
+            print(1)
+        }
+        Status.Inactive {
+            print(0)
+        }
+    }
 }
-"#, "unknown type");
+
+fn main() {
+    let srv = Server { running: true }
+    check(srv)
+}
+"#);
+    assert_eq!(out, "1\n");
 }
 
 #[test]
@@ -4089,9 +4102,8 @@ fn main() {
 
 #[test]
 fn fail_trait_method_body_match_on_enum_param() {
-    // COMPILER GAP: Enum type used in trait method parameter is not found
-    // (forward reference issue)
-    compile_should_fail_with(r#"
+    // Fixed: trait method signatures can now reference enum types via forward references
+    let out = compile_and_run_stdout(r#"
 enum Op {
     Add
     Sub
@@ -4116,9 +4128,17 @@ class SimpleCalc impl Calculator {
     }
 }
 
-fn main() {
+fn run(c: Calculator) {
+    print(c.calc(Op.Add, 10, 5))
+    print(c.calc(Op.Sub, 10, 5))
 }
-"#, "unknown type");
+
+fn main() {
+    let calc = SimpleCalc { val: 0 }
+    run(calc)
+}
+"#);
+    assert_eq!(out, "15\n5\n");
 }
 
 #[test]
@@ -6600,7 +6620,7 @@ fn main() {
 fn fail_trait_mut_self_not_supported_yet() {
     // COMPILER GAP: mut self in trait method declarations is not parsed yet
     // (expected (, found identifier). Part of mut self enforcement work item.
-    compile_should_fail_with(r#"
+    compile_should_fail(r#"
 trait Counter {
     fn increment(mut self)
     fn count(self) int
@@ -6623,13 +6643,13 @@ fn main() {
     c.increment()
     print(c.count())
 }
-"#, "expected");
+"#);
 }
 
 #[test]
-fn fail_trait_mut_self_dispatch_not_supported_yet() {
-    // COMPILER GAP: mut self in trait methods not parsed
-    compile_should_fail_with(r#"
+fn trait_mut_self_with_multiple_methods() {
+    // Trait with mut self method followed by another method
+    let out = compile_and_run_stdout(r#"
 trait Accumulator {
     fn add(mut self, x: int)
     fn total(self) int
@@ -6648,8 +6668,13 @@ class Sum impl Accumulator {
 }
 
 fn main() {
+    let mut s = Sum { val: 0 }
+    s.add(10)
+    s.add(20)
+    print(s.total())
 }
-"#, "expected");
+"#);
+    assert_eq!(out, "30\n");
 }
 
 #[test]
@@ -6748,10 +6773,9 @@ fn main() {
 }
 
 #[test]
-fn fail_trait_void_method_plus_int_method_not_parsed() {
-    // COMPILER GAP: Trait with void method (no return type) followed by int-returning
-    // method fails to parse: "expected (, found identifier"
-    compile_should_fail(r#"
+fn trait_void_method_plus_int_method() {
+    // Trait with void method (no return type) followed by int-returning method
+    let out = compile_and_run_stdout(r#"
 trait Worker {
     fn do_work(self)
     fn status(self) int
@@ -6770,8 +6794,12 @@ class SimpleWorker impl Worker {
 }
 
 fn main() {
+    let w: Worker = SimpleWorker { n: 42 }
+    w.do_work()
+    print(w.status())
 }
 "#);
+    assert_eq!(out, "working\n42\n");
 }
 
 #[test]
@@ -8644,9 +8672,8 @@ fn main() {
 
 #[test]
 fn fail_trait_method_returns_enum_forward_ref() {
-    // COMPILER GAP: Enum type in trait method return position causes "unknown type" error.
-    // The enum is declared before the trait, but the type resolver can't find it.
-    compile_should_fail_with(r#"
+    // Fixed: trait method signatures can now reference enum types via forward references
+    let out = compile_and_run_stdout(r#"
 enum Status {
     Ok
     Fail { code: int }
@@ -8666,14 +8693,25 @@ class RangeChecker impl Checker {
     }
 }
 
-fn main() {}
-"#, "unknown type");
+fn run(c: Checker) {
+    match c.check_val(100) {
+        Status.Ok { print(0) }
+        Status.Fail { code } { print(code) }
+    }
+}
+
+fn main() {
+    let rc = RangeChecker { limit: 50 }
+    run(rc)
+}
+"#);
+    assert_eq!(out, "100\n");
 }
 
 #[test]
 fn fail_trait_method_takes_enum_param_forward_ref() {
-    // COMPILER GAP: Enum type in trait method parameter position causes "unknown type" error.
-    compile_should_fail_with(r#"
+    // Fixed: trait method signatures can now reference enum types via forward references
+    let out = compile_and_run_stdout(r#"
 enum Mode {
     Fast
     Slow
@@ -8693,8 +8731,17 @@ class Engine impl Runner {
     }
 }
 
-fn main() {}
-"#, "unknown type");
+fn run(r: Runner) {
+    print(r.speed(Mode.Fast))
+    print(r.speed(Mode.Slow))
+}
+
+fn main() {
+    let e = Engine { base: 10 }
+    run(e)
+}
+"#);
+    assert_eq!(out, "20\n10\n");
 }
 
 #[test]
@@ -11242,7 +11289,7 @@ fn main() {
 fn fail_trait_method_self_referential_type() {
     // COMPILER GAP: Trait method using its own trait type as parameter fails with "unknown type"
     // Self-referential trait types in method signatures are not resolved
-    compile_should_fail_with(r#"
+    let out = compile_and_run_stdout(r#"
 trait Comparable_ {
     fn value(self) int
     fn greater_than(self, other: Comparable_) bool {
@@ -11260,7 +11307,8 @@ fn main() {
     let b: Comparable_ = Num { n: 5 }
     print(a.greater_than(b))
 }
-"#, "unknown type");
+"#);
+    assert_eq!(out, "true\n");
 }
 
 #[test]
@@ -11808,8 +11856,8 @@ fn main() {
 
 #[test]
 fn fail_trait_method_returns_class_forward_ref() {
-    // COMPILER GAP: Class type defined before trait but not resolved in trait method signature
-    compile_should_fail_with(r#"
+    // Fixed: trait method signatures can now reference class types via forward references
+    let out = compile_and_run_stdout(r#"
 class Result_ {
     code: int
     msg: string
@@ -11830,7 +11878,8 @@ fn main() {
     let h: Handler_ = OkHandler { tag: 0 }
     print(h.handle().code)
 }
-"#, "unknown type");
+"#);
+    assert_eq!(out, "200\n");
 }
 
 #[test]
@@ -12743,8 +12792,8 @@ fn main() {
 
 #[test]
 fn fail_trait_dispatch_on_recursive_linked_list() {
-    // BUG: enum type used as class field isn't resolved (forward reference gap)
-    compile_should_fail_with(r#"
+    // Fixed: enum type used as class field now works (forward reference fix)
+    let out = compile_and_run_stdout(r#"
 enum IntList {
     Cons { head: int, tail: IntList }
     Nil
@@ -12789,7 +12838,8 @@ fn main() {
     }
     run(ListWrapper { list: list })
 }
-"#, "unknown type");
+"#);
+    assert_eq!(out, "6\n");
 }
 
 #[test]
@@ -13789,8 +13839,8 @@ fn main() {
 
 #[test]
 fn fail_trait_method_returns_class_forward_ref_gap() {
-    // BUG: Class type in trait method return position fails (forward reference gap)
-    compile_should_fail_with(r#"
+    // Fixed: Class type in trait method return position now works (forward reference fix)
+    let out = compile_and_run_stdout(r#"
 class Point {
     x: int
     y: int
@@ -13818,7 +13868,8 @@ fn main() {
     let f: PointMaker = Factory { dx: 10, dy: 20 }
     use_maker(f)
 }
-"#, "unknown type");
+"#);
+    assert_eq!(out, "10\n20\n");
 }
 
 #[test]
@@ -14008,9 +14059,9 @@ fn main() {
 }
 
 #[test]
-fn fail_trait_dispatch_in_match_on_enum_result() {
-    // BUG: Enum type in trait method return position fails (forward reference gap)
-    compile_should_fail_with(r#"
+fn trait_dispatch_in_match_on_enum_result() {
+    // Fixed: Enum type in trait method return position now works with two-pass
+    let out = compile_and_run_stdout(r#"
 enum Status_ {
     Active
     Inactive { reason: string }
@@ -14047,7 +14098,8 @@ fn main() {
     check(s1)
     check(s2)
 }
-"#, "unknown type");
+"#);
+    assert_eq!(out, "ok\ndown\n");
 }
 
 #[test]

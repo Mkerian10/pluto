@@ -1,0 +1,162 @@
+extern fn __pluto_codepoint_to_string(cp: int) string
+extern fn __pluto_string_byte_at(s: string, index: int) int
+extern fn __pluto_string_len(s: string) int
+extern fn __pluto_string_substring(s: string, start: int, length: int) string
+
+// Standard base64 alphabet
+fn alphabet() string {
+    return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+}
+
+// URL-safe base64 alphabet (- and _ instead of + and /)
+fn alphabet_url_safe() string {
+    return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+}
+
+// Encode a string to base64
+pub fn encode(s: string) string {
+    return encode_with_alphabet(s, alphabet())
+}
+
+// Encode a string to URL-safe base64
+pub fn encode_url_safe(s: string) string {
+    return encode_with_alphabet(s, alphabet_url_safe())
+}
+
+fn encode_with_alphabet(s: string, alpha: string) string {
+    let input_len = __pluto_string_len(s)
+    let result = ""
+    let i = 0
+
+    while i < input_len {
+        let b1 = __pluto_string_byte_at(s, i)
+        let b2 = 0
+        let b3 = 0
+        let has_b2 = 0
+        let has_b3 = 0
+
+        if i + 1 < input_len {
+            b2 = __pluto_string_byte_at(s, i + 1)
+            has_b2 = 1
+        }
+
+        if i + 2 < input_len {
+            b3 = __pluto_string_byte_at(s, i + 2)
+            has_b3 = 1
+        }
+
+        // Extract 6-bit chunks
+        let c1 = (b1 >> 2) & 0x3F
+        let c2 = ((b1 & 0x03) << 4) | ((b2 >> 4) & 0x0F)
+        let c3 = ((b2 & 0x0F) << 2) | ((b3 >> 6) & 0x03)
+        let c4 = b3 & 0x3F
+
+        result = result + __pluto_codepoint_to_string(char_code_at(alpha, c1))
+
+        result = result + __pluto_codepoint_to_string(char_code_at(alpha, c2))
+
+        if has_b2 != 0 {
+            result = result + __pluto_codepoint_to_string(char_code_at(alpha, c3))
+        } else {
+            result = result + "="
+        }
+
+        if has_b3 != 0 {
+            result = result + __pluto_codepoint_to_string(char_code_at(alpha, c4))
+        } else {
+            result = result + "="
+        }
+
+        i = i + 3
+    }
+
+    return result
+}
+
+// Decode a base64 string
+pub fn decode(s: string) string {
+    return decode_with_alphabet(s, alphabet())
+}
+
+// Decode a URL-safe base64 string
+pub fn decode_url_safe(s: string) string {
+    return decode_with_alphabet(s, alphabet_url_safe())
+}
+
+fn decode_with_alphabet(s: string, alpha: string) string {
+    let input_len = __pluto_string_len(s)
+    let result = ""
+    let i = 0
+
+    while i < input_len {
+        let c1_char = __pluto_string_byte_at(s, i)
+        let c2_char = 0
+        let c3_char = 0
+        let c4_char = 0
+
+        if i + 1 < input_len {
+            c2_char = __pluto_string_byte_at(s, i + 1)
+        }
+        if i + 2 < input_len {
+            c3_char = __pluto_string_byte_at(s, i + 2)
+        }
+        if i + 3 < input_len {
+            c4_char = __pluto_string_byte_at(s, i + 3)
+        }
+
+        let c1 = char_index_in(alpha, c1_char)
+        let c2 = char_index_in(alpha, c2_char)
+        let c3 = char_index_in(alpha, c3_char)
+        let c4 = char_index_in(alpha, c4_char)
+
+        // Handle padding
+        if c3_char == 61 {
+            c3 = 0
+        }
+        if c4_char == 61 {
+            c4 = 0
+        }
+
+        // Reconstruct 3 bytes from 4 base64 characters
+        let b1 = ((c1 << 2) | (c2 >> 4)) & 0xFF
+        result = result + __pluto_codepoint_to_string(b1)
+
+        if c3_char != 61 {
+            let b2 = (((c2 & 0x0F) << 4) | (c3 >> 2)) & 0xFF
+            result = result + __pluto_codepoint_to_string(b2)
+        }
+
+        if c4_char != 61 {
+            let b3 = (((c3 & 0x03) << 6) | c4) & 0xFF
+            result = result + __pluto_codepoint_to_string(b3)
+        }
+
+        i = i + 4
+    }
+
+    return result
+}
+
+// Get character code at position in string
+fn char_code_at(s: string, idx: int) int {
+    if idx < 0 {
+        return 0
+    }
+    if idx >= __pluto_string_len(s) {
+        return 0
+    }
+    return __pluto_string_byte_at(s, idx)
+}
+
+// Find index of a character (by byte value) in a string, or -1 if not found
+fn char_index_in(s: string, ch: int) int {
+    let len = __pluto_string_len(s)
+    let i = 0
+    while i < len {
+        if __pluto_string_byte_at(s, i) == ch {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
