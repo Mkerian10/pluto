@@ -10,26 +10,43 @@ pub fn plutoc() -> Command {
     Command::new(env!("CARGO_BIN_EXE_plutoc"))
 }
 
+/// A compiled Pluto binary in a temporary directory.
+/// The tempdir is kept alive for the struct's lifetime.
+pub struct CompiledBinary {
+    _dir: tempfile::TempDir,
+    pub path: std::path::PathBuf,
+}
+
+impl CompiledBinary {
+    /// Compile source in normal mode.
+    pub fn compile(source: &str) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_path = dir.path().join("test_bin");
+        plutoc::compile(source, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+        Self { _dir: dir, path: bin_path }
+    }
+
+    /// Compile source in test mode.
+    pub fn compile_test(source: &str) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_path = dir.path().join("test_bin");
+        plutoc::compile_test(source, &bin_path).unwrap_or_else(|e| panic!("Test compilation failed: {e}"));
+        Self { _dir: dir, path: bin_path }
+    }
+}
+
 /// Compile source via plutoc::compile() (library call, no subprocess) and run the binary.
 /// Returns the process exit code.
 pub fn compile_and_run(source: &str) -> i32 {
-    let dir = tempfile::tempdir().unwrap();
-    let bin_path = dir.path().join("test_bin");
-
-    plutoc::compile(source, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
-
-    let output = Command::new(&bin_path).output().unwrap();
+    let bin = CompiledBinary::compile(source);
+    let output = Command::new(&bin.path).output().unwrap();
     output.status.code().unwrap_or(-1)
 }
 
 /// Compile source via plutoc::compile() (library call) and capture stdout.
 pub fn compile_and_run_stdout(source: &str) -> String {
-    let dir = tempfile::tempdir().unwrap();
-    let bin_path = dir.path().join("test_bin");
-
-    plutoc::compile(source, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
-
-    let output = Command::new(&bin_path).output().unwrap();
+    let bin = CompiledBinary::compile(source);
+    let output = Command::new(&bin.path).output().unwrap();
     assert!(output.status.success(), "Binary exited with non-zero status");
     String::from_utf8_lossy(&output.stdout).to_string()
 }
@@ -63,12 +80,8 @@ pub fn compile_should_fail(source: &str) {
 /// Compile source in test mode and run the resulting binary, capturing stdout + stderr.
 /// Returns (stdout, exit_code).
 pub fn compile_test_and_run(source: &str) -> (String, String, i32) {
-    let dir = tempfile::tempdir().unwrap();
-    let bin_path = dir.path().join("test_bin");
-
-    plutoc::compile_test(source, &bin_path).unwrap_or_else(|e| panic!("Test compilation failed: {e}"));
-
-    let output = Command::new(&bin_path).output().unwrap();
+    let bin = CompiledBinary::compile_test(source);
+    let output = Command::new(&bin.path).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let code = output.status.code().unwrap_or(-1);
@@ -77,12 +90,8 @@ pub fn compile_test_and_run(source: &str) -> (String, String, i32) {
 
 /// Like compile_test_and_run but passes env vars to the test binary.
 pub fn compile_test_and_run_with_env(source: &str, envs: &[(&str, &str)]) -> (String, String, i32) {
-    let dir = tempfile::tempdir().unwrap();
-    let bin_path = dir.path().join("test_bin");
-
-    plutoc::compile_test(source, &bin_path).unwrap_or_else(|e| panic!("Test compilation failed: {e}"));
-
-    let mut cmd = Command::new(&bin_path);
+    let bin = CompiledBinary::compile_test(source);
+    let mut cmd = Command::new(&bin.path);
     for (key, val) in envs {
         cmd.env(key, val);
     }
@@ -96,12 +105,8 @@ pub fn compile_test_and_run_with_env(source: &str, envs: &[(&str, &str)]) -> (St
 /// Compile source in test mode, run, and capture stdout. Asserts success.
 /// Uses the test runtime (sequential task execution, no-mutex channels).
 pub fn compile_test_and_run_stdout(source: &str) -> String {
-    let dir = tempfile::tempdir().unwrap();
-    let bin_path = dir.path().join("test_bin");
-
-    plutoc::compile_test(source, &bin_path).unwrap_or_else(|e| panic!("Test compilation failed: {e}"));
-
-    let output = Command::new(&bin_path).output().unwrap();
+    let bin = CompiledBinary::compile_test(source);
+    let output = Command::new(&bin.path).output().unwrap();
     assert!(output.status.success(), "Test binary exited with non-zero status.\nstderr: {}", String::from_utf8_lossy(&output.stderr));
     String::from_utf8_lossy(&output.stdout).to_string()
 }
@@ -109,10 +114,8 @@ pub fn compile_test_and_run_stdout(source: &str) -> String {
 /// Compile source and run, returning (stdout, stderr, exit_code).
 /// Does NOT assert success — use for testing runtime aborts.
 pub fn compile_and_run_output(source: &str) -> (String, String, i32) {
-    let dir = tempfile::tempdir().unwrap();
-    let bin_path = dir.path().join("test_bin");
-    plutoc::compile(source, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
-    let output = Command::new(&bin_path).output().unwrap();
+    let bin = CompiledBinary::compile(source);
+    let output = Command::new(&bin.path).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     (stdout, stderr, output.status.code().unwrap_or(-1))
@@ -121,10 +124,8 @@ pub fn compile_and_run_output(source: &str) -> (String, String, i32) {
 /// Compile and run with a timeout (for tests that may deadlock).
 /// Panics if the binary doesn't exit within `timeout_secs`.
 pub fn compile_and_run_stdout_timeout(source: &str, timeout_secs: u64) -> String {
-    let dir = tempfile::tempdir().unwrap();
-    let bin_path = dir.path().join("test_bin");
-    plutoc::compile(source, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
-    let mut child = Command::new(&bin_path)
+    let bin = CompiledBinary::compile(source);
+    let mut child = Command::new(&bin.path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

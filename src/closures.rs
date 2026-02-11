@@ -232,8 +232,8 @@ fn lift_in_expr(
                 // Build the __env param (typed as int, since it's a raw pointer)
                 let env_param = Param {
                     id: Uuid::new_v4(),
-                    name: Spanned::new("__env".to_string(), Span::new(0, 0)),
-                    ty: Spanned::new(TypeExpr::Named("int".to_string()), Span::new(0, 0)),
+                    name: Spanned::dummy("__env".to_string()),
+                    ty: Spanned::dummy(TypeExpr::Named("int".to_string())),
                     is_mut: false,
                 };
 
@@ -280,14 +280,14 @@ fn lift_in_expr(
                 // Create the lifted Function
                 let lifted = Function {
                     id: Uuid::new_v4(),
-                    name: Spanned::new(fn_name.clone(), Span::new(0, 0)),
+                    name: Spanned::dummy(fn_name.clone()),
                     type_params: vec![],
                     type_param_bounds: std::collections::HashMap::new(),
                     params: all_params,
                     return_type: if ret_type == PlutoType::Void {
                         None
                     } else {
-                        Some(Spanned::new(ret_type_expr, Span::new(0, 0)))
+                        Some(Spanned::dummy(ret_type_expr))
                     },
                     contracts: vec![],
                     body,

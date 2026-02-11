@@ -1,5 +1,5 @@
 use crate::parser::ast::TypeExpr;
-use crate::span::{Span, Spanned};
+use crate::span::Spanned;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PlutoType {
@@ -35,6 +35,47 @@ pub enum PlutoType {
 pub enum GenericKind {
     Class,
     Enum,
+}
+
+impl PlutoType {
+    /// Recursively transform all inner types via `f`, rebuilding the structure.
+    /// Leaf types (Int, Float, Bool, etc.) are returned unchanged.
+    pub fn map_inner_types(&self, f: &impl Fn(&PlutoType) -> PlutoType) -> PlutoType {
+        match self {
+            PlutoType::Array(inner) => PlutoType::Array(Box::new(f(inner))),
+            PlutoType::Fn(params, ret) => PlutoType::Fn(
+                params.iter().map(|p| f(p)).collect(),
+                Box::new(f(ret)),
+            ),
+            PlutoType::Map(k, v) => PlutoType::Map(Box::new(f(k)), Box::new(f(v))),
+            PlutoType::Set(t) => PlutoType::Set(Box::new(f(t))),
+            PlutoType::Task(t) => PlutoType::Task(Box::new(f(t))),
+            PlutoType::Sender(t) => PlutoType::Sender(Box::new(f(t))),
+            PlutoType::Receiver(t) => PlutoType::Receiver(Box::new(f(t))),
+            PlutoType::Nullable(inner) => PlutoType::Nullable(Box::new(f(inner))),
+            PlutoType::GenericInstance(kind, name, args) => PlutoType::GenericInstance(
+                kind.clone(),
+                name.clone(),
+                args.iter().map(|a| f(a)).collect(),
+            ),
+            // Leaf types — no inner types to transform
+            _ => self.clone(),
+        }
+    }
+
+    /// Returns true if any inner type (recursively) satisfies the predicate.
+    /// Does NOT test `self` — only child types.
+    pub fn any_inner_type(&self, pred: &impl Fn(&PlutoType) -> bool) -> bool {
+        match self {
+            PlutoType::Array(inner) => pred(inner),
+            PlutoType::Fn(params, ret) => params.iter().any(|p| pred(p)) || pred(ret),
+            PlutoType::Map(k, v) => pred(k) || pred(v),
+            PlutoType::Set(t) | PlutoType::Task(t) | PlutoType::Sender(t)
+            | PlutoType::Receiver(t) | PlutoType::Nullable(t) => pred(t),
+            PlutoType::GenericInstance(_, _, args) => args.iter().any(|a| pred(a)),
+            _ => false,
+        }
+    }
 }
 
 impl std::fmt::Display for PlutoType {
@@ -91,39 +132,39 @@ pub fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         PlutoType::Void => TypeExpr::Named("void".to_string()),
         PlutoType::Class(name) => TypeExpr::Named(name.clone()),
         PlutoType::Array(inner) => {
-            TypeExpr::Array(Box::new(Spanned::new(pluto_type_to_type_expr(inner), Span::new(0, 0))))
+            TypeExpr::Array(Box::new(Spanned::dummy(pluto_type_to_type_expr(inner))))
         }
         PlutoType::Trait(name) => TypeExpr::Named(name.clone()),
         PlutoType::Enum(name) => TypeExpr::Named(name.clone()),
         PlutoType::Fn(params, ret) => TypeExpr::Fn {
             params: params
                 .iter()
-                .map(|p| Box::new(Spanned::new(pluto_type_to_type_expr(p), Span::new(0, 0))))
+                .map(|p| Box::new(Spanned::dummy(pluto_type_to_type_expr(p))))
                 .collect(),
-            return_type: Box::new(Spanned::new(pluto_type_to_type_expr(ret), Span::new(0, 0))),
+            return_type: Box::new(Spanned::dummy(pluto_type_to_type_expr(ret))),
         },
         PlutoType::Map(k, v) => TypeExpr::Generic {
             name: "Map".to_string(),
             type_args: vec![
-                Spanned::new(pluto_type_to_type_expr(k), Span::new(0, 0)),
-                Spanned::new(pluto_type_to_type_expr(v), Span::new(0, 0)),
+                Spanned::dummy(pluto_type_to_type_expr(k)),
+                Spanned::dummy(pluto_type_to_type_expr(v)),
             ],
         },
         PlutoType::Set(t) => TypeExpr::Generic {
             name: "Set".to_string(),
-            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
+            type_args: vec![Spanned::dummy(pluto_type_to_type_expr(t))],
         },
         PlutoType::Task(t) => TypeExpr::Generic {
             name: "Task".to_string(),
-            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
+            type_args: vec![Spanned::dummy(pluto_type_to_type_expr(t))],
         },
         PlutoType::Sender(t) => TypeExpr::Generic {
             name: "Sender".to_string(),
-            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
+            type_args: vec![Spanned::dummy(pluto_type_to_type_expr(t))],
         },
         PlutoType::Receiver(t) => TypeExpr::Generic {
             name: "Receiver".to_string(),
-            type_args: vec![Spanned::new(pluto_type_to_type_expr(t), Span::new(0, 0))],
+            type_args: vec![Spanned::dummy(pluto_type_to_type_expr(t))],
         },
         PlutoType::Error => TypeExpr::Named("error".to_string()),
         PlutoType::TypeParam(name) => TypeExpr::Named(name.clone()),
@@ -133,11 +174,11 @@ pub fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         PlutoType::GenericInstance(_, name, args) => TypeExpr::Generic {
             name: name.clone(),
             type_args: args.iter()
-                .map(|a| Spanned::new(pluto_type_to_type_expr(a), Span::new(0, 0)))
+                .map(|a| Spanned::dummy(pluto_type_to_type_expr(a)))
                 .collect(),
         },
         PlutoType::Nullable(inner) => {
-            TypeExpr::Nullable(Box::new(Spanned::new(pluto_type_to_type_expr(inner), Span::new(0, 0))))
+            TypeExpr::Nullable(Box::new(Spanned::dummy(pluto_type_to_type_expr(inner))))
         }
     }
 }
