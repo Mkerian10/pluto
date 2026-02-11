@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use super::types::PlutoType;
-use crate::parser::ast::{ContractClause, Lifecycle};
+use crate::parser::ast::{ContractClause, Lifecycle, TypeExpr};
 use crate::span::{Span, Spanned};
 
 #[derive(Debug, Clone)]
@@ -23,11 +23,17 @@ pub struct TraitInfo {
     pub default_methods: Vec<String>,
     pub mut_self_methods: HashSet<String>,
     pub method_contracts: HashMap<String, Vec<Spanned<ContractClause>>>,
+    /// Temporary storage for raw AST type expressions during registration
+    /// Maps method_name -> (param_types, return_type)
+    pub method_type_exprs: HashMap<String, (Vec<Spanned<TypeExpr>>, Option<Spanned<TypeExpr>>)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct EnumInfo {
     pub variants: Vec<(String, Vec<(String, PlutoType)>)>,
+    /// Temporary storage for raw AST type expressions during registration
+    /// Vec of (variant_name, Vec of (field_name, field_type))
+    pub variant_type_exprs: Vec<(String, Vec<(String, Spanned<TypeExpr>)>)>,
 }
 
 #[derive(Debug, Clone)]

@@ -200,13 +200,11 @@ fn enum_array_field() {
 
 #[test]
 fn enum_class_field() {
-    // COMPILER GAP: enum variant fields referencing class types fail with
-    // "unknown type 'ClassName'" — enum field types are resolved before classes
-    // are registered in the type environment (forward reference issue)
-    compile_should_fail_with(
+    // Enum variant fields referencing class types are now supported with two-pass type registration
+    let out = compile_and_run_stdout(
         "class Point {\n    x: int\n    y: int\n}\n\nenum Shape {\n    Located { pos: Point }\n    Origin\n}\n\nfn main() {\n    let p = Point { x: 10, y: 20 }\n    let s = Shape.Located { pos: p }\n    match s {\n        Shape.Located { pos } {\n            print(pos.x)\n            print(pos.y)\n        }\n        Shape.Origin { print(0) }\n    }\n}",
-        "unknown type",
     );
+    assert_eq!(out, "10\n20\n");
 }
 
 #[test]
@@ -557,12 +555,11 @@ fn enum_state_machine_pattern() {
 
 #[test]
 fn enum_linked_list_pattern() {
-    // COMPILER GAP: self-referential enums are not supported — the enum name is
-    // not yet registered when its own fields are type-resolved
-    compile_should_fail_with(
+    // Self-referential enums are now supported with two-pass type registration
+    let out = compile_and_run_stdout(
         "enum IntList {\n    Cons { head: int, tail: IntList }\n    Nil\n}\n\nfn sum_list(list: IntList) int {\n    match list {\n        IntList.Cons { head, tail } {\n            return head + sum_list(tail)\n        }\n        IntList.Nil { return 0 }\n    }\n}\n\nfn main() {\n    let list = IntList.Cons { head: 1, tail: IntList.Cons { head: 2, tail: IntList.Cons { head: 3, tail: IntList.Nil } } }\n    print(sum_list(list))\n}",
-        "unknown type",
     );
+    assert_eq!(out, "6\n");
 }
 
 #[test]
