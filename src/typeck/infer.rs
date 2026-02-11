@@ -1749,6 +1749,21 @@ fn infer_method_call(
                 builtin(env, method);
                 return Ok(PlutoType::String);
             }
+            "byte_at" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        "byte_at() expects 1 argument".to_string(), span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("byte_at(): expected int, found {arg_type}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Int);
+            }
             "substring" => {
                 if args.len() != 2 {
                     return Err(CompileError::type_err(

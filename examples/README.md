@@ -2,10 +2,26 @@
 
 ## strings
 
-Demonstrates built-in string methods (`contains`, `starts_with`, `trim`, `to_upper`, `replace`, `split`, etc.), string indexing (`s[0]`), character iteration (`for c in s`), and method chaining.
+Comprehensive demonstration of string manipulation: basic operations (`len`), case conversion (`to_upper`, `to_lower`), trimming (`trim`, `trim_start`, `trim_end`), substring operations, character access (`char_at`, `byte_at`), string searching (`contains`, `starts_with`, `ends_with`, `index_of`, `last_index_of`, `count`), string replacement, splitting, repetition, concatenation, empty/whitespace checking, and number parsing with nullable types.
 
 ```bash
-cargo run -- run examples/strings/main.pluto
+cargo run -- run examples/strings/main.pluto --stdlib stdlib
+```
+
+## paths
+
+Demonstrates the `std.path` module for path manipulation: `join` (path joining with separator handling), `basename` (extract filename), `dirname` (extract directory), `ext` (file extension), `is_absolute`, `has_trailing_slash`, `normalize` (resolve . and ..), and `split_ext` (filename/extension split).
+
+```bash
+cargo run -- run examples/paths/main.pluto --stdlib stdlib
+```
+
+## env_example
+
+Demonstrates the `std.env` module for environment variable access: `get` (retrieve variable or empty string), `get_or` (with default fallback), `set` (set variable), `exists` (check if set), `remove` (delete variable), and `list_names` (enumerate all variables).
+
+```bash
+cargo run -- run examples/env_example/main.pluto --stdlib stdlib
 ```
 
 ## logging
