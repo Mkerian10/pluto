@@ -51,22 +51,25 @@ fn trait_multiple_traits() {
 
 #[test]
 fn trait_missing_method_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "trait Foo {\n    fn bar(self) int\n}\n\nclass X impl Foo {\n    val: int\n}\n\nfn main() {\n}",
+        "class 'X' does not implement required method 'bar' from trait 'Foo'",
     );
 }
 
 #[test]
 fn trait_wrong_return_type_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "trait Foo {\n    fn bar(self) int\n}\n\nclass X impl Foo {\n    val: int\n\n    fn bar(self) bool {\n        return true\n    }\n}\n\nfn main() {\n}",
+        "method 'bar' return type mismatch: trait 'Foo' expects int, class 'X' returns bool",
     );
 }
 
 #[test]
 fn trait_unknown_trait_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "class X impl NonExistent {\n    val: int\n}\n\nfn main() {\n}",
+        "unknown trait 'NonExistent'",
     );
 }
 
@@ -893,7 +896,7 @@ fn main() {
 #[test]
 fn fail_impl_class_name() {
     // impl a class name instead of a trait name
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 class Other {
     val: int
 }
@@ -904,13 +907,13 @@ class X impl Other {
 
 fn main() {
 }
-"#);
+"#, "unknown trait 'Other'");
 }
 
 #[test]
 fn fail_impl_enum_name() {
     // impl an enum name instead of a trait name
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 enum Color {
     Red
     Blue
@@ -922,13 +925,13 @@ class X impl Color {
 
 fn main() {
 }
-"#);
+"#, "unknown trait 'Color'");
 }
 
 #[test]
 fn fail_non_implementing_class_as_trait_param() {
     // Class has matching methods but doesn't declare impl — should fail
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Worker {
     fn work(self) int
 }
@@ -949,13 +952,13 @@ fn main() {
     let x = NotAWorker { val: 42 }
     use_worker(x)
 }
-"#);
+"#, "argument 1 of 'use_worker': expected trait Worker, found NotAWorker");
 }
 
 #[test]
 fn fail_call_non_trait_method_on_handle() {
     // Dog has fetch() but Worker trait doesn't — calling on trait handle should fail
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Worker {
     fn work(self) int
 }
@@ -980,13 +983,13 @@ fn main() {
     let d = Dog { val: 1 }
     use_worker(d)
 }
-"#);
+"#, "trait 'Worker' has no method 'fetch'");
 }
 
 #[test]
 fn fail_access_field_on_trait_handle() {
     // Cannot access concrete class fields through trait handle
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Worker {
     fn work(self) int
 }
@@ -1007,13 +1010,13 @@ fn main() {
     let d = Dog { val: 42 }
     use_worker(d)
 }
-"#);
+"#, "field access on non-class type trait Worker");
 }
 
 #[test]
 fn fail_assign_primitive_to_trait() {
     // Cannot assign int to trait-typed variable
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Worker {
     fn work(self) int
 }
@@ -1021,13 +1024,13 @@ trait Worker {
 fn main() {
     let w: Worker = 42
 }
-"#);
+"#, "type mismatch: expected trait Worker, found int");
 }
 
 #[test]
 fn fail_assign_incompatible_class_to_trait() {
     // Class doesn't implement the trait
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Worker {
     fn work(self) int
 }
@@ -1039,7 +1042,7 @@ class NotWorker {
 fn main() {
     let w: Worker = NotWorker { val: 1 }
 }
-"#);
+"#, "type mismatch: expected trait Worker, found NotWorker");
 }
 
 #[test]
@@ -1721,33 +1724,33 @@ fn main() {
 #[test]
 fn fail_trait_method_unknown_return_type() {
     // Trait method returning a type that doesn't exist
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Foo {
     fn bar(self) UnknownType
 }
 
 fn main() {
 }
-"#);
+"#, "unknown type 'UnknownType'");
 }
 
 #[test]
 fn fail_trait_method_unknown_param_type() {
     // Trait method with a param type that doesn't exist
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Foo {
     fn bar(self, x: UnknownType) int
 }
 
 fn main() {
 }
-"#);
+"#, "unknown type 'UnknownType'");
 }
 
 #[test]
 fn fail_impl_function_name() {
     // impl a function name instead of trait
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 fn some_func() int {
     return 1
 }
@@ -1758,13 +1761,13 @@ class X impl some_func {
 
 fn main() {
 }
-"#);
+"#, "unknown trait 'some_func'");
 }
 
 #[test]
 fn fail_trait_handle_to_concrete_function() {
     // Cannot pass trait-typed value to function expecting concrete type
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Worker {
     fn work(self) int
 }
@@ -1785,13 +1788,13 @@ fn main() {
     let w: Worker = Dog { val: 1 }
     use_dog(w)
 }
-"#);
+"#, "argument 1 of 'use_dog': expected Dog, found trait Worker");
 }
 
 #[test]
 fn fail_assign_one_trait_to_different_trait() {
     // Cannot assign TraitA-typed value to TraitB variable
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait TraitA {
     fn a(self) int
 }
@@ -1812,7 +1815,7 @@ fn main() {
     let a: TraitA = X { val: 1 }
     let b: TraitB = a
 }
-"#);
+"#, "type mismatch: expected trait TraitB, found trait TraitA");
 }
 
 #[test]
@@ -1953,7 +1956,7 @@ fn main() {
 fn trait_diamond_two_defaults_same_method() {
     // Two traits both define default for same method — class doesn't override
     // Contracts guard rejects this. Without contracts, behavior varies.
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait A {
     fn work(self) int {
         return 1
@@ -1972,7 +1975,7 @@ class C impl A, B {
 
 fn main() {
 }
-"#);
+"#, "Duplicate definition of identifier: C$work");
 }
 
 #[test]
@@ -2015,7 +2018,7 @@ fn main() {
 #[test]
 fn trait_diamond_different_signatures() {
     // Two traits define same method name with different return types — should fail
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait A {
     fn work(self) int
 }
@@ -2034,13 +2037,13 @@ class C impl A, B {
 
 fn main() {
 }
-"#);
+"#, "method 'work' return type mismatch: trait 'B' expects string, class 'C' returns int");
 }
 
 #[test]
 fn trait_three_traits_same_method() {
     // Three traits all define the same method name — maximum ambiguity
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait A {
     fn work(self) int {
         return 1
@@ -2065,7 +2068,7 @@ class X impl A, B, C {
 
 fn main() {
 }
-"#);
+"#, "Duplicate definition of identifier: X$work");
 }
 
 #[test]
@@ -2387,7 +2390,7 @@ fn main() {
 #[test]
 fn fail_trait_print_directly() {
     // Cannot print a trait-typed value directly (not Printable)
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Worker {
     fn work(self) int
 }
@@ -2404,7 +2407,7 @@ fn main() {
     let w: Worker = X { val: 1 }
     print(w)
 }
-"#);
+"#, "print() does not support type trait Worker");
 }
 
 #[test]
@@ -2441,7 +2444,7 @@ fn main() {
 #[test]
 fn fail_trait_as_map_key() {
     // Trait type cannot be used as map key
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Worker {
     fn work(self) int
 }
@@ -2449,7 +2452,7 @@ trait Worker {
 fn main() {
     let m = Map<Worker, int> {}
 }
-"#);
+"#, "type trait Worker cannot be used as a map/set key");
 }
 
 #[test]
@@ -3260,7 +3263,7 @@ fn main() {
 #[test]
 fn fail_impl_trait_wrong_return_type_on_one_method() {
     // Class has right method names but one has wrong return type
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Pair {
     fn name(self) string
     fn age(self) int
@@ -3281,7 +3284,7 @@ class Person impl Pair {
 
 fn main() {
 }
-"#);
+"#, "method 'age' return type mismatch: trait 'Pair' expects int, class 'Person' returns string");
 }
 
 #[test]
@@ -5493,7 +5496,7 @@ fn main() {
 #[test]
 fn fail_call_trait_method_on_wrong_trait() {
     // Method exists on trait A but called through trait B handle
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Alpha {
     fn a_method(self) int
 }
@@ -5514,7 +5517,7 @@ fn use_beta(b: Beta) {
 
 fn main() {
 }
-"#);
+"#, "trait 'Beta' has no method 'a_method'");
 }
 
 // ===== Batch 10: Recursion through traits, trait + array iteration, deeper dispatch patterns =====
@@ -5940,7 +5943,7 @@ fn main() {
 #[test]
 fn fail_trait_method_wrong_return_type_string_vs_int() {
     // Class returns string but trait requires int
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Valued {
     fn val(self) int
 }
@@ -5955,13 +5958,13 @@ class Bad impl Valued {
 
 fn main() {
 }
-"#);
+"#, "method 'val' return type mismatch: trait 'Valued' expects int, class 'Bad' returns string");
 }
 
 #[test]
 fn fail_trait_missing_one_of_two_methods() {
     // Trait requires two methods, class only implements one
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait TwoMethods {
     fn first(self) int
     fn second(self) int
@@ -5977,7 +5980,7 @@ class Half impl TwoMethods {
 
 fn main() {
 }
-"#);
+"#, "class 'Half' does not implement required method 'second' from trait 'TwoMethods'");
 }
 
 #[test]
@@ -6362,7 +6365,7 @@ fn main() {
 #[test]
 fn fail_class_impl_trait_with_extra_param() {
     // Class method has extra parameter vs trait signature
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Simple {
     fn val(self) int
 }
@@ -6377,13 +6380,13 @@ class Bad impl Simple {
 
 fn main() {
 }
-"#);
+"#, "method 'val' of class 'Bad' has wrong number of parameters for trait 'Simple'");
 }
 
 #[test]
 fn fail_class_impl_trait_missing_param() {
     // Class method has fewer parameters than trait signature
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait TakesParam {
     fn compute(self, x: int) int
 }
@@ -6398,13 +6401,13 @@ class Bad impl TakesParam {
 
 fn main() {
 }
-"#);
+"#, "method 'compute' of class 'Bad' has wrong number of parameters for trait 'TakesParam'");
 }
 
 #[test]
 fn fail_assign_concrete_to_wrong_trait_var() {
     // Class implements TraitA, but assigned to TraitB variable
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait TraitA {
     fn a(self) int
 }
@@ -6421,7 +6424,7 @@ class X impl TraitA {
 fn main() {
     let b: TraitB = X { val: 0 }
 }
-"#);
+"#, "type mismatch: expected trait TraitB, found X");
 }
 
 #[test]
@@ -6620,7 +6623,7 @@ fn main() {
 fn fail_trait_mut_self_not_supported_yet() {
     // COMPILER GAP: mut self in trait method declarations is not parsed yet
     // (expected (, found identifier). Part of mut self enforcement work item.
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Counter {
     fn increment(mut self)
     fn count(self) int
@@ -6643,7 +6646,7 @@ fn main() {
     c.increment()
     print(c.count())
 }
-"#);
+"#, "cannot call mutating method");
 }
 
 #[test]
@@ -7070,7 +7073,7 @@ fn main() {
 #[test]
 fn fail_method_not_in_trait_called_via_handle() {
     // Class has extra method, called through trait handle — should fail
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Simple {
     fn val(self) int
 }
@@ -7087,7 +7090,7 @@ fn use_it(s: Simple) {
 
 fn main() {
 }
-"#);
+"#, "trait 'Simple' has no method 'extra'");
 }
 
 #[test]
@@ -7528,7 +7531,7 @@ fn main() {
 #[test]
 fn fail_impl_two_traits_conflicting_method_signatures() {
     // Two traits both have method "compute" but with different return types
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait TraitA {
     fn compute(self) int
 }
@@ -7547,7 +7550,7 @@ class X impl TraitA, TraitB {
 
 fn main() {
 }
-"#);
+"#, "method 'compute' return type mismatch");
 }
 
 #[test]
@@ -8190,7 +8193,7 @@ fn main() {
 #[test]
 fn fail_trait_method_param_type_mismatch() {
     // Trait method takes int, class implements with string param
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Processor {
     fn process(self, x: int) int
 }
@@ -8205,7 +8208,7 @@ class Bad impl Processor {
 
 fn main() {
 }
-"#);
+"#, "method 'process' parameter 1 type mismatch: trait 'Processor' expects int, class 'Bad' has string");
 }
 
 #[test]
@@ -8572,7 +8575,7 @@ fn main() {
 #[test]
 fn fail_trait_method_wrong_param_count() {
     // Implementing method has wrong number of params
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Foo {
     fn bar(self, x: int) int
 }
@@ -8583,13 +8586,13 @@ class X impl Foo {
 }
 
 fn main() {}
-"#);
+"#, "method 'bar' of class 'X' has wrong number of parameters for trait 'Foo'");
 }
 
 #[test]
 fn fail_trait_method_wrong_param_type() {
     // Implementing method has wrong param type
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Foo {
     fn bar(self, x: int) int
 }
@@ -8600,13 +8603,13 @@ class X impl Foo {
 }
 
 fn main() {}
-"#);
+"#, "method 'bar' parameter 1 type mismatch: trait 'Foo' expects int, class 'X' has string");
 }
 
 #[test]
 fn fail_assign_int_to_trait_variable() {
     // Cannot assign an int to a trait-typed variable
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Foo {
     fn get(self) int
 }
@@ -8614,13 +8617,13 @@ trait Foo {
 fn main() {
     let f: Foo = 42
 }
-"#);
+"#, "type mismatch: expected trait Foo, found int");
 }
 
 #[test]
 fn fail_assign_string_to_trait_variable() {
     // Cannot assign a string to a trait-typed variable
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Foo {
     fn get(self) int
 }
@@ -8628,7 +8631,7 @@ trait Foo {
 fn main() {
     let f: Foo = "hello"
 }
-"#);
+"#, "type mismatch: expected trait Foo, found string");
 }
 
 #[test]
@@ -9018,7 +9021,7 @@ fn main() {
 #[test]
 fn fail_trait_impl_missing_one_of_two_methods() {
     // Class implements trait but misses one of two required methods
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait TwoMethods {
     fn first(self) int
     fn second(self) int
@@ -9030,13 +9033,13 @@ class X impl TwoMethods {
 }
 
 fn main() {}
-"#);
+"#, "class 'X' does not implement required method 'second' from trait 'TwoMethods'");
 }
 
 #[test]
 fn fail_trait_impl_method_returns_string_not_int() {
     // Method return type mismatch: trait says int, class says string
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Getter {
     fn get(self) int
 }
@@ -9047,13 +9050,13 @@ class X impl Getter {
 }
 
 fn main() {}
-"#);
+"#, "method 'get' return type mismatch: trait 'Getter' expects int, class 'X' returns string");
 }
 
 #[test]
 fn fail_pass_non_implementing_class_to_trait_param() {
     // Class doesn't implement the required trait
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Foo {
     fn foo(self) int
 }
@@ -9067,7 +9070,7 @@ fn use_foo(f: Foo) { print(f.foo()) }
 fn main() {
     use_foo(Bar { val: 1 })
 }
-"#);
+"#, "argument 1 of 'use_foo': expected trait Foo, found Bar");
 }
 
 #[test]
@@ -10093,20 +10096,20 @@ fn main() {
 #[test]
 fn fail_class_impl_nonexistent_trait() {
     // Class implements a trait that doesn't exist
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 class Foo impl NonexistentTrait {
     val: int
     fn bar(self) int { return 1 }
 }
 
 fn main() {}
-"#);
+"#, "unknown trait 'NonexistentTrait'");
 }
 
 #[test]
 fn fail_trait_method_returns_wrong_type_string_vs_int() {
     // Trait expects string return, class returns int
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Namer {
     fn name(self) string
 }
@@ -10117,13 +10120,13 @@ class Bad impl Namer {
 }
 
 fn main() {}
-"#);
+"#, "method 'name' return type mismatch: trait 'Namer' expects string, class 'Bad' returns int");
 }
 
 #[test]
 fn fail_call_undeclared_method_on_trait() {
     // Call a method that doesn't exist on the trait
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Foo {
     fn bar(self) int
 }
@@ -10138,13 +10141,13 @@ fn use_foo(f: Foo) {
 }
 
 fn main() {}
-"#);
+"#, "trait 'Foo' has no method 'baz'");
 }
 
 #[test]
 fn fail_use_trait_as_type_without_impl() {
     // Assign a class to trait-typed variable when class doesn't implement it
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Foo {
     fn bar(self) int
 }
@@ -10156,7 +10159,7 @@ class NotFoo {
 fn main() {
     let f: Foo = NotFoo { val: 1 }
 }
-"#);
+"#, "type mismatch: expected trait Foo, found NotFoo");
 }
 
 #[test]
@@ -10994,7 +10997,7 @@ fn main() {
 #[test]
 fn fail_trait_method_wrong_param_type_string_for_int() {
     // Class implements trait method with string param where int expected
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Adder {
     fn add(self, x: int) int
 }
@@ -11008,7 +11011,7 @@ fn main() {
     let a: Adder = BadAdder { tag: 0 }
     print(a.add(1))
 }
-"#);
+"#, "method 'add' parameter 1 type mismatch: trait 'Adder' expects int, class 'BadAdder' has string");
 }
 
 // ===== Batch 20: Empty traits, vtable stress, recursive dispatch, field rejection, generics =====
@@ -11344,7 +11347,7 @@ fn main() {
 #[test]
 fn fail_trait_method_array_param_type_mismatch() {
     // Trait requires [int] but class impl provides [string]
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Lister {
     fn list(self, items: [int]) int
 }
@@ -11359,13 +11362,13 @@ fn main() {
     let data: [int] = [1, 2]
     print(l.list(data))
 }
-"#);
+"#, "method 'list' parameter 1 type mismatch: trait 'Lister' expects [int], class 'BadLister' has [string]");
 }
 
 #[test]
 fn fail_trait_method_return_type_array_mismatch() {
     // Trait requires [int] return but class returns [string]
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Producer_ {
     fn produce(self) [int]
 }
@@ -11382,7 +11385,7 @@ fn main() {
     let p: Producer_ = BadProducer { tag: 0 }
     print(p.produce().len())
 }
-"#);
+"#, "method 'produce' return type mismatch: trait 'Producer_' expects [int], class 'BadProducer' returns [string]");
 }
 
 #[test]
@@ -11552,7 +11555,7 @@ fn main() {
 #[test]
 fn fail_trait_method_extra_param() {
     // Class method has extra parameter not in trait
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Adder_ {
     fn add(self, x: int) int
 }
@@ -11566,13 +11569,13 @@ fn main() {
     let a: Adder_ = BadAdder_ { tag: 0 }
     print(a.add(1))
 }
-"#);
+"#, "method 'add' of class 'BadAdder_' has wrong number of parameters for trait 'Adder_'");
 }
 
 #[test]
 fn fail_trait_method_missing_param() {
     // Class method has fewer params than trait requires
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Combiner {
     fn combine(self, a: int, b: int) int
 }
@@ -11586,7 +11589,7 @@ fn main() {
     let c: Combiner = BadCombiner { tag: 0 }
     print(c.combine(1, 2))
 }
-"#);
+"#, "method 'combine' of class 'BadCombiner' has wrong number of parameters for trait 'Combiner'");
 }
 
 // ===== Batch 21: Reassignment, contracts, error combos, default-only, nested dispatch =====
@@ -12069,7 +12072,7 @@ fn main() {
 fn fail_trait_impl_with_requires_on_impl_method() {
     // COMPILER GAP TEST: Class method adding requires to trait impl should be rejected (Liskov)
     // If this passes compilation, it means requires enforcement on trait impls isn't checked
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Worker__ {
     fn work(self, x: int) int
 }
@@ -12087,7 +12090,7 @@ fn main() {
     let w: Worker__ = RestrictedWorker { tag: 1 }
     print(w.work(5))
 }
-"#);
+"#, "cannot add 'requires' clauses");
 }
 
 #[test]
@@ -12550,7 +12553,7 @@ fn main() {
 #[test]
 fn fail_call_method_not_in_trait_via_handle() {
     // Calling a method through trait handle that exists on class but not in trait
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Basic {
     fn basic(self) int
 }
@@ -12568,13 +12571,13 @@ fn run(b: Basic) {
 fn main() {
     run(Full { tag: 0 })
 }
-"#);
+"#, "trait 'Basic' has no method 'extra'");
 }
 
 #[test]
 fn fail_trait_method_nullable_return_mismatch() {
     // Trait expects int return, class returns int? — should fail
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Getter {
     fn get(self) int
 }
@@ -12590,7 +12593,7 @@ fn main() {
     let g: Getter = NullableGetter { tag: 0 }
     print(g.get())
 }
-"#);
+"#, "method 'get' return type mismatch: trait 'Getter' expects int, class 'NullableGetter' returns int?");
 }
 
 #[test]
@@ -12745,7 +12748,7 @@ app MyApp[repo: UserRepo] {
 #[test]
 fn fail_access_field_on_trait_handle_direct() {
     // Cannot access field on a trait handle (traits are opaque)
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Foo {
     fn bar(self) int
 }
@@ -12762,7 +12765,7 @@ fn use_foo(f: Foo) {
 fn main() {
     use_foo(Impl { val: 5 })
 }
-"#);
+"#, "field access on non-class type trait Foo");
 }
 
 #[test]
@@ -13205,7 +13208,7 @@ fn main() {
 #[test]
 fn fail_trait_return_type_float_vs_int() {
     // Trait expects float return but class returns int
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Measured {
     fn measure(self) float
 }
@@ -13219,7 +13222,7 @@ fn main() {
     let m: Measured = BadMeasure { tag: 0 }
     print(m.measure())
 }
-"#);
+"#, "method 'measure' return type mismatch: trait 'Measured' expects float, class 'BadMeasure' returns int");
 }
 
 #[test]
@@ -13709,7 +13712,7 @@ fn main() {
 #[test]
 fn fail_construct_trait_directly() {
     // Cannot construct a trait as if it were a class
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Foo {
     fn bar(self) int
 }
@@ -13717,13 +13720,13 @@ trait Foo {
 fn main() {
     let f = Foo { }
 }
-"#);
+"#, "unexpected token { in expression");
 }
 
 #[test]
 fn fail_trait_method_call_wrong_arg_count() {
     // Calling trait method with wrong number of arguments
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Adder {
     fn add(self, x: int) int
 }
@@ -13737,13 +13740,13 @@ fn main() {
     let a: Adder = Impl { tag: 0 }
     print(a.add(1, 2))
 }
-"#);
+"#, "method 'add' expects 1 arguments, got 2");
 }
 
 #[test]
 fn fail_trait_method_call_wrong_arg_type() {
     // Calling trait method with wrong argument type
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Adder {
     fn add(self, x: int) int
 }
@@ -13757,7 +13760,7 @@ fn main() {
     let a: Adder = Impl { tag: 0 }
     print(a.add("hello"))
 }
-"#);
+"#, "argument 1 of 'add': expected int, found string");
 }
 
 #[test]
@@ -14311,7 +14314,7 @@ fn main() {
 #[test]
 fn fail_return_wrong_class_from_trait_method() {
     // Trait method declared to return ClassA but returns ClassB
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 class Result__ {
     val: int
 }
@@ -14332,13 +14335,13 @@ class Impl__ impl Producer__ {
 }
 
 fn main() {}
-"#);
+"#, "return type mismatch: expected Result__, found Other__");
 }
 
 #[test]
 fn fail_trait_method_return_array_wrong_element_type() {
     // Returns [string] when trait declares [int]
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Lister__ {
     fn items(self) [int]
 }
@@ -14352,7 +14355,7 @@ class ListerImpl impl Lister__ {
 }
 
 fn main() {}
-"#);
+"#, "return type mismatch: expected [int], found [string]");
 }
 
 #[test]
@@ -14958,7 +14961,7 @@ fn main() {
 #[test]
 fn fail_trait_as_class_field_type_coercion() {
     // BUG: Assigning concrete class to trait-typed field in struct literal fails
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 trait Worker {
     fn work(self) int
 }
@@ -14975,7 +14978,7 @@ class Container {
 fn main() {
     let c = Container { worker: MyWorker { n: 1 } }
 }
-"#);
+"#, "field 'worker': expected trait Worker, found MyWorker");
 }
 
 #[test]
