@@ -464,27 +464,27 @@ fn encoder_decoder_primitives() {
 import std.wire
 
 fn main() {
-    let mut enc = wire.wire_value_encoder()
+    let enc = wire.wire_value_encoder()
     enc.encode_int(42)
     let wv = enc.result()
 
-    let mut dec = wire.wire_value_decoder(wv)
+    let dec = wire.wire_value_decoder(wv)
     let val = dec.decode_int()!
     print(val)
 
-    let mut enc2 = wire.wire_value_encoder()
+    let enc2 = wire.wire_value_encoder()
     enc2.encode_string("hello")
     let wv2 = enc2.result()
 
-    let mut dec2 = wire.wire_value_decoder(wv2)
+    let dec2 = wire.wire_value_decoder(wv2)
     let val2 = dec2.decode_string()!
     print(val2)
 
-    let mut enc3 = wire.wire_value_encoder()
+    let enc3 = wire.wire_value_encoder()
     enc3.encode_bool(true)
     let wv3 = enc3.result()
 
-    let mut dec3 = wire.wire_value_decoder(wv3)
+    let dec3 = wire.wire_value_decoder(wv3)
     let val3 = dec3.decode_bool()!
     if val3 {
         print("true")
@@ -502,7 +502,7 @@ fn encoder_decoder_array() {
 import std.wire
 
 fn main() {
-    let mut enc = wire.wire_value_encoder()
+    let enc = wire.wire_value_encoder()
     enc.encode_array_start(3)
     enc.encode_int(1)
     enc.encode_int(2)
@@ -510,7 +510,7 @@ fn main() {
     enc.encode_array_end()
     let wv = enc.result()
 
-    let mut dec = wire.wire_value_decoder(wv)
+    let dec = wire.wire_value_decoder(wv)
     let len = dec.decode_array_start()!
     print(len)
     dec.decode_array_end()
@@ -525,7 +525,7 @@ fn encoder_decoder_record() {
 import std.wire
 
 fn main() {
-    let mut enc = wire.wire_value_encoder()
+    let enc = wire.wire_value_encoder()
     enc.encode_record_start("Person", 2)
     enc.encode_field("name", 0)
     enc.encode_string("Alice")
@@ -534,7 +534,7 @@ fn main() {
     enc.encode_record_end()
     let wv = enc.result()
 
-    let mut dec = wire.wire_value_decoder(wv)
+    let dec = wire.wire_value_decoder(wv)
     dec.decode_record_start("Person", 2)!
     dec.decode_field("name", 0)!
     let name = dec.decode_string()!
@@ -554,7 +554,7 @@ fn encoder_decoder_variant() {
 import std.wire
 
 fn main() {
-    let mut enc = wire.wire_value_encoder()
+    let enc = wire.wire_value_encoder()
     enc.encode_variant_start("Status", "Active", 0, 0)
     enc.encode_variant_end()
     let wv = enc.result()
@@ -563,7 +563,7 @@ fn main() {
     names.push("Active")
     names.push("Suspended")
 
-    let mut dec = wire.wire_value_decoder(wv)
+    let dec = wire.wire_value_decoder(wv)
     let idx = dec.decode_variant("Status", names)!
     print(idx)
     dec.decode_variant_end()
@@ -578,7 +578,7 @@ fn encoder_decoder_variant_with_fields() {
 import std.wire
 
 fn main() {
-    let mut enc = wire.wire_value_encoder()
+    let enc = wire.wire_value_encoder()
     enc.encode_variant_start("Status", "Suspended", 1, 1)
     enc.encode_field("reason", 0)
     enc.encode_string("maintenance")
@@ -589,7 +589,7 @@ fn main() {
     names.push("Active")
     names.push("Suspended")
 
-    let mut dec = wire.wire_value_decoder(wv)
+    let dec = wire.wire_value_decoder(wv)
     let idx = dec.decode_variant("Status", names)!
     print(idx)
     dec.decode_field("reason", 0)!
@@ -607,11 +607,11 @@ fn encoder_decoder_nullable() {
 import std.wire
 
 fn main() {
-    let mut enc1 = wire.wire_value_encoder()
+    let enc1 = wire.wire_value_encoder()
     enc1.encode_null()
     let wv1 = enc1.result()
 
-    let mut dec1 = wire.wire_value_decoder(wv1)
+    let dec1 = wire.wire_value_decoder(wv1)
     let has_value1 = dec1.decode_nullable()
     if has_value1 {
         print("has value")
@@ -619,11 +619,11 @@ fn main() {
         print("null")
     }
 
-    let mut enc2 = wire.wire_value_encoder()
+    let enc2 = wire.wire_value_encoder()
     enc2.encode_int(42)
     let wv2 = enc2.result()
 
-    let mut dec2 = wire.wire_value_decoder(wv2)
+    let dec2 = wire.wire_value_decoder(wv2)
     let has_value2 = dec2.decode_nullable()
     if has_value2 {
         print("has value")
@@ -643,7 +643,7 @@ fn encoder_decoder_nested_structures() {
 import std.wire
 
 fn main() {
-    let mut enc = wire.wire_value_encoder()
+    let enc = wire.wire_value_encoder()
     enc.encode_record_start("Order", 2)
     enc.encode_field("id", 0)
     enc.encode_int(123)
@@ -655,7 +655,7 @@ fn main() {
     enc.encode_record_end()
     let wv = enc.result()
 
-    let mut dec = wire.wire_value_decoder(wv)
+    let dec = wire.wire_value_decoder(wv)
     dec.decode_record_start("Order", 2)!
     dec.decode_field("id", 0)!
     let id = dec.decode_int()!
