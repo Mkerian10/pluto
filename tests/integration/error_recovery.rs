@@ -112,7 +112,7 @@ fn stray_closing_brace() {
             print("test")
         }
         }
-    "#, "unexpected");
+    "#, "found }");
 }
 
 #[test]
