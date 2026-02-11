@@ -32,6 +32,66 @@ fn resolve_stdlib(stdlib_root: Option<&Path>) -> Option<PathBuf> {
     stdlib_root.map(|p| p.to_path_buf()).or(env_stdlib)
 }
 
+struct FrontendResult {
+    env: typeck::env::TypeEnv,
+    warnings: Vec<CompileWarning>,
+}
+
+/// Run the shared frontend pipeline: prelude → ambient → spawn → [strip tests] →
+/// contracts → typeck → monomorphize → trait conformance → closures → xref.
+fn run_frontend(program: &mut Program, test_mode: bool) -> Result<FrontendResult, CompileError> {
+    prelude::inject_prelude(program)?;
+    ambient::desugar_ambient(program)?;
+    spawn::desugar_spawn(program)?;
+    if !test_mode {
+        let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
+            .map(|t| t.fn_name.clone()).collect();
+        program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
+        program.test_info.clear();
+        program.tests = None;
+    }
+    contracts::validate_contracts(program)?;
+    let (mut env, warnings) = typeck::type_check(program)?;
+    monomorphize::monomorphize(program, &mut env)?;
+    typeck::check_trait_conformance(program, &mut env)?;
+    closures::lift_closures(program, &mut env)?;
+    xref::resolve_cross_refs(program);
+    Ok(FrontendResult { env, warnings })
+}
+
+/// Resolve extern rust crates and inject their extern fn declarations into the program.
+fn resolve_rust_artifacts(program: &mut Program, entry_dir: &Path) -> Result<Vec<rust_ffi::RustCrateArtifact>, CompileError> {
+    let artifacts = if program.extern_rust_crates.is_empty() {
+        vec![]
+    } else {
+        rust_ffi::resolve_rust_crates(program, entry_dir)?
+    };
+    rust_ffi::inject_extern_fns(program, &artifacts);
+    Ok(artifacts)
+}
+
+/// Add Rust FFI artifact static libs and native lib flags to a link config.
+fn add_rust_artifact_flags(config: &mut LinkConfig, artifacts: &[rust_ffi::RustCrateArtifact]) {
+    for artifact in artifacts {
+        config.static_libs.push(artifact.static_lib.clone());
+        config.flags.extend(artifact.native_libs.clone());
+    }
+}
+
+/// Parse a source string and reject extern rust declarations (which need file-based compilation).
+fn parse_source(source: &str) -> Result<Program, CompileError> {
+    let tokens = lexer::lex(source)?;
+    let mut parser = parser::Parser::new(&tokens, source);
+    let program = parser.parse_program()?;
+    if !program.extern_rust_crates.is_empty() {
+        return Err(CompileError::syntax(
+            "extern rust declarations require file-based compilation (use compile_file instead)",
+            program.extern_rust_crates[0].span,
+        ));
+    }
+    Ok(program)
+}
+
 /// Parse source for editing — no transforms (no monomorphize, no closure lift, no spawn desugar).
 /// Does NOT inject prelude (avoids serializing Option<T> etc. into user source).
 /// Resolves cross-references so xref IDs are available for user-defined declarations.
@@ -46,61 +106,17 @@ pub fn parse_for_editing(source: &str) -> Result<parser::ast::Program, CompileEr
 /// Compile a source string to object bytes (lex → parse → prelude → typeck → monomorphize → closures → codegen).
 /// No file I/O or linking. Useful for compile-fail tests that only need to check errors.
 pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
-    let tokens = lexer::lex(source)?;
-    let mut parser = parser::Parser::new(&tokens, source);
-    let mut program = parser.parse_program()?;
-    // Reject extern rust in single-string compilation
-    if !program.extern_rust_crates.is_empty() {
-        return Err(CompileError::syntax(
-            "extern rust declarations require file-based compilation (use compile_file instead)",
-            program.extern_rust_crates[0].span,
-        ));
-    }
-    prelude::inject_prelude(&mut program)?;
-    ambient::desugar_ambient(&mut program)?;
-    spawn::desugar_spawn(&mut program)?;
-    // Strip test functions in non-test mode
-    let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
-        .map(|t| t.fn_name.clone()).collect();
-    program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
-    program.test_info.clear();
-    program.tests = None;
-    contracts::validate_contracts(&program)?;
-    let (mut env, _warnings) = typeck::type_check(&program)?;
-    monomorphize::monomorphize(&mut program, &mut env)?;
-    typeck::check_trait_conformance(&program, &mut env)?;
-    closures::lift_closures(&mut program, &mut env)?;
-    xref::resolve_cross_refs(&mut program);
-    codegen::codegen(&program, &env, source)
+    let mut program = parse_source(source)?;
+    let result = run_frontend(&mut program, false)?;
+    codegen::codegen(&program, &result.env, source)
 }
 
 /// Compile a source string and return both the object bytes and any compiler warnings.
 pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<CompileWarning>), CompileError> {
-    let tokens = lexer::lex(source)?;
-    let mut parser = parser::Parser::new(&tokens, source);
-    let mut program = parser.parse_program()?;
-    if !program.extern_rust_crates.is_empty() {
-        return Err(CompileError::syntax(
-            "extern rust declarations require file-based compilation (use compile_file instead)",
-            program.extern_rust_crates[0].span,
-        ));
-    }
-    prelude::inject_prelude(&mut program)?;
-    ambient::desugar_ambient(&mut program)?;
-    spawn::desugar_spawn(&mut program)?;
-    let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
-        .map(|t| t.fn_name.clone()).collect();
-    program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
-    program.test_info.clear();
-    program.tests = None;
-    contracts::validate_contracts(&program)?;
-    let (mut env, warnings) = typeck::type_check(&program)?;
-    monomorphize::monomorphize(&mut program, &mut env)?;
-    typeck::check_trait_conformance(&program, &mut env)?;
-    closures::lift_closures(&mut program, &mut env)?;
-    xref::resolve_cross_refs(&mut program);
-    let obj = codegen::codegen(&program, &env, source)?;
-    Ok((obj, warnings))
+    let mut program = parse_source(source)?;
+    let result = run_frontend(&mut program, false)?;
+    let obj = codegen::codegen(&program, &result.env, source)?;
+    Ok((obj, result.warnings))
 }
 
 /// Compile a source string directly (single-file, no module resolution).
@@ -122,27 +138,9 @@ pub fn compile(source: &str, output_path: &Path) -> Result<(), CompileError> {
 /// Compile a source string in test mode (lex → parse → prelude → typeck → monomorphize → closures → codegen).
 /// Tests are preserved and a test runner main is generated.
 pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError> {
-    let tokens = lexer::lex(source)?;
-    let mut parser = parser::Parser::new(&tokens, source);
-    let mut program = parser.parse_program()?;
-    // Reject extern rust in single-string compilation
-    if !program.extern_rust_crates.is_empty() {
-        return Err(CompileError::syntax(
-            "extern rust declarations require file-based compilation (use compile_file instead)",
-            program.extern_rust_crates[0].span,
-        ));
-    }
-    prelude::inject_prelude(&mut program)?;
-    ambient::desugar_ambient(&mut program)?;
-    spawn::desugar_spawn(&mut program)?;
-    // test_info is NOT stripped in test mode
-    contracts::validate_contracts(&program)?;
-    let (mut env, _warnings) = typeck::type_check(&program)?;
-    monomorphize::monomorphize(&mut program, &mut env)?;
-    typeck::check_trait_conformance(&program, &mut env)?;
-    closures::lift_closures(&mut program, &mut env)?;
-    xref::resolve_cross_refs(&mut program);
-    codegen::codegen(&program, &env, source)
+    let mut program = parse_source(source)?;
+    let result = run_frontend(&mut program, true)?;
+    codegen::codegen(&program, &result.env, source)
 }
 
 /// Compile a source string in test mode directly (single-file, no module resolution).
@@ -191,48 +189,24 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
         modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?
     };
 
-    // Check extern rust aliases don't collide with import aliases
     check_extern_rust_import_collisions(&graph)?;
 
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
 
-    // Resolve extern rust crates (build glue, extract signatures)
-    let rust_artifacts = if program.extern_rust_crates.is_empty() {
-        vec![]
-    } else {
-        rust_ffi::resolve_rust_crates(&program, entry_dir)?
-    };
-    rust_ffi::inject_extern_fns(&mut program, &rust_artifacts);
+    let rust_artifacts = resolve_rust_artifacts(&mut program, entry_dir)?;
 
-    prelude::inject_prelude(&mut program)?;
-    ambient::desugar_ambient(&mut program)?;
-    spawn::desugar_spawn(&mut program)?;
-    // Strip test functions in non-test mode
-    let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
-        .map(|t| t.fn_name.clone()).collect();
-    program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
-    program.test_info.clear();
-    program.tests = None;
-    contracts::validate_contracts(&program)?;
-    let (mut env, warnings) = typeck::type_check(&program)?;
-    for w in &warnings {
+    let result = run_frontend(&mut program, false)?;
+    for w in &result.warnings {
         diagnostics::render_warning(&source, &entry_file.display().to_string(), w);
     }
-    monomorphize::monomorphize(&mut program, &mut env)?;
-    typeck::check_trait_conformance(&program, &mut env)?;
-    closures::lift_closures(&mut program, &mut env)?;
-    xref::resolve_cross_refs(&mut program);
-    let object_bytes = codegen::codegen(&program, &env, &source)?;
+    let object_bytes = codegen::codegen(&program, &result.env, &source)?;
 
     let obj_path = output_path.with_extension("o");
     std::fs::write(&obj_path, &object_bytes)
         .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
 
     let mut config = LinkConfig::default_config(&obj_path)?;
-    for artifact in &rust_artifacts {
-        config.static_libs.push(artifact.static_lib.clone());
-        config.flags.extend(artifact.native_libs.clone());
-    }
+    add_rust_artifact_flags(&mut config, &rust_artifacts);
     link_from_config(&config, output_path)?;
 
     let _ = std::fs::remove_file(&obj_path);
@@ -266,31 +240,12 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
 
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
 
-    let rust_artifacts = if program.extern_rust_crates.is_empty() {
-        vec![]
-    } else {
-        rust_ffi::resolve_rust_crates(&program, entry_dir)?
-    };
-    rust_ffi::inject_extern_fns(&mut program, &rust_artifacts);
+    resolve_rust_artifacts(&mut program, entry_dir)?;
 
-    prelude::inject_prelude(&mut program)?;
-    ambient::desugar_ambient(&mut program)?;
-    spawn::desugar_spawn(&mut program)?;
-    // Strip test functions in non-test mode
-    let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()
-        .map(|t| t.fn_name.clone()).collect();
-    program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
-    program.test_info.clear();
-    program.tests = None;
-    contracts::validate_contracts(&program)?;
-    let (mut env, warnings) = typeck::type_check(&program)?;
-    monomorphize::monomorphize(&mut program, &mut env)?;
-    typeck::check_trait_conformance(&program, &mut env)?;
-    closures::lift_closures(&mut program, &mut env)?;
-    xref::resolve_cross_refs(&mut program);
-    let derived = derived::DerivedInfo::build(&env, &program);
+    let result = run_frontend(&mut program, false)?;
+    let derived = derived::DerivedInfo::build(&result.env, &program);
 
-    Ok((program, source, derived, warnings))
+    Ok((program, source, derived, result.warnings))
 }
 
 /// Compile a file in test mode. Tests are preserved and a test runner main is generated.
@@ -305,7 +260,6 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
     let pkg_graph = manifest::find_and_resolve(entry_dir)?;
     let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
 
-    // Check extern rust aliases don't collide with import aliases
     check_extern_rust_import_collisions(&graph)?;
 
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
@@ -326,37 +280,20 @@ pub fn compile_file_for_tests(entry_file: &Path, output_path: &Path, stdlib_root
         ));
     }
 
-    // Resolve extern rust crates
-    let rust_artifacts = if program.extern_rust_crates.is_empty() {
-        vec![]
-    } else {
-        rust_ffi::resolve_rust_crates(&program, entry_dir)?
-    };
-    rust_ffi::inject_extern_fns(&mut program, &rust_artifacts);
+    let rust_artifacts = resolve_rust_artifacts(&mut program, entry_dir)?;
 
-    prelude::inject_prelude(&mut program)?;
-    ambient::desugar_ambient(&mut program)?;
-    spawn::desugar_spawn(&mut program)?;
-    contracts::validate_contracts(&program)?;
-    let (mut env, warnings) = typeck::type_check(&program)?;
-    for w in &warnings {
+    let result = run_frontend(&mut program, true)?;
+    for w in &result.warnings {
         diagnostics::render_warning(&source, &entry_file.display().to_string(), w);
     }
-    monomorphize::monomorphize(&mut program, &mut env)?;
-    typeck::check_trait_conformance(&program, &mut env)?;
-    closures::lift_closures(&mut program, &mut env)?;
-    xref::resolve_cross_refs(&mut program);
-    let object_bytes = codegen::codegen(&program, &env, &source)?;
+    let object_bytes = codegen::codegen(&program, &result.env, &source)?;
 
     let obj_path = output_path.with_extension("o");
     std::fs::write(&obj_path, &object_bytes)
         .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
 
     let mut config = LinkConfig::test_config(&obj_path)?;
-    for artifact in &rust_artifacts {
-        config.static_libs.push(artifact.static_lib.clone());
-        config.flags.extend(artifact.native_libs.clone());
-    }
+    add_rust_artifact_flags(&mut config, &rust_artifacts);
     link_from_config(&config, output_path)?;
 
     let _ = std::fs::remove_file(&obj_path);
