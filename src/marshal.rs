@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use uuid::Uuid;
 
 use crate::diagnostics::CompileError;
@@ -44,19 +45,75 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
 
     // Generate marshal and unmarshal functions for each type
     let mut generated_functions = Vec::new();
+    let mut instantiated_classes = Vec::new();
+    let mut instantiated_enums = Vec::new();
 
     for type_name in &types_to_marshal {
-        // Check if it's a class or enum
+        // Handle mangled generic instantiations (Box$$int, etc.)
+        if type_name.contains("$$") {
+            // Parse mangled name: Box$$int → Box, [int]
+            let parts: Vec<&str> = type_name.split("$$").collect();
+            if parts.len() != 2 {
+                continue; // Skip complex generics for now (e.g., Pair$$int$string)
+            }
+            let base_name = parts[0];
+            let type_arg_str = parts[1];
+
+            // Find the generic template class
+            if let Some(generic_class) = program.classes.iter().find(|c| &c.node.name.node == base_name && !c.node.type_params.is_empty()) {
+                // Create instantiated class declaration
+                let instantiated_class = instantiate_generic_class(&generic_class.node, type_name, type_arg_str)?;
+                let marshal_fn = generate_marshal_class(&instantiated_class)?;
+                let unmarshal_fn = generate_unmarshal_class(&instantiated_class)?;
+                generated_functions.push(marshal_fn);
+                generated_functions.push(unmarshal_fn);
+                // Add instantiated class to program so type checking knows about Box$$int
+                instantiated_classes.push(Spanned {
+                    node: instantiated_class,
+                    span: generic_class.span,
+                });
+                continue;
+            }
+
+            // Find the generic template enum
+            if let Some(generic_enum) = program.enums.iter().find(|e| &e.node.name.node == base_name && !e.node.type_params.is_empty()) {
+                // Create instantiated enum declaration
+                let instantiated_enum = instantiate_generic_enum(&generic_enum.node, type_name, type_arg_str)?;
+                let marshal_fn = generate_marshal_enum(&instantiated_enum)?;
+                let unmarshal_fn = generate_unmarshal_enum(&instantiated_enum)?;
+                generated_functions.push(marshal_fn);
+                generated_functions.push(unmarshal_fn);
+                // Add instantiated enum to program so type checking knows about Result__int
+                instantiated_enums.push(Spanned {
+                    node: instantiated_enum,
+                    span: generic_enum.span,
+                });
+                continue;
+            }
+        }
+
+        // Handle non-generic classes and enums
         if let Some(class_decl) = program.classes.iter().find(|c| &c.node.name.node == type_name) {
-            // Skip generic classes (they'll be handled in phase B)
+            // Skip generic classes (they'll be handled above)
             if !class_decl.node.type_params.is_empty() {
                 continue;
             }
 
-            generated_functions.push(generate_marshal_class(&class_decl.node)?);
-            generated_functions.push(generate_unmarshal_class(&class_decl.node)?);
+            let marshal_fn = generate_marshal_class(&class_decl.node)?;
+            let unmarshal_fn = generate_unmarshal_class(&class_decl.node)?;
+
+            // // Debug: print generated functions
+            // if type_name == "Item" || type_name == "Data" {
+            //     eprintln!("\n=== Generated __marshal_{} ===", type_name);
+            //     eprintln!("{}", crate::pretty::pretty_print_function(&marshal_fn.node));
+            //     eprintln!("\n=== Generated __unmarshal_{} ===", type_name);
+            //     eprintln!("{}", crate::pretty::pretty_print_function(&unmarshal_fn.node));
+            // }
+
+            generated_functions.push(marshal_fn);
+            generated_functions.push(unmarshal_fn);
         } else if let Some(enum_decl) = program.enums.iter().find(|e| &e.node.name.node == type_name) {
-            // Skip generic enums (they'll be handled in phase B)
+            // Skip generic enums (they'll be handled above)
             if !enum_decl.node.type_params.is_empty() {
                 continue;
             }
@@ -66,8 +123,10 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
         }
     }
 
-    // Inject generated functions into the program
+    // Inject generated functions and instantiated types into the program
     program.functions.extend(generated_functions);
+    program.classes.extend(instantiated_classes);
+    program.enums.extend(instantiated_enums);
 
     Ok(())
 }
@@ -94,16 +153,20 @@ pub fn generate_marshalers_phase_b(
         return Ok(());
     }
 
-    // Collect types from stage methods (now includes monomorphized names like Box__int)
+    // Collect types from stage methods (now includes monomorphized names like Box$$int)
     let types_to_marshal = collect_types_from_stage_methods(program)?;
+
+    eprintln!("Phase B: Collected types: {:?}", types_to_marshal);
 
     let mut generated_functions = Vec::new();
 
     for type_name in &types_to_marshal {
-        // Check if it's a monomorphized type (contains __) that doesn't have a marshaler yet
-        if type_name.contains("__") {
+        // Check if it's a monomorphized type (contains $$) that doesn't have a marshaler yet
+        if type_name.contains("$$") {
+            // Convert $$ to __ in function name for valid identifier syntax
+            let marshal_fn_name = format!("__marshal_{}", type_name.replace("$$", "__"));
             let has_marshal = program.functions.iter()
-                .any(|f| f.node.name.node == format!("__marshal_{}", type_name));
+                .any(|f| f.node.name.node == marshal_fn_name);
 
             if has_marshal {
                 continue; // Already generated
@@ -132,9 +195,11 @@ pub fn generate_marshalers_phase_b(
 
 /// Collects all types that cross stage boundaries (stage pub method parameters and returns).
 /// Returns a set of type names (classes and enums) that need marshalers.
+/// Uses fixed-point expansion to recursively collect nested types from class fields and enum variants.
 fn collect_types_from_stage_methods(program: &Program) -> Result<HashSet<String>, CompileError> {
     let mut types = HashSet::new();
 
+    // Initial collection from stage method signatures
     for stage in &program.stages {
         for method in &stage.node.methods {
             if !method.node.is_pub {
@@ -156,7 +221,156 @@ fn collect_types_from_stage_methods(program: &Program) -> Result<HashSet<String>
         }
     }
 
+    // Fixed-point expansion: recursively collect nested types from class fields and enum variants
+    loop {
+        let mut new_types = HashSet::new();
+
+        for type_name in &types {
+            // Expand class fields
+            if let Some(class_decl) = program.classes.iter().find(|c| &c.node.name.node == type_name) {
+                for field in &class_decl.node.fields {
+                    if field.is_injected {
+                        continue; // Skip DI fields
+                    }
+                    collect_types_from_type_expr(&field.ty.node, &mut new_types);
+                }
+            }
+
+            // Expand enum variant fields
+            if let Some(enum_decl) = program.enums.iter().find(|e| &e.node.name.node == type_name) {
+                for variant in &enum_decl.node.variants {
+                    for field in &variant.fields {
+                        collect_types_from_type_expr(&field.ty.node, &mut new_types);
+                    }
+                }
+            }
+        }
+
+        // Check if we found any new types (fixed point reached when no new types added)
+        let added = new_types.difference(&types).count();
+        if added == 0 {
+            break;
+        }
+
+        types.extend(new_types);
+    }
+
     Ok(types)
+}
+
+/// Instantiates a generic class template with concrete type arguments.
+/// Example: Box<T> with type_arg="int" → Box__int with all T replaced by int
+fn instantiate_generic_class(template: &ClassDecl, mangled_name: &str, type_arg_str: &str) -> Result<ClassDecl, CompileError> {
+    // For now, only support single type parameter
+    if template.type_params.len() != 1 {
+        return Err(CompileError::codegen(
+            format!("Marshal generation for multi-param generics not yet supported: {}", template.name.node)
+        ));
+    }
+
+    let type_param = &template.type_params[0].node;
+    let concrete_type = TypeExpr::Named(type_arg_str.to_string());
+
+    // Substitute type parameter in all field types
+    let mut instantiated_fields = Vec::new();
+    for field in &template.fields {
+        let instantiated_ty = substitute_type_in_type_expr(&field.ty.node, type_param, &concrete_type);
+        instantiated_fields.push(crate::parser::ast::Field {
+            id: field.id,
+            name: field.name.clone(),
+            ty: Spanned { node: instantiated_ty, span: field.ty.span },
+            is_injected: field.is_injected,
+            is_ambient: field.is_ambient,
+        });
+    }
+
+    Ok(ClassDecl {
+        id: template.id,
+        name: Spanned { node: mangled_name.to_string(), span: template.name.span },
+        type_params: vec![], // Instantiated classes have no type params
+        type_param_bounds: std::collections::HashMap::new(),
+        fields: instantiated_fields,
+        methods: template.methods.clone(), // Methods not used in marshal generation
+        invariants: template.invariants.clone(),
+        impl_traits: template.impl_traits.clone(),
+        uses: template.uses.clone(),
+        is_pub: template.is_pub,
+        lifecycle: template.lifecycle,
+    })
+}
+
+/// Instantiates a generic enum template with concrete type arguments.
+fn instantiate_generic_enum(template: &crate::parser::ast::EnumDecl, mangled_name: &str, type_arg_str: &str) -> Result<crate::parser::ast::EnumDecl, CompileError> {
+    use crate::parser::ast::EnumVariant;
+
+    if template.type_params.len() != 1 {
+        return Err(CompileError::codegen(
+            format!("Marshal generation for multi-param generics not yet supported: {}", template.name.node)
+        ));
+    }
+
+    let type_param = &template.type_params[0].node;
+    let concrete_type = TypeExpr::Named(type_arg_str.to_string());
+
+    // Substitute type parameter in all variant field types
+    let mut instantiated_variants = Vec::new();
+    for variant in &template.variants {
+        let mut instantiated_fields = Vec::new();
+        for field in &variant.fields {
+            let instantiated_ty = substitute_type_in_type_expr(&field.ty.node, type_param, &concrete_type);
+            instantiated_fields.push(crate::parser::ast::Field {
+                id: field.id,
+                name: field.name.clone(),
+                ty: Spanned { node: instantiated_ty, span: field.ty.span },
+                is_injected: field.is_injected,
+                is_ambient: field.is_ambient,
+            });
+        }
+        instantiated_variants.push(EnumVariant {
+            id: variant.id,
+            name: variant.name.clone(),
+            fields: instantiated_fields,
+        });
+    }
+
+    Ok(crate::parser::ast::EnumDecl {
+        id: template.id,
+        name: Spanned { node: mangled_name.to_string(), span: template.name.span },
+        type_params: vec![],
+        type_param_bounds: std::collections::HashMap::new(),
+        variants: instantiated_variants,
+        is_pub: template.is_pub,
+    })
+}
+
+/// Substitutes a type parameter with a concrete type in a TypeExpr.
+fn substitute_type_in_type_expr(ty: &TypeExpr, type_param: &str, concrete: &TypeExpr) -> TypeExpr {
+    match ty {
+        TypeExpr::Named(name) if name == type_param => concrete.clone(),
+        TypeExpr::Named(name) => TypeExpr::Named(name.clone()),
+        TypeExpr::Array(elem) => {
+            TypeExpr::Array(Box::new(Spanned {
+                node: substitute_type_in_type_expr(&elem.node, type_param, concrete),
+                span: elem.span,
+            }))
+        }
+        TypeExpr::Nullable(inner) => {
+            TypeExpr::Nullable(Box::new(Spanned {
+                node: substitute_type_in_type_expr(&inner.node, type_param, concrete),
+                span: inner.span,
+            }))
+        }
+        TypeExpr::Generic { name, type_args } => {
+            let substituted_args: Vec<Spanned<TypeExpr>> = type_args.iter().map(|arg| {
+                Spanned {
+                    node: substitute_type_in_type_expr(&arg.node, type_param, concrete),
+                    span: arg.span,
+                }
+            }).collect();
+            TypeExpr::Generic { name: name.clone(), type_args: substituted_args }
+        }
+        other => other.clone(),
+    }
 }
 
 /// Recursively collects type names from a TypeExpr.
@@ -189,8 +403,15 @@ fn collect_types_from_type_expr(ty: &TypeExpr, types: &mut HashSet<String>) {
                     }
                 }
                 _ => {
-                    // User-defined generic (will be monomorphized)
-                    // Don't collect generic template names, only instantiations
+                    // User-defined generic (will be monomorphized to Box__int, etc.)
+                    // Collect the mangled name that will exist after monomorphization
+                    let mangled = mangle_generic_name(name, type_args);
+                    types.insert(mangled);
+
+                    // Also recursively collect type arguments
+                    for arg in type_args {
+                        collect_types_from_type_expr(&arg.node, types);
+                    }
                 }
             }
         }
@@ -211,7 +432,8 @@ fn collect_types_from_type_expr(ty: &TypeExpr, types: &mut HashSet<String>) {
 /// Generates __marshal_ClassName function for a class.
 fn generate_marshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>, CompileError> {
     let class_name = &class_decl.name.node;
-    let fn_name = format!("__marshal_{}", class_name);
+    // Convert $$ to __ in function name for valid identifier syntax
+    let fn_name = format!("__marshal_{}", class_name.replace("$$", "__"));
 
     // Count non-injected fields
     let data_fields: Vec<_> = class_decl.fields.iter()
@@ -309,7 +531,8 @@ fn generate_marshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>, C
 /// Generates __unmarshal_ClassName function for a class.
 fn generate_unmarshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>, CompileError> {
     let class_name = &class_decl.name.node;
-    let fn_name = format!("__unmarshal_{}", class_name);
+    // Convert $$ to __ in function name for valid identifier syntax
+    let fn_name = format!("__unmarshal_{}", class_name.replace("$$", "__"));
 
     let data_fields: Vec<_> = class_decl.fields.iter()
         .filter(|f| !f.is_injected)
@@ -319,25 +542,27 @@ fn generate_unmarshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>,
 
     let mut stmts = Vec::new();
 
-    // dec.decode_record_start("ClassName", num_fields)
-    stmts.push(mk_stmt_expr(mk_call(
-        "dec.decode_record_start",
+    // dec.decode_record_start("ClassName", num_fields)!
+    stmts.push(mk_stmt_expr(mk_propagate(mk_method_call(
+        "dec",
+        "decode_record_start",
         vec![
             mk_string_lit(class_name),
             mk_int_lit(num_fields as i64),
         ],
-    )));
+    ))));
 
     // For each field: decode_field + decode the value
     for (index, field) in data_fields.iter().enumerate() {
-        // dec.decode_field("field_name", index)
-        stmts.push(mk_stmt_expr(mk_call(
-            "dec.decode_field",
+        // dec.decode_field("field_name", index)!
+        stmts.push(mk_stmt_expr(mk_propagate(mk_method_call(
+            "dec",
+            "decode_field",
             vec![
                 mk_string_lit(&field.name.node),
                 mk_int_lit(index as i64),
             ],
-        )));
+        ))));
 
         // let field_name = decode_type(dec)
         stmts.extend(mk_let_decode(&field.name.node, &field.ty.node)?);
@@ -399,7 +624,8 @@ fn generate_marshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<Spa
     use crate::parser::ast::MatchArm;
 
     let enum_name = &enum_decl.name.node;
-    let fn_name = format!("__marshal_{}", enum_name);
+    // Convert $$ to __ in function name for valid identifier syntax
+    let fn_name = format!("__marshal_{}", enum_name.replace("$$", "__"));
 
     // Build match arms for each variant
     let mut match_arms = Vec::new();
@@ -516,7 +742,8 @@ fn generate_marshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<Spa
 /// Generates __unmarshal_enum function for an enum.
 fn generate_unmarshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<Spanned<Function>, CompileError> {
     let enum_name = &enum_decl.name.node;
-    let fn_name = format!("__unmarshal_{}", enum_name);
+    // Convert $$ to __ in function name for valid identifier syntax
+    let fn_name = format!("__unmarshal_{}", enum_name.replace("$$", "__"));
 
     let mut stmts = Vec::new();
 
@@ -556,10 +783,10 @@ fn generate_unmarshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<S
                 span: mk_span(),
             }),
             value: Spanned {
-                node: mk_method_call("dec", "decode_variant", vec![
+                node: mk_propagate(mk_method_call("dec", "decode_variant", vec![
                     mk_string_lit(enum_name),
                     mk_var("names"),
-                ]),
+                ])),
                 span: mk_span(),
             },
             is_mut: false,
@@ -579,13 +806,14 @@ fn generate_unmarshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<S
         // Decode each field
         for (field_index, field) in variant.fields.iter().enumerate() {
             // dec.decode_field("field_name", field_index)!
-            variant_stmts.push(mk_stmt_expr(mk_call(
-                "dec.decode_field",
+            variant_stmts.push(mk_stmt_expr(mk_propagate(mk_method_call(
+                "dec",
+                "decode_field",
                 vec![
                     mk_string_lit(&field.name.node),
                     mk_int_lit(field_index as i64),
                 ],
-            )));
+            ))));
 
             // let field_name = decode_type(dec)!
             variant_stmts.extend(mk_let_decode(&field.name.node, &field.ty.node)?);
@@ -714,8 +942,16 @@ fn generate_unmarshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<S
 // AST Helper Functions
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Global span counter for generated AST nodes to avoid HashMap collisions in type checking.
+// Uses atomic to be thread-safe (though currently single-threaded).
+static MARSHAL_SPAN_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
 fn mk_span() -> Span {
-    Span { start: 0, end: 0, file_id: 0 }
+    // Generate unique spans for each AST node to avoid method resolution collisions.
+    // Start at 20_000_000 to avoid colliding with real source spans.
+    let offset = MARSHAL_SPAN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let start = 20_000_000 + offset;
+    Span { start, end: start + 1, file_id: 0 }
 }
 
 fn mk_stmt_expr(expr: Expr) -> Spanned<Stmt> {
@@ -876,7 +1112,7 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
                         span: mk_span(),
                     }),
                     value: Spanned { node: mk_int_lit(0), span: mk_span() },
-                    is_mut: false,
+                    is_mut: true,
                 },
                 span: mk_span(),
             });
@@ -1240,10 +1476,10 @@ fn value_expr_to_string(expr: &Expr) -> Result<String, CompileError> {
 /// Helper to mangle generic type names
 fn mangle_generic_name(base_name: &str, type_args: &[Spanned<TypeExpr>]) -> String {
     let mut result = base_name.to_string();
-    result.push_str("__");
+    result.push_str("$$");
     for (i, arg) in type_args.iter().enumerate() {
         if i > 0 {
-            result.push('_');
+            result.push('$');
         }
         result.push_str(&type_expr_to_string(&arg.node));
     }
@@ -1322,13 +1558,13 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
 
             let mut stmts = Vec::new();
 
-            // let __len = dec.decode_array_start() (infallible)
+            // let __len = dec.decode_array_start()!
             stmts.push(Spanned {
                 node: Stmt::Let {
                     name: Spanned { node: "__len".to_string(), span: mk_span() },
                     ty: None,
                     value: Spanned {
-                        node: mk_method_call("dec", "decode_array_start", vec![]),
+                        node: mk_propagate(mk_method_call("dec", "decode_array_start", vec![])),
                         span: mk_span(),
                     },
                     is_mut: false,
@@ -1345,7 +1581,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                         node: Expr::ArrayLit { elements: vec![] },
                         span: mk_span(),
                     },
-                    is_mut: false,
+                    is_mut: true,
                 },
                 span: mk_span(),
             });
@@ -1359,13 +1595,16 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                         span: mk_span(),
                     }),
                     value: Spanned { node: mk_int_lit(0), span: mk_span() },
-                    is_mut: false,
+                    is_mut: true,
                 },
                 span: mk_span(),
             });
 
             // while __i < __len { ... }
             let mut loop_body = Vec::new();
+
+            // dec.decode_array_element(__i)!
+            loop_body.push(mk_stmt_expr(mk_propagate(mk_method_call("dec", "decode_array_element", vec![mk_var("__i")]))));
 
             // let elem = decode_T(dec)!
             loop_body.extend(mk_let_decode("__elem", &elem_ty.node)?);
@@ -1433,7 +1672,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
 
             let mut stmts = Vec::new();
 
-            // let __is_present = dec.decode_nullable()!
+            // let __is_present = dec.decode_nullable()
             stmts.push(Spanned {
                 node: Stmt::Let {
                     name: Spanned { node: "__is_present".to_string(), span: mk_span() },
@@ -1453,7 +1692,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                     name: Spanned { node: "__result".to_string(), span: mk_span() },
                     ty: Some(Spanned { node: ty.clone(), span: mk_span() }),
                     value: Spanned { node: Expr::NoneLit, span: mk_span() },
-                    is_mut: false,
+                    is_mut: true,
                 },
                 span: mk_span(),
             });
@@ -1466,13 +1705,13 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                 TypeExpr::Named(name) if matches!(name.as_str(), "int" | "float" | "bool" | "string" | "byte") => {
                     // Simple types - decode directly into __result
                     let decode_expr = match name.as_str() {
-                        "int" => mk_method_call("dec", "decode_int", vec![]),
-                        "float" => mk_method_call("dec", "decode_float", vec![]),
-                        "bool" => mk_method_call("dec", "decode_bool", vec![]),
-                        "string" => mk_method_call("dec", "decode_string", vec![]),
+                        "int" => mk_propagate(mk_method_call("dec", "decode_int", vec![])),
+                        "float" => mk_propagate(mk_method_call("dec", "decode_float", vec![])),
+                        "bool" => mk_propagate(mk_method_call("dec", "decode_bool", vec![])),
+                        "string" => mk_propagate(mk_method_call("dec", "decode_string", vec![])),
                         "byte" => Expr::Cast {
                             expr: Box::new(Spanned {
-                                node: mk_method_call("dec", "decode_int", vec![]),
+                                node: mk_propagate(mk_method_call("dec", "decode_int", vec![])),
                                 span: mk_span(),
                             }),
                             target_type: Spanned {
@@ -1497,7 +1736,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                         node: Stmt::Assign {
                             target: Spanned { node: "__result".to_string(), span: mk_span() },
                             value: Spanned {
-                                node: mk_call(&format!("__unmarshal_{}", name), vec![mk_var("dec")]),
+                                node: mk_propagate(mk_call(&format!("__unmarshal_{}", name), vec![mk_var("dec")])),
                                 span: mk_span(),
                             },
                         },
