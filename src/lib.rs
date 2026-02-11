@@ -114,17 +114,37 @@ pub fn parse_for_editing(source: &str) -> Result<parser::ast::Program, CompileEr
 /// Compile a source string to object bytes (lex → parse → prelude → typeck → monomorphize → closures → codegen).
 /// No file I/O or linking. Useful for compile-fail tests that only need to check errors.
 pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
-    let mut program = parse_source(source)?;
-    let result = run_frontend(&mut program, false)?;
-    codegen::codegen(&program, &result.env, source)
+    // Run compilation on a thread with a larger stack (16MB) to handle deeply nested expressions
+    // like classes with 100+ fields where the sum expression creates a deeply nested BinOp tree.
+    // Default stack size (typically 2-8MB) can overflow with ~100 levels of recursion.
+    let source = source.to_string();
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            let mut program = parse_source(&source)?;
+            let result = run_frontend(&mut program, false)?;
+            codegen::codegen(&program, &result.env, &source)
+        })
+        .expect("failed to spawn compilation thread")
+        .join()
+        .expect("compilation thread panicked")
 }
 
 /// Compile a source string and return both the object bytes and any compiler warnings.
 pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<CompileWarning>), CompileError> {
-    let mut program = parse_source(source)?;
-    let result = run_frontend(&mut program, false)?;
-    let obj = codegen::codegen(&program, &result.env, source)?;
-    Ok((obj, result.warnings))
+    // Run compilation on a thread with a larger stack (16MB) to handle deeply nested expressions
+    let source = source.to_string();
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            let mut program = parse_source(&source)?;
+            let result = run_frontend(&mut program, false)?;
+            let obj = codegen::codegen(&program, &result.env, &source)?;
+            Ok((obj, result.warnings))
+        })
+        .expect("failed to spawn compilation thread")
+        .join()
+        .expect("compilation thread panicked")
 }
 
 /// Compile a source string directly (single-file, no module resolution).
@@ -146,9 +166,18 @@ pub fn compile(source: &str, output_path: &Path) -> Result<(), CompileError> {
 /// Compile a source string in test mode (lex → parse → prelude → typeck → monomorphize → closures → codegen).
 /// Tests are preserved and a test runner main is generated.
 pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError> {
-    let mut program = parse_source(source)?;
-    let result = run_frontend(&mut program, true)?;
-    codegen::codegen(&program, &result.env, source)
+    // Run compilation on a thread with a larger stack (16MB) to handle deeply nested expressions
+    let source = source.to_string();
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            let mut program = parse_source(&source)?;
+            let result = run_frontend(&mut program, true)?;
+            codegen::codegen(&program, &result.env, &source)
+        })
+        .expect("failed to spawn compilation thread")
+        .join()
+        .expect("compilation thread panicked")
 }
 
 /// Compile a source string in test mode directly (single-file, no module resolution).
