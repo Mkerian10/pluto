@@ -18,7 +18,9 @@ When the compiler sees your entire program, it can do things that are impossible
 
 **Monomorphization of generics.** The compiler sees every instantiation of every generic type and function across your entire program. It generates exactly the concrete versions you use — `Box<int>`, `Pair<string, float>`, `Option<User>` — and nothing else. No vtables, no boxing, no type erasure. The type parameters are erased at runtime because they were resolved at compile time.
 
-**Future: Cross-service RPC generation.** Because the compiler sees the full call graph, it will know which function calls cross service boundaries. You write `payment_service.charge(order)` and the compiler generates serialization, HTTP transport, and error propagation automatically. The function call syntax is the same. The compiler generates different code based on where the callee lives.
+**Future: Cross-stage RPC generation.** Because the compiler sees the full call graph, it will know which function calls cross stage boundaries. You declare `stage api` and `stage payments`, write `payments.charge(order)` in the api stage, and the compiler generates serialization, HTTP transport, and error propagation automatically. The function call syntax is the same. The compiler generates different code based on which stage the callee lives in.
+
+**Future: Your distributed system is your program.** Instead of building separate services in separate repos with manual RPC code, you'll write one Pluto program with multiple `stage` declarations. The compiler will see all of them, generate per-stage binaries with all the RPC wiring, and you'll deploy them as independent services. Microservices become **compile targets**, not architectural decisions you implement in YAML.
 
 This is the core thesis of Pluto: **If the compiler sees your whole program, it can solve problems that otherwise require frameworks, containers, and runtime magic.**
 
