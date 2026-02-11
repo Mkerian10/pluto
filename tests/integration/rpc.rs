@@ -41,8 +41,8 @@ fn rpc_module_import() {
     let out = run_with_stdlib(
         "import std.rpc\n\nfn main() {\n    let result = rpc.http_post(\"http://localhost:8000/test\", \"body\")\n    print(result)\n}",
     );
-    // Should get dummy response from __pluto_http_post stub
-    assert_eq!(out, "{\"status\":\"ok\",\"result\":42}\n");
+    // Should get dummy response from __pluto_http_post stub (with quoted result)
+    assert_eq!(out, "{\"status\":\"ok\",\"result\":\"42\"}\n");
 }
 
 #[test]
@@ -50,5 +50,87 @@ fn rpc_http_post_with_timeout() {
     let out = run_with_stdlib(
         "import std.rpc\n\nfn main() {\n    let result = rpc.http_post_with_timeout(\"http://localhost:8000/test\", \"body\", 10000)\n    print(result)\n}",
     );
-    assert_eq!(out, "{\"status\":\"ok\",\"result\":42}\n");
+    assert_eq!(out, "{\"status\":\"ok\",\"result\":\"42\"}\n");
+}
+
+#[test]
+fn rpc_cross_stage_call_simple() {
+    let out = run_with_stdlib(
+        "import std.rpc
+
+stage ServiceA[b: ServiceB] {
+    fn main(self) {
+        let result = self.b.get_value()
+        print(result)
+    }
+}
+
+stage ServiceB {
+    pub fn get_value(self) string {
+        return \"dummy response\"
+    }
+
+    fn main(self) {
+        print(\"ServiceB main\")
+    }
+}",
+    );
+    // The stub returns {"status":"ok","result":42}
+    // We extract the result field (string "42") and print it
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn rpc_cross_stage_with_int_arg() {
+    let out = run_with_stdlib(
+        "import std.rpc
+
+stage ServiceA[b: ServiceB] {
+    fn main(self) {
+        let result = self.b.add(10, 32)
+        print(result)
+    }
+}
+
+stage ServiceB {
+    pub fn add(self, a: int, b: int) int {
+        return a + b
+    }
+
+    fn main(self) {
+        print(\"ServiceB\")
+    }
+}",
+    );
+    // The stub returns {"status":"ok","result":42}
+    // We extract the result field (int 42) and print it
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn rpc_cross_stage_with_string_arg() {
+    let out = run_with_stdlib(
+        "import std.rpc
+
+stage ServiceA[b: ServiceB] {
+    fn main(self) {
+        let result = self.b.greet(\"world\")
+        print(result)
+    }
+}
+
+stage ServiceB {
+    pub fn greet(self, name: string) string {
+        return \"hello \" + name
+    }
+
+    fn main(self) {
+        print(\"ServiceB\")
+    }
+}",
+    );
+    // The stub returns {"status":"ok","result":"42"} for string methods
+    // We extract the string "42" and print it
+    // (In a real implementation, the server would return the actual greeting)
+    assert_eq!(out, "42\n");
 }

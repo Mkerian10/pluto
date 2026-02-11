@@ -189,6 +189,12 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_test_summary", &[types::I64], &[])?;
         reg.declare(module, "__pluto_test_run", &[types::I64, types::I64, types::I64, types::I64], &[])?;
 
+        // RPC functions
+        reg.declare(module, "__pluto_rpc_extract_int", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_rpc_extract_float", &[types::I64], &[types::F64])?;
+        reg.declare(module, "__pluto_rpc_extract_string", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_rpc_extract_bool", &[types::I64], &[types::I64])?;
+
         Ok(reg)
     }
 
