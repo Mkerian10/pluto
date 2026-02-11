@@ -576,6 +576,27 @@ path = "tests/typeck/mutability/const_correctness.rs"
 name = "typeck_closure_mutation"
 path = "tests/typeck/mutability/closure_mutation.rs"
 
+# Typeck edge case tests - contracts category
+[[test]]
+name = "typeck_invariant_violations"
+path = "tests/typeck/contracts/invariant_violations.rs"
+
+[[test]]
+name = "typeck_requires_ensures"
+path = "tests/typeck/contracts/requires_ensures.rs"
+
+[[test]]
+name = "typeck_liskov_contracts"
+path = "tests/typeck/contracts/liskov_contracts.rs"
+
+[[test]]
+name = "typeck_contract_inheritance"
+path = "tests/typeck/contracts/contract_inheritance.rs"
+
+[[test]]
+name = "typeck_temporal_contracts"
+path = "tests/typeck/contracts/temporal_contracts.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false
