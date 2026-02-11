@@ -1,0 +1,63 @@
+import std.env
+
+fn main() {
+    print("=== Environment Module Example ===")
+
+    // Test set
+    print("\n--- set() ---")
+    env.set("MY_VAR", "hello")
+    env.set("ANOTHER_VAR", "world")
+    env.set("MY_NUMBER", "42")
+    print("Set MY_VAR, ANOTHER_VAR, MY_NUMBER")
+
+    // Test exists
+    print("\n--- exists() ---")
+    print("MY_VAR exists: ")
+    print(env.exists("MY_VAR"))
+    print("NONEXISTENT exists: ")
+    print(env.exists("NONEXISTENT"))
+
+    // Test get
+    print("\n--- get() ---")
+    let val = env.get("MY_VAR")
+    print("MY_VAR = ")
+    print(val)
+
+    let val2 = env.get("ANOTHER_VAR")
+    print("ANOTHER_VAR = ")
+    print(val2)
+
+    let val3 = env.get("NONEXISTENT")
+    if val3.len() == 0 {
+        print("NONEXISTENT is not set (got empty string)")
+    } else {
+        print("NONEXISTENT = ")
+        print(val3)
+    }
+
+    // Test get_or
+    print("\n--- get_or() ---")
+    let val4 = env.get_or("NONEXISTENT", "default_value")
+    print("NONEXISTENT with default = ")
+    print(val4)
+
+    // Test remove
+    print("\n--- remove() ---")
+    print("Removing MY_VAR: ")
+    print(env.remove("MY_VAR"))
+    print("MY_VAR exists after removal: ")
+    print(env.exists("MY_VAR"))
+
+    // Test list_names
+    print("\n--- list_names() ---")
+    let names = env.list_names()
+    print("Environment variable count: ")
+    print(names.len())
+    print("First few variables:")
+    for i in 0..names.len() {
+        if i >= 5 {
+            break
+        }
+        print(names[i])
+    }
+}
