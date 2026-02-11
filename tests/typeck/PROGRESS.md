@@ -95,12 +95,22 @@
 
 **Subtotal:** 100/100 ✅ **TARGET MET**
 
-### 9-15. Remaining Categories
+### 9. Declaration Registration ✅ COMPLETE (Target: 100+, Actual: 100)
+- ✅ `declarations/forward_references.rs` - 20 tests
+- ✅ `declarations/circular_dependencies.rs` - 20 tests
+- ✅ `declarations/duplicate_declarations.rs` - 20 tests
+- ✅ `declarations/initialization_order.rs` - 15 tests
+- ✅ `declarations/visibility_errors.rs` - 15 tests
+- ✅ `declarations/name_collision.rs` - 10 tests
+
+**Subtotal:** 100/100 ✅ **TARGET MET**
+
+### 10-15. Remaining Categories
 - 🚧 All TODO
 
 ---
 
-## TOTAL PROGRESS: 1,163/1,730 tests (67.2%)
+## TOTAL PROGRESS: 1,263/1,730 tests (73.0%)
 
 ## Key Achievements
 - ✅ Inference category complete and exceeded target (213 tests)
@@ -118,13 +128,14 @@
 - ✅ Complete control flow validation (unreachable code, return paths, break/continue, scopes)
 - ✅ Complete closure system testing (capture, type checking, lifting, recursion edge cases)
 - ✅ Complete method resolution testing (vtables, trait dispatch, lookup, overloading, self types)
+- ✅ Complete declaration registration testing (forward refs, circular deps, duplicates, init order)
 
 ## Next Priorities
-1. **Declaration Registration** (100 tests) - HIGH priority, forward references, circular deps
-2. **DI Graph** (80 tests) - MEDIUM priority, topological sort, cycle detection
-3. **Scope & Variables** (80 tests) - MEDIUM priority, shadowing, lifetime edge cases
-4. **Mutability** (60 tests) - MEDIUM priority, mut self enforcement, immutability violations
-5. Continue through remaining 6 categories systematically
+1. **DI Graph** (80 tests) - MEDIUM priority, topological sort, cycle detection
+2. **Scope & Variables** (80 tests) - MEDIUM priority, shadowing, lifetime edge cases
+3. **Mutability** (60 tests) - MEDIUM priority, mut self enforcement, immutability violations
+4. **Contract Tests** (100 tests) - MEDIUM priority, invariant violations, requires/ensures
+5. Continue through remaining 5 categories systematically
 
 ## Testing Strategy Notes
 - Using inline `compile_should_fail_with(code, expected_msg)` pattern
