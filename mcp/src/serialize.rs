@@ -448,6 +448,9 @@ pub fn type_expr_to_string(te: &TypeExpr) -> String {
         TypeExpr::Nullable(inner) => {
             format!("{}?", type_expr_to_string(&inner.node))
         }
+        TypeExpr::Stream(inner) => {
+            format!("stream {}", type_expr_to_string(&inner.node))
+        }
     }
 }
 

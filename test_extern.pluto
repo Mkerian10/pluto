@@ -1,0 +1,5 @@
+extern fn printf(format: string) void
+
+fn main() void {
+    printf("hello\n")
+}

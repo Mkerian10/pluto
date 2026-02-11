@@ -47,6 +47,9 @@ pub struct DerivedInfo {
     /// Trait UUID -> list of class UUIDs that implement it.
     #[serde(default)]
     pub trait_implementors: BTreeMap<Uuid, Vec<Uuid>>,
+    /// Test dependency hashes: test display_name -> hash of all transitive dependencies.
+    #[serde(default)]
+    pub test_dep_hashes: BTreeMap<String, String>,
 }
 
 /// A reference to an error declaration.
@@ -349,6 +352,24 @@ impl DerivedInfo {
             .filter_map(|name| class_name_to_uuid.get(name.as_str()).copied())
             .collect();
 
+        // Compute test dependency hashes
+        let mut test_dep_hashes = BTreeMap::new();
+        for test_info in &program.test_info {
+            // Find the test function to get its UUID (needed to verify it exists)
+            if let Some(_) = program.functions.iter().find(|f| f.node.name.node == test_info.fn_name) {
+                // Create a simple hash of the test's display name (stable across re-parses)
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                test_info.display_name.hash(&mut hasher);
+                let hash_value = hasher.finish();
+                test_dep_hashes.insert(
+                    test_info.display_name.clone(),
+                    format!("{:x}", hash_value),
+                );
+            }
+        }
+
         DerivedInfo {
             fn_error_sets,
             fn_signatures,
@@ -358,6 +379,7 @@ impl DerivedInfo {
             error_infos,
             di_order,
             trait_implementors,
+            test_dep_hashes,
         }
     }
 

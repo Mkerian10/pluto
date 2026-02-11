@@ -675,6 +675,9 @@ fn collect_dangling_in_stmt(stmt: &Stmt, span: Span, target: Uuid, out: &mut Vec
             }
             collect_dangling_in_block(&body.node, target, out);
         }
+        Stmt::Yield { value } => {
+            collect_dangling_in_expr(&value.node, value.span, target, out);
+        }
     }
 }
 
@@ -895,6 +898,9 @@ fn rename_in_type_expr(te: &mut TypeExpr, kind: DeclKindSimple, old_name: &str, 
         TypeExpr::Nullable(inner) => {
             rename_in_type_expr(&mut inner.node, kind, old_name, new_name);
         }
+        TypeExpr::Stream(inner) => {
+            rename_in_type_expr(&mut inner.node, kind, old_name, new_name);
+        }
     }
 }
 
@@ -997,6 +1003,9 @@ fn rename_in_stmt(stmt: &mut Stmt, id: Uuid, kind: DeclKindSimple, old_name: &st
                 rename_in_type_expr(&mut binding.ty.node, kind, old_name, new_name);
             }
             rename_in_block(&mut body.node, id, kind, old_name, new_name);
+        }
+        Stmt::Yield { value } => {
+            rename_in_expr(&mut value.node, id, kind, old_name, new_name);
         }
     }
 }

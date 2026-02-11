@@ -567,6 +567,9 @@ fn find_expr_in_stmt<'a>(stmt: &'a Stmt, target: Span) -> Option<&'a Expr> {
             }
             find_expr_in_block(&body.node, target)
         }
+        Stmt::Yield { value } => {
+            find_expr_recursive(&value.node, value.span, target)
+        }
     }
 }
 
