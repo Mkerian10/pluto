@@ -114,6 +114,290 @@ pub struct ResolvedErrorInfo {
     pub fields: Vec<ResolvedFieldInfo>,
 }
 
+/// Collects all function names, class names, and enum names that a test transitively depends on.
+/// Returns a sorted list for stable hashing.
+fn collect_test_dependencies(
+    test_fn_name: &str,
+    program: &Program,
+    visited: &mut std::collections::HashSet<String>,
+    deps: &mut Vec<String>,
+) {
+    if visited.contains(test_fn_name) {
+        return;
+    }
+    visited.insert(test_fn_name.to_string());
+    deps.push(test_fn_name.to_string());
+
+    // Find the test function
+    let test_fn = program.functions.iter().find(|f| f.node.name.node == test_fn_name);
+    if let Some(func) = test_fn {
+        // Collect dependencies from the function body
+        collect_deps_from_block(&func.node.body.node, program, visited, deps);
+    }
+}
+
+/// Recursively collect dependencies from a block of statements
+fn collect_deps_from_block(
+    block: &crate::parser::ast::Block,
+    program: &Program,
+    visited: &mut std::collections::HashSet<String>,
+    deps: &mut Vec<String>,
+) {
+    use crate::parser::ast::Stmt;
+
+    for stmt in &block.stmts {
+        match &stmt.node {
+            Stmt::Let { value, .. } => {
+                collect_deps_from_expr(&value.node, program, visited, deps);
+            }
+            Stmt::Return(Some(expr)) => {
+                collect_deps_from_expr(&expr.node, program, visited, deps);
+            }
+            Stmt::Assign { value, .. } => {
+                collect_deps_from_expr(&value.node, program, visited, deps);
+            }
+            Stmt::FieldAssign { object, value, .. } => {
+                collect_deps_from_expr(&object.node, program, visited, deps);
+                collect_deps_from_expr(&value.node, program, visited, deps);
+            }
+            Stmt::If { condition, then_block, else_block } => {
+                collect_deps_from_expr(&condition.node, program, visited, deps);
+                collect_deps_from_block(&then_block.node, program, visited, deps);
+                if let Some(else_blk) = else_block {
+                    collect_deps_from_block(&else_blk.node, program, visited, deps);
+                }
+            }
+            Stmt::While { condition, body } => {
+                collect_deps_from_expr(&condition.node, program, visited, deps);
+                collect_deps_from_block(&body.node, program, visited, deps);
+            }
+            Stmt::For { iterable, body, .. } => {
+                collect_deps_from_expr(&iterable.node, program, visited, deps);
+                collect_deps_from_block(&body.node, program, visited, deps);
+            }
+            Stmt::IndexAssign { object, index, value } => {
+                collect_deps_from_expr(&object.node, program, visited, deps);
+                collect_deps_from_expr(&index.node, program, visited, deps);
+                collect_deps_from_expr(&value.node, program, visited, deps);
+            }
+            Stmt::Match { expr, arms } => {
+                collect_deps_from_expr(&expr.node, program, visited, deps);
+                for arm in arms {
+                    collect_deps_from_block(&arm.body.node, program, visited, deps);
+                }
+            }
+            Stmt::Raise { fields, .. } => {
+                for (_name, expr) in fields {
+                    collect_deps_from_expr(&expr.node, program, visited, deps);
+                }
+            }
+            Stmt::Select { arms, default } => {
+                for arm in arms {
+                    use crate::parser::ast::SelectOp;
+                    match &arm.op {
+                        SelectOp::Recv { channel, .. } => {
+                            collect_deps_from_expr(&channel.node, program, visited, deps);
+                        }
+                        SelectOp::Send { channel, value } => {
+                            collect_deps_from_expr(&channel.node, program, visited, deps);
+                            collect_deps_from_expr(&value.node, program, visited, deps);
+                        }
+                    }
+                    collect_deps_from_block(&arm.body.node, program, visited, deps);
+                }
+                if let Some(default_block) = default {
+                    collect_deps_from_block(&default_block.node, program, visited, deps);
+                }
+            }
+            Stmt::Scope { seeds, body, .. } => {
+                for seed in seeds {
+                    collect_deps_from_expr(&seed.node, program, visited, deps);
+                }
+                collect_deps_from_block(&body.node, program, visited, deps);
+            }
+            Stmt::Yield { value } => {
+                collect_deps_from_expr(&value.node, program, visited, deps);
+            }
+            Stmt::Expr(expr) => {
+                collect_deps_from_expr(&expr.node, program, visited, deps);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Recursively collect dependencies from an expression
+fn collect_deps_from_expr(
+    expr: &crate::parser::ast::Expr,
+    program: &Program,
+    visited: &mut std::collections::HashSet<String>,
+    deps: &mut Vec<String>,
+) {
+    use crate::parser::ast::Expr;
+
+    match expr {
+        Expr::Call { name, args, .. } => {
+            let fn_name = &name.node;
+            // Recursively collect dependencies from called function
+            collect_test_dependencies(fn_name, program, visited, deps);
+            // Also collect deps from args
+            for arg in args {
+                collect_deps_from_expr(&arg.node, program, visited, deps);
+            }
+        }
+        Expr::StructLit { name, fields, .. } => {
+            // Track class usage
+            let class_name = &name.node;
+            if !visited.contains(class_name) {
+                visited.insert(class_name.clone());
+                deps.push(class_name.clone());
+            }
+            for (_field_name, field_expr) in fields {
+                collect_deps_from_expr(&field_expr.node, program, visited, deps);
+            }
+        }
+        Expr::EnumUnit { enum_name, .. } | Expr::EnumData { enum_name, .. } => {
+            // Track enum usage
+            let enum_name_str = &enum_name.node;
+            if !visited.contains(enum_name_str) {
+                visited.insert(enum_name_str.clone());
+                deps.push(enum_name_str.clone());
+            }
+            if let Expr::EnumData { fields, .. } = expr {
+                for (_field_name, field_expr) in fields {
+                    collect_deps_from_expr(&field_expr.node, program, visited, deps);
+                }
+            }
+        }
+        Expr::MethodCall { object, args, .. } => {
+            collect_deps_from_expr(&object.node, program, visited, deps);
+            for arg in args {
+                collect_deps_from_expr(&arg.node, program, visited, deps);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_deps_from_expr(&lhs.node, program, visited, deps);
+            collect_deps_from_expr(&rhs.node, program, visited, deps);
+        }
+        Expr::UnaryOp { operand, .. } => {
+            collect_deps_from_expr(&operand.node, program, visited, deps);
+        }
+        Expr::FieldAccess { object, .. } => {
+            collect_deps_from_expr(&object.node, program, visited, deps);
+        }
+        Expr::ArrayLit { elements } => {
+            for elem in elements {
+                collect_deps_from_expr(&elem.node, program, visited, deps);
+            }
+        }
+        Expr::Index { object, index } => {
+            collect_deps_from_expr(&object.node, program, visited, deps);
+            collect_deps_from_expr(&index.node, program, visited, deps);
+        }
+        Expr::StringInterp { parts } => {
+            for part in parts {
+                if let crate::parser::ast::StringInterpPart::Expr(e) = part {
+                    collect_deps_from_expr(&e.node, program, visited, deps);
+                }
+            }
+        }
+        Expr::Closure { body, .. } => {
+            collect_deps_from_block(&body.node, program, visited, deps);
+        }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                collect_deps_from_expr(&k.node, program, visited, deps);
+                collect_deps_from_expr(&v.node, program, visited, deps);
+            }
+        }
+        Expr::SetLit { elements, .. } => {
+            for elem in elements {
+                collect_deps_from_expr(&elem.node, program, visited, deps);
+            }
+        }
+        Expr::ClosureCreate { fn_name, .. } => {
+            // Track closure dependencies
+            collect_test_dependencies(fn_name, program, visited, deps);
+        }
+        Expr::Propagate { expr } | Expr::NullPropagate { expr } => {
+            collect_deps_from_expr(&expr.node, program, visited, deps);
+        }
+        Expr::Catch { expr, handler } => {
+            collect_deps_from_expr(&expr.node, program, visited, deps);
+            match handler {
+                crate::parser::ast::CatchHandler::Shorthand(e) => {
+                    collect_deps_from_expr(&e.node, program, visited, deps);
+                }
+                crate::parser::ast::CatchHandler::Wildcard { body, .. } => {
+                    collect_deps_from_block(&body.node, program, visited, deps);
+                }
+            }
+        }
+        Expr::Cast { expr, .. } => {
+            collect_deps_from_expr(&expr.node, program, visited, deps);
+        }
+        Expr::Range { start, end, .. } => {
+            collect_deps_from_expr(&start.node, program, visited, deps);
+            collect_deps_from_expr(&end.node, program, visited, deps);
+        }
+        Expr::Spawn { call } => {
+            collect_deps_from_expr(&call.node, program, visited, deps);
+        }
+        // Literals don't add dependencies
+        _ => {}
+    }
+}
+
+/// Compute stable dependency hashes for all tests
+fn compute_test_dependency_hashes(program: &Program) -> BTreeMap<String, String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut test_dep_hashes = BTreeMap::new();
+
+    for test_info in &program.test_info {
+        let mut visited = std::collections::HashSet::new();
+        let mut deps = Vec::new();
+
+        // Collect all transitive dependencies
+        collect_test_dependencies(&test_info.fn_name, program, &mut visited, &mut deps);
+
+        // Sort for stable hashing
+        deps.sort();
+
+        // Hash the sorted dependency list along with function bodies
+        let mut hasher = DefaultHasher::new();
+        for dep_name in &deps {
+            // Hash the name
+            dep_name.hash(&mut hasher);
+
+            // Hash the function body if it's a function
+            if let Some(func) = program.functions.iter().find(|f| f.node.name.node == *dep_name) {
+                // Hash the function's body (simplified - using debug representation)
+                // In production, you might want a more sophisticated AST hash
+                format!("{:?}", func.node.body).hash(&mut hasher);
+            }
+            // Hash class definitions
+            else if let Some(class) = program.classes.iter().find(|c| c.node.name.node == *dep_name) {
+                format!("{:?}", class.node.fields).hash(&mut hasher);
+                format!("{:?}", class.node.methods).hash(&mut hasher);
+            }
+            // Hash enum definitions
+            else if let Some(enum_decl) = program.enums.iter().find(|e| e.node.name.node == *dep_name) {
+                format!("{:?}", enum_decl.node.variants).hash(&mut hasher);
+            }
+        }
+
+        let hash_value = hasher.finish();
+        test_dep_hashes.insert(
+            test_info.display_name.clone(),
+            format!("{:x}", hash_value),
+        );
+    }
+
+    test_dep_hashes
+}
+
 impl DerivedInfo {
     /// Build derived info by walking the program AST and extracting type data from TypeEnv.
     pub fn build(env: &TypeEnv, program: &Program) -> Self {
@@ -353,22 +637,7 @@ impl DerivedInfo {
             .collect();
 
         // Compute test dependency hashes
-        let mut test_dep_hashes = BTreeMap::new();
-        for test_info in &program.test_info {
-            // Find the test function to get its UUID (needed to verify it exists)
-            if let Some(_) = program.functions.iter().find(|f| f.node.name.node == test_info.fn_name) {
-                // Create a simple hash of the test's display name (stable across re-parses)
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-                let mut hasher = DefaultHasher::new();
-                test_info.display_name.hash(&mut hasher);
-                let hash_value = hasher.finish();
-                test_dep_hashes.insert(
-                    test_info.display_name.clone(),
-                    format!("{:x}", hash_value),
-                );
-            }
-        }
+        let test_dep_hashes = compute_test_dependency_hashes(program);
 
         DerivedInfo {
             fn_error_sets,
