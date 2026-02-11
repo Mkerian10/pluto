@@ -6,6 +6,7 @@
 //! - Errors: error_instance.field_name → field_type
 //! - Enums: variant.field_name → field_type (data-carrying variants)
 
+#[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 

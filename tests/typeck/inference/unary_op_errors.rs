@@ -1,4 +1,5 @@
 //! Unary operator type errors - 10 tests
+#[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 

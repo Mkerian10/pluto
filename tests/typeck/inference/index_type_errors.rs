@@ -7,6 +7,7 @@
 //! - Strings: string[int] → string (single char)
 //! - Bytes: bytes[int] → byte
 
+#[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 
