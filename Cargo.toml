@@ -314,6 +314,31 @@ path = "tests/typeck/inference/closure_inference.rs"
 name = "typeck_unary_op_errors"
 path = "tests/typeck/inference/unary_op_errors.rs"
 
+# Typeck edge case tests - trait conformance category
+[[test]]
+name = "typeck_method_signature_mismatch"
+path = "tests/typeck/traits/method_signature_mismatch.rs"
+
+[[test]]
+name = "typeck_missing_methods"
+path = "tests/typeck/traits/missing_methods.rs"
+
+[[test]]
+name = "typeck_liskov_violations"
+path = "tests/typeck/traits/liskov_violations.rs"
+
+[[test]]
+name = "typeck_multiple_trait_impls"
+path = "tests/typeck/traits/multiple_trait_impls.rs"
+
+[[test]]
+name = "typeck_trait_object_errors"
+path = "tests/typeck/traits/trait_object_errors.rs"
+
+[[test]]
+name = "typeck_generic_trait_errors"
+path = "tests/typeck/traits/generic_trait_errors.rs"
+
 # Typeck edge case tests - nullable types category
 [[test]]
 name = "typeck_nested_nullable"
@@ -408,6 +433,35 @@ path = "tests/typeck/errors/select_errors.rs"
 [[test]]
 name = "typeck_task_error_tracking"
 path = "tests/typeck/errors/task_error_tracking.rs"
+
+# Typeck edge case tests - statement checking category
+[[test]]
+name = "typeck_unreachable_code"
+path = "tests/typeck/statements/unreachable_code.rs"
+
+[[test]]
+name = "typeck_return_path_analysis"
+path = "tests/typeck/statements/return_path_analysis.rs"
+
+[[test]]
+name = "typeck_break_continue_validation"
+path = "tests/typeck/statements/break_continue_validation.rs"
+
+[[test]]
+name = "typeck_variable_redeclaration"
+path = "tests/typeck/statements/variable_redeclaration.rs"
+
+[[test]]
+name = "typeck_assignment_validation"
+path = "tests/typeck/statements/assignment_validation.rs"
+
+[[test]]
+name = "typeck_scope_violations"
+path = "tests/typeck/statements/scope_violations.rs"
+
+[[test]]
+name = "typeck_control_flow_edges"
+path = "tests/typeck/statements/control_flow_edges.rs"
 
 [[bench]]
 name = "compile_time"
