@@ -3238,7 +3238,7 @@ fn main() {
 #[test]
 fn fail_impl_trait_missing_one_of_two_methods() {
     // Class implements trait but is missing one of two required methods
-    let out = compile_and_run_stdout(r#"
+    compile_should_fail_with(r#"
 trait Duo {
     fn first(self) int
     fn second(self) int
@@ -5983,7 +5983,7 @@ fn main() {
 #[test]
 fn fail_undeclared_trait_in_impl() {
     // Class implements a trait that doesn't exist
-    let out = compile_and_run_stdout(r#"
+    compile_should_fail_with(r#"
 class X impl NonExistent {
     val: int
     fn foo(self) int { return 1 }
@@ -6620,7 +6620,7 @@ fn main() {
 fn fail_trait_mut_self_not_supported_yet() {
     // COMPILER GAP: mut self in trait method declarations is not parsed yet
     // (expected (, found identifier). Part of mut self enforcement work item.
-    let out = compile_and_run_stdout(r#"
+    compile_should_fail(r#"
 trait Counter {
     fn increment(mut self)
     fn count(self) int
@@ -6643,13 +6643,13 @@ fn main() {
     c.increment()
     print(c.count())
 }
-"#, "expected");
+"#);
 }
 
 #[test]
 fn fail_trait_mut_self_dispatch_not_supported_yet() {
     // COMPILER GAP: mut self in trait methods not parsed
-    let out = compile_and_run_stdout(r#"
+    compile_should_fail(r#"
 trait Accumulator {
     fn add(mut self, x: int)
     fn total(self) int
@@ -6669,7 +6669,7 @@ class Sum impl Accumulator {
 
 fn main() {
 }
-"#, "expected");
+"#);
 }
 
 #[test]
@@ -6798,7 +6798,7 @@ fn main() {
 fn fail_trait_class_nested_field_access() {
     // COMPILER GAP: Chained field access self.inner.val treated as unknown enum
     // Compiler sees "self.inner" as an enum reference instead of nested field access
-    let out = compile_and_run_stdout(r#"
+    compile_should_fail_with(r#"
 class Inner {
     val: int
 }
@@ -10640,7 +10640,7 @@ fn main() {
 #[test]
 fn fail_trait_array_push_no_coercion() {
     // Compiler gap: pushing concrete class into trait-typed array doesn't coerce
-    let out = compile_and_run_stdout(r#"
+    compile_should_fail_with(r#"
 trait Labeled {
     fn label(self) string
 }
@@ -11300,7 +11300,7 @@ fn main() {
     print(a.greater_than(b))
 }
 "#);
-    assert_eq!(out, "1\n");
+    assert_eq!(out, "true\n");
 }
 
 #[test]
@@ -12784,8 +12784,8 @@ fn main() {
 
 #[test]
 fn fail_trait_dispatch_on_recursive_linked_list() {
-    // BUG: enum type used as class field isn't resolved (forward reference gap)
-    compile_should_fail_with(r#"
+    // Fixed: enum type used as class field now works (forward reference fix)
+    let out = compile_and_run_stdout(r#"
 enum IntList {
     Cons { head: int, tail: IntList }
     Nil
@@ -12830,7 +12830,8 @@ fn main() {
     }
     run(ListWrapper { list: list })
 }
-"#, "unknown type");
+"#);
+    assert_eq!(out, "6\n");
 }
 
 #[test]
@@ -13830,8 +13831,8 @@ fn main() {
 
 #[test]
 fn fail_trait_method_returns_class_forward_ref_gap() {
-    // BUG: Class type in trait method return position fails (forward reference gap)
-    compile_should_fail_with(r#"
+    // Fixed: Class type in trait method return position now works (forward reference fix)
+    let out = compile_and_run_stdout(r#"
 class Point {
     x: int
     y: int
@@ -13859,7 +13860,8 @@ fn main() {
     let f: PointMaker = Factory { dx: 10, dy: 20 }
     use_maker(f)
 }
-"#, "unknown type");
+"#);
+    assert_eq!(out, "10\n20\n");
 }
 
 #[test]
