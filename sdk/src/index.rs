@@ -282,6 +282,12 @@ fn collect_stmt_xrefs(
         Stmt::Expr(expr) => {
             collect_expr_xrefs(&expr.node, expr.span, fn_name, callers, constructors, enum_usages, raise_sites);
         }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                collect_expr_xrefs(&seed.node, seed.span, fn_name, callers, constructors, enum_usages, raise_sites);
+            }
+            collect_block_xrefs(&body.node, fn_name, callers, constructors, enum_usages, raise_sites);
+        }
     }
 }
 

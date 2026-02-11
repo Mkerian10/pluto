@@ -127,6 +127,15 @@ impl ModuleEditor {
             return Err(SdkError::Edit("source contains no declarations".to_string()));
         }
 
+        // Merge any imports from the input source into the program.
+        merge_imports(&mut self.program.imports, &program.imports);
+
+        // Merge test metadata so the pretty printer can reconstruct test blocks.
+        self.program.test_info.append(&mut program.test_info);
+        if program.tests.is_some() && self.program.tests.is_none() {
+            self.program.tests = program.tests.take();
+        }
+
         let mut ids = Vec::new();
 
         for f in program.functions.drain(..) {
@@ -166,6 +175,9 @@ impl ModuleEditor {
     pub fn replace_from_source(&mut self, id: Uuid, source: &str) -> Result<(), SdkError> {
         let (kind, idx) = self.find_top_level(id)?;
         let mut program = parse_single_program(source, &self.program)?;
+
+        // Merge any imports from the replacement source.
+        merge_imports(&mut self.program.imports, &program.imports);
 
         match kind {
             DeclKindSimple::Function => {
@@ -412,6 +424,23 @@ enum DeclKindSimple {
 
 // --- Parsing helpers ---
 
+/// Merge imports from `new` into `existing`, skipping duplicates.
+/// Two imports are considered duplicates if they have the same path segments and alias.
+fn merge_imports(existing: &mut Vec<Spanned<ImportDecl>>, new: &[Spanned<ImportDecl>]) {
+    for imp in new {
+        let new_path: Vec<&str> = imp.node.path.iter().map(|s| s.node.as_str()).collect();
+        let new_alias: Option<&str> = imp.node.alias.as_ref().map(|a| a.node.as_str());
+        let already_exists = existing.iter().any(|e| {
+            let existing_path: Vec<&str> = e.node.path.iter().map(|s| s.node.as_str()).collect();
+            let existing_alias: Option<&str> = e.node.alias.as_ref().map(|a| a.node.as_str());
+            existing_path == new_path && existing_alias == new_alias
+        });
+        if !already_exists {
+            existing.push(imp.clone());
+        }
+    }
+}
+
 /// Collect enum names from the current Program for parser context.
 fn collect_enum_names(program: &Program) -> HashSet<String> {
     let mut names = HashSet::new();
@@ -640,12 +669,18 @@ fn collect_dangling_in_stmt(stmt: &Stmt, span: Span, target: Uuid, out: &mut Vec
         }
         Stmt::Break | Stmt::Continue => {}
         Stmt::Expr(e) => collect_dangling_in_expr(&e.node, e.span, target, out),
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                collect_dangling_in_expr(&seed.node, seed.span, target, out);
+            }
+            collect_dangling_in_block(&body.node, target, out);
+        }
     }
 }
 
 fn collect_dangling_in_expr(expr: &Expr, span: Span, target: Uuid, out: &mut Vec<DanglingRef>) {
     match expr {
-        Expr::Call { name, args, target_id } => {
+        Expr::Call { name, args, target_id, .. } => {
             if *target_id == Some(target) {
                 out.push(DanglingRef {
                     kind: DanglingRefKind::Call,
@@ -954,12 +989,21 @@ fn rename_in_stmt(stmt: &mut Stmt, id: Uuid, kind: DeclKindSimple, old_name: &st
         Stmt::Expr(e) => {
             rename_in_expr(&mut e.node, id, kind, old_name, new_name);
         }
+        Stmt::Scope { seeds, bindings, body, .. } => {
+            for seed in seeds {
+                rename_in_expr(&mut seed.node, id, kind, old_name, new_name);
+            }
+            for binding in bindings {
+                rename_in_type_expr(&mut binding.ty.node, kind, old_name, new_name);
+            }
+            rename_in_block(&mut body.node, id, kind, old_name, new_name);
+        }
     }
 }
 
 fn rename_in_expr(expr: &mut Expr, id: Uuid, kind: DeclKindSimple, old_name: &str, new_name: &str) {
     match expr {
-        Expr::Call { name, args, target_id } => {
+        Expr::Call { name, args, target_id, .. } => {
             if kind == DeclKindSimple::Function && *target_id == Some(id) {
                 name.node = new_name.to_string();
             }
