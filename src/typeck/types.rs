@@ -1,5 +1,5 @@
 use crate::parser::ast::TypeExpr;
-use crate::span::{Span, Spanned};
+use crate::span::Spanned;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PlutoType {
@@ -183,10 +183,7 @@ pub fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
             TypeExpr::Nullable(Box::new(Spanned::dummy(pluto_type_to_type_expr(inner))))
         }
         PlutoType::Stream(inner) => {
-            TypeExpr::Stream(Box::new(Spanned::new(pluto_type_to_type_expr(inner), Span::new(0, 0))))
-        }
-        PlutoType::Stream(inner) => {
-            TypeExpr::Stream(Box::new(Spanned::new(pluto_type_to_type_expr(inner), Span::new(0, 0))))
+            TypeExpr::Stream(Box::new(Spanned::dummy(pluto_type_to_type_expr(inner))))
         }
     }
 }

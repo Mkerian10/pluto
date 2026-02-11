@@ -2822,6 +2822,29 @@ impl<'a> LowerContext<'a> {
                 "to_bytes" => Ok(self.call_runtime("__pluto_string_to_bytes", &[obj_ptr])),
                 "to_int" => Ok(self.call_runtime("__pluto_string_to_int", &[obj_ptr])),
                 "to_float" => Ok(self.call_runtime("__pluto_string_to_float", &[obj_ptr])),
+                "trim_start" => Ok(self.call_runtime("__pluto_string_trim_start", &[obj_ptr])),
+                "trim_end" => Ok(self.call_runtime("__pluto_string_trim_end", &[obj_ptr])),
+                "repeat" => {
+                    let count = self.lower_expr(&args[0].node)?;
+                    Ok(self.call_runtime("__pluto_string_repeat", &[obj_ptr, count]))
+                }
+                "last_index_of" => {
+                    let needle = self.lower_expr(&args[0].node)?;
+                    Ok(self.call_runtime("__pluto_string_last_index_of", &[obj_ptr, needle]))
+                }
+                "count" => {
+                    let needle = self.lower_expr(&args[0].node)?;
+                    Ok(self.call_runtime("__pluto_string_count", &[obj_ptr, needle]))
+                }
+                "is_empty" => {
+                    let result = self.call_runtime("__pluto_string_is_empty", &[obj_ptr]);
+                    Ok(self.builder.ins().ireduce(types::I8, result))
+                }
+
+                "is_whitespace" => {
+                    let result = self.call_runtime("__pluto_string_is_whitespace", &[obj_ptr]);
+                    Ok(self.builder.ins().ireduce(types::I8, result))
+                }
                 _ => Err(CompileError::codegen(format!("string has no method '{}'", method.node))),
             };
         }

@@ -1825,6 +1825,54 @@ fn infer_method_call(
                 builtin(env, method);
                 return Ok(PlutoType::Bytes);
             }
+            "trim_start" | "trim_end" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 0 arguments", method.node), span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::String);
+            }
+            "repeat" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        "repeat() expects 1 argument".to_string(), span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("repeat(): expected int, found {arg_type}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::String);
+            }
+            "last_index_of" | "count" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 1 argument", method.node), span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                if arg_type != PlutoType::String {
+                    return Err(CompileError::type_err(
+                        format!("{}(): expected string, found {arg_type}", method.node), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Int);
+            }
+            "is_empty" | "is_whitespace" => {
+                if !args.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 0 arguments", method.node), span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Bool);
+            }
             _ => {
                 return Err(CompileError::type_err(
                     format!("string has no method '{}'", method.node),

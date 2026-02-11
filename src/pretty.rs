@@ -96,6 +96,7 @@ impl PrettyPrinter {
         let mut has_output = false;
 
         // Helper: insert a blank line separator before a new group (if something was emitted before)
+        #[allow(unused_assignments)]
         macro_rules! sep {
             ($self:expr, $has:expr) => {
                 if $has { $self.newline(); }
