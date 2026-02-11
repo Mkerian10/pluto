@@ -1564,10 +1564,18 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
     for stage_spanned in &program.stages {
         let stage = &stage_spanned.node;
         let stage_name = &stage.name.node;
+
+        // Set current stage context for cross-stage call detection (RPC Phase 2)
+        let prev_stage = env.current_stage.clone();
+        env.current_stage = Some(stage_name.clone());
+
         for method in &stage.methods {
             check_function(&method.node, env, Some(stage_name))?;
             check_function_contracts(&method.node, env, Some(stage_name))?;
         }
+
+        // Restore previous context
+        env.current_stage = prev_stage;
     }
     Ok(())
 }
