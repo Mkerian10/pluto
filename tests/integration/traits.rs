@@ -6647,9 +6647,9 @@ fn main() {
 }
 
 #[test]
-fn fail_trait_mut_self_dispatch_not_supported_yet() {
-    // COMPILER GAP: mut self in trait methods not parsed
-    compile_should_fail(r#"
+fn trait_mut_self_with_multiple_methods() {
+    // Trait with mut self method followed by another method
+    let out = compile_and_run_stdout(r#"
 trait Accumulator {
     fn add(mut self, x: int)
     fn total(self) int
@@ -6668,8 +6668,13 @@ class Sum impl Accumulator {
 }
 
 fn main() {
+    let mut s = Sum { val: 0 }
+    s.add(10)
+    s.add(20)
+    print(s.total())
 }
 "#);
+    assert_eq!(out, "30\n");
 }
 
 #[test]
@@ -6768,10 +6773,9 @@ fn main() {
 }
 
 #[test]
-fn fail_trait_void_method_plus_int_method_not_parsed() {
-    // COMPILER GAP: Trait with void method (no return type) followed by int-returning
-    // method fails to parse: "expected (, found identifier"
-    compile_should_fail(r#"
+fn trait_void_method_plus_int_method() {
+    // Trait with void method (no return type) followed by int-returning method
+    let out = compile_and_run_stdout(r#"
 trait Worker {
     fn do_work(self)
     fn status(self) int
@@ -6790,8 +6794,12 @@ class SimpleWorker impl Worker {
 }
 
 fn main() {
+    let w: Worker = SimpleWorker { n: 42 }
+    w.do_work()
+    print(w.status())
 }
 "#);
+    assert_eq!(out, "working\n42\n");
 }
 
 #[test]

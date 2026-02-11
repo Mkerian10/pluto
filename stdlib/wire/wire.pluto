@@ -545,6 +545,10 @@ pub class JsonWireFormat impl WireFormat {
     }
 }
 
+pub fn json_wire_format() JsonWireFormat {
+    return JsonWireFormat { _unused: 0 }
+}
+
 // ── Internal helpers ───────────────────────────────────────────────────────────
 
 fn wire_to_json(w: WireValue) json.Json {
