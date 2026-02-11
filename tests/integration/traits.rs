@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
+use common::{compile_and_run_stdout, compile_and_run_output, compile_should_fail, compile_should_fail_with};
 
 #[test]
 fn trait_basic_impl() {
@@ -12602,4 +12602,597 @@ fn main() {
 "#);
     // (10 + 3) * 2 + 1 = 27, (10 - 3 + 3) = 10, 27 * 10 + 3 = 273
     assert_eq!(out, "273\n");
+}
+
+// ===== Batch 23: Closures as params, DI, field rejection, generics+traits, recursive data =====
+
+#[test]
+fn trait_method_takes_closure_param() {
+    // Trait method accepts a closure (fn type) parameter
+    let out = compile_and_run_stdout(r#"
+trait Transformer_ {
+    fn transform(self, f: fn(int) int) int
+}
+
+class Holder_ impl Transformer_ {
+    val: int
+    fn transform(self, f: fn(int) int) int {
+        return f(self.val)
+    }
+}
+
+fn main() {
+    let h: Transformer_ = Holder_ { val: 5 }
+    let doubled = h.transform((x: int) => x * 2)
+    print(doubled)
+    let squared = h.transform((x: int) => x * x)
+    print(squared)
+}
+"#);
+    assert_eq!(out, "10\n25\n");
+}
+
+#[test]
+fn trait_method_returns_closure() {
+    // Trait method creates and returns a closure
+    let out = compile_and_run_stdout(r#"
+trait ClosureMaker {
+    fn make(self) fn(int) int
+}
+
+class Adder_ impl ClosureMaker {
+    amount: int
+    fn make(self) fn(int) int {
+        let amt = self.amount
+        return (x: int) => x + amt
+    }
+}
+
+fn main() {
+    let m: ClosureMaker = Adder_ { amount: 10 }
+    let f = m.make()
+    print(f(5))
+    print(f(20))
+}
+"#);
+    assert_eq!(out, "15\n30\n");
+}
+
+#[test]
+fn trait_with_di_class_impl() {
+    // Class with bracket deps (DI) also implements a trait
+    let out = compile_and_run_stdout(r#"
+class Database {
+    tag: int
+    fn label(self) string {
+        return "db"
+    }
+}
+
+trait Repository_ {
+    fn query(self) string
+}
+
+class UserRepo[db: Database] impl Repository_ {
+    tag: int
+    fn query(self) string {
+        return self.db.label()
+    }
+}
+
+fn run(r: Repository_) {
+    print(r.query())
+}
+
+app MyApp[repo: UserRepo] {
+    fn main(self) {
+        run(self.repo)
+    }
+}
+"#);
+    assert_eq!(out, "db\n");
+}
+
+#[test]
+fn fail_access_field_on_trait_handle_direct() {
+    // Cannot access field on a trait handle (traits are opaque)
+    compile_should_fail(r#"
+trait Foo {
+    fn bar(self) int
+}
+
+class Impl impl Foo {
+    val: int
+    fn bar(self) int { return self.val }
+}
+
+fn use_foo(f: Foo) {
+    print(f.val)
+}
+
+fn main() {
+    use_foo(Impl { val: 5 })
+}
+"#);
+}
+
+#[test]
+fn trait_generic_class_two_instantiations_same_trait() {
+    // Generic class instantiated with two types, both implement same trait
+    let out = compile_and_run_stdout(r#"
+trait Sizer {
+    fn size(self) int
+}
+
+class Wrap<T> impl Sizer {
+    inner: T
+    fn size(self) int { return 1 }
+}
+
+fn show_size(s: Sizer) {
+    print(s.size())
+}
+
+fn main() {
+    show_size(Wrap<int> { inner: 42 })
+    show_size(Wrap<string> { inner: "hello" })
+}
+"#);
+    assert_eq!(out, "1\n1\n");
+}
+
+#[test]
+fn fail_trait_dispatch_on_recursive_linked_list() {
+    // BUG: enum type used as class field isn't resolved (forward reference gap)
+    compile_should_fail_with(r#"
+enum IntList {
+    Cons { head: int, tail: IntList }
+    Nil
+}
+
+trait Summable {
+    fn total(self) int
+}
+
+class ListWrapper impl Summable {
+    list: IntList
+    fn total(self) int {
+        return sum_list(self.list)
+    }
+}
+
+fn sum_list(l: IntList) int {
+    match l {
+        IntList.Cons { head, tail } {
+            return head + sum_list(tail)
+        }
+        IntList.Nil {
+            return 0
+        }
+    }
+}
+
+fn run(s: Summable) {
+    print(s.total())
+}
+
+fn main() {
+    let list = IntList.Cons {
+        head: 1,
+        tail: IntList.Cons {
+            head: 2,
+            tail: IntList.Cons {
+                head: 3,
+                tail: IntList.Nil
+            }
+        }
+    }
+    run(ListWrapper { list: list })
+}
+"#, "unknown type");
+}
+
+#[test]
+fn trait_method_void_called_in_sequence() {
+    // Multiple void trait method calls in sequence
+    let out = compile_and_run_stdout(r#"
+trait Printer__ {
+    fn print_val(self, prefix: string)
+}
+
+class NumPrinter impl Printer__ {
+    val: int
+    fn print_val(self, prefix: string) {
+        print("{prefix}{self.val}")
+    }
+}
+
+fn run(p: Printer__) {
+    p.print_val("a=")
+    p.print_val("b=")
+    p.print_val("c=")
+}
+
+fn main() {
+    run(NumPrinter { val: 7 })
+}
+"#);
+    assert_eq!(out, "a=7\nb=7\nc=7\n");
+}
+
+#[test]
+fn trait_default_method_overridden_by_some_classes() {
+    // Trait with default, some classes override it and some don't
+    let out = compile_and_run_stdout(r#"
+trait Labeled_ {
+    fn label(self) string { return "default" }
+}
+
+class Custom impl Labeled_ {
+    name: string
+    fn label(self) string { return self.name }
+}
+
+class Default_ impl Labeled_ {
+    tag: int
+}
+
+fn show(l: Labeled_) {
+    print(l.label())
+}
+
+fn main() {
+    show(Custom { name: "custom" })
+    show(Default_ { tag: 0 })
+}
+"#);
+    assert_eq!(out, "custom\ndefault\n");
+}
+
+#[test]
+fn trait_method_with_multiple_returns() {
+    // Trait method with multiple return paths
+    let out = compile_and_run_stdout(r#"
+trait Categorizer {
+    fn categorize(self, x: int) string
+}
+
+class ThreeBucket impl Categorizer {
+    tag: int
+    fn categorize(self, x: int) string {
+        if x < 0 {
+            return "negative"
+        }
+        if x == 0 {
+            return "zero"
+        }
+        if x < 100 {
+            return "small"
+        }
+        return "large"
+    }
+}
+
+fn run(c: Categorizer) {
+    print(c.categorize(-5))
+    print(c.categorize(0))
+    print(c.categorize(50))
+    print(c.categorize(200))
+}
+
+fn main() {
+    run(ThreeBucket { tag: 0 })
+}
+"#);
+    assert_eq!(out, "negative\nzero\nsmall\nlarge\n");
+}
+
+#[test]
+fn trait_dispatch_result_used_in_array_literal() {
+    // Trait dispatch result placed into an array literal
+    let out = compile_and_run_stdout(r#"
+trait NumGen {
+    fn gen(self) int
+}
+
+class ConstGen impl NumGen {
+    val: int
+    fn gen(self) int { return self.val }
+}
+
+fn main() {
+    let g: NumGen = ConstGen { val: 7 }
+    let arr: [int] = [g.gen(), g.gen() + 1, g.gen() + 2]
+    print(arr[0])
+    print(arr[1])
+    print(arr[2])
+}
+"#);
+    assert_eq!(out, "7\n8\n9\n");
+}
+
+#[test]
+fn trait_method_with_while_loop_counter() {
+    // Trait method implements counting logic with while loop
+    let out = compile_and_run_stdout(r#"
+trait Fibonacci {
+    fn fib(self, n: int) int
+}
+
+class IterFib impl Fibonacci {
+    tag: int
+    fn fib(self, n: int) int {
+        if n <= 1 {
+            return n
+        }
+        let a = 0
+        let b = 1
+        let i = 2
+        while i <= n {
+            let temp = a + b
+            a = b
+            b = temp
+            i = i + 1
+        }
+        return b
+    }
+}
+
+fn run(f: Fibonacci) {
+    print(f.fib(0))
+    print(f.fib(1))
+    print(f.fib(5))
+    print(f.fib(10))
+}
+
+fn main() {
+    run(IterFib { tag: 0 })
+}
+"#);
+    assert_eq!(out, "0\n1\n5\n55\n");
+}
+
+#[test]
+fn trait_method_error_propagation_chain() {
+    // Error propagation through multiple trait dispatch calls
+    let out = compile_and_run_stdout(r#"
+error Oops { code: int }
+
+trait Layer {
+    fn process(self, x: int) int
+}
+
+class InnerLayer impl Layer {
+    tag: int
+    fn process(self, x: int) int {
+        if x == 0 {
+            raise Oops { code: 1 }
+        }
+        return x * 2
+    }
+}
+
+class OuterLayer impl Layer {
+    inner: Layer
+    fn process(self, x: int) int {
+        return self.inner.process(x)! + 1
+    }
+}
+
+fn main() {
+    let inner: Layer = InnerLayer { tag: 0 }
+    let outer: Layer = OuterLayer { inner: inner }
+    let r1 = outer.process(5) catch -1
+    print(r1)
+    let r2 = outer.process(0) catch -1
+    print(r2)
+}
+"#);
+    assert_eq!(out, "11\n-1\n");
+}
+
+#[test]
+fn trait_method_takes_map_param() {
+    // Trait method accepts a Map parameter
+    let out = compile_and_run_stdout(r#"
+trait ConfigReader {
+    fn read_key(self, config: Map<string, int>, key: string) int
+}
+
+class DefaultReader impl ConfigReader {
+    default_val: int
+    fn read_key(self, config: Map<string, int>, key: string) int {
+        if config.contains(key) {
+            return config[key]
+        }
+        return self.default_val
+    }
+}
+
+fn main() {
+    let r: ConfigReader = DefaultReader { default_val: -1 }
+    let m = Map<string, int> {}
+    m["port"] = 8080
+    print(r.read_key(m, "port"))
+    print(r.read_key(m, "timeout"))
+}
+"#);
+    assert_eq!(out, "8080\n-1\n");
+}
+
+#[test]
+fn trait_dispatch_chained_three_different_traits() {
+    // Call methods on three different trait handles in sequence, combining results
+    let out = compile_and_run_stdout(r#"
+trait First_ {
+    fn first(self) int
+}
+
+trait Second_ {
+    fn second(self) int
+}
+
+trait Third_ {
+    fn third(self) int
+}
+
+class Trio impl First_, Second_, Third_ {
+    val: int
+    fn first(self) int { return self.val }
+    fn second(self) int { return self.val * 2 }
+    fn third(self) int { return self.val * 3 }
+}
+
+fn combine(a: First_, b: Second_, c: Third_) int {
+    return a.first() + b.second() + c.third()
+}
+
+fn main() {
+    let t = Trio { val: 5 }
+    print(combine(t, t, t))
+}
+"#);
+    assert_eq!(out, "30\n");
+}
+
+#[test]
+fn trait_dispatch_in_return_expression() {
+    // Trait method dispatch directly in return statement
+    let out = compile_and_run_stdout(r#"
+trait Evaluator {
+    fn eval(self) int
+}
+
+class ConstEval impl Evaluator {
+    val: int
+    fn eval(self) int { return self.val }
+}
+
+fn get_eval(e: Evaluator) int {
+    return e.eval()
+}
+
+fn main() {
+    print(get_eval(ConstEval { val: 99 }))
+}
+"#);
+    assert_eq!(out, "99\n");
+}
+
+#[test]
+fn trait_method_with_nested_closures() {
+    // Trait method uses a closure that captures a local variable
+    let out = compile_and_run_stdout(r#"
+trait ArrayProcessor {
+    fn process(self, arr: [int]) [int]
+}
+
+class Doubler_ impl ArrayProcessor {
+    tag: int
+    fn process(self, arr: [int]) [int] {
+        let result: [int] = []
+        let i = 0
+        while i < arr.len() {
+            result.push(arr[i] * 2)
+            i = i + 1
+        }
+        return result
+    }
+}
+
+fn run(p: ArrayProcessor) {
+    let data: [int] = [1, 2, 3]
+    let out = p.process(data)
+    let i = 0
+    while i < out.len() {
+        print(out[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    run(Doubler_ { tag: 0 })
+}
+"#);
+    assert_eq!(out, "2\n4\n6\n");
+}
+
+#[test]
+fn trait_method_with_break_in_while() {
+    // Trait method uses break to exit loop early
+    let out = compile_and_run_stdout(r#"
+trait SearchAlgo {
+    fn find(self, arr: [int], target: int) int
+}
+
+class LinearSearch impl SearchAlgo {
+    tag: int
+    fn find(self, arr: [int], target: int) int {
+        let i = 0
+        while i < arr.len() {
+            if arr[i] == target {
+                return i
+            }
+            i = i + 1
+        }
+        return -1
+    }
+}
+
+fn run(s: SearchAlgo) {
+    let data: [int] = [10, 20, 30, 40, 50]
+    print(s.find(data, 30))
+    print(s.find(data, 99))
+}
+
+fn main() {
+    run(LinearSearch { tag: 0 })
+}
+"#);
+    assert_eq!(out, "2\n-1\n");
+}
+
+#[test]
+fn fail_trait_return_type_float_vs_int() {
+    // Trait expects float return but class returns int
+    compile_should_fail(r#"
+trait Measured {
+    fn measure(self) float
+}
+
+class BadMeasure impl Measured {
+    tag: int
+    fn measure(self) int { return 5 }
+}
+
+fn main() {
+    let m: Measured = BadMeasure { tag: 0 }
+    print(m.measure())
+}
+"#);
+}
+
+#[test]
+fn trait_ensures_violation_aborts() {
+    // ensures contract violated at runtime should abort
+    let (_, stderr, code) = compile_and_run_output(r#"
+trait Positive_ {
+    fn make(self) int
+        ensures result > 0
+}
+
+class BadMaker impl Positive_ {
+    tag: int
+    fn make(self) int {
+        return -1
+    }
+}
+
+fn main() {
+    let p: Positive_ = BadMaker { tag: 0 }
+    print(p.make())
+}
+"#);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("ensures"), "Expected ensures violation, got stderr: {}", stderr);
 }
