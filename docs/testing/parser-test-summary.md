@@ -3,7 +3,54 @@
 **Date**: 2026-02-11
 **Branch**: `test-phase2-parser`
 **Total Tests Implemented**: **165 parser tests** (47 original + 118 new)
-**Current Pass Rate**: **121/165 passing (73.3%)**
+**Current Pass Rate**: **122/165 passing (73.9%)**
+**Investigation Status**: ✅ Complete - See `parser-test-investigation.md`
+
+---
+
+## Investigation Results (2026-02-11)
+
+**43 failing tests analyzed** - See `parser-test-investigation.md` for full details
+
+### Categorization:
+- **Test Bugs (Wrong Syntax/Unimplemented Features):** 24 failures (55.8%)
+  - If/match expressions not supported (3 tests)
+  - Binary/octal/scientific notation literals not implemented (4 tests)
+  - Wrong class declaration syntax (4 tests - used commas instead of newlines)
+  - Empty file test expectations wrong (2 tests)
+  - Other syntax issues (11 tests)
+
+- **Actual Compiler Bugs:** 19 failures (44.2%)
+  - **Estimated 12-15 distinct bugs** (many tests affected by same root cause)
+
+### Major Compiler Bugs Found:
+
+1. **Nested Closure Lifting** (affects 5-7 tests) - HIGH PRIORITY
+   - Error: "Codegen error: closures should be lifted before codegen"
+   - Tests: arrow_nested_closure, closures in arrays, closures in match arms
+
+2. **Chained Field/Method Access** (affects 2-3 tests)
+   - Error: `obj.inner.x` not supported in typechecker
+
+3. **Function Values Not Assignable** (affects 2-3 tests)
+   - Error: "undefined variable" when assigning function to variable
+
+4. **Array Access After Newline** (affects 1 test)
+   - Parser treats `arr\n[0]` as two statements instead of array access
+
+5. **Error Recovery Issues** (affects 2 tests)
+   - Stray closing braces, double operators
+
+### Projected Pass Rates:
+
+| Stage | Pass Rate | Tests | Action |
+|-------|-----------|-------|--------|
+| **Current** | **73.9%** | **122/165** | Baseline |
+| After fixing test bugs | 81.8% | 135/165 | Mark #[ignore], fix syntax (1-2 hrs) |
+| After fixing 2 major bugs | 87.9% | 145/165 | Nested closures + function values (4-8 hrs) |
+| After fixing all bugs | 94-97% | 155-160/165 | All compiler bugs fixed |
+
+**Realistic near-term target:** 88-92% pass rate
 
 ---
 
