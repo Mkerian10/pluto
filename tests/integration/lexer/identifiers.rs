@@ -225,3 +225,66 @@ fn identifier_numbers_and_underscores() {
     let tokens = lex_ok("var_1_2_3");
     assert!(matches!(&tokens[0].0, Token::Ident));
 }
+
+// ===== Case Sensitivity =====
+
+#[test]
+fn keyword_case_sensitive_let_uppercase() {
+    // LET should be an identifier, not keyword
+    let tokens = lex_ok("LET");
+    assert!(matches!(&tokens[0].0, Token::Ident), "LET should be identifier, not keyword");
+}
+
+#[test]
+fn keyword_case_sensitive_let_mixed() {
+    // Let should be an identifier
+    let tokens = lex_ok("Let");
+    assert!(matches!(&tokens[0].0, Token::Ident));
+}
+
+#[test]
+fn keyword_case_sensitive_fn_uppercase() {
+    let tokens = lex_ok("FN");
+    assert!(matches!(&tokens[0].0, Token::Ident));
+}
+
+#[test]
+fn keyword_case_sensitive_class_mixed() {
+    let tokens = lex_ok("Class");
+    assert!(matches!(&tokens[0].0, Token::Ident));
+}
+
+#[test]
+fn keyword_case_sensitive_return_uppercase() {
+    let tokens = lex_ok("RETURN");
+    assert!(matches!(&tokens[0].0, Token::Ident));
+}
+
+// ===== Underscore Patterns =====
+
+#[test]
+fn identifier_single_underscore_standalone() {
+    // Single underscore is valid identifier
+    let tokens = lex_ok("_");
+    assert_eq!(tokens.len(), 1);
+    assert!(matches!(&tokens[0].0, Token::Ident));
+}
+
+#[test]
+fn identifier_trailing_underscore() {
+    let tokens = lex_ok("foo_");
+    assert!(matches!(&tokens[0].0, Token::Ident));
+}
+
+#[test]
+fn identifier_python_style_dunder() {
+    // Python-style __init__
+    let tokens = lex_ok("__init__");
+    assert!(matches!(&tokens[0].0, Token::Ident));
+}
+
+#[test]
+fn identifier_many_underscores() {
+    let tokens = lex_ok("a_b_c_d_e_f");
+    assert!(matches!(&tokens[0].0, Token::Ident));
+}

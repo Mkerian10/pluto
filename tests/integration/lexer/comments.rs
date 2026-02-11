@@ -167,3 +167,22 @@ fn comment_slash_star_in_line_comment() {
     let tokens = lex_ok(src);
     assert_eq!(tokens.len(), 5); // \n let x = 1
 }
+
+#[test]
+fn comment_with_url() {
+    // URL in comment should not confuse lexer
+    let src = "// See http://example.com for details\nlet x = 1";
+    let tokens = lex_ok(src);
+    // Comment filtered, should have: \n let x = 1
+    assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Let)));
+}
+
+#[test]
+fn comment_that_looks_like_code() {
+    // Comment containing code-like content
+    let src = "// fn foo() { let x = 1; }\nlet y = 2";
+    let tokens = lex_ok(src);
+    // Only the actual code should be lexed
+    let let_count = tokens.iter().filter(|(t, _)| matches!(t, Token::Let)).count();
+    assert_eq!(let_count, 1); // Only the real 'let y'
+}

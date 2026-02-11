@@ -98,3 +98,38 @@ fn trailing_whitespace_after_last_token() {
     assert_eq!(tokens.len(), 4);
     assert!(matches!(&tokens[3].0, Token::IntLit(1)));
 }
+
+// ===== Newlines in Expressions =====
+
+#[test]
+fn newline_after_operator() {
+    // Newline after operator (expression continuation)
+    let src = "1 +\n2";
+    let tokens = lex_ok(src);
+    // 1 + \n 2
+    assert_eq!(tokens.len(), 4);
+    assert!(matches!(&tokens[0].0, Token::IntLit(1)));
+    assert!(matches!(&tokens[1].0, Token::Plus));
+    assert!(matches!(&tokens[2].0, Token::Newline));
+    assert!(matches!(&tokens[3].0, Token::IntLit(2)));
+}
+
+#[test]
+fn newline_multi_line_expression() {
+    // Expression spanning multiple lines
+    let src = "1 + 2 +\n3 + 4 +\n5";
+    let tokens = lex_ok(src);
+    // Should have two newlines
+    let newline_count = tokens.iter().filter(|(t, _)| matches!(t, Token::Newline)).count();
+    assert_eq!(newline_count, 2);
+}
+
+#[test]
+fn newline_between_function_params() {
+    // Newlines in parameter list (lexer level)
+    let src = "fn foo(\nx: int,\ny: int\n)";
+    let tokens = lex_ok(src);
+    // Should have 3 newlines
+    let newline_count = tokens.iter().filter(|(t, _)| matches!(t, Token::Newline)).count();
+    assert_eq!(newline_count, 3);
+}

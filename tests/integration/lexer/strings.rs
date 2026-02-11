@@ -234,3 +234,39 @@ fn string_emoji() {
     let tokens = lex_ok(r#""🚀🎉💯""#);
     assert!(matches!(&tokens[0].0, Token::StringLit(s) if s == "🚀🎉💯"));
 }
+
+// ===== Pathological String Cases =====
+
+#[test]
+fn string_many_consecutive_escapes() {
+    // String with 1000 consecutive newline escapes
+    let escapes = r"\n".repeat(1000);
+    let src = format!(r#""{}""#, escapes);
+    let tokens = lex_ok(&src);
+    assert_eq!(tokens.len(), 1);
+    assert!(matches!(&tokens[0].0, Token::StringLit(_)));
+}
+
+#[test]
+fn string_only_escape_sequences() {
+    // String containing only escape sequences: "\"\"\"\""
+    let tokens = lex_ok(r#""\"\"\"\"""#);
+    assert!(matches!(&tokens[0].0, Token::StringLit(s) if s == "\"\"\"\""));
+}
+
+#[test]
+fn string_alternating_content_and_escapes() {
+    // Alternating pattern: a\nb\tc\rd\\
+    let tokens = lex_ok(r#""a\nb\tc\rd\\""#);
+    assert!(matches!(&tokens[0].0, Token::StringLit(s) if s == "a\nb\tc\rd\\"));
+}
+
+#[test]
+fn string_many_mixed_escapes() {
+    // Mix of all escape types repeated
+    let pattern = r"\n\r\t\\";  // Removed \" to avoid format! issues
+    let repeated = pattern.repeat(100);
+    let src = format!("\"{}\"", repeated);
+    let tokens = lex_ok(&src);
+    assert_eq!(tokens.len(), 1);
+}

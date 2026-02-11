@@ -309,3 +309,106 @@ fn operator_four_dots() {
     assert!(matches!(&tokens[0].0, Token::DotDot));
     assert!(matches!(&tokens[1].0, Token::DotDot));
 }
+
+// ===== Token Boundary Edge Cases =====
+
+#[test]
+fn boundary_range_with_numbers() {
+    // Range operator with numbers: 1..10
+    let tokens = lex_ok("1..10");
+    assert_eq!(tokens.len(), 3);
+    assert!(matches!(&tokens[0].0, Token::IntLit(1)));
+    assert!(matches!(&tokens[1].0, Token::DotDot));
+    assert!(matches!(&tokens[2].0, Token::IntLit(10)));
+}
+
+#[test]
+fn boundary_range_inclusive_with_numbers() {
+    // Inclusive range: 1..=10
+    let tokens = lex_ok("1..=10");
+    assert_eq!(tokens.len(), 3);
+    assert!(matches!(&tokens[0].0, Token::IntLit(1)));
+    assert!(matches!(&tokens[1].0, Token::DotDotEq));
+    assert!(matches!(&tokens[2].0, Token::IntLit(10)));
+}
+
+#[test]
+fn boundary_method_chain() {
+    // Method chaining: a.b.c.d
+    let tokens = lex_ok("a.b.c.d");
+    assert_eq!(tokens.len(), 7);
+    // a . b . c . d
+    assert!(matches!(&tokens[0].0, Token::Ident));
+    assert!(matches!(&tokens[1].0, Token::Dot));
+    assert!(matches!(&tokens[2].0, Token::Ident));
+    assert!(matches!(&tokens[3].0, Token::Dot));
+    assert!(matches!(&tokens[4].0, Token::Ident));
+    assert!(matches!(&tokens[5].0, Token::Dot));
+    assert!(matches!(&tokens[6].0, Token::Ident));
+}
+
+#[test]
+fn boundary_arrow_sequence() {
+    // ->> is Arrow + Gt (not three tokens)
+    let tokens = lex_ok("->>");
+    assert_eq!(tokens.len(), 2);
+    assert!(matches!(&tokens[0].0, Token::Arrow));
+    assert!(matches!(&tokens[1].0, Token::Gt));
+}
+
+#[test]
+fn boundary_operators_in_parens() {
+    // (+), [*], {/}
+    let src = "(+) [*] {/}";
+    let tokens = lex_ok(src);
+    // ( + ) [ * ] { / }
+    assert_eq!(tokens.len(), 9);
+    assert!(matches!(&tokens[0].0, Token::LParen));
+    assert!(matches!(&tokens[1].0, Token::Plus));
+    assert!(matches!(&tokens[2].0, Token::RParen));
+    assert!(matches!(&tokens[3].0, Token::LBracket));
+    assert!(matches!(&tokens[4].0, Token::Star));
+    assert!(matches!(&tokens[5].0, Token::RBracket));
+}
+
+#[test]
+fn boundary_punctuation_combinations() {
+    // Test various punctuation combinations
+    let src = "()[]{}";
+    let tokens = lex_ok(src);
+    assert_eq!(tokens.len(), 6);
+    assert!(matches!(&tokens[0].0, Token::LParen));
+    assert!(matches!(&tokens[1].0, Token::RParen));
+    assert!(matches!(&tokens[2].0, Token::LBracket));
+    assert!(matches!(&tokens[3].0, Token::RBracket));
+    assert!(matches!(&tokens[4].0, Token::LBrace));
+    assert!(matches!(&tokens[5].0, Token::RBrace));
+}
+
+#[test]
+fn boundary_question_marks() {
+    // Test nullable type operator: T?, T??, T???
+    let src = "x? y?? z???";
+    let tokens = lex_ok(src);
+    // x ? y ? ? z ? ? ?
+    let question_count = tokens.iter().filter(|(t, _)| matches!(t, Token::Question)).count();
+    assert_eq!(question_count, 6);
+}
+
+#[test]
+fn boundary_comma_sequences() {
+    // Multiple commas: a,b,c,d
+    let tokens = lex_ok("a,b,c,d");
+    assert_eq!(tokens.len(), 7);
+    let comma_count = tokens.iter().filter(|(t, _)| matches!(t, Token::Comma)).count();
+    assert_eq!(comma_count, 3);
+}
+
+#[test]
+fn boundary_colon_sequences() {
+    // Multiple colons: a:b:c
+    let tokens = lex_ok("a:b:c");
+    assert_eq!(tokens.len(), 5);
+    assert!(matches!(&tokens[1].0, Token::Colon));
+    assert!(matches!(&tokens[3].0, Token::Colon));
+}
