@@ -22,6 +22,10 @@ pub mod pretty;
 pub mod xref;
 pub mod sync;
 pub mod stages;
+pub mod decl_key;
+pub mod depgraph;
+pub mod content_hash;
+pub mod comp_cache;
 pub mod cache;
 
 use diagnostics::{CompileError, CompileWarning};
