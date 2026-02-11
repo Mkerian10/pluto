@@ -292,6 +292,7 @@ fn lift_in_expr(
                     contracts: vec![],
                     body,
                     is_pub: false,
+                    is_override: false,
                 };
 
                 new_fns.push(Spanned::new(lifted, span));

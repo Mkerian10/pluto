@@ -49,6 +49,7 @@ mod tests {
             contracts: vec![],
             body: empty_block(),
             is_pub: false,
+            is_override: false,
         })
     }
 

@@ -466,6 +466,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                                 contracts: trait_method.contracts.clone(),
                                 body: body.clone(),
                                 is_pub: false,
+                                is_override: false,
                             };
 
                             let mangled = mangle_method(class_name, &trait_method.name.node);
