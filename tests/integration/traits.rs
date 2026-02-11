@@ -13784,3 +13784,650 @@ fn main() {
 "#);
     assert_eq!(out, "6\n");
 }
+
+// ===== Batch 25: Return class, string methods, dispatch arithmetic, error catch, trait-takes-trait =====
+
+#[test]
+fn fail_trait_method_returns_class_forward_ref_gap() {
+    // BUG: Class type in trait method return position fails (forward reference gap)
+    compile_should_fail_with(r#"
+class Point {
+    x: int
+    y: int
+}
+
+trait PointMaker {
+    fn make_point(self) Point
+}
+
+class Factory impl PointMaker {
+    dx: int
+    dy: int
+    fn make_point(self) Point {
+        return Point { x: self.dx, y: self.dy }
+    }
+}
+
+fn use_maker(pm: PointMaker) {
+    let p = pm.make_point()
+    print(p.x)
+    print(p.y)
+}
+
+fn main() {
+    let f: PointMaker = Factory { dx: 10, dy: 20 }
+    use_maker(f)
+}
+"#, "unknown type");
+}
+
+#[test]
+fn trait_method_uses_string_contains() {
+    // Trait method body calls .contains() on string
+    let out = compile_and_run_stdout(r#"
+trait Matcher {
+    fn matches(self, input: string) bool
+}
+
+class SubstringMatcher impl Matcher {
+    pattern: string
+    fn matches(self, input: string) bool {
+        return input.contains(self.pattern)
+    }
+}
+
+fn check(m: Matcher, s: string) {
+    if m.matches(s) {
+        print(1)
+    } else {
+        print(0)
+    }
+}
+
+fn main() {
+    let m: Matcher = SubstringMatcher { pattern: "ell" }
+    check(m, "hello")
+    check(m, "world")
+}
+"#);
+    assert_eq!(out, "1\n0\n");
+}
+
+#[test]
+fn trait_binary_op_between_two_dispatches() {
+    // Single expression with two trait dispatches combined by operator
+    let out = compile_and_run_stdout(r#"
+trait Num_ {
+    fn val(self) int
+}
+
+class A_ impl Num_ {
+    n: int
+    fn val(self) int { return self.n }
+}
+
+class B_ impl Num_ {
+    n: int
+    fn val(self) int { return self.n * 10 }
+}
+
+fn main() {
+    let a: Num_ = A_ { n: 3 }
+    let b: Num_ = B_ { n: 2 }
+    print(a.val() + b.val())
+    print(a.val() * b.val())
+}
+"#);
+    assert_eq!(out, "23\n60\n");
+}
+
+#[test]
+fn trait_method_iterates_array_param() {
+    // Trait method uses for..in to iterate array parameter
+    let out = compile_and_run_stdout(r#"
+trait Aggregator_ {
+    fn total(self, items: [int]) int
+}
+
+class Summer_ impl Aggregator_ {
+    tag: int
+    fn total(self, items: [int]) int {
+        let sum = 0
+        for v in items {
+            sum = sum + v
+        }
+        return sum
+    }
+}
+
+fn run(a: Aggregator_) {
+    let arr: [int] = [10, 20, 30]
+    print(a.total(arr))
+}
+
+fn main() {
+    let a: Aggregator_ = Summer_ { tag: 0 }
+    run(a)
+}
+"#);
+    assert_eq!(out, "60\n");
+}
+
+#[test]
+fn trait_default_method_with_interp_of_required() {
+    // Default method uses string interpolation with result of required method
+    let out = compile_and_run_stdout(r#"
+trait Named_ {
+    fn name(self) string
+    fn greeting(self) string {
+        return "Hello, {self.name()}!"
+    }
+}
+
+class Person_ impl Named_ {
+    n: string
+    fn name(self) string { return self.n }
+}
+
+fn show(n: Named_) {
+    print(n.greeting())
+}
+
+fn main() {
+    let p: Named_ = Person_ { n: "Alice" }
+    show(p)
+}
+"#);
+    assert_eq!(out, "Hello, Alice!\n");
+}
+
+#[test]
+fn trait_method_builds_and_returns_map() {
+    // Trait method creates a map and returns it
+    let out = compile_and_run_stdout(r#"
+trait MapBuilder_ {
+    fn build(self) Map<string, int>
+}
+
+class PairBuilder_ impl MapBuilder_ {
+    key1: string
+    val1: int
+    fn build(self) Map<string, int> {
+        let m = Map<string, int> {}
+        m[self.key1] = self.val1
+        return m
+    }
+}
+
+fn show(b: MapBuilder_) {
+    let m = b.build()
+    print(m.len())
+}
+
+fn main() {
+    let b: MapBuilder_ = PairBuilder_ { key1: "a", val1: 42 }
+    show(b)
+}
+"#);
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn trait_dispatch_inside_catch_expression() {
+    // Trait method that raises error, caught by caller
+    let out = compile_and_run_stdout(r#"
+error BadInput_ {
+    code: int
+}
+
+trait Validator_ {
+    fn validate(self, x: int) int
+}
+
+class StrictValidator_ impl Validator_ {
+    tag: int
+    fn validate(self, x: int) int {
+        if x < 0 {
+            raise BadInput_ { code: 1 }
+        }
+        return x
+    }
+}
+
+fn safe_validate(v: Validator_, x: int) int {
+    return v.validate(x) catch -1
+}
+
+fn main() {
+    let v: Validator_ = StrictValidator_ { tag: 0 }
+    print(safe_validate(v, 5))
+    print(safe_validate(v, -3))
+}
+"#);
+    assert_eq!(out, "5\n-1\n");
+}
+
+#[test]
+fn fail_trait_dispatch_in_match_on_enum_result() {
+    // BUG: Enum type in trait method return position fails (forward reference gap)
+    compile_should_fail_with(r#"
+enum Status_ {
+    Active
+    Inactive { reason: string }
+}
+
+trait StatusProvider_ {
+    fn status(self) Status_
+}
+
+class Server_ impl StatusProvider_ {
+    up: bool
+    fn status(self) Status_ {
+        if self.up {
+            return Status_.Active
+        }
+        return Status_.Inactive { reason: "down" }
+    }
+}
+
+fn check(s: StatusProvider_) {
+    match s.status() {
+        Status_.Active {
+            print("ok")
+        }
+        Status_.Inactive { reason } {
+            print(reason)
+        }
+    }
+}
+
+fn main() {
+    let s1: StatusProvider_ = Server_ { up: true }
+    let s2: StatusProvider_ = Server_ { up: false }
+    check(s1)
+    check(s2)
+}
+"#, "unknown type");
+}
+
+#[test]
+fn trait_method_takes_trait_param_different_trait() {
+    // Trait method takes another trait-typed parameter
+    let out = compile_and_run_stdout(r#"
+trait FormatTrait {
+    fn format(self, val: int) string
+}
+
+trait PrintTrait {
+    fn do_print(self, f: FormatTrait, val: int)
+}
+
+class SimpleFormat impl FormatTrait {
+    tag: int
+    fn format(self, val: int) string {
+        return "val={val}"
+    }
+}
+
+class ConsolePrint impl PrintTrait {
+    tag: int
+    fn do_print(self, f: FormatTrait, val: int) {
+        print(f.format(val))
+    }
+}
+
+fn run(p: PrintTrait, f: FormatTrait) {
+    p.do_print(f, 42)
+}
+
+fn main() {
+    let f: FormatTrait = SimpleFormat { tag: 0 }
+    let p: PrintTrait = ConsolePrint { tag: 0 }
+    run(p, f)
+}
+"#);
+    assert_eq!(out, "val=42\n");
+}
+
+#[test]
+fn trait_method_with_to_int_string_parse() {
+    // Trait method uses string.to_int() nullable result
+    let out = compile_and_run_stdout(r#"
+trait IntParser {
+    fn parse(self, input: string) int
+}
+
+class SafeParser impl IntParser {
+    default_val: int
+    fn parse(self, input: string) int {
+        let result = input.to_int()
+        if result == none {
+            return self.default_val
+        }
+        return result?
+    }
+}
+
+fn run(p: IntParser) {
+    print(p.parse("42"))
+    print(p.parse("abc"))
+}
+
+fn main() {
+    let p: IntParser = SafeParser { default_val: -1 }
+    run(p)
+}
+"#);
+    assert_eq!(out, "42\n-1\n");
+}
+
+#[test]
+fn trait_dispatch_three_methods_interleaved_on_two_objects() {
+    // Two different trait objects, calling methods in interleaved order
+    let out = compile_and_run_stdout(r#"
+trait MultiMethod {
+    fn a(self) int
+    fn b(self) int
+    fn c(self) int
+}
+
+class MM1 impl MultiMethod {
+    tag: int
+    fn a(self) int { return 1 }
+    fn b(self) int { return 2 }
+    fn c(self) int { return 3 }
+}
+
+class MM2 impl MultiMethod {
+    tag: int
+    fn a(self) int { return 10 }
+    fn b(self) int { return 20 }
+    fn c(self) int { return 30 }
+}
+
+fn main() {
+    let x: MultiMethod = MM1 { tag: 0 }
+    let y: MultiMethod = MM2 { tag: 0 }
+    print(x.a() + y.a())
+    print(x.b() + y.b())
+    print(x.c() + y.c())
+}
+"#);
+    assert_eq!(out, "11\n22\n33\n");
+}
+
+#[test]
+fn trait_method_with_string_starts_with() {
+    // Trait method uses .starts_with() on string
+    let out = compile_and_run_stdout(r#"
+trait PrefixCheck {
+    fn has_prefix(self, input: string) bool
+}
+
+class HttpCheck impl PrefixCheck {
+    prefix: string
+    fn has_prefix(self, input: string) bool {
+        return input.starts_with(self.prefix)
+    }
+}
+
+fn check(p: PrefixCheck, s: string) {
+    if p.has_prefix(s) {
+        print("yes")
+    } else {
+        print("no")
+    }
+}
+
+fn main() {
+    let p: PrefixCheck = HttpCheck { prefix: "http" }
+    check(p, "http://example.com")
+    check(p, "ftp://example.com")
+}
+"#);
+    assert_eq!(out, "yes\nno\n");
+}
+
+#[test]
+fn trait_dispatch_comparison_between_two_results() {
+    // Compare results of two trait dispatches
+    let out = compile_and_run_stdout(r#"
+trait ScoreGiver {
+    fn score(self) int
+}
+
+class LowScore impl ScoreGiver {
+    tag: int
+    fn score(self) int { return 10 }
+}
+
+class HighScore impl ScoreGiver {
+    tag: int
+    fn score(self) int { return 90 }
+}
+
+fn compare(a: ScoreGiver, b: ScoreGiver) {
+    if a.score() > b.score() {
+        print("a wins")
+    } else {
+        print("b wins")
+    }
+}
+
+fn main() {
+    let a: ScoreGiver = LowScore { tag: 0 }
+    let b: ScoreGiver = HighScore { tag: 0 }
+    compare(a, b)
+    compare(b, a)
+}
+"#);
+    assert_eq!(out, "b wins\na wins\n");
+}
+
+#[test]
+fn trait_default_method_with_for_range_loop() {
+    // Default method contains a for range loop
+    let out = compile_and_run_stdout(r#"
+trait TextRepeater {
+    fn text(self) string
+    fn repeat(self, n: int) string {
+        let result = ""
+        for i in 0..n {
+            result = result + self.text()
+        }
+        return result
+    }
+}
+
+class Star impl TextRepeater {
+    tag: int
+    fn text(self) string { return "x" }
+}
+
+fn show(r: TextRepeater) {
+    print(r.repeat(4))
+}
+
+fn main() {
+    let s: TextRepeater = Star { tag: 0 }
+    show(s)
+}
+"#);
+    assert_eq!(out, "xxxx\n");
+}
+
+#[test]
+fn fail_return_wrong_class_from_trait_method() {
+    // Trait method declared to return ClassA but returns ClassB
+    compile_should_fail(r#"
+class Result__ {
+    val: int
+}
+
+class Other__ {
+    val: int
+}
+
+trait Producer__ {
+    fn make(self) Result__
+}
+
+class Impl__ impl Producer__ {
+    tag: int
+    fn make(self) Result__ {
+        return Other__ { val: 1 }
+    }
+}
+
+fn main() {}
+"#);
+}
+
+#[test]
+fn fail_trait_method_return_array_wrong_element_type() {
+    // Returns [string] when trait declares [int]
+    compile_should_fail(r#"
+trait Lister__ {
+    fn items(self) [int]
+}
+
+class ListerImpl impl Lister__ {
+    tag: int
+    fn items(self) [int] {
+        let arr: [string] = ["a"]
+        return arr
+    }
+}
+
+fn main() {}
+"#);
+}
+
+#[test]
+fn trait_handle_survives_triple_reassignment() {
+    // Create handle, reassign to different impl multiple times, dispatch after each
+    let out = compile_and_run_stdout(r#"
+trait Getter_ {
+    fn get(self) int
+}
+
+class GA impl Getter_ {
+    n: int
+    fn get(self) int { return self.n }
+}
+
+class GB impl Getter_ {
+    n: int
+    fn get(self) int { return self.n * 10 }
+}
+
+fn main() {
+    let g: Getter_ = GA { n: 5 }
+    print(g.get())
+    g = GB { n: 3 }
+    print(g.get())
+    g = GA { n: 7 }
+    print(g.get())
+}
+"#);
+    assert_eq!(out, "5\n30\n7\n");
+}
+
+#[test]
+fn trait_dispatch_result_pushed_to_array() {
+    // Push result of dispatch into array
+    let out = compile_and_run_stdout(r#"
+trait IntProducer {
+    fn produce(self) int
+}
+
+class FiveProducer impl IntProducer {
+    tag: int
+    fn produce(self) int { return 5 }
+}
+
+fn main() {
+    let p: IntProducer = FiveProducer { tag: 0 }
+    let arr: [int] = []
+    arr.push(p.produce())
+    arr.push(p.produce())
+    arr.push(p.produce())
+    print(arr.len())
+    print(arr[0] + arr[1] + arr[2])
+}
+"#);
+    assert_eq!(out, "3\n15\n");
+}
+
+#[test]
+fn trait_method_complex_search_with_early_return() {
+    // Trait method with if/else + for + early return
+    let out = compile_and_run_stdout(r#"
+trait ArraySearcher {
+    fn find_first_above(self, items: [int], threshold: int) int
+}
+
+class LinearSearcher impl ArraySearcher {
+    tag: int
+    fn find_first_above(self, items: [int], threshold: int) int {
+        for v in items {
+            if v > threshold {
+                return v
+            }
+        }
+        return -1
+    }
+}
+
+fn run(s: ArraySearcher) {
+    let arr: [int] = [1, 5, 3, 8, 2]
+    print(s.find_first_above(arr, 4))
+    print(s.find_first_above(arr, 10))
+}
+
+fn main() {
+    let s: ArraySearcher = LinearSearcher { tag: 0 }
+    run(s)
+}
+"#);
+    assert_eq!(out, "5\n-1\n");
+}
+
+#[test]
+fn trait_method_error_caught_with_binding() {
+    // Error from trait dispatch caught with catch err { expr } syntax
+    let out = compile_and_run_stdout(r#"
+error ParseErr_ {
+    msg: string
+}
+
+trait TextParser {
+    fn parse(self, input: string) int
+}
+
+class StrictTextParser impl TextParser {
+    tag: int
+    fn parse(self, input: string) int {
+        if input == "bad" {
+            raise ParseErr_ { msg: "invalid" }
+        }
+        return 42
+    }
+}
+
+fn safe_parse(p: TextParser, input: string) {
+    let result = p.parse(input) catch err {
+        print("error")
+        0
+    }
+    print(result)
+}
+
+fn main() {
+    let p: TextParser = StrictTextParser { tag: 0 }
+    safe_parse(p, "good")
+    safe_parse(p, "bad")
+}
+"#);
+    assert_eq!(out, "42\nerror\n0\n");
+}
