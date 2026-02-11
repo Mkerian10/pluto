@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
+use crate::span::Spanned;
 use super::env::{self, mangle_method, ClassInfo, EnumInfo, ErrorInfo, FuncSig, GenericClassInfo, GenericEnumInfo, GenericFuncSig, TraitInfo, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::{resolve_type, resolve_type_with_params};
@@ -96,12 +97,59 @@ fn check_function_contracts(
     Ok(())
 }
 
-pub(crate) fn register_traits(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+/// Register trait names and store raw type expressions for later resolution.
+/// This allows trait method signatures to reference classes/enums that haven't been registered yet.
+pub(crate) fn register_trait_names(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     for trait_decl in &program.traits {
         let t = &trait_decl.node;
-        let mut methods = Vec::new();
         let mut default_methods = Vec::new();
+        let mut mut_self_methods = HashSet::new();
+        let mut method_contracts = HashMap::new();
+        let mut method_type_exprs = HashMap::new();
 
+        for m in &t.methods {
+            // Store raw type expressions for later resolution
+            let param_type_exprs: Vec<Spanned<TypeExpr>> = m.params.iter()
+                .filter(|p| p.name.node != "self")
+                .map(|p| p.ty.clone())
+                .collect();
+
+            method_type_exprs.insert(
+                m.name.node.clone(),
+                (param_type_exprs, m.return_type.clone())
+            );
+
+            if m.body.is_some() {
+                default_methods.push(m.name.node.clone());
+            }
+
+            if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
+                mut_self_methods.insert(m.name.node.clone());
+            }
+
+            if !m.contracts.is_empty() {
+                method_contracts.insert(m.name.node.clone(), m.contracts.clone());
+            }
+        }
+
+        env.traits.insert(t.name.node.clone(), TraitInfo {
+            methods: Vec::new(),  // Will be populated in resolve_trait_signatures
+            default_methods,
+            mut_self_methods,
+            method_contracts,
+            method_type_exprs,
+        });
+    }
+    Ok(())
+}
+
+/// Resolve trait method signatures after all type names have been registered.
+pub(crate) fn resolve_trait_signatures(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for trait_decl in &program.traits {
+        let t = &trait_decl.node;
+
+        // Resolve type expressions now that all types are registered
+        let mut methods = Vec::new();
         for m in &t.methods {
             let mut param_types = Vec::new();
             for p in &m.params {
@@ -116,27 +164,20 @@ pub(crate) fn register_traits(program: &Program, env: &mut TypeEnv) -> Result<()
                 None => PlutoType::Void,
             };
             methods.push((m.name.node.clone(), FuncSig { params: param_types, return_type }));
-            if m.body.is_some() {
-                default_methods.push(m.name.node.clone());
-            }
         }
 
-        let mut mut_self_methods = HashSet::new();
-        let mut method_contracts = HashMap::new();
-        for m in &t.methods {
-            if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
-                mut_self_methods.insert(m.name.node.clone());
-            }
-            if !m.contracts.is_empty() {
-                method_contracts.insert(m.name.node.clone(), m.contracts.clone());
-            }
-        }
-        env.traits.insert(t.name.node.clone(), TraitInfo { methods, default_methods, mut_self_methods, method_contracts });
+        // Update trait info after all resolve_type calls
+        let trait_info = env.traits.get_mut(&t.name.node)
+            .expect("Trait should be registered in pass 0");
+        trait_info.methods = methods;
+        trait_info.method_type_exprs.clear(); // Free memory
     }
     Ok(())
 }
 
-pub(crate) fn register_enums(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+/// Register enum names and store raw type expressions for later resolution.
+/// This allows enum variant fields to reference classes/enums that haven't been registered yet.
+pub(crate) fn register_enum_names(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     for enum_decl in &program.enums {
         let e = &enum_decl.node;
         if !e.type_params.is_empty() {
@@ -177,6 +218,36 @@ pub(crate) fn register_enums(program: &Program, env: &mut TypeEnv) -> Result<(),
             });
             continue;
         }
+
+        // Store raw type expressions for non-generic enums
+        let mut variant_type_exprs = Vec::new();
+        for v in &e.variants {
+            let mut field_type_exprs = Vec::new();
+            for f in &v.fields {
+                field_type_exprs.push((f.name.node.clone(), f.ty.clone()));
+            }
+            variant_type_exprs.push((v.name.node.clone(), field_type_exprs));
+        }
+
+        env.enums.insert(e.name.node.clone(), EnumInfo {
+            variants: Vec::new(),  // Will be populated in resolve_enum_fields
+            variant_type_exprs,
+        });
+    }
+    Ok(())
+}
+
+/// Resolve enum variant field types after all type names have been registered.
+pub(crate) fn resolve_enum_fields(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for enum_decl in &program.enums {
+        let e = &enum_decl.node;
+
+        // Skip generic enums — they were fully resolved in register_enum_names
+        if !e.type_params.is_empty() {
+            continue;
+        }
+
+        // Resolve variant field types
         let mut variants = Vec::new();
         for v in &e.variants {
             let mut fields = Vec::new();
@@ -186,7 +257,12 @@ pub(crate) fn register_enums(program: &Program, env: &mut TypeEnv) -> Result<(),
             }
             variants.push((v.name.node.clone(), fields));
         }
-        env.enums.insert(e.name.node.clone(), EnumInfo { variants });
+
+        // Update enum info after all resolve_type calls
+        let enum_info = env.enums.get_mut(&e.name.node)
+            .expect("Enum should be registered in pass 0");
+        enum_info.variants = variants;
+        enum_info.variant_type_exprs.clear(); // Free memory
     }
     Ok(())
 }

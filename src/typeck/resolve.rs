@@ -558,6 +558,7 @@ pub(crate) fn ensure_generic_enum_instantiated(
         .collect();
     env.enums.insert(mangled.clone(), EnumInfo {
         variants: concrete_variants,
+        variant_type_exprs: Vec::new(),  // Empty for instantiated enums
     });
     env.instantiations.insert(Instantiation {
         kind: InstKind::Enum(base_name.to_string()),

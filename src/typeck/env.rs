@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use super::types::PlutoType;
-use crate::parser::ast::{ContractClause, Lifecycle};
+use crate::parser::ast::{ContractClause, Lifecycle, TypeExpr};
 use crate::span::{Span, Spanned};
 
 #[derive(Debug, Clone)]
@@ -23,11 +23,17 @@ pub struct TraitInfo {
     pub default_methods: Vec<String>,
     pub mut_self_methods: HashSet<String>,
     pub method_contracts: HashMap<String, Vec<Spanned<ContractClause>>>,
+    /// Temporary storage for raw AST type expressions during registration
+    /// Maps method_name -> (param_types, return_type)
+    pub method_type_exprs: HashMap<String, (Vec<Spanned<TypeExpr>>, Option<Spanned<TypeExpr>>)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct EnumInfo {
     pub variants: Vec<(String, Vec<(String, PlutoType)>)>,
+    /// Temporary storage for raw AST type expressions during registration
+    /// Vec of (variant_name, Vec of (field_name, field_type))
+    pub variant_type_exprs: Vec<(String, Vec<(String, Spanned<TypeExpr>)>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,20 +68,20 @@ pub struct GenericEnumInfo {
     pub variants: Vec<(String, Vec<(String, PlutoType)>)>,  // may contain TypeParam
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Instantiation {
     pub kind: InstKind,
     pub type_args: Vec<PlutoType>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum InstKind {
     Function(String),
     Class(String),
     Enum(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum MethodResolution {
     /// Class method call — resolved to a specific mangled name
     Class { mangled_name: String },
@@ -100,7 +106,7 @@ pub enum MethodResolution {
 }
 
 /// How a field of a scoped class gets its value during a scope block.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum FieldWiring {
     /// Value comes from the Nth seed expression
     Seed(usize),
@@ -111,7 +117,7 @@ pub enum FieldWiring {
 }
 
 /// Resolved DI graph for a single scope block — computed in typeck, consumed in codegen.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScopeResolution {
     /// Topologically sorted scoped classes to allocate (leaves first)
     pub creation_order: Vec<String>,
