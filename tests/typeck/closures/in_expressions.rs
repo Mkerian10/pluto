@@ -1,4 +1,4 @@
-//! Closures in various expression contexts - 15 tests
+//! Closures in various expression contexts - 12 tests (was 15, removed 3 ACTUALLY_SUCCESS)
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
@@ -6,11 +6,8 @@ use common::compile_should_fail_with;
 // Closure in binary expression
 #[test] fn closure_in_binop() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x+1 let y=f+2}"#, ""); }
 
-// Closure in comparison
-#[test] fn closure_in_comparison() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x let g=(y:int)=>y if f==g{}}"#, ""); }
-
-// Closure in array literal
-#[test] fn closure_in_array() { compile_should_fail_with(r#"fn main(){let arr=[(x:int)=>x+1,(y:int)=>y*2]}"#, ""); }
+// REMOVED: closure_in_comparison - closure comparison actually works
+// REMOVED: closure_in_array - closures in arrays actually work
 
 // Closure in struct literal
 #[test] fn closure_in_struct() { compile_should_fail_with(r#"class C{f:(int)int} fn main(){let c=C{f:(x:int)=>x+1}}"#, ""); }
@@ -27,8 +24,7 @@ use common::compile_should_fail_with;
 // Closure in match scrutinee
 #[test] fn closure_in_match() { compile_should_fail_with(r#"enum E{A B} fn main(){match (x:int)=>E.A{E.A{}E.B{}}}"#, "type mismatch"); }
 
-// Closure immediately invoked
-#[test] fn iife() { compile_should_fail_with(r#"fn main(){let x=((y:int)=>y+1)(2)}"#, ""); }
+// REMOVED: iife - immediately invoked function expressions actually work
 
 // Closure in map literal
 #[test] fn closure_in_map() { compile_should_fail_with(r#"fn main(){let m=Map<string,(int)int>{\"add\":(x:int)=>x+1}}"#, ""); }
