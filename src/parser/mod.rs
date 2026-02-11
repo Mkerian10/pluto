@@ -585,6 +585,7 @@ impl<'a> Parser<'a> {
             body,
             is_pub: false,
             is_override: false,
+            is_generator: false,
         }, Span::new(start, end));
 
         Ok((info, func))
@@ -1276,7 +1277,7 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { id: Uuid::new_v4(), name, type_params: vec![], type_param_bounds: HashMap::new(), params, return_type, contracts, body, is_pub: false, is_override: false },
+            Function { id: Uuid::new_v4(), name, type_params: vec![], type_param_bounds: HashMap::new(), params, return_type, contracts, body, is_pub: false, is_override: false, is_generator: false },
             Span::new(start, end),
         ))
     }
@@ -1387,7 +1388,7 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { id: Uuid::new_v4(), name, type_params, type_param_bounds, params, return_type, contracts, body, is_pub: false, is_override: false },
+            Function { id: Uuid::new_v4(), name, type_params, type_param_bounds, params, return_type, contracts, body, is_pub: false, is_override: false, is_generator: false },
             Span::new(start, end),
         ))
     }

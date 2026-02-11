@@ -537,6 +537,10 @@ impl<'a> LowerContext<'a> {
             }
             Stmt::Select { arms, default } => self.lower_select(arms, default, terminated),
             Stmt::Scope { seeds, bindings, body } => self.lower_scope(seeds, bindings, body),
+            Stmt::Yield { .. } => {
+                // Generator yield is handled by lower_generator_next, not lower_stmt
+                unreachable!("Stmt::Yield should only appear in generator next function codegen")
+            }
             Stmt::Expr(expr) => {
                 self.lower_expr(&expr.node)?;
                 Ok(())
@@ -2904,7 +2908,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I64, arg_val);
                 self.call_runtime_void("__pluto_print_int", &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes | PlutoType::GenericInstance(_, _, _) | PlutoType::Nullable(_) => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes | PlutoType::GenericInstance(_, _, _) | PlutoType::Nullable(_) | PlutoType::Stream(_) => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -3351,6 +3355,10 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
             let inner_ty = resolve_type_expr_to_pluto(&inner.node, env);
             PlutoType::Nullable(Box::new(inner_ty))
         }
+        TypeExpr::Stream(inner) => {
+            let inner_ty = resolve_type_expr_to_pluto(&inner.node, env);
+            PlutoType::Stream(Box::new(inner_ty))
+        }
     }
 }
 
@@ -3367,6 +3375,7 @@ fn needs_deep_copy(ty: &PlutoType) -> bool {
         | PlutoType::Set(_) | PlutoType::Enum(_) | PlutoType::Bytes
         | PlutoType::Fn(..) | PlutoType::Trait(_) => true,
         PlutoType::Nullable(inner) => needs_deep_copy(inner),
+        PlutoType::Stream(_) => false, // generator pointer, not deep-copied
     }
 }
 
@@ -3411,6 +3420,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Byte => types::I8,          // unsigned 8-bit value
         PlutoType::Bytes => types::I64,        // pointer to bytes handle
         PlutoType::Nullable(_) => types::I64,   // pointer (0 = none)
+        PlutoType::Stream(_) => types::I64,    // pointer to generator object
         PlutoType::GenericInstance(_, name, _) => panic!("ICE: generic instance '{name}' reached codegen unresolved"),
     }
 }

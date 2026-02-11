@@ -166,6 +166,7 @@ pub struct Function {
     pub body: Spanned<Block>,
     pub is_pub: bool,
     pub is_override: bool,
+    pub is_generator: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +191,7 @@ pub enum TypeExpr {
         type_args: Vec<Spanned<TypeExpr>>,
     },
     Nullable(Box<Spanned<TypeExpr>>),
+    Stream(Box<Spanned<TypeExpr>>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,6 +259,9 @@ pub enum Stmt {
         seeds: Vec<Spanned<Expr>>,
         bindings: Vec<ScopeBinding>,
         body: Spanned<Block>,
+    },
+    Yield {
+        value: Spanned<Expr>,
     },
     Break,
     Continue,

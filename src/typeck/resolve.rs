@@ -140,6 +140,10 @@ pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<
                 _ => Ok(PlutoType::Nullable(Box::new(inner_type))),
             }
         }
+        TypeExpr::Stream(inner) => {
+            let elem = resolve_type(inner, env)?;
+            Ok(PlutoType::Stream(Box::new(elem)))
+        }
     }
 }
 
@@ -223,6 +227,10 @@ pub(crate) fn resolve_type_with_params(
                 )),
                 _ => Ok(PlutoType::Nullable(Box::new(inner_type))),
             }
+        }
+        TypeExpr::Stream(inner) => {
+            let elem = resolve_type_with_params(inner, env, type_param_names)?;
+            Ok(PlutoType::Stream(Box::new(elem)))
         }
         _ => resolve_type(ty, env),
     }
@@ -367,6 +375,7 @@ pub(crate) fn resolve_generic_instances(ty: &PlutoType, env: &mut TypeEnv) -> Pl
         PlutoType::Sender(t) => PlutoType::Sender(Box::new(resolve_generic_instances(t, env))),
         PlutoType::Receiver(t) => PlutoType::Receiver(Box::new(resolve_generic_instances(t, env))),
         PlutoType::Nullable(inner) => PlutoType::Nullable(Box::new(resolve_generic_instances(inner, env))),
+        PlutoType::Stream(inner) => PlutoType::Stream(Box::new(resolve_generic_instances(inner, env))),
         _ => ty.clone(),
     }
 }

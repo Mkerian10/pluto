@@ -709,6 +709,10 @@ impl PrettyPrinter {
                 self.emit_type_expr(&inner.node);
                 self.write("?");
             }
+            TypeExpr::Stream(inner) => {
+                self.write("stream ");
+                self.emit_type_expr(&inner.node);
+            }
         }
     }
 
@@ -986,6 +990,10 @@ impl PrettyPrinter {
                 }
                 self.write("| ");
                 self.emit_block(&body.node);
+            }
+            Stmt::Yield { value } => {
+                self.write("yield ");
+                self.emit_expr(&value.node, 0);
             }
             Stmt::Break => self.write("break"),
             Stmt::Continue => self.write("continue"),

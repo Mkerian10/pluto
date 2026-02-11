@@ -1433,6 +1433,7 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
                                 body: body.clone(),
                                 is_pub: false,
                                 is_override: false,
+                                is_generator: false,
                             };
                             check_function(&tmp_func, env, Some(class_name))?;
                         }

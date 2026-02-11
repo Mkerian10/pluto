@@ -860,6 +860,9 @@ fn prefix_type_expr(ty: &mut TypeExpr, module_name: &str, module_prog: &Program)
         TypeExpr::Nullable(inner) => {
             prefix_type_expr(&mut inner.node, module_name, module_prog);
         }
+        TypeExpr::Stream(inner) => {
+            prefix_type_expr(&mut inner.node, module_name, module_prog);
+        }
     }
 }
 
@@ -978,6 +981,9 @@ fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Pro
                 prefix_type_expr(&mut binding.ty.node, module_name, module_prog);
             }
             rewrite_block_for_module(&mut body.node, module_name, module_prog);
+        }
+        Stmt::Yield { value, .. } => {
+            rewrite_expr_for_module(&mut value.node, module_name, module_prog);
         }
         Stmt::Break | Stmt::Continue => {}
     }
@@ -1229,6 +1235,9 @@ fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, import_names: &HashSet<String>)
         TypeExpr::Nullable(inner) => {
             rewrite_type_expr(inner, import_names);
         }
+        TypeExpr::Stream(inner) => {
+            rewrite_type_expr(inner, import_names);
+        }
     }
 }
 
@@ -1326,6 +1335,9 @@ fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
                 rewrite_type_expr(&mut binding.ty, import_names);
             }
             rewrite_block(&mut body.node, import_names);
+        }
+        Stmt::Yield { value, .. } => {
+            rewrite_expr(&mut value.node, value.span, import_names);
         }
         Stmt::Break | Stmt::Continue => {}
     }
