@@ -618,6 +618,23 @@ path = "tests/typeck/concurrency/channel_errors.rs"
 name = "typeck_concurrent_mutations"
 path = "tests/typeck/concurrency/concurrent_mutations.rs"
 
+# Typeck edge case tests - type system category
+[[test]]
+name = "typeck_recursive_types"
+path = "tests/typeck/type_system/recursive_types.rs"
+
+[[test]]
+name = "typeck_type_inference_limits"
+path = "tests/typeck/type_system/type_inference_limits.rs"
+
+[[test]]
+name = "typeck_collection_type_errors"
+path = "tests/typeck/type_system/collection_type_errors.rs"
+
+[[test]]
+name = "typeck_pattern_matching_exhaustiveness"
+path = "tests/typeck/type_system/pattern_matching_exhaustiveness.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false
