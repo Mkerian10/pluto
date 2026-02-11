@@ -347,6 +347,7 @@ mod tests {
             contracts: vec![],
             body: empty_block(),
             is_pub: false,
+            is_override: false,
         })
     }
 
@@ -735,6 +736,7 @@ mod tests {
                 contracts: vec![],
                 body: empty_block(),
                 is_pub: false,
+                is_override: false,
             })],
             invariants: vec![],
             impl_traits: vec![],

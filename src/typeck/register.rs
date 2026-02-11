@@ -1432,6 +1432,7 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
                                 contracts: trait_method.contracts.clone(),
                                 body: body.clone(),
                                 is_pub: false,
+                                is_override: false,
                             };
                             check_function(&tmp_func, env, Some(class_name))?;
                         }
