@@ -277,6 +277,9 @@ fn collect_stmt_accesses(
                 collect_stmt_accesses(&s.node, accesses, edges, current_fn, env, di_singletons);
             }
         }
+        Stmt::Yield { value, .. } => {
+            collect_expr_accesses(&value.node, accesses, edges, current_fn, env, di_singletons);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }

@@ -356,6 +356,24 @@ fn check_stmt(
         Stmt::Scope { seeds, bindings, body } => {
             check_scope_stmt(seeds, bindings, body, span, env, return_type)?;
         }
+        Stmt::Yield { value } => {
+            let elem_type = match &env.current_generator_elem {
+                Some(t) => t.clone(),
+                None => {
+                    return Err(CompileError::type_err(
+                        "yield can only be used inside a generator function (one that returns stream T)".to_string(),
+                        span,
+                    ));
+                }
+            };
+            let val_type = infer_expr(&value.node, value.span, env)?;
+            if !super::types_compatible(&val_type, &elem_type, env) {
+                return Err(CompileError::type_err(
+                    format!("yield type mismatch: expected {elem_type}, found {val_type}"),
+                    value.span,
+                ));
+            }
+        }
     }
     Ok(())
 }

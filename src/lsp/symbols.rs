@@ -236,5 +236,8 @@ fn format_type_expr(te: &crate::parser::ast::TypeExpr) -> String {
         TypeExpr::Nullable(inner) => {
             format!("{}?", format_type_expr(&inner.node))
         }
+        TypeExpr::Stream(inner) => {
+            format!("stream {}", format_type_expr(&inner.node))
+        }
     }
 }

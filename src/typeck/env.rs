@@ -190,6 +190,10 @@ pub struct TypeEnv {
     pub scope_tainted_vars: Vec<HashSet<String>>,
     /// Stack: scope_depth at each scope block entry (for detecting outer-variable assignments)
     pub scope_body_depths: Vec<usize>,
+    /// Names of functions that are generators (return stream T)
+    pub generators: HashSet<String>,
+    /// When type-checking a generator body, holds the element type T from `stream T`
+    pub current_generator_elem: Option<PlutoType>,
 }
 
 impl Default for TypeEnv {
@@ -259,6 +263,8 @@ impl TypeEnv {
             scope_tainted_closures: HashSet::new(),
             scope_tainted_vars: Vec::new(),
             scope_body_depths: Vec::new(),
+            generators: HashSet::new(),
+            current_generator_elem: None,
         }
     }
 
@@ -418,5 +424,6 @@ fn mangle_type(ty: &PlutoType) -> String {
             format!("{}$${}", name, suffixes.join("$"))
         }
         PlutoType::Nullable(inner) => format!("nullable${}", mangle_type(inner)),
+        PlutoType::Stream(inner) => format!("stream${}", mangle_type(inner)),
     }
 }

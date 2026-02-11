@@ -220,6 +220,9 @@ fn collect_stmt_effects(
                 collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
             }
         }
+        Stmt::Yield { value, .. } => {
+            collect_expr_effects(&value.node, direct_errors, edges, current_fn, env);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -565,6 +568,10 @@ fn enforce_stmt(
             enforce_block(&body.node, current_fn, env)?;
             Ok(())
         }
+        Stmt::Yield { value, .. } => {
+            enforce_expr(&value.node, value.span, current_fn, env)?;
+            Ok(())
+        }
         Stmt::Break | Stmt::Continue => Ok(()),
     }
 }
@@ -866,6 +873,7 @@ fn stmt_contains_propagate(stmt: &Stmt) -> bool {
             if seeds.iter().any(|s| contains_propagate(&s.node)) { return true; }
             body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
         }
+        Stmt::Yield { value, .. } => contains_propagate(&value.node),
         Stmt::Break | Stmt::Continue => false,
     }
 }

@@ -29,6 +29,7 @@ pub enum PlutoType {
     /// substitute_pluto_type resolves these to concrete Class/Enum types when all args become concrete.
     GenericInstance(GenericKind, std::string::String, Vec<PlutoType>),
     Nullable(Box<PlutoType>),
+    Stream(Box<PlutoType>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -68,6 +69,7 @@ impl std::fmt::Display for PlutoType {
             PlutoType::Sender(inner) => write!(f, "Sender<{inner}>"),
             PlutoType::Receiver(inner) => write!(f, "Receiver<{inner}>"),
             PlutoType::Nullable(inner) => write!(f, "{inner}?"),
+            PlutoType::Stream(inner) => write!(f, "stream {inner}"),
             PlutoType::GenericInstance(_, name, args) => {
                 write!(f, "{name}<")?;
                 for (i, a) in args.iter().enumerate() {
@@ -138,6 +140,9 @@ pub fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         },
         PlutoType::Nullable(inner) => {
             TypeExpr::Nullable(Box::new(Spanned::new(pluto_type_to_type_expr(inner), Span::new(0, 0))))
+        }
+        PlutoType::Stream(inner) => {
+            TypeExpr::Stream(Box::new(Spanned::new(pluto_type_to_type_expr(inner), Span::new(0, 0))))
         }
     }
 }

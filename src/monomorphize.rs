@@ -271,6 +271,8 @@ fn build_type_expr_bindings(type_params: &[String], type_args: &[PlutoType]) -> 
         .collect()
 }
 
+
+
 fn substitute_in_type_expr(te: &mut TypeExpr, bindings: &HashMap<String, TypeExpr>) {
     match te {
         TypeExpr::Named(name) => {
@@ -294,6 +296,9 @@ fn substitute_in_type_expr(te: &mut TypeExpr, bindings: &HashMap<String, TypeExp
             }
         }
         TypeExpr::Nullable(inner) => {
+            substitute_in_type_expr(&mut inner.node, bindings);
+        }
+        TypeExpr::Stream(inner) => {
             substitute_in_type_expr(&mut inner.node, bindings);
         }
     }
@@ -450,6 +455,9 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
             if let Some(def) = default {
                 substitute_in_block(&mut def.node, bindings);
             }
+        }
+        Stmt::Yield { value, .. } => {
+            substitute_in_expr(&mut value.node, bindings);
         }
         Stmt::Break | Stmt::Continue => {}
     }
@@ -654,6 +662,10 @@ fn offset_type_expr_spans(te: &mut TypeExpr, offset: usize) {
             offset_spanned(inner, offset);
             offset_type_expr_spans(&mut inner.node, offset);
         }
+        TypeExpr::Stream(inner) => {
+            offset_spanned(inner, offset);
+            offset_type_expr_spans(&mut inner.node, offset);
+        }
     }
 }
 
@@ -800,6 +812,10 @@ fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
                 offset_spanned(def, offset);
                 offset_block_spans(&mut def.node, offset);
             }
+        }
+        Stmt::Yield { value, .. } => {
+            offset_spanned(value, offset);
+            offset_expr_spans(&mut value.node, offset);
         }
         Stmt::Break | Stmt::Continue => {}
     }
@@ -1092,6 +1108,9 @@ fn rewrite_stmt(stmt: &mut Stmt, rewrites: &HashMap<(usize, usize), String>) {
                 rewrite_block(&mut def.node, rewrites);
             }
         }
+        Stmt::Yield { value, .. } => {
+            rewrite_expr(&mut value.node, value.span.start, value.span.end, rewrites);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
@@ -1338,6 +1357,9 @@ fn resolve_generic_te_in_stmt(stmt: &mut Stmt, env: &mut TypeEnv) -> Result<(), 
                 resolve_generic_te_in_block(&mut def.node, env)?;
             }
         }
+        Stmt::Yield { value, .. } => {
+            resolve_generic_te_in_expr(&mut value.node, env)?;
+        }
         Stmt::Break | Stmt::Continue => {}
     }
     Ok(())
@@ -1472,6 +1494,7 @@ fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), Compil
         }
         TypeExpr::Named(_) | TypeExpr::Qualified { .. } => {}
         TypeExpr::Nullable(inner) => resolve_generic_te(&mut inner.node, env)?,
+        TypeExpr::Stream(inner) => resolve_generic_te(&mut inner.node, env)?,
     }
     Ok(())
 }
@@ -1537,6 +1560,10 @@ fn type_expr_to_pluto_type(te: &TypeExpr, env: &TypeEnv) -> Result<PlutoType, Co
         TypeExpr::Nullable(inner) => {
             let inner_type = type_expr_to_pluto_type(&inner.node, env)?;
             Ok(PlutoType::Nullable(Box::new(inner_type)))
+        }
+        TypeExpr::Stream(inner) => {
+            let inner_type = type_expr_to_pluto_type(&inner.node, env)?;
+            Ok(PlutoType::Stream(Box::new(inner_type)))
         }
     }
 }

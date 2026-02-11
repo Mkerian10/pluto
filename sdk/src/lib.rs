@@ -44,12 +44,14 @@ mod tests {
             id: Uuid::new_v4(),
             name: sp(name.to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             params: vec![],
             return_type: None,
             contracts: vec![],
             body: empty_block(),
             is_pub: false,
             is_override: false,
+            is_generator: false,
         })
     }
 

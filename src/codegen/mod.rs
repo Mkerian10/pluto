@@ -467,6 +467,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                                 body: body.clone(),
                                 is_pub: false,
                                 is_override: false,
+                                is_generator: false,
                             };
 
                             let mangled = mangle_method(class_name, &trait_method.name.node);
@@ -1028,6 +1029,7 @@ fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
                 if let Some(cap) = capacity { walk_expr(&cap.node, result); }
             }
             Stmt::Return(Some(e)) => walk_expr(&e.node, result),
+            Stmt::Yield { value, .. } => walk_expr(&value.node, result),
             Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
             Stmt::Assign { value, .. } => walk_expr(&value.node, result),
             Stmt::FieldAssign { object, value, .. } => {

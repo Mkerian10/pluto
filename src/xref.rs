@@ -204,6 +204,9 @@ fn resolve_stmt(stmt: &mut Stmt, index: &DeclIndex) {
             }
             resolve_block(&mut body.node, index);
         }
+        Stmt::Yield { value, .. } => {
+            resolve_expr(&mut value.node, index);
+        }
         Stmt::Break | Stmt::Continue => {}
         Stmt::Expr(expr) => {
             resolve_expr(&mut expr.node, index);
@@ -348,6 +351,7 @@ mod tests {
             body: empty_block(),
             is_pub: false,
             is_override: false,
+            is_generator: false,
         })
     }
 
@@ -737,6 +741,7 @@ mod tests {
                 body: empty_block(),
                 is_pub: false,
                 is_override: false,
+                is_generator: false,
             })],
             invariants: vec![],
             impl_traits: vec![],

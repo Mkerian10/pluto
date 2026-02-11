@@ -337,6 +337,9 @@ fn rewrite_stmt(stmt: &mut Spanned<Stmt>, active: &HashSet<String>) {
             }
             rewrite_block(&mut body.node, &inner);
         }
+        Stmt::Yield { value, .. } => {
+            rewrite_expr(&mut value.node, value.span, active);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }

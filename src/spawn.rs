@@ -105,6 +105,9 @@ fn desugar_stmt(stmt: &mut Stmt) {
             }
             desugar_block(&mut body.node);
         }
+        Stmt::Yield { value, .. } => {
+            desugar_expr(&mut value.node, value.span);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }
