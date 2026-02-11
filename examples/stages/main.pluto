@@ -1,0 +1,40 @@
+class Config {
+    fn db_url(self) string {
+        return "postgres://localhost/mydb"
+    }
+}
+
+class Database[config: Config] {
+    fn query(self, sql: string) string {
+        return "result for: {sql} (db={self.config.db_url()})"
+    }
+}
+
+class UserService[db: Database] {
+    fn get_user(self, id: int) string {
+        return self.db.query("SELECT * FROM users WHERE id = {id}")
+    }
+
+    fn list_users(self) string {
+        return self.db.query("SELECT * FROM users")
+    }
+}
+
+stage Api[users: UserService] {
+    fn handle_request(self, path: string) string {
+        if path == "/users" {
+            return self.users.list_users()
+        }
+        return self.users.get_user(1)
+    }
+
+    pub fn greet(self) string {
+        return "Welcome to the API"
+    }
+
+    fn main(self) {
+        print(self.greet())
+        print(self.handle_request("/users"))
+        print(self.handle_request("/user/1"))
+    }
+}

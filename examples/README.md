@@ -175,6 +175,14 @@ Demonstrates advanced generics: generic classes implementing traits (`class Box<
 cargo run -- run examples/generics/main.pluto
 ```
 
+## stages
+
+Demonstrates the `stage` language construct — a deployable unit for distributed systems. A stage is like `app` but designed as a future RPC boundary. Shows DI with bracket deps (`stage Api[users: UserService]`), `pub` methods (marking future RPC endpoints), private helper methods, and a `main` entry point.
+
+```bash
+cargo run -- run examples/stages/main.pluto
+```
+
 ## http-api
 
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.
