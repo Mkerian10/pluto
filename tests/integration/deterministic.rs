@@ -5093,3 +5093,679 @@ tests[scheduler: Exhaustive] {
     assert_eq!(code, 0);
     assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
 }
+
+#[test]
+fn exhaustive_three_independent_fibers() {
+    // Three independent spawned tasks — DPOR should heavily prune (3! = 6 orderings down to fewer).
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn square(x: int) int {
+    return x * x
+}
+
+tests[scheduler: Exhaustive] {
+    test "three independent" {
+        let t1 = spawn square(2)
+        let t2 = spawn square(3)
+        let t3 = spawn square(5)
+        expect(t1.get()).to_equal(4)
+        expect(t2.get()).to_equal(9)
+        expect(t3.get()).to_equal(25)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_producer_consumer_buffered() {
+    // Producer sends multiple items through buffered channel, consumer reads them all.
+    // Should succeed in all interleavings.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn produce(tx: Sender<int>) {
+    tx.send(10)!
+    tx.send(20)!
+    tx.send(30)!
+    tx.send(40)!
+    tx.send(50)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "producer consumer buffered" {
+        let (tx, rx) = chan<int>(5)
+        let t = spawn produce(tx)
+        let total = 0
+        total = total + rx.recv()!
+        total = total + rx.recv()!
+        total = total + rx.recv()!
+        total = total + rx.recv()!
+        total = total + rx.recv()!
+        t.get()!
+        expect(total).to_equal(150)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_two_producers_one_consumer() {
+    // Two producers share a channel, one consumer reads all items.
+    // Dependent fibers — should explore interleavings.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn produce_pair(tx: Sender<int>, a: int, b: int) {
+    tx.send(a)!
+    tx.send(b)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "two producers" {
+        let (tx, rx) = chan<int>(4)
+        let t1 = spawn produce_pair(tx, 1, 2)
+        let t2 = spawn produce_pair(tx, 10, 20)
+        let sum = 0
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        t1.get()!
+        t2.get()!
+        expect(sum).to_equal(33)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_zero_buffer_channel_success() {
+    // Zero-buffer (synchronous) channel where send and recv must rendezvous.
+    // Should succeed as long as producer and consumer can meet.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn sender(tx: Sender<int>) {
+    tx.send(42)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "zero buffer success" {
+        let (tx, rx) = chan<int>(0)
+        let t = spawn sender(tx)
+        let v = rx.recv()!
+        t.get()!
+        expect(v).to_equal(42)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_diamond_dependency() {
+    // Diamond pattern: main spawns A and B which both send to a shared channel,
+    // main reads both. Tests DPOR correctly identifies A and B as dependent
+    // (they share the channel).
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn worker(tx: Sender<int>, val: int) {
+    tx.send(val)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "diamond" {
+        let (tx, rx) = chan<int>(2)
+        let t1 = spawn worker(tx, 100)
+        let t2 = spawn worker(tx, 200)
+        let a = rx.recv()!
+        let b = rx.recv()!
+        t1.get()!
+        t2.get()!
+        expect(a + b).to_equal(300)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_mixed_dependent_independent() {
+    // Mix of dependent (channel-sharing) and independent (no shared channels) fibers.
+    // t1 and t2 share ch1, t3 is independent. DPOR should prune t3 orderings.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn sender(tx: Sender<int>, val: int) {
+    tx.send(val)!
+}
+
+fn compute(x: int) int {
+    return x * x
+}
+
+tests[scheduler: Exhaustive] {
+    test "mixed deps" {
+        let (tx, rx) = chan<int>(2)
+        let t1 = spawn sender(tx, 5)
+        let t2 = spawn sender(tx, 7)
+        let t3 = spawn compute(10)
+        let a = rx.recv()!
+        let b = rx.recv()!
+        t1.get()!
+        t2.get()!
+        let c = t3.get()
+        expect(a + b).to_equal(12)
+        expect(c).to_equal(100)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_multiple_channels_separate() {
+    // Two pairs of fibers, each pair using its own channel.
+    // Pairs are independent of each other but dependent within.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn send_val(tx: Sender<int>, val: int) {
+    tx.send(val)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "separate channels" {
+        let (tx1, rx1) = chan<int>(1)
+        let (tx2, rx2) = chan<int>(1)
+        let t1 = spawn send_val(tx1, 10)
+        let t2 = spawn send_val(tx2, 20)
+        let v1 = rx1.recv()!
+        let v2 = rx2.recv()!
+        t1.get()!
+        t2.get()!
+        expect(v1).to_equal(10)
+        expect(v2).to_equal(20)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_deadlock_three_way_cycle() {
+    // Three-way circular deadlock: A waits on B's channel, B waits on C's, C waits on A's.
+    let (_stdout, stderr, code) = compile_test_and_run(r#"
+fn cycle_node(tx: Sender<int>, rx: Receiver<int>) {
+    let v = rx.recv()!
+    tx.send(v)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "three way deadlock" {
+        let (tx1, rx1) = chan<int>(0)
+        let (tx2, rx2) = chan<int>(0)
+        let (tx3, rx3) = chan<int>(0)
+        let t1 = spawn cycle_node(tx1, rx3)
+        let t2 = spawn cycle_node(tx2, rx1)
+        let t3 = spawn cycle_node(tx3, rx2)
+        t1.get()!
+        t2.get()!
+        t3.get()!
+        expect(1).to_equal(1)
+    }
+}
+"#);
+    assert_ne!(code, 0, "Expected deadlock failure, got stderr: {stderr}");
+    assert!(stderr.contains("deadlock") || stderr.contains("Deadlock"), "Expected deadlock in stderr: {stderr}");
+}
+
+#[test]
+fn exhaustive_chain_of_channels() {
+    // Pipeline: A -> ch1 -> B -> ch2 -> main. Should succeed in all interleavings.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn stage_a(tx: Sender<int>) {
+    tx.send(5)!
+}
+
+fn stage_b(rx: Receiver<int>, tx: Sender<int>) {
+    let v = rx.recv()!
+    tx.send(v * 10)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "pipeline" {
+        let (tx1, rx1) = chan<int>(1)
+        let (tx2, rx2) = chan<int>(1)
+        let t1 = spawn stage_a(tx1)
+        let t2 = spawn stage_b(rx1, tx2)
+        let result = rx2.recv()!
+        t1.get()!
+        t2.get()!
+        expect(result).to_equal(50)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_max_depth_respected() {
+    // Test that PLUTO_MAX_DEPTH env var limits schedule depth without crashing.
+    let (stdout, stderr, code) = compile_test_and_run_with_env(r#"
+fn busy(tx: Sender<int>) {
+    tx.send(1)!
+    tx.send(2)!
+    tx.send(3)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "depth limited" {
+        let (tx, rx) = chan<int>(1)
+        let t = spawn busy(tx)
+        let a = rx.recv()!
+        let b = rx.recv()!
+        let c = rx.recv()!
+        t.get()!
+        expect(a + b + c).to_equal(6)
+    }
+}
+"#, &[("PLUTO_MAX_DEPTH", "10")]);
+    assert_eq!(code, 0, "Expected pass, got stdout: {stdout}\nstderr: {stderr}");
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_single_fiber_no_spawn() {
+    // With no spawn at all, exhaustive should still work (trivial 1 schedule).
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+tests[scheduler: Exhaustive] {
+    test "arithmetic only" {
+        let x = 10
+        let y = 20
+        expect(x + y).to_equal(30)
+        expect(x * y).to_equal(200)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert!(stderr.contains("1 schedule"), "Expected 1 schedule, got stderr: {stderr}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn exhaustive_spawn_with_return_value() {
+    // Spawned task returns a computed value, main uses it.
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn fibonacci(n: int) int {
+    if n <= 1 {
+        return n
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2)
+}
+
+tests[scheduler: Exhaustive] {
+    test "fib spawn" {
+        let t1 = spawn fibonacci(8)
+        let t2 = spawn fibonacci(6)
+        expect(t1.get()).to_equal(21)
+        expect(t2.get()).to_equal(8)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn exhaustive_send_recv_alternating() {
+    // Interleaved send/recv pattern with zero-buffer channel.
+    // Producer and consumer must alternate strictly.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn alternating_sender(tx: Sender<int>) {
+    tx.send(1)!
+    tx.send(2)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "alternating" {
+        let (tx, rx) = chan<int>(0)
+        let t = spawn alternating_sender(tx)
+        let a = rx.recv()!
+        let b = rx.recv()!
+        t.get()!
+        expect(a).to_equal(1)
+        expect(b).to_equal(2)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_many_schedules_bounded() {
+    // Many fibers sharing a channel — bounded so we don't run forever.
+    let (stdout, stderr, code) = compile_test_and_run_with_env(r#"
+fn push_val(tx: Sender<int>, v: int) {
+    tx.send(v)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "many fibers bounded" {
+        let (tx, rx) = chan<int>(4)
+        let t1 = spawn push_val(tx, 1)
+        let t2 = spawn push_val(tx, 2)
+        let t3 = spawn push_val(tx, 3)
+        let t4 = spawn push_val(tx, 4)
+        let sum = 0
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        t1.get()!
+        t2.get()!
+        t3.get()!
+        t4.get()!
+        expect(sum).to_equal(10)
+    }
+}
+"#, &[("PLUTO_MAX_SCHEDULES", "50")]);
+    assert_eq!(code, 0, "Expected pass, got stdout: {stdout}\nstderr: {stderr}");
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_multiple_tests_in_block() {
+    // Multiple tests in one tests block — each explored exhaustively.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn double(x: int) int {
+    return x * 2
+}
+
+tests[scheduler: Exhaustive] {
+    test "first" {
+        let t = spawn double(5)
+        expect(t.get()).to_equal(10)
+    }
+    test "second" {
+        let t = spawn double(21)
+        expect(t.get()).to_equal(42)
+    }
+}
+"#);
+    assert!(stdout.contains("2 tests passed"), "Expected 2 tests passed, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_deadlock_detected_among_many_schedules() {
+    // A scenario where most interleavings succeed but at least one deadlocks.
+    // Two fibers with zero-buffer channel: if the scheduling order is wrong,
+    // main tries to recv before producer has started sending.
+    // Actually with zero-buffer, both sides must rendezvous, so this should
+    // work. Instead: partial deadlock where one channel pair can't meet.
+    let (_stdout, stderr, code) = compile_test_and_run(r#"
+fn relay(rx: Receiver<int>, tx: Sender<int>) {
+    let v = rx.recv()!
+    tx.send(v + 1)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "relay deadlock" {
+        let (tx1, rx1) = chan<int>(0)
+        let (tx2, rx2) = chan<int>(0)
+        let (tx3, rx3) = chan<int>(0)
+        let t1 = spawn relay(rx1, tx2)
+        let t2 = spawn relay(rx2, tx3)
+        let result = rx3.recv()!
+        tx1.send(10)!
+        t1.get()!
+        t2.get()!
+        expect(result).to_equal(12)
+    }
+}
+"#);
+    // This deadlocks: main blocks on rx3.recv, t2 blocks on rx2.recv, t1 blocks on rx1.recv,
+    // then main needs to send on tx1 but it's already blocked on rx3.recv — deadlock!
+    assert_ne!(code, 0, "Expected deadlock, got stderr: {stderr}");
+    assert!(stderr.contains("deadlock") || stderr.contains("Deadlock"), "Expected deadlock: {stderr}");
+}
+
+#[test]
+fn exhaustive_spawn_returns_string() {
+    // Heap-allocated return type from spawned task
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn greet(name: string) string {
+    return "hello {name}"
+}
+
+tests[scheduler: Exhaustive] {
+    test "string return" {
+        let t = spawn greet("world")
+        expect(t.get()).to_equal("hello world")
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn exhaustive_spawn_returns_array() {
+    // Array return from spawned task
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn make_list(n: int) [int] {
+    let arr: [int] = []
+    let i = 0
+    while i < n {
+        arr.push(i)
+        i = i + 1
+    }
+    return arr
+}
+
+tests[scheduler: Exhaustive] {
+    test "array return" {
+        let t = spawn make_list(5)
+        let result = t.get()
+        expect(result.len()).to_equal(5)
+        expect(result[0]).to_equal(0)
+        expect(result[4]).to_equal(4)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn exhaustive_channel_with_large_buffer() {
+    // Large buffer means less blocking — should have fewer interleavings than small buffer.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn fill_channel(tx: Sender<int>) {
+    tx.send(1)!
+    tx.send(2)!
+    tx.send(3)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "large buffer" {
+        let (tx, rx) = chan<int>(10)
+        let t = spawn fill_channel(tx)
+        t.get()!
+        let a = rx.recv()!
+        let b = rx.recv()!
+        let c = rx.recv()!
+        expect(a + b + c).to_equal(6)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_spawn_no_get() {
+    // Spawn a task but never call .get() — the task runs to completion independently.
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn fire_and_forget(x: int) int {
+    return x + 1
+}
+
+tests[scheduler: Exhaustive] {
+    test "no get" {
+        let t = spawn fire_and_forget(99)
+        expect(1).to_equal(1)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn exhaustive_bidirectional_channels() {
+    // Two fibers exchange messages in both directions.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn peer(my_tx: Sender<int>, my_rx: Receiver<int>, val: int) int {
+    my_tx.send(val)!
+    let received = my_rx.recv()!
+    return received
+}
+
+tests[scheduler: Exhaustive] {
+    test "bidirectional" {
+        let (tx1, rx1) = chan<int>(1)
+        let (tx2, rx2) = chan<int>(1)
+        let t1 = spawn peer(tx1, rx2, 10)
+        let t2 = spawn peer(tx2, rx1, 20)
+        let r1 = t1.get()!
+        let r2 = t2.get()!
+        expect(r1).to_equal(20)
+        expect(r2).to_equal(10)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
+fn exhaustive_successive_spawns() {
+    // Spawn tasks one after another (not concurrent), each waits for previous.
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn inc(x: int) int {
+    return x + 1
+}
+
+tests[scheduler: Exhaustive] {
+    test "successive" {
+        let t1 = spawn inc(0)
+        let v1 = t1.get()
+        let t2 = spawn inc(v1)
+        let v2 = t2.get()
+        let t3 = spawn inc(v2)
+        let v3 = t3.get()
+        expect(v3).to_equal(3)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn exhaustive_max_schedules_one() {
+    // Set max_schedules to 1 — should only explore one schedule then stop.
+    let (stdout, stderr, code) = compile_test_and_run_with_env(r#"
+fn send_val(tx: Sender<int>, v: int) {
+    tx.send(v)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "single schedule" {
+        let (tx, rx) = chan<int>(2)
+        let t1 = spawn send_val(tx, 1)
+        let t2 = spawn send_val(tx, 2)
+        let a = rx.recv()!
+        let b = rx.recv()!
+        t1.get()!
+        t2.get()!
+        expect(a + b).to_equal(3)
+    }
+}
+"#, &[("PLUTO_MAX_SCHEDULES", "1")]);
+    assert_eq!(code, 0, "Expected pass with 1 schedule, got stdout: {stdout}\nstderr: {stderr}");
+    assert!(stderr.contains("1 schedule"), "Expected exactly 1 schedule: {stderr}");
+}
+
+#[test]
+fn exhaustive_get_after_channel_work() {
+    // Task does channel work then returns a value via .get()
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn worker(tx: Sender<int>) int {
+    tx.send(100)!
+    tx.send(200)!
+    return 42
+}
+
+tests[scheduler: Exhaustive] {
+    test "get after channel" {
+        let (tx, rx) = chan<int>(2)
+        let t = spawn worker(tx)
+        let a = rx.recv()!
+        let b = rx.recv()!
+        let result = t.get()!
+        expect(a).to_equal(100)
+        expect(b).to_equal(200)
+        expect(result).to_equal(42)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn exhaustive_fan_out_fan_in() {
+    // Fan-out: main sends to N workers via separate channels.
+    // Fan-in: workers send results back on a shared result channel.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn worker(rx: Receiver<int>, result_tx: Sender<int>) {
+    let v = rx.recv()!
+    result_tx.send(v * 2)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "fan out fan in" {
+        let (work_tx1, work_rx1) = chan<int>(1)
+        let (work_tx2, work_rx2) = chan<int>(1)
+        let (result_tx, result_rx) = chan<int>(2)
+        let t1 = spawn worker(work_rx1, result_tx)
+        let t2 = spawn worker(work_rx2, result_tx)
+        work_tx1.send(5)!
+        work_tx2.send(10)!
+        let r1 = result_rx.recv()!
+        let r2 = result_rx.recv()!
+        t1.get()!
+        t2.get()!
+        expect(r1 + r2).to_equal(30)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}

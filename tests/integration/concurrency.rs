@@ -1460,3 +1460,112 @@ fn main() {
 "#);
     assert_eq!(out.trim(), "500\n500");
 }
+
+#[test]
+fn gc_stress_concurrent_maps() {
+    // Tasks build maps to stress GC with hash table allocations during concurrent execution
+    let out = compile_and_run_stdout(r#"
+fn build_map(n: int) int {
+    let m = Map<int, int> {}
+    let i = 0
+    while i < n {
+        m[i] = i * 3
+        i = i + 1
+    }
+    return m.len()
+}
+
+fn main() {
+    let t1 = spawn build_map(200)
+    let t2 = spawn build_map(200)
+    let t3 = spawn build_map(200)
+    print(t1.get())
+    print(t2.get())
+    print(t3.get())
+}
+"#);
+    assert_eq!(out.trim(), "200\n200\n200");
+}
+
+#[test]
+fn gc_stress_concurrent_classes() {
+    // Tasks allocate many class instances to stress GC object tracking
+    let out = compile_and_run_stdout(r#"
+class Node {
+    value: int
+    label: string
+}
+
+fn build_nodes(n: int, prefix: string) string {
+    let i = 0
+    let last = ""
+    while i < n {
+        let node = Node { value: i, label: "{prefix}_{i}" }
+        last = node.label
+        i = i + 1
+    }
+    return last
+}
+
+fn main() {
+    let t1 = spawn build_nodes(300, "a")
+    let t2 = spawn build_nodes(300, "b")
+    print(t1.get())
+    print(t2.get())
+}
+"#);
+    assert_eq!(out.trim(), "a_299\nb_299");
+}
+
+#[test]
+fn gc_stress_concurrent_nested_arrays() {
+    // Tasks build arrays of arrays (nested heap objects)
+    let out = compile_and_run_stdout(r#"
+fn build_nested(rows: int, cols: int) int {
+    let outer: [[int]] = []
+    let r = 0
+    while r < rows {
+        let inner: [int] = []
+        let c = 0
+        while c < cols {
+            inner.push(r * cols + c)
+            c = c + 1
+        }
+        outer.push(inner)
+        r = r + 1
+    }
+    return outer.len()
+}
+
+fn main() {
+    let t1 = spawn build_nested(50, 20)
+    let t2 = spawn build_nested(50, 20)
+    print(t1.get())
+    print(t2.get())
+}
+"#);
+    assert_eq!(out.trim(), "50\n50");
+}
+
+#[test]
+fn gc_stress_many_short_tasks() {
+    // Many short-lived tasks that each do a small allocation — tests thread stack
+    // registration/deregistration churn
+    let out = compile_and_run_stdout(r#"
+fn make_string(n: int) string {
+    return "task_{n}"
+}
+
+fn main() {
+    let results: [string] = []
+    let i = 0
+    while i < 20 {
+        let t = spawn make_string(i)
+        results.push(t.get())
+        i = i + 1
+    }
+    print(results.len())
+}
+"#);
+    assert_eq!(out.trim(), "20");
+}
