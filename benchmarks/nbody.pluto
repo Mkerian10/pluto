@@ -10,12 +10,12 @@ class Body {
 
 fn advance(bodies: [Body], dt: float) {
     let n = bodies.len()
-    let i = 0
+    let mut i = 0
     while i < n {
-        let bi = bodies[i]
-        let j = i + 1
+        let mut bi = bodies[i]
+        let mut j = i + 1
         while j < n {
-            let bj = bodies[j]
+            let mut bj = bodies[j]
             let dx = bi.x - bj.x
             let dy = bi.y - bj.y
             let dz = bi.z - bj.z
@@ -37,7 +37,7 @@ fn advance(bodies: [Body], dt: float) {
 
     i = 0
     while i < n {
-        let b = bodies[i]
+        let mut b = bodies[i]
         b.x = b.x + dt * b.vx
         b.y = b.y + dt * b.vy
         b.z = b.z + dt * b.vz
@@ -47,12 +47,12 @@ fn advance(bodies: [Body], dt: float) {
 
 fn energy(bodies: [Body]) float {
     let n = bodies.len()
-    let e = 0.0
-    let i = 0
+    let mut e = 0.0
+    let mut i = 0
     while i < n {
         let bi = bodies[i]
         e = e + 0.5 * bi.mass * (bi.vx * bi.vx + bi.vy * bi.vy + bi.vz * bi.vz)
-        let j = i + 1
+        let mut j = i + 1
         while j < n {
             let bj = bodies[j]
             let dx = bi.x - bj.x
@@ -73,7 +73,7 @@ fn main() {
     let days_per_year = 365.24
 
     // Sun
-    let sun = Body {
+    let mut sun = Body {
         x: 0.0, y: 0.0, z: 0.0,
         vx: 0.0, vy: 0.0, vz: 0.0,
         mass: solar_mass
@@ -126,10 +126,10 @@ fn main() {
     let bodies = [sun, jupiter, saturn, uranus, neptune]
 
     // Offset momentum
-    let px = 0.0
-    let py = 0.0
-    let pz = 0.0
-    let i = 0
+    let mut px = 0.0
+    let mut py = 0.0
+    let mut pz = 0.0
+    let mut i = 0
     while i < bodies.len() {
         let b = bodies[i]
         px = px + b.vx * b.mass
