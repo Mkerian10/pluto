@@ -537,6 +537,9 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
             Some(t) => resolve_type(t, env)?,
             None => PlutoType::Void,
         };
+        if matches!(&return_type, PlutoType::Stream(_)) {
+            env.generators.insert(f.name.node.clone());
+        }
         env.functions.insert(
             f.name.node.clone(),
             FuncSig { params: param_types, return_type },

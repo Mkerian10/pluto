@@ -41,7 +41,10 @@ pub(crate) fn infer_closure(
     // Reset loop_depth so break/continue inside closures can't escape to enclosing loop
     let saved_loop_depth = env.loop_depth;
     env.loop_depth = 0;
+    // Clear generator context so yield cannot be used inside closures
+    let saved_gen_elem = env.current_generator_elem.take();
     check_block(&body.node, env, &final_ret)?;
+    env.current_generator_elem = saved_gen_elem;
     env.loop_depth = saved_loop_depth;
 
     // Collect captures: find free variables that come from outer scopes
