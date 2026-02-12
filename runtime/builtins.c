@@ -71,7 +71,11 @@ static GCHeader *gc_head = NULL;
 static size_t gc_bytes_allocated = 0;
 static size_t gc_threshold = 256 * 1024;  // 256KB initial
 static void *gc_stack_bottom = NULL;
+#ifdef PLUTO_TEST_MODE
 static int gc_collecting = 0;
+#else
+static atomic_int gc_collecting = 0;
+#endif
 
 // Mark worklist (raw malloc, not GC-tracked)
 static void **gc_worklist = NULL;
@@ -129,14 +133,21 @@ typedef struct {
 static GCThreadStack gc_thread_stacks[GC_MAX_THREAD_STACKS];
 static int gc_thread_stack_count = 0;
 
-// Signal-based stop-the-world state.
-// GC sends SIGUSR1 to each thread; the handler flushes registers (setjmp),
-// increments gc_stw_stopped, and spins until gc_stw_resume is set.
+// Safepoint-based stop-the-world state.
+// GC sets gc_safepoint_requested; threads check this flag periodically and yield.
+// When yielding, threads increment gc_stw_stopped and spin on gc_stw_resume.
+static atomic_int gc_safepoint_requested = 0;
 static volatile int gc_stw_stopped = 0;
 static volatile int gc_stw_resume = 0;
 
-static void gc_stw_signal_handler(int sig) {
-    (void)sig;
+// Safepoint check - called by threads at regular intervals (loop back-edges, allocations).
+// If GC has requested a safepoint, the thread yields here until GC completes.
+void __pluto_safepoint(void) {
+    if (atomic_load(&gc_safepoint_requested) == 0) {
+        return;  // Fast path - no GC pending
+    }
+
+    // GC is running - yield at this safepoint
     // Flush registers to stack so GC can scan them
     jmp_buf regs;
     setjmp(regs);
@@ -150,15 +161,6 @@ static void gc_stw_signal_handler(int sig) {
         __sync_synchronize();
     }
 }
-
-static void gc_stw_install_handler(void) {
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = gc_stw_signal_handler;
-    sa.sa_flags = SA_RESTART;
-    sigfillset(&sa.sa_mask);  // block all signals during handler
-    sigaction(SIGUSR1, &sa, NULL);
-}
 #endif
 
 static inline GCHeader *gc_get_header(void *user_ptr) {
@@ -166,6 +168,11 @@ static inline GCHeader *gc_get_header(void *user_ptr) {
 }
 
 #ifdef PLUTO_TEST_MODE
+// No-op safepoint for test mode (single-threaded, no GC coordination needed)
+void __pluto_safepoint(void) {
+    // Test mode: no-op
+}
+
 static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
     // Test mode: single-threaded, no mutex needed
     if (gc_stack_bottom && !gc_collecting
@@ -185,9 +192,8 @@ static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) 
     return (char *)h + sizeof(GCHeader);
 }
 #else
-// Stop all registered task threads via SIGUSR1 and wait for them to acknowledge.
-// Returns the number of threads that were stopped. Caller must call gc_stw_resume_threads() after GC.
-// Stop all registered task threads via SIGUSR1 and wait for them to acknowledge.
+// Stop all registered task threads via safepoint polling.
+// Sets the global safepoint flag and waits for all threads to yield.
 // Returns the number of threads that were stopped. Caller must call gc_stw_resume_threads() after GC.
 static int gc_stw_stop_threads(void) {
     int count = 0;
@@ -195,20 +201,23 @@ static int gc_stw_stop_threads(void) {
     gc_stw_resume = 0;
     __sync_synchronize();  // memory barrier
 
+    // Count active threads (excluding self)
     pthread_t self = pthread_self();
     for (int i = 0; i < gc_thread_stack_count; i++) {
         if (!gc_thread_stacks[i].active) continue;
         if (pthread_equal(gc_thread_stacks[i].thread, self)) continue;  // skip self
-        pthread_kill(gc_thread_stacks[i].thread, SIGUSR1);
         count++;
     }
 
     if (count > 0) {
-        // Wait for all threads to acknowledge (with timeout)
-        int spins = 0;
+        // Request all threads to stop at their next safepoint
+        atomic_store(&gc_safepoint_requested, 1);
+        __sync_synchronize();
+
+        // Wait for all threads to acknowledge (NO TIMEOUT - they WILL hit a safepoint)
         while (__sync_fetch_and_add(&gc_stw_stopped, 0) < count) {
             __sync_synchronize();
-            if (++spins > 1000000) break;  // ~1s timeout — give up
+            usleep(100);  // yield CPU, don't spin
         }
     }
     return count;
@@ -217,16 +226,32 @@ static int gc_stw_stop_threads(void) {
 static void gc_stw_resume_threads(void) {
     gc_stw_resume = 1;
     __sync_synchronize();  // ensure visibility
+    atomic_store(&gc_safepoint_requested, 0);  // Clear safepoint request
+    __sync_synchronize();
 }
 
 static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
     pthread_mutex_lock(&gc_mutex);
-    if (gc_stack_bottom && !gc_collecting
+    if (gc_stack_bottom
         && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold) {
-        // Stop all other task threads via SIGUSR1 so we can safely scan their stacks
-        int stopped = gc_stw_stop_threads();
-        __pluto_gc_collect();
-        if (stopped > 0) gc_stw_resume_threads();
+        // Atomic test-and-set: only one thread wins the race to initiate GC
+        int expected = 0;
+        if (atomic_compare_exchange_strong(&gc_collecting, &expected, 1)) {
+            // This thread won - run GC
+            int stopped = gc_stw_stop_threads();
+            __pluto_gc_collect();  // This will set gc_collecting back to 0
+            if (stopped > 0) gc_stw_resume_threads();
+        } else {
+            // Another thread is collecting - wait for it to finish
+            // Note: Cannot use usleep() here because SA_RESTART in signal handler
+            // would cause usleep() to restart when SIGUSR1 arrives, creating deadlock.
+            pthread_mutex_unlock(&gc_mutex);
+            while (atomic_load(&gc_collecting) == 1) {
+                // Yield CPU to let GC thread make progress
+                __sync_synchronize();  // memory barrier
+            }
+            pthread_mutex_lock(&gc_mutex);
+        }
     }
     size_t total = sizeof(GCHeader) + user_size;
     GCHeader *h = (GCHeader *)calloc(1, total);
@@ -724,7 +749,6 @@ void __pluto_gc_init(void) {
     (void)anchor;
     gc_stack_bottom = (void *)&anchor;
 #ifndef PLUTO_TEST_MODE
-    gc_stw_install_handler();
     // Register main thread's stack for GC root scanning
     {
         pthread_t self = pthread_self();
@@ -3323,7 +3347,22 @@ long __pluto_task_get(long task_ptr) {
 
     pthread_mutex_lock(&sync->mutex);
     while (!task[3]) {
-        pthread_cond_wait(&sync->cond, &sync->mutex);
+        // Use timed wait with short timeout to allow safepoint checks
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 10000000;  // 10ms timeout
+        if (ts.tv_nsec >= 1000000000) {
+            ts.tv_sec += 1;
+            ts.tv_nsec -= 1000000000;
+        }
+        pthread_cond_timedwait(&sync->cond, &sync->mutex, &ts);
+
+        // Check safepoint while holding mutex (safe because safepoint doesn't need mutex)
+        if (atomic_load(&gc_safepoint_requested)) {
+            pthread_mutex_unlock(&sync->mutex);
+            __pluto_safepoint();
+            pthread_mutex_lock(&sync->mutex);
+        }
     }
     pthread_mutex_unlock(&sync->mutex);
 
