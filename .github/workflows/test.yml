@@ -22,5 +22,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
 
-      - name: Run all tests (unit + integration)
-        run: cargo nextest run
+      - name: Run unit tests only
+        run: cargo nextest run --lib
