@@ -81,7 +81,6 @@ fn load_directory_module(
             imports: Vec::new(),
             functions: Vec::new(),
             extern_fns: Vec::new(),
-            extern_rust_crates: Vec::new(),
             classes: Vec::new(),
             traits: Vec::new(),
             enums: Vec::new(),
@@ -109,7 +108,6 @@ fn load_directory_module(
             let (program, _file_id) = load_and_parse(&file_path, source_map)?;
             merged.functions.extend(program.functions);
             merged.extern_fns.extend(program.extern_fns);
-            merged.extern_rust_crates.extend(program.extern_rust_crates);
             merged.classes.extend(program.classes);
             merged.traits.extend(program.traits);
             merged.enums.extend(program.enums);
@@ -367,19 +365,6 @@ fn validate_imported_modules(imports: &[(String, Program, ImportOrigin)]) -> Res
                 "app declarations are not allowed in imported modules (found in '{}')",
                 module_name
             )));
-        }
-        if !module_prog.extern_rust_crates.is_empty() {
-            let msg = match origin {
-                ImportOrigin::PackageDep => format!(
-                    "extern rust declarations are not supported in package dependencies (found in '{}')",
-                    module_name
-                ),
-                ImportOrigin::Local => format!(
-                    "extern rust declarations are only allowed in the root program (found in '{}')",
-                    module_name
-                ),
-            };
-            return Err(CompileError::codegen(msg));
         }
     }
     Ok(())
@@ -639,7 +624,6 @@ fn resolve_modules_inner(
             root.imports.extend(program.imports);
             root.functions.extend(program.functions);
             root.extern_fns.extend(program.extern_fns);
-            root.extern_rust_crates.extend(program.extern_rust_crates);
             root.classes.extend(program.classes);
             root.traits.extend(program.traits);
             root.enums.extend(program.enums);
@@ -790,12 +774,7 @@ fn resolve_modules_inner(
 /// - Add ALL items with prefixed names (visibility deferred)
 /// - Rewrite qualified references in the root program's AST
 pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), CompileError> {
-    let mut import_names: HashSet<String> = graph.imports.iter().map(|(n, _, _)| n.clone()).collect();
-
-    // Add extern rust aliases so the rewrite pass converts alias.fn() → Call { name: "alias.fn" }
-    for ext_rust in &graph.root.extern_rust_crates {
-        import_names.insert(ext_rust.node.alias.node.clone());
-    }
+    let import_names: HashSet<String> = graph.imports.iter().map(|(n, _, _)| n.clone()).collect();
 
     validate_imported_modules(&graph.imports)?;
 

@@ -1,6 +1,6 @@
 [workspace]
 members = [".", "sdk", "mcp"]
-exclude = ["tests/fixtures/test_math_crate", "examples/rust_ffi/my_math"]
+exclude = ["tests/fixtures/test_math_crate"]
 resolver = "2"
 
 [package]
@@ -132,10 +132,6 @@ path = "tests/integration/json_tests.rs"
 [[test]]
 name = "http_tests"
 path = "tests/integration/http_tests.rs"
-
-[[test]]
-name = "rust_ffi"
-path = "tests/integration/rust_ffi.rs"
 
 [[test]]
 name = "concurrency"

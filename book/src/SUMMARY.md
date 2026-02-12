@@ -27,7 +27,6 @@
 - [Nullable Types](language/nullable.md)
 - [Modules and Packages](language/modules-and-packages.md)
 - [Testing](language/testing.md)
-- [Rust FFI](language/rust-ffi.md)
 
 # The Vision
 

@@ -230,7 +230,6 @@ impl<'a> Parser<'a> {
         let mut imports = Vec::new();
         let mut functions = Vec::new();
         let mut extern_fns = Vec::new();
-        let mut extern_rust_crates = Vec::new();
         let mut classes = Vec::new();
         let mut traits = Vec::new();
         let mut enums = Vec::new();
@@ -369,27 +368,15 @@ impl<'a> Parser<'a> {
                             tok.span,
                         ));
                     }
-                    // Peek at next token to decide: extern fn vs extern rust
+                    // Only extern fn is supported
                     let next = self.peek_nth(1);
-                    match next {
-                        Some(t) if matches!(t.node, Token::Fn) => {
-                            extern_fns.push(self.parse_extern_fn(is_pub)?);
-                        }
-                        Some(t) if matches!(t.node, Token::Ident) && self.source[t.span.start..t.span.end] == *"rust" => {
-                            if is_pub {
-                                return Err(CompileError::syntax(
-                                    "extern rust declarations cannot be pub",
-                                    tok.span,
-                                ));
-                            }
-                            extern_rust_crates.push(self.parse_extern_rust()?);
-                        }
-                        _ => {
-                            return Err(CompileError::syntax(
-                                "expected 'fn' or 'rust' after 'extern'",
-                                tok.span,
-                            ));
-                        }
+                    if matches!(next, Some(t) if matches!(t.node, Token::Fn)) {
+                        extern_fns.push(self.parse_extern_fn(is_pub)?);
+                    } else {
+                        return Err(CompileError::syntax(
+                            "expected 'fn' after 'extern'",
+                            tok.span,
+                        ));
                     }
                 }
                 Token::Tests => {
@@ -532,7 +519,7 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        Ok(Program { imports, functions, extern_fns, extern_rust_crates, classes, traits, enums, app, stages, system, errors, test_info, tests, fallible_extern_fns: Vec::new() })
+        Ok(Program { imports, functions, extern_fns,  classes, traits, enums, app, stages, system, errors, test_info, tests, fallible_extern_fns: Vec::new() })
     }
 
     /// Parse a bare `test "name" { body }` block into a TestInfo + synthetic Function.
@@ -718,35 +705,6 @@ impl<'a> Parser<'a> {
 
         self.consume_statement_end();
         Ok(Spanned::new(ExternFnDecl { name, params, return_type, is_pub }, Span::new(start, end)))
-    }
-
-    fn parse_extern_rust(&mut self) -> Result<Spanned<ExternRustDecl>, CompileError> {
-        let extern_tok = self.expect(&Token::Extern)?;
-        let start = extern_tok.span.start;
-
-        // Consume contextual keyword "rust"
-        let rust_tok = self.expect_ident()?;
-        if rust_tok.node != "rust" {
-            return Err(CompileError::syntax(
-                format!("expected 'rust' after 'extern', found '{}'", rust_tok.node),
-                rust_tok.span,
-            ));
-        }
-
-        // Expect string literal for crate path
-        let path_tok = self.expect(&Token::StringLit(String::new()))?;
-        let crate_path = match &path_tok.node {
-            Token::StringLit(s) => Spanned::new(s.clone(), path_tok.span),
-            _ => unreachable!(),
-        };
-
-        // Expect `as alias`
-        self.expect(&Token::As)?;
-        let alias = self.expect_ident()?;
-        let end = alias.span.end;
-
-        self.consume_statement_end();
-        Ok(Spanned::new(ExternRustDecl { crate_path, alias }, Span::new(start, end)))
     }
 
     fn parse_bracket_deps(&mut self) -> Result<Vec<Field>, CompileError> {
@@ -2296,6 +2254,8 @@ impl<'a> Parser<'a> {
                     );
                 } else if matches!(&lhs.node, Expr::FieldAccess { object, .. } if matches!(&object.node, Expr::Ident(_))) {
                     // Possible qualified enum: module.Enum.Variant or module.Enum.Variant { fields }
+                    // vs. nested field access: outer.inner.value
+                    // Use naming convention heuristic: enums start with uppercase, fields with lowercase
                     let (module_name, enum_local) = match &lhs.node {
                         Expr::FieldAccess { object, field } => {
                             match &object.node {
@@ -2306,39 +2266,54 @@ impl<'a> Parser<'a> {
                         _ => unreachable!(),
                     };
                     let qualified_enum_name = format!("{}.{}", module_name, enum_local);
-                    let enum_name_span = Span::new(lhs.span.start, field_name.span.end);
 
-                    if !self.restrict_struct_lit
-                        && self.peek().is_some()
-                        && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
-                        && self.is_struct_lit_ahead()
-                    {
-                        // module.Enum.Variant { field: value }
-                        self.advance(); // consume '{'
-                        let (fields, close_end) = self.parse_field_list()?;
-                        let span = Span::new(lhs.span.start, close_end);
-                        lhs = Spanned::new(
-                            Expr::EnumData {
-                                enum_name: Spanned::new(qualified_enum_name, enum_name_span),
-                                variant: field_name,
-                                type_args: vec![],
-                                fields,
-                                enum_id: None,
-                                variant_id: None,
-                            },
-                            span,
-                        );
+                    // Only treat as enum if the middle name starts with uppercase (Pluto naming convention)
+                    // This distinguishes `status.State.Active` (enum) from `outer.inner.value` (fields)
+                    let is_likely_enum = enum_local.chars().next().map_or(false, |c| c.is_uppercase());
+                    if is_likely_enum {
+                        let enum_name_span = Span::new(lhs.span.start, field_name.span.end);
+
+                        if !self.restrict_struct_lit
+                            && self.peek().is_some()
+                            && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
+                            && self.is_struct_lit_ahead()
+                        {
+                            // module.Enum.Variant { field: value }
+                            self.advance(); // consume '{'
+                            let (fields, close_end) = self.parse_field_list()?;
+                            let span = Span::new(lhs.span.start, close_end);
+                            lhs = Spanned::new(
+                                Expr::EnumData {
+                                    enum_name: Spanned::new(qualified_enum_name, enum_name_span),
+                                    variant: field_name,
+                                    type_args: vec![],
+                                    fields,
+                                    enum_id: None,
+                                    variant_id: None,
+                                },
+                                span,
+                            );
+                        } else {
+                            // module.Enum.Variant (unit)
+                            let span = Span::new(lhs.span.start, field_name.span.end);
+                            lhs = Spanned::new(
+                                Expr::EnumUnit {
+                                    enum_name: Spanned::new(qualified_enum_name, enum_name_span),
+                                    variant: field_name,
+                                    type_args: vec![],
+                                    enum_id: None,
+                                    variant_id: None,
+                                },
+                                span,
+                            );
+                        }
                     } else {
-                        // module.Enum.Variant (unit) — speculatively treat as enum
-                        // Typeck will reject if it's not actually an enum
+                        // Not a known enum - treat as regular field access (e.g., outer.inner.value)
                         let span = Span::new(lhs.span.start, field_name.span.end);
                         lhs = Spanned::new(
-                            Expr::EnumUnit {
-                                enum_name: Spanned::new(qualified_enum_name, enum_name_span),
-                                variant: field_name,
-                                type_args: vec![],
-                                enum_id: None,
-                                variant_id: None,
+                            Expr::FieldAccess {
+                                object: Box::new(lhs),
+                                field: field_name,
                             },
                             span,
                         );

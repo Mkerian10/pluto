@@ -9,7 +9,6 @@ pub mod closures;
 pub mod monomorphize;
 pub mod prelude;
 pub mod ambient;
-pub mod rust_ffi;
 pub mod spawn;
 pub mod contracts;
 pub mod marshal;
@@ -68,35 +67,14 @@ fn run_frontend(program: &mut Program, test_mode: bool) -> Result<FrontendResult
 }
 
 /// Resolve extern rust crates and inject their extern fn declarations into the program.
-fn resolve_rust_artifacts(program: &mut Program, entry_dir: &Path) -> Result<Vec<rust_ffi::RustCrateArtifact>, CompileError> {
-    let artifacts = if program.extern_rust_crates.is_empty() {
-        vec![]
-    } else {
-        rust_ffi::resolve_rust_crates(program, entry_dir)?
-    };
-    rust_ffi::inject_extern_fns(program, &artifacts);
-    Ok(artifacts)
-}
 
 /// Add Rust FFI artifact static libs and native lib flags to a link config.
-fn add_rust_artifact_flags(config: &mut LinkConfig, artifacts: &[rust_ffi::RustCrateArtifact]) {
-    for artifact in artifacts {
-        config.static_libs.push(artifact.static_lib.clone());
-        config.flags.extend(artifact.native_libs.clone());
-    }
-}
 
 /// Parse a source string and reject extern rust declarations (which need file-based compilation).
 fn parse_source(source: &str) -> Result<Program, CompileError> {
     let tokens = lexer::lex(source)?;
     let mut parser = parser::Parser::new(&tokens, source);
     let program = parser.parse_program()?;
-    if !program.extern_rust_crates.is_empty() {
-        return Err(CompileError::syntax(
-            "extern rust declarations require file-based compilation (use compile_file instead)",
-            program.extern_rust_crates[0].span,
-        ));
-    }
     Ok(program)
 }
 
@@ -226,11 +204,9 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
         modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?
     };
 
-    check_extern_rust_import_collisions(&graph)?;
 
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
 
-    let rust_artifacts = resolve_rust_artifacts(&mut program, entry_dir)?;
 
     let result = run_frontend(&mut program, false)?;
     for w in &result.warnings {
@@ -243,7 +219,6 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
         .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
 
     let mut config = LinkConfig::default_config(&obj_path)?;
-    add_rust_artifact_flags(&mut config, &rust_artifacts);
     link_from_config(&config, output_path)?;
 
     let _ = std::fs::remove_file(&obj_path);
@@ -273,11 +248,9 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
     let pkg_graph = manifest::find_and_resolve(entry_dir)?;
     let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
 
-    check_extern_rust_import_collisions(&graph)?;
 
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
 
-    resolve_rust_artifacts(&mut program, entry_dir)?;
 
     let result = run_frontend(&mut program, false)?;
     let derived = derived::DerivedInfo::build(&result.env, &program);
@@ -348,7 +321,6 @@ pub fn compile_file_for_tests(
     let pkg_graph = manifest::find_and_resolve(entry_dir)?;
     let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
 
-    check_extern_rust_import_collisions(&graph)?;
 
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
 
@@ -368,7 +340,6 @@ pub fn compile_file_for_tests(
         ));
     }
 
-    let rust_artifacts = resolve_rust_artifacts(&mut program, entry_dir)?;
 
     let result = run_frontend(&mut program, true)?;
     for w in &result.warnings {
@@ -424,7 +395,6 @@ pub fn compile_file_for_tests(
         .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
 
     let mut config = LinkConfig::test_config(&obj_path)?;
-    add_rust_artifact_flags(&mut config, &rust_artifacts);
     link_from_config(&config, output_path)?;
 
     let _ = std::fs::remove_file(&obj_path);
@@ -697,26 +667,3 @@ pub fn update_git_deps(dir: &Path) -> Result<(), CompileError> {
     Ok(())
 }
 
-/// Check that extern rust aliases don't collide with import aliases.
-/// Must be called before flatten_modules (which clears import data).
-fn check_extern_rust_import_collisions(graph: &modules::ModuleGraph) -> Result<(), CompileError> {
-    let import_aliases: std::collections::HashSet<&str> = graph
-        .imports
-        .iter()
-        .map(|(name, _, _)| name.as_str())
-        .collect();
-
-    for ext_rust in &graph.root.extern_rust_crates {
-        let alias = &ext_rust.node.alias.node;
-        if import_aliases.contains(alias.as_str()) {
-            return Err(CompileError::syntax(
-                format!(
-                    "extern rust alias '{}' conflicts with import alias of the same name",
-                    alias
-                ),
-                ext_rust.node.alias.span,
-            ));
-        }
-    }
-    Ok(())
-}
