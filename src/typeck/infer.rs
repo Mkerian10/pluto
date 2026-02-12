@@ -347,13 +347,79 @@ pub(crate) fn infer_expr(
                 )),
             }
         }
-        Expr::StaticTraitCall { trait_name, method_name, type_args: _, args: _ } => {
-            // TODO: Implement static trait method type inference
-            // For now, return a placeholder error
-            Err(CompileError::type_err(
-                format!("Static trait calls not yet fully implemented: {}::{}", trait_name.node, method_name.node),
-                span,
-            ))
+        Expr::StaticTraitCall { trait_name, method_name, type_args, args } => {
+            // Look up the trait and clone the information we need
+            let (method_sig, is_static) = {
+                let trait_info = env.traits.get(&trait_name.node).ok_or_else(|| {
+                    CompileError::type_err(
+                        format!("unknown trait '{}'", trait_name.node),
+                        trait_name.span,
+                    )
+                })?;
+
+                // Look up the method in the trait
+                let method_sig = trait_info.methods.iter()
+                    .find(|(name, _)| name == &method_name.node)
+                    .ok_or_else(|| {
+                        CompileError::type_err(
+                            format!("trait '{}' has no method '{}'", trait_name.node, method_name.node),
+                            method_name.span,
+                        )
+                    })?
+                    .1.clone();
+
+                // Check if it's a static method
+                let is_static = trait_info.static_methods.contains(&method_name.node);
+
+                (method_sig, is_static)
+            };
+
+            // Verify it's a static method (no self parameter)
+            if !is_static {
+                return Err(CompileError::type_err(
+                    format!(
+                        "method '{}' on trait '{}' is not a static method (requires self parameter)",
+                        method_name.node, trait_name.node
+                    ),
+                    method_name.span,
+                ));
+            }
+
+            // TODO: Handle type arguments once generic static methods are supported
+            if !type_args.is_empty() {
+                // For now, type arguments are stored but not yet fully implemented
+                // This will be needed for TypeInfo::kind<T>()
+            }
+
+            // Type check call arguments
+            let arg_types: Result<Vec<_>, _> = args.iter().map(|a| infer_expr(&a.node, a.span, env)).collect();
+            let arg_types = arg_types?;
+
+            // Verify argument count matches
+            if arg_types.len() != method_sig.params.len() {
+                return Err(CompileError::type_err(
+                    format!(
+                        "static method '{}::{}' expects {} arguments, got {}",
+                        trait_name.node, method_name.node, method_sig.params.len(), arg_types.len()
+                    ),
+                    span,
+                ));
+            }
+
+            // Verify argument types match
+            for (i, (expected, actual)) in method_sig.params.iter().zip(&arg_types).enumerate() {
+                if expected != actual {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "static method '{}::{}' argument {} has type {:?}, expected {:?}",
+                            trait_name.node, method_name.node, i + 1, actual, expected
+                        ),
+                        args[i].span,
+                    ));
+                }
+            }
+
+            Ok(method_sig.return_type.clone())
         }
         Expr::QualifiedAccess { segments } => {
             panic!(

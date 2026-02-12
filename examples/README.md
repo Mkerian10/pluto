@@ -273,3 +273,11 @@ Demonstrates the `std.regex` module for pattern matching: literal matching (`mat
 ```bash
 cargo run -- run examples/regex/main.pluto --stdlib stdlib
 ```
+
+## reflection_demo
+
+Demonstrates Phase 1 compile-time reflection with the `TypeInfo` trait: `TypeInfo::type_name<T>()` returns type names as strings, `TypeInfo::kind<T>()` provides detailed metadata (field names, types, offsets for classes; variant information for enums). Reflection intrinsics are generated at compile time with zero runtime overhead.
+
+```bash
+cargo run -- run examples/reflection_demo.pluto
+```

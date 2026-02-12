@@ -2100,9 +2100,8 @@ impl<'a> LowerContext<'a> {
             Expr::Range { .. } => {
                 Err(CompileError::codegen("range expressions can only be used as for loop iterables".to_string()))
             }
-            Expr::StaticTraitCall { .. } => {
-                // TODO: Implement codegen for static trait calls
-                Err(CompileError::codegen("static trait calls not yet implemented in codegen".to_string()))
+            Expr::StaticTraitCall { trait_name, method_name, type_args, args } => {
+                self.lower_static_trait_call(trait_name, method_name, type_args, args)
             }
             Expr::QualifiedAccess { segments } => {
                 panic!(
@@ -2356,6 +2355,71 @@ impl<'a> LowerContext<'a> {
             Ok(self.builder.ins().iconst(types::I64, 0))
         } else {
             Ok(results[0])
+        }
+    }
+
+    fn lower_static_trait_call(
+        &mut self,
+        trait_name: &crate::span::Spanned<String>,
+        method_name: &crate::span::Spanned<String>,
+        type_args: &[crate::span::Spanned<crate::parser::ast::TypeExpr>],
+        args: &[crate::span::Spanned<Expr>],
+    ) -> Result<Value, CompileError> {
+        // Mangle the function name: TraitName_methodName
+        // For generic calls like TypeInfo::kind<int>(), we'll add type args to the mangling
+        let mangled_name = if type_args.is_empty() {
+            format!("{}_{}", trait_name.node, method_name.node)
+        } else {
+            // For generic static trait methods, mangle with type arguments
+            // TypeInfo::kind<int>() becomes TypeInfo_kind__int
+            let type_arg_str = type_args.iter()
+                .map(|ta| self.mangle_type_expr(&ta.node))
+                .collect::<Vec<_>>()
+                .join("_");
+            format!("{}_{}_{}", trait_name.node, method_name.node, type_arg_str)
+        };
+
+        // Look up the function
+        let func_id = self.func_ids.get(&mangled_name).ok_or_else(|| {
+            CompileError::codegen(format!(
+                "undefined static trait method '{}::{}' (looking for function '{}')",
+                trait_name.node, method_name.node, mangled_name
+            ))
+        })?;
+
+        let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+
+        // Lower all arguments
+        let mut arg_values = Vec::new();
+        for arg in args {
+            let val = self.lower_expr(&arg.node)?;
+            arg_values.push(val);
+        }
+
+        // Make the call
+        let call = self.builder.ins().call(func_ref, &arg_values);
+        let results = self.builder.inst_results(call);
+        if results.is_empty() {
+            Ok(self.builder.ins().iconst(types::I64, 0))
+        } else {
+            Ok(results[0])
+        }
+    }
+
+    /// Helper to mangle a type expression into a string for function name mangling
+    fn mangle_type_expr(&self, ty: &crate::parser::ast::TypeExpr) -> String {
+        use crate::parser::ast::TypeExpr;
+        match ty {
+            TypeExpr::Named(name) => name.clone(),
+            TypeExpr::Array(elem) => format!("array_{}", self.mangle_type_expr(&elem.node)),
+            TypeExpr::Generic { name, type_args } => {
+                let arg_strs: Vec<_> = type_args.iter().map(|a| self.mangle_type_expr(&a.node)).collect();
+                format!("{}_{}", name, arg_strs.join("_"))
+            }
+            TypeExpr::Nullable(inner) => format!("nullable_{}", self.mangle_type_expr(&inner.node)),
+            TypeExpr::Qualified { module, name } => format!("{}_{}", module, name),
+            TypeExpr::Fn { .. } => "fn".to_string(), // Function types in type args (rare)
+            TypeExpr::Stream(inner) => format!("stream_{}", self.mangle_type_expr(&inner.node)),
         }
     }
 
@@ -4756,9 +4820,14 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 other => other,
             }
         }
-        Expr::StaticTraitCall { .. } => {
-            // TODO: Proper type inference for static trait calls
-            // For now, return Void as placeholder
+        Expr::StaticTraitCall { trait_name, method_name, .. } => {
+            // Look up the method signature in the trait
+            if let Some(trait_info) = env.traits.get(&trait_name.node) {
+                if let Some((_, sig)) = trait_info.methods.iter().find(|(n, _)| n == &method_name.node) {
+                    return sig.return_type.clone();
+                }
+            }
+            // Fallback to Void if not found (shouldn't happen after typeck)
             PlutoType::Void
         }
         Expr::QualifiedAccess { segments } => {
