@@ -1251,6 +1251,20 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
             )
         })?.clone();
 
+        // Validate no duplicate traits in impl list
+        {
+            let mut seen_traits = HashSet::new();
+            for trait_name_spanned in &c.impl_traits {
+                let trait_name = &trait_name_spanned.node;
+                if !seen_traits.insert(trait_name.clone()) {
+                    return Err(CompileError::type_err(
+                        format!("trait '{}' appears multiple times in impl list for class '{}'", trait_name, class_name),
+                        trait_name_spanned.span,
+                    ));
+                }
+            }
+        }
+
         // Multi-trait collision guard: reject if two traits define the same method
         // and at least one has contracts on it
         {
