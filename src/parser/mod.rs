@@ -4583,4 +4583,111 @@ mod tests {
             _ => panic!("expected let"),
         }
     }
+
+    // Phase 2: Maps and Sets Parser Tests (6 new tests)
+
+    #[test]
+    fn parse_map_literal_empty() {
+        let prog = parse("fn main() {\n    let m = Map<int, string> {}\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::MapLit { key_type, value_type, entries } => {
+                        assert_eq!(entries.len(), 0);
+                        assert!(matches!(key_type.node, TypeExpr::Named(_)));
+                        assert!(matches!(value_type.node, TypeExpr::Named(_)));
+                    }
+                    _ => panic!("expected map literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_map_literal_single_entry() {
+        let prog = parse("fn main() {\n    let m = Map<int, string> { 1: \"a\" }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::MapLit { entries, .. } => {
+                        assert_eq!(entries.len(), 1);
+                    }
+                    _ => panic!("expected map literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_map_literal_multiple_entries() {
+        let prog = parse("fn main() {\n    let m = Map<int, string> { 1: \"a\", 2: \"b\", 3: \"c\" }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::MapLit { entries, .. } => {
+                        assert_eq!(entries.len(), 3);
+                    }
+                    _ => panic!("expected map literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_set_literal_empty() {
+        let prog = parse("fn main() {\n    let s = Set<int> {}\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::SetLit { elem_type, elements } => {
+                        assert_eq!(elements.len(), 0);
+                        assert!(matches!(elem_type.node, TypeExpr::Named(_)));
+                    }
+                    _ => panic!("expected set literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_set_literal_single_element() {
+        let prog = parse("fn main() {\n    let s = Set<int> { 1 }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::SetLit { elements, .. } => {
+                        assert_eq!(elements.len(), 1);
+                    }
+                    _ => panic!("expected set literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_set_literal_multiple_elements() {
+        let prog = parse("fn main() {\n    let s = Set<int> { 1, 2, 3 }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::SetLit { elements, .. } => {
+                        assert_eq!(elements.len(), 3);
+                    }
+                    _ => panic!("expected set literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
 }

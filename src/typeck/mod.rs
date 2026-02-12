@@ -853,4 +853,50 @@ mod tests {
         let result = check("fn main() {\n    let s = \"sum: {1 + \\\"str\\\"}\"\n}");
         assert!(result.is_err());
     }
+
+    // Phase 2: Maps and Sets Typeck Tests (8 new tests)
+
+    #[test]
+    fn map_literal_type_infers() {
+        check("fn main() {\n    let m: Map<int, string> = Map<int, string> { 1: \"a\" }\n}").unwrap();
+    }
+
+    #[test]
+    fn map_key_type_mismatch_rejected() {
+        let result = check("fn main() {\n    let m = Map<int, string> { \"key\": \"val\" }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn map_value_type_mismatch_rejected() {
+        let result = check("fn main() {\n    let m = Map<int, string> { 1: 42 }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn map_empty_literal_requires_annotation() {
+        check("fn main() {\n    let m: Map<int, string> = Map<int, string> {}\n}").unwrap();
+    }
+
+    #[test]
+    fn set_literal_type_infers() {
+        check("fn main() {\n    let s: Set<int> = Set<int> { 1, 2, 3 }\n}").unwrap();
+    }
+
+    #[test]
+    fn set_element_type_mismatch_rejected() {
+        let result = check("fn main() {\n    let s = Set<int> { \"str\" }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn set_mixed_element_types_rejected() {
+        let result = check("fn main() {\n    let s = Set<int> { 1, \"str\" }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn set_empty_literal_requires_annotation() {
+        check("fn main() {\n    let s: Set<int> = Set<int> {}\n}").unwrap();
+    }
 }
