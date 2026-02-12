@@ -25,5 +25,16 @@ jobs:
       - name: Run unit tests only
         run: cargo nextest run --lib
 
+  stdlib-test:
+    name: Stdlib Tests
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
       - name: Run stdlib tests
         run: cargo test --test stdlib_tests
