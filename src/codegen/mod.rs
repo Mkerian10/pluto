@@ -18,6 +18,7 @@ use crate::parser::ast::*;
 use crate::span::Spanned;
 use crate::typeck::env::{mangle_method, TypeEnv};
 use crate::typeck::types::PlutoType;
+use crate::visit::{walk_expr, Visitor};
 use lower::{lower_function, lower_generator_creator, lower_generator_next, pluto_to_cranelift, resolve_type_expr_to_pluto, FnContracts, POINTER_SIZE};
 use runtime::RuntimeRegistry;
 
@@ -936,176 +937,26 @@ fn build_signature(func: &Function, module: &impl Module, env: &TypeEnv) -> cran
 
 /// Collect the set of function names that are spawn closure bodies.
 /// These functions need sender_dec cleanup for captured Sender variables.
+struct SpawnClosureCollector<'a> {
+    names: &'a mut HashSet<String>,
+}
+
+impl Visitor for SpawnClosureCollector<'_> {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        if let Expr::Spawn { call } = &expr.node {
+            if let Expr::ClosureCreate { fn_name, .. } = &call.node {
+                self.names.insert(fn_name.clone());
+            }
+        }
+        walk_expr(self, expr);
+    }
+}
+
 fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
-    let mut result = HashSet::new();
-
-    fn walk_expr(expr: &Expr, result: &mut HashSet<String>) {
-        match expr {
-            Expr::Spawn { call } => {
-                if let Expr::ClosureCreate { fn_name, .. } = &call.node {
-                    result.insert(fn_name.clone());
-                }
-                walk_expr(&call.node, result);
-            }
-            Expr::BinOp { lhs, rhs, .. } => {
-                walk_expr(&lhs.node, result);
-                walk_expr(&rhs.node, result);
-            }
-            Expr::UnaryOp { operand, .. } => walk_expr(&operand.node, result),
-            Expr::Call { args, .. } => {
-                for a in args { walk_expr(&a.node, result); }
-            }
-            Expr::MethodCall { object, args, .. } => {
-                walk_expr(&object.node, result);
-                for a in args { walk_expr(&a.node, result); }
-            }
-            Expr::FieldAccess { object, .. } => walk_expr(&object.node, result),
-            Expr::Index { object, index } => {
-                walk_expr(&object.node, result);
-                walk_expr(&index.node, result);
-            }
-            Expr::StructLit { fields, .. } => {
-                for (_, v) in fields { walk_expr(&v.node, result); }
-            }
-            Expr::EnumData { fields, .. } => {
-                for (_, v) in fields { walk_expr(&v.node, result); }
-            }
-            Expr::ArrayLit { elements } => {
-                for e in elements { walk_expr(&e.node, result); }
-            }
-            Expr::SetLit { elements, .. } => {
-                for e in elements { walk_expr(&e.node, result); }
-            }
-            Expr::MapLit { entries, .. } => {
-                for (k, v) in entries { walk_expr(&k.node, result); walk_expr(&v.node, result); }
-            }
-            Expr::StringInterp { parts } => {
-                for p in parts {
-                    if let StringInterpPart::Expr(e) = p { walk_expr(&e.node, result); }
-                }
-            }
-            Expr::Propagate { expr } | Expr::Cast { expr, .. } => walk_expr(&expr.node, result),
-            Expr::Catch { expr, handler } => {
-                walk_expr(&expr.node, result);
-                match handler {
-                    CatchHandler::Wildcard { body, .. } => walk_block(&body.node, result),
-                    CatchHandler::Shorthand(e) => walk_expr(&e.node, result),
-                }
-            }
-            Expr::Closure { body, .. } => walk_block(&body.node, result),
-            Expr::ClosureCreate { .. } => {}
-            Expr::Range { start, end, .. } => {
-                walk_expr(&start.node, result);
-                walk_expr(&end.node, result);
-            }
-            Expr::NullPropagate { expr } => walk_expr(&expr.node, result),
-            Expr::StaticTraitCall { args, .. } => {
-                for arg in args {
-                    walk_expr(&arg.node, result);
-                }
-            }
-            Expr::QualifiedAccess { segments } => {
-                panic!(
-                    "QualifiedAccess should be resolved by module flattening before codegen. Segments: {:?}",
-                    segments.iter().map(|s| &s.node).collect::<Vec<_>>()
-                )
-            }
-            Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
-            | Expr::StringLit(_) | Expr::Ident(_) | Expr::EnumUnit { .. }
-            | Expr::NoneLit => {}
-        }
-    }
-
-    fn walk_stmt(stmt: &Stmt, result: &mut HashSet<String>) {
-        match stmt {
-            Stmt::Let { value, .. } => walk_expr(&value.node, result),
-            Stmt::LetChan { capacity, .. } => {
-                if let Some(cap) = capacity { walk_expr(&cap.node, result); }
-            }
-            Stmt::Return(Some(e)) => walk_expr(&e.node, result),
-            Stmt::Yield { value, .. } => walk_expr(&value.node, result),
-            Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
-            Stmt::Assign { value, .. } => walk_expr(&value.node, result),
-            Stmt::FieldAssign { object, value, .. } => {
-                walk_expr(&object.node, result);
-                walk_expr(&value.node, result);
-            }
-            Stmt::IndexAssign { object, index, value } => {
-                walk_expr(&object.node, result);
-                walk_expr(&index.node, result);
-                walk_expr(&value.node, result);
-            }
-            Stmt::If { condition, then_block, else_block } => {
-                walk_expr(&condition.node, result);
-                walk_block(&then_block.node, result);
-                if let Some(eb) = else_block { walk_block(&eb.node, result); }
-            }
-            Stmt::While { condition, body } => {
-                walk_expr(&condition.node, result);
-                walk_block(&body.node, result);
-            }
-            Stmt::For { iterable, body, .. } => {
-                walk_expr(&iterable.node, result);
-                walk_block(&body.node, result);
-            }
-            Stmt::Match { expr, arms } => {
-                walk_expr(&expr.node, result);
-                for arm in arms { walk_block(&arm.body.node, result); }
-            }
-            Stmt::Raise { fields, .. } => {
-                for (_, v) in fields { walk_expr(&v.node, result); }
-            }
-            Stmt::Select { arms, default } => {
-                for arm in arms {
-                    match &arm.op {
-                        SelectOp::Recv { channel, .. } => walk_expr(&channel.node, result),
-                        SelectOp::Send { channel, value } => {
-                            walk_expr(&channel.node, result);
-                            walk_expr(&value.node, result);
-                        }
-                    }
-                    walk_block(&arm.body.node, result);
-                }
-                if let Some(def) = default { walk_block(&def.node, result); }
-            }
-            Stmt::Scope { seeds, body, .. } => {
-                for seed in seeds {
-                    walk_expr(&seed.node, result);
-                }
-                walk_block(&body.node, result);
-            }
-            Stmt::Expr(e) => walk_expr(&e.node, result),
-        }
-    }
-
-    fn walk_block(block: &Block, result: &mut HashSet<String>) {
-        for stmt in &block.stmts { walk_stmt(&stmt.node, result); }
-    }
-
-    fn walk_function(func: &Function, result: &mut HashSet<String>) {
-        walk_block(&func.body.node, result);
-    }
-
-    for func in &program.functions {
-        walk_function(&func.node, &mut result);
-    }
-    for class in &program.classes {
-        for method in &class.node.methods {
-            walk_function(&method.node, &mut result);
-        }
-    }
-    if let Some(app) = &program.app {
-        for method in &app.node.methods {
-            walk_function(&method.node, &mut result);
-        }
-    }
-    for stage in &program.stages {
-        for method in &stage.node.methods {
-            walk_function(&method.node, &mut result);
-        }
-    }
-
-    result
+    let mut names = HashSet::new();
+    let mut collector = SpawnClosureCollector { names: &mut names };
+    collector.visit_program(program);
+    names
 }
 
 fn build_method_signature(func: &Function, module: &impl Module, class_name: &str, env: &TypeEnv) -> cranelift_codegen::ir::Signature {

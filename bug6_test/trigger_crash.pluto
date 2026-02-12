@@ -1,0 +1,28 @@
+// Test to trigger Bug #6: TaskSync Destruction Race
+// This should crash when tasks are GC'd while workers are still running
+
+fn heavy_worker() int {
+    let sum = 0
+    // Do enough work to still be running when GC happens
+    for i in 0..10000 {
+        sum = sum + i
+    }
+    return sum
+}
+
+fn main() {
+    // Spawn MANY tasks but DON'T hold references
+    // Tasks become unreachable immediately
+    for iteration in 0..100 {
+        spawn heavy_worker()
+        // Task dropped here - no reference kept!
+    }
+
+    // Force aggressive GC by allocating lots of arrays
+    // This should trigger GC while workers are still running
+    for i in 0..5000 {
+        let waste = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    }
+
+    print("If you see this, the bug didn't trigger (or is already fixed)")
+}

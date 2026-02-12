@@ -725,6 +725,8 @@ impl<'a> LowerContext<'a> {
         }
         self.loop_stack.pop();
         if !body_terminated {
+            // Safepoint check before loop back-edge
+            self.call_runtime_void("__pluto_safepoint", &[]);
             self.builder.ins().jump(header_bb, &[]);
         }
 
@@ -825,6 +827,8 @@ impl<'a> LowerContext<'a> {
         let one = self.builder.ins().iconst(types::I64, 1);
         let new_counter = self.builder.ins().iadd(counter_inc, one);
         self.builder.def_var(counter_var, new_counter);
+        // Safepoint check before loop back-edge
+        self.call_runtime_void("__pluto_safepoint", &[]);
         self.builder.ins().jump(header_bb, &[]);
 
         self.builder.seal_block(header_bb);
@@ -939,6 +943,8 @@ impl<'a> LowerContext<'a> {
         let one = self.builder.ins().iconst(types::I64, 1);
         let new_counter = self.builder.ins().iadd(counter_inc, one);
         self.builder.def_var(counter_var, new_counter);
+        // Safepoint check before loop back-edge
+        self.call_runtime_void("__pluto_safepoint", &[]);
         self.builder.ins().jump(header_bb, &[]);
 
         self.builder.seal_block(header_bb);
@@ -1022,6 +1028,8 @@ impl<'a> LowerContext<'a> {
         let one = self.builder.ins().iconst(types::I64, 1);
         let new_counter = self.builder.ins().iadd(counter_inc, one);
         self.builder.def_var(counter_var, new_counter);
+        // Safepoint check before loop back-edge
+        self.call_runtime_void("__pluto_safepoint", &[]);
         self.builder.ins().jump(header_bb, &[]);
 
         self.builder.seal_block(header_bb);
@@ -1112,6 +1120,8 @@ impl<'a> LowerContext<'a> {
         let one = self.builder.ins().iconst(types::I64, 1);
         let new_counter = self.builder.ins().iadd(counter_inc, one);
         self.builder.def_var(counter_var, new_counter);
+        // Safepoint check before loop back-edge
+        self.call_runtime_void("__pluto_safepoint", &[]);
         self.builder.ins().jump(header_bb, &[]);
 
         self.builder.seal_block(header_bb);
@@ -1197,6 +1207,8 @@ impl<'a> LowerContext<'a> {
         }
 
         if !body_terminated {
+            // Safepoint check before loop back-edge
+            self.call_runtime_void("__pluto_safepoint", &[]);
             self.builder.ins().jump(header_bb, &[]);
         }
 
@@ -1289,6 +1301,8 @@ impl<'a> LowerContext<'a> {
         }
 
         if !body_terminated {
+            // Safepoint check before loop back-edge
+            self.call_runtime_void("__pluto_safepoint", &[]);
             self.builder.ins().jump(header_bb, &[]);
         }
 
