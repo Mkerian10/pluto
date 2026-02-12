@@ -403,3 +403,502 @@ impl std::fmt::Display for Token {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ===== is_keyword tests =====
+
+    #[test]
+    fn test_is_keyword_all_keywords() {
+        let keywords = vec![
+            "fn", "let", "mut", "return", "if", "else", "while", "true", "false",
+            "class", "trait", "app", "inject", "error", "raise", "catch", "spawn",
+            "enum", "impl", "self", "pub", "for", "in", "break", "continue",
+            "match", "import", "as", "extern", "uses", "ambient", "tests", "test",
+            "invariant", "requires", "ensures", "select", "default",
+            "scope", "scoped", "transient", "none", "system", "stage", "override",
+            "yield", "stream",
+        ];
+        for keyword in keywords {
+            assert!(is_keyword(keyword), "Expected '{keyword}' to be a keyword");
+        }
+    }
+
+    #[test]
+    fn test_is_keyword_non_keywords() {
+        let non_keywords = vec![
+            "foo", "bar", "my_var", "MyClass", "function", "variable",
+            "returns", "ifs", "whiles", "selff", "pubic", "imports",
+        ];
+        for word in non_keywords {
+            assert!(!is_keyword(word), "Expected '{word}' to not be a keyword");
+        }
+    }
+
+    #[test]
+    fn test_is_keyword_case_sensitive() {
+        assert!(!is_keyword("FN"));
+        assert!(!is_keyword("Let"));
+        assert!(!is_keyword("IF"));
+        assert!(!is_keyword("Class"));
+    }
+
+    // ===== Display tests =====
+
+    #[test]
+    fn test_display_keywords() {
+        assert_eq!(Token::Fn.to_string(), "fn");
+        assert_eq!(Token::Let.to_string(), "let");
+        assert_eq!(Token::Mut.to_string(), "mut");
+        assert_eq!(Token::Return.to_string(), "return");
+        assert_eq!(Token::If.to_string(), "if");
+        assert_eq!(Token::Else.to_string(), "else");
+        assert_eq!(Token::While.to_string(), "while");
+        assert_eq!(Token::True.to_string(), "true");
+        assert_eq!(Token::False.to_string(), "false");
+    }
+
+    #[test]
+    fn test_display_class_related() {
+        assert_eq!(Token::Class.to_string(), "class");
+        assert_eq!(Token::Trait.to_string(), "trait");
+        assert_eq!(Token::Impl.to_string(), "impl");
+        assert_eq!(Token::SelfVal.to_string(), "self");
+        assert_eq!(Token::Pub.to_string(), "pub");
+    }
+
+    #[test]
+    fn test_display_app_di() {
+        assert_eq!(Token::App.to_string(), "app");
+        assert_eq!(Token::Inject.to_string(), "inject");
+        assert_eq!(Token::Scope.to_string(), "scope");
+        assert_eq!(Token::Scoped.to_string(), "scoped");
+        assert_eq!(Token::Transient.to_string(), "transient");
+    }
+
+    #[test]
+    fn test_display_error_handling() {
+        assert_eq!(Token::Error.to_string(), "error");
+        assert_eq!(Token::Raise.to_string(), "raise");
+        assert_eq!(Token::Catch.to_string(), "catch");
+    }
+
+    #[test]
+    fn test_display_concurrency() {
+        assert_eq!(Token::Spawn.to_string(), "spawn");
+        assert_eq!(Token::Select.to_string(), "select");
+        assert_eq!(Token::Yield.to_string(), "yield");
+        assert_eq!(Token::Stream.to_string(), "stream");
+    }
+
+    #[test]
+    fn test_display_control_flow() {
+        assert_eq!(Token::For.to_string(), "for");
+        assert_eq!(Token::In.to_string(), "in");
+        assert_eq!(Token::Break.to_string(), "break");
+        assert_eq!(Token::Continue.to_string(), "continue");
+        assert_eq!(Token::Match.to_string(), "match");
+        assert_eq!(Token::Default.to_string(), "default");
+    }
+
+    #[test]
+    fn test_display_enum() {
+        assert_eq!(Token::Enum.to_string(), "enum");
+    }
+
+    #[test]
+    fn test_display_module_system() {
+        assert_eq!(Token::Import.to_string(), "import");
+        assert_eq!(Token::As.to_string(), "as");
+        assert_eq!(Token::Extern.to_string(), "extern");
+        assert_eq!(Token::Uses.to_string(), "uses");
+    }
+
+    #[test]
+    fn test_display_testing() {
+        assert_eq!(Token::Ambient.to_string(), "ambient");
+        assert_eq!(Token::Tests.to_string(), "tests");
+        assert_eq!(Token::Test.to_string(), "test");
+    }
+
+    #[test]
+    fn test_display_contracts() {
+        assert_eq!(Token::Invariant.to_string(), "invariant");
+        assert_eq!(Token::Requires.to_string(), "requires");
+        assert_eq!(Token::Ensures.to_string(), "ensures");
+    }
+
+    #[test]
+    fn test_display_future_keywords() {
+        assert_eq!(Token::None.to_string(), "none");
+        assert_eq!(Token::System.to_string(), "system");
+        assert_eq!(Token::Stage.to_string(), "stage");
+        assert_eq!(Token::Override.to_string(), "override");
+    }
+
+    #[test]
+    fn test_display_literals() {
+        assert_eq!(Token::IntLit(42).to_string(), "42");
+        assert_eq!(Token::IntLit(-123).to_string(), "-123");
+        assert_eq!(Token::FloatLit(3.14).to_string(), "3.14");
+        assert_eq!(Token::FloatLit(-0.5).to_string(), "-0.5");
+        assert_eq!(Token::StringLit("hello".to_string()).to_string(), "\"hello\"");
+        assert_eq!(Token::FStringLit("world".to_string()).to_string(), "f\"world\"");
+        assert_eq!(Token::Ident.to_string(), "identifier");
+    }
+
+    #[test]
+    fn test_display_arithmetic_operators() {
+        assert_eq!(Token::Plus.to_string(), "+");
+        assert_eq!(Token::Minus.to_string(), "-");
+        assert_eq!(Token::Star.to_string(), "*");
+        assert_eq!(Token::Slash.to_string(), "/");
+        assert_eq!(Token::Percent.to_string(), "%");
+        assert_eq!(Token::PlusPlus.to_string(), "++");
+        assert_eq!(Token::MinusMinus.to_string(), "--");
+    }
+
+    #[test]
+    fn test_display_assignment_operators() {
+        assert_eq!(Token::Eq.to_string(), "=");
+        assert_eq!(Token::PlusEq.to_string(), "+=");
+        assert_eq!(Token::MinusEq.to_string(), "-=");
+        assert_eq!(Token::StarEq.to_string(), "*=");
+        assert_eq!(Token::SlashEq.to_string(), "/=");
+        assert_eq!(Token::PercentEq.to_string(), "%=");
+    }
+
+    #[test]
+    fn test_display_comparison_operators() {
+        assert_eq!(Token::EqEq.to_string(), "==");
+        assert_eq!(Token::BangEq.to_string(), "!=");
+        assert_eq!(Token::Lt.to_string(), "<");
+        assert_eq!(Token::Gt.to_string(), ">");
+        assert_eq!(Token::LtEq.to_string(), "<=");
+        assert_eq!(Token::GtEq.to_string(), ">=");
+    }
+
+    #[test]
+    fn test_display_bitwise_operators() {
+        assert_eq!(Token::Amp.to_string(), "&");
+        assert_eq!(Token::Pipe.to_string(), "|");
+        assert_eq!(Token::Caret.to_string(), "^");
+        assert_eq!(Token::Tilde.to_string(), "~");
+        assert_eq!(Token::Shl.to_string(), "<<");
+    }
+
+    #[test]
+    fn test_display_logical_operators() {
+        assert_eq!(Token::AmpAmp.to_string(), "&&");
+        assert_eq!(Token::PipePipe.to_string(), "||");
+        assert_eq!(Token::Bang.to_string(), "!");
+    }
+
+    #[test]
+    fn test_display_punctuation() {
+        assert_eq!(Token::LParen.to_string(), "(");
+        assert_eq!(Token::RParen.to_string(), ")");
+        assert_eq!(Token::LBrace.to_string(), "{");
+        assert_eq!(Token::RBrace.to_string(), "}");
+        assert_eq!(Token::LBracket.to_string(), "[");
+        assert_eq!(Token::RBracket.to_string(), "]");
+        assert_eq!(Token::Comma.to_string(), ",");
+        assert_eq!(Token::Colon.to_string(), ":");
+        assert_eq!(Token::DoubleColon.to_string(), "::");
+        assert_eq!(Token::Dot.to_string(), ".");
+        assert_eq!(Token::DotDot.to_string(), "..");
+        assert_eq!(Token::DotDotEq.to_string(), "..=");
+        assert_eq!(Token::Arrow.to_string(), "->");
+        assert_eq!(Token::FatArrow.to_string(), "=>");
+        assert_eq!(Token::Question.to_string(), "?");
+    }
+
+    #[test]
+    fn test_display_special() {
+        assert_eq!(Token::Newline.to_string(), "newline");
+        assert_eq!(Token::Comment.to_string(), "comment");
+    }
+
+    // ===== Token equality and clone tests =====
+
+    #[test]
+    fn test_token_equality() {
+        assert_eq!(Token::Fn, Token::Fn);
+        assert_ne!(Token::Fn, Token::Let);
+        assert_eq!(Token::IntLit(42), Token::IntLit(42));
+        assert_ne!(Token::IntLit(42), Token::IntLit(43));
+        assert_eq!(Token::StringLit("hello".to_string()), Token::StringLit("hello".to_string()));
+        assert_ne!(Token::StringLit("hello".to_string()), Token::StringLit("world".to_string()));
+    }
+
+    #[test]
+    fn test_token_clone() {
+        let tok = Token::IntLit(42);
+        let cloned = tok.clone();
+        assert_eq!(tok, cloned);
+
+        let tok2 = Token::StringLit("test".to_string());
+        let cloned2 = tok2.clone();
+        assert_eq!(tok2, cloned2);
+    }
+
+    #[test]
+    fn test_token_debug() {
+        let tok = Token::Fn;
+        let debug_str = format!("{:?}", tok);
+        assert_eq!(debug_str, "Fn");
+
+        let tok2 = Token::IntLit(42);
+        let debug_str2 = format!("{:?}", tok2);
+        assert_eq!(debug_str2, "IntLit(42)");
+    }
+
+    // ===== Hex integer parsing tests via logos =====
+
+    #[test]
+    fn test_hex_integer_basic() {
+        let mut lex = Token::lexer("0xFF");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(255))));
+    }
+
+    #[test]
+    fn test_hex_integer_lowercase() {
+        let mut lex = Token::lexer("0xff");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(255))));
+    }
+
+    #[test]
+    fn test_hex_integer_uppercase_x() {
+        let mut lex = Token::lexer("0XFF");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(255))));
+    }
+
+    #[test]
+    fn test_hex_integer_with_underscores() {
+        let mut lex = Token::lexer("0xFF_00_AA");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(0xFF00AA))));
+    }
+
+    #[test]
+    fn test_hex_integer_empty() {
+        let mut lex = Token::lexer("0x");
+        assert_eq!(lex.next(), Some(Err(())));
+    }
+
+    #[test]
+    fn test_hex_integer_leading_underscore() {
+        let mut lex = Token::lexer("0x_FF");
+        assert_eq!(lex.next(), Some(Err(())));
+    }
+
+    #[test]
+    fn test_hex_integer_trailing_underscore() {
+        let mut lex = Token::lexer("0xFF_");
+        assert_eq!(lex.next(), Some(Err(())));
+    }
+
+    #[test]
+    fn test_hex_integer_invalid_chars() {
+        let mut lex = Token::lexer("0xGG");
+        assert_eq!(lex.next(), Some(Err(())));
+    }
+
+    #[test]
+    fn test_decimal_integer() {
+        let mut lex = Token::lexer("12345");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(12345))));
+    }
+
+    #[test]
+    fn test_decimal_integer_with_underscores() {
+        let mut lex = Token::lexer("1_000_000");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(1000000))));
+    }
+
+    #[test]
+    fn test_float_literal() {
+        let mut lex = Token::lexer("3.14");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(3.14))));
+    }
+
+    #[test]
+    fn test_float_with_underscores() {
+        let mut lex = Token::lexer("1_000.5_5");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(1000.55))));
+    }
+
+    // ===== String escape sequence tests =====
+
+    #[test]
+    fn test_string_basic() {
+        let mut lex = Token::lexer("\"hello\"");
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello".to_string()))));
+    }
+
+    #[test]
+    fn test_string_escape_newline() {
+        let mut lex = Token::lexer(r#""hello\nworld""#);
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\nworld".to_string()))));
+    }
+
+    #[test]
+    fn test_string_escape_tab() {
+        let mut lex = Token::lexer(r#""hello\tworld""#);
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\tworld".to_string()))));
+    }
+
+    #[test]
+    fn test_string_escape_carriage_return() {
+        let mut lex = Token::lexer(r#""hello\rworld""#);
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\rworld".to_string()))));
+    }
+
+    #[test]
+    fn test_string_escape_backslash() {
+        let mut lex = Token::lexer(r#""hello\\world""#);
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\\world".to_string()))));
+    }
+
+    #[test]
+    fn test_string_escape_quote() {
+        let mut lex = Token::lexer(r#""hello\"world""#);
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\"world".to_string()))));
+    }
+
+    #[test]
+    fn test_string_invalid_escape() {
+        let mut lex = Token::lexer(r#""hello\xworld""#);
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\\xworld".to_string()))));
+    }
+
+    #[test]
+    fn test_fstring_basic() {
+        let mut lex = Token::lexer("f\"hello\"");
+        assert_eq!(lex.next(), Some(Ok(Token::FStringLit("hello".to_string()))));
+    }
+
+    #[test]
+    fn test_fstring_escape_newline() {
+        let mut lex = Token::lexer(r#"f"hello\nworld""#);
+        assert_eq!(lex.next(), Some(Ok(Token::FStringLit("hello\nworld".to_string()))));
+    }
+
+    #[test]
+    fn test_fstring_escape_tab() {
+        let mut lex = Token::lexer(r#"f"hello\tworld""#);
+        assert_eq!(lex.next(), Some(Ok(Token::FStringLit("hello\tworld".to_string()))));
+    }
+
+    #[test]
+    fn test_fstring_escape_backslash() {
+        let mut lex = Token::lexer(r#"f"hello\\world""#);
+        assert_eq!(lex.next(), Some(Ok(Token::FStringLit("hello\\world".to_string()))));
+    }
+
+    // ===== Identifier tests =====
+
+    #[test]
+    fn test_identifier() {
+        let mut lex = Token::lexer("my_var");
+        assert_eq!(lex.next(), Some(Ok(Token::Ident)));
+    }
+
+    #[test]
+    fn test_identifier_with_numbers() {
+        let mut lex = Token::lexer("var123");
+        assert_eq!(lex.next(), Some(Ok(Token::Ident)));
+    }
+
+    #[test]
+    fn test_identifier_underscore_prefix() {
+        let mut lex = Token::lexer("_private");
+        assert_eq!(lex.next(), Some(Ok(Token::Ident)));
+    }
+
+    // ===== Comment and newline tests =====
+
+    #[test]
+    fn test_comment() {
+        let mut lex = Token::lexer("// this is a comment");
+        assert_eq!(lex.next(), Some(Ok(Token::Comment)));
+    }
+
+    #[test]
+    fn test_newline_lf() {
+        let mut lex = Token::lexer("\n");
+        assert_eq!(lex.next(), Some(Ok(Token::Newline)));
+    }
+
+    #[test]
+    fn test_newline_crlf() {
+        let mut lex = Token::lexer("\r\n");
+        assert_eq!(lex.next(), Some(Ok(Token::Newline)));
+    }
+
+    #[test]
+    fn test_multiple_newlines() {
+        let mut lex = Token::lexer("\n\n\n");
+        assert_eq!(lex.next(), Some(Ok(Token::Newline)));
+    }
+
+    // ===== Operator precedence tests (multi-char tokens) =====
+
+    #[test]
+    fn test_plusplus_vs_plus() {
+        let mut lex = Token::lexer("++");
+        assert_eq!(lex.next(), Some(Ok(Token::PlusPlus)));
+
+        let mut lex2 = Token::lexer("+");
+        assert_eq!(lex2.next(), Some(Ok(Token::Plus)));
+    }
+
+    #[test]
+    fn test_eqeq_vs_eq() {
+        let mut lex = Token::lexer("==");
+        assert_eq!(lex.next(), Some(Ok(Token::EqEq)));
+
+        let mut lex2 = Token::lexer("=");
+        assert_eq!(lex2.next(), Some(Ok(Token::Eq)));
+    }
+
+    #[test]
+    fn test_dotdoteq_vs_dotdot_vs_dot() {
+        let mut lex = Token::lexer("..=");
+        assert_eq!(lex.next(), Some(Ok(Token::DotDotEq)));
+
+        let mut lex2 = Token::lexer("..");
+        assert_eq!(lex2.next(), Some(Ok(Token::DotDot)));
+
+        let mut lex3 = Token::lexer(".");
+        assert_eq!(lex3.next(), Some(Ok(Token::Dot)));
+    }
+
+    #[test]
+    fn test_arrow_vs_minus() {
+        let mut lex = Token::lexer("->");
+        assert_eq!(lex.next(), Some(Ok(Token::Arrow)));
+
+        let mut lex2 = Token::lexer("-");
+        assert_eq!(lex2.next(), Some(Ok(Token::Minus)));
+    }
+
+    #[test]
+    fn test_fatarrow_vs_eq() {
+        let mut lex = Token::lexer("=>");
+        assert_eq!(lex.next(), Some(Ok(Token::FatArrow)));
+
+        let mut lex2 = Token::lexer("=");
+        assert_eq!(lex2.next(), Some(Ok(Token::Eq)));
+    }
+
+    #[test]
+    fn test_doublecolon_vs_colon() {
+        let mut lex = Token::lexer("::");
+        assert_eq!(lex.next(), Some(Ok(Token::DoubleColon)));
+
+        let mut lex2 = Token::lexer(":");
+        assert_eq!(lex2.next(), Some(Ok(Token::Colon)));
+    }
+}
