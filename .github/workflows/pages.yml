@@ -1,0 +1,204 @@
+name: GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Install tools
+      - name: Install mdbook
+        run: |
+          curl -L https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          sudo mv mdbook /usr/local/bin/
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
+
+      # Build the book
+      - name: Build book
+        run: |
+          cd book
+          mdbook build
+
+      # Run test coverage
+      - name: Generate test coverage
+        run: |
+          cargo tarpaulin --out Html --output-dir coverage --exclude-files 'tests/*' --timeout 300
+
+      # Create landing page
+      - name: Create landing page
+        run: |
+          mkdir -p public
+          cat > public/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Pluto Programming Language</title>
+              <style>
+                  * {
+                      margin: 0;
+                      padding: 0;
+                      box-sizing: border-box;
+                  }
+                  body {
+                      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                      line-height: 1.6;
+                      color: #333;
+                      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                      min-height: 100vh;
+                      padding: 2rem;
+                  }
+                  .container {
+                      max-width: 1200px;
+                      margin: 0 auto;
+                  }
+                  h1 {
+                      color: white;
+                      font-size: 3.5rem;
+                      margin-bottom: 1rem;
+                      text-align: center;
+                      text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+                  }
+                  .tagline {
+                      color: rgba(255,255,255,0.9);
+                      text-align: center;
+                      font-size: 1.3rem;
+                      margin-bottom: 3rem;
+                  }
+                  .cards {
+                      display: grid;
+                      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                      gap: 2rem;
+                      margin-bottom: 2rem;
+                  }
+                  .card {
+                      background: white;
+                      border-radius: 12px;
+                      padding: 2rem;
+                      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+                      transition: transform 0.3s ease, box-shadow 0.3s ease;
+                      text-decoration: none;
+                      color: inherit;
+                      display: block;
+                  }
+                  .card:hover {
+                      transform: translateY(-5px);
+                      box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+                  }
+                  .card h2 {
+                      color: #667eea;
+                      font-size: 1.8rem;
+                      margin-bottom: 1rem;
+                  }
+                  .card p {
+                      color: #666;
+                      font-size: 1.1rem;
+                      margin-bottom: 1rem;
+                  }
+                  .card .link {
+                      color: #667eea;
+                      font-weight: 600;
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 0.5rem;
+                  }
+                  .card .link::after {
+                      content: "→";
+                      transition: transform 0.3s ease;
+                  }
+                  .card:hover .link::after {
+                      transform: translateX(5px);
+                  }
+                  .footer {
+                      text-align: center;
+                      color: rgba(255,255,255,0.8);
+                      margin-top: 3rem;
+                      padding-top: 2rem;
+                      border-top: 1px solid rgba(255,255,255,0.2);
+                  }
+                  .footer a {
+                      color: white;
+                      text-decoration: none;
+                      font-weight: 600;
+                  }
+                  .footer a:hover {
+                      text-decoration: underline;
+                  }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <h1>🌍 Pluto</h1>
+                  <p class="tagline">A modern programming language for distributed backend systems</p>
+
+                  <div class="cards">
+                      <a href="book/" class="card">
+                          <h2>📖 The Book</h2>
+                          <p>Learn Pluto from the ground up. Written for experienced developers who want to understand what makes Pluto different.</p>
+                          <span class="link">Read the book</span>
+                      </a>
+
+                      <a href="coverage/index.html" class="card">
+                          <h2>✅ Test Coverage</h2>
+                          <p>Comprehensive test coverage report showing which parts of the compiler are tested.</p>
+                          <span class="link">View coverage report</span>
+                      </a>
+
+                      <a href="dev/bench/" class="card">
+                          <h2>⚡ Benchmarks</h2>
+                          <p>Performance benchmarks tracking compilation speed and runtime performance over time.</p>
+                          <span class="link">See benchmarks</span>
+                      </a>
+                  </div>
+
+                  <div class="footer">
+                      <p>Built with ❤️ by the Pluto community</p>
+                      <p><a href="https://github.com/Mkerian10/pluto" target="_blank">View on GitHub</a></p>
+                  </div>
+              </div>
+          </body>
+          </html>
+          EOF
+
+      # Collect all artifacts
+      - name: Collect artifacts
+        run: |
+          # Copy book
+          cp -r book/book public/book
+
+          # Copy coverage
+          cp -r coverage public/coverage
+
+          # Copy existing benchmark data from gh-pages if available
+          git fetch origin gh-pages || true
+          if git rev-parse origin/gh-pages >/dev/null 2>&1; then
+            git checkout origin/gh-pages -- dev 2>/dev/null || true
+            if [ -d dev ]; then
+              cp -r dev public/dev
+            fi
+          fi
+
+      # Deploy to GitHub Pages
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
+          keep_files: true
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
