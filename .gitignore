@@ -4,3 +4,4 @@ tree-sitter-pluto/
 *.wasm
 node_modules/
 data/
+book/book/

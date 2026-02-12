@@ -56,6 +56,27 @@ app MyApp[svc: OrderService] {
 
 Every type used in a `uses` clause must be declared `ambient` in the app. The compiler validates this at compile time.
 
+### Stages
+
+Stages (service boundaries for RPC) work similarly to apps — they can have bracket deps and ambient types:
+
+```
+stage Api[db: Database] {
+    ambient Logger
+
+    pub fn get_user(self, id: int) User? {
+        logger.info("Fetching user {id}")
+        return self.db.query(id)!
+    }
+
+    fn main(self) {
+        // service entry point
+    }
+}
+```
+
+Like apps, stages are top-level containers and **not part of the dependency injection graph**. They consume dependencies but are never injected themselves.
+
 ## How Ambient DI Works
 
 Ambient deps are syntactic sugar. Before type checking, the compiler runs a desugaring pass that:
