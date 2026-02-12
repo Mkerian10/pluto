@@ -410,35 +410,113 @@ pub fn compile_file_for_tests(
     Ok(())
 }
 
-/// Compile builtins.c to an object file. In test mode, adds -DPLUTO_TEST_MODE
-/// for sequential task execution and no-mutex channels.
+/// Compile gc.c, threading.c, and builtins.c to a single linked object file.
+/// In test mode, adds -DPLUTO_TEST_MODE for sequential task execution and no-mutex channels.
 fn compile_runtime_object(test_mode: bool) -> Result<PathBuf, CompileError> {
-    let runtime_src = include_str!("../runtime/builtins.c");
+    let gc_src = include_str!("../runtime/gc.c");
+    let threading_src = include_str!("../runtime/threading.c");
+    let builtins_src = include_str!("../runtime/builtins.c");
+    let header_src = include_str!("../runtime/builtins.h");
+
     let dir_suffix = if test_mode { "pluto_test_runtime" } else { "pluto_runtime" };
     let dir = std::env::temp_dir().join(format!("{}_{}", dir_suffix, std::process::id()));
     std::fs::create_dir_all(&dir)
         .map_err(|e| CompileError::link(format!("failed to create runtime cache dir: {e}")))?;
-    let runtime_c = dir.join("builtins.c");
-    let o_name = if test_mode { "builtins_test.o" } else { "builtins.o" };
-    let runtime_o = dir.join(o_name);
-    std::fs::write(&runtime_c, runtime_src)
-        .map_err(|e| CompileError::link(format!("failed to write runtime source: {e}")))?;
+
+    // Write all source files
+    let header_h = dir.join("builtins.h");
+    let gc_c = dir.join("gc.c");
+    let threading_c = dir.join("threading.c");
+    let builtins_c = dir.join("builtins.c");
+
+    std::fs::write(&header_h, header_src)
+        .map_err(|e| CompileError::link(format!("failed to write header: {e}")))?;
+    std::fs::write(&gc_c, gc_src)
+        .map_err(|e| CompileError::link(format!("failed to write gc.c: {e}")))?;
+    std::fs::write(&threading_c, threading_src)
+        .map_err(|e| CompileError::link(format!("failed to write threading.c: {e}")))?;
+    std::fs::write(&builtins_c, builtins_src)
+        .map_err(|e| CompileError::link(format!("failed to write builtins.c: {e}")))?;
+
+    let gc_o = dir.join("gc.o");
+    let threading_o = dir.join("threading.o");
+    let builtins_o = dir.join("builtins.o");
+    let runtime_o_name = if test_mode { "runtime_test.o" } else { "runtime.o" };
+    let runtime_o = dir.join(runtime_o_name);
+
+    // Compile gc.c
     let mut cmd = std::process::Command::new("cc");
     cmd.arg("-c");
     if test_mode {
         cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
     }
-    cmd.arg(&runtime_c).arg("-o").arg(&runtime_o);
+    cmd.arg("-I").arg(&dir);
+    cmd.arg(&gc_c).arg("-o").arg(&gc_o);
     #[cfg(target_os = "linux")]
     if !test_mode {
         cmd.arg("-pthread");
     }
     let status = cmd.status()
-        .map_err(|e| CompileError::link(format!("failed to compile runtime: {e}")))?;
-    let _ = std::fs::remove_file(&runtime_c);
+        .map_err(|e| CompileError::link(format!("failed to compile gc.c: {e}")))?;
     if !status.success() {
-        return Err(CompileError::link("failed to compile runtime"));
+        return Err(CompileError::link("failed to compile gc.c"));
     }
+
+    // Compile threading.c
+    let mut cmd = std::process::Command::new("cc");
+    cmd.arg("-c");
+    if test_mode {
+        cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
+    }
+    cmd.arg("-I").arg(&dir);
+    cmd.arg(&threading_c).arg("-o").arg(&threading_o);
+    #[cfg(target_os = "linux")]
+    if !test_mode {
+        cmd.arg("-pthread");
+    }
+    let status = cmd.status()
+        .map_err(|e| CompileError::link(format!("failed to compile threading.c: {e}")))?;
+    if !status.success() {
+        return Err(CompileError::link("failed to compile threading.c"));
+    }
+
+    // Compile builtins.c
+    let mut cmd = std::process::Command::new("cc");
+    cmd.arg("-c");
+    if test_mode {
+        cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
+    }
+    cmd.arg("-I").arg(&dir);
+    cmd.arg(&builtins_c).arg("-o").arg(&builtins_o);
+    #[cfg(target_os = "linux")]
+    if !test_mode {
+        cmd.arg("-pthread");
+    }
+    let status = cmd.status()
+        .map_err(|e| CompileError::link(format!("failed to compile builtins.c: {e}")))?;
+    if !status.success() {
+        return Err(CompileError::link("failed to compile builtins.c"));
+    }
+
+    // Link all three object files into one
+    let mut cmd = std::process::Command::new("ld");
+    cmd.arg("-r");
+    cmd.arg(&gc_o).arg(&threading_o).arg(&builtins_o).arg("-o").arg(&runtime_o);
+    let status = cmd.status()
+        .map_err(|e| CompileError::link(format!("failed to link runtime: {e}")))?;
+    if !status.success() {
+        return Err(CompileError::link("failed to link runtime"));
+    }
+
+    // Cleanup intermediate files
+    let _ = std::fs::remove_file(&header_h);
+    let _ = std::fs::remove_file(&gc_c);
+    let _ = std::fs::remove_file(&threading_c);
+    let _ = std::fs::remove_file(&builtins_c);
+    let _ = std::fs::remove_file(&gc_o);
+    let _ = std::fs::remove_file(&threading_o);
+    let _ = std::fs::remove_file(&builtins_o);
+
     Ok(runtime_o)
 }
 
