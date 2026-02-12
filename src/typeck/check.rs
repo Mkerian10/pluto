@@ -1,6 +1,7 @@
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::Spanned;
+use crate::visit::{walk_stmt, Visitor};
 use super::env::{mangle_method, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::resolve_type;
@@ -1180,78 +1181,82 @@ pub(crate) fn enforce_mut_self(program: &Program, env: &TypeEnv) -> Result<(), C
     Ok(())
 }
 
-fn check_body_for_self_mutation(
-    block: &Block,
-    class_name: &str,
-    env: &TypeEnv,
-) -> Result<(), CompileError> {
-    for stmt in &block.stmts {
-        check_stmt_for_self_mutation(&stmt.node, stmt.span, class_name, env)?;
-    }
-    Ok(())
+/// Visitor that checks for mutations to self in non-mut methods.
+struct SelfMutationChecker<'a> {
+    class_name: &'a str,
+    env: &'a TypeEnv,
+    error: Option<CompileError>,
 }
 
-fn check_stmt_for_self_mutation(
-    stmt: &Stmt,
-    span: crate::span::Span,
-    class_name: &str,
-    env: &TypeEnv,
-) -> Result<(), CompileError> {
-    match stmt {
-        Stmt::FieldAssign { object, field, .. } => {
-            if matches!(&object.node, Expr::Ident(name) if name == "self") {
-                return Err(CompileError::type_err(
-                    format!(
-                        "cannot assign to 'self.{}' in a non-mut method; declare 'mut self' to modify fields",
-                        field.node
-                    ),
-                    span,
-                ));
+impl Visitor for SelfMutationChecker<'_> {
+    fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+        // Short-circuit if we already found an error
+        if self.error.is_some() {
+            return;
+        }
+
+        match &stmt.node {
+            Stmt::FieldAssign { object, field, .. } => {
+                if matches!(&object.node, Expr::Ident(name) if name == "self") {
+                    self.error = Some(CompileError::type_err(
+                        format!(
+                            "cannot assign to 'self.{}' in a non-mut method; declare 'mut self' to modify fields",
+                            field.node
+                        ),
+                        stmt.span,
+                    ));
+                    return;
+                }
             }
-        }
-        Stmt::If { then_block, else_block, .. } => {
-            check_body_for_self_mutation(&then_block.node, class_name, env)?;
-            if let Some(else_blk) = else_block {
-                check_body_for_self_mutation(&else_blk.node, class_name, env)?;
+            Stmt::IndexAssign { object, .. } => {
+                // NEW: Handle self.array[i] = x and self.field.array[i] = x
+                if is_mutation_on_self(&object.node) {
+                    self.error = Some(CompileError::type_err(
+                        "cannot mutate self's data in a non-mut method; declare 'mut self'".to_string(),
+                        stmt.span,
+                    ));
+                    return;
+                }
             }
-        }
-        Stmt::While { body, .. } => {
-            check_body_for_self_mutation(&body.node, class_name, env)?;
-        }
-        Stmt::For { body, .. } => {
-            check_body_for_self_mutation(&body.node, class_name, env)?;
-        }
-        Stmt::Match { arms, .. } => {
-            for arm in arms {
-                check_body_for_self_mutation(&arm.body.node, class_name, env)?;
+            Stmt::Expr(expr) => {
+                // Check for method calls on self with mut self methods
+                if let Err(e) = check_expr_for_mut_method_call(&expr.node, expr.span, self.class_name, self.env) {
+                    self.error = Some(e);
+                    return;
+                }
             }
-        }
-        Stmt::Select { arms, default, .. } => {
-            for arm in arms {
-                check_body_for_self_mutation(&arm.body.node, class_name, env)?;
+            Stmt::Let { value, .. } => {
+                if let Err(e) = check_expr_for_mut_method_call(&value.node, value.span, self.class_name, self.env) {
+                    self.error = Some(e);
+                    return;
+                }
             }
-            if let Some(def) = default {
-                check_body_for_self_mutation(&def.node, class_name, env)?;
+            Stmt::Return(Some(expr)) => {
+                if let Err(e) = check_expr_for_mut_method_call(&expr.node, expr.span, self.class_name, self.env) {
+                    self.error = Some(e);
+                    return;
+                }
             }
+            _ => {}
         }
-        Stmt::Scope { body, .. } => {
-            check_body_for_self_mutation(&body.node, class_name, env)?;
-        }
-        Stmt::Expr(expr) => {
-            check_expr_for_self_mutation(&expr.node, expr.span, class_name, env)?;
-        }
-        Stmt::Let { value, .. } => {
-            check_expr_for_self_mutation(&value.node, value.span, class_name, env)?;
-        }
-        Stmt::Return(Some(expr)) => {
-            check_expr_for_self_mutation(&expr.node, expr.span, class_name, env)?;
-        }
-        _ => {}
+
+        // Recurse into nested blocks
+        walk_stmt(self, stmt);
     }
-    Ok(())
 }
 
-fn check_expr_for_self_mutation(
+/// Helper: detect mutations rooted at self (self.field[i], self[i], etc.)
+fn is_mutation_on_self(expr: &Expr) -> bool {
+    match expr {
+        Expr::Ident(name) if name == "self" => true,
+        Expr::FieldAccess { object, .. } => is_mutation_on_self(&object.node),
+        Expr::Index { object, .. } => is_mutation_on_self(&object.node),
+        _ => false,
+    }
+}
+
+/// Check if an expression contains a mut self method call on self.
+fn check_expr_for_mut_method_call(
     expr: &Expr,
     span: crate::span::Span,
     class_name: &str,
@@ -1273,47 +1278,64 @@ fn check_expr_for_self_mutation(
             }
             // Recurse into args
             for arg in args {
-                check_expr_for_self_mutation(&arg.node, arg.span, class_name, env)?;
+                check_expr_for_mut_method_call(&arg.node, arg.span, class_name, env)?;
             }
             // Recurse into object
-            check_expr_for_self_mutation(&object.node, object.span, class_name, env)?;
+            check_expr_for_mut_method_call(&object.node, object.span, class_name, env)?;
         }
         Expr::Propagate { expr: inner } | Expr::Cast { expr: inner, .. } | Expr::Spawn { call: inner } => {
-            check_expr_for_self_mutation(&inner.node, inner.span, class_name, env)?;
+            check_expr_for_mut_method_call(&inner.node, inner.span, class_name, env)?;
         }
         Expr::Catch { expr: inner, handler } => {
-            check_expr_for_self_mutation(&inner.node, inner.span, class_name, env)?;
-            match handler {
-                CatchHandler::Shorthand(expr) => {
-                    check_expr_for_self_mutation(&expr.node, expr.span, class_name, env)?;
-                }
-                CatchHandler::Wildcard { body, .. } => {
-                    check_body_for_self_mutation(&body.node, class_name, env)?;
-                }
+            check_expr_for_mut_method_call(&inner.node, inner.span, class_name, env)?;
+            if let CatchHandler::Shorthand(expr) = handler {
+                check_expr_for_mut_method_call(&expr.node, expr.span, class_name, env)?;
             }
+            // Note: Wildcard bodies are checked via the visitor
         }
         Expr::Call { args, .. } => {
             for arg in args {
-                check_expr_for_self_mutation(&arg.node, arg.span, class_name, env)?;
+                check_expr_for_mut_method_call(&arg.node, arg.span, class_name, env)?;
             }
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            check_expr_for_self_mutation(&lhs.node, lhs.span, class_name, env)?;
-            check_expr_for_self_mutation(&rhs.node, rhs.span, class_name, env)?;
+            check_expr_for_mut_method_call(&lhs.node, lhs.span, class_name, env)?;
+            check_expr_for_mut_method_call(&rhs.node, rhs.span, class_name, env)?;
         }
         Expr::UnaryOp { operand, .. } => {
-            check_expr_for_self_mutation(&operand.node, operand.span, class_name, env)?;
+            check_expr_for_mut_method_call(&operand.node, operand.span, class_name, env)?;
         }
         Expr::Index { object, index } => {
-            check_expr_for_self_mutation(&object.node, object.span, class_name, env)?;
-            check_expr_for_self_mutation(&index.node, index.span, class_name, env)?;
+            check_expr_for_mut_method_call(&object.node, object.span, class_name, env)?;
+            check_expr_for_mut_method_call(&index.node, index.span, class_name, env)?;
         }
         Expr::FieldAccess { object, .. } => {
-            check_expr_for_self_mutation(&object.node, object.span, class_name, env)?;
+            check_expr_for_mut_method_call(&object.node, object.span, class_name, env)?;
         }
         // Do NOT recurse into Closure bodies — they capture self by value
         Expr::Closure { .. } | Expr::ClosureCreate { .. } => {}
         _ => {}
     }
+    Ok(())
+}
+
+fn check_body_for_self_mutation(
+    block: &Block,
+    class_name: &str,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let mut checker = SelfMutationChecker {
+        class_name,
+        env,
+        error: None,
+    };
+
+    for stmt in &block.stmts {
+        checker.visit_stmt(stmt);
+        if let Some(err) = checker.error {
+            return Err(err);
+        }
+    }
+
     Ok(())
 }

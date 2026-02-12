@@ -1538,3 +1538,51 @@ fn main() {
     assert!(stderr.contains("requires violation"), "stderr: {stderr}");
     assert!(stderr.contains("x >= 0"), "stderr: {stderr}");
 }
+
+// ── Self mutation checks (PR 1.4) ────────────────────────────────────
+
+#[test]
+fn self_array_index_assign_rejected_in_non_mut_method() {
+    // Tests that IndexAssign on self's data is caught in non-mut methods
+    // Bug: check_stmt_for_self_mutation had no IndexAssign case
+    compile_should_fail_with(
+        r#"
+class Counter {
+    values: [int]
+
+    fn increment(self, index: int) {
+        self.values[index] = self.values[index] + 1
+    }
+}
+
+fn main() {
+    let c = Counter { values: [1, 2, 3] }
+    c.increment(0)
+}
+"#,
+        "cannot mutate self's data in a non-mut method",
+    );
+}
+
+#[test]
+fn self_array_index_assign_allowed_in_mut_method() {
+    // Verify that IndexAssign on self's data IS allowed in mut methods
+    let out = compile_and_run_stdout(
+        r#"
+class Counter {
+    values: [int]
+
+    fn increment(mut self, index: int) {
+        self.values[index] = self.values[index] + 1
+    }
+}
+
+fn main() {
+    let mut c = Counter { values: [1, 2, 3] }
+    c.increment(0)
+    print(c.values[0])
+}
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
