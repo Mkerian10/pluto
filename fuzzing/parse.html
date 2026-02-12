@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Fuzzing Report - parse</title>
+  <style>
+    body { font-family: monospace; margin: 40px; background: #1e1e1e; color: #d4d4d4; }
+    pre { background: #2d2d2d; padding: 20px; border-radius: 4px; overflow-x: auto; }
+    h1 { color: #4ec9b0; }
+  </style>
+</head>
+<body>
+  <h1>Fuzzing Report: parse</h1>
+  <p>Generated: $(date)</p>
+  <pre>
+[1m[91merror[0m: current package believes it's in a workspace when it's not:
+current:   /home/runner/work/pluto/pluto/fuzz/Cargo.toml
+workspace: /home/runner/work/pluto/pluto/Cargo.toml
+
+this may be fixable by adding `fuzz` to the `workspace.members` array of the manifest located at: /home/runner/work/pluto/pluto/Cargo.toml
+Alternatively, to keep it out of the workspace, add the package to the `workspace.exclude` array, or add an empty `[workspace]` table to the package's manifest.
+Error: failed to build fuzz script: ASAN_OPTIONS="detect_odr_violation=0" RUSTFLAGS=" -Cpasses=sancov-module -Cllvm-args=-sanitizer-coverage-level=4 -Cllvm-args=-sanitizer-coverage-inline-8bit-counters -Cllvm-args=-sanitizer-coverage-pc-table -Cllvm-args=-sanitizer-coverage-trace-compares --cfg fuzzing -Cllvm-args=-simplifycfg-branch-fold-threshold=0 -Zsanitizer=address -Cllvm-args=-sanitizer-coverage-stack-depth -Cdebug-assertions -Ccodegen-units=1" "cargo" "build" "--manifest-path" "/home/runner/work/pluto/pluto/fuzz/Cargo.toml" "--target" "x86_64-unknown-linux-gnu" "--release" "--config" "profile.release.debug=\"line-tables-only\"" "--bin" "parse"
+</pre></body></html>
