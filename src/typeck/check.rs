@@ -141,8 +141,8 @@ fn check_stmt(
                 env.define_task_origin(name.node.clone(), fn_name.clone());
             }
             // Track taint propagation: if inside a scope block and value is tainted, mark variable
-            if !env.scope_tainted_vars.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
-                env.scope_tainted_vars.last_mut().unwrap().insert(name.node.clone());
+            if !env.scope_tainted.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
+                env.scope_tainted.insert(name.node.clone(), ());
             }
         }
         Stmt::Return(value) => {
@@ -170,7 +170,7 @@ fn check_stmt(
             }
             // Reject scope-tainted closures escaping via return
             if let Some(expr) = value {
-                if !env.scope_tainted_vars.is_empty() && is_scope_tainted_expr(&expr.node, expr.span, env) {
+                if !env.scope_tainted.is_empty() && is_scope_tainted_expr(&expr.node, expr.span, env) {
                     return Err(CompileError::type_err(
                         "closure capturing scope binding cannot escape scope block via return",
                         expr.span,
@@ -203,7 +203,7 @@ fn check_stmt(
                 env.invalidated_task_vars.insert(target.node.clone());
             }
             // Reject scope-tainted closures escaping via assignment to outer variable
-            if !env.scope_tainted_vars.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
+            if !env.scope_tainted.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
                 if let Some(scope_depth) = env.scope_body_depths.last() {
                     if let Some((_, var_depth)) = env.lookup_with_depth(&target.node) {
                         if var_depth < *scope_depth {
@@ -680,21 +680,21 @@ fn check_scope_stmt(
 
     // 9. Type-check body with bindings in scope
     env.scope_body_depths.push(env.scope_depth());
-    env.scope_tainted_vars.push(std::collections::HashSet::new());
+    env.scope_tainted.push_scope();
     env.push_scope();
-    let binding_name_set: std::collections::HashSet<String> = bindings.iter()
-        .map(|b| b.name.node.clone())
-        .collect();
-    env.scope_binding_names.push(binding_name_set);
+    env.scope_bindings.push_scope();
+    for binding in bindings {
+        env.scope_bindings.insert(binding.name.node.clone(), ());
+    }
     for (i, binding) in bindings.iter().enumerate() {
         let (_, ty) = &binding_types[i];
         env.define(binding.name.node.clone(), ty.clone());
     }
     check_block(&body.node, env, return_type)?;
-    env.scope_binding_names.pop();
+    env.scope_bindings.pop_scope();
     env.pop_scope();
     env.scope_body_depths.pop();
-    env.scope_tainted_vars.pop();
+    env.scope_tainted.pop_scope();
 
     Ok(())
 }
@@ -707,10 +707,8 @@ fn is_scope_tainted_expr(expr: &Expr, span: crate::span::Span, env: &TypeEnv) ->
     }
     // Variable that holds a tainted closure
     if let Expr::Ident(name) = expr {
-        for level in &env.scope_tainted_vars {
-            if level.contains(name) {
-                return true;
-            }
+        if env.scope_tainted.contains(name) {
+            return true;
         }
     }
     false
