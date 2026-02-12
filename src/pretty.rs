@@ -2436,4 +2436,193 @@ fn main() {
         assert!(result.contains("invariant self.value <= 100"));
         assert_roundtrip_stable(src);
     }
+
+    // ===== Helper function unit tests =====
+
+    // binop_prec tests
+    #[test]
+    fn test_binop_prec_logical_or_lowest() {
+        assert_eq!(binop_prec(BinOp::Or), 1);
+    }
+
+    #[test]
+    fn test_binop_prec_logical_and() {
+        assert_eq!(binop_prec(BinOp::And), 3);
+    }
+
+    #[test]
+    fn test_binop_prec_bitwise() {
+        assert_eq!(binop_prec(BinOp::BitOr), 5);
+        assert_eq!(binop_prec(BinOp::BitXor), 7);
+        assert_eq!(binop_prec(BinOp::BitAnd), 9);
+    }
+
+    #[test]
+    fn test_binop_prec_equality() {
+        assert_eq!(binop_prec(BinOp::Eq), 11);
+        assert_eq!(binop_prec(BinOp::Neq), 11);
+    }
+
+    #[test]
+    fn test_binop_prec_comparison() {
+        assert_eq!(binop_prec(BinOp::Lt), 13);
+        assert_eq!(binop_prec(BinOp::Gt), 13);
+        assert_eq!(binop_prec(BinOp::LtEq), 13);
+        assert_eq!(binop_prec(BinOp::GtEq), 13);
+    }
+
+    #[test]
+    fn test_binop_prec_shifts() {
+        assert_eq!(binop_prec(BinOp::Shl), 15);
+        assert_eq!(binop_prec(BinOp::Shr), 15);
+    }
+
+    #[test]
+    fn test_binop_prec_additive() {
+        assert_eq!(binop_prec(BinOp::Add), 17);
+        assert_eq!(binop_prec(BinOp::Sub), 17);
+    }
+
+    #[test]
+    fn test_binop_prec_multiplicative_highest() {
+        assert_eq!(binop_prec(BinOp::Mul), 19);
+        assert_eq!(binop_prec(BinOp::Div), 19);
+        assert_eq!(binop_prec(BinOp::Mod), 19);
+    }
+
+    // binop_str tests
+    #[test]
+    fn test_binop_str_arithmetic() {
+        assert_eq!(binop_str(BinOp::Add), "+");
+        assert_eq!(binop_str(BinOp::Sub), "-");
+        assert_eq!(binop_str(BinOp::Mul), "*");
+        assert_eq!(binop_str(BinOp::Div), "/");
+        assert_eq!(binop_str(BinOp::Mod), "%");
+    }
+
+    #[test]
+    fn test_binop_str_comparison() {
+        assert_eq!(binop_str(BinOp::Eq), "==");
+        assert_eq!(binop_str(BinOp::Neq), "!=");
+        assert_eq!(binop_str(BinOp::Lt), "<");
+        assert_eq!(binop_str(BinOp::Gt), ">");
+        assert_eq!(binop_str(BinOp::LtEq), "<=");
+        assert_eq!(binop_str(BinOp::GtEq), ">=");
+    }
+
+    #[test]
+    fn test_binop_str_logical() {
+        assert_eq!(binop_str(BinOp::And), "&&");
+        assert_eq!(binop_str(BinOp::Or), "||");
+    }
+
+    #[test]
+    fn test_binop_str_bitwise() {
+        assert_eq!(binop_str(BinOp::BitAnd), "&");
+        assert_eq!(binop_str(BinOp::BitOr), "|");
+        assert_eq!(binop_str(BinOp::BitXor), "^");
+        assert_eq!(binop_str(BinOp::Shl), "<<");
+        assert_eq!(binop_str(BinOp::Shr), ">>");
+    }
+
+    // escape_string tests
+    #[test]
+    fn test_escape_string_empty() {
+        assert_eq!(escape_string(""), "");
+    }
+
+    #[test]
+    fn test_escape_string_plain_text() {
+        assert_eq!(escape_string("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_escape_string_backslash() {
+        assert_eq!(escape_string("a\\b"), "a\\\\b");
+        assert_eq!(escape_string("\\\\"), "\\\\\\\\");
+    }
+
+    #[test]
+    fn test_escape_string_quotes() {
+        assert_eq!(escape_string("say \"hello\""), "say \\\"hello\\\"");
+    }
+
+    #[test]
+    fn test_escape_string_newline() {
+        assert_eq!(escape_string("line1\nline2"), "line1\\nline2");
+    }
+
+    #[test]
+    fn test_escape_string_carriage_return() {
+        assert_eq!(escape_string("text\rmore"), "text\\rmore");
+    }
+
+    #[test]
+    fn test_escape_string_tab() {
+        assert_eq!(escape_string("col1\tcol2"), "col1\\tcol2");
+    }
+
+    #[test]
+    fn test_escape_string_braces() {
+        assert_eq!(escape_string("{value}"), "{{value}}");
+        assert_eq!(escape_string("{{escaped}}"), "{{{{escaped}}}}");
+    }
+
+    #[test]
+    fn test_escape_string_mixed() {
+        assert_eq!(
+            escape_string("\"hello\"\n\t{world}\\"),
+            "\\\"hello\\\"\\n\\t{{world}}\\\\"
+        );
+    }
+
+    // escape_interp tests
+    #[test]
+    fn test_escape_interp_empty() {
+        assert_eq!(escape_interp(""), "");
+    }
+
+    #[test]
+    fn test_escape_interp_plain_text() {
+        assert_eq!(escape_interp("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_escape_interp_backslash() {
+        assert_eq!(escape_interp("a\\b"), "a\\\\b");
+    }
+
+    #[test]
+    fn test_escape_interp_quotes() {
+        assert_eq!(escape_interp("say \"hello\""), "say \\\"hello\\\"");
+    }
+
+    #[test]
+    fn test_escape_interp_newline() {
+        assert_eq!(escape_interp("line1\nline2"), "line1\\nline2");
+    }
+
+    #[test]
+    fn test_escape_interp_carriage_return() {
+        assert_eq!(escape_interp("text\rmore"), "text\\rmore");
+    }
+
+    #[test]
+    fn test_escape_interp_tab() {
+        assert_eq!(escape_interp("col1\tcol2"), "col1\\tcol2");
+    }
+
+    #[test]
+    fn test_escape_interp_braces() {
+        assert_eq!(escape_interp("{literal}"), "{{literal}}");
+        assert_eq!(escape_interp("{{already}}"), "{{{{already}}}}");
+    }
+
+    #[test]
+    fn test_escape_interp_mixed() {
+        assert_eq!(
+            escape_interp("\"text\"\n\t{brace}\\"),
+            "\\\"text\\\"\\n\\t{{brace}}\\\\"
+        );
+    }
 }
