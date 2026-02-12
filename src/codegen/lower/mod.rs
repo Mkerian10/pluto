@@ -5096,4 +5096,425 @@ mod tests {
         assert_eq!(byte_to_line(source, 31), 3); // '}' - has 2 newlines before it
         assert_eq!(byte_to_line(source, 32), 3); // '\n' after }
     }
+
+    // ===== resolve_type_expr_to_pluto tests =====
+
+    // Helper to create a minimal TypeEnv for testing
+    fn make_test_env() -> TypeEnv {
+        let mut env = TypeEnv::new();
+
+        // Add some test classes
+        env.classes.insert("User".to_string(), crate::typeck::env::ClassInfo {
+            fields: vec![],
+            methods: vec![],
+            impl_traits: vec![],
+            lifecycle: crate::parser::ast::Lifecycle::Singleton,
+        });
+
+        // Add some test traits
+        env.traits.insert("Printable".to_string(), crate::typeck::env::TraitInfo {
+            methods: vec![],
+            default_methods: vec![],
+            mut_self_methods: HashSet::new(),
+            static_methods: HashSet::new(),
+            method_contracts: HashMap::new(),
+            method_type_exprs: HashMap::new(),
+        });
+
+        // Add some test enums
+        env.enums.insert("Option".to_string(), crate::typeck::env::EnumInfo {
+            variants: vec![],
+            variant_type_exprs: vec![],
+        });
+
+        env
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_primitives() {
+        let env = make_test_env();
+
+        assert_eq!(
+            resolve_type_expr_to_pluto(&TypeExpr::Named("int".to_string()), &env),
+            PlutoType::Int
+        );
+        assert_eq!(
+            resolve_type_expr_to_pluto(&TypeExpr::Named("float".to_string()), &env),
+            PlutoType::Float
+        );
+        assert_eq!(
+            resolve_type_expr_to_pluto(&TypeExpr::Named("bool".to_string()), &env),
+            PlutoType::Bool
+        );
+        assert_eq!(
+            resolve_type_expr_to_pluto(&TypeExpr::Named("string".to_string()), &env),
+            PlutoType::String
+        );
+        assert_eq!(
+            resolve_type_expr_to_pluto(&TypeExpr::Named("byte".to_string()), &env),
+            PlutoType::Byte
+        );
+        assert_eq!(
+            resolve_type_expr_to_pluto(&TypeExpr::Named("bytes".to_string()), &env),
+            PlutoType::Bytes
+        );
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_class() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(&TypeExpr::Named("User".to_string()), &env);
+        assert_eq!(result, PlutoType::Class("User".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_trait() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(&TypeExpr::Named("Printable".to_string()), &env);
+        assert_eq!(result, PlutoType::Trait("Printable".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_enum() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(&TypeExpr::Named("Option".to_string()), &env);
+        assert_eq!(result, PlutoType::Enum("Option".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_unknown() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(&TypeExpr::Named("Unknown".to_string()), &env);
+        assert_eq!(result, PlutoType::Void);
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_array() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Array(Box::new(crate::span::Spanned::dummy(TypeExpr::Named("int".to_string())))),
+            &env
+        );
+        assert_eq!(result, PlutoType::Array(Box::new(PlutoType::Int)));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_array_nested() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Array(Box::new(crate::span::Spanned::dummy(
+                TypeExpr::Array(Box::new(crate::span::Spanned::dummy(TypeExpr::Named("int".to_string()))))
+            ))),
+            &env
+        );
+        assert_eq!(
+            result,
+            PlutoType::Array(Box::new(PlutoType::Array(Box::new(PlutoType::Int))))
+        );
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_qualified_class() {
+        let mut env = make_test_env();
+        env.classes.insert("math.Vector".to_string(), crate::typeck::env::ClassInfo {
+            fields: vec![],
+            methods: vec![],
+            impl_traits: vec![],
+            lifecycle: crate::parser::ast::Lifecycle::Singleton,
+        });
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Qualified {
+                module: "math".to_string(),
+                name: "Vector".to_string(),
+            },
+            &env
+        );
+        assert_eq!(result, PlutoType::Class("math.Vector".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_qualified_trait() {
+        let mut env = make_test_env();
+        env.traits.insert("io.Reader".to_string(), crate::typeck::env::TraitInfo {
+            methods: vec![],
+            default_methods: vec![],
+            mut_self_methods: HashSet::new(),
+            static_methods: HashSet::new(),
+            method_contracts: HashMap::new(),
+            method_type_exprs: HashMap::new(),
+        });
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Qualified {
+                module: "io".to_string(),
+                name: "Reader".to_string(),
+            },
+            &env
+        );
+        assert_eq!(result, PlutoType::Trait("io.Reader".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_qualified_enum() {
+        let mut env = make_test_env();
+        env.enums.insert("result.Result".to_string(), crate::typeck::env::EnumInfo {
+            variants: vec![],
+            variant_type_exprs: vec![],
+        });
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Qualified {
+                module: "result".to_string(),
+                name: "Result".to_string(),
+            },
+            &env
+        );
+        assert_eq!(result, PlutoType::Enum("result.Result".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_qualified_unknown() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Qualified {
+                module: "foo".to_string(),
+                name: "Bar".to_string(),
+            },
+            &env
+        );
+        assert_eq!(result, PlutoType::Void);
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_fn_type() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Fn {
+                params: vec![
+                    Box::new(crate::span::Spanned::dummy(TypeExpr::Named("int".to_string()))),
+                    Box::new(crate::span::Spanned::dummy(TypeExpr::Named("string".to_string()))),
+                ],
+                return_type: Box::new(crate::span::Spanned::dummy(TypeExpr::Named("bool".to_string()))),
+            },
+            &env
+        );
+        assert_eq!(
+            result,
+            PlutoType::Fn(vec![PlutoType::Int, PlutoType::String], Box::new(PlutoType::Bool))
+        );
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_fn_type_void_return() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Fn {
+                params: vec![Box::new(crate::span::Spanned::dummy(TypeExpr::Named("int".to_string())))],
+                return_type: Box::new(crate::span::Spanned::dummy(TypeExpr::Named("void".to_string()))),
+            },
+            &env
+        );
+        // "void" is not a primitive, so it maps to PlutoType::Void
+        assert_eq!(
+            result,
+            PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::Void))
+        );
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_map() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Generic {
+                name: "Map".to_string(),
+                type_args: vec![
+                    crate::span::Spanned::dummy(TypeExpr::Named("string".to_string())),
+                    crate::span::Spanned::dummy(TypeExpr::Named("int".to_string())),
+                ],
+            },
+            &env
+        );
+        assert_eq!(
+            result,
+            PlutoType::Map(Box::new(PlutoType::String), Box::new(PlutoType::Int))
+        );
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_set() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Generic {
+                name: "Set".to_string(),
+                type_args: vec![
+                    crate::span::Spanned::dummy(TypeExpr::Named("int".to_string())),
+                ],
+            },
+            &env
+        );
+        assert_eq!(result, PlutoType::Set(Box::new(PlutoType::Int)));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_task() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Generic {
+                name: "Task".to_string(),
+                type_args: vec![
+                    crate::span::Spanned::dummy(TypeExpr::Named("string".to_string())),
+                ],
+            },
+            &env
+        );
+        assert_eq!(result, PlutoType::Task(Box::new(PlutoType::String)));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_sender() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Generic {
+                name: "Sender".to_string(),
+                type_args: vec![
+                    crate::span::Spanned::dummy(TypeExpr::Named("int".to_string())),
+                ],
+            },
+            &env
+        );
+        assert_eq!(result, PlutoType::Sender(Box::new(PlutoType::Int)));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_receiver() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Generic {
+                name: "Receiver".to_string(),
+                type_args: vec![
+                    crate::span::Spanned::dummy(TypeExpr::Named("float".to_string())),
+                ],
+            },
+            &env
+        );
+        assert_eq!(result, PlutoType::Receiver(Box::new(PlutoType::Float)));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_nullable() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Nullable(Box::new(crate::span::Spanned::dummy(TypeExpr::Named("int".to_string())))),
+            &env
+        );
+        assert_eq!(result, PlutoType::Nullable(Box::new(PlutoType::Int)));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_nullable_class() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Nullable(Box::new(crate::span::Spanned::dummy(TypeExpr::Named("User".to_string())))),
+            &env
+        );
+        assert_eq!(result, PlutoType::Nullable(Box::new(PlutoType::Class("User".to_string()))));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_stream() {
+        let env = make_test_env();
+
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Stream(Box::new(crate::span::Spanned::dummy(TypeExpr::Named("int".to_string())))),
+            &env
+        );
+        assert_eq!(result, PlutoType::Stream(Box::new(PlutoType::Int)));
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_complex_nested() {
+        let env = make_test_env();
+
+        // Map<string, Array<int>>
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Generic {
+                name: "Map".to_string(),
+                type_args: vec![
+                    crate::span::Spanned::dummy(TypeExpr::Named("string".to_string())),
+                    crate::span::Spanned::dummy(TypeExpr::Array(
+                        Box::new(crate::span::Spanned::dummy(TypeExpr::Named("int".to_string())))
+                    )),
+                ],
+            },
+            &env
+        );
+        assert_eq!(
+            result,
+            PlutoType::Map(
+                Box::new(PlutoType::String),
+                Box::new(PlutoType::Array(Box::new(PlutoType::Int)))
+            )
+        );
+    }
+
+    #[test]
+    fn test_resolve_type_expr_to_pluto_array_of_maps() {
+        let env = make_test_env();
+
+        // Array<Map<string, int>>
+        let result = resolve_type_expr_to_pluto(
+            &TypeExpr::Array(Box::new(crate::span::Spanned::dummy(
+                TypeExpr::Generic {
+                    name: "Map".to_string(),
+                    type_args: vec![
+                        crate::span::Spanned::dummy(TypeExpr::Named("string".to_string())),
+                        crate::span::Spanned::dummy(TypeExpr::Named("int".to_string())),
+                    ],
+                }
+            ))),
+            &env
+        );
+        assert_eq!(
+            result,
+            PlutoType::Array(Box::new(PlutoType::Map(
+                Box::new(PlutoType::String),
+                Box::new(PlutoType::Int)
+            )))
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Generic TypeExpr should not reach codegen")]
+    fn test_resolve_type_expr_to_pluto_unresolved_generic() {
+        let env = make_test_env();
+
+        // User-defined generic (not Map/Set/Task/Sender/Receiver) should panic
+        let _ = resolve_type_expr_to_pluto(
+            &TypeExpr::Generic {
+                name: "Pair".to_string(),
+                type_args: vec![
+                    crate::span::Spanned::dummy(TypeExpr::Named("int".to_string())),
+                    crate::span::Spanned::dummy(TypeExpr::Named("string".to_string())),
+                ],
+            },
+            &env
+        );
+    }
 }

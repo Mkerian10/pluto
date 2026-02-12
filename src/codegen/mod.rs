@@ -1024,3 +1024,469 @@ pub(super) fn format_invariant_expr(expr: &Expr) -> String {
         _ => "<contract>".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::span::Spanned;
+
+    // Helper to create Spanned nodes with dummy spans
+    fn sp<T>(node: T) -> Spanned<T> {
+        Spanned::new(node, crate::span::Span::dummy())
+    }
+
+    // ===== format_invariant_expr tests =====
+
+    #[test]
+    fn test_format_invariant_expr_int_lit() {
+        let expr = Expr::IntLit(42);
+        assert_eq!(format_invariant_expr(&expr), "42");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_negative_int() {
+        let expr = Expr::IntLit(-100);
+        assert_eq!(format_invariant_expr(&expr), "-100");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_float_lit() {
+        let expr = Expr::FloatLit(3.14);
+        assert_eq!(format_invariant_expr(&expr), "3.14");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_bool_true() {
+        let expr = Expr::BoolLit(true);
+        assert_eq!(format_invariant_expr(&expr), "true");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_bool_false() {
+        let expr = Expr::BoolLit(false);
+        assert_eq!(format_invariant_expr(&expr), "false");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_ident() {
+        let expr = Expr::Ident("balance".to_string());
+        assert_eq!(format_invariant_expr(&expr), "balance");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_field_access_simple() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(sp(Expr::Ident("self".to_string()))),
+            field: sp("balance".to_string()),
+        };
+        assert_eq!(format_invariant_expr(&expr), "self.balance");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_field_access_nested() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(sp(Expr::FieldAccess {
+                object: Box::new(sp(Expr::Ident("self".to_string()))),
+                field: sp("account".to_string()),
+            })),
+            field: sp("balance".to_string()),
+        };
+        assert_eq!(format_invariant_expr(&expr), "self.account.balance");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_method_call() {
+        let expr = Expr::MethodCall {
+            object: Box::new(sp(Expr::Ident("self".to_string()))),
+            method: sp("len".to_string()),
+            args: vec![],
+        };
+        assert_eq!(format_invariant_expr(&expr), "self.len()");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_binop_add() {
+        let expr = Expr::BinOp {
+            op: BinOp::Add,
+            lhs: Box::new(sp(Expr::IntLit(1))),
+            rhs: Box::new(sp(Expr::IntLit(2))),
+        };
+        assert_eq!(format_invariant_expr(&expr), "1 + 2");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_binop_all_arithmetic() {
+        let ops = vec![
+            (BinOp::Add, "+"),
+            (BinOp::Sub, "-"),
+            (BinOp::Mul, "*"),
+            (BinOp::Div, "/"),
+            (BinOp::Mod, "%"),
+        ];
+
+        for (op, expected_str) in ops {
+            let expr = Expr::BinOp {
+                op,
+                lhs: Box::new(sp(Expr::Ident("a".to_string()))),
+                rhs: Box::new(sp(Expr::Ident("b".to_string()))),
+            };
+            assert_eq!(format_invariant_expr(&expr), format!("a {} b", expected_str));
+        }
+    }
+
+    #[test]
+    fn test_format_invariant_expr_binop_all_comparison() {
+        let ops = vec![
+            (BinOp::Eq, "=="),
+            (BinOp::Neq, "!="),
+            (BinOp::Lt, "<"),
+            (BinOp::Gt, ">"),
+            (BinOp::LtEq, "<="),
+            (BinOp::GtEq, ">="),
+        ];
+
+        for (op, expected_str) in ops {
+            let expr = Expr::BinOp {
+                op,
+                lhs: Box::new(sp(Expr::Ident("x".to_string()))),
+                rhs: Box::new(sp(Expr::IntLit(0))),
+            };
+            assert_eq!(format_invariant_expr(&expr), format!("x {} 0", expected_str));
+        }
+    }
+
+    #[test]
+    fn test_format_invariant_expr_binop_all_logical() {
+        let ops = vec![
+            (BinOp::And, "&&"),
+            (BinOp::Or, "||"),
+        ];
+
+        for (op, expected_str) in ops {
+            let expr = Expr::BinOp {
+                op,
+                lhs: Box::new(sp(Expr::BoolLit(true))),
+                rhs: Box::new(sp(Expr::BoolLit(false))),
+            };
+            assert_eq!(format_invariant_expr(&expr), format!("true {} false", expected_str));
+        }
+    }
+
+    #[test]
+    fn test_format_invariant_expr_binop_all_bitwise() {
+        let ops = vec![
+            (BinOp::BitAnd, "&"),
+            (BinOp::BitOr, "|"),
+            (BinOp::BitXor, "^"),
+            (BinOp::Shl, "<<"),
+            (BinOp::Shr, ">>"),
+        ];
+
+        for (op, expected_str) in ops {
+            let expr = Expr::BinOp {
+                op,
+                lhs: Box::new(sp(Expr::IntLit(5))),
+                rhs: Box::new(sp(Expr::IntLit(3))),
+            };
+            assert_eq!(format_invariant_expr(&expr), format!("5 {} 3", expected_str));
+        }
+    }
+
+    #[test]
+    fn test_format_invariant_expr_unary_neg() {
+        let expr = Expr::UnaryOp {
+            op: UnaryOp::Neg,
+            operand: Box::new(sp(Expr::Ident("x".to_string()))),
+        };
+        assert_eq!(format_invariant_expr(&expr), "-x");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_unary_not() {
+        let expr = Expr::UnaryOp {
+            op: UnaryOp::Not,
+            operand: Box::new(sp(Expr::BoolLit(true))),
+        };
+        assert_eq!(format_invariant_expr(&expr), "!true");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_unary_bitnot() {
+        let expr = Expr::UnaryOp {
+            op: UnaryOp::BitNot,
+            operand: Box::new(sp(Expr::IntLit(42))),
+        };
+        assert_eq!(format_invariant_expr(&expr), "~42");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_old_call() {
+        let expr = Expr::Call {
+            name: sp("old".to_string()),
+            args: vec![sp(Expr::FieldAccess {
+                object: Box::new(sp(Expr::Ident("self".to_string()))),
+                field: sp("balance".to_string()),
+            })],
+            type_args: vec![],
+            target_id: None,
+        };
+        assert_eq!(format_invariant_expr(&expr), "old(self.balance)");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_complex_nested() {
+        // self.balance > 0 && self.balance <= old(self.balance)
+        let expr = Expr::BinOp {
+            op: BinOp::And,
+            lhs: Box::new(sp(Expr::BinOp {
+                op: BinOp::Gt,
+                lhs: Box::new(sp(Expr::FieldAccess {
+                    object: Box::new(sp(Expr::Ident("self".to_string()))),
+                    field: sp("balance".to_string()),
+                })),
+                rhs: Box::new(sp(Expr::IntLit(0))),
+            })),
+            rhs: Box::new(sp(Expr::BinOp {
+                op: BinOp::LtEq,
+                lhs: Box::new(sp(Expr::FieldAccess {
+                    object: Box::new(sp(Expr::Ident("self".to_string()))),
+                    field: sp("balance".to_string()),
+                })),
+                rhs: Box::new(sp(Expr::Call {
+                    name: sp("old".to_string()),
+                    args: vec![sp(Expr::FieldAccess {
+                        object: Box::new(sp(Expr::Ident("self".to_string()))),
+                        field: sp("balance".to_string()),
+                    })],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })),
+        };
+        assert_eq!(
+            format_invariant_expr(&expr),
+            "self.balance > 0 && self.balance <= old(self.balance)"
+        );
+    }
+
+    #[test]
+    fn test_format_invariant_expr_default_fallback() {
+        // Unsupported expressions should return "<contract>"
+        let expr = Expr::StringLit("test".to_string());
+        assert_eq!(format_invariant_expr(&expr), "<contract>");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_call_not_old() {
+        // Regular function calls (not "old") should fallback
+        let expr = Expr::Call {
+            name: sp("foo".to_string()),
+            args: vec![sp(Expr::IntLit(1))],
+            type_args: vec![],
+            target_id: None,
+        };
+        assert_eq!(format_invariant_expr(&expr), "<contract>");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_old_call_wrong_args() {
+        // old() with wrong number of args should fallback
+        let expr = Expr::Call {
+            name: sp("old".to_string()),
+            args: vec![sp(Expr::IntLit(1)), sp(Expr::IntLit(2))],
+            type_args: vec![],
+            target_id: None,
+        };
+        assert_eq!(format_invariant_expr(&expr), "<contract>");
+    }
+
+    // ===== extract_fn_contracts tests =====
+
+    #[test]
+    fn test_extract_fn_contracts_empty() {
+        let contracts: Vec<Spanned<ContractClause>> = vec![];
+        assert!(extract_fn_contracts(&contracts).is_none());
+    }
+
+    #[test]
+    fn test_extract_fn_contracts_only_requires() {
+        let contracts = vec![
+            sp(ContractClause {
+                kind: ContractKind::Requires,
+                expr: sp(Expr::BinOp {
+                    op: BinOp::Gt,
+                    lhs: Box::new(sp(Expr::Ident("x".to_string()))),
+                    rhs: Box::new(sp(Expr::IntLit(0))),
+                }),
+            }),
+        ];
+        let result = extract_fn_contracts(&contracts).unwrap();
+        assert_eq!(result.requires.len(), 1);
+        assert_eq!(result.ensures.len(), 0);
+        assert_eq!(result.requires[0].1, "x > 0");
+    }
+
+    #[test]
+    fn test_extract_fn_contracts_only_ensures() {
+        let contracts = vec![
+            sp(ContractClause {
+                kind: ContractKind::Ensures,
+                expr: sp(Expr::BinOp {
+                    op: BinOp::GtEq,
+                    lhs: Box::new(sp(Expr::Ident("result".to_string()))),
+                    rhs: Box::new(sp(Expr::IntLit(0))),
+                }),
+            }),
+        ];
+        let result = extract_fn_contracts(&contracts).unwrap();
+        assert_eq!(result.requires.len(), 0);
+        assert_eq!(result.ensures.len(), 1);
+        assert_eq!(result.ensures[0].1, "result >= 0");
+    }
+
+    #[test]
+    fn test_extract_fn_contracts_both() {
+        let contracts = vec![
+            sp(ContractClause {
+                kind: ContractKind::Requires,
+                expr: sp(Expr::BinOp {
+                    op: BinOp::Gt,
+                    lhs: Box::new(sp(Expr::Ident("x".to_string()))),
+                    rhs: Box::new(sp(Expr::IntLit(0))),
+                }),
+            }),
+            sp(ContractClause {
+                kind: ContractKind::Ensures,
+                expr: sp(Expr::BinOp {
+                    op: BinOp::GtEq,
+                    lhs: Box::new(sp(Expr::Ident("result".to_string()))),
+                    rhs: Box::new(sp(Expr::IntLit(0))),
+                }),
+            }),
+        ];
+        let result = extract_fn_contracts(&contracts).unwrap();
+        assert_eq!(result.requires.len(), 1);
+        assert_eq!(result.ensures.len(), 1);
+        assert_eq!(result.requires[0].1, "x > 0");
+        assert_eq!(result.ensures[0].1, "result >= 0");
+    }
+
+    #[test]
+    fn test_extract_fn_contracts_filtered_invariants() {
+        let contracts = vec![
+            sp(ContractClause {
+                kind: ContractKind::Invariant,
+                expr: sp(Expr::BoolLit(true)),
+            }),
+            sp(ContractClause {
+                kind: ContractKind::Requires,
+                expr: sp(Expr::BoolLit(true)),
+            }),
+        ];
+        let result = extract_fn_contracts(&contracts).unwrap();
+        assert_eq!(result.requires.len(), 1);
+        assert_eq!(result.ensures.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_fn_contracts_multiple_each() {
+        let contracts = vec![
+            sp(ContractClause {
+                kind: ContractKind::Requires,
+                expr: sp(Expr::BinOp {
+                    op: BinOp::Gt,
+                    lhs: Box::new(sp(Expr::Ident("x".to_string()))),
+                    rhs: Box::new(sp(Expr::IntLit(0))),
+                }),
+            }),
+            sp(ContractClause {
+                kind: ContractKind::Requires,
+                expr: sp(Expr::BinOp {
+                    op: BinOp::Lt,
+                    lhs: Box::new(sp(Expr::Ident("x".to_string()))),
+                    rhs: Box::new(sp(Expr::IntLit(100))),
+                }),
+            }),
+            sp(ContractClause {
+                kind: ContractKind::Ensures,
+                expr: sp(Expr::BinOp {
+                    op: BinOp::GtEq,
+                    lhs: Box::new(sp(Expr::Ident("result".to_string()))),
+                    rhs: Box::new(sp(Expr::IntLit(0))),
+                }),
+            }),
+            sp(ContractClause {
+                kind: ContractKind::Ensures,
+                expr: sp(Expr::BinOp {
+                    op: BinOp::LtEq,
+                    lhs: Box::new(sp(Expr::Ident("result".to_string()))),
+                    rhs: Box::new(sp(Expr::IntLit(100))),
+                }),
+            }),
+        ];
+        let result = extract_fn_contracts(&contracts).unwrap();
+        assert_eq!(result.requires.len(), 2);
+        assert_eq!(result.ensures.len(), 2);
+        assert_eq!(result.requires[0].1, "x > 0");
+        assert_eq!(result.requires[1].1, "x < 100");
+        assert_eq!(result.ensures[0].1, "result >= 0");
+        assert_eq!(result.ensures[1].1, "result <= 100");
+    }
+
+    // ===== host_target_triple tests =====
+
+    #[test]
+    fn test_host_target_triple_returns_valid_string() {
+        let result = host_target_triple();
+        assert!(result.is_ok());
+        let triple = result.unwrap();
+
+        // Should be one of the supported triples
+        let valid_triples = vec![
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+        ];
+        assert!(valid_triples.contains(&triple), "Got unexpected triple: {}", triple);
+    }
+
+    #[test]
+    fn test_host_target_triple_format() {
+        let result = host_target_triple().unwrap();
+
+        // Should have at least two hyphens (arch-vendor-os format, or arch-vendor-os-env on Linux)
+        let hyphen_count = result.chars().filter(|c| *c == '-').count();
+        assert!(hyphen_count >= 2, "Triple should have at least 2 hyphens (got {})", hyphen_count);
+    }
+
+    #[test]
+    fn test_host_target_triple_arch_prefix() {
+        let result = host_target_triple().unwrap();
+
+        // Should start with a known arch
+        assert!(
+            result.starts_with("aarch64") || result.starts_with("x86_64"),
+            "Triple should start with known arch"
+        );
+    }
+
+    #[test]
+    fn test_host_target_triple_os_suffix() {
+        let result = host_target_triple().unwrap();
+
+        // Should end with a known OS
+        assert!(
+            result.ends_with("darwin") || result.ends_with("linux-gnu"),
+            "Triple should end with known OS"
+        );
+    }
+
+    #[test]
+    fn test_host_target_triple_consistency() {
+        // Calling multiple times should return the same result
+        let result1 = host_target_triple().unwrap();
+        let result2 = host_target_triple().unwrap();
+        assert_eq!(result1, result2);
+    }
+}
