@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
+use crate::visit::{walk_block_mut, walk_expr_mut, walk_stmt_mut, VisitMut};
 
 /// Desugar ambient DI (`uses` on classes, `ambient` in app).
 ///
@@ -216,32 +217,64 @@ fn lowercase_first(s: &str) -> String {
     }
 }
 
-fn rewrite_block(block: &mut Block, active: &HashSet<String>) {
-    let mut active = active.clone();
-    for stmt in &mut block.stmts {
-        rewrite_stmt(stmt, &active);
-        // If this is a `let` or `let chan` statement, remove bindings from active for subsequent stmts
-        if let Stmt::Let { name, .. } = &stmt.node {
-            active.remove(&name.node);
-        }
-        if let Stmt::LetChan { sender, receiver, .. } = &stmt.node {
-            active.remove(&sender.node);
-            active.remove(&receiver.node);
-        }
-    }
+struct AmbientRewriter<'a> {
+    active: &'a HashSet<String>,
 }
 
-fn rewrite_stmt(stmt: &mut Spanned<Stmt>, active: &HashSet<String>) {
-    match &mut stmt.node {
-        Stmt::Let { value, .. } => {
-            rewrite_expr(&mut value.node, value.span, active);
+impl VisitMut for AmbientRewriter<'_> {
+    fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+        // Check if this is an ambient identifier that needs rewriting
+        if let Expr::Ident(name) = &expr.node {
+            if self.active.contains(name) {
+                // Rewrite `logger` to `self.logger`
+                let field_name = name.clone();
+                expr.node = Expr::FieldAccess {
+                    object: Box::new(Spanned::new(Expr::Ident("self".into()), expr.span)),
+                    field: Spanned::new(field_name, expr.span),
+                };
+                return; // Don't recurse into the rewritten expression
+            }
         }
-        Stmt::Return(Some(expr)) => {
-            rewrite_expr(&mut expr.node, expr.span, active);
+
+        // Handle expressions that introduce new scopes
+        match &mut expr.node {
+            Expr::Closure { params, body, .. } => {
+                let mut inner = self.active.clone();
+                for p in params.iter() {
+                    inner.remove(&p.name.node);
+                }
+                let mut inner_rewriter = AmbientRewriter { active: &inner };
+                inner_rewriter.visit_block_mut(body);
+                return; // Don't use walk_expr_mut since we handled it manually
+            }
+            Expr::Catch { expr: inner, handler } => {
+                // Recurse into the expression
+                self.visit_expr_mut(inner);
+                // Handle the catch handler with proper scoping
+                match handler {
+                    CatchHandler::Wildcard { var, body } => {
+                        let mut inner_active = self.active.clone();
+                        inner_active.remove(&var.node);
+                        let mut inner_rewriter = AmbientRewriter { active: &inner_active };
+                        inner_rewriter.visit_block_mut(body);
+                    }
+                    CatchHandler::Shorthand(fb) => {
+                        self.visit_expr_mut(fb);
+                    }
+                }
+                return; // Don't use walk_expr_mut
+            }
+            _ => {}
         }
-        Stmt::Return(None) => {}
-        Stmt::Assign { target, value } => {
-            if active.contains(&target.node) {
+
+        // For all other expressions, use the default walker
+        walk_expr_mut(self, expr);
+    }
+
+    fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
+        // Handle ambient assignment rewriting
+        if let Stmt::Assign { target, value } = &mut stmt.node {
+            if self.active.contains(&target.node) {
                 // Rewrite `logger = x` to `self.logger = x`
                 let field = target.clone();
                 let dummy_val = Spanned::new(Expr::IntLit(0), Span::dummy());
@@ -254,214 +287,77 @@ fn rewrite_stmt(stmt: &mut Spanned<Stmt>, active: &HashSet<String>) {
                 };
                 // Rewrite the value expression
                 if let Stmt::FieldAssign { value, .. } = &mut stmt.node {
-                    rewrite_expr(&mut value.node, value.span, active);
+                    self.visit_expr_mut(value);
                 }
-            } else {
-                rewrite_expr(&mut value.node, value.span, active);
+                return; // Don't use walk_stmt_mut
             }
         }
-        Stmt::FieldAssign { object, value, .. } => {
-            rewrite_expr(&mut object.node, object.span, active);
-            rewrite_expr(&mut value.node, value.span, active);
-        }
-        Stmt::If { condition, then_block, else_block } => {
-            rewrite_expr(&mut condition.node, condition.span, active);
-            rewrite_block(&mut then_block.node, active);
-            if let Some(eb) = else_block {
-                rewrite_block(&mut eb.node, active);
+
+        // Handle statements that introduce new scopes
+        match &mut stmt.node {
+            Stmt::For { var, iterable, body } => {
+                self.visit_expr_mut(iterable);
+                let mut inner = self.active.clone();
+                inner.remove(&var.node);
+                let mut inner_rewriter = AmbientRewriter { active: &inner };
+                inner_rewriter.visit_block_mut(body);
+                return;
             }
-        }
-        Stmt::While { condition, body } => {
-            rewrite_expr(&mut condition.node, condition.span, active);
-            rewrite_block(&mut body.node, active);
-        }
-        Stmt::For { var, iterable, body } => {
-            rewrite_expr(&mut iterable.node, iterable.span, active);
-            let mut inner = active.clone();
-            inner.remove(&var.node);
-            rewrite_block(&mut body.node, &inner);
-        }
-        Stmt::IndexAssign { object, index, value } => {
-            rewrite_expr(&mut object.node, object.span, active);
-            rewrite_expr(&mut index.node, index.span, active);
-            rewrite_expr(&mut value.node, value.span, active);
-        }
-        Stmt::Match { expr, arms } => {
-            rewrite_expr(&mut expr.node, expr.span, active);
-            for arm in arms {
-                let mut inner = active.clone();
-                for (binding, rename) in &arm.bindings {
-                    let name = rename.as_ref().unwrap_or(binding);
-                    inner.remove(&name.node);
-                }
-                rewrite_block(&mut arm.body.node, &inner);
-            }
-        }
-        Stmt::Raise { fields, .. } => {
-            for (_, val) in fields {
-                rewrite_expr(&mut val.node, val.span, active);
-            }
-        }
-        Stmt::Expr(expr) => {
-            rewrite_expr(&mut expr.node, expr.span, active);
-        }
-        Stmt::LetChan { capacity, .. } => {
-            if let Some(cap) = capacity {
-                rewrite_expr(&mut cap.node, cap.span, active);
-            }
-        }
-        Stmt::Select { arms, default } => {
-            for arm in arms {
-                match &mut arm.op {
-                    SelectOp::Recv { channel, .. } => {
-                        rewrite_expr(&mut channel.node, channel.span, active);
+            Stmt::Match { expr, arms } => {
+                self.visit_expr_mut(expr);
+                for arm in arms {
+                    let mut inner = self.active.clone();
+                    for (binding, rename) in &arm.bindings {
+                        let name = rename.as_ref().unwrap_or(binding);
+                        inner.remove(&name.node);
                     }
-                    SelectOp::Send { channel, value } => {
-                        rewrite_expr(&mut channel.node, channel.span, active);
-                        rewrite_expr(&mut value.node, value.span, active);
-                    }
+                    let mut inner_rewriter = AmbientRewriter { active: &inner };
+                    inner_rewriter.visit_block_mut(&mut arm.body);
                 }
-                rewrite_block(&mut arm.body.node, active);
+                return;
             }
-            if let Some(def) = default {
-                rewrite_block(&mut def.node, active);
+            Stmt::Scope { seeds, bindings, body } => {
+                for seed in seeds {
+                    self.visit_expr_mut(seed);
+                }
+                let mut inner = self.active.clone();
+                for binding in bindings {
+                    inner.remove(&binding.name.node);
+                }
+                let mut inner_rewriter = AmbientRewriter { active: &inner };
+                inner_rewriter.visit_block_mut(body);
+                return;
+            }
+            _ => {}
+        }
+
+        // Default: use the walker
+        walk_stmt_mut(self, stmt);
+    }
+
+    fn visit_block_mut(&mut self, block: &mut Spanned<Block>) {
+        let mut active = self.active.clone();
+        for stmt in &mut block.node.stmts {
+            let mut stmt_rewriter = AmbientRewriter { active: &active };
+            stmt_rewriter.visit_stmt_mut(stmt);
+
+            // Update active set based on bindings in this statement
+            if let Stmt::Let { name, .. } = &stmt.node {
+                active.remove(&name.node);
+            }
+            if let Stmt::LetChan { sender, receiver, .. } = &stmt.node {
+                active.remove(&sender.node);
+                active.remove(&receiver.node);
             }
         }
-        Stmt::Scope { seeds, bindings, body } => {
-            for seed in seeds {
-                rewrite_expr(&mut seed.node, seed.span, active);
-            }
-            let mut inner = active.clone();
-            for binding in bindings {
-                inner.remove(&binding.name.node);
-            }
-            rewrite_block(&mut body.node, &inner);
-        }
-        Stmt::Yield { value, .. } => {
-            rewrite_expr(&mut value.node, value.span, active);
-        }
-        Stmt::Break | Stmt::Continue => {}
     }
 }
 
-fn rewrite_expr(expr: &mut Expr, span: Span, active: &HashSet<String>) {
-    match expr {
-        Expr::Ident(name) if active.contains(name) => {
-            // Rewrite `logger` to `self.logger`
-            let field_name = name.clone();
-            *expr = Expr::FieldAccess {
-                object: Box::new(Spanned::new(Expr::Ident("self".into()), span)),
-                field: Spanned::new(field_name, span),
-            };
-        }
-        Expr::Ident(_) => {}
-        Expr::BinOp { lhs, rhs, .. } => {
-            rewrite_expr(&mut lhs.node, lhs.span, active);
-            rewrite_expr(&mut rhs.node, rhs.span, active);
-        }
-        Expr::UnaryOp { operand, .. } => {
-            rewrite_expr(&mut operand.node, operand.span, active);
-        }
-        Expr::Call { args, .. } => {
-            for arg in args {
-                rewrite_expr(&mut arg.node, arg.span, active);
-            }
-        }
-        Expr::FieldAccess { object, .. } => {
-            rewrite_expr(&mut object.node, object.span, active);
-        }
-        Expr::MethodCall { object, args, .. } => {
-            rewrite_expr(&mut object.node, object.span, active);
-            for arg in args {
-                rewrite_expr(&mut arg.node, arg.span, active);
-            }
-        }
-        Expr::StructLit { fields, .. } => {
-            for (_, val) in fields {
-                rewrite_expr(&mut val.node, val.span, active);
-            }
-        }
-        Expr::ArrayLit { elements } => {
-            for elem in elements {
-                rewrite_expr(&mut elem.node, elem.span, active);
-            }
-        }
-        Expr::Index { object, index } => {
-            rewrite_expr(&mut object.node, object.span, active);
-            rewrite_expr(&mut index.node, index.span, active);
-        }
-        Expr::StringInterp { parts } => {
-            for part in parts {
-                if let StringInterpPart::Expr(e) = part {
-                    rewrite_expr(&mut e.node, e.span, active);
-                }
-            }
-        }
-        Expr::EnumData { fields, .. } => {
-            for (_, val) in fields {
-                rewrite_expr(&mut val.node, val.span, active);
-            }
-        }
-        Expr::Closure { params, body, .. } => {
-            let mut inner = active.clone();
-            for p in params.iter() {
-                inner.remove(&p.name.node);
-            }
-            rewrite_block(&mut body.node, &inner);
-        }
-        Expr::Propagate { expr: inner } => {
-            rewrite_expr(&mut inner.node, inner.span, active);
-        }
-        Expr::Catch { expr: inner, handler } => {
-            rewrite_expr(&mut inner.node, inner.span, active);
-            match handler {
-                CatchHandler::Wildcard { var, body } => {
-                    let mut inner_active = active.clone();
-                    inner_active.remove(&var.node);
-                    rewrite_block(&mut body.node, &inner_active);
-                }
-                CatchHandler::Shorthand(fb) => {
-                    rewrite_expr(&mut fb.node, fb.span, active);
-                }
-            }
-        }
-        Expr::MapLit { entries, .. } => {
-            for (k, v) in entries {
-                rewrite_expr(&mut k.node, k.span, active);
-                rewrite_expr(&mut v.node, v.span, active);
-            }
-        }
-        Expr::SetLit { elements, .. } => {
-            for elem in elements {
-                rewrite_expr(&mut elem.node, elem.span, active);
-            }
-        }
-        Expr::Cast { expr: inner, .. } => {
-            rewrite_expr(&mut inner.node, inner.span, active);
-        }
-        Expr::Range { start, end, .. } => {
-            rewrite_expr(&mut start.node, start.span, active);
-            rewrite_expr(&mut end.node, end.span, active);
-        }
-        Expr::Spawn { call } => {
-            rewrite_expr(&mut call.node, call.span, active);
-        }
-        Expr::NullPropagate { expr: inner } => {
-            rewrite_expr(&mut inner.node, inner.span, active);
-        }
-        Expr::StaticTraitCall { args, .. } => {
-            for arg in args {
-                rewrite_expr(&mut arg.node, arg.span, active);
-            }
-        }
-        Expr::QualifiedAccess { segments } => {
-            panic!(
-                "QualifiedAccess should be resolved by module flattening before ambient. Segments: {:?}",
-                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
-            )
-        }
-        // Literals and non-rewritable expressions
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
-    }
+fn rewrite_block(block: &mut Block, active: &HashSet<String>) {
+    let mut spanned = Spanned::new(std::mem::replace(block, Block { stmts: vec![] }), Span::dummy());
+    let mut rewriter = AmbientRewriter { active };
+    rewriter.visit_block_mut(&mut spanned);
+    *block = spanned.node;
 }
+
+
