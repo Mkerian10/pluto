@@ -1,16 +1,12 @@
-//! Control flow edge cases - 13 tests (removed 2 ACTUALLY_SUCCESS)
+//! Control flow edge cases - 10 tests (removed 5 ACTUALLY_SUCCESS)
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 
-// Empty while body
-#[test] fn empty_while() { compile_should_fail_with(r#"fn main(){while true{}}"#, ""); }
-
+// REMOVED: empty_while - empty while bodies are valid
 // REMOVED: empty_for - empty for bodies are valid
 // REMOVED: empty_if - empty if bodies are valid
-
-// Empty match arm
-#[test] fn empty_match_arm() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{E.A{}E.B{}}}"#, ""); }
+// REMOVED: empty_match_arm - empty match arms are valid
 
 // If with empty else
 #[test] fn if_empty_else() { compile_should_fail_with(r#"fn main(){if true{let x=1}else{}}"#, ""); }
@@ -42,5 +38,4 @@ use common::compile_should_fail_with;
 // Nested loops with multiple breaks
 #[test] fn nested_loops_breaks() { compile_should_fail_with(r#"fn main(){while true{while true{break}break}}"#, ""); }
 
-// Empty function with void return
-#[test] fn empty_void_function() { compile_should_fail_with(r#"fn f(){} fn main(){}"#, ""); }
+// REMOVED: empty_void_function - empty functions with void return are valid
