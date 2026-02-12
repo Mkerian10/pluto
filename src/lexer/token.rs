@@ -140,6 +140,30 @@ pub enum Token {
     #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<f64>().ok())]
     FloatLit(f64),
 
+    #[regex(r#"f"([^"\\]|\\.)*""#, |lex| {
+        let s = lex.slice();
+        let raw = &s[2..s.len()-1];  // Skip f" prefix
+        let mut result = String::with_capacity(raw.len());
+        let mut chars = raw.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('n') => result.push('\n'),
+                    Some('r') => result.push('\r'),
+                    Some('t') => result.push('\t'),
+                    Some('\\') => result.push('\\'),
+                    Some('"') => result.push('"'),
+                    Some(other) => { result.push('\\'); result.push(other); }
+                    None => result.push('\\'),
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        Some(result)
+    })]
+    FStringLit(String),
+
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {
         let s = lex.slice();
         let raw = &s[1..s.len()-1];
@@ -328,6 +352,7 @@ impl std::fmt::Display for Token {
             Token::IntLit(n) => write!(f, "{n}"),
             Token::FloatLit(n) => write!(f, "{n}"),
             Token::StringLit(s) => write!(f, "\"{s}\""),
+            Token::FStringLit(s) => write!(f, "f\"{s}\""),
             Token::Ident => write!(f, "identifier"),
             Token::PlusPlus => write!(f, "++"),
             Token::Plus => write!(f, "+"),
