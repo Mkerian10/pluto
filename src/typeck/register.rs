@@ -104,6 +104,7 @@ pub(crate) fn register_trait_names(program: &Program, env: &mut TypeEnv) -> Resu
         let t = &trait_decl.node;
         let mut default_methods = Vec::new();
         let mut mut_self_methods = HashSet::new();
+        let mut static_methods = HashSet::new();
         let mut method_contracts = HashMap::new();
         let mut method_type_exprs = HashMap::new();
 
@@ -111,9 +112,18 @@ pub(crate) fn register_trait_names(program: &Program, env: &mut TypeEnv) -> Resu
             if m.body.is_some() {
                 default_methods.push(m.name.node.clone());
             }
-            if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
+
+            // Check if method has self parameter
+            let has_self = !m.params.is_empty() && m.params[0].name.node == "self";
+
+            if has_self && m.params[0].is_mut {
                 mut_self_methods.insert(m.name.node.clone());
             }
+
+            if !has_self {
+                static_methods.insert(m.name.node.clone());
+            }
+
             if !m.contracts.is_empty() {
                 method_contracts.insert(m.name.node.clone(), m.contracts.clone());
             }
@@ -133,6 +143,7 @@ pub(crate) fn register_trait_names(program: &Program, env: &mut TypeEnv) -> Resu
             methods: Vec::new(),  // Will be populated in Pass 1
             default_methods,
             mut_self_methods,
+            static_methods,
             method_contracts,
             method_type_exprs,
         });
@@ -148,13 +159,8 @@ pub(crate) fn resolve_trait_signatures(program: &Program, env: &mut TypeEnv) -> 
 
         let mut methods = Vec::new();
         for m in &t.methods {
-            // Validate that trait methods have a self parameter
-            if m.params.is_empty() || m.params[0].name.node != "self" {
-                return Err(CompileError::type_err(
-                    format!("trait method '{}' must have a 'self' parameter as its first parameter", m.name.node),
-                    m.name.span,
-                ));
-            }
+            // Trait methods can be instance methods (with self) or static methods (without self)
+            let has_self = !m.params.is_empty() && m.params[0].name.node == "self";
 
             let mut param_types = Vec::new();
             for p in &m.params {

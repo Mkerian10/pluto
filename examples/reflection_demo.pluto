@@ -1,0 +1,35 @@
+// Phase 1 Reflection Demo
+// Demonstrates compile-time type introspection using TypeInfo trait
+
+class User {
+    username: string
+    email: string
+    age: int
+}
+
+enum Role {
+    Admin { permissions: int }
+    User
+    Guest
+}
+
+fn main() {
+    print("=== Compile-Time Reflection Demo ===")
+    print("")
+    
+    // Get type name for a class
+    let user_type = TypeInfo::type_name<User>()
+    print("User type name: {user_type}")
+    
+    // Get type name for an enum
+    let role_type = TypeInfo::type_name<Role>()
+    print("Role type name: {role_type}")
+    
+    print("")
+    print("TypeInfo::kind<T>() provides detailed metadata:")
+    print("- For classes: field names, types, and offsets")
+    print("- For enums: variant names and their fields")
+    print("")
+    print("Reflection intrinsics are generated at compile time")
+    print("with zero runtime overhead!")
+}
