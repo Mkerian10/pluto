@@ -1,8 +1,10 @@
 # AI-Native Development
 
-Most compilers treat source code as text. The compiler reads characters, builds a rich internal representation (types, call graphs, error sets, dependency wiring), generates code, and discards all that knowledge. Next compilation, it starts from scratch. No one else gets to use what the compiler learned.
+Whole-program compilation means the Pluto compiler builds a complete understanding of your program: resolved types for every expression, inferred error sets for every function, the full call graph, the dependency wiring topology, cross-references between every declaration and its usage sites.
 
-Pluto takes a different approach. The compiler's internal representation is a first-class artifact: serializable, queryable, and designed for AI agents to read and write directly.
+Most compilers throw this knowledge away after code generation. Pluto keeps it.
+
+The compiler's internal representation — the AST, the type information, the analysis results — is a first-class artifact: serializable, queryable, and designed for AI agents to read and write directly. The compiler sees your entire program and understands it deeply. AI agents get access to that same understanding through a structured API.
 
 This chapter covers what is implemented today and where the design is headed.
 
@@ -143,9 +145,25 @@ The MCP (Model Context Protocol) server exposes the SDK's capabilities as struct
 
 The agent workflow is: load a module, query its structure, understand types and error sets, make a targeted edit, validate with the type checker, iterate.
 
-## The Vision
+## The Vision: Programs, Not Services
 
-The tools above are implemented and working. The larger vision takes them further.
+The tools above are implemented and working. The larger vision takes them further — toward a world where distributed systems are **programs**, not collections of services.
+
+### The Four Pillars
+
+**1. Whole-program compilation.** The compiler sees your entire distributed system: every stage, every function call, every error that could be raised. It generates per-stage binaries with all RPC code.
+
+**2. Source-level composition.** There are no library binaries, no ABI boundaries. All dependencies are source code. The compiler integrates them into your program and optimizes across module boundaries.
+
+**3. Stages as deployment units.** You declare `stage api`, `stage workers`, `stage analytics` in your program. The compiler knows which calls cross stage boundaries and generates the RPC code.
+
+**4. AI agents as first-class developers.** The compiler's internal representation (AST, types, call graph, error sets) is a queryable artifact. AI agents read and write programs at the semantic level, not as text.
+
+When these four pillars are complete, you'll write a Pluto program that defines your entire backend — all services, all communication, all schemas — and the compiler will generate deployable binaries, migration scripts, API documentation, and monitoring hooks automatically.
+
+**You write logic. The compiler generates infrastructure.**
+
+## The Vision
 
 ### .pluto as Canonical Source
 
@@ -171,3 +189,256 @@ The core idea is that the compiler and AI agents form a feedback loop:
 This is not AI replacing developers. It is the compiler's understanding of your program being accessible to every tool in the chain -- AI agents, editors, code review systems, refactoring tools -- through a structured interface with stable identities.
 
 The text file is a view. The semantic graph is the source.
+
+## What This Looks Like in Practice
+
+Imagine building a production backend in 2027 with Pluto. Here's what the workflow looks like:
+
+### You Write One Program
+
+```pluto
+// main.pluto
+stage api[db: Database] {
+    fn handle_order(req: OrderRequest) OrderResponse {
+        let user = auth.verify_user(req.token)!
+        let inventory = warehouse.check_stock(req.items)!
+        let order = self.db.create_order(user.id, req.items)!
+        payments.charge_async(order.id, order.total)
+        return OrderResponse { order_id: order.id }
+    }
+}
+
+stage auth {
+    pub fn verify_user(token: string) User {
+        // JWT validation
+    }
+}
+
+stage warehouse {
+    pub fn check_stock(items: Array<Item>) Inventory {
+        // inventory lookup
+    }
+}
+
+stage payments {
+    pub fn charge_async(order_id: string, amount: int) {
+        // async payment processing
+    }
+}
+```
+
+This is your entire backend. Four stages, defined in one program.
+
+### The Compiler Sees Everything
+
+When you run `plutoc compile main.pluto`, the compiler:
+
+1. **Parses and type-checks** all four stages together
+2. **Infers error sets** — sees that `verify_user` can raise `InvalidToken`, `check_stock` can raise `OutOfStock`, `create_order` can raise `DatabaseError`
+3. **Analyzes call graph** — sees that `api` calls `auth`, `warehouse`, and `payments` across stage boundaries
+4. **Generates RPC code** — serialization for `OrderRequest`, `User`, `Item`, `Inventory`; HTTP client calls; error propagation for both remote errors and network failures
+5. **Generates per-stage binaries** — `build/api`, `build/auth`, `build/warehouse`, `build/payments`
+
+### An AI Agent Adds a Feature
+
+You ask Claude: "Add fraud detection before charging payments."
+
+Claude uses the MCP server to:
+1. **Load the program** — `load_module("main.pluto")`
+2. **Query the structure** — `list_declarations()` shows all four stages and their functions
+3. **Inspect the payments stage** — `inspect("payments.charge_async")` shows params, return type, error set
+4. **Add a new stage**:
+
+```pluto
+stage fraud {
+    error FraudDetected { order_id: string, reason: string }
+
+    pub fn check_order(order_id: string, amount: int) {
+        if amount > 10000 {
+            raise FraudDetected { order_id: order_id, reason: "high value order" }
+        }
+    }
+}
+```
+
+5. **Modify the api stage** to call `fraud.check_order`:
+
+```pluto
+stage api[db: Database] {
+    fn handle_order(req: OrderRequest) OrderResponse {
+        let user = auth.verify_user(req.token)!
+        let inventory = warehouse.check_stock(req.items)!
+        let order = self.db.create_order(user.id, req.items)!
+        fraud.check_order(order.id, order.total)!  // NEW
+        payments.charge_async(order.id, order.total)
+        return OrderResponse { order_id: order.id }
+    }
+}
+```
+
+6. **Type-check** — `check()` verifies the edit is correct
+7. **Commit** — the SDK updates the `.pluto` binary with the new stage and the modified function
+
+The compiler re-compiles. It sees that `handle_order` now calls `fraud.check_order`, which can raise `FraudDetected`. It:
+- Adds `FraudDetected` to the error set of `handle_order`
+- Generates RPC code for the `api → fraud` call
+- Generates a new `build/fraud` binary
+- Updates `build/api` to include the RPC client for fraud
+
+You never wrote serialization code. You never wrote error handling boilerplate. The compiler generated it.
+
+### You Deploy to Production
+
+You write a deployment spec (YAML, HCL, or future Pluto-native format):
+
+```yaml
+# deploy.yaml
+stages:
+  api:
+    replicas: 5
+    region: us-east-1
+    cpu: 2
+    memory: 4GB
+
+  auth:
+    replicas: 2
+    region: us-east-1
+    cpu: 1
+    memory: 2GB
+
+  warehouse:
+    replicas: 3
+    region: us-west-2
+    cpu: 2
+    memory: 4GB
+
+  payments:
+    replicas: 2
+    region: us-east-1
+    cpu: 1
+    memory: 2GB
+
+  fraud:
+    replicas: 1
+    region: us-east-1
+    cpu: 1
+    memory: 1GB
+```
+
+You run `pluto deploy --spec deploy.yaml` (hypothetical command for a future orchestrator). It:
+1. Builds Docker images for each stage binary
+2. Pushes them to a container registry
+3. Deploys them to Kubernetes (or Nomad, or EC2, or wherever)
+4. Configures service discovery so stages can find each other
+5. Injects config (database URLs, API keys) as environment variables
+
+The stages start up. They discover each other via DNS or Consul. The `api` stage handles requests and calls `auth`, `warehouse`, `fraud`, and `payments` via HTTP. The RPC code handles serialization, retries, timeouts, error propagation — all generated by the compiler.
+
+### A Schema Change Propagates Automatically
+
+You realize `OrderRequest` needs a new field: `discount_code`.
+
+You edit `main.pluto`:
+
+```pluto
+class OrderRequest {
+    token: string
+    items: Array<Item>
+    discount_code: string?  // NEW: optional discount code
+}
+```
+
+You re-compile. The compiler:
+- Updates the serialization code for `OrderRequest` in the `api` stage
+- Updates the deserialization code in any stage that receives `OrderRequest` (none in this case, but if `warehouse` needed it, the compiler would update `warehouse` too)
+- Type-checks all usages of `OrderRequest` to ensure they handle the new field correctly
+
+No manual Protobuf schema update. No "rebuild all the services that depend on this." The compiler saw the change, propagated it, and verified it.
+
+### The Database Schema is Part of Your Program
+
+*(Aspirational — schema-as-code isn't implemented yet.)*
+
+Eventually, your database schema will be declared in your program:
+
+```pluto
+stage db {
+    schema Order {
+        id: string primary key
+        user_id: int foreign key User(id)
+        items: json
+        total: int
+        created_at: timestamp
+    }
+
+    pub fn create_order(user_id: int, items: Array<Item>) Order {
+        return insert_into!(Order, {
+            id: generate_uuid(),
+            user_id: user_id,
+            items: items,
+            total: calculate_total(items),
+            created_at: now()
+        })
+    }
+}
+```
+
+The compiler generates:
+- SQL migrations (CREATE TABLE, ALTER TABLE) based on schema changes
+- Type-checked queries (`insert_into!` macro validates that all required fields are present)
+- Query result types (the return type of `create_order` matches the `Order` schema)
+
+When you change the schema (add a field, change a type, add an index), the compiler generates the migration. When you deploy, the migration runs before the stage starts. **Schema changes are code changes.** They're type-checked, versioned, and deployed atomically.
+
+### Observability is Generated
+
+*(Aspirational — observability hooks aren't implemented yet.)*
+
+The compiler knows every function call, every error, every stage boundary. It can generate observability hooks automatically:
+
+```pluto
+stage api[db: Database] {
+    @traced  // compiler generates tracing spans
+    @metrics  // compiler generates latency/error metrics
+    fn handle_order(req: OrderRequest) OrderResponse {
+        let user = auth.verify_user(req.token)!
+        let inventory = warehouse.check_stock(req.items)!
+        let order = self.db.create_order(user.id, req.items)!
+        fraud.check_order(order.id, order.total)!
+        payments.charge_async(order.id, order.total)
+        return OrderResponse { order_id: order.id }
+    }
+}
+```
+
+The compiler generates code that:
+- Creates a trace span for `handle_order`
+- Creates child spans for each cross-stage call (`auth.verify_user`, `warehouse.check_stock`, etc.)
+- Emits metrics for latency (p50, p95, p99) and error rates
+- Logs errors with structured context (order_id, user_id, error type)
+
+You write business logic. The compiler generates the plumbing.
+
+### This is the Vision
+
+A world where:
+- **You write one program** with stages, not services in separate repos
+- **The compiler sees everything** and generates RPC, serialization, migrations, metrics
+- **AI agents write code** using the SDK, not text editors
+- **Deployment is configuration**, not code
+- **Your distributed system is type-checked, error-checked, and optimized** as a whole
+
+This is not a fantasy. The pieces exist:
+- Whole-program compilation ✅
+- Error inference ✅
+- Dependency injection ✅
+- AI SDK and MCP server ✅
+- Binary AST format ✅
+
+What's left:
+- Stages and cross-stage RPC generation
+- Schema-as-code and migration generation
+- Observability hooks
+- Orchestration integration
+
+The foundation is solid. The vision is clear. Pluto is building toward a world where **your infrastructure is your compiler, not your YAML files.**

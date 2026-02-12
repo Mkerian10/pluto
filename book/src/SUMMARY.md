@@ -9,11 +9,14 @@
 
 # What Sets Pluto Apart
 
+- [Whole-Program Compilation](whats-different/whole-program.md)
+- [Source-Level Libraries](whats-different/no-libraries.md)
 - [Error Handling](whats-different/errors.md)
 - [Dependency Injection](whats-different/di.md)
 - [The App Model](whats-different/app.md)
 - [Concurrency](whats-different/concurrency.md)
 - [Contracts](whats-different/contracts.md)
+- [Stages: Distributed as Programs](whats-different/stages.md)
 
 # The Language
 

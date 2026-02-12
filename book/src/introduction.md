@@ -1,12 +1,32 @@
 # The Pluto Programming Language
 
-Every backend team rebuilds the same infrastructure. Dependency injection frameworks. Error handling conventions. Service communication layers. Deployment pipelines. Configuration management. These are not application problems -- they are platform problems, and solving them with libraries and conventions produces systems that are fragile, inconsistent, and expensive to maintain. Pluto is a language designed from the ground up for distributed backend systems, where the solutions to these problems are built into the compiler, not bolted on after the fact.
+Most languages give up at the function boundary. They see your code as isolated units — functions, classes, modules — analyzed in isolation, then stitched together at runtime through reflection, containers, or shared conventions. The compiler type-checks each piece, generates code for each piece, and trusts that you wired everything correctly.
 
-Pluto compiles to native code. It has no runtime VM, no garbage collection pauses at scale, and no framework lock-in. What it does have is a set of language-level constructs that eliminate entire categories of boilerplate and bugs that backend engineers deal with daily.
+**Pluto sees your entire program at compile time.** It analyzes the complete call graph, traces error propagation through every path, resolves your dependency graph, and generates a self-contained native binary with all the knowledge baked in. No runtime container. No reflection. No framework discovering your code at startup.
 
-## What makes Pluto different
+This is **whole-program compilation**, and it changes everything.
 
-**Language-level dependency injection.** Classes declare their dependencies in brackets. The compiler resolves the dependency graph at compile time, performs a topological sort, and wires everything as singletons. No containers, no reflection, no service locators.
+## What Whole-Program Compilation Gives You
+
+When the compiler sees your entire program, it can do things that are impossible with separate compilation:
+
+**Zero-cost dependency injection.** The compiler builds the complete dependency graph at compile time, performs a topological sort, and generates direct allocation and wiring code. There is no container looking up service registrations at runtime. There is no reflection scanning for `@Inject` annotations. The cost is literally zero — it compiles down to a sequence of `calloc` calls and pointer assignments in your `main()` function.
+
+**Compiler-inferred error handling.** The compiler traces every function call in your program, determines which paths can raise errors, and computes the exact error set for each function. You never write `throws` or `Result<T, E>`. The compiler infers fallibility from the complete call graph and enforces handling at every call site. If you forget a `!` or `catch`, the program does not compile.
+
+**Dead code elimination.** The compiler sees every call site in your program. If you import a module with 50 functions but only call 3 of them, the other 47 don't make it into your binary. If you wire up a service that's declared but never used, it doesn't get allocated. This isn't LTO doing cleanup after the fact — the compiler knows what you use because it sees all of it.
+
+**Monomorphization of generics.** The compiler sees every instantiation of every generic type and function across your entire program. It generates exactly the concrete versions you use — `Box<int>`, `Pair<string, float>`, `Option<User>` — and nothing else. No vtables, no boxing, no type erasure. The type parameters are erased at runtime because they were resolved at compile time.
+
+**Future: Cross-stage RPC generation.** Because the compiler sees the full call graph, it will know which function calls cross stage boundaries. You declare `stage api` and `stage payments`, write `payments.charge(order)` in the api stage, and the compiler generates serialization, HTTP transport, and error propagation automatically. The function call syntax is the same. The compiler generates different code based on which stage the callee lives in.
+
+**Future: Your distributed system is your program.** Instead of building separate services in separate repos with manual RPC code, you'll write one Pluto program with multiple `stage` declarations. The compiler will see all of them, generate per-stage binaries with all the RPC wiring, and you'll deploy them as independent services. Microservices become **compile targets**, not architectural decisions you implement in YAML.
+
+This is the core thesis of Pluto: **If the compiler sees your whole program, it can solve problems that otherwise require frameworks, containers, and runtime magic.**
+
+## What Makes Pluto Different
+
+**Language-level dependency injection.** Classes declare their dependencies in brackets. The compiler sees every class in your program, builds the full dependency graph, and generates explicit wiring code. At runtime, there is no container, no service locator, no `getInstance()` calls — just a sequence of allocations in dependency order. This only works because the compiler sees the whole program.
 
 ```
 class OrderService[db: Database, cache: Cache] {
@@ -16,13 +36,13 @@ class OrderService[db: Database, cache: Cache] {
 }
 ```
 
-**Compiler-inferred error handling.** You never annotate functions as fallible. The compiler analyzes the entire call graph, determines which functions can raise errors, and enforces handling at every call site. `!` propagates, `catch` handles. If you forget to handle an error, the program does not compile.
+**Compiler-inferred error handling.** You never annotate functions as fallible. The compiler walks the complete call graph for your program, discovers every `raise` statement, traces error propagation through every function call, and computes the exact error set each function can produce. It enforces handling at every call site. If you forget `!` or `catch`, compilation fails. This is only possible with whole-program analysis.
 
 ```
 fn process(id: string) string {
-    let order = find_order(id)!
-    let receipt = charge(order)!
-    return receipt.confirmation
+    let order = find_order(id)!      // compiler knows find_order can fail
+    let receipt = charge(order)!      // compiler knows charge can fail
+    return receipt.confirmation       // compiler knows this function can fail
 }
 ```
 
@@ -66,7 +86,23 @@ let stock = t2.get()!
 
 **AI-native development.** Pluto's compiler exposes a structured API (MCP tools and a programmatic SDK) so AI agents can read, write, and refactor code at the semantic level -- declarations, types, cross-references -- rather than manipulating raw text.
 
-## Implemented vs. designed
+## Why Separate Compilation Fails for Backend Systems
+
+Go, Java, and Rust all use separate compilation. They compile each package or crate independently, then link them together. This is great for build times and incremental compilation, but it means the compiler never sees your complete program.
+
+The result? All the cross-cutting backend concerns get pushed to runtime:
+
+- **Dependency injection** becomes a runtime container (Spring) or a code generation tool run as a separate build step (`wire`). The container uses reflection to discover services at startup. Errors happen at runtime, not compile time.
+
+- **Error handling** becomes conventions. Go returns `(T, error)` tuples and you write `if err != nil` at every call site — but the compiler doesn't enforce it. Java has checked exceptions, but you annotate every function signature manually with `throws`. Rust has `Result<T, E>`, but you choose between `.unwrap()` (crash) and `.expect()` (crash with message) or explicit `match`.
+
+- **Service communication** becomes frameworks. You add `@RestController` annotations and a framework scans them at startup, builds routing tables via reflection, and handles serialization with more reflection. Or you write explicit HTTP client code, manual JSON marshaling, and duplicate error handling logic.
+
+The common thread: **the compiler doesn't know what you're building**, so it can't help you build it correctly.
+
+Pluto's whole-program compilation makes the compiler your infrastructure. It knows your dependency graph. It knows your error propagation. It will know your service boundaries. And it generates code accordingly — no runtime, no reflection, no surprises.
+
+## Implemented vs. Designed
 
 Pluto is transparent about its maturity. The following features are implemented and working today:
 
