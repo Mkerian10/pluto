@@ -269,7 +269,10 @@
   - [ ] Tests for migration
 
 #### Compile-Time Reflection (`docs/design/rfc-compile-time-reflection-and-encodings.md`)
-- **Phase 1:** `@generate` + basic intrinsics
+- **Phase 1:** ✅ `TypeInfo` trait + intrinsics for classes and enums
+  - Static trait methods: `TypeInfo::type_name<T>()`, `TypeInfo::kind<T>()`
+  - Metadata types: `FieldInfo`, `ClassInfo`, `VariantInfo`, `EnumInfo`, `TypeKind`
+  - Zero runtime overhead - all generated at compile time
 - **Phase 2:** Loop unrolling and compiler transforms
 - **Phase 3:** `JsonEncoding` implementation
 
