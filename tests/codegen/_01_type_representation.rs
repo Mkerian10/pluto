@@ -601,12 +601,12 @@ fn test_class_with_bracket_deps() {
         }
 
         app MyApp[server: Server] {
-            fn main(self) int {
-                return self.server.get_port()
+            fn main(self) {
+                print(self.server.get_port())
             }
         }
     "#;
-    assert_eq!(compile_and_run(src), 0); // Default config port is 0
+    assert_eq!(compile_and_run_stdout(src).trim(), "0"); // Default config port is 0
 }
 
 #[test]
