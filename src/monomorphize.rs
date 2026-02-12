@@ -737,235 +737,95 @@ fn rewrite_program(program: &mut Program, rewrites: &HashMap<(usize, usize), Str
     }
 }
 
-fn rewrite_block(block: &mut Block, rewrites: &HashMap<(usize, usize), String>) {
-    for stmt in &mut block.stmts {
-        rewrite_stmt(&mut stmt.node, rewrites);
-    }
+struct MonomorphizeRewriter<'a> {
+    rewrites: &'a HashMap<(usize, usize), String>,
 }
 
-fn rewrite_stmt(stmt: &mut Stmt, rewrites: &HashMap<(usize, usize), String>) {
-    match stmt {
-        Stmt::Let { value, .. } => {
-            rewrite_expr(&mut value.node, value.span.start, value.span.end, rewrites);
-        }
-        Stmt::Return(Some(expr)) => {
-            rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
-        }
-        Stmt::Return(None) => {}
-        Stmt::Assign { value, .. } => {
-            rewrite_expr(&mut value.node, value.span.start, value.span.end, rewrites);
-        }
-        Stmt::FieldAssign { object, value, .. } => {
-            rewrite_expr(&mut object.node, object.span.start, object.span.end, rewrites);
-            rewrite_expr(&mut value.node, value.span.start, value.span.end, rewrites);
-        }
-        Stmt::If { condition, then_block, else_block } => {
-            rewrite_expr(&mut condition.node, condition.span.start, condition.span.end, rewrites);
-            rewrite_block(&mut then_block.node, rewrites);
-            if let Some(eb) = else_block {
-                rewrite_block(&mut eb.node, rewrites);
+impl VisitMut for MonomorphizeRewriter<'_> {
+    fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+        let span_key = (expr.span.start, expr.span.end);
+
+        // Handle expressions that need name rewriting
+        match &mut expr.node {
+            Expr::Call { name, type_args, .. } => {
+                // Check if this call site should be rewritten
+                if let Some(mangled) = self.rewrites.get(&span_key) {
+                    name.node = mangled.clone();
+                    type_args.clear();
+                }
             }
+            Expr::StructLit { name, type_args, .. } => {
+                if let Some(mangled) = self.rewrites.get(&span_key) {
+                    name.node = mangled.clone();
+                    type_args.clear();
+                }
+            }
+            Expr::EnumUnit { enum_name, type_args, .. } => {
+                if let Some(mangled) = self.rewrites.get(&span_key) {
+                    enum_name.node = mangled.clone();
+                    type_args.clear();
+                }
+            }
+            Expr::EnumData { enum_name, type_args, .. } => {
+                if let Some(mangled) = self.rewrites.get(&span_key) {
+                    enum_name.node = mangled.clone();
+                    type_args.clear();
+                }
+            }
+            Expr::QualifiedAccess { segments } => {
+                panic!(
+                    "QualifiedAccess should be resolved by module flattening before monomorphize. Segments: {:?}",
+                    segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+                )
+            }
+            Expr::StringInterp { parts } => {
+                for part in parts.iter_mut() {
+                    if let StringInterpPart::Expr(e) = part {
+                        self.visit_expr_mut(e);
+                    }
+                }
+                return;
+            }
+            _ => {}
         }
-        Stmt::While { condition, body } => {
-            rewrite_expr(&mut condition.node, condition.span.start, condition.span.end, rewrites);
-            rewrite_block(&mut body.node, rewrites);
-        }
-        Stmt::For { iterable, body, .. } => {
-            rewrite_expr(&mut iterable.node, iterable.span.start, iterable.span.end, rewrites);
-            rewrite_block(&mut body.node, rewrites);
-        }
-        Stmt::IndexAssign { object, index, value } => {
-            rewrite_expr(&mut object.node, object.span.start, object.span.end, rewrites);
-            rewrite_expr(&mut index.node, index.span.start, index.span.end, rewrites);
-            rewrite_expr(&mut value.node, value.span.start, value.span.end, rewrites);
-        }
-        Stmt::Match { expr, arms } => {
+        // Recurse into sub-expressions
+        walk_expr_mut(self, expr);
+    }
+
+    fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
+        // Handle Match arms: rewrite enum names
+        if let Stmt::Match { expr, arms } = &mut stmt.node {
             let match_span = (expr.span.start, expr.span.end);
-            rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
+            // Visit the match expression
+            self.visit_expr_mut(expr);
+
             // Rewrite enum names in match arms
             for arm in arms.iter_mut() {
-                // Check if the match statement has a rewrite for the arm's enum name
-                // Use the arm's enum_name span to look up rewrites
                 let arm_key = (arm.enum_name.span.start, arm.enum_name.span.end);
-                if let Some(mangled) = rewrites.get(&arm_key) {
+                if let Some(mangled) = self.rewrites.get(&arm_key) {
                     arm.enum_name.node = mangled.clone();
                 }
                 // Also check if match expr span maps to a rewrite
-                if let Some(mangled) = rewrites.get(&match_span) {
+                if let Some(mangled) = self.rewrites.get(&match_span) {
                     arm.enum_name.node = mangled.clone();
                 }
-                rewrite_block(&mut arm.body.node, rewrites);
+                self.visit_block_mut(&mut arm.body);
             }
+            return;
         }
-        Stmt::Raise { fields, .. } => {
-            for (_, fexpr) in fields.iter_mut() {
-                rewrite_expr(&mut fexpr.node, fexpr.span.start, fexpr.span.end, rewrites);
-            }
-        }
-        Stmt::Expr(expr) => {
-            rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
-        }
-        Stmt::LetChan { capacity, .. } => {
-            if let Some(cap) = capacity {
-                rewrite_expr(&mut cap.node, cap.span.start, cap.span.end, rewrites);
-            }
-        }
-        Stmt::Scope { seeds, body, .. } => {
-            for seed in seeds {
-                rewrite_expr(&mut seed.node, seed.span.start, seed.span.end, rewrites);
-            }
-            rewrite_block(&mut body.node, rewrites);
-        }
-        Stmt::Select { arms, default } => {
-            for arm in arms {
-                match &mut arm.op {
-                    SelectOp::Recv { channel, .. } => {
-                        rewrite_expr(&mut channel.node, channel.span.start, channel.span.end, rewrites);
-                    }
-                    SelectOp::Send { channel, value } => {
-                        rewrite_expr(&mut channel.node, channel.span.start, channel.span.end, rewrites);
-                        rewrite_expr(&mut value.node, value.span.start, value.span.end, rewrites);
-                    }
-                }
-                rewrite_block(&mut arm.body.node, rewrites);
-            }
-            if let Some(def) = default {
-                rewrite_block(&mut def.node, rewrites);
-            }
-        }
-        Stmt::Yield { value, .. } => {
-            rewrite_expr(&mut value.node, value.span.start, value.span.end, rewrites);
-        }
-        Stmt::Break | Stmt::Continue => {}
+
+        // Recurse into sub-statements
+        walk_stmt_mut(self, stmt);
     }
 }
 
-fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(usize, usize), String>) {
-    match expr {
-        Expr::Call { name, args, type_args, .. } => {
-            // Check if this call site should be rewritten
-            if let Some(mangled) = rewrites.get(&(start, end)) {
-                name.node = mangled.clone();
-                type_args.clear();
-            }
-            for arg in args.iter_mut() {
-                rewrite_expr(&mut arg.node, arg.span.start, arg.span.end, rewrites);
-            }
-        }
-        Expr::StructLit { name, type_args, fields, .. } => {
-            if let Some(mangled) = rewrites.get(&(start, end)) {
-                name.node = mangled.clone();
-                type_args.clear();
-            }
-            for (_, fexpr) in fields.iter_mut() {
-                rewrite_expr(&mut fexpr.node, fexpr.span.start, fexpr.span.end, rewrites);
-            }
-        }
-        Expr::EnumUnit { enum_name, type_args, .. } => {
-            if let Some(mangled) = rewrites.get(&(start, end)) {
-                enum_name.node = mangled.clone();
-                type_args.clear();
-            }
-        }
-        Expr::EnumData { enum_name, type_args, fields, .. } => {
-            if let Some(mangled) = rewrites.get(&(start, end)) {
-                enum_name.node = mangled.clone();
-                type_args.clear();
-            }
-            for (_, fexpr) in fields.iter_mut() {
-                rewrite_expr(&mut fexpr.node, fexpr.span.start, fexpr.span.end, rewrites);
-            }
-        }
-        // Recurse into sub-expressions
-        Expr::BinOp { lhs, rhs, .. } => {
-            rewrite_expr(&mut lhs.node, lhs.span.start, lhs.span.end, rewrites);
-            rewrite_expr(&mut rhs.node, rhs.span.start, rhs.span.end, rewrites);
-        }
-        Expr::Range { start, end, .. } => {
-            rewrite_expr(&mut start.node, start.span.start, start.span.end, rewrites);
-            rewrite_expr(&mut end.node, end.span.start, end.span.end, rewrites);
-        }
-        Expr::UnaryOp { operand, .. } => {
-            rewrite_expr(&mut operand.node, operand.span.start, operand.span.end, rewrites);
-        }
-        Expr::Cast { expr: inner, .. } => {
-            rewrite_expr(&mut inner.node, inner.span.start, inner.span.end, rewrites);
-        }
-        Expr::FieldAccess { object, .. } => {
-            rewrite_expr(&mut object.node, object.span.start, object.span.end, rewrites);
-        }
-        Expr::MethodCall { object, args, .. } => {
-            rewrite_expr(&mut object.node, object.span.start, object.span.end, rewrites);
-            for arg in args.iter_mut() {
-                rewrite_expr(&mut arg.node, arg.span.start, arg.span.end, rewrites);
-            }
-        }
-        Expr::ArrayLit { elements } => {
-            for el in elements.iter_mut() {
-                rewrite_expr(&mut el.node, el.span.start, el.span.end, rewrites);
-            }
-        }
-        Expr::Index { object, index } => {
-            rewrite_expr(&mut object.node, object.span.start, object.span.end, rewrites);
-            rewrite_expr(&mut index.node, index.span.start, index.span.end, rewrites);
-        }
-        Expr::StringInterp { parts } => {
-            for part in parts.iter_mut() {
-                if let StringInterpPart::Expr(e) = part {
-                    rewrite_expr(&mut e.node, e.span.start, e.span.end, rewrites);
-                }
-            }
-        }
-        Expr::Closure { body, .. } => {
-            rewrite_block(&mut body.node, rewrites);
-        }
-        Expr::Propagate { expr } => {
-            rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
-        }
-        Expr::Catch { expr, handler } => {
-            rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
-            match handler {
-                CatchHandler::Wildcard { body, .. } => {
-                    rewrite_block(&mut body.node, rewrites);
-                }
-                CatchHandler::Shorthand(body) => {
-                    rewrite_expr(&mut body.node, body.span.start, body.span.end, rewrites);
-                }
-            }
-        }
-        Expr::MapLit { entries, .. } => {
-            for (k, v) in entries.iter_mut() {
-                rewrite_expr(&mut k.node, k.span.start, k.span.end, rewrites);
-                rewrite_expr(&mut v.node, v.span.start, v.span.end, rewrites);
-            }
-        }
-        Expr::SetLit { elements, .. } => {
-            for el in elements.iter_mut() {
-                rewrite_expr(&mut el.node, el.span.start, el.span.end, rewrites);
-            }
-        }
-        Expr::Spawn { call } => {
-            rewrite_expr(&mut call.node, call.span.start, call.span.end, rewrites);
-        }
-        Expr::NullPropagate { expr } => {
-            rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
-        }
-        Expr::StaticTraitCall { args, .. } => {
-            for arg in args {
-                rewrite_expr(&mut arg.node, arg.span.start, arg.span.end, rewrites);
-            }
-        }
-        Expr::QualifiedAccess { segments } => {
-            panic!(
-                "QualifiedAccess should be resolved by module flattening before monomorphize. Segments: {:?}",
-                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
-            )
-        }
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
-        | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. }
-        | Expr::NoneLit => {}
+fn rewrite_block(block: &mut Block, rewrites: &HashMap<(usize, usize), String>) {
+    let mut rewriter = MonomorphizeRewriter { rewrites };
+    for stmt in &mut block.stmts {
+        rewriter.visit_stmt_mut(stmt);
     }
 }
+
 
 // ── Phase 2b: Resolve TypeExpr::Generic to TypeExpr::Named ──────────
 
