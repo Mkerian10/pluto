@@ -899,4 +899,38 @@ mod tests {
     fn set_empty_literal_requires_annotation() {
         check("fn main() {\n    let s: Set<int> = Set<int> {}\n}").unwrap();
     }
+
+    // Phase 3: Channels and Select Typeck Tests (6 new tests)
+
+    #[test]
+    fn chan_type_infers_from_generic() {
+        check("fn main() {\n    let (s, r) = chan<int>()\n}").unwrap();
+    }
+
+    #[test]
+    fn chan_capacity_must_be_int() {
+        let result = check("fn main() {\n    let (s, r) = chan<int>(\"10\")\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn select_recv_channel_type_checks() {
+        check("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        x = r.recv() {\n        }\n    }\n}").unwrap();
+    }
+
+    #[test]
+    fn select_send_channel_type_checks() {
+        check("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        s.send(42) {\n        }\n    }\n}").unwrap();
+    }
+
+    #[test]
+    fn select_send_value_type_mismatch_rejected() {
+        let result = check("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        s.send(\"str\") {\n        }\n    }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn select_recv_binding_type_infers() {
+        check("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        x = r.recv() {\n            let y: int = x\n        }\n    }\n}").unwrap();
+    }
 }

@@ -4690,4 +4690,76 @@ mod tests {
             _ => panic!("expected let"),
         }
     }
+
+    // Phase 3: Channels and Select Parser Tests (5 new tests)
+
+    #[test]
+    fn parse_let_chan_basic() {
+        let prog = parse("fn main() {\n    let (sender, receiver) = chan<int>()\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::LetChan { sender, receiver, elem_type, .. } => {
+                assert_eq!(sender.node, "sender");
+                assert_eq!(receiver.node, "receiver");
+                assert!(matches!(elem_type.node, TypeExpr::Named(_)));
+            }
+            _ => panic!("expected let chan statement, got {:?}", f.body.node.stmts[0].node),
+        }
+    }
+
+    #[test]
+    fn parse_let_chan_with_capacity() {
+        let prog = parse("fn main() {\n    let (s, r) = chan<int>(10)\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::LetChan { capacity, .. } => {
+                assert!(capacity.is_some());
+            }
+            _ => panic!("expected let chan statement"),
+        }
+    }
+
+    #[test]
+    fn parse_select_recv_only() {
+        let prog = parse("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        val = r.recv() {\n        }\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[1].node {
+            Stmt::Select { arms, .. } => {
+                assert_eq!(arms.len(), 1);
+                match &arms[0].op {
+                    SelectOp::Recv { .. } => {},
+                    _ => panic!("expected recv operation"),
+                }
+            }
+            _ => panic!("expected select statement"),
+        }
+    }
+
+    #[test]
+    fn parse_select_send_only() {
+        let prog = parse("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        s.send(42) {\n        }\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[1].node {
+            Stmt::Select { arms, .. } => {
+                assert_eq!(arms.len(), 1);
+                match &arms[0].op {
+                    SelectOp::Send { .. } => {},
+                    _ => panic!("expected send operation"),
+                }
+            }
+            _ => panic!("expected select statement"),
+        }
+    }
+
+    #[test]
+    fn parse_select_with_default() {
+        let prog = parse("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        val = r.recv() {\n        }\n        default {\n        }\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[1].node {
+            Stmt::Select { default, .. } => {
+                assert!(default.is_some());
+            }
+            _ => panic!("expected select statement"),
+        }
+    }
 }
