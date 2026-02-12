@@ -113,7 +113,8 @@ mod tests {
 
     #[test]
     fn lex_reserved_keywords() {
-        let src = "class trait app inject error raise catch spawn enum";
+        // Test all language keywords
+        let src = "class trait app inject error raise catch spawn enum import match uses ambient";
         let tokens = lex(src).unwrap();
         assert!(matches!(tokens[0].node, Token::Class));
         assert!(matches!(tokens[1].node, Token::Trait));
@@ -124,36 +125,44 @@ mod tests {
         assert!(matches!(tokens[6].node, Token::Catch));
         assert!(matches!(tokens[7].node, Token::Spawn));
         assert!(matches!(tokens[8].node, Token::Enum));
+        assert!(matches!(tokens[9].node, Token::Import));
+        assert!(matches!(tokens[10].node, Token::Match));
+        assert!(matches!(tokens[11].node, Token::Uses));
+        assert!(matches!(tokens[12].node, Token::Ambient));
     }
 
-    #[test]
-    fn lex_import_keyword() {
-        let src = "import math";
-        let tokens = lex(src).unwrap();
-        assert!(matches!(tokens[0].node, Token::Import));
-        assert!(matches!(tokens[1].node, Token::Ident));
-    }
-
-    #[test]
-    fn lex_match_keyword() {
-        let src = "match x";
-        let tokens = lex(src).unwrap();
-        assert!(matches!(tokens[0].node, Token::Match));
-        assert!(matches!(tokens[1].node, Token::Ident));
-    }
-
-    #[test]
-    fn lex_uses_and_ambient_keywords() {
-        let src = "uses ambient";
-        let tokens = lex(src).unwrap();
-        assert!(matches!(tokens[0].node, Token::Uses));
-        assert!(matches!(tokens[1].node, Token::Ambient));
-    }
 
     #[test]
     fn lex_string_with_escapes() {
         let src = r#""hello \"world\"""#;
         let tokens = lex(src).unwrap();
         assert!(matches!(tokens[0].node, Token::StringLit(_)));
+    }
+
+    #[test]
+    fn lex_bitwise_operators() {
+        let src = "a & b | c ^ d ~ e << f";
+        let tokens = lex(src).unwrap();
+        // a & b | c ^ d ~ e << f
+        // 0 1 2 3 4 5 6 7 8 9 10 11
+        assert!(matches!(tokens[1].node, Token::Amp));      // &
+        assert!(matches!(tokens[3].node, Token::Pipe));     // |
+        assert!(matches!(tokens[5].node, Token::Caret));    // ^
+        assert!(matches!(tokens[7].node, Token::Tilde));    // ~
+        assert!(matches!(tokens[9].node, Token::Shl));      // <<
+        // Note: >> is parsed as two Gt tokens to avoid generic syntax conflicts
+    }
+
+    #[test]
+    fn lex_arithmetic_operators() {
+        let src = "a + b - c * d / e % f";
+        let tokens = lex(src).unwrap();
+        // a + b - c * d / e % f
+        // 0 1 2 3 4 5 6 7 8 9 10
+        assert!(matches!(tokens[1].node, Token::Plus));     // +
+        assert!(matches!(tokens[3].node, Token::Minus));    // -
+        assert!(matches!(tokens[5].node, Token::Star));     // *
+        assert!(matches!(tokens[7].node, Token::Slash));    // /
+        assert!(matches!(tokens[9].node, Token::Percent));  // %
     }
 }
