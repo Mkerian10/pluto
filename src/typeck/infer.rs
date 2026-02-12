@@ -347,6 +347,14 @@ pub(crate) fn infer_expr(
                 )),
             }
         }
+        Expr::StaticTraitCall { trait_name, method_name, type_args: _, args: _ } => {
+            // TODO: Implement static trait method type inference
+            // For now, return a placeholder error
+            Err(CompileError::type_err(
+                format!("Static trait calls not yet fully implemented: {}::{}", trait_name.node, method_name.node),
+                span,
+            ))
+        }
     }
 }
 

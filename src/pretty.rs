@@ -1312,6 +1312,26 @@ impl PrettyPrinter {
                 self.emit_expr(&expr.node, 25);
                 self.write("?");
             }
+            Expr::StaticTraitCall { trait_name, method_name, type_args, args } => {
+                self.write(&trait_name.node);
+                self.write("::");
+                self.write(&method_name.node);
+                self.write("<");
+                for (i, type_arg) in type_args.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_type_expr(&type_arg.node);
+                }
+                self.write(">(");
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(&arg.node, 0);
+                }
+                self.write(")");
+            }
         }
     }
 }

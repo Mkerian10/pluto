@@ -449,6 +449,11 @@ fn rewrite_expr(expr: &mut Expr, span: Span, active: &HashSet<String>) {
         Expr::NullPropagate { expr: inner } => {
             rewrite_expr(&mut inner.node, inner.span, active);
         }
+        Expr::StaticTraitCall { args, .. } => {
+            for arg in args {
+                rewrite_expr(&mut arg.node, arg.span, active);
+            }
+        }
         // Literals and non-rewritable expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}

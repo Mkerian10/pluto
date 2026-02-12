@@ -1092,6 +1092,11 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
         Expr::NullPropagate { expr } => {
             rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
         }
+        Expr::StaticTraitCall { args, .. } => {
+            for arg in args {
+                rewrite_expr_for_module(&mut arg.node, module_name, module_prog);
+            }
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::NoneLit => {}
     }
@@ -1450,6 +1455,11 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
         }
         Expr::NullPropagate { expr } => {
             rewrite_expr(&mut expr.node, expr.span, import_names);
+        }
+        Expr::StaticTraitCall { args, .. } => {
+            for arg in args {
+                rewrite_expr(&mut arg.node, arg.span, import_names);
+            }
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::NoneLit => {}

@@ -473,6 +473,14 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
         Expr::NullPropagate { expr } => {
             substitute_in_expr(&mut expr.node, bindings);
         }
+        Expr::StaticTraitCall { type_args, args, .. } => {
+            for type_arg in type_args {
+                substitute_in_type_expr(&mut type_arg.node, bindings);
+            }
+            for arg in args {
+                substitute_in_expr(&mut arg.node, bindings);
+            }
+        }
         Expr::BinOp { lhs, rhs, .. } => {
             substitute_in_expr(&mut lhs.node, bindings);
             substitute_in_expr(&mut rhs.node, bindings);
@@ -985,6 +993,18 @@ fn offset_expr_spans(expr: &mut Expr, offset: usize) {
             offset_spanned(call, offset);
             offset_expr_spans(&mut call.node, offset);
         }
+        Expr::StaticTraitCall { trait_name, method_name, type_args, args } => {
+            offset_spanned(trait_name, offset);
+            offset_spanned(method_name, offset);
+            for type_arg in type_args {
+                offset_spanned(type_arg, offset);
+                offset_type_expr_spans(&mut type_arg.node, offset);
+            }
+            for arg in args {
+                offset_spanned(arg, offset);
+                offset_expr_spans(&mut arg.node, offset);
+            }
+        }
     }
 }
 
@@ -1227,6 +1247,11 @@ fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(u
         }
         Expr::NullPropagate { expr } => {
             rewrite_expr(&mut expr.node, expr.span.start, expr.span.end, rewrites);
+        }
+        Expr::StaticTraitCall { args, .. } => {
+            for arg in args {
+                rewrite_expr(&mut arg.node, arg.span.start, arg.span.end, rewrites);
+            }
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
         | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. }

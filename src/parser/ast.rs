@@ -383,6 +383,13 @@ pub enum Expr {
     NullPropagate {
         expr: Box<Spanned<Expr>>,
     },
+    /// Static trait method call: TypeInfo::kind<User>()
+    StaticTraitCall {
+        trait_name: Spanned<String>,
+        method_name: Spanned<String>,
+        type_args: Vec<Spanned<TypeExpr>>,
+        args: Vec<Spanned<Expr>>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

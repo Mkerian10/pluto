@@ -118,6 +118,12 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
         // None literal — allowed (useful for nullable comparisons in contracts)
         Expr::NoneLit => Ok(()),
 
+        // Static trait calls — rejected (might not be pure)
+        Expr::StaticTraitCall { .. } => Err(CompileError::syntax(
+            "static trait calls are not allowed in contract expressions",
+            span,
+        )),
+
         // Null propagation — rejected (side-effectful)
         Expr::NullPropagate { .. } => Err(CompileError::syntax(
             "null propagation is not allowed in contract expressions",

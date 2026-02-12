@@ -2100,6 +2100,10 @@ impl<'a> LowerContext<'a> {
             Expr::Range { .. } => {
                 Err(CompileError::codegen("range expressions can only be used as for loop iterables".to_string()))
             }
+            Expr::StaticTraitCall { .. } => {
+                // TODO: Implement codegen for static trait calls
+                Err(CompileError::codegen("static trait calls not yet implemented in codegen".to_string()))
+            }
         }
     }
 
@@ -4745,6 +4749,11 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 PlutoType::Nullable(t) => *t,
                 other => other,
             }
+        }
+        Expr::StaticTraitCall { .. } => {
+            // TODO: Proper type inference for static trait calls
+            // For now, return Void as placeholder
+            PlutoType::Void
         }
     }
 }

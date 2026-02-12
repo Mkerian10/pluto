@@ -348,6 +348,14 @@ fn lift_in_expr(
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. }
         | Expr::NoneLit => {}
+        Expr::StaticTraitCall { type_args, args, .. } => {
+            for type_arg in type_args {
+                // Type args don't contain closures
+            }
+            for arg in args {
+                lift_in_expr(&mut arg.node, arg.span, env, counter, new_fns)?;
+            }
+        }
     }
     Ok(())
 }

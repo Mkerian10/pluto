@@ -241,6 +241,8 @@ pub enum Token {
     Comma,
     #[token(":")]
     Colon,
+    #[token("::")]
+    DoubleColon,
     #[token("->")]
     Arrow,
     #[token("=>")]
@@ -364,6 +366,7 @@ impl std::fmt::Display for Token {
             Token::RBracket => write!(f, "]"),
             Token::Comma => write!(f, ","),
             Token::Colon => write!(f, ":"),
+            Token::DoubleColon => write!(f, "::"),
             Token::Arrow => write!(f, "->"),
             Token::FatArrow => write!(f, "=>"),
             Token::DotDotEq => write!(f, "..="),

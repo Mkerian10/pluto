@@ -423,6 +423,11 @@ fn collect_expr_effects(
         Expr::NullPropagate { expr: inner } => {
             collect_expr_effects(&inner.node, direct_errors, edges, current_fn, env);
         }
+        Expr::StaticTraitCall { args, .. } => {
+            for arg in args {
+                collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+            }
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
     }
@@ -783,6 +788,12 @@ fn enforce_expr(
         }
         Expr::NullPropagate { expr: inner } => {
             enforce_expr(&inner.node, inner.span, current_fn, env)
+        }
+        Expr::StaticTraitCall { args, .. } => {
+            for arg in args {
+                enforce_expr(&arg.node, arg.span, current_fn, env)?;
+            }
+            Ok(())
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => Ok(()),
