@@ -1,6 +1,6 @@
 # Bugs, Limitations, and Missing Features
 
-**Last Updated:** 2026-02-11
+**Last Updated:** 2026-02-12
 **Purpose:** Centralized tracking of known issues, limitations, and planned features for the Pluto compiler
 
 **📋 Quick Navigation:**
@@ -11,7 +11,7 @@
 
 ## 📊 Key Metrics
 
-**Active Bugs:** 6 total (2 P0, 4 P1)
+**Active Bugs:** 4 total (2 P0, 2 P1)
 **Known Limitations:** 20
 **Missing Features:** See [FEATURES.md](FEATURES.md) (49 tracked features)
 
@@ -60,22 +60,10 @@
 
 ### P1 - High Priority
 
-#### 3. 🟡 Test Runner Generates Duplicate IDs for Multiple Files
-- **Status:** 🟡 Active (workaround: one file per directory)
-- **Effort:** S (<3 days)
-- **Impact:** Cannot organize tests into multiple files in same directory
-- **File:** `feedback/bugs/test-runner-duplicate-ids-multiple-files.md`
-- **Example:**
-  ```bash
-  # tests/lang/fstrings/test1.pluto + test2.pluto
-  cargo run -- test tests/lang/fstrings/test1.pluto
-  # ERROR: Duplicate definition of identifier: __test_0
-  ```
-- **Workaround:** Only one test file per directory
-- **Recommended Fix:**
-  - Option 1: Generate unique IDs with file hash (`__test_<hash>_0`)
-  - Option 2: Only compile specified file, not all siblings
-  - Option 3: Support directory-based test suites
+#### 3. ✅ Test Runner Generates Duplicate IDs for Multiple Files
+- **Status:** ✅ **FIXED** in PR #45 (2026-02-12)
+- **Impact:** Could not organize tests into multiple files in same directory
+- **Fix:** Test runner now generates unique IDs using file hash prefix (`__test_<hash>_0`)
 
 #### 4. ✅ Trait Method Without `self` Parameter Causes Compiler Panic
 - **Status:** ✅ **FIXED** in PR #43 (2026-02-11)
@@ -326,11 +314,19 @@
 
 ## ✅ Recently Fixed
 
-1. **`?` Operator Crash in Void-Returning Functions**
+1. **Test Runner Generates Duplicate IDs for Multiple Files** (Bug #3)
+   - Fixed in PR #45 (2026-02-12)
+   - Now generates unique test IDs using file hash prefix
+
+2. **Trait Method Without `self` Parameter Causes Compiler Panic** (Bug #4)
+   - Fixed in PR #43 (2026-02-11)
+   - Now shows clear error: "trait method 'X' must have a 'self' parameter"
+
+3. **`?` Operator Crash in Void-Returning Functions**
    - Fixed in commit `ec589633` (2026-02-10)
    - File: `docs/completed/bugs/null-propagate-void-crash.md`
 
-2. **Lexer Bugs (BUG-LEX-001 to -008)**
+4. **Lexer Bugs (BUG-LEX-001 to -008)**
    - Fixed per `bugs/LEXER-SUMMARY.md`
    - Hex literal validation
    - CRLF line endings
@@ -344,9 +340,9 @@
 ### Fix Immediately (Blocking Real Projects)
 1. 🔴 **Nested field access bug** (#1) — blocks OOP-style code (Effort: M)
 2. 🔴 **Errors in closures** (#2) — blocks functional patterns with error handling (Effort: L)
-3. 🟡 **Test runner duplicate IDs** (#3) — blocks multi-file test organization (Effort: S)
 
 ### Fix Soon (Quality of Life)
+3. ✅ ~~Test runner duplicate IDs~~ — **FIXED** in PR #45
 4. ✅ ~~Trait method validation~~ — **FIXED** in PR #43
 5. 🟡 **Trait type coercion** (#5) — struct literal field assignment (Effort: M)
 6. 🟢 **Duplicate trait impl** (#6) — validation (Effort: S)
@@ -388,5 +384,5 @@ This document consolidates information from:
 - Remove limitations when implemented (cross-reference FEATURES.md)
 - Review and update monthly
 
-**Last reviewed:** 2026-02-11
-**Next review:** 2026-03-11
+**Last reviewed:** 2026-02-12
+**Next review:** 2026-03-12
