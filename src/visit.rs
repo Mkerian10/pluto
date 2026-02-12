@@ -289,6 +289,9 @@ pub fn walk_block<V: Visitor>(v: &mut V, block: &Spanned<Block>) {
     }
 }
 
+/// NOTE: When adding a new Stmt variant, update this function AND all core manual walkers.
+/// Follow the checklist in docs/checklists/add-ast-variant.md to ensure all necessary
+/// updates are made (visitor infrastructure, type checking, codegen, pretty printing, etc.).
 pub fn walk_stmt<V: Visitor>(v: &mut V, stmt: &Spanned<Stmt>) {
     match &stmt.node {
         Stmt::Let { ty, value, .. } => {
@@ -389,6 +392,9 @@ pub fn walk_stmt<V: Visitor>(v: &mut V, stmt: &Spanned<Stmt>) {
     }
 }
 
+/// NOTE: When adding a new Expr variant, update this function AND all core manual walkers.
+/// Follow the checklist in docs/checklists/add-ast-variant.md to ensure all necessary
+/// updates are made (visitor infrastructure, type checking, codegen, pretty printing, etc.).
 pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
     match &expr.node {
         // Leaves — no children
@@ -547,6 +553,9 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
     }
 }
 
+/// NOTE: When adding a new TypeExpr variant, update this function AND all core manual walkers.
+/// Follow the checklist in docs/checklists/add-ast-variant.md to ensure all necessary
+/// updates are made (visitor infrastructure, type checking, codegen, pretty printing, etc.).
 pub fn walk_type_expr<V: Visitor>(v: &mut V, te: &Spanned<TypeExpr>) {
     match &te.node {
         TypeExpr::Named(_) | TypeExpr::Qualified { .. } => {}
