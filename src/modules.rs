@@ -7,6 +7,7 @@ use crate::manifest::{DependencyScope, PackageGraph};
 use crate::parser::ast::*;
 use crate::parser::Parser;
 use crate::span::{Span, Spanned};
+use crate::visit::{walk_expr_mut, walk_stmt_mut, VisitMut};
 
 /// Maps file_id -> (path, source_text).
 #[derive(Default)]
@@ -873,248 +874,122 @@ fn prefix_function_types(func: &mut Function, module_name: &str, module_prog: &P
 }
 
 /// Rewrite expressions inside a block for module-internal references.
+struct ModuleRewriter<'a> {
+    module_name: &'a str,
+    module_prog: &'a Program,
+}
+
+impl VisitMut for ModuleRewriter<'_> {
+    fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+        // Handle expressions that need name prefixing
+        match &mut expr.node {
+            Expr::Call { name, .. } => {
+                // Prefix calls to module-internal functions (but NOT extern fns)
+                if self.module_prog.functions.iter().any(|f| f.node.name.node == name.node) {
+                    name.node = prefix_name(self.module_name, &name.node);
+                }
+            }
+            Expr::StructLit { name, type_args, .. } => {
+                if is_module_type(&name.node, self.module_prog) {
+                    name.node = prefix_name(self.module_name, &name.node);
+                }
+                for ta in type_args {
+                    prefix_type_expr(&mut ta.node, self.module_name, self.module_prog);
+                }
+            }
+            Expr::EnumUnit { enum_name, type_args, .. } => {
+                if is_module_type(&enum_name.node, self.module_prog) {
+                    enum_name.node = prefix_name(self.module_name, &enum_name.node);
+                }
+                for ta in type_args {
+                    prefix_type_expr(&mut ta.node, self.module_name, self.module_prog);
+                }
+            }
+            Expr::EnumData { enum_name, type_args, .. } => {
+                if is_module_type(&enum_name.node, self.module_prog) {
+                    enum_name.node = prefix_name(self.module_name, &enum_name.node);
+                }
+                for ta in type_args {
+                    prefix_type_expr(&mut ta.node, self.module_name, self.module_prog);
+                }
+            }
+            Expr::MapLit { key_type, value_type, .. } => {
+                prefix_type_expr(&mut key_type.node, self.module_name, self.module_prog);
+                prefix_type_expr(&mut value_type.node, self.module_name, self.module_prog);
+            }
+            Expr::SetLit { elem_type, .. } => {
+                prefix_type_expr(&mut elem_type.node, self.module_name, self.module_prog);
+            }
+            Expr::Cast { target_type, .. } => {
+                prefix_type_expr(&mut target_type.node, self.module_name, self.module_prog);
+            }
+            Expr::Closure { params, .. } => {
+                for p in params {
+                    prefix_type_expr(&mut p.ty.node, self.module_name, self.module_prog);
+                }
+            }
+            Expr::StringInterp { parts } => {
+                for part in parts {
+                    if let StringInterpPart::Expr(e) = part {
+                        self.visit_expr_mut(e);
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        // Recurse into sub-expressions
+        walk_expr_mut(self, expr);
+    }
+
+    fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
+        // Handle statements that need special processing
+        match &mut stmt.node {
+            Stmt::Let { ty, .. } => {
+                if let Some(t) = ty {
+                    prefix_type_expr(&mut t.node, self.module_name, self.module_prog);
+                }
+            }
+            Stmt::Match { arms, .. } => {
+                for arm in arms {
+                    if is_module_type(&arm.enum_name.node, self.module_prog) {
+                        arm.enum_name.node = prefix_name(self.module_name, &arm.enum_name.node);
+                    }
+                    for ta in &mut arm.type_args {
+                        prefix_type_expr(&mut ta.node, self.module_name, self.module_prog);
+                    }
+                }
+            }
+            Stmt::Raise { error_name, .. } => {
+                if self.module_prog.errors.iter().any(|e| e.node.name.node == error_name.node) {
+                    error_name.node = prefix_name(self.module_name, &error_name.node);
+                }
+            }
+            Stmt::LetChan { elem_type, .. } => {
+                prefix_type_expr(&mut elem_type.node, self.module_name, self.module_prog);
+            }
+            Stmt::Scope { bindings, .. } => {
+                for binding in bindings {
+                    prefix_type_expr(&mut binding.ty.node, self.module_name, self.module_prog);
+                }
+            }
+            _ => {}
+        }
+        // Recurse into sub-statements
+        walk_stmt_mut(self, stmt);
+    }
+}
+
 fn rewrite_block_for_module(block: &mut Block, module_name: &str, module_prog: &Program) {
+    let mut rewriter = ModuleRewriter {
+        module_name,
+        module_prog,
+    };
     for stmt in &mut block.stmts {
-        rewrite_stmt_for_module(&mut stmt.node, module_name, module_prog);
+        rewriter.visit_stmt_mut(stmt);
     }
 }
 
-fn rewrite_stmt_for_module(stmt: &mut Stmt, module_name: &str, module_prog: &Program) {
-    match stmt {
-        Stmt::Let { ty, value, .. } => {
-            if let Some(t) = ty {
-                prefix_type_expr(&mut t.node, module_name, module_prog);
-            }
-            rewrite_expr_for_module(&mut value.node, module_name, module_prog);
-        }
-        Stmt::Return(Some(expr)) => {
-            rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
-        }
-        Stmt::Return(None) => {}
-        Stmt::Assign { value, .. } => {
-            rewrite_expr_for_module(&mut value.node, module_name, module_prog);
-        }
-        Stmt::FieldAssign { object, value, .. } => {
-            rewrite_expr_for_module(&mut object.node, module_name, module_prog);
-            rewrite_expr_for_module(&mut value.node, module_name, module_prog);
-        }
-        Stmt::If { condition, then_block, else_block } => {
-            rewrite_expr_for_module(&mut condition.node, module_name, module_prog);
-            rewrite_block_for_module(&mut then_block.node, module_name, module_prog);
-            if let Some(eb) = else_block {
-                rewrite_block_for_module(&mut eb.node, module_name, module_prog);
-            }
-        }
-        Stmt::While { condition, body } => {
-            rewrite_expr_for_module(&mut condition.node, module_name, module_prog);
-            rewrite_block_for_module(&mut body.node, module_name, module_prog);
-        }
-        Stmt::For { iterable, body, .. } => {
-            rewrite_expr_for_module(&mut iterable.node, module_name, module_prog);
-            rewrite_block_for_module(&mut body.node, module_name, module_prog);
-        }
-        Stmt::IndexAssign { object, index, value } => {
-            rewrite_expr_for_module(&mut object.node, module_name, module_prog);
-            rewrite_expr_for_module(&mut index.node, module_name, module_prog);
-            rewrite_expr_for_module(&mut value.node, module_name, module_prog);
-        }
-        Stmt::Match { expr, arms } => {
-            rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
-            for arm in arms {
-                if is_module_type(&arm.enum_name.node, module_prog) {
-                    arm.enum_name.node = prefix_name(module_name, &arm.enum_name.node);
-                }
-                // Rewrite type_args in match arms
-                for ta in &mut arm.type_args {
-                    prefix_type_expr(&mut ta.node, module_name, module_prog);
-                }
-                rewrite_block_for_module(&mut arm.body.node, module_name, module_prog);
-            }
-        }
-        Stmt::Raise { error_name, fields, .. } => {
-            if module_prog.errors.iter().any(|e| e.node.name.node == error_name.node) {
-                error_name.node = prefix_name(module_name, &error_name.node);
-            }
-            for (_, val) in fields {
-                rewrite_expr_for_module(&mut val.node, module_name, module_prog);
-            }
-        }
-        Stmt::Expr(expr) => {
-            rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
-        }
-        Stmt::LetChan { elem_type, capacity, .. } => {
-            prefix_type_expr(&mut elem_type.node, module_name, module_prog);
-            if let Some(cap) = capacity {
-                rewrite_expr_for_module(&mut cap.node, module_name, module_prog);
-            }
-        }
-        Stmt::Select { arms, default } => {
-            for arm in arms {
-                match &mut arm.op {
-                    SelectOp::Recv { channel, .. } => {
-                        rewrite_expr_for_module(&mut channel.node, module_name, module_prog);
-                    }
-                    SelectOp::Send { channel, value } => {
-                        rewrite_expr_for_module(&mut channel.node, module_name, module_prog);
-                        rewrite_expr_for_module(&mut value.node, module_name, module_prog);
-                    }
-                }
-                rewrite_block_for_module(&mut arm.body.node, module_name, module_prog);
-            }
-            if let Some(def) = default {
-                rewrite_block_for_module(&mut def.node, module_name, module_prog);
-            }
-        }
-        Stmt::Scope { seeds, bindings, body } => {
-            for seed in seeds {
-                rewrite_expr_for_module(&mut seed.node, module_name, module_prog);
-            }
-            for binding in bindings {
-                prefix_type_expr(&mut binding.ty.node, module_name, module_prog);
-            }
-            rewrite_block_for_module(&mut body.node, module_name, module_prog);
-        }
-        Stmt::Yield { value, .. } => {
-            rewrite_expr_for_module(&mut value.node, module_name, module_prog);
-        }
-        Stmt::Break | Stmt::Continue => {}
-    }
-}
-
-fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Program) {
-    match expr {
-        Expr::Call { name, args, .. } => {
-            // Prefix calls to module-internal functions (but NOT extern fns — those are C symbols)
-            if module_prog.functions.iter().any(|f| f.node.name.node == name.node) {
-                name.node = prefix_name(module_name, &name.node);
-            }
-            for arg in args {
-                rewrite_expr_for_module(&mut arg.node, module_name, module_prog);
-            }
-        }
-        Expr::StructLit { name, type_args, fields, .. } => {
-            if is_module_type(&name.node, module_prog) {
-                name.node = prefix_name(module_name, &name.node);
-            }
-            for ta in type_args {
-                prefix_type_expr(&mut ta.node, module_name, module_prog);
-            }
-            for (_, val) in fields {
-                rewrite_expr_for_module(&mut val.node, module_name, module_prog);
-            }
-        }
-        Expr::MethodCall { object, args, .. } => {
-            rewrite_expr_for_module(&mut object.node, module_name, module_prog);
-            for arg in args {
-                rewrite_expr_for_module(&mut arg.node, module_name, module_prog);
-            }
-        }
-        Expr::FieldAccess { object, .. } => {
-            rewrite_expr_for_module(&mut object.node, module_name, module_prog);
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            rewrite_expr_for_module(&mut lhs.node, module_name, module_prog);
-            rewrite_expr_for_module(&mut rhs.node, module_name, module_prog);
-        }
-        Expr::UnaryOp { operand, .. } => {
-            rewrite_expr_for_module(&mut operand.node, module_name, module_prog);
-        }
-        Expr::Cast { expr: inner, target_type } => {
-            rewrite_expr_for_module(&mut inner.node, module_name, module_prog);
-            prefix_type_expr(&mut target_type.node, module_name, module_prog);
-        }
-        Expr::ArrayLit { elements } => {
-            for elem in elements {
-                rewrite_expr_for_module(&mut elem.node, module_name, module_prog);
-            }
-        }
-        Expr::Index { object, index } => {
-            rewrite_expr_for_module(&mut object.node, module_name, module_prog);
-            rewrite_expr_for_module(&mut index.node, module_name, module_prog);
-        }
-        Expr::EnumUnit { enum_name, type_args, .. } => {
-            if is_module_type(&enum_name.node, module_prog) {
-                enum_name.node = prefix_name(module_name, &enum_name.node);
-            }
-            for ta in type_args {
-                prefix_type_expr(&mut ta.node, module_name, module_prog);
-            }
-        }
-        Expr::EnumData { enum_name, type_args, fields, .. } => {
-            if is_module_type(&enum_name.node, module_prog) {
-                enum_name.node = prefix_name(module_name, &enum_name.node);
-            }
-            for ta in type_args {
-                prefix_type_expr(&mut ta.node, module_name, module_prog);
-            }
-            for (_, val) in fields {
-                rewrite_expr_for_module(&mut val.node, module_name, module_prog);
-            }
-        }
-        Expr::StringInterp { parts } => {
-            for part in parts {
-                if let StringInterpPart::Expr(e) = part {
-                    rewrite_expr_for_module(&mut e.node, module_name, module_prog);
-                }
-            }
-        }
-        Expr::Closure { params, body, .. } => {
-            for p in params {
-                prefix_type_expr(&mut p.ty.node, module_name, module_prog);
-            }
-            for stmt in &mut body.node.stmts {
-                rewrite_stmt_for_module(&mut stmt.node, module_name, module_prog);
-            }
-        }
-        Expr::MapLit { key_type, value_type, entries } => {
-            prefix_type_expr(&mut key_type.node, module_name, module_prog);
-            prefix_type_expr(&mut value_type.node, module_name, module_prog);
-            for (k, v) in entries {
-                rewrite_expr_for_module(&mut k.node, module_name, module_prog);
-                rewrite_expr_for_module(&mut v.node, module_name, module_prog);
-            }
-        }
-        Expr::SetLit { elem_type, elements } => {
-            prefix_type_expr(&mut elem_type.node, module_name, module_prog);
-            for elem in elements {
-                rewrite_expr_for_module(&mut elem.node, module_name, module_prog);
-            }
-        }
-        Expr::ClosureCreate { .. } => {}
-        Expr::Propagate { expr } => {
-            rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
-        }
-        Expr::Catch { expr, handler } => {
-            rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
-            match handler {
-                CatchHandler::Wildcard { body, .. } => {
-                    rewrite_block_for_module(&mut body.node, module_name, module_prog);
-                }
-                CatchHandler::Shorthand(fallback) => {
-                    rewrite_expr_for_module(&mut fallback.node, module_name, module_prog);
-                }
-            }
-        }
-        Expr::Range { start, end, .. } => {
-            rewrite_expr_for_module(&mut start.node, module_name, module_prog);
-            rewrite_expr_for_module(&mut end.node, module_name, module_prog);
-        }
-        Expr::Spawn { call } => {
-            rewrite_expr_for_module(&mut call.node, module_name, module_prog);
-        }
-        Expr::NullPropagate { expr } => {
-            rewrite_expr_for_module(&mut expr.node, module_name, module_prog);
-        }
-        Expr::StaticTraitCall { args, .. } => {
-            for arg in args {
-                rewrite_expr_for_module(&mut arg.node, module_name, module_prog);
-            }
-        }
-        Expr::QualifiedAccess { .. } => {}
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::Ident(_) | Expr::NoneLit => {}
-    }
-}
 
 /// Rewrite qualified references in the root program.
 /// Converts MethodCall { object: Ident("module"), method, args } → Call { name: "module.method", args }
