@@ -1,6 +1,6 @@
 # Bugs, Limitations, and Missing Features
 
-**Last Updated:** 2026-02-11
+**Last Updated:** 2026-02-12
 **Purpose:** Centralized tracking of known issues, limitations, and planned features for the Pluto compiler
 
 **📋 Quick Navigation:**
@@ -11,7 +11,7 @@
 
 ## 📊 Key Metrics
 
-**Active Bugs:** 6 total (2 P0, 4 P1)
+**Active Bugs:** 5 total (2 P0, 3 P1)
 **Known Limitations:** 20
 **Missing Features:** See [FEATURES.md](FEATURES.md) (49 tracked features)
 
@@ -89,12 +89,10 @@
 - **File:** `tests/integration/traits.rs:14963`
 - **Workaround:** `let obj = Foo { other_fields... }; obj.trait_field = ConcreteClass { ... }`
 
-#### 6. 🟢 Same Trait Listed Twice in Impl List Silently Accepted
-- **Status:** 🟢 Low Impact
-- **Effort:** S (<3 days)
-- **Impact:** Confusing, should be compiler error
-- **File:** `tests/integration/traits.rs:14986`
-- **Fix:** Add validation in trait conformance check
+#### 6. ✅ Same Trait Listed Twice in Impl List Silently Accepted
+- **Status:** ✅ **FIXED** in PR #48 (2026-02-12)
+- **Impact:** Duplicate traits were silently accepted, now properly rejected
+- **Fix:** Added validation in `check_trait_conformance()` to detect and reject duplicates
 
 ---
 
@@ -326,11 +324,15 @@
 
 ## ✅ Recently Fixed
 
-1. **`?` Operator Crash in Void-Returning Functions**
+1. **Duplicate Trait in Impl List** (Bug #6)
+   - Fixed in PR #48 (2026-02-12)
+   - Added validation to reject duplicate traits in impl list
+
+2. **`?` Operator Crash in Void-Returning Functions**
    - Fixed in commit `ec589633` (2026-02-10)
    - File: `docs/completed/bugs/null-propagate-void-crash.md`
 
-2. **Lexer Bugs (BUG-LEX-001 to -008)**
+3. **Lexer Bugs (BUG-LEX-001 to -008)**
    - Fixed per `bugs/LEXER-SUMMARY.md`
    - Hex literal validation
    - CRLF line endings
@@ -348,8 +350,8 @@
 
 ### Fix Soon (Quality of Life)
 4. ✅ ~~Trait method validation~~ — **FIXED** in PR #43
-5. 🟡 **Trait type coercion** (#5) — struct literal field assignment (Effort: M)
-6. 🟢 **Duplicate trait impl** (#6) — validation (Effort: S)
+5. ✅ ~~Duplicate trait impl~~ — **FIXED** in PR #48
+6. 🟡 **Trait type coercion** (#5) — struct literal field assignment (Effort: M)
 
 ### Features to Implement (See FEATURES.md)
 7. **Empty array literals** ([FEATURES.md #1](FEATURES.md)) — P0, high impact (Effort: S)
