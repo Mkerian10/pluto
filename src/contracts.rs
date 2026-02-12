@@ -187,5 +187,11 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
             "enum expressions are not allowed in contract expressions",
             span,
         )),
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before contracts. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
+        }
     }
 }

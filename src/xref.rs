@@ -324,6 +324,12 @@ fn resolve_expr(expr: &mut Expr, index: &DeclIndex) {
                 resolve_expr(&mut arg.node, index);
             }
         }
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before xref. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
+        }
         // Leaf expressions — no cross-references
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) |
         Expr::StringLit(_) | Expr::Ident(_) | Expr::NoneLit => {}

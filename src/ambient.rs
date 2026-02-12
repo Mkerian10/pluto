@@ -454,6 +454,12 @@ fn rewrite_expr(expr: &mut Expr, span: Span, active: &HashSet<String>) {
                 rewrite_expr(&mut arg.node, arg.span, active);
             }
         }
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before ambient. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
+        }
         // Literals and non-rewritable expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}

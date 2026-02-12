@@ -1332,6 +1332,9 @@ impl PrettyPrinter {
                 }
                 self.write(")");
             }
+            Expr::QualifiedAccess { segments } => {
+                self.write(&segments.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join("."));
+            }
         }
     }
 }

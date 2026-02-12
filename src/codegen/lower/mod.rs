@@ -2103,6 +2103,12 @@ impl<'a> LowerContext<'a> {
             Expr::StaticTraitCall { trait_name, method_name, type_args, args } => {
                 self.lower_static_trait_call(trait_name, method_name, type_args, args)
             }
+            Expr::QualifiedAccess { segments } => {
+                panic!(
+                    "QualifiedAccess should be resolved by module flattening before codegen. Segments: {:?}",
+                    segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+                )
+            }
         }
     }
 
@@ -4823,6 +4829,12 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
             // Fallback to Void if not found (shouldn't happen after typeck)
             PlutoType::Void
+        }
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before codegen. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
         }
     }
 }

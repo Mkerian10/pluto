@@ -1004,6 +1004,12 @@ fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
                     walk_expr(&arg.node, result);
                 }
             }
+            Expr::QualifiedAccess { segments } => {
+                panic!(
+                    "QualifiedAccess should be resolved by module flattening before codegen. Segments: {:?}",
+                    segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+                )
+            }
             Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
             | Expr::StringLit(_) | Expr::Ident(_) | Expr::EnumUnit { .. }
             | Expr::NoneLit => {}

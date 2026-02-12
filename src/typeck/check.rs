@@ -866,6 +866,11 @@ fn collect_idents_in_expr(expr: &Expr, idents: &mut std::collections::HashSet<St
                 collect_idents_in_expr(&arg.node, idents);
             }
         }
+        Expr::QualifiedAccess { segments } => {
+            if let Some(first) = segments.first() {
+                idents.insert(first.node.clone());
+            }
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
     }
