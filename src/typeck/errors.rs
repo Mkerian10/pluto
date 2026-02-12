@@ -836,3 +836,466 @@ fn contains_propagate(expr: &Spanned<Expr>) -> bool {
     detector.visit_expr(expr);
     detector.found
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::span::Span;
+
+    fn sp<T>(node: T) -> Spanned<T> {
+        Spanned::new(node, Span::dummy())
+    }
+
+    // ===== contains_propagate tests =====
+
+    #[test]
+    fn test_contains_propagate_simple_propagate() {
+        let expr = sp(Expr::Propagate {
+            expr: Box::new(sp(Expr::IntLit(42))),
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_no_propagate() {
+        let expr = sp(Expr::IntLit(42));
+        assert!(!contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_binop_lhs() {
+        let expr = sp(Expr::BinOp {
+            op: BinOp::Add,
+            lhs: Box::new(sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("foo".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })),
+            rhs: Box::new(sp(Expr::IntLit(1))),
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_binop_rhs() {
+        let expr = sp(Expr::BinOp {
+            op: BinOp::Add,
+            lhs: Box::new(sp(Expr::IntLit(1))),
+            rhs: Box::new(sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("bar".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })),
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_nested_in_array() {
+        let expr = sp(Expr::ArrayLit {
+            elements: vec![
+                sp(Expr::IntLit(1)),
+                sp(Expr::Propagate {
+                    expr: Box::new(sp(Expr::Call {
+                        name: sp("get_value".to_string()),
+                        args: vec![],
+                        type_args: vec![],
+                        target_id: None,
+                    })),
+                }),
+            ],
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_call_args() {
+        let expr = sp(Expr::Call {
+            name: sp("foo".to_string()),
+            args: vec![
+                sp(Expr::IntLit(1)),
+                sp(Expr::Propagate {
+                    expr: Box::new(sp(Expr::Call {
+                        name: sp("bar".to_string()),
+                        args: vec![],
+                        type_args: vec![],
+                        target_id: None,
+                    })),
+                }),
+            ],
+            type_args: vec![],
+            target_id: None,
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_unary_op() {
+        let expr = sp(Expr::UnaryOp {
+            op: UnaryOp::Neg,
+            operand: Box::new(sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("get_num".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })),
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_field_access_object() {
+        let expr = sp(Expr::FieldAccess {
+            object: Box::new(sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("get_obj".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })),
+            field: sp("value".to_string()),
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_index_object() {
+        let expr = sp(Expr::Index {
+            object: Box::new(sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("get_array".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })),
+            index: Box::new(sp(Expr::IntLit(0))),
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_index_index() {
+        let expr = sp(Expr::Index {
+            object: Box::new(sp(Expr::Ident("arr".to_string()))),
+            index: Box::new(sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("get_index".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })),
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_struct_lit_field() {
+        let expr = sp(Expr::StructLit {
+            name: sp("Point".to_string()),
+            type_args: vec![],
+            fields: vec![
+                (sp("x".to_string()), sp(Expr::IntLit(1))),
+                (sp("y".to_string()), sp(Expr::Propagate {
+                    expr: Box::new(sp(Expr::Call {
+                        name: sp("get_y".to_string()),
+                        args: vec![],
+                        type_args: vec![],
+                        target_id: None,
+                    })),
+                })),
+            ],
+            target_id: None,
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_map_key() {
+        let expr = sp(Expr::MapLit {
+            key_type: sp(TypeExpr::Named("int".to_string())),
+            value_type: sp(TypeExpr::Named("int".to_string())),
+            entries: vec![
+                (sp(Expr::Propagate {
+                    expr: Box::new(sp(Expr::Call {
+                        name: sp("get_key".to_string()),
+                        args: vec![],
+                        type_args: vec![],
+                        target_id: None,
+                    })),
+                }), sp(Expr::IntLit(42))),
+            ],
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_map_value() {
+        let expr = sp(Expr::MapLit {
+            key_type: sp(TypeExpr::Named("int".to_string())),
+            value_type: sp(TypeExpr::Named("int".to_string())),
+            entries: vec![
+                (sp(Expr::IntLit(1)), sp(Expr::Propagate {
+                    expr: Box::new(sp(Expr::Call {
+                        name: sp("get_value".to_string()),
+                        args: vec![],
+                        type_args: vec![],
+                        target_id: None,
+                    })),
+                })),
+            ],
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_set_element() {
+        let expr = sp(Expr::SetLit {
+            elem_type: sp(TypeExpr::Named("int".to_string())),
+            elements: vec![
+                sp(Expr::IntLit(1)),
+                sp(Expr::Propagate {
+                    expr: Box::new(sp(Expr::Call {
+                        name: sp("get_elem".to_string()),
+                        args: vec![],
+                        type_args: vec![],
+                        target_id: None,
+                    })),
+                }),
+            ],
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_range_start() {
+        let expr = sp(Expr::Range {
+            start: Box::new(sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("get_start".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })),
+            end: Box::new(sp(Expr::IntLit(10))),
+            inclusive: false,
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_range_end() {
+        let expr = sp(Expr::Range {
+            start: Box::new(sp(Expr::IntLit(0))),
+            end: Box::new(sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("get_end".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })),
+            inclusive: false,
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_cast() {
+        let expr = sp(Expr::Cast {
+            expr: Box::new(sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("get_num".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })),
+            target_type: sp(TypeExpr::Named("float".to_string())),
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_in_null_propagate() {
+        let expr = sp(Expr::NullPropagate {
+            expr: Box::new(sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("get_value".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })),
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_literals_false() {
+        // Test that all literal types return false
+        assert!(!contains_propagate(&sp(Expr::IntLit(42))));
+        assert!(!contains_propagate(&sp(Expr::FloatLit(3.14))));
+        assert!(!contains_propagate(&sp(Expr::BoolLit(true))));
+        assert!(!contains_propagate(&sp(Expr::StringLit("hello".to_string()))));
+        assert!(!contains_propagate(&sp(Expr::NoneLit)));
+        assert!(!contains_propagate(&sp(Expr::Ident("x".to_string()))));
+    }
+
+    #[test]
+    fn test_contains_propagate_complex_nested() {
+        // Deeply nested: array containing binop with propagate in rhs
+        let expr = sp(Expr::ArrayLit {
+            elements: vec![
+                sp(Expr::BinOp {
+                    op: BinOp::Mul,
+                    lhs: Box::new(sp(Expr::IntLit(2))),
+                    rhs: Box::new(sp(Expr::Propagate {
+                        expr: Box::new(sp(Expr::Call {
+                            name: sp("compute".to_string()),
+                            args: vec![],
+                            type_args: vec![],
+                            target_id: None,
+                        })),
+                    })),
+                }),
+            ],
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_method_call_object() {
+        let expr = sp(Expr::MethodCall {
+            object: Box::new(sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("get_obj".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })),
+            method: sp("compute".to_string()),
+            args: vec![],
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_method_call_args() {
+        let expr = sp(Expr::MethodCall {
+            object: Box::new(sp(Expr::Ident("obj".to_string()))),
+            method: sp("compute".to_string()),
+            args: vec![sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("get_arg".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })],
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_enum_data_field() {
+        let expr = sp(Expr::EnumData {
+            enum_name: sp("Result".to_string()),
+            variant: sp("Ok".to_string()),
+            type_args: vec![],
+            fields: vec![
+                (sp("value".to_string()), sp(Expr::Propagate {
+                    expr: Box::new(sp(Expr::Call {
+                        name: sp("get_value".to_string()),
+                        args: vec![],
+                        type_args: vec![],
+                        target_id: None,
+                    })),
+                })),
+            ],
+            enum_id: None,
+            variant_id: None,
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_string_interp() {
+        let expr = sp(Expr::StringInterp {
+            parts: vec![
+                StringInterpPart::Lit("Value: ".to_string()),
+                StringInterpPart::Expr(sp(Expr::Propagate {
+                    expr: Box::new(sp(Expr::Call {
+                        name: sp("get_value".to_string()),
+                        args: vec![],
+                        type_args: vec![],
+                        target_id: None,
+                    })),
+                })),
+            ],
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    #[test]
+    fn test_contains_propagate_static_trait_call_args() {
+        let expr = sp(Expr::StaticTraitCall {
+            trait_name: sp("TypeInfo".to_string()),
+            method_name: sp("type_name".to_string()),
+            type_args: vec![],
+            args: vec![sp(Expr::Propagate {
+                expr: Box::new(sp(Expr::Call {
+                    name: sp("get_arg".to_string()),
+                    args: vec![],
+                    type_args: vec![],
+                    target_id: None,
+                })),
+            })],
+        });
+        assert!(contains_propagate(&expr));
+    }
+
+    // ===== PropagateDetector tests =====
+
+    #[test]
+    fn test_propagate_detector_stops_after_first_match() {
+        // Create an expression with multiple propagate nodes
+        // Detector should stop after finding the first one
+        let expr = sp(Expr::ArrayLit {
+            elements: vec![
+                sp(Expr::Propagate {
+                    expr: Box::new(sp(Expr::Call {
+                        name: sp("first".to_string()),
+                        args: vec![],
+                        type_args: vec![],
+                        target_id: None,
+                    })),
+                }),
+                sp(Expr::Propagate {
+                    expr: Box::new(sp(Expr::Call {
+                        name: sp("second".to_string()),
+                        args: vec![],
+                        type_args: vec![],
+                        target_id: None,
+                    })),
+                }),
+            ],
+        });
+
+        let mut detector = PropagateDetector { found: false };
+        detector.visit_expr(&expr);
+        assert!(detector.found);
+    }
+}
