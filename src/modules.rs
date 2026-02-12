@@ -796,6 +796,9 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
     // Rewrite qualified references in root program's AST
     rewrite_program(&mut graph.root, &import_names);
 
+    // Resolve QualifiedAccess nodes: convert to FieldAccess or keep for type checker
+    resolve_qualified_access_in_program(&mut graph.root, &import_names);
+
     // Clear imports since they've been flattened
     graph.root.imports.clear();
 
@@ -1099,6 +1102,7 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
                 rewrite_expr_for_module(&mut arg.node, module_name, module_prog);
             }
         }
+        Expr::QualifiedAccess { .. } => {}
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::NoneLit => {}
     }
@@ -1486,8 +1490,251 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
                 rewrite_expr(&mut arg.node, arg.span, import_names);
             }
         }
+        Expr::QualifiedAccess { .. } => {}
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::NoneLit => {}
+    }
+    let _ = span;
+}
+/// Resolve QualifiedAccess nodes after module flattening.
+/// If first segment is a module name, keep as QualifiedAccess for type checker (enum case).
+/// Otherwise, convert to nested FieldAccess chain (variable.field.field case).
+fn resolve_qualified_access_in_program(program: &mut Program, module_names: &HashSet<String>) {
+    for func in &mut program.functions {
+        resolve_qualified_access_in_block(&mut func.node.body.node, module_names);
+    }
+    for class in &mut program.classes {
+        for method in &mut class.node.methods {
+            resolve_qualified_access_in_block(&mut method.node.body.node, module_names);
+        }
+    }
+    if let Some(app) = &mut program.app {
+        for method in &mut app.node.methods {
+            resolve_qualified_access_in_block(&mut method.node.body.node, module_names);
+        }
+    }
+    for stage in &mut program.stages {
+        for method in &mut stage.node.methods {
+            resolve_qualified_access_in_block(&mut method.node.body.node, module_names);
+        }
+    }
+}
+
+fn resolve_qualified_access_in_block(block: &mut Block, module_names: &HashSet<String>) {
+    for stmt in &mut block.stmts {
+        resolve_qualified_access_in_stmt(&mut stmt.node, module_names);
+    }
+}
+
+fn resolve_qualified_access_in_stmt(stmt: &mut Stmt, module_names: &HashSet<String>) {
+    match stmt {
+        Stmt::Let { value, .. } => {
+            resolve_qualified_access_in_expr(&mut value.node, value.span, module_names);
+        }
+        Stmt::Return(Some(expr)) => {
+            resolve_qualified_access_in_expr(&mut expr.node, expr.span, module_names);
+        }
+        Stmt::Return(None) => {}
+        Stmt::Assign { value, .. } => {
+            resolve_qualified_access_in_expr(&mut value.node, value.span, module_names);
+        }
+        Stmt::FieldAssign { object, value, .. } => {
+            resolve_qualified_access_in_expr(&mut object.node, object.span, module_names);
+            resolve_qualified_access_in_expr(&mut value.node, value.span, module_names);
+        }
+        Stmt::If { condition, then_block, else_block } => {
+            resolve_qualified_access_in_expr(&mut condition.node, condition.span, module_names);
+            resolve_qualified_access_in_block(&mut then_block.node, module_names);
+            if let Some(eb) = else_block {
+                resolve_qualified_access_in_block(&mut eb.node, module_names);
+            }
+        }
+        Stmt::While { condition, body } => {
+            resolve_qualified_access_in_expr(&mut condition.node, condition.span, module_names);
+            resolve_qualified_access_in_block(&mut body.node, module_names);
+        }
+        Stmt::For { iterable, body, .. } => {
+            resolve_qualified_access_in_expr(&mut iterable.node, iterable.span, module_names);
+            resolve_qualified_access_in_block(&mut body.node, module_names);
+        }
+        Stmt::IndexAssign { object, index, value } => {
+            resolve_qualified_access_in_expr(&mut object.node, object.span, module_names);
+            resolve_qualified_access_in_expr(&mut index.node, index.span, module_names);
+            resolve_qualified_access_in_expr(&mut value.node, value.span, module_names);
+        }
+        Stmt::Match { expr, arms } => {
+            resolve_qualified_access_in_expr(&mut expr.node, expr.span, module_names);
+            for arm in arms {
+                resolve_qualified_access_in_block(&mut arm.body.node, module_names);
+            }
+        }
+        Stmt::Raise { fields, .. } => {
+            for (_, val) in fields {
+                resolve_qualified_access_in_expr(&mut val.node, val.span, module_names);
+            }
+        }
+        Stmt::Expr(expr) => {
+            resolve_qualified_access_in_expr(&mut expr.node, expr.span, module_names);
+        }
+        Stmt::LetChan { capacity, .. } => {
+            if let Some(cap) = capacity {
+                resolve_qualified_access_in_expr(&mut cap.node, cap.span, module_names);
+            }
+        }
+        Stmt::Select { arms, default } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => {
+                        resolve_qualified_access_in_expr(&mut channel.node, channel.span, module_names);
+                    }
+                    SelectOp::Send { channel, value } => {
+                        resolve_qualified_access_in_expr(&mut channel.node, channel.span, module_names);
+                        resolve_qualified_access_in_expr(&mut value.node, value.span, module_names);
+                    }
+                }
+                resolve_qualified_access_in_block(&mut arm.body.node, module_names);
+            }
+            if let Some(def) = default {
+                resolve_qualified_access_in_block(&mut def.node, module_names);
+            }
+        }
+        Stmt::Scope { seeds, body, .. } => {
+            for seed in seeds {
+                resolve_qualified_access_in_expr(&mut seed.node, seed.span, module_names);
+            }
+            resolve_qualified_access_in_block(&mut body.node, module_names);
+        }
+        Stmt::Yield { value, .. } => {
+            resolve_qualified_access_in_expr(&mut value.node, value.span, module_names);
+        }
+        Stmt::Break | Stmt::Continue => {}
+    }
+}
+
+fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &HashSet<String>) {
+    match expr {
+        Expr::QualifiedAccess { segments } => {
+            if segments.is_empty() {
+                return;
+            }
+
+            // Check if first segment is a module name
+            let is_module_reference = module_names.contains(&segments[0].node);
+
+            if is_module_reference {
+                // Keep as QualifiedAccess for type checker (module.Enum.Variant case)
+                return;
+            }
+
+            // Convert to nested FieldAccess chain (variable.field.field case)
+            let mut current = Expr::Ident(segments[0].node.clone());
+            let mut current_span = segments[0].span;
+
+            for field_seg in &segments[1..] {
+                current_span = Span::new(current_span.start, field_seg.span.end);
+                current = Expr::FieldAccess {
+                    object: Box::new(Spanned::new(current, current_span)),
+                    field: field_seg.clone(),
+                };
+            }
+
+            *expr = current;
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            resolve_qualified_access_in_expr(&mut lhs.node, lhs.span, module_names);
+            resolve_qualified_access_in_expr(&mut rhs.node, rhs.span, module_names);
+        }
+        Expr::UnaryOp { operand, .. } => {
+            resolve_qualified_access_in_expr(&mut operand.node, operand.span, module_names);
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                resolve_qualified_access_in_expr(&mut arg.node, arg.span, module_names);
+            }
+        }
+        Expr::FieldAccess { object, .. } => {
+            resolve_qualified_access_in_expr(&mut object.node, object.span, module_names);
+        }
+        Expr::MethodCall { object, args, .. } => {
+            resolve_qualified_access_in_expr(&mut object.node, object.span, module_names);
+            for arg in args {
+                resolve_qualified_access_in_expr(&mut arg.node, arg.span, module_names);
+            }
+        }
+        Expr::StructLit { fields, .. } => {
+            for (_, val) in fields {
+                resolve_qualified_access_in_expr(&mut val.node, val.span, module_names);
+            }
+        }
+        Expr::ArrayLit { elements } => {
+            for elem in elements {
+                resolve_qualified_access_in_expr(&mut elem.node, elem.span, module_names);
+            }
+        }
+        Expr::Index { object, index } => {
+            resolve_qualified_access_in_expr(&mut object.node, object.span, module_names);
+            resolve_qualified_access_in_expr(&mut index.node, index.span, module_names);
+        }
+        Expr::StringInterp { parts } => {
+            for part in parts {
+                if let StringInterpPart::Expr(e) = part {
+                    resolve_qualified_access_in_expr(&mut e.node, e.span, module_names);
+                }
+            }
+        }
+        Expr::EnumData { fields, .. } => {
+            for (_, val) in fields {
+                resolve_qualified_access_in_expr(&mut val.node, val.span, module_names);
+            }
+        }
+        Expr::Closure { body, .. } => {
+            resolve_qualified_access_in_block(&mut body.node, module_names);
+        }
+        Expr::Propagate { expr: inner } => {
+            resolve_qualified_access_in_expr(&mut inner.node, inner.span, module_names);
+        }
+        Expr::Catch { expr: inner, handler } => {
+            resolve_qualified_access_in_expr(&mut inner.node, inner.span, module_names);
+            match handler {
+                CatchHandler::Wildcard { body, .. } => {
+                    resolve_qualified_access_in_block(&mut body.node, module_names);
+                }
+                CatchHandler::Shorthand(fb) => {
+                    resolve_qualified_access_in_expr(&mut fb.node, fb.span, module_names);
+                }
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                resolve_qualified_access_in_expr(&mut k.node, k.span, module_names);
+                resolve_qualified_access_in_expr(&mut v.node, v.span, module_names);
+            }
+        }
+        Expr::SetLit { elements, .. } => {
+            for elem in elements {
+                resolve_qualified_access_in_expr(&mut elem.node, elem.span, module_names);
+            }
+        }
+        Expr::Cast { expr: inner, .. } => {
+            resolve_qualified_access_in_expr(&mut inner.node, inner.span, module_names);
+        }
+        Expr::Range { start, end, .. } => {
+            resolve_qualified_access_in_expr(&mut start.node, start.span, module_names);
+            resolve_qualified_access_in_expr(&mut end.node, end.span, module_names);
+        }
+        Expr::Spawn { call } => {
+            resolve_qualified_access_in_expr(&mut call.node, call.span, module_names);
+        }
+        Expr::NullPropagate { expr: inner } => {
+            resolve_qualified_access_in_expr(&mut inner.node, inner.span, module_names);
+        }
+        Expr::StaticTraitCall { args, .. } => {
+            for arg in args {
+                resolve_qualified_access_in_expr(&mut arg.node, arg.span, module_names);
+            }
+        }
+        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
+        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
     }
     let _ = span;
 }

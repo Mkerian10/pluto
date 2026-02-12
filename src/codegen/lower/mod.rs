@@ -2104,6 +2104,12 @@ impl<'a> LowerContext<'a> {
                 // TODO: Implement codegen for static trait calls
                 Err(CompileError::codegen("static trait calls not yet implemented in codegen".to_string()))
             }
+            Expr::QualifiedAccess { segments } => {
+                panic!(
+                    "QualifiedAccess should be resolved by module flattening before codegen. Segments: {:?}",
+                    segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+                )
+            }
         }
     }
 
@@ -4754,6 +4760,12 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             // TODO: Proper type inference for static trait calls
             // For now, return Void as placeholder
             PlutoType::Void
+        }
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before codegen. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
         }
     }
 }

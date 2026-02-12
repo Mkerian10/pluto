@@ -361,6 +361,12 @@ fn lift_in_expr(
                 lift_in_expr(&mut arg.node, arg.span, env, counter, new_fns)?;
             }
         }
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before closures. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
+        }
     }
     Ok(())
 }

@@ -236,6 +236,12 @@ fn desugar_expr(expr: &mut Expr, span: Span) {
                 desugar_expr(&mut arg.node, arg.span);
             }
         }
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before spawn. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. }
         | Expr::NoneLit => {}

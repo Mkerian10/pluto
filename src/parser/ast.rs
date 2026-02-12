@@ -390,6 +390,11 @@ pub enum Expr {
         type_args: Vec<Spanned<TypeExpr>>,
         args: Vec<Spanned<Expr>>,
     },
+    /// Ambiguous qualified access pattern (a.b.c)
+    /// Resolved during module flattening to either FieldAccess chain or kept for type checker (enums)
+    QualifiedAccess {
+        segments: Vec<Spanned<String>>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
