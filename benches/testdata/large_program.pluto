@@ -1,0 +1,286 @@
+// Large test program for visitor pattern performance benchmarks
+// This file is used to measure AST traversal performance
+
+// Multiple functions with various expression types
+fn arithmetic_operations(a: int, b: int, c: int) int {
+    let x = a + b * c
+    let y = (x - a) / b
+    let z = y * (a + b) - c
+    return z + x - y
+}
+
+fn comparison_operations(x: int, y: int) bool {
+    let a = x > y
+    let b = x < y
+    let c = x >= y
+    let d = x <= y
+    let e = x == y
+    let f = x != y
+    return a && b || c && d || e && f
+}
+
+fn logical_operations(a: bool, b: bool, c: bool) bool {
+    let x = a && b
+    let y = b || c
+    let z = !a
+    return (x && y) || z
+}
+
+fn conditional_expressions(n: int) int {
+    if n > 10 {
+        if n > 20 {
+            return n * 2
+        }
+        return n + 10
+    }
+    return n
+}
+
+fn loop_constructs(n: int) int {
+    let sum = 0
+    let i = 0
+    while i < n {
+        sum = sum + i
+        i = i + 1
+    }
+    return sum
+}
+
+fn array_operations(arr: [int]) int {
+    let sum = 0
+    for x in arr {
+        sum = sum + x
+    }
+    return sum
+}
+
+fn nested_expressions(a: int, b: int, c: int, d: int) int {
+    return ((a + b) * (c - d)) / ((a - b) + (c * d))
+}
+
+fn method_chains(s: string) int {
+    return s.len() + s.to_upper().len() + s.to_lower().len()
+}
+
+class Calculator {
+    value: int
+
+    fn add(mut self, x: int) {
+        self.value = self.value + x
+    }
+
+    fn multiply(mut self, x: int) {
+        self.value = self.value * x
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+class Point {
+    x: int
+    y: int
+
+    fn distance_from_origin(self) float {
+        let x_sq = self.x * self.x
+        let y_sq = self.y * self.y
+        return sqrt((x_sq + y_sq) as float)
+    }
+
+    fn add(self, other: Point) Point {
+        return Point {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+}
+
+enum Color {
+    Red
+    Green
+    Blue
+    RGB { r: int, g: int, b: int }
+}
+
+fn color_intensity(c: Color) int {
+    let result = 0
+    match c {
+        Color.Red {
+            result = 100
+        }
+        Color.Green {
+            result = 150
+        }
+        Color.Blue {
+            result = 200
+        }
+        Color.RGB { r, g, b } {
+            result = r + g + b
+        }
+    }
+    return result
+}
+
+fn complex_computation(n: int) int {
+    let result = 0
+    let i = 0
+    while i < n {
+        if i % 2 == 0 {
+            result = result + i * 2
+        }
+        if i % 3 == 0 {
+            result = result - i
+        }
+        if i % 5 == 0 {
+            result = result * 2
+        }
+        i = i + 1
+    }
+    return result
+}
+
+fn recursive_fibonacci(n: int) int {
+    if n <= 1 {
+        return n
+    }
+    return recursive_fibonacci(n - 1) + recursive_fibonacci(n - 2)
+}
+
+fn string_operations(s1: string, s2: string) string {
+    let combined = s1 + s2
+    let upper = combined.to_upper()
+    let lower = combined.to_lower()
+    return upper + lower
+}
+
+fn closure_creation(x: int) fn(int) int {
+    let offset = x * 2
+    return (y: int) => { return y + offset }
+}
+
+fn closure_usage(n: int) int {
+    let add_ten = (x: int) => { return x + 10 }
+    let mul_two = (x: int) => { return x * 2 }
+    return add_ten(mul_two(n))
+}
+
+fn deep_nesting(a: int, b: int, c: int) int {
+    if a > 0 {
+        if b > 0 {
+            if c > 0 {
+                return a + b + c
+            }
+            return a + b
+        }
+        return a
+    }
+    return 0
+}
+
+fn binary_tree_depth(depth: int, value: int) int {
+    if depth == 0 {
+        return value
+    }
+    let left = binary_tree_depth(depth - 1, value * 2)
+    let right = binary_tree_depth(depth - 1, value * 2 + 1)
+    return left + right
+}
+
+fn multiple_returns(n: int) int {
+    if n < 0 {
+        return -1
+    }
+    if n == 0 {
+        return 0
+    }
+    if n > 100 {
+        return 100
+    }
+    return n
+}
+
+fn bitwise_operations(a: int, b: int) int {
+    let and_result = a & b
+    let or_result = a | b
+    let xor_result = a ^ b
+    let not_result = ~a
+    let left_shift = a << 2
+    let right_shift = b >> 1
+    return and_result + or_result + xor_result + not_result + left_shift + right_shift
+}
+
+fn type_casting(n: int) float {
+    let as_float = n as float
+    let doubled = as_float * 2.0
+    let result = doubled + 10.0
+    return result
+}
+
+fn complex_boolean(a: int, b: int, c: int) bool {
+    return (a > b && b > c) || (a == b && b == c) || (a < b && b < c)
+}
+
+fn nested_calls(n: int) int {
+    return arithmetic_operations(
+        comparison_operations(n, n + 1) as int,
+        logical_operations(true, false, n > 0) as int,
+        conditional_expressions(n)
+    )
+}
+
+fn struct_creation(x: int, y: int) Point {
+    let p1 = Point { x: x, y: y }
+    let p2 = Point { x: y, y: x }
+    return p1.add(p2)
+}
+
+fn enum_matching(colors: [Color]) int {
+    let total = 0
+    for c in colors {
+        total = total + color_intensity(c)
+    }
+    return total
+}
+
+fn main() {
+    let _ = arithmetic_operations(1, 2, 3)
+    let _ = comparison_operations(5, 10)
+    let _ = logical_operations(true, false, true)
+    let _ = conditional_expressions(15)
+    let _ = loop_constructs(10)
+    let _ = array_operations([1, 2, 3, 4, 5])
+    let _ = nested_expressions(1, 2, 3, 4)
+    let _ = method_chains("hello")
+
+    let mut calc = Calculator { value: 0 }
+    calc.add(5)
+    calc.multiply(3)
+    let _ = calc.get()
+
+    let p = Point { x: 3, y: 4 }
+    let _ = p.distance_from_origin()
+
+    let red = Color.Red
+    let _ = color_intensity(red)
+
+    let _ = complex_computation(20)
+    let _ = recursive_fibonacci(10)
+    let _ = string_operations("hello", "world")
+
+    let f = closure_creation(5)
+    let _ = f(10)
+    let _ = closure_usage(7)
+
+    let _ = deep_nesting(1, 2, 3)
+    let _ = binary_tree_depth(3, 1)
+    let _ = multiple_returns(50)
+    let _ = bitwise_operations(12, 7)
+    let _ = type_casting(42)
+    let _ = complex_boolean(1, 2, 3)
+    let _ = nested_calls(5)
+    let _ = struct_creation(1, 2)
+
+    let colors = [Color.Red, Color.Green, Color.Blue]
+    let _ = enum_matching(colors)
+}

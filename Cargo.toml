@@ -644,3 +644,7 @@ path = "tests/typeck/type_system/pattern_matching_exhaustiveness.rs"
 [[bench]]
 name = "compile_time"
 harness = false
+
+[[bench]]
+name = "visitor_overhead"
+harness = false
