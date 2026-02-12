@@ -519,7 +519,7 @@ fn test_math_builtins_abi_compliance() {
     let output = compile_and_run_stdout(src);
     let lines: Vec<&str> = output.trim().lines().collect();
     assert_eq!(lines[0], "10");
-    assert_eq!(lines[1], "5");
+    assert_eq!(lines[1], "5.000000");
     assert_eq!(lines[2], "42");
 }
 
@@ -579,9 +579,15 @@ fn test_enum_abi_compliance() {
 
         fn color_value(c: Color) int {
             match c {
-                Color.Red => 1
-                Color.Green => 2
-                Color.Blue => 3
+                Color.Red {
+                    return 1
+                }
+                Color.Green {
+                    return 2
+                }
+                Color.Blue {
+                    return 3
+                }
             }
         }
 

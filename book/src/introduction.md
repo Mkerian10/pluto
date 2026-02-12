@@ -79,7 +79,6 @@ Pluto is transparent about its maturity. The following features are implemented 
 - Modules, packages, and visibility (`pub`)
 - Generics (monomorphized)
 - Test framework (`test "name" { ... }` with expect assertions)
-- Rust FFI (`extern rust`)
 - Standard library: collections, json, math, strings, fs, http, net, time, random
 
 The following features are designed but not yet implemented:
