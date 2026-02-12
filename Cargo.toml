@@ -36,6 +36,10 @@ criterion = "0.5"
 arbitrary = "1.3"
 
 [[test]]
+name = "visit"
+path = "tests/integration/visit.rs"
+
+[[test]]
 name = "basics"
 path = "tests/integration/basics.rs"
 
