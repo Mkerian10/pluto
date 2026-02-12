@@ -2562,6 +2562,19 @@ impl<'a> Parser<'a> {
                 let tok = self.advance().expect("token should exist after peek");
                 Ok(Spanned::new(Expr::BoolLit(false), tok.span))
             }
+            Token::FStringLit(_) => {
+                // F-strings always support interpolation
+                let tok = self.advance().expect("token should exist after peek");
+                let Token::FStringLit(s) = &tok.node else { unreachable!() };
+                let s = s.clone();
+                let span = tok.span;
+                if s.contains('{') || s.contains('}') {
+                    self.parse_string_interp(&s, span)
+                } else {
+                    // Even without braces, it's still a valid f-string (just no interpolation)
+                    Ok(Spanned::new(Expr::StringLit(s), span))
+                }
+            }
             Token::StringLit(_) => {
                 let tok = self.advance().expect("token should exist after peek");
                 let Token::StringLit(s) = &tok.node else { unreachable!() };
