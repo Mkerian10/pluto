@@ -410,7 +410,7 @@ jobs:
                 <div class="section-card">
                   <h2>⚡ Benchmarks</h2>
                   <p>Performance benchmarks with historical tracking and regression detection.</p>
-                  <a href="benchmarks/index.html" class="btn">View Benchmarks →</a>
+                  <a href="benchmarks/report/index.html" class="btn">View Benchmarks →</a>
                 </div>
 
                 <div class="section-card">
