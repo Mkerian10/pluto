@@ -1,0 +1,258 @@
+// Operator precedence and complex expression tests for f-strings
+
+// ===== Operator Precedence =====
+
+test "multiplication before addition" {
+    let a = 2
+    let b = 3
+    let c = 4
+    let result = f"{a + b * c}"
+    expect(result).to_equal("14")
+}
+
+test "parentheses override precedence" {
+    let a = 2
+    let b = 3
+    let c = 4
+    let result = f"{(a + b) * c}"
+    expect(result).to_equal("20")
+}
+
+test "division before subtraction" {
+    let a = 20
+    let b = 10
+    let c = 2
+    let result = f"{a - b / c}"
+    expect(result).to_equal("15")
+}
+
+test "modulo same precedence as multiplication" {
+    let a = 10
+    let b = 3
+    let c = 2
+    let result = f"{a % b * c}"
+    expect(result).to_equal("2")
+}
+
+test "comparison before logical AND" {
+    let a = 5
+    let b = 10
+    let result = f"{a < b && b > 0}"
+    expect(result).to_equal("true")
+}
+
+test "comparison before logical OR" {
+    let a = 5
+    let b = 10
+    let result = f"{a > b || b > 0}"
+    expect(result).to_equal("true")
+}
+
+test "logical AND before logical OR" {
+    let a = true
+    let b = false
+    let c = true
+    let result = f"{a && b || c}"
+    expect(result).to_equal("true")
+}
+
+test "unary negation high precedence" {
+    let a = 5
+    let b = 3
+    let result = f"{-a + b}"
+    expect(result).to_equal("-2")
+}
+
+test "logical NOT high precedence" {
+    let a = true
+    let b = false
+    let result = f"{!a && b}"
+    expect(result).to_equal("false")
+}
+
+// ===== Comparison Operators =====
+
+test "less than or equal boundary true" {
+    let x = 10
+    let result = f"{x <= 10}"
+    expect(result).to_equal("true")
+}
+
+test "less than or equal boundary false" {
+    let x = 11
+    let result = f"{x <= 10}"
+    expect(result).to_equal("false")
+}
+
+test "greater than or equal boundary true" {
+    let x = 10
+    let result = f"{x >= 10}"
+    expect(result).to_equal("true")
+}
+
+test "greater than or equal boundary false" {
+    let x = 9
+    let result = f"{x >= 10}"
+    expect(result).to_equal("false")
+}
+
+test "self comparison always equal" {
+    let x = 42
+    let result = f"{x == x}"
+    expect(result).to_equal("true")
+}
+
+test "self comparison never not equal" {
+    let x = 42
+    let result = f"{x != x}"
+    expect(result).to_equal("false")
+}
+
+// ===== Compound Boolean Expressions =====
+
+test "double negation returns original" {
+    let b = true
+    let result = f"{!!b}"
+    expect(result).to_equal("true")
+}
+
+test "AND with both true" {
+    let a = true
+    let b = true
+    let result = f"{a && b}"
+    expect(result).to_equal("true")
+}
+
+test "AND with one false" {
+    let a = true
+    let b = false
+    let result = f"{a && b}"
+    expect(result).to_equal("false")
+}
+
+test "OR with both false" {
+    let a = false
+    let b = false
+    let result = f"{a || b}"
+    expect(result).to_equal("false")
+}
+
+test "OR with one true" {
+    let a = false
+    let b = true
+    let result = f"{a || b}"
+    expect(result).to_equal("true")
+}
+
+test "complex boolean with parentheses" {
+    let a = true
+    let b = false
+    let c = true
+    let result = f"{(a && c) || (b && c)}"
+    expect(result).to_equal("true")
+}
+
+test "chained comparisons" {
+    let x = 5
+    let result = f"{x > 3 && x < 10}"
+    expect(result).to_equal("true")
+}
+
+// ===== Arithmetic Edge Cases =====
+
+test "division by one preserves value" {
+    let x = 42
+    let result = f"{x / 1}"
+    expect(result).to_equal("42")
+}
+
+test "multiplication by zero" {
+    let x = 42
+    let result = f"{x * 0}"
+    expect(result).to_equal("0")
+}
+
+test "multiplication by one preserves value" {
+    let x = 42
+    let result = f"{x * 1}"
+    expect(result).to_equal("42")
+}
+
+test "addition of zero preserves value" {
+    let x = 42
+    let result = f"{x + 0}"
+    expect(result).to_equal("42")
+}
+
+test "subtraction of zero preserves value" {
+    let x = 42
+    let result = f"{x - 0}"
+    expect(result).to_equal("42")
+}
+
+test "modulo by one always zero" {
+    let x = 42
+    let result = f"{x % 1}"
+    expect(result).to_equal("0")
+}
+
+test "modulo by larger number" {
+    let x = 10
+    let result = f"{x % 100}"
+    expect(result).to_equal("10")
+}
+
+// ===== Nested Arithmetic =====
+
+test "deeply nested addition and multiplication" {
+    let a = 2
+    let b = 3
+    let c = 4
+    let result = f"{((a + b) * c) - (a * b)}"
+    expect(result).to_equal("14")
+}
+
+test "multiple parenthesis levels" {
+    let a = 10
+    let b = 5
+    let c = 2
+    let result = f"{((a - b) / c) + b}"
+    expect(result).to_equal("7")
+}
+
+// ===== Variable Reuse in Expressions =====
+
+test "same variable used twice in expression" {
+    let x = 5
+    let result = f"{x + x}"
+    expect(result).to_equal("10")
+}
+
+test "same variable in different operations" {
+    let x = 10
+    let result = f"{x * 2 - x}"
+    expect(result).to_equal("10")
+}
+
+// ===== String Operations =====
+
+test "concatenate empty string" {
+    let empty = ""
+    let text = "hello"
+    let result = f"{empty + text}"
+    expect(result).to_equal("hello")
+}
+
+test "concatenate string with itself" {
+    let text = "ab"
+    let result = f"{text + text}"
+    expect(result).to_equal("abab")
+}
+
+test "concatenate three strings" {
+    let a = "a"
+    let b = "b"
+    let c = "c"
+    let result = f"{a + b + c}"
+    expect(result).to_equal("abc")
+}
