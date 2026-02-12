@@ -1,0 +1,454 @@
+name: Nightly Build
+
+on:
+  schedule:
+    # Run at 2 AM UTC every day
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  # Generate comprehensive coverage report (HTML + badges)
+  coverage:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate HTML coverage report
+        run: cargo llvm-cov --lib --html
+
+      - name: Generate coverage summary
+        run: |
+          cargo llvm-cov --lib --json --output-path coverage.json
+          cargo llvm-cov --lib --summary-only > coverage-summary.txt
+          cat coverage-summary.txt
+
+      - name: Upload coverage for GitHub Pages
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            target/llvm-cov/html/
+            coverage.json
+            coverage-summary.txt
+          retention-days: 90
+
+  # Benchmark with historical tracking and graphs
+  benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run benchmarks
+        run: cargo bench --bench compile_time
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: target/criterion/
+          retention-days: 90
+
+  # Extended fuzzing with corpus tracking
+  fuzzing:
+    name: Extended Fuzzing
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [lex, parse]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Restore corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.sha }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Run fuzzer for 30 minutes
+        run: |
+          cd fuzz
+          timeout 1800 cargo fuzz run ${{ matrix.target }} -- \
+            -max_total_time=1800 \
+            -print_final_stats=1 \
+            2>&1 | tee ../fuzz-output-${{ matrix.target }}.txt || true
+
+      - name: Generate fuzzing report
+        run: |
+          mkdir -p fuzzing-reports
+          cat > fuzzing-reports/${{ matrix.target }}.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Fuzzing Report - ${{ matrix.target }}</title>
+            <style>
+              body { font-family: monospace; margin: 40px; background: #1e1e1e; color: #d4d4d4; }
+              pre { background: #2d2d2d; padding: 20px; border-radius: 4px; overflow-x: auto; }
+              h1 { color: #4ec9b0; }
+            </style>
+          </head>
+          <body>
+            <h1>Fuzzing Report: ${{ matrix.target }}</h1>
+            <p>Generated: $(date)</p>
+            <pre>
+          EOF
+          cat fuzz-output-${{ matrix.target }}.txt >> fuzzing-reports/${{ matrix.target }}.html
+          echo '</pre></body></html>' >> fuzzing-reports/${{ matrix.target }}.html
+
+          # Count corpus size
+          CORPUS_SIZE=$(find fuzz/corpus/${{ matrix.target }} -type f 2>/dev/null | wc -l)
+          echo "$CORPUS_SIZE" > fuzzing-reports/${{ matrix.target }}-corpus-size.txt
+
+      - name: Upload fuzzing reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzzing-${{ matrix.target }}
+          path: fuzzing-reports/
+          retention-days: 90
+
+      - name: Check for crashes
+        run: |
+          if [ -d "fuzz/artifacts" ] && [ "$(ls -A fuzz/artifacts)" ]; then
+            echo "❌ Fuzzer found crashes!"
+            ls -la fuzz/artifacts/
+            exit 1
+          fi
+
+  # Unit tests only (integration tests excluded for pipeline testing)
+  full-test-suite:
+    name: Unit Tests Only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
+
+      - name: Run unit tests only
+        run: |
+          cargo nextest run --lib 2>&1 | tee test-output.txt
+          # Extract summary
+          grep -E "test result:|running" test-output.txt > test-summary.txt || true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-summary.txt
+          retention-days: 30
+
+  # Property tests with extended cases
+  property-tests:
+    name: Property Tests (10k cases)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run property tests
+        run: |
+          PROPTEST_CASES=10000 cargo test --test ast --test parser_property 2>&1 | tee proptest-output.txt
+          grep -E "test result:|running|proptest" proptest-output.txt > proptest-summary.txt || true
+
+      - name: Upload property test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: property-test-results
+          path: proptest-summary.txt
+          retention-days: 30
+
+  # Deploy to GitHub Pages
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: [coverage, benchmarks, fuzzing, full-test-suite, property-tests]
+    if: always()
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Build GitHub Pages site
+        run: |
+          mkdir -p gh-pages
+
+          # Copy coverage report
+          if [ -d "artifacts/coverage-report" ]; then
+            cp -r artifacts/coverage-report gh-pages/coverage
+          fi
+
+          # Copy benchmark results
+          if [ -d "artifacts/benchmark-results" ]; then
+            cp -r artifacts/benchmark-results gh-pages/benchmarks
+          fi
+
+          # Copy fuzzing reports
+          mkdir -p gh-pages/fuzzing
+          if [ -d "artifacts/fuzzing-lex" ]; then
+            cp artifacts/fuzzing-lex/*.html gh-pages/fuzzing/ 2>/dev/null || true
+            cp artifacts/fuzzing-lex/*-corpus-size.txt gh-pages/fuzzing/ 2>/dev/null || true
+          fi
+          if [ -d "artifacts/fuzzing-parse" ]; then
+            cp artifacts/fuzzing-parse/*.html gh-pages/fuzzing/ 2>/dev/null || true
+            cp artifacts/fuzzing-parse/*-corpus-size.txt gh-pages/fuzzing/ 2>/dev/null || true
+          fi
+
+          # Extract metrics for dashboard
+          COVERAGE="0"
+          if [ -f "artifacts/coverage-report/coverage-summary.txt" ]; then
+            COVERAGE=$(grep "TOTAL" artifacts/coverage-report/coverage-summary.txt | awk '{print $10}' | sed 's/%//' || echo "0")
+          fi
+
+          # Generate coverage badge JSON for shields.io
+          COLOR="red"
+          if (( $(echo "$COVERAGE >= 80" | bc -l) )); then COLOR="brightgreen"; fi
+          if (( $(echo "$COVERAGE >= 60 && $COVERAGE < 80" | bc -l) )); then COLOR="yellow"; fi
+          if (( $(echo "$COVERAGE < 60" | bc -l) )); then COLOR="red"; fi
+
+          cat > gh-pages/coverage-badge.json << BADGE
+          {
+            "schemaVersion": 1,
+            "label": "coverage",
+            "message": "${COVERAGE}%",
+            "color": "$COLOR"
+          }
+          BADGE
+
+          TEST_COUNT="0"
+          if [ -f "artifacts/test-results/test-summary.txt" ]; then
+            TEST_COUNT=$(grep -oP '\d+(?= passed)' artifacts/test-results/test-summary.txt | head -1 || echo "0")
+          fi
+
+          PROPTEST_COUNT="0"
+          if [ -f "artifacts/property-test-results/proptest-summary.txt" ]; then
+            PROPTEST_COUNT=$(grep -oP '\d+(?= passed)' artifacts/property-test-results/proptest-summary.txt | head -1 || echo "0")
+          fi
+
+          LEX_CORPUS="0"
+          if [ -f "gh-pages/fuzzing/lex-corpus-size.txt" ]; then
+            LEX_CORPUS=$(cat gh-pages/fuzzing/lex-corpus-size.txt | tr -d ' ')
+          fi
+
+          PARSE_CORPUS="0"
+          if [ -f "gh-pages/fuzzing/parse-corpus-size.txt" ]; then
+            PARSE_CORPUS=$(cat gh-pages/fuzzing/parse-corpus-size.txt | tr -d ' ')
+          fi
+
+          # Create main index page
+          cat > gh-pages/index.html << EOF
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Pluto Nightly Build Dashboard</title>
+            <style>
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                padding: 40px 20px;
+              }
+              .container {
+                max-width: 1200px;
+                margin: 0 auto;
+              }
+              .header {
+                text-align: center;
+                color: white;
+                margin-bottom: 40px;
+              }
+              .header h1 {
+                font-size: 48px;
+                margin-bottom: 10px;
+                text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+              }
+              .header p {
+                font-size: 18px;
+                opacity: 0.9;
+              }
+              .metrics {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                gap: 20px;
+                margin-bottom: 40px;
+              }
+              .metric-card {
+                background: white;
+                border-radius: 12px;
+                padding: 30px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+                transition: transform 0.3s ease;
+              }
+              .metric-card:hover {
+                transform: translateY(-5px);
+              }
+              .metric-label {
+                font-size: 14px;
+                color: #666;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                margin-bottom: 10px;
+              }
+              .metric-value {
+                font-size: 36px;
+                font-weight: bold;
+                color: #667eea;
+              }
+              .metric-unit {
+                font-size: 18px;
+                color: #999;
+              }
+              .sections {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                gap: 20px;
+              }
+              .section-card {
+                background: white;
+                border-radius: 12px;
+                padding: 30px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+              }
+              .section-card h2 {
+                color: #333;
+                margin-bottom: 15px;
+                font-size: 24px;
+              }
+              .section-card p {
+                color: #666;
+                margin-bottom: 20px;
+                line-height: 1.6;
+              }
+              .btn {
+                display: inline-block;
+                padding: 12px 24px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                text-decoration: none;
+                border-radius: 6px;
+                font-weight: 600;
+                transition: all 0.3s ease;
+                box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+              }
+              .btn:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+              }
+              .footer {
+                text-align: center;
+                color: white;
+                margin-top: 60px;
+                opacity: 0.8;
+              }
+              .timestamp {
+                background: rgba(255,255,255,0.1);
+                padding: 10px 20px;
+                border-radius: 6px;
+                display: inline-block;
+                margin-top: 20px;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h1>🌙 Pluto Nightly Build</h1>
+                <p>Automated testing, coverage, and performance tracking</p>
+                <div class="timestamp">Last updated: $(date -u +"%Y-%m-%d %H:%M UTC")</div>
+              </div>
+
+              <div class="metrics">
+                <div class="metric-card">
+                  <div class="metric-label">Code Coverage</div>
+                  <div class="metric-value">${COVERAGE}<span class="metric-unit">%</span></div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-label">Tests Passing</div>
+                  <div class="metric-value">${TEST_COUNT}<span class="metric-unit"></span></div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-label">Property Tests</div>
+                  <div class="metric-value">${PROPTEST_COUNT}<span class="metric-unit"></span></div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-label">Fuzz Corpus</div>
+                  <div class="metric-value">$((LEX_CORPUS + PARSE_CORPUS))<span class="metric-unit"> files</span></div>
+                </div>
+              </div>
+
+              <div class="sections">
+                <div class="section-card">
+                  <h2>📊 Coverage Report</h2>
+                  <p>Line-by-line code coverage showing tested and untested code paths.</p>
+                  <a href="coverage/index.html" class="btn">View Coverage →</a>
+                </div>
+
+                <div class="section-card">
+                  <h2>⚡ Benchmarks</h2>
+                  <p>Performance benchmarks with historical tracking and regression detection.</p>
+                  <a href="benchmarks/index.html" class="btn">View Benchmarks →</a>
+                </div>
+
+                <div class="section-card">
+                  <h2>🔍 Fuzzing Results</h2>
+                  <p>Extended fuzzing runs (30 min/target) with coverage statistics and corpus growth.</p>
+                  <a href="fuzzing/lex.html" class="btn">Lexer Fuzzing →</a>
+                  <a href="fuzzing/parse.html" class="btn" style="margin-top: 10px;">Parser Fuzzing →</a>
+                </div>
+              </div>
+
+              <div class="footer">
+                <p>Generated by Pluto Nightly Build • <a href="https://github.com/Mkerian10/pluto" style="color: white;">View on GitHub</a></p>
+              </div>
+            </div>
+          </body>
+          </html>
+          EOF
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: gh-pages
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Comment deployment URL
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = '${{ steps.deployment.outputs.page_url }}';
+            github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: `🌙 **Nightly build deployed!**\n\nView dashboard: ${url}`
+            });

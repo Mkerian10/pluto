@@ -3,6 +3,16 @@
   <img src="https://img.shields.io/badge/status-v0.1-blue?style=flat-square" alt="v0.1" />
   <img src="https://img.shields.io/badge/targets-macOS%20%7C%20Linux-brightgreen?style=flat-square" alt="macOS | Linux" />
   <img src="https://img.shields.io/badge/arch-ARM64%20%7C%20x86__64-orange?style=flat-square" alt="ARM64 | x86_64" />
+  <br />
+  <a href="https://github.com/Mkerian10/pluto/actions/workflows/nightly.yml">
+    <img src="https://github.com/Mkerian10/pluto/actions/workflows/nightly.yml/badge.svg" alt="Nightly Build" />
+  </a>
+  <a href="https://mkerian10.github.io/pluto/coverage/">
+    <img src="https://img.shields.io/endpoint?url=https://mkerian10.github.io/pluto/coverage-badge.json&style=flat-square" alt="Coverage" />
+  </a>
+  <a href="https://mkerian10.github.io/pluto/">
+    <img src="https://img.shields.io/badge/nightly-dashboard-purple?style=flat-square" alt="Nightly Dashboard" />
+  </a>
 </p>
 
 <h1 align="center">Pluto</h1>
