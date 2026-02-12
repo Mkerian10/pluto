@@ -4128,4 +4128,348 @@ mod tests {
         let result = parser.parse_program();
         assert!(result.is_err());
     }
+
+    // Nullable types parser tests
+
+    #[test]
+    fn parse_nullable_type_expr() {
+        let prog = parse("fn foo(x: int?) int? { return x }");
+        let f = &prog.functions[0].node;
+        assert_eq!(f.name.node, "foo");
+        assert_eq!(f.params.len(), 1);
+        // Verify param type is Nullable(Int)
+        match &f.params[0].ty.node {
+            TypeExpr::Nullable(inner) => {
+                assert!(matches!(inner.node, TypeExpr::Named(ref name) if name == "int"));
+            }
+            _ => panic!("expected nullable type for param"),
+        }
+        // Verify return type is Nullable(Int)
+        let ret_type = f.return_type.as_ref().unwrap();
+        match &ret_type.node {
+            TypeExpr::Nullable(inner) => {
+                assert!(matches!(inner.node, TypeExpr::Named(ref name) if name == "int"));
+            }
+            _ => panic!("expected nullable return type"),
+        }
+    }
+
+    #[test]
+    fn parse_none_literal() {
+        let prog = parse("fn main() { let x = none }");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::NoneLit));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_nullable_in_class_field() {
+        let prog = parse("class Foo { value: int? }");
+        let c = &prog.classes[0].node;
+        assert_eq!(c.name.node, "Foo");
+        assert_eq!(c.fields.len(), 1);
+        match &c.fields[0].ty.node {
+            TypeExpr::Nullable(inner) => {
+                assert!(matches!(inner.node, TypeExpr::Named(ref name) if name == "int"));
+            }
+            _ => panic!("expected nullable field type"),
+        }
+    }
+
+    #[test]
+    fn parse_nullable_in_array() {
+        let prog = parse("fn foo(xs: [int?]) { }");
+        let f = &prog.functions[0].node;
+        match &f.params[0].ty.node {
+            TypeExpr::Array(elem_type) => {
+                match &elem_type.node {
+                    TypeExpr::Nullable(inner) => {
+                        assert!(matches!(inner.node, TypeExpr::Named(ref name) if name == "int"));
+                    }
+                    _ => panic!("expected nullable element type"),
+                }
+            }
+            _ => panic!("expected array type"),
+        }
+    }
+
+    #[test]
+    fn parse_question_operator() {
+        let prog = parse("fn foo(x: int?) int { return x? }");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Return(Some(expr)) => {
+                assert!(matches!(expr.node, Expr::NullPropagate { .. }));
+            }
+            _ => panic!("expected return with null propagate"),
+        }
+    }
+
+    #[test]
+    fn parse_nested_nullable_rejected() {
+        // Parser doesn't reject nested nullable (typeck does),
+        // but we can verify the parse structure
+        let tokens = lex("fn main() { let x: int?? = none }");
+        // This will fail during lexing/parsing because ?? is not valid
+        // The second ? will be parsed as a separate token
+        assert!(tokens.is_ok()); // Lexing succeeds
+        let tokens_vec = tokens.unwrap();
+        let mut parser = Parser::new(&tokens_vec, "fn main() { let x: int?? = none }");
+        let result = parser.parse_program();
+        // Parser will fail trying to parse the second ?
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_nullable_map_value() {
+        let prog = parse("fn foo() Map<string, int?> { return Map<string, int?> {} }");
+        let f = &prog.functions[0].node;
+        let ret_type = f.return_type.as_ref().unwrap();
+        match &ret_type.node {
+            TypeExpr::Generic { name, type_args } => {
+                assert_eq!(name, "Map");
+                assert_eq!(type_args.len(), 2);
+                // Second type arg should be Nullable(Int)
+                match &type_args[1].node {
+                    TypeExpr::Nullable(inner) => {
+                        assert!(matches!(inner.node, TypeExpr::Named(ref n) if n == "int"));
+                    }
+                    _ => panic!("expected nullable value type in map"),
+                }
+            }
+            _ => panic!("expected generic Map type"),
+        }
+    }
+
+    #[test]
+    fn parse_nullable_in_generic() {
+        let prog = parse("enum Option<T> { Some { v: T } None }\nfn main() { let x: Option<int?> = Option<int?>.None }");
+        // Verify the type annotation on the let statement
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { ty, .. } => {
+                let type_ann = ty.as_ref().unwrap();
+                match &type_ann.node {
+                    TypeExpr::Generic { name, type_args } => {
+                        assert_eq!(name, "Option");
+                        assert_eq!(type_args.len(), 1);
+                        // Type arg should be Nullable(Int)
+                        match &type_args[0].node {
+                            TypeExpr::Nullable(inner) => {
+                                assert!(matches!(inner.node, TypeExpr::Named(ref n) if n == "int"));
+                            }
+                            _ => panic!("expected nullable type arg"),
+                        }
+                    }
+                    _ => panic!("expected generic type annotation"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    // Contracts parser tests
+
+    #[test]
+    fn parse_invariant_clause() {
+        let prog = parse("class Foo {\n    x: int\n    invariant self.x > 0\n}");
+        let c = &prog.classes[0].node;
+        assert_eq!(c.invariants.len(), 1);
+        assert!(matches!(c.invariants[0].node.kind, ContractKind::Invariant));
+    }
+
+    #[test]
+    fn parse_requires_on_function() {
+        let prog = parse("fn foo(x: int)\nrequires x > 0\n{\n}");
+        let f = &prog.functions[0].node;
+        assert_eq!(f.contracts.len(), 1);
+        assert!(matches!(f.contracts[0].node.kind, ContractKind::Requires));
+    }
+
+    #[test]
+    fn parse_ensures_on_function() {
+        let prog = parse("fn foo(x: int) int\nensures result > 0\n{\n    return x + 1\n}");
+        let f = &prog.functions[0].node;
+        assert_eq!(f.contracts.len(), 1);
+        assert!(matches!(f.contracts[0].node.kind, ContractKind::Ensures));
+    }
+
+    #[test]
+    fn parse_multiple_invariants() {
+        let prog = parse("class Foo {\n    x: int\n    y: int\n    invariant self.x > 0\n    invariant self.y > 0\n}");
+        let c = &prog.classes[0].node;
+        assert_eq!(c.invariants.len(), 2);
+    }
+
+    #[test]
+    fn parse_requires_ensures_together() {
+        let prog = parse("fn foo(x: int) int\nrequires x > 0\nensures result > 0\n{\n    return x\n}");
+        let f = &prog.functions[0].node;
+        assert_eq!(f.contracts.len(), 2);
+        let has_requires = f.contracts.iter().any(|c| matches!(c.node.kind, ContractKind::Requires));
+        let has_ensures = f.contracts.iter().any(|c| matches!(c.node.kind, ContractKind::Ensures));
+        assert!(has_requires && has_ensures);
+    }
+
+    #[test]
+    fn parse_trait_method_with_contracts() {
+        let prog = parse("trait Counter {\n    fn inc(self) int\n    ensures result > 0\n}");
+        let t = &prog.traits[0].node;
+        assert_eq!(t.methods.len(), 1);
+        let method = &t.methods[0];
+        assert_eq!(method.contracts.len(), 1);
+        assert!(matches!(method.contracts[0].node.kind, ContractKind::Ensures));
+    }
+
+    // Type casting & operators parser tests
+
+    #[test]
+    fn parse_cast_int_to_float() {
+        let prog = parse("fn main() {\n    let x = 42 as float\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::Cast { .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_cast_in_expression() {
+        let prog = parse("fn main() {\n    let x = (1 + 2) as float\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::Cast { expr, .. } => {
+                        // Inner expression should be the addition
+                        assert!(matches!(expr.node, Expr::BinOp { op: BinOp::Add, .. }));
+                    }
+                    _ => panic!("expected cast expression"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_unary_minus() {
+        let prog = parse("fn main() {\n    let x = -42\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::UnaryOp { op: UnaryOp::Neg, .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_unary_not() {
+        let prog = parse("fn main() {\n    let b = !true\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::UnaryOp { op: UnaryOp::Not, .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_bitwise_not() {
+        let prog = parse("fn main() {\n    let n = ~42\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::UnaryOp { op: UnaryOp::BitNot, .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_left_shift() {
+        let prog = parse("fn main() {\n    let x = 1 << 2\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::BinOp { op: BinOp::Shl, .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_right_shift() {
+        let prog = parse("fn main() {\n    let x = 8 >> 2\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::BinOp { op: BinOp::Shr, .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    // Array/Range expression parser tests
+
+    #[test]
+    fn parse_array_literal() {
+        let prog = parse("fn main() {\n    let xs = [1, 2, 3]\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::ArrayLit { elements } => {
+                        assert_eq!(elements.len(), 3);
+                    }
+                    _ => panic!("expected array literal"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_array_index() {
+        let prog = parse("fn main() {\n    let xs = [1, 2]\n    let x = xs[0]\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[1].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::Index { .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_range_inclusive() {
+        let prog = parse("fn main() {\n    for i in 0..10 {\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::For { iterable, .. } => {
+                assert!(matches!(iterable.node, Expr::Range { .. }));
+            }
+            _ => panic!("expected for statement"),
+        }
+    }
+
+    #[test]
+    fn parse_range_in_for_loop() {
+        let prog = parse("fn main() {\n    for i in 0..5 {\n        print(i)\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::For { iterable, body, .. } => {
+                assert!(matches!(iterable.node, Expr::Range { .. }));
+                assert_eq!(body.node.stmts.len(), 1);
+            }
+            _ => panic!("expected for statement"),
+        }
+    }
 }
