@@ -1455,9 +1455,9 @@ mod tests {
     fn test_host_target_triple_format() {
         let result = host_target_triple().unwrap();
 
-        // Should have two hyphens (arch-vendor-os format)
+        // Should have at least two hyphens (arch-vendor-os format, or arch-vendor-os-env on Linux)
         let hyphen_count = result.chars().filter(|c| *c == '-').count();
-        assert_eq!(hyphen_count, 2, "Triple should have format arch-vendor-os");
+        assert!(hyphen_count >= 2, "Triple should have at least 2 hyphens (got {})", hyphen_count);
     }
 
     #[test]
