@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::parser::ast::*;
+use crate::span::Spanned;
 use crate::typeck::env::mangle_method;
+use crate::visit::{walk_expr_mut, walk_stmt_mut, VisitMut};
 
 /// Index of declaration names to their UUIDs, built from the final program AST.
 struct DeclIndex {
@@ -98,8 +100,9 @@ pub fn resolve_cross_refs(program: &mut Program) {
             resolve_block(&mut m.node.body.node, &index);
         }
         // Walk invariant expressions
+        let mut resolver = XrefResolver { index: &index };
         for inv in &mut c.node.invariants {
-            resolve_expr(&mut inv.node.expr.node, &index);
+            resolver.visit_expr_mut(&mut inv.node.expr);
         }
     }
 
@@ -118,223 +121,86 @@ pub fn resolve_cross_refs(program: &mut Program) {
     }
 }
 
-fn resolve_block(block: &mut Block, index: &DeclIndex) {
-    for stmt in &mut block.stmts {
-        resolve_stmt(&mut stmt.node, index);
-    }
+struct XrefResolver<'a> {
+    index: &'a DeclIndex,
 }
 
-fn resolve_stmt(stmt: &mut Stmt, index: &DeclIndex) {
-    match stmt {
-        Stmt::Let { value, .. } => {
-            resolve_expr(&mut value.node, index);
-        }
-        Stmt::Return(Some(expr)) => {
-            resolve_expr(&mut expr.node, index);
-        }
-        Stmt::Return(None) => {}
-        Stmt::Assign { value, .. } => {
-            resolve_expr(&mut value.node, index);
-        }
-        Stmt::FieldAssign { object, value, .. } => {
-            resolve_expr(&mut object.node, index);
-            resolve_expr(&mut value.node, index);
-        }
-        Stmt::If { condition, then_block, else_block } => {
-            resolve_expr(&mut condition.node, index);
-            resolve_block(&mut then_block.node, index);
-            if let Some(eb) = else_block {
-                resolve_block(&mut eb.node, index);
+impl VisitMut for XrefResolver<'_> {
+    fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+        // Handle expressions that need ID resolution
+        match &mut expr.node {
+            Expr::Call { name, target_id, .. } => {
+                *target_id = self.index.fn_index.get(&name.node).copied();
             }
-        }
-        Stmt::While { condition, body } => {
-            resolve_expr(&mut condition.node, index);
-            resolve_block(&mut body.node, index);
-        }
-        Stmt::For { iterable, body, .. } => {
-            resolve_expr(&mut iterable.node, index);
-            resolve_block(&mut body.node, index);
-        }
-        Stmt::IndexAssign { object, index: idx, value } => {
-            resolve_expr(&mut object.node, index);
-            resolve_expr(&mut idx.node, index);
-            resolve_expr(&mut value.node, index);
-        }
-        Stmt::Match { expr, arms } => {
-            resolve_expr(&mut expr.node, index);
-            for arm in arms {
-                arm.enum_id = index.enum_index.get(&arm.enum_name.node).copied();
-                arm.variant_id = index.variant_index.get(
-                    &(arm.enum_name.node.clone(), arm.variant_name.node.clone())
+            Expr::StructLit { name, target_id, .. } => {
+                *target_id = self.index.class_index.get(&name.node).copied();
+            }
+            Expr::EnumUnit { enum_name, variant, enum_id, variant_id, .. } => {
+                *enum_id = self.index.enum_index.get(&enum_name.node).copied();
+                *variant_id = self.index.variant_index.get(
+                    &(enum_name.node.clone(), variant.node.clone())
                 ).copied();
-                resolve_block(&mut arm.body.node, index);
             }
-        }
-        Stmt::Raise { error_name, fields, error_id } => {
-            *error_id = index.error_index.get(&error_name.node).copied();
-            for (_, expr) in fields {
-                resolve_expr(&mut expr.node, index);
+            Expr::EnumData { enum_name, variant, enum_id, variant_id, .. } => {
+                *enum_id = self.index.enum_index.get(&enum_name.node).copied();
+                *variant_id = self.index.variant_index.get(
+                    &(enum_name.node.clone(), variant.node.clone())
+                ).copied();
             }
-        }
-        Stmt::LetChan { capacity, .. } => {
-            if let Some(cap) = capacity {
-                resolve_expr(&mut cap.node, index);
+            Expr::ClosureCreate { fn_name, target_id, .. } => {
+                *target_id = self.index.fn_index.get(fn_name).copied();
             }
-        }
-        Stmt::Select { arms, default } => {
-            for arm in arms {
-                match &mut arm.op {
-                    SelectOp::Recv { channel, .. } => {
-                        resolve_expr(&mut channel.node, index);
-                    }
-                    SelectOp::Send { channel, value } => {
-                        resolve_expr(&mut channel.node, index);
-                        resolve_expr(&mut value.node, index);
+            Expr::QualifiedAccess { segments } => {
+                panic!(
+                    "QualifiedAccess should be resolved by module flattening before xref. Segments: {:?}",
+                    segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+                )
+            }
+            Expr::StringInterp { parts } => {
+                for part in parts {
+                    if let StringInterpPart::Expr(e) = part {
+                        self.visit_expr_mut(e);
                     }
                 }
-                resolve_block(&mut arm.body.node, index);
+                return;
             }
-            if let Some(def) = default {
-                resolve_block(&mut def.node, index);
+            _ => {}
+        }
+        // Recurse into sub-expressions
+        walk_expr_mut(self, expr);
+    }
+
+    fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
+        // Handle statements that need ID resolution
+        match &mut stmt.node {
+            Stmt::Match { expr, arms } => {
+                self.visit_expr_mut(expr);
+                for arm in arms {
+                    arm.enum_id = self.index.enum_index.get(&arm.enum_name.node).copied();
+                    arm.variant_id = self.index.variant_index.get(
+                        &(arm.enum_name.node.clone(), arm.variant_name.node.clone())
+                    ).copied();
+                    self.visit_block_mut(&mut arm.body);
+                }
+                return;
             }
-        }
-        Stmt::Scope { seeds, body, .. } => {
-            for seed in seeds {
-                resolve_expr(&mut seed.node, index);
+            Stmt::Raise { error_name, error_id, .. } => {
+                *error_id = self.index.error_index.get(&error_name.node).copied();
             }
-            resolve_block(&mut body.node, index);
+            _ => {}
         }
-        Stmt::Yield { value, .. } => {
-            resolve_expr(&mut value.node, index);
-        }
-        Stmt::Break | Stmt::Continue => {}
-        Stmt::Expr(expr) => {
-            resolve_expr(&mut expr.node, index);
-        }
+        // Recurse into sub-statements
+        walk_stmt_mut(self, stmt);
     }
 }
 
-fn resolve_expr(expr: &mut Expr, index: &DeclIndex) {
-    match expr {
-        Expr::Call { name, args, target_id, .. } => {
-            *target_id = index.fn_index.get(&name.node).copied();
-            for arg in args {
-                resolve_expr(&mut arg.node, index);
-            }
-        }
-        Expr::StructLit { name, fields, target_id, .. } => {
-            *target_id = index.class_index.get(&name.node).copied();
-            for (_, expr) in fields {
-                resolve_expr(&mut expr.node, index);
-            }
-        }
-        Expr::EnumUnit { enum_name, variant, enum_id, variant_id, .. } => {
-            *enum_id = index.enum_index.get(&enum_name.node).copied();
-            *variant_id = index.variant_index.get(
-                &(enum_name.node.clone(), variant.node.clone())
-            ).copied();
-        }
-        Expr::EnumData { enum_name, variant, fields, enum_id, variant_id, .. } => {
-            *enum_id = index.enum_index.get(&enum_name.node).copied();
-            *variant_id = index.variant_index.get(
-                &(enum_name.node.clone(), variant.node.clone())
-            ).copied();
-            for (_, expr) in fields {
-                resolve_expr(&mut expr.node, index);
-            }
-        }
-        Expr::ClosureCreate { fn_name, target_id, .. } => {
-            *target_id = index.fn_index.get(fn_name).copied();
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            resolve_expr(&mut lhs.node, index);
-            resolve_expr(&mut rhs.node, index);
-        }
-        Expr::UnaryOp { operand, .. } => {
-            resolve_expr(&mut operand.node, index);
-        }
-        Expr::FieldAccess { object, .. } => {
-            resolve_expr(&mut object.node, index);
-        }
-        Expr::MethodCall { object, args, .. } => {
-            resolve_expr(&mut object.node, index);
-            for arg in args {
-                resolve_expr(&mut arg.node, index);
-            }
-        }
-        Expr::ArrayLit { elements } => {
-            for el in elements {
-                resolve_expr(&mut el.node, index);
-            }
-        }
-        Expr::Index { object, index: idx } => {
-            resolve_expr(&mut object.node, index);
-            resolve_expr(&mut idx.node, index);
-        }
-        Expr::StringInterp { parts } => {
-            for part in parts {
-                if let StringInterpPart::Expr(e) = part {
-                    resolve_expr(&mut e.node, index);
-                }
-            }
-        }
-        Expr::Closure { body, .. } => {
-            resolve_block(&mut body.node, index);
-        }
-        Expr::MapLit { entries, .. } => {
-            for (k, v) in entries {
-                resolve_expr(&mut k.node, index);
-                resolve_expr(&mut v.node, index);
-            }
-        }
-        Expr::SetLit { elements, .. } => {
-            for el in elements {
-                resolve_expr(&mut el.node, index);
-            }
-        }
-        Expr::Propagate { expr } => {
-            resolve_expr(&mut expr.node, index);
-        }
-        Expr::Catch { expr, handler } => {
-            resolve_expr(&mut expr.node, index);
-            match handler {
-                CatchHandler::Wildcard { body, .. } => {
-                    resolve_block(&mut body.node, index);
-                }
-                CatchHandler::Shorthand(body) => {
-                    resolve_expr(&mut body.node, index);
-                }
-            }
-        }
-        Expr::Cast { expr, .. } => {
-            resolve_expr(&mut expr.node, index);
-        }
-        Expr::Range { start, end, .. } => {
-            resolve_expr(&mut start.node, index);
-            resolve_expr(&mut end.node, index);
-        }
-        Expr::Spawn { call } => {
-            resolve_expr(&mut call.node, index);
-        }
-        Expr::NullPropagate { expr } => {
-            resolve_expr(&mut expr.node, index);
-        }
-        Expr::StaticTraitCall { args, .. } => {
-            for arg in args {
-                resolve_expr(&mut arg.node, index);
-            }
-        }
-        Expr::QualifiedAccess { segments } => {
-            panic!(
-                "QualifiedAccess should be resolved by module flattening before xref. Segments: {:?}",
-                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
-            )
-        }
-        // Leaf expressions — no cross-references
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) |
-        Expr::StringLit(_) | Expr::Ident(_) | Expr::NoneLit => {}
+fn resolve_block(block: &mut Block, index: &DeclIndex) {
+    let mut resolver = XrefResolver { index };
+    for stmt in &mut block.stmts {
+        resolver.visit_stmt_mut(stmt);
     }
 }
+
 
 #[cfg(test)]
 mod tests {
