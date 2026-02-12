@@ -1,0 +1,9 @@
+fn main() {
+    // Test that reflection types are available
+    let fields: [FieldInfo] = []
+    let info = ClassInfo { name: "Test", fields: fields }
+    let kind = TypeKind.Void
+
+    print("Reflection types loaded successfully!")
+    print(info.name)
+}
