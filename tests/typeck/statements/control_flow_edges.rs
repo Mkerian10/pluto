@@ -1,4 +1,4 @@
-//! Control flow edge cases - 15 tests
+//! Control flow edge cases - 13 tests (removed 2 ACTUALLY_SUCCESS)
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
@@ -6,11 +6,8 @@ use common::compile_should_fail_with;
 // Empty while body
 #[test] fn empty_while() { compile_should_fail_with(r#"fn main(){while true{}}"#, ""); }
 
-// Empty for body
-#[test] fn empty_for() { compile_should_fail_with(r#"fn main(){for i in 0..10{}}"#, ""); }
-
-// Empty if body
-#[test] fn empty_if() { compile_should_fail_with(r#"fn main(){if true{}}"#, ""); }
+// REMOVED: empty_for - empty for bodies are valid
+// REMOVED: empty_if - empty if bodies are valid
 
 // Empty match arm
 #[test] fn empty_match_arm() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{E.A{}E.B{}}}"#, ""); }
