@@ -416,7 +416,7 @@ fn test_error_state_abi_compliance() {
         }
 
         fn main() {
-            may_fail() catch {
+            may_fail() catch err {
                 print("caught")
             }
         }
