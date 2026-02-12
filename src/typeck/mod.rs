@@ -761,4 +761,47 @@ mod tests {
         let result = check("trait T {\n    fn foo(x: int)\n}\n\nclass C impl T {\n    fn foo(x: int)\n    requires x > 0\n    {\n    }\n}\n\nfn main() {\n}");
         assert!(result.is_err());
     }
+
+    // Type casting & operators typeck tests
+
+    #[test]
+    fn cast_int_to_float() {
+        check("fn main() {\n    let x: float = 42 as float\n}").unwrap();
+    }
+
+    #[test]
+    fn cast_float_to_int() {
+        check("fn main() {\n    let x: int = 3.14 as int\n}").unwrap();
+    }
+
+    #[test]
+    fn cast_int_to_bool() {
+        check("fn main() {\n    let x: bool = 1 as bool\n}").unwrap();
+    }
+
+    #[test]
+    fn cast_invalid_rejected() {
+        let result = check("fn main() {\n    let x: int = \"hi\" as int\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unary_minus_on_int() {
+        check("fn main() {\n    let x: int = -42\n}").unwrap();
+    }
+
+    #[test]
+    fn unary_not_on_bool() {
+        check("fn main() {\n    let x: bool = !true\n}").unwrap();
+    }
+
+    #[test]
+    fn bitwise_not_on_int() {
+        check("fn main() {\n    let x: int = ~42\n}").unwrap();
+    }
+
+    #[test]
+    fn bitwise_shift_on_int() {
+        check("fn main() {\n    let x = 1 << 2\n    let y = 8 >> 1\n}").unwrap();
+    }
 }

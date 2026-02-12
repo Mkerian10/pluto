@@ -4324,4 +4324,96 @@ mod tests {
         assert_eq!(method.contracts.len(), 1);
         assert!(matches!(method.contracts[0].node.kind, ContractKind::Ensures));
     }
+
+    // Type casting & operators parser tests
+
+    #[test]
+    fn parse_cast_int_to_float() {
+        let prog = parse("fn main() {\n    let x = 42 as float\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::Cast { .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_cast_in_expression() {
+        let prog = parse("fn main() {\n    let x = (1 + 2) as float\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::Cast { expr, .. } => {
+                        // Inner expression should be the addition
+                        assert!(matches!(expr.node, Expr::BinOp { op: BinOp::Add, .. }));
+                    }
+                    _ => panic!("expected cast expression"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_unary_minus() {
+        let prog = parse("fn main() {\n    let x = -42\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::UnaryOp { op: UnaryOp::Neg, .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_unary_not() {
+        let prog = parse("fn main() {\n    let b = !true\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::UnaryOp { op: UnaryOp::Not, .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_bitwise_not() {
+        let prog = parse("fn main() {\n    let n = ~42\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::UnaryOp { op: UnaryOp::BitNot, .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_left_shift() {
+        let prog = parse("fn main() {\n    let x = 1 << 2\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::BinOp { op: BinOp::Shl, .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_right_shift() {
+        let prog = parse("fn main() {\n    let x = 8 >> 2\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::BinOp { op: BinOp::Shr, .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
 }
