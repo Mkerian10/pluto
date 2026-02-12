@@ -148,6 +148,14 @@ pub(crate) fn resolve_trait_signatures(program: &Program, env: &mut TypeEnv) -> 
 
         let mut methods = Vec::new();
         for m in &t.methods {
+            // Validate that trait methods have a self parameter
+            if m.params.is_empty() || m.params[0].name.node != "self" {
+                return Err(CompileError::type_err(
+                    format!("trait method '{}' must have a 'self' parameter as its first parameter", m.name.node),
+                    m.name.span,
+                ));
+            }
+
             let mut param_types = Vec::new();
             for p in &m.params {
                 if p.name.node == "self" {
@@ -1242,6 +1250,20 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                 class.span,
             )
         })?.clone();
+
+        // Validate no duplicate traits in impl list
+        {
+            let mut seen_traits = HashSet::new();
+            for trait_name_spanned in &c.impl_traits {
+                let trait_name = &trait_name_spanned.node;
+                if !seen_traits.insert(trait_name.clone()) {
+                    return Err(CompileError::type_err(
+                        format!("trait '{}' appears multiple times in impl list for class '{}'", trait_name, class_name),
+                        trait_name_spanned.span,
+                    ));
+                }
+            }
+        }
 
         // Multi-trait collision guard: reject if two traits define the same method
         // and at least one has contracts on it

@@ -433,3 +433,64 @@ fn main() {
     );
     assert_eq!(out, "11\n99\n");
 }
+
+// Regression tests for nested field access (bug: parsed as enum variant with uppercase heuristic)
+
+#[test]
+fn nested_field_access_two_levels() {
+    let out = compile_and_run_stdout(
+        "class Inner { value: int }\n\
+         class Outer { inner: Inner }\n\
+         fn main() {\n\
+             let outer = Outer { inner: Inner { value: 42 } }\n\
+             print(outer.inner.value)\n\
+         }",
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn nested_field_access_self() {
+    let out = compile_and_run_stdout(
+        "class Inner { value: int }\n\
+         class Outer {\n\
+             inner: Inner\n\
+             fn get_value(self) int {\n\
+                 return self.inner.value\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let o = Outer { inner: Inner { value: 99 } }\n\
+             print(o.get_value())\n\
+         }",
+    );
+    assert_eq!(out, "99\n");
+}
+
+#[test]
+fn nested_field_access_three_levels() {
+    let out = compile_and_run_stdout(
+        "class Deep { val: int }\n\
+         class Mid { deep: Deep }\n\
+         class Top { mid: Mid }\n\
+         fn main() {\n\
+             let t = Top { mid: Mid { deep: Deep { val: 123 } } }\n\
+             print(t.mid.deep.val)\n\
+         }",
+    );
+    assert_eq!(out, "123\n");
+}
+
+#[test]
+fn nested_field_access_uppercase_field() {
+    // This test specifically validates that the uppercase heuristic is gone
+    let out = compile_and_run_stdout(
+        "class Inner { Value: int }\n\
+         class Outer { Inner: Inner }\n\
+         fn main() {\n\
+             let o = Outer { Inner: Inner { Value: 77 } }\n\
+             print(o.Inner.Value)\n\
+         }",
+    );
+    assert_eq!(out, "77\n");
+}

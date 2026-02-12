@@ -1,0 +1,337 @@
+// Boundary conditions and edge cases for f-strings
+
+// ===== Numeric Boundaries =====
+
+test "interpolate maximum 32-bit integer" {
+    let x = 2147483647
+    let result = f"{x}"
+    expect(result).to_equal("2147483647")
+}
+
+test "interpolate minimum 32-bit integer" {
+    let x = -2147483648
+    let result = f"{x}"
+    expect(result).to_equal("-2147483648")
+}
+
+test "interpolate one" {
+    let x = 1
+    let result = f"{x}"
+    expect(result).to_equal("1")
+}
+
+test "interpolate minus one" {
+    let x = -1
+    let result = f"{x}"
+    expect(result).to_equal("-1")
+}
+
+test "interpolate negative float" {
+    let x = -3.14
+    let result = f"{x}"
+    expect(result).to_equal("-3.140000")
+}
+
+test "interpolate zero float" {
+    let x = 0.0
+    let result = f"{x}"
+    expect(result).to_equal("0.000000")
+}
+
+test "hex addition result" {
+    let x = 0x10
+    let y = 0x20
+    let result = f"{x + y}"
+    expect(result).to_equal("48")
+}
+
+// ===== String Boundaries =====
+
+test "interpolate single character" {
+    let ch = "a"
+    let result = f"{ch}"
+    expect(result).to_equal("a")
+}
+
+test "interpolate very long string" {
+    let long = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    let result = f"{long}"
+    expect(result).to_equal("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+}
+
+test "interpolate string with repeated characters" {
+    let rep = "aaaaaaaaaa"
+    let result = f"{rep}"
+    expect(result).to_equal("aaaaaaaaaa")
+}
+
+test "interpolate string with special ASCII" {
+    let spec = "!@#$%^&*()"
+    let result = f"{spec}"
+    expect(result).to_equal("!@#$%^&*()")
+}
+
+test "interpolate numeric string" {
+    let nums = "0123456789"
+    let result = f"{nums}"
+    expect(result).to_equal("0123456789")
+}
+
+test "interpolate mixed case string" {
+    let mixed = "HeLLo WoRLd"
+    let result = f"{mixed}"
+    expect(result).to_equal("HeLLo WoRLd")
+}
+
+test "interpolate string with underscores" {
+    let under = "hello_world_test"
+    let result = f"{under}"
+    expect(result).to_equal("hello_world_test")
+}
+
+test "interpolate string with dashes" {
+    let dash = "hello-world-test"
+    let result = f"{dash}"
+    expect(result).to_equal("hello-world-test")
+}
+
+test "interpolate string with dots" {
+    let dots = "file.name.txt"
+    let result = f"{dots}"
+    expect(result).to_equal("file.name.txt")
+}
+
+// ===== Whitespace Boundaries =====
+
+test "leading spaces before interpolation" {
+    let x = 42
+    let result = f"   {x}"
+    expect(result).to_equal("   42")
+}
+
+test "trailing spaces after interpolation" {
+    let x = 42
+    let result = f"{x}   "
+    expect(result).to_equal("42   ")
+}
+
+test "multiple spaces between text and interpolation" {
+    let x = 42
+    let result = f"Value:    {x}"
+    expect(result).to_equal("Value:    42")
+}
+
+test "mixed whitespace around interpolation" {
+    let x = 42
+    let result = f"  \t{x}\n  "
+    expect(result).to_equal("  \t42\n  ")
+}
+
+test "f-string with only whitespace" {
+    let result = f"     "
+    expect(result).to_equal("     ")
+}
+
+test "f-string with only newlines" {
+    let result = f"\n\n\n"
+    expect(result).to_equal("\n\n\n")
+}
+
+test "f-string with only tabs" {
+    let result = f"\t\t\t"
+    expect(result).to_equal("\t\t\t")
+}
+
+// ===== Unary Operator Boundaries =====
+
+test "negate positive number" {
+    let x = 10
+    let result = f"{-x}"
+    expect(result).to_equal("-10")
+}
+
+test "negate negative number" {
+    let x = -10
+    let result = f"{-x}"
+    expect(result).to_equal("10")
+}
+
+test "negate zero" {
+    let x = 0
+    let result = f"{-x}"
+    expect(result).to_equal("0")
+}
+
+// ===== Variable Reuse Patterns =====
+
+test "interpolate same variable three times" {
+    let x = 42
+    let result = f"{x} {x} {x}"
+    expect(result).to_equal("42 42 42")
+}
+
+test "interpolate variable in sequential expressions" {
+    let x = 10
+    let result = f"{x} {x + 1} {x + 2}"
+    expect(result).to_equal("10 11 12")
+}
+
+test "variable used multiple times in same expression" {
+    let x = 5
+    let result = f"{x * x}"
+    expect(result).to_equal("25")
+}
+
+// ===== Pattern Repetition =====
+
+test "alternating variable and literal pattern" {
+    let x = 1
+    let result = f"{x}a{x}b{x}c"
+    expect(result).to_equal("1a1b1c")
+}
+
+test "mirrored interpolation pattern" {
+    let a = "A"
+    let b = "B"
+    let result = f"{a}{b}{b}{a}"
+    expect(result).to_equal("ABBA")
+}
+
+test "repeated interpolation separator" {
+    let a = "A"
+    let b = "B"
+    let result = f"{a}    {b}"
+    expect(result).to_equal("A    B")
+}
+
+// ===== Boolean Patterns =====
+
+test "alternating boolean values" {
+    let t = true
+    let f = false
+    let result = f"{t}{f}{t}{f}"
+    expect(result).to_equal("truefalsetruefalse")
+}
+
+// ===== Escape Sequence Boundaries =====
+
+test "escape at very start" {
+    let result = f"\ntext"
+    expect(result).to_equal("\ntext")
+}
+
+test "escape at very end" {
+    let result = f"text\n"
+    expect(result).to_equal("text\n")
+}
+
+test "multiple consecutive escapes" {
+    let result = f"\n\n\n"
+    expect(result).to_equal("\n\n\n")
+}
+
+test "all escape types together" {
+    let result = f"Line\nTab\tQuote\"Backslash\\Return\r"
+    expect(result).to_equal("Line\nTab\tQuote\"Backslash\\Return\r")
+}
+
+test "escape before interpolation" {
+    let x = 10
+    let result = f"\n{x}"
+    expect(result).to_equal("\n10")
+}
+
+test "escape after interpolation" {
+    let x = 10
+    let result = f"{x}\n"
+    expect(result).to_equal("10\n")
+}
+
+test "escapes surrounding interpolation" {
+    let x = 10
+    let result = f"\n{x}\t"
+    expect(result).to_equal("\n10\t")
+}
+
+test "quote escape before interpolation" {
+    let x = 10
+    let result = f"\"Value\": {x}"
+    expect(result).to_equal("\"Value\": 10")
+}
+
+test "quote escape after interpolation" {
+    let x = 10
+    let result = f"{x} is \"ten\""
+    expect(result).to_equal("10 is \"ten\"")
+}
+
+test "backslash before interpolation" {
+    let x = 10
+    let result = f"\\{x}"
+    expect(result).to_equal("\\10")
+}
+
+test "backslash after interpolation" {
+    let x = 10
+    let result = f"{x}\\"
+    expect(result).to_equal("10\\")
+}
+
+// ===== Length Checks =====
+
+test "empty f-string has zero length" {
+    let result = f""
+    expect(result.len()).to_equal(0)
+}
+
+test "single character f-string length" {
+    let result = f"a"
+    expect(result.len()).to_equal(1)
+}
+
+test "interpolated result length" {
+    let name = "Alice"
+    let result = f"Hello {name}!"
+    expect(result.len()).to_equal(12)
+}
+
+// ===== Stress Tests =====
+
+test "ten sequential interpolations" {
+    let v1 = 1
+    let v2 = 2
+    let v3 = 3
+    let v4 = 4
+    let v5 = 5
+    let v6 = 6
+    let v7 = 7
+    let v8 = 8
+    let v9 = 9
+    let v10 = 10
+    let result = f"{v1} {v2} {v3} {v4} {v5} {v6} {v7} {v8} {v9} {v10}"
+    expect(result).to_equal("1 2 3 4 5 6 7 8 9 10")
+}
+
+test "long literal before interpolation" {
+    let x = 42
+    let result = f"This is a very long string with lots of text before the interpolation {x} end"
+    expect(result).to_equal("This is a very long string with lots of text before the interpolation 42 end")
+}
+
+test "concatenation chain of four f-strings" {
+    let a = f"A"
+    let b = f"B"
+    let c = f"C"
+    let d = f"D"
+    let result = a + b + c + d
+    expect(result).to_equal("ABCD")
+}
+
+test "reassign and re-interpolate" {
+    let mut x = 10
+    let mut result = f"{x}"
+    expect(result).to_equal("10")
+    x = 20
+    result = f"{x}"
+    expect(result).to_equal("20")
+}

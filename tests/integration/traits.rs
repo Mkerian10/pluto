@@ -1047,8 +1047,8 @@ fn main() {
 
 #[test]
 fn trait_duplicate_trait_in_impl_allowed() {
-    // COMPILER GAP: class Foo impl Bar, Bar — duplicate trait is silently accepted
-    let out = compile_and_run_stdout(r#"
+    // Duplicate trait in impl list should be rejected
+    compile_should_fail_with(r#"
 trait Bar {
     fn get(self) int
 }
@@ -1069,8 +1069,7 @@ fn main() {
     let f = Foo { val: 7 }
     show(f)
 }
-"#);
-    assert_eq!(out, "7\n");
+"#, "trait 'Bar' appears multiple times in impl list for class 'Foo'");
 }
 
 #[test]
@@ -4805,6 +4804,26 @@ fn main() {
 }
 
 #[test]
+fn trait_method_without_self_shows_error() {
+    // Trait methods must have self parameter - should show helpful error, not panic
+    compile_should_fail_with(r#"
+trait Compute {
+    fn calculate() int
+}
+
+class Calculator impl Compute {
+    value: int
+    fn calculate() int { return 42 }
+}
+
+fn main() {
+    let c: Compute = Calculator { value: 0 }
+    print(c.calculate())
+}
+"#, "trait method 'calculate' must have a 'self' parameter");
+}
+
+#[test]
 fn trait_generic_class_three_instantiations_same_trait() {
     // Three different instantiations of a generic class, all dispatched through same trait
     let out = compile_and_run_stdout(r#"
@@ -6806,10 +6825,10 @@ fn main() {
 }
 
 #[test]
-fn fail_trait_class_nested_field_access() {
-    // COMPILER GAP: Chained field access self.inner.val treated as unknown enum
-    // Compiler sees "self.inner" as an enum reference instead of nested field access
-    compile_should_fail_with(r#"
+fn trait_class_nested_field_access() {
+    // Regression test: nested field access self.inner.val should work correctly
+    // (Previously treated as unknown enum due to uppercase heuristic bug)
+    let out = compile_and_run_stdout(r#"
 class Inner {
     val: int
 }
@@ -6827,8 +6846,11 @@ class Outer impl HasInner {
 }
 
 fn main() {
+    let o = Outer { inner: Inner { val: 42 } }
+    print(o.get_inner_val())
 }
-"#, "unknown enum");
+"#);
+    assert_eq!(out, "42\n");
 }
 
 #[test]
@@ -13685,12 +13707,8 @@ fn main() {
 
 #[test]
 fn crash_trait_method_missing_self_with_impl() {
-    // BUG: Trait method without self + class impl panics the compiler
-    // (register.rs:1194 — index out of range for empty params slice)
-    // Just declaring the trait is fine, but implementing triggers the panic.
-    // Using catch_unwind to document without crashing the test suite.
-    let result = std::panic::catch_unwind(|| {
-        plutoc::compile_to_object(r#"
+    // FIXED: Trait method without self now shows proper error instead of panicking
+    compile_should_fail_with(r#"
 trait Bad {
     fn compute() int
 }
@@ -13704,9 +13722,7 @@ fn main() {
     let b: Bad = Impl { tag: 0 }
     print(b.compute())
 }
-"#)
-    });
-    assert!(result.is_err(), "Expected compiler to panic on trait method without self");
+"#, "trait method 'compute' must have a 'self' parameter");
 }
 
 #[test]
@@ -13720,7 +13736,7 @@ trait Foo {
 fn main() {
     let f = Foo { }
 }
-"#, "unexpected token { in expression");
+"#, "unknown class 'Foo'");
 }
 
 #[test]
@@ -14983,9 +14999,8 @@ fn main() {
 
 #[test]
 fn fail_duplicate_trait_in_impl_list() {
-    // BUG: Same trait listed twice in impl list silently accepted
-    // Currently compiles without error (compiler gap)
-    let out = compile_and_run_stdout(r#"
+    // Same trait listed twice in impl list should be rejected
+    compile_should_fail_with(r#"
 trait Foo {
     fn work(self) int
 }
@@ -14999,9 +15014,7 @@ fn main() {
     let x: Foo = X { n: 42 }
     print(x.work())
 }
-"#);
-    // Compiles and works (duplicate silently ignored)
-    assert_eq!(out, "42\n");
+"#, "trait 'Foo' appears multiple times in impl list for class 'X'");
 }
 
 #[test]

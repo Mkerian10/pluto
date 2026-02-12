@@ -329,3 +329,63 @@ test "gamma" {
     assert!(alpha_pos < beta_pos);
     assert!(beta_pos < gamma_pos);
 }
+
+// ── Multiple files with tests ─────────────────────────────────────────────────
+
+#[test]
+fn test_multiple_files_unique_test_ids() {
+    // Regression test for P1 #3: Test Runner Generates Duplicate IDs for Multiple Files
+    // When multiple .pluto files in the same directory have test blocks, each test should
+    // get a unique ID based on the file path hash to avoid duplicate symbol errors at link time.
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create two sibling files, each with test blocks
+    std::fs::write(
+        dir.path().join("file_a.pluto"),
+        r#"
+test "test in file a" {
+    expect(1).to_equal(1)
+}
+
+test "another test in file a" {
+    expect(true).to_be_true()
+}
+"#,
+    ).unwrap();
+
+    std::fs::write(
+        dir.path().join("file_b.pluto"),
+        r#"
+test "test in file b" {
+    expect(2).to_equal(2)
+}
+
+test "another test in file b" {
+    expect(false).to_be_false()
+}
+"#,
+    ).unwrap();
+
+    let entry = dir.path().join("file_a.pluto");
+    let bin_path = dir.path().join("test_bin");
+
+    // Compile file_a in test mode - this should auto-include file_b as a sibling
+    // If test IDs are not unique, this will fail with duplicate symbol errors
+    plutoc::compile_file_for_tests(&entry, &bin_path, None, false)
+        .unwrap_or_else(|e| panic!("Test compilation failed: {e}"));
+
+    // Run the test binary and verify all tests execute
+    let output = Command::new(&bin_path).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // All 4 tests should run successfully
+    assert!(output.status.success(), "Tests should pass. stderr: {}", stderr);
+    assert!(stdout.contains("test in file a ... ok"), "stdout: {}", stdout);
+    assert!(stdout.contains("another test in file a ... ok"), "stdout: {}", stdout);
+    assert!(stdout.contains("test in file b ... ok"), "stdout: {}", stdout);
+    assert!(stdout.contains("another test in file b ... ok"), "stdout: {}", stdout);
+    assert!(stdout.contains("4 tests passed"), "stdout: {}", stdout);
+}
