@@ -1509,20 +1509,40 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
 /// Otherwise, convert to nested FieldAccess chain (variable.field.field case).
 fn resolve_qualified_access_in_program(program: &mut Program, module_names: &HashSet<String>) {
     for func in &mut program.functions {
+        // Resolve in function contracts (requires/ensures)
+        for contract in &mut func.node.contracts {
+            resolve_qualified_access_in_expr(&mut contract.node.expr.node, contract.node.expr.span, module_names);
+        }
         resolve_qualified_access_in_block(&mut func.node.body.node, module_names);
     }
     for class in &mut program.classes {
+        // Resolve in class invariants
+        for invariant in &mut class.node.invariants {
+            resolve_qualified_access_in_expr(&mut invariant.node.expr.node, invariant.node.expr.span, module_names);
+        }
         for method in &mut class.node.methods {
+            // Resolve in method contracts (requires/ensures)
+            for contract in &mut method.node.contracts {
+                resolve_qualified_access_in_expr(&mut contract.node.expr.node, contract.node.expr.span, module_names);
+            }
             resolve_qualified_access_in_block(&mut method.node.body.node, module_names);
         }
     }
     if let Some(app) = &mut program.app {
         for method in &mut app.node.methods {
+            // Resolve in app method contracts
+            for contract in &mut method.node.contracts {
+                resolve_qualified_access_in_expr(&mut contract.node.expr.node, contract.node.expr.span, module_names);
+            }
             resolve_qualified_access_in_block(&mut method.node.body.node, module_names);
         }
     }
     for stage in &mut program.stages {
         for method in &mut stage.node.methods {
+            // Resolve in stage method contracts
+            for contract in &mut method.node.contracts {
+                resolve_qualified_access_in_expr(&mut contract.node.expr.node, contract.node.expr.span, module_names);
+            }
             resolve_qualified_access_in_block(&mut method.node.body.node, module_names);
         }
     }
@@ -1652,9 +1672,10 @@ fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &
             let mut current_span = segments[0].span;
 
             for field_seg in &segments[1..] {
+                let object_span = current_span;  // Save span before updating
                 current_span = Span::new(current_span.start, field_seg.span.end);
                 current = Expr::FieldAccess {
-                    object: Box::new(Spanned::new(current, current_span)),
+                    object: Box::new(Spanned::new(current, object_span)),
                     field: field_seg.clone(),
                 };
             }
