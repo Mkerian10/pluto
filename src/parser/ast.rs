@@ -507,3 +507,144 @@ pub struct MatchArm {
     pub enum_id: Option<Uuid>,
     pub variant_id: Option<Uuid>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::span::Span;
+
+    // ===== ImportDecl tests =====
+
+    #[test]
+    fn test_binding_name_without_alias() {
+        let import = ImportDecl {
+            path: vec![
+                Spanned::new("std".to_string(), Span::dummy()),
+                Spanned::new("collections".to_string(), Span::dummy()),
+            ],
+            alias: None,
+        };
+        assert_eq!(import.binding_name(), "collections");
+    }
+
+    #[test]
+    fn test_binding_name_with_alias() {
+        let import = ImportDecl {
+            path: vec![
+                Spanned::new("std".to_string(), Span::dummy()),
+                Spanned::new("collections".to_string(), Span::dummy()),
+            ],
+            alias: Some(Spanned::new("col".to_string(), Span::dummy())),
+        };
+        assert_eq!(import.binding_name(), "col");
+    }
+
+    #[test]
+    fn test_binding_name_single_path() {
+        let import = ImportDecl {
+            path: vec![Spanned::new("math".to_string(), Span::dummy())],
+            alias: None,
+        };
+        assert_eq!(import.binding_name(), "math");
+    }
+
+    #[test]
+    fn test_full_path_single_segment() {
+        let import = ImportDecl {
+            path: vec![Spanned::new("math".to_string(), Span::dummy())],
+            alias: None,
+        };
+        assert_eq!(import.full_path(), "math");
+    }
+
+    #[test]
+    fn test_full_path_two_segments() {
+        let import = ImportDecl {
+            path: vec![
+                Spanned::new("std".to_string(), Span::dummy()),
+                Spanned::new("math".to_string(), Span::dummy()),
+            ],
+            alias: None,
+        };
+        assert_eq!(import.full_path(), "std.math");
+    }
+
+    #[test]
+    fn test_full_path_three_segments() {
+        let import = ImportDecl {
+            path: vec![
+                Spanned::new("std".to_string(), Span::dummy()),
+                Spanned::new("collections".to_string(), Span::dummy()),
+                Spanned::new("map".to_string(), Span::dummy()),
+            ],
+            alias: None,
+        };
+        assert_eq!(import.full_path(), "std.collections.map");
+    }
+
+    #[test]
+    fn test_full_path_with_alias() {
+        let import = ImportDecl {
+            path: vec![
+                Spanned::new("std".to_string(), Span::dummy()),
+                Spanned::new("math".to_string(), Span::dummy()),
+            ],
+            alias: Some(Spanned::new("m".to_string(), Span::dummy())),
+        };
+        // full_path should return the actual path, not the alias
+        assert_eq!(import.full_path(), "std.math");
+    }
+
+    // ===== Lifecycle Display tests =====
+
+    #[test]
+    fn test_lifecycle_display_singleton() {
+        assert_eq!(format!("{}", Lifecycle::Singleton), "singleton");
+    }
+
+    #[test]
+    fn test_lifecycle_display_scoped() {
+        assert_eq!(format!("{}", Lifecycle::Scoped), "scoped");
+    }
+
+    #[test]
+    fn test_lifecycle_display_transient() {
+        assert_eq!(format!("{}", Lifecycle::Transient), "transient");
+    }
+
+    // ===== Lifecycle Copy/Clone/Eq tests =====
+
+    #[test]
+    fn test_lifecycle_clone() {
+        let lc = Lifecycle::Singleton;
+        let cloned = lc.clone();
+        assert_eq!(lc, cloned);
+    }
+
+    #[test]
+    fn test_lifecycle_copy() {
+        let lc = Lifecycle::Scoped;
+        let copied = lc; // Copy trait
+        assert_eq!(lc, copied);
+        // Both should still be usable (proving Copy)
+        assert_eq!(lc, Lifecycle::Scoped);
+        assert_eq!(copied, Lifecycle::Scoped);
+    }
+
+    #[test]
+    fn test_lifecycle_equality() {
+        assert_eq!(Lifecycle::Singleton, Lifecycle::Singleton);
+        assert_eq!(Lifecycle::Scoped, Lifecycle::Scoped);
+        assert_eq!(Lifecycle::Transient, Lifecycle::Transient);
+        assert_ne!(Lifecycle::Singleton, Lifecycle::Scoped);
+        assert_ne!(Lifecycle::Scoped, Lifecycle::Transient);
+        assert_ne!(Lifecycle::Singleton, Lifecycle::Transient);
+    }
+
+    #[test]
+    fn test_lifecycle_debug() {
+        let lc = Lifecycle::Singleton;
+        let debug_str = format!("{:?}", lc);
+        assert!(debug_str.contains("Singleton"));
+    }
+}

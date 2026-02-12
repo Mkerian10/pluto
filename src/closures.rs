@@ -5,6 +5,7 @@ use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 use crate::typeck::env::{FuncSig, TypeEnv};
 use crate::typeck::types::{PlutoType, pluto_type_to_type_expr};
+use crate::visit::{walk_expr_mut, walk_stmt_mut, VisitMut};
 
 /// Lift closures out of function/method bodies into top-level functions.
 ///
@@ -53,179 +54,29 @@ pub fn lift_closures(program: &mut Program, env: &mut TypeEnv) -> Result<(), Com
     Ok(())
 }
 
-fn lift_in_block(
-    block: &mut Block,
-    env: &mut TypeEnv,
-    counter: &mut usize,
-    new_fns: &mut Vec<Spanned<Function>>,
-) -> Result<(), CompileError> {
-    for stmt in &mut block.stmts {
-        lift_in_stmt(&mut stmt.node, env, counter, new_fns)?;
-    }
-    Ok(())
+struct ClosureLifter<'a> {
+    env: &'a mut TypeEnv,
+    counter: &'a mut usize,
+    new_fns: &'a mut Vec<Spanned<Function>>,
 }
 
-fn lift_in_stmt(
-    stmt: &mut Stmt,
-    env: &mut TypeEnv,
-    counter: &mut usize,
-    new_fns: &mut Vec<Spanned<Function>>,
-) -> Result<(), CompileError> {
-    match stmt {
-        Stmt::Let { value, .. } => {
-            lift_in_expr(&mut value.node, value.span, env, counter, new_fns)?;
-        }
-        Stmt::Return(Some(expr)) => {
-            lift_in_expr(&mut expr.node, expr.span, env, counter, new_fns)?;
-        }
-        Stmt::Return(None) => {}
-        Stmt::Assign { value, .. } => {
-            lift_in_expr(&mut value.node, value.span, env, counter, new_fns)?;
-        }
-        Stmt::FieldAssign { object, value, .. } => {
-            lift_in_expr(&mut object.node, object.span, env, counter, new_fns)?;
-            lift_in_expr(&mut value.node, value.span, env, counter, new_fns)?;
-        }
-        Stmt::If { condition, then_block, else_block } => {
-            lift_in_expr(&mut condition.node, condition.span, env, counter, new_fns)?;
-            lift_in_block(&mut then_block.node, env, counter, new_fns)?;
-            if let Some(eb) = else_block {
-                lift_in_block(&mut eb.node, env, counter, new_fns)?;
-            }
-        }
-        Stmt::While { condition, body } => {
-            lift_in_expr(&mut condition.node, condition.span, env, counter, new_fns)?;
-            lift_in_block(&mut body.node, env, counter, new_fns)?;
-        }
-        Stmt::For { iterable, body, .. } => {
-            lift_in_expr(&mut iterable.node, iterable.span, env, counter, new_fns)?;
-            lift_in_block(&mut body.node, env, counter, new_fns)?;
-        }
-        Stmt::IndexAssign { object, index, value } => {
-            lift_in_expr(&mut object.node, object.span, env, counter, new_fns)?;
-            lift_in_expr(&mut index.node, index.span, env, counter, new_fns)?;
-            lift_in_expr(&mut value.node, value.span, env, counter, new_fns)?;
-        }
-        Stmt::Match { expr, arms } => {
-            lift_in_expr(&mut expr.node, expr.span, env, counter, new_fns)?;
-            for arm in arms {
-                lift_in_block(&mut arm.body.node, env, counter, new_fns)?;
-            }
-        }
-        Stmt::Expr(expr) => {
-            lift_in_expr(&mut expr.node, expr.span, env, counter, new_fns)?;
-        }
-        Stmt::Raise { fields, .. } => {
-            for (_, val) in fields {
-                lift_in_expr(&mut val.node, val.span, env, counter, new_fns)?;
-            }
-        }
-        Stmt::LetChan { capacity, .. } => {
-            if let Some(cap) = capacity {
-                lift_in_expr(&mut cap.node, cap.span, env, counter, new_fns)?;
-            }
-        }
-        Stmt::Select { arms, default } => {
-            for arm in arms {
-                match &mut arm.op {
-                    SelectOp::Recv { channel, .. } => {
-                        lift_in_expr(&mut channel.node, channel.span, env, counter, new_fns)?;
-                    }
-                    SelectOp::Send { channel, value } => {
-                        lift_in_expr(&mut channel.node, channel.span, env, counter, new_fns)?;
-                        lift_in_expr(&mut value.node, value.span, env, counter, new_fns)?;
-                    }
-                }
-                lift_in_block(&mut arm.body.node, env, counter, new_fns)?;
-            }
-            if let Some(def) = default {
-                lift_in_block(&mut def.node, env, counter, new_fns)?;
-            }
-        }
-        Stmt::Scope { seeds, body, .. } => {
-            for seed in seeds {
-                lift_in_expr(&mut seed.node, seed.span, env, counter, new_fns)?;
-            }
-            lift_in_block(&mut body.node, env, counter, new_fns)?;
-        }
-        Stmt::Yield { value, .. } => {
-            lift_in_expr(&mut value.node, value.span, env, counter, new_fns)?;
-        }
-        Stmt::Break | Stmt::Continue => {}
-    }
-    Ok(())
-}
+impl VisitMut for ClosureLifter<'_> {
+    fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+        let span = expr.span;
 
-fn lift_in_expr(
-    expr: &mut Expr,
-    span: Span,
-    env: &mut TypeEnv,
-    counter: &mut usize,
-    new_fns: &mut Vec<Spanned<Function>>,
-) -> Result<(), CompileError> {
-    match expr {
-        Expr::BinOp { lhs, rhs, .. } => {
-            lift_in_expr(&mut lhs.node, lhs.span, env, counter, new_fns)?;
-            lift_in_expr(&mut rhs.node, rhs.span, env, counter, new_fns)?;
-        }
-        Expr::UnaryOp { operand, .. } => {
-            lift_in_expr(&mut operand.node, operand.span, env, counter, new_fns)?;
-        }
-        Expr::Cast { expr: inner, .. } => {
-            lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
-        }
-        Expr::Call { args, .. } => {
-            for arg in args {
-                lift_in_expr(&mut arg.node, arg.span, env, counter, new_fns)?;
-            }
-        }
-        Expr::FieldAccess { object, .. } => {
-            lift_in_expr(&mut object.node, object.span, env, counter, new_fns)?;
-        }
-        Expr::MethodCall { object, args, .. } => {
-            lift_in_expr(&mut object.node, object.span, env, counter, new_fns)?;
-            for arg in args {
-                lift_in_expr(&mut arg.node, arg.span, env, counter, new_fns)?;
-            }
-        }
-        Expr::StructLit { fields, .. } => {
-            for (_, val) in fields {
-                lift_in_expr(&mut val.node, val.span, env, counter, new_fns)?;
-            }
-        }
-        Expr::ArrayLit { elements } => {
-            for elem in elements {
-                lift_in_expr(&mut elem.node, elem.span, env, counter, new_fns)?;
-            }
-        }
-        Expr::Index { object, index } => {
-            lift_in_expr(&mut object.node, object.span, env, counter, new_fns)?;
-            lift_in_expr(&mut index.node, index.span, env, counter, new_fns)?;
-        }
-        Expr::StringInterp { parts } => {
-            for part in parts {
-                if let StringInterpPart::Expr(e) = part {
-                    lift_in_expr(&mut e.node, e.span, env, counter, new_fns)?;
-                }
-            }
-        }
-        Expr::EnumData { fields, .. } => {
-            for (_, val) in fields {
-                lift_in_expr(&mut val.node, val.span, env, counter, new_fns)?;
-            }
-        }
-        Expr::Closure { .. } => {
+        // Handle Closure — the main transformation
+        if let Expr::Closure { .. } = &expr.node {
             // This is the main case — lift the closure
             // We need to take ownership of the closure fields, so use a dummy swap
             let dummy = Expr::IntLit(0);
-            let old_expr = std::mem::replace(expr, dummy);
+            let old_expr = std::mem::replace(&mut expr.node, dummy);
 
             if let Expr::Closure { params, return_type: _, body } = old_expr {
-                let fn_name = format!("__closure_{}", *counter);
-                *counter += 1;
+                let fn_name = format!("__closure_{}", *self.counter);
+                *self.counter += 1;
 
                 // Look up captures from typeck's closure_captures (keyed by span)
-                let captures = env.closure_captures
+                let captures = self.env.closure_captures
                     .get(&(span.start, span.end))
                     .cloned()
                     .unwrap_or_default();
@@ -244,13 +95,6 @@ fn lift_in_expr(
                 let mut all_params = vec![env_param];
                 all_params.extend(params.clone());
 
-                // Determine the return type from env.functions or from the closure's inferred type
-                // The typeck stored the fn type — we can look up what it inferred
-                // Actually, we can compute from the captures stored in closure_captures
-                // For the Function AST node, we need the return_type as Option<Spanned<TypeExpr>>
-                // We can just pass None and let the codegen use the FuncSig from env.functions
-                // But we need to register the FuncSig first
-
                 // Compute param types for the FuncSig
                 let mut sig_params = vec![PlutoType::Int]; // __env is I64
                 for (_, ty) in &captures {
@@ -263,19 +107,19 @@ fn lift_in_expr(
                 }
 
                 // For return type, use the correct type from typeck when available
-                let ret_type = env.closure_return_types
+                let ret_type = self.env.closure_return_types
                     .get(&(span.start, span.end))
                     .cloned()
                     .unwrap_or_else(|| infer_return_type_from_body(&body.node));
 
                 // Register the FuncSig in env.functions
-                env.functions.insert(fn_name.clone(), FuncSig {
+                self.env.functions.insert(fn_name.clone(), FuncSig {
                     params: sig_params,
                     return_type: ret_type.clone(),
                 });
 
                 // Register captures in env.closure_fns
-                env.closure_fns.insert(fn_name.clone(), captures);
+                self.env.closure_fns.insert(fn_name.clone(), captures);
 
                 // Build the return type annotation (None → codegen will use env.functions)
                 let ret_type_expr = pluto_type_to_type_expr(&ret_type);
@@ -283,7 +127,9 @@ fn lift_in_expr(
                 // IMPORTANT: Recursively lift nested closures in the body before creating the function
                 // This handles cases like: (x: int) => (y: int) => x + y
                 let mut lifted_body = body;
-                lift_in_block(&mut lifted_body.node, env, counter, new_fns)?;
+                for stmt in &mut lifted_body.node.stmts {
+                    self.visit_stmt_mut(stmt);
+                }
 
                 // Create the lifted Function
                 let lifted = Function {
@@ -304,70 +150,98 @@ fn lift_in_expr(
                     is_generator: false,
                 };
 
-                new_fns.push(Spanned::new(lifted, span));
+                self.new_fns.push(Spanned::new(lifted, span));
 
                 // Replace expr with ClosureCreate
-                *expr = Expr::ClosureCreate {
+                expr.node = Expr::ClosureCreate {
                     fn_name,
                     captures: capture_names,
                     target_id: None,
                 };
             }
+            return;
         }
-        Expr::Spawn { call } => {
-            lift_in_expr(&mut call.node, call.span, env, counter, new_fns)?;
-        }
-        Expr::Propagate { expr: inner } => {
-            lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
-        }
-        Expr::Catch { expr: inner, handler } => {
-            lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
-            match handler {
-                CatchHandler::Wildcard { body, .. } => {
-                    lift_in_block(&mut body.node, env, counter, new_fns)?;
-                }
-                CatchHandler::Shorthand(fb) => {
-                    lift_in_expr(&mut fb.node, fb.span, env, counter, new_fns)?;
+
+        // Handle StringInterp — manual iteration
+        if let Expr::StringInterp { parts } = &mut expr.node {
+            for part in parts {
+                if let StringInterpPart::Expr(e) = part {
+                    self.visit_expr_mut(e);
                 }
             }
+            return;
         }
-        Expr::MapLit { entries, .. } => {
-            for (k, v) in entries {
-                lift_in_expr(&mut k.node, k.span, env, counter, new_fns)?;
-                lift_in_expr(&mut v.node, v.span, env, counter, new_fns)?;
-            }
-        }
-        Expr::SetLit { elements, .. } => {
-            for elem in elements {
-                lift_in_expr(&mut elem.node, elem.span, env, counter, new_fns)?;
-            }
-        }
-        Expr::Range { start, end, .. } => {
-            lift_in_expr(&mut start.node, start.span, env, counter, new_fns)?;
-            lift_in_expr(&mut end.node, end.span, env, counter, new_fns)?;
-        }
-        Expr::NullPropagate { expr: inner } => {
-            lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
-        }
-        // Non-capturing expressions
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. }
-        | Expr::NoneLit => {}
-        Expr::StaticTraitCall { type_args, args, .. } => {
-            for type_arg in type_args {
-                // Type args don't contain closures
-            }
-            for arg in args {
-                lift_in_expr(&mut arg.node, arg.span, env, counter, new_fns)?;
-            }
-        }
-        Expr::QualifiedAccess { segments } => {
+
+        // Handle QualifiedAccess — panic
+        if let Expr::QualifiedAccess { segments } = &expr.node {
             panic!(
                 "QualifiedAccess should be resolved by module flattening before closures. Segments: {:?}",
                 segments.iter().map(|s| &s.node).collect::<Vec<_>>()
             )
         }
+
+        // Recurse into sub-expressions
+        walk_expr_mut(self, expr);
     }
+
+    fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
+        // No special statement handling needed, just recurse
+        walk_stmt_mut(self, stmt);
+    }
+}
+
+fn lift_in_block(
+    block: &mut Block,
+    env: &mut TypeEnv,
+    counter: &mut usize,
+    new_fns: &mut Vec<Spanned<Function>>,
+) -> Result<(), CompileError> {
+    let mut lifter = ClosureLifter {
+        env,
+        counter,
+        new_fns,
+    };
+    for stmt in &mut block.stmts {
+        lifter.visit_stmt_mut(stmt);
+    }
+    Ok(())
+}
+
+// Helper functions for tests (maintain old signature)
+#[allow(dead_code)]
+fn lift_in_stmt(
+    stmt: &mut Stmt,
+    env: &mut TypeEnv,
+    counter: &mut usize,
+    new_fns: &mut Vec<Spanned<Function>>,
+) -> Result<(), CompileError> {
+    let mut lifter = ClosureLifter {
+        env,
+        counter,
+        new_fns,
+    };
+    let mut spanned_stmt = Spanned::dummy(std::mem::replace(stmt, Stmt::Break));
+    lifter.visit_stmt_mut(&mut spanned_stmt);
+    *stmt = spanned_stmt.node;
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn lift_in_expr(
+    expr: &mut Expr,
+    span: Span,
+    env: &mut TypeEnv,
+    counter: &mut usize,
+    new_fns: &mut Vec<Spanned<Function>>,
+) -> Result<(), CompileError> {
+    let mut lifter = ClosureLifter {
+        env,
+        counter,
+        new_fns,
+    };
+    let mut spanned_expr = Spanned::new(std::mem::replace(expr, Expr::IntLit(0)), span);
+    lifter.visit_expr_mut(&mut spanned_expr);
+    *expr = spanned_expr.node;
     Ok(())
 }
 

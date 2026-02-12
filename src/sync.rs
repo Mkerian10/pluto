@@ -392,4 +392,288 @@ mod tests {
 
         let _ = std::fs::remove_file(&pluto_path);
     }
+
+    // ===== Unit tests for transplant helpers =====
+
+    use crate::parser::ast::{TypeExpr, Block};
+    use crate::span::Span;
+    use uuid::Uuid;
+
+    fn make_param(name: &str, uuid: Uuid) -> Param {
+        Param {
+            id: uuid,
+            name: Spanned::new(name.to_string(), Span::dummy()),
+            ty: Spanned::new(TypeExpr::Named("void".to_string()), Span::dummy()),
+            is_mut: false,
+        }
+    }
+
+    fn make_field(name: &str, uuid: Uuid) -> Field {
+        Field {
+            id: uuid,
+            name: Spanned::new(name.to_string(), Span::dummy()),
+            ty: Spanned::new(TypeExpr::Named("void".to_string()), Span::dummy()),
+            is_injected: false,
+            is_ambient: false,
+        }
+    }
+
+    fn make_function(name: &str, uuid: Uuid, param_uuids: Vec<(&str, Uuid)>) -> Spanned<Function> {
+        Spanned::new(
+            Function {
+                id: uuid,
+                name: Spanned::new(name.to_string(), Span::dummy()),
+                type_params: vec![],
+                type_param_bounds: std::collections::HashMap::new(),
+                params: param_uuids
+                    .into_iter()
+                    .map(|(n, id)| make_param(n, id))
+                    .collect(),
+                return_type: None,
+                contracts: vec![],
+                body: Spanned::new(Block { stmts: vec![] }, Span::dummy()),
+                is_pub: false,
+                is_override: false,
+                is_generator: false,
+            },
+            Span::dummy(),
+        )
+    }
+
+    fn make_variant(name: &str, uuid: Uuid, field_uuids: Vec<(&str, Uuid)>) -> EnumVariant {
+        EnumVariant {
+            id: uuid,
+            name: Spanned::new(name.to_string(), Span::dummy()),
+            fields: field_uuids
+                .into_iter()
+                .map(|(n, id)| make_field(n, id))
+                .collect(),
+        }
+    }
+
+    fn make_trait_method(name: &str, uuid: Uuid, param_uuids: Vec<(&str, Uuid)>) -> TraitMethod {
+        TraitMethod {
+            id: uuid,
+            name: Spanned::new(name.to_string(), Span::dummy()),
+            params: param_uuids
+                .into_iter()
+                .map(|(n, id)| make_param(n, id))
+                .collect(),
+            return_type: None,
+            contracts: vec![],
+            body: None,
+        }
+    }
+
+    #[test]
+    fn test_transplant_params_matching_names() {
+        let old_id = Uuid::new_v4();
+        let mut new_params = vec![make_param("x", Uuid::new_v4())];
+        let old_params = vec![make_param("x", old_id)];
+
+        transplant_params(&mut new_params, &old_params);
+
+        assert_eq!(new_params[0].id, old_id);
+    }
+
+    #[test]
+    fn test_transplant_params_no_match() {
+        let new_id = Uuid::new_v4();
+        let mut new_params = vec![make_param("x", new_id)];
+        let old_params = vec![make_param("y", Uuid::new_v4())];
+
+        transplant_params(&mut new_params, &old_params);
+
+        // UUID should remain unchanged
+        assert_eq!(new_params[0].id, new_id);
+    }
+
+    #[test]
+    fn test_transplant_params_multiple() {
+        let old_x_id = Uuid::new_v4();
+        let old_y_id = Uuid::new_v4();
+        let mut new_params = vec![
+            make_param("x", Uuid::new_v4()),
+            make_param("y", Uuid::new_v4()),
+        ];
+        let old_params = vec![
+            make_param("x", old_x_id),
+            make_param("y", old_y_id),
+        ];
+
+        transplant_params(&mut new_params, &old_params);
+
+        assert_eq!(new_params[0].id, old_x_id);
+        assert_eq!(new_params[1].id, old_y_id);
+    }
+
+    #[test]
+    fn test_transplant_fields_matching_names() {
+        let old_id = Uuid::new_v4();
+        let mut new_fields = vec![make_field("count", Uuid::new_v4())];
+        let old_fields = vec![make_field("count", old_id)];
+
+        transplant_fields(&mut new_fields, &old_fields);
+
+        assert_eq!(new_fields[0].id, old_id);
+    }
+
+    #[test]
+    fn test_transplant_fields_no_match() {
+        let new_id = Uuid::new_v4();
+        let mut new_fields = vec![make_field("count", new_id)];
+        let old_fields = vec![make_field("total", Uuid::new_v4())];
+
+        transplant_fields(&mut new_fields, &old_fields);
+
+        assert_eq!(new_fields[0].id, new_id);
+    }
+
+    #[test]
+    fn test_transplant_fields_multiple() {
+        let old_x_id = Uuid::new_v4();
+        let old_y_id = Uuid::new_v4();
+        let mut new_fields = vec![
+            make_field("x", Uuid::new_v4()),
+            make_field("y", Uuid::new_v4()),
+        ];
+        let old_fields = vec![
+            make_field("x", old_x_id),
+            make_field("y", old_y_id),
+        ];
+
+        transplant_fields(&mut new_fields, &old_fields);
+
+        assert_eq!(new_fields[0].id, old_x_id);
+        assert_eq!(new_fields[1].id, old_y_id);
+    }
+
+    #[test]
+    fn test_transplant_methods_matching_names() {
+        let old_method_id = Uuid::new_v4();
+        let old_param_id = Uuid::new_v4();
+        let mut new_methods = vec![make_function("foo", Uuid::new_v4(), vec![("self", Uuid::new_v4())])];
+        let old_methods = vec![make_function("foo", old_method_id, vec![("self", old_param_id)])];
+
+        transplant_methods(&mut new_methods, &old_methods);
+
+        assert_eq!(new_methods[0].node.id, old_method_id);
+        assert_eq!(new_methods[0].node.params[0].id, old_param_id);
+    }
+
+    #[test]
+    fn test_transplant_methods_no_match() {
+        let new_id = Uuid::new_v4();
+        let mut new_methods = vec![make_function("foo", new_id, vec![])];
+        let old_methods = vec![make_function("bar", Uuid::new_v4(), vec![])];
+
+        transplant_methods(&mut new_methods, &old_methods);
+
+        assert_eq!(new_methods[0].node.id, new_id);
+    }
+
+    #[test]
+    fn test_transplant_methods_multiple() {
+        let old_foo_id = Uuid::new_v4();
+        let old_bar_id = Uuid::new_v4();
+        let mut new_methods = vec![
+            make_function("foo", Uuid::new_v4(), vec![]),
+            make_function("bar", Uuid::new_v4(), vec![]),
+        ];
+        let old_methods = vec![
+            make_function("foo", old_foo_id, vec![]),
+            make_function("bar", old_bar_id, vec![]),
+        ];
+
+        transplant_methods(&mut new_methods, &old_methods);
+
+        assert_eq!(new_methods[0].node.id, old_foo_id);
+        assert_eq!(new_methods[1].node.id, old_bar_id);
+    }
+
+    #[test]
+    fn test_transplant_variants_matching_names() {
+        let old_variant_id = Uuid::new_v4();
+        let old_field_id = Uuid::new_v4();
+        let mut new_variants = vec![make_variant("Some", Uuid::new_v4(), vec![("value", Uuid::new_v4())])];
+        let old_variants = vec![make_variant("Some", old_variant_id, vec![("value", old_field_id)])];
+
+        transplant_variants(&mut new_variants, &old_variants);
+
+        assert_eq!(new_variants[0].id, old_variant_id);
+        assert_eq!(new_variants[0].fields[0].id, old_field_id);
+    }
+
+    #[test]
+    fn test_transplant_variants_no_match() {
+        let new_id = Uuid::new_v4();
+        let mut new_variants = vec![make_variant("Some", new_id, vec![])];
+        let old_variants = vec![make_variant("None", Uuid::new_v4(), vec![])];
+
+        transplant_variants(&mut new_variants, &old_variants);
+
+        assert_eq!(new_variants[0].id, new_id);
+    }
+
+    #[test]
+    fn test_transplant_variants_multiple() {
+        let old_some_id = Uuid::new_v4();
+        let old_none_id = Uuid::new_v4();
+        let mut new_variants = vec![
+            make_variant("Some", Uuid::new_v4(), vec![]),
+            make_variant("None", Uuid::new_v4(), vec![]),
+        ];
+        let old_variants = vec![
+            make_variant("Some", old_some_id, vec![]),
+            make_variant("None", old_none_id, vec![]),
+        ];
+
+        transplant_variants(&mut new_variants, &old_variants);
+
+        assert_eq!(new_variants[0].id, old_some_id);
+        assert_eq!(new_variants[1].id, old_none_id);
+    }
+
+    #[test]
+    fn test_transplant_trait_methods_matching_names() {
+        let old_method_id = Uuid::new_v4();
+        let old_param_id = Uuid::new_v4();
+        let mut new_methods = vec![make_trait_method("print", Uuid::new_v4(), vec![("self", Uuid::new_v4())])];
+        let old_methods = vec![make_trait_method("print", old_method_id, vec![("self", old_param_id)])];
+
+        transplant_trait_methods(&mut new_methods, &old_methods);
+
+        assert_eq!(new_methods[0].id, old_method_id);
+        assert_eq!(new_methods[0].params[0].id, old_param_id);
+    }
+
+    #[test]
+    fn test_transplant_trait_methods_no_match() {
+        let new_id = Uuid::new_v4();
+        let mut new_methods = vec![make_trait_method("print", new_id, vec![])];
+        let old_methods = vec![make_trait_method("clone", Uuid::new_v4(), vec![])];
+
+        transplant_trait_methods(&mut new_methods, &old_methods);
+
+        assert_eq!(new_methods[0].id, new_id);
+    }
+
+    #[test]
+    fn test_transplant_trait_methods_multiple() {
+        let old_print_id = Uuid::new_v4();
+        let old_clone_id = Uuid::new_v4();
+        let mut new_methods = vec![
+            make_trait_method("print", Uuid::new_v4(), vec![]),
+            make_trait_method("clone", Uuid::new_v4(), vec![]),
+        ];
+        let old_methods = vec![
+            make_trait_method("print", old_print_id, vec![]),
+            make_trait_method("clone", old_clone_id, vec![]),
+        ];
+
+        transplant_trait_methods(&mut new_methods, &old_methods);
+
+        assert_eq!(new_methods[0].id, old_print_id);
+        assert_eq!(new_methods[1].id, old_clone_id);
+    }
 }
