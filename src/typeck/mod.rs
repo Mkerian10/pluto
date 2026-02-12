@@ -716,4 +716,49 @@ mod tests {
     fn nullable_method_chaining() {
         check("fn a() int? {\n    return 42\n}\n\nfn b() int? {\n    return a()?\n}\n\nfn c() int? {\n    return b()?\n}").unwrap();
     }
+
+    // Contracts typeck tests
+
+    #[test]
+    fn invariant_type_checks() {
+        check("class Foo {\n    x: int\n    invariant self.x > 0\n}\n\nfn main() {\n}").unwrap();
+    }
+
+    #[test]
+    fn invariant_wrong_type_rejected() {
+        let result = check("class Foo {\n    x: int\n    invariant self.x\n}\n\nfn main() {\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn requires_type_checks() {
+        check("fn foo(x: int)\nrequires x > 0\n{\n}\n\nfn main() {\n}").unwrap();
+    }
+
+    #[test]
+    fn requires_wrong_type_rejected() {
+        let result = check("fn foo(x: int)\nrequires x\n{\n}\n\nfn main() {\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn ensures_type_checks() {
+        check("fn foo() int\nensures result > 0\n{\n    return 1\n}\n\nfn main() {\n}").unwrap();
+    }
+
+    #[test]
+    fn ensures_result_in_scope() {
+        check("fn foo() int\nensures result == 42\n{\n    return 42\n}\n\nfn main() {\n}").unwrap();
+    }
+
+    #[test]
+    fn trait_method_contracts_propagate() {
+        check("trait Counter {\n    fn get(self) int\n    ensures result >= 0\n}\n\nclass C impl Counter {\n    fn get(self) int {\n        return 1\n    }\n}\n\nfn main() {\n}").unwrap();
+    }
+
+    #[test]
+    fn liskov_additional_requires_rejected() {
+        let result = check("trait T {\n    fn foo(x: int)\n}\n\nclass C impl T {\n    fn foo(x: int)\n    requires x > 0\n    {\n    }\n}\n\nfn main() {\n}");
+        assert!(result.is_err());
+    }
 }

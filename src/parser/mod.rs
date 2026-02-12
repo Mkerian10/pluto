@@ -4271,4 +4271,57 @@ mod tests {
             _ => panic!("expected let statement"),
         }
     }
+
+    // Contracts parser tests
+
+    #[test]
+    fn parse_invariant_clause() {
+        let prog = parse("class Foo {\n    x: int\n    invariant self.x > 0\n}");
+        let c = &prog.classes[0].node;
+        assert_eq!(c.invariants.len(), 1);
+        assert!(matches!(c.invariants[0].node.kind, ContractKind::Invariant));
+    }
+
+    #[test]
+    fn parse_requires_on_function() {
+        let prog = parse("fn foo(x: int)\nrequires x > 0\n{\n}");
+        let f = &prog.functions[0].node;
+        assert_eq!(f.contracts.len(), 1);
+        assert!(matches!(f.contracts[0].node.kind, ContractKind::Requires));
+    }
+
+    #[test]
+    fn parse_ensures_on_function() {
+        let prog = parse("fn foo(x: int) int\nensures result > 0\n{\n    return x + 1\n}");
+        let f = &prog.functions[0].node;
+        assert_eq!(f.contracts.len(), 1);
+        assert!(matches!(f.contracts[0].node.kind, ContractKind::Ensures));
+    }
+
+    #[test]
+    fn parse_multiple_invariants() {
+        let prog = parse("class Foo {\n    x: int\n    y: int\n    invariant self.x > 0\n    invariant self.y > 0\n}");
+        let c = &prog.classes[0].node;
+        assert_eq!(c.invariants.len(), 2);
+    }
+
+    #[test]
+    fn parse_requires_ensures_together() {
+        let prog = parse("fn foo(x: int) int\nrequires x > 0\nensures result > 0\n{\n    return x\n}");
+        let f = &prog.functions[0].node;
+        assert_eq!(f.contracts.len(), 2);
+        let has_requires = f.contracts.iter().any(|c| matches!(c.node.kind, ContractKind::Requires));
+        let has_ensures = f.contracts.iter().any(|c| matches!(c.node.kind, ContractKind::Ensures));
+        assert!(has_requires && has_ensures);
+    }
+
+    #[test]
+    fn parse_trait_method_with_contracts() {
+        let prog = parse("trait Counter {\n    fn inc(self) int\n    ensures result > 0\n}");
+        let t = &prog.traits[0].node;
+        assert_eq!(t.methods.len(), 1);
+        let method = &t.methods[0];
+        assert_eq!(method.contracts.len(), 1);
+        assert!(matches!(method.contracts[0].node.kind, ContractKind::Ensures));
+    }
 }
