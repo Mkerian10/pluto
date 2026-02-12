@@ -195,3 +195,295 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_span() -> Span {
+        Span::new(0, 0)
+    }
+
+    fn spanned<T>(node: T) -> Spanned<T> {
+        Spanned::new(node, dummy_span())
+    }
+
+    #[test]
+    fn validate_int_literal() {
+        let expr = Expr::IntLit(42);
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
+    }
+
+    #[test]
+    fn validate_float_literal() {
+        let expr = Expr::FloatLit(3.14);
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
+    }
+
+    #[test]
+    fn validate_bool_literal() {
+        let expr = Expr::BoolLit(true);
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
+    }
+
+    #[test]
+    fn validate_none_literal() {
+        let expr = Expr::NoneLit;
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
+    }
+
+    #[test]
+    fn validate_identifier() {
+        let expr = Expr::Ident("x".to_string());
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
+    }
+
+    #[test]
+    fn validate_binary_op() {
+        let expr = Expr::BinOp {
+            op: BinOp::Add,
+            lhs: Box::new(spanned(Expr::IntLit(1))),
+            rhs: Box::new(spanned(Expr::IntLit(2))),
+        };
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
+    }
+
+    #[test]
+    fn validate_comparison() {
+        let expr = Expr::BinOp {
+            op: BinOp::Lt,
+            lhs: Box::new(spanned(Expr::Ident("x".to_string()))),
+            rhs: Box::new(spanned(Expr::IntLit(10))),
+        };
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
+    }
+
+    #[test]
+    fn validate_unary_op() {
+        let expr = Expr::UnaryOp {
+            op: UnaryOp::Neg,
+            operand: Box::new(spanned(Expr::IntLit(5))),
+        };
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
+    }
+
+    #[test]
+    fn validate_field_access() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(spanned(Expr::Ident("self".to_string()))),
+            field: spanned("value".to_string()),
+        };
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
+    }
+
+    #[test]
+    fn validate_nested_field_access() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(spanned(Expr::FieldAccess {
+                object: Box::new(spanned(Expr::Ident("self".to_string()))),
+                field: spanned("child".to_string()),
+            })),
+            field: spanned("value".to_string()),
+        };
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
+    }
+
+    #[test]
+    fn validate_len_method() {
+        let expr = Expr::MethodCall {
+            object: Box::new(spanned(Expr::Ident("items".to_string()))),
+            method: spanned("len".to_string()),
+            args: vec![],
+        };
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
+    }
+
+    #[test]
+    fn reject_method_with_args() {
+        let expr = Expr::MethodCall {
+            object: Box::new(spanned(Expr::Ident("x".to_string()))),
+            method: spanned("foo".to_string()),
+            args: vec![spanned(Expr::IntLit(1))],
+        };
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_err());
+    }
+
+    #[test]
+    fn reject_non_len_method() {
+        let expr = Expr::MethodCall {
+            object: Box::new(spanned(Expr::Ident("x".to_string()))),
+            method: spanned("foo".to_string()),
+            args: vec![],
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("method call '.foo()' is not allowed"));
+    }
+
+    #[test]
+    fn validate_old_in_ensures() {
+        let expr = Expr::Call {
+            name: spanned("old".to_string()),
+            args: vec![spanned(Expr::Ident("x".to_string()))],
+            type_args: vec![],
+            target_id: None,
+        };
+        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Ensures).is_ok());
+    }
+
+    #[test]
+    fn reject_old_in_invariant() {
+        let expr = Expr::Call {
+            name: spanned("old".to_string()),
+            args: vec![spanned(Expr::Ident("x".to_string()))],
+            type_args: vec![],
+            target_id: None,
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("old() is only allowed in ensures clauses"));
+    }
+
+    #[test]
+    fn reject_old_in_requires() {
+        let expr = Expr::Call {
+            name: spanned("old".to_string()),
+            args: vec![spanned(Expr::Ident("x".to_string()))],
+            type_args: vec![],
+            target_id: None,
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Requires);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("old() is only allowed in ensures clauses"));
+    }
+
+    #[test]
+    fn reject_function_call() {
+        let expr = Expr::Call {
+            name: spanned("foo".to_string()),
+            args: vec![],
+            type_args: vec![],
+            target_id: None,
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("function call 'foo()' is not allowed"));
+    }
+
+    #[test]
+    fn reject_string_literal() {
+        let expr = Expr::StringLit("hello".to_string());
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("string literals are not allowed"));
+    }
+
+    #[test]
+    fn reject_string_interpolation() {
+        let expr = Expr::StringInterp {
+            parts: vec![],
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("string interpolation is not allowed"));
+    }
+
+    #[test]
+    fn reject_struct_literal() {
+        let expr = Expr::StructLit {
+            name: spanned("Point".to_string()),
+            type_args: vec![],
+            fields: vec![],
+            target_id: None,
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("struct literals are not allowed"));
+    }
+
+    #[test]
+    fn reject_array_literal() {
+        let expr = Expr::ArrayLit {
+            elements: vec![],
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("array literals are not allowed"));
+    }
+
+    #[test]
+    fn reject_closure() {
+        let expr = Expr::Closure {
+            params: vec![],
+            body: spanned(Block { stmts: vec![] }),
+            return_type: None,
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("closures are not allowed"));
+    }
+
+    #[test]
+    fn reject_spawn() {
+        let expr = Expr::Spawn {
+            call: Box::new(spanned(Expr::IntLit(1))),
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("spawn is not allowed"));
+    }
+
+    #[test]
+    fn reject_cast() {
+        let expr = Expr::Cast {
+            expr: Box::new(spanned(Expr::IntLit(1))),
+            target_type: spanned(TypeExpr::Named("float".to_string())),
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("type casts are not allowed"));
+    }
+
+    #[test]
+    fn reject_index() {
+        let expr = Expr::Index {
+            object: Box::new(spanned(Expr::Ident("arr".to_string()))),
+            index: Box::new(spanned(Expr::IntLit(0))),
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("index expressions are not allowed"));
+    }
+
+    #[test]
+    fn reject_range() {
+        let expr = Expr::Range {
+            start: Box::new(spanned(Expr::IntLit(0))),
+            end: Box::new(spanned(Expr::IntLit(10))),
+            inclusive: false,
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("range expressions are not allowed"));
+    }
+
+    #[test]
+    fn reject_propagate() {
+        let expr = Expr::Propagate {
+            expr: Box::new(spanned(Expr::Ident("x".to_string()))),
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("error propagation is not allowed"));
+    }
+
+    #[test]
+    fn reject_null_propagate() {
+        let expr = Expr::NullPropagate {
+            expr: Box::new(spanned(Expr::Ident("x".to_string()))),
+        };
+        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("null propagation is not allowed"));
+    }
+}
