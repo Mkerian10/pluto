@@ -71,7 +71,11 @@ static GCHeader *gc_head = NULL;
 static size_t gc_bytes_allocated = 0;
 static size_t gc_threshold = 256 * 1024;  // 256KB initial
 static void *gc_stack_bottom = NULL;
+#ifdef PLUTO_TEST_MODE
 static int gc_collecting = 0;
+#else
+static atomic_int gc_collecting = 0;
+#endif
 
 // Mark worklist (raw malloc, not GC-tracked)
 static void **gc_worklist = NULL;
@@ -221,12 +225,23 @@ static void gc_stw_resume_threads(void) {
 
 static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
     pthread_mutex_lock(&gc_mutex);
-    if (gc_stack_bottom && !gc_collecting
+    if (gc_stack_bottom
         && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold) {
-        // Stop all other task threads via SIGUSR1 so we can safely scan their stacks
-        int stopped = gc_stw_stop_threads();
-        __pluto_gc_collect();
-        if (stopped > 0) gc_stw_resume_threads();
+        // Atomic test-and-set: only one thread wins the race to initiate GC
+        int expected = 0;
+        if (atomic_compare_exchange_strong(&gc_collecting, &expected, 1)) {
+            // This thread won - run GC
+            int stopped = gc_stw_stop_threads();
+            __pluto_gc_collect();  // This will set gc_collecting back to 0
+            if (stopped > 0) gc_stw_resume_threads();
+        } else {
+            // Another thread is collecting - wait for it to finish
+            pthread_mutex_unlock(&gc_mutex);
+            while (atomic_load(&gc_collecting) == 1) {
+                usleep(100);  // Sleep 100 microseconds to avoid spinning
+            }
+            pthread_mutex_lock(&gc_mutex);
+        }
     }
     size_t total = sizeof(GCHeader) + user_size;
     GCHeader *h = (GCHeader *)calloc(1, total);
