@@ -51,7 +51,7 @@ fn load_and_parse(path: &Path, source_map: &mut SourceMap) -> Result<(Program, u
     })?;
     let file_id = source_map.add_file(path.to_path_buf(), source.clone());
     let tokens = lexer::lex(&source)?;
-    let mut parser = Parser::new(&tokens, &source);
+    let mut parser = Parser::new_with_path(&tokens, &source, path.display().to_string());
     let program = parser.parse_program()?;
     Ok((program, file_id))
 }
@@ -646,6 +646,7 @@ fn resolve_modules_inner(
             }
             root.stages.extend(program.stages);
             root.errors.extend(program.errors);
+            root.test_info.extend(program.test_info);
         }
     }
 

@@ -1,6 +1,8 @@
 pub mod ast;
 
 use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use uuid::Uuid;
 
@@ -15,6 +17,8 @@ pub struct Parser<'a> {
     pos: usize,
     restrict_struct_lit: bool,
     enum_names: HashSet<String>,
+    /// Optional file path for generating unique test IDs when multiple files are compiled together
+    file_path: Option<String>,
 }
 
 impl<'a> Parser<'a> {
@@ -22,12 +26,12 @@ impl<'a> Parser<'a> {
         // Seed with prelude enum names so all parse paths (including interpolation
         // sub-parsers) know about Option, Result, etc.
         let enum_names = crate::prelude::prelude_enum_names().clone();
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: None }
     }
 
     /// Constructor without prelude seeding — used only to parse the prelude source itself.
     pub fn new_without_prelude(tokens: &'a [Spanned<Token>], source: &'a str) -> Self {
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names: HashSet::new() }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names: HashSet::new(), file_path: None }
     }
 
     /// Constructor with extra enum names added to the prelude set.
@@ -39,7 +43,28 @@ impl<'a> Parser<'a> {
     ) -> Self {
         let mut enum_names = crate::prelude::prelude_enum_names().clone();
         enum_names.extend(extra_enum_names);
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: None }
+    }
+
+    /// Constructor with file path for generating unique test IDs
+    pub fn new_with_path(tokens: &'a [Spanned<Token>], source: &'a str, file_path: String) -> Self {
+        let enum_names = crate::prelude::prelude_enum_names().clone();
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: Some(file_path) }
+    }
+
+    /// Generate a unique test ID prefix from file path to avoid collisions when multiple files are compiled together
+    fn test_id_prefix(&self) -> String {
+        match &self.file_path {
+            Some(path) => {
+                // Generate a short hash from the file path for uniqueness
+                let mut hasher = DefaultHasher::new();
+                path.hash(&mut hasher);
+                let hash = hasher.finish();
+                // Use first 8 hex digits of hash as prefix
+                format!("{:08x}_", hash as u32)
+            }
+            None => String::new(),
+        }
     }
 
     fn peek(&self) -> Option<&Spanned<Token>> {
@@ -556,7 +581,7 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         let test_index = existing_tests.len();
-        let fn_name = format!("__test_{}", test_index);
+        let fn_name = format!("__test_{}{}", self.test_id_prefix(), test_index);
         let info = TestInfo {
             display_name,
             fn_name: fn_name.clone(),
