@@ -1,7 +1,30 @@
 # Bugs, Limitations, and Missing Features
 
-**Last Updated:** 2026-02-11
+**Last Updated:** 2026-02-12
 **Purpose:** Centralized tracking of known issues, limitations, and planned features for the Pluto compiler
+
+**📋 Quick Navigation:**
+- [FEATURES.md](FEATURES.md) - Detailed feature tracker with priorities and effort estimates
+- [ROADMAP.md](ROADMAP.md) - High-level vision, milestones, and quarterly goals
+
+---
+
+## 📊 Key Metrics
+
+**Active Bugs:** 5 total (2 P0, 3 P1)
+**Known Limitations:** 20
+**Missing Features:** See [FEATURES.md](FEATURES.md) (49 tracked features)
+
+---
+
+## 📊 Status Indicators
+
+- 🔴 **Critical** - Blocks significant use cases, no good workaround
+- 🟡 **Active** - Known issue with workaround available
+- 🟢 **Low Impact** - Minor inconvenience, rarely encountered
+- ✅ **Fixed** - Recently resolved
+
+**Effort Estimates:** S (Small, <3 days) | M (Medium, 1 week) | L (Large, 2+ weeks)
 
 ---
 
@@ -9,10 +32,11 @@
 
 ### P0 - Critical (Compiler Crashes)
 
-#### 1. Nested Field Access Parsed as Enum Variant
-- **File:** `bugs/nested-field-access.md`
-- **Status:** Active workaround exists, no fix yet
+#### 1. 🔴 Nested Field Access Parsed as Enum Variant
+- **Status:** 🟡 Active (workaround exists)
+- **Effort:** M (1 week)
 - **Impact:** Blocks any code with `obj.field.field` patterns
+- **File:** `bugs/nested-field-access.md`
 - **Example:**
   ```pluto
   let v = o.inner.value  // ERROR: unknown enum 'o.inner'
@@ -26,19 +50,21 @@
 - **Root Cause:** Parser at `src/parser/mod.rs:2297` speculatively treats `a.b.c` as qualified enum variant `module.Enum.Variant`
 - **Recommended Fix:** Option 1 (parser check for `self`) as quick fix, Option 3 (new AST node `QualifiedAccess`) for general solution
 
-#### 2. Errors in Closures Not Supported
-- **File:** `tests/codegen/BUG_FIXES_SUMMARY.md`, `tests/codegen/_06_error_handling.rs:84`
-- **Status:** Confirmed bug, pipeline timing issue
+#### 2. 🔴 Errors in Closures Not Supported
+- **Status:** 🔴 Critical (no workaround)
+- **Effort:** L (2+ weeks, requires pipeline refactor)
 - **Impact:** Cannot use `!` operator inside closures
 - **Root Cause:** Error inference runs before closure lifting
+- **File:** `tests/codegen/BUG_FIXES_SUMMARY.md`, `tests/codegen/_06_error_handling.rs:84`
 - **Test:** `#[ignore] // FIXME: Errors in closures not supported - pipeline timing bug`
 
 ### P1 - High Priority
 
-#### 3. Test Runner Generates Duplicate IDs for Multiple Files
-- **File:** `feedback/bugs/test-runner-duplicate-ids-multiple-files.md`
-- **Status:** Active, workaround exists
+#### 3. 🟡 Test Runner Generates Duplicate IDs for Multiple Files
+- **Status:** 🟡 Active (workaround: one file per directory)
+- **Effort:** S (<3 days)
 - **Impact:** Cannot organize tests into multiple files in same directory
+- **File:** `feedback/bugs/test-runner-duplicate-ids-multiple-files.md`
 - **Example:**
   ```bash
   # tests/lang/fstrings/test1.pluto + test2.pluto
@@ -51,20 +77,22 @@
   - Option 2: Only compile specified file, not all siblings
   - Option 3: Support directory-based test suites
 
-#### 4. Trait Method Without `self` Parameter Causes Compiler Panic
-- **File:** `tests/integration/traits.rs:4787`, `tests/integration/traits.rs:13688`
-- **Status:** Causes panic
-- **Impact:** Invalid trait definitions crash compiler instead of showing error
+#### 4. ✅ Trait Method Without `self` Parameter Causes Compiler Panic
+- **Status:** ✅ **FIXED** in PR #43 (2026-02-11)
+- **Impact:** Invalid trait definitions crashed compiler
+- **Fix:** Now shows clear error: "trait method 'X' must have a 'self' parameter"
 
-#### 5. Assigning Concrete Class to Trait-Typed Field in Struct Literal Fails
-- **File:** `tests/integration/traits.rs:14963`
-- **Status:** Type error where coercion should work
+#### 5. 🟡 Assigning Concrete Class to Trait-Typed Field in Struct Literal Fails
+- **Status:** 🟡 Active (workaround: assign after construction)
+- **Effort:** M (1 week)
 - **Impact:** Cannot directly assign implementing class to trait field in constructor
+- **File:** `tests/integration/traits.rs:14963`
+- **Workaround:** `let obj = Foo { other_fields... }; obj.trait_field = ConcreteClass { ... }`
 
-#### 6. Same Trait Listed Twice in Impl List Silently Accepted
-- **File:** `tests/integration/traits.rs:14986`
-- **Status:** No error/warning for duplicate trait impl
-- **Impact:** Confusing, should be compiler error
+#### 6. ✅ Same Trait Listed Twice in Impl List Silently Accepted
+- **Status:** ✅ **FIXED** in PR #48 (2026-02-12)
+- **Impact:** Duplicate traits were silently accepted, now properly rejected
+- **Fix:** Added validation in `check_trait_conformance()` to detect and reject duplicates
 
 ---
 
@@ -296,11 +324,15 @@
 
 ## ✅ Recently Fixed
 
-1. **`?` Operator Crash in Void-Returning Functions**
+1. **Duplicate Trait in Impl List** (Bug #6)
+   - Fixed in PR #48 (2026-02-12)
+   - Added validation to reject duplicate traits in impl list
+
+2. **`?` Operator Crash in Void-Returning Functions**
    - Fixed in commit `ec589633` (2026-02-10)
    - File: `docs/completed/bugs/null-propagate-void-crash.md`
 
-2. **Lexer Bugs (BUG-LEX-001 to -008)**
+3. **Lexer Bugs (BUG-LEX-001 to -008)**
    - Fixed per `bugs/LEXER-SUMMARY.md`
    - Hex literal validation
    - CRLF line endings
@@ -312,32 +344,51 @@
 ## 📊 Priority Recommendations
 
 ### Fix Immediately (Blocking Real Projects)
-1. **Nested field access bug** — blocks OOP-style code
-2. **Test runner duplicate IDs** — blocks multi-file test organization
-3. **Errors in closures** — blocks functional patterns with error handling
+1. 🔴 **Nested field access bug** (#1) — blocks OOP-style code (Effort: M)
+2. 🔴 **Errors in closures** (#2) — blocks functional patterns with error handling (Effort: L)
+3. 🟡 **Test runner duplicate IDs** (#3) — blocks multi-file test organization (Effort: S)
 
 ### Fix Soon (Quality of Life)
-4. Trait method validation (prevent panic, give proper error)
-5. Trait impl validation (duplicate traits, type coercion)
-6. Empty array literals (common pattern)
+4. ✅ ~~Trait method validation~~ — **FIXED** in PR #43
+5. ✅ ~~Duplicate trait impl~~ — **FIXED** in PR #48
+6. 🟡 **Trait type coercion** (#5) — struct literal field assignment (Effort: M)
 
-### Design/Implement When Ready
-7. String literals Phase 2 (breaking change, coordinate with users)
-8. RPC implementation (per phase plan)
-9. Structured concurrency Phase 2
-10. Compile-time reflection (experimental, high value for serialization)
+### Features to Implement (See FEATURES.md)
+7. **Empty array literals** ([FEATURES.md #1](FEATURES.md)) — P0, high impact (Effort: S)
+8. **If/Match as expressions** ([FEATURES.md #2-3](FEATURES.md)) — P0, ergonomics (Effort: M)
+9. **HTTP client** ([FEATURES.md #4](FEATURES.md)) — P0, real apps (Effort: M)
+10. **RPC implementation** ([FEATURES.md #5, 17-18](FEATURES.md)) — P0/P1, distributed (Effort: L)
+
+### See Also
+- **[FEATURES.md](FEATURES.md)** - 49 tracked features with priorities, effort, status
+- **[ROADMAP.md](ROADMAP.md)** - Quarterly goals and long-term vision
+- **Current Milestone:** v0.2 - Production Foundations (Q2 2026)
 
 ---
 
 ## 📝 Notes
 
-- This document consolidates information from:
-  - `bugs/` directory
-  - `docs/design/open-questions.md`
-  - `#[ignore]` test annotations
-  - TODO/FIXME comments in source
-  - Design RFCs with phased implementation
-  - Test failure documentation
+### Document Organization
+This repository uses three main tracking documents:
 
-- For detailed information on specific bugs, see the referenced files
-- This is a living document — update as bugs are fixed and features are added
+1. **BUGS_AND_FEATURES.md** (this file) - Known issues, limitations, stubs
+2. **[FEATURES.md](FEATURES.md)** - Detailed feature tracker (49 features, priorities, effort, status)
+3. **[ROADMAP.md](ROADMAP.md)** - Strategic vision, milestones, quarterly goals
+
+### Data Sources
+This document consolidates information from:
+- `bugs/` directory - Detailed bug reports
+- `docs/design/open-questions.md` - Design questions
+- `#[ignore]` test annotations - Skipped tests with reasons
+- `TODO`/`FIXME` comments in source - Inline notes
+- Design RFCs - Phased implementation plans
+- Test failure documentation - Regression tracking
+
+### Maintenance
+- Update bug status when fixed (move to "Recently Fixed")
+- Add new bugs as discovered (P0/P1/P2/P3 priority)
+- Remove limitations when implemented (cross-reference FEATURES.md)
+- Review and update monthly
+
+**Last reviewed:** 2026-02-11
+**Next review:** 2026-03-11

@@ -1,0 +1,380 @@
+// Basic f-string functionality tests - each test validates ONE specific behavior
+
+// ===== Single Interpolation by Type =====
+
+test "interpolate string variable" {
+    let name = "Alice"
+    let result = f"Hello {name}"
+    expect(result).to_equal("Hello Alice")
+}
+
+test "interpolate integer variable" {
+    let x = 42
+    let result = f"Number: {x}"
+    expect(result).to_equal("Number: 42")
+}
+
+test "interpolate float variable" {
+    let pi = 3.14
+    let result = f"Value: {pi}"
+    expect(result).to_equal("Value: 3.140000")
+}
+
+test "interpolate true boolean" {
+    let b = true
+    let result = f"Flag: {b}"
+    expect(result).to_equal("Flag: true")
+}
+
+test "interpolate false boolean" {
+    let b = false
+    let result = f"Flag: {b}"
+    expect(result).to_equal("Flag: false")
+}
+
+test "interpolate negative integer" {
+    let x = -42
+    let result = f"Value: {x}"
+    expect(result).to_equal("Value: -42")
+}
+
+test "interpolate zero" {
+    let x = 0
+    let result = f"Value: {x}"
+    expect(result).to_equal("Value: 0")
+}
+
+test "interpolate large integer" {
+    let x = 1000000
+    let result = f"Value: {x}"
+    expect(result).to_equal("Value: 1000000")
+}
+
+test "interpolate hex literal" {
+    let x = 0xFF
+    let result = f"Value: {x}"
+    expect(result).to_equal("Value: 255")
+}
+
+// ===== Interpolation Positioning =====
+
+test "interpolation at string start" {
+    let name = "Alice"
+    let result = f"{name} says hello"
+    expect(result).to_equal("Alice says hello")
+}
+
+test "interpolation at string end" {
+    let name = "Bob"
+    let result = f"Hello {name}"
+    expect(result).to_equal("Hello Bob")
+}
+
+test "interpolation only (no literal text)" {
+    let name = "Test"
+    let result = f"{name}"
+    expect(result).to_equal("Test")
+}
+
+test "multiple interpolations" {
+    let first = "John"
+    let last = "Doe"
+    let result = f"{first} {last}"
+    expect(result).to_equal("John Doe")
+}
+
+test "adjacent interpolations (no separator)" {
+    let a = "Hello"
+    let b = "World"
+    let result = f"{a}{b}"
+    expect(result).to_equal("HelloWorld")
+}
+
+// ===== Empty Cases =====
+
+test "empty f-string" {
+    let result = f""
+    expect(result).to_equal("")
+}
+
+test "f-string without interpolation" {
+    let result = f"Just plain text"
+    expect(result).to_equal("Just plain text")
+}
+
+test "interpolate empty string" {
+    let empty = ""
+    let result = f"Value: {empty}"
+    expect(result).to_equal("Value: ")
+}
+
+// ===== Escape Sequences (no interpolation) =====
+
+test "escape newline" {
+    let result = f"Line1\nLine2"
+    expect(result).to_equal("Line1\nLine2")
+}
+
+test "escape tab" {
+    let result = f"Col1\tCol2"
+    expect(result).to_equal("Col1\tCol2")
+}
+
+test "escape quote" {
+    let result = f"He said \"hello\""
+    expect(result).to_equal("He said \"hello\"")
+}
+
+test "escape backslash" {
+    let result = f"Path: C:\\Users"
+    expect(result).to_equal("Path: C:\\Users")
+}
+
+test "escape carriage return" {
+    let result = f"Line1\rLine2"
+    expect(result).to_equal("Line1\rLine2")
+}
+
+// ===== Escape + Interpolation =====
+
+test "newline before interpolation" {
+    let name = "Alice"
+    let result = f"Name:\n{name}"
+    expect(result).to_equal("Name:\nAlice")
+}
+
+test "tab before interpolation" {
+    let x = 10
+    let result = f"Value:\t{x}"
+    expect(result).to_equal("Value:\t10")
+}
+
+test "quote before interpolation" {
+    let x = 10
+    let result = f"\"Value\": {x}"
+    expect(result).to_equal("\"Value\": 10")
+}
+
+test "backslash before interpolation" {
+    let x = 10
+    let result = f"\\{x}"
+    expect(result).to_equal("\\10")
+}
+
+// ===== Expression Interpolation =====
+
+test "arithmetic addition in interpolation" {
+    let x = 5
+    let y = 3
+    let result = f"Sum: {x + y}"
+    expect(result).to_equal("Sum: 8")
+}
+
+test "arithmetic subtraction in interpolation" {
+    let x = 10
+    let y = 3
+    let result = f"Diff: {x - y}"
+    expect(result).to_equal("Diff: 7")
+}
+
+test "arithmetic multiplication in interpolation" {
+    let x = 7
+    let y = 6
+    let result = f"Product: {x * y}"
+    expect(result).to_equal("Product: 42")
+}
+
+test "arithmetic division in interpolation" {
+    let x = 20
+    let y = 4
+    let result = f"Quotient: {x / y}"
+    expect(result).to_equal("Quotient: 5")
+}
+
+test "arithmetic modulo in interpolation" {
+    let x = 17
+    let y = 5
+    let result = f"Remainder: {x % y}"
+    expect(result).to_equal("Remainder: 2")
+}
+
+test "comparison greater than" {
+    let a = 10
+    let b = 20
+    let result = f"Greater: {a > b}"
+    expect(result).to_equal("Greater: false")
+}
+
+test "comparison less than" {
+    let a = 10
+    let b = 20
+    let result = f"Less: {a < b}"
+    expect(result).to_equal("Less: true")
+}
+
+test "comparison equal" {
+    let a = 42
+    let b = 42
+    let result = f"Equal: {a == b}"
+    expect(result).to_equal("Equal: true")
+}
+
+test "comparison not equal" {
+    let a = 10
+    let b = 20
+    let result = f"NotEqual: {a != b}"
+    expect(result).to_equal("NotEqual: true")
+}
+
+test "logical AND" {
+    let a = true
+    let b = false
+    let result = f"AND: {a && b}"
+    expect(result).to_equal("AND: false")
+}
+
+test "logical OR" {
+    let a = true
+    let b = false
+    let result = f"OR: {a || b}"
+    expect(result).to_equal("OR: true")
+}
+
+test "logical NOT" {
+    let x = true
+    let result = f"NOT: {!x}"
+    expect(result).to_equal("NOT: false")
+}
+
+test "string concatenation in interpolation" {
+    let prefix = "Mr."
+    let name = "Smith"
+    let result = f"Name: {prefix + name}"
+    expect(result).to_equal("Name: Mr.Smith")
+}
+
+test "parenthesized expression" {
+    let a = 2
+    let b = 3
+    let c = 4
+    let result = f"Value: {(a + b) * c}"
+    expect(result).to_equal("Value: 20")
+}
+
+test "unary negation" {
+    let x = 10
+    let result = f"Value: {-x}"
+    expect(result).to_equal("Value: -10")
+}
+
+// ===== Method Calls =====
+
+test "string to_upper method" {
+    let text = "hello"
+    let result = f"Upper: {text.to_upper()}"
+    expect(result).to_equal("Upper: HELLO")
+}
+
+test "string to_lower method" {
+    let text = "HELLO"
+    let result = f"Lower: {text.to_lower()}"
+    expect(result).to_equal("Lower: hello")
+}
+
+test "string len method" {
+    let text = "test"
+    let result = f"Length: {text.len()}"
+    expect(result).to_equal("Length: 4")
+}
+
+test "string trim method" {
+    let text = "  spaces  "
+    let result = f"Trimmed: {text.trim()}"
+    expect(result).to_equal("Trimmed: spaces")
+}
+
+test "string substring method" {
+    let text = "Hello World"
+    let result = f"Sub: {text.substring(0, 5)}"
+    expect(result).to_equal("Sub: Hello")
+}
+
+test "string contains method" {
+    let text = "Hello World"
+    let search = "World"
+    let result = f"Contains: {text.contains(search)}"
+    expect(result).to_equal("Contains: true")
+}
+
+test "string starts_with method" {
+    let text = "Hello World"
+    let prefix = "Hello"
+    let result = f"Starts: {text.starts_with(prefix)}"
+    expect(result).to_equal("Starts: true")
+}
+
+test "string ends_with method" {
+    let text = "Hello World"
+    let suffix = "World"
+    let result = f"Ends: {text.ends_with(suffix)}"
+    expect(result).to_equal("Ends: true")
+}
+
+test "string replace method" {
+    let text = "Hello World"
+    let old = "World"
+    let new = "Pluto"
+    let result = f"Replaced: {text.replace(old, new)}"
+    expect(result).to_equal("Replaced: Hello Pluto")
+}
+
+test "method chaining" {
+    let text = "  HELLO  "
+    let result = f"Result: {text.trim().to_lower()}"
+    expect(result).to_equal("Result: hello")
+}
+
+// ===== Backward Compatibility =====
+
+test "regular string with interpolation still works" {
+    let name = "Charlie"
+    let result = "Hello {name}"
+    expect(result).to_equal("Hello Charlie")
+}
+
+test "regular string without interpolation" {
+    let result = "Plain string"
+    expect(result).to_equal("Plain string")
+}
+
+test "regular string with escape sequences" {
+    let result = "She said \"hi\""
+    expect(result).to_equal("She said \"hi\"")
+}
+
+// ===== F-String Operations =====
+
+test "concatenate two f-strings" {
+    let part1 = f"Hello "
+    let part2 = f"World"
+    let result = part1 + part2
+    expect(result).to_equal("Hello World")
+}
+
+test "f-string length" {
+    let name = "Alice"
+    let result = f"Hello {name}!"
+    expect(result.len()).to_equal(12)
+}
+
+test "interpolate f-string into another f-string" {
+    let inner = f"inner"
+    let outer = f"Outer {inner} text"
+    expect(outer).to_equal("Outer inner text")
+}
+
+test "whitespace around expression is ignored" {
+    let x = 42
+    let result = f"Value: { x }"
+    expect(result).to_equal("Value: 42")
+}

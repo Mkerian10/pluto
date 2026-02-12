@@ -51,7 +51,7 @@ fn load_and_parse(path: &Path, source_map: &mut SourceMap) -> Result<(Program, u
     })?;
     let file_id = source_map.add_file(path.to_path_buf(), source.clone());
     let tokens = lexer::lex(&source)?;
-    let mut parser = Parser::new(&tokens, &source);
+    let mut parser = Parser::new_with_path(&tokens, &source, path.display().to_string());
     let program = parser.parse_program()?;
     Ok((program, file_id))
 }
@@ -619,7 +619,8 @@ fn resolve_modules_inner(
             if dep_names.contains(&stem.to_string()) {
                 continue;
             }
-            let (program, _file_id) = load_and_parse(file_path, &mut source_map)?;
+            let (program, _file_id) = load_and_parse(file_path, &mut source_map)
+                .map_err(|err| CompileError::sibling_file(file_path.clone(), err))?;
             // Merge sibling's imports into root (they might also have imports)
             root.imports.extend(program.imports);
             root.functions.extend(program.functions);
@@ -645,6 +646,7 @@ fn resolve_modules_inner(
             }
             root.stages.extend(program.stages);
             root.errors.extend(program.errors);
+            root.test_info.extend(program.test_info);
         }
     }
 
@@ -1354,8 +1356,31 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
             }
         }
         Expr::FieldAccess { object, field } => {
+            // Check for module-qualified enum access: status.State.Active
+            // Pattern: FieldAccess { object: FieldAccess { object: Ident(module), field: enum_name }, field: variant }
+            if let Expr::FieldAccess { object: inner_object, field: inner_field } = &object.node {
+                if let Expr::Ident(module_name) = &inner_object.node {
+                    if import_names.contains(module_name.as_str()) {
+                        // This is module.Enum.Variant - convert to EnumUnit/EnumData
+                        let qualified_enum_name = prefix_name(module_name, &inner_field.node);
+                        let enum_name_span = Span::new(inner_object.span.start, inner_field.span.end);
+                        let variant = field.clone();
+
+                        // The conversion happens here, and the caller (statement/expression context)
+                        // will handle whether it becomes EnumUnit or EnumData based on what follows.
+                        // For now, we create EnumUnit and let the parser's follow-on logic handle EnumData cases.
+                        *expr = Expr::EnumUnit {
+                            enum_name: Spanned::new(qualified_enum_name, enum_name_span),
+                            variant,
+                            type_args: vec![],
+                            enum_id: None,
+                            variant_id: None,
+                        };
+                        return;
+                    }
+                }
+            }
             rewrite_expr(&mut object.node, object.span, import_names);
-            let _ = field;
         }
         Expr::Call { name, args, .. } => {
             for arg in args {

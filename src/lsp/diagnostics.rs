@@ -63,6 +63,10 @@ pub fn compile_error_to_diagnostics(
 
             vec![(uri, diag)]
         }
+        CompileError::SiblingFile { source, .. } => {
+            // Recursively convert the wrapped error
+            compile_error_to_diagnostics(source, line_indices, file_paths)
+        }
         CompileError::Manifest { msg, path } => {
             let uri = path_to_uri(path);
 
