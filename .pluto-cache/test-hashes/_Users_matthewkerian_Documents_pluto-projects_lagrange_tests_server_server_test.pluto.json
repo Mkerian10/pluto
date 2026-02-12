@@ -1,0 +1,14 @@
+{
+  "source_hash": "65a520dfcf7347f",
+  "test_hashes": {
+    "dispatch list_groups action": "338cddb2255e9bbf",
+    "dispatch stats action": "752edbea3f55d79c",
+    "dispatch unknown action returns error": "fe8b0e0647b92fc1",
+    "parse request with all fields": "53096021cc7126bd",
+    "dispatch delete_group action": "8887d250504b22a6",
+    "dispatch produce and consume": "2f63696474c39709",
+    "dispatch subscribe action": "a5ba184fc33617eb",
+    "dispatch create_topic action": "8061d6ab8a35aeb2"
+  },
+  "timestamp": 1770852295
+}

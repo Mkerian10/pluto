@@ -1,0 +1,12 @@
+{
+  "source_hash": "ef524f58b67ce39",
+  "test_hashes": {
+    "name filter returns matching only": "f9ce3db58ed35b3f",
+    "merge_batch returns count": "1449e07405e802d0",
+    "histogram merge appends values": "9c0caa747961c4ad",
+    "gauge last-write-wins": "99827b0cda8a290a",
+    "different label keys are separate series": "58c94f39616671",
+    "counter additive merge": "81d73205e1b3bdc"
+  },
+  "timestamp": 1770851982
+}

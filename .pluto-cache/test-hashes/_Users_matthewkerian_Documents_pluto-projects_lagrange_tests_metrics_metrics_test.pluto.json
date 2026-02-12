@@ -1,0 +1,9 @@
+{
+  "source_hash": "a70695ffb608348c",
+  "test_hashes": {
+    "stats endpoint shows topic and partition counts": "192d685e5a32c095",
+    "metrics flush does not crash": "429fcb60bc4bb929",
+    "metrics collector tracks produce and consume": "c95412785801e047"
+  },
+  "timestamp": 1770852280
+}

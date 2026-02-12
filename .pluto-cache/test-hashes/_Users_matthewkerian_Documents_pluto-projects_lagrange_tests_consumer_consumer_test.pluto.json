@@ -1,0 +1,13 @@
+{
+  "source_hash": "3f424340f90537f0",
+  "test_hashes": {
+    "consumer group rebalances on member leave": "dad58aab10822220",
+    "consumer polls from assigned partitions with auto-commit": "b67d1d491dae5d41",
+    "offset manager persists and fetches offsets": "fe47faf3e2418baa",
+    "consumer group assigns partitions round-robin": "21dd01531ab2c109",
+    "coordinator creates consumers with partition assignments": "326406e4612461c0",
+    "consumer can seek to specific offset": "8187ef8bb5bf47d5",
+    "coordinator end-to-end: produce, consume, commit": "43788af41c02340d"
+  },
+  "timestamp": 1770852271
+}
