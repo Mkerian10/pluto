@@ -1047,8 +1047,8 @@ fn main() {
 
 #[test]
 fn trait_duplicate_trait_in_impl_allowed() {
-    // COMPILER GAP: class Foo impl Bar, Bar — duplicate trait is silently accepted
-    let out = compile_and_run_stdout(r#"
+    // Duplicate trait in impl list should be rejected
+    compile_should_fail_with(r#"
 trait Bar {
     fn get(self) int
 }
@@ -1069,8 +1069,7 @@ fn main() {
     let f = Foo { val: 7 }
     show(f)
 }
-"#);
-    assert_eq!(out, "7\n");
+"#, "trait 'Bar' appears multiple times in impl list for class 'Foo'");
 }
 
 #[test]
@@ -13737,7 +13736,7 @@ trait Foo {
 fn main() {
     let f = Foo { }
 }
-"#, "unexpected token { in expression");
+"#, "unknown class 'Foo'");
 }
 
 #[test]
@@ -15000,9 +14999,8 @@ fn main() {
 
 #[test]
 fn fail_duplicate_trait_in_impl_list() {
-    // BUG: Same trait listed twice in impl list silently accepted
-    // Currently compiles without error (compiler gap)
-    let out = compile_and_run_stdout(r#"
+    // Same trait listed twice in impl list should be rejected
+    compile_should_fail_with(r#"
 trait Foo {
     fn work(self) int
 }
@@ -15016,9 +15014,7 @@ fn main() {
     let x: Foo = X { n: 42 }
     print(x.work())
 }
-"#);
-    // Compiles and works (duplicate silently ignored)
-    assert_eq!(out, "42\n");
+"#, "trait 'Foo' appears multiple times in impl list for class 'X'");
 }
 
 #[test]
