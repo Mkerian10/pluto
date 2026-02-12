@@ -132,7 +132,8 @@ fn test_float_nan() {
             print(nan)
         }
     "#;
-    let output = compile_and_run_stdout(src).trim();
+    let output_full = compile_and_run_stdout(src);
+    let output = output_full.trim();
     // Platform-dependent: can be "nan" or "-nan"
     assert!(output == "nan" || output == "-nan", "Expected nan or -nan, got: {}", output);
 }
