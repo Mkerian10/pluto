@@ -321,3 +321,104 @@ Spawn captures variables by value, which for heap types (arrays, maps, sets, cla
 ### Conservative fallibility
 
 When the compiler cannot statically determine which function was spawned (aliased/reassigned task handles, non-identifier `.get()` targets), `.get()` is treated as conservatively fallible. Users must handle with `!` or `catch` even if the underlying function is infallible.
+
+## Runtime Implementation
+
+The concurrency runtime is implemented in `runtime/threading.c` (2056 lines), which is compiled separately from the GC and core builtins. See `docs/design/runtime-architecture.md` for the full runtime module structure.
+
+### Dual-Mode Runtime
+
+The threading runtime operates in two modes:
+
+**Test mode** (`-DPLUTO_TEST_MODE`):
+- Cooperative fiber scheduler using `setcontext`/`swapcontext`
+- Exhaustive DPOR (Dynamic Partial Order Reduction) state exploration
+- Deterministic execution order for reproducible tests
+- 256 fibers max, 64 KB stack per fiber
+- Channels use fiber queues (no mutexes)
+- All concurrency integration tests run in test mode
+
+**Production mode** (default):
+- Pthread-based tasks (`pthread_create`)
+- Mutex-protected channels with condition variables
+- Real OS-level parallelism
+- Thread-local storage for error state and task handles
+- Per-thread stack registration with GC for root scanning
+
+### Task Implementation
+
+Tasks are GC-allocated handles with the following layout:
+
+```c
+// GC_TAG_TASK = 7
+long task[7] = {
+    [0] closure_ptr,   // spawned function + captures
+    [1] result,        // return value (after completion)
+    [2] error,         // error object (if function raised)
+    [3] done,          // 0=running, 1=completed
+    [4] sync_ptr,      // TaskSync* (mutex+cond in production, fiber_id in test)
+    [5] detached,      // 0=joinable, 1=detached
+    [6] cancelled      // 0=running, 1=cancelled (future)
+};
+```
+
+**Test mode:** `sync_ptr` stores fiber ID for cross-referencing.
+
+**Production mode:** `sync_ptr` points to malloc'd `pthread_mutex_t` and `pthread_cond_t` for signaling completion.
+
+### Channel Implementation
+
+Channels are GC-allocated handles with the following layout:
+
+```c
+// GC_TAG_CHANNEL = 9
+long channel[7] = {
+    [0] sync_ptr,   // ChannelSync* (mutex+2 conds in production, NULL in test)
+    [1] buf_ptr,    // circular buffer for values
+    [2] capacity,   // max buffered items
+    [3] count,      // current number of items
+    [4] head,       // read index
+    [5] tail,       // write index
+    [6] closed      // 0=open, 1=closed
+};
+```
+
+**Test mode:** Channels block/unblock fibers directly via scheduler state.
+
+**Production mode:** Channels use `pthread_cond_wait`/`pthread_cond_signal` on `not_empty` and `not_full` condition variables.
+
+### Select Implementation
+
+`select` waits on multiple channels by polling them in random order (to avoid bias). Test mode tries channels in exhaustive permutations for DPOR. Production mode randomizes the order each iteration.
+
+### Deep Copy for Spawn Isolation
+
+`__pluto_deep_copy(value, type_id)` recursively copies heap objects:
+- **Primitives** (int, float, bool): copied by value (no-op, just return)
+- **Strings**: allocate new GC string, copy bytes
+- **Arrays**: recursively copy each element
+- **Maps/Sets**: copy key-value pairs and metadata
+- **Classes**: copy field-by-field
+- **Enums**: copy discriminant and data variant recursively
+- **Tasks/Channels**: **error** (cannot deep copy concurrency primitives)
+
+Deep copy ensures value isolation between spawner and task, preventing data races on mutable heap objects.
+
+### GC Integration
+
+**Production mode:** Spawned tasks register their thread stacks with the GC via `__pluto_gc_register_thread_stack(stack_lo, stack_hi)`. The GC scans all registered thread stacks as roots during collection. When a task completes, it deregisters via `__pluto_gc_deregister_thread_stack()`.
+
+**Test mode:** Fibers register their stacks with `__pluto_gc_register_fiber_stack(base, size)`. The GC scans active fiber stacks based on the scheduler's current state.
+
+**GC suppression:** In phase 1, the GC is suppressed while any tasks are active (`atomic_int __pluto_active_tasks > 0`). This prevents incomplete stack scanning but causes unbounded heap growth during long-running tasks. Phase 2 will remove this suppression by completing per-thread root registration.
+
+### Rwlocks for Contract Synchronization
+
+Classes with invariants use rwlocks to ensure thread-safe contract enforcement:
+- Non-mut methods acquire **read locks** (shared, multiple readers allowed)
+- Mut methods acquire **write locks** (exclusive, blocks all readers and writers)
+- Invariants are checked after releasing write locks
+
+Rwlocks are only used for classes with `invariant` clauses. Regular classes have no synchronization overhead.
+
+See `docs/design/contracts.md` for contract enforcement details.
