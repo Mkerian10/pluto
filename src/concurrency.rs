@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::*;
 use crate::typeck::env::{mangle_method, TypeEnv};
+use crate::span::Spanned;
+use crate::visit::{walk_expr, walk_stmt, Visitor};
 
 /// Infer which DI singletons need rwlock synchronization.
 ///
@@ -162,6 +164,81 @@ pub fn infer_synchronization(program: &Program, env: &mut TypeEnv) {
 }
 
 /// Collect direct singleton accesses and call-graph edges from a block.
+struct AccessCollector<'a> {
+    accesses: &'a mut HashSet<String>,
+    edges: &'a mut HashSet<String>,
+    current_fn: &'a str,
+    env: &'a TypeEnv,
+    di_singletons: &'a HashSet<String>,
+}
+
+impl Visitor for AccessCollector<'_> {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        // Handle expressions that need access/edge collection
+        match &expr.node {
+            Expr::Call { name, .. } => {
+                self.edges.insert(name.node.clone());
+            }
+            Expr::MethodCall { method, .. } => {
+                // Check if the method call is on a DI singleton — use method_resolutions from typeck
+                let key = (self.current_fn.to_string(), method.span.start);
+                if let Some(crate::typeck::env::MethodResolution::Class { mangled_name }) = self.env.method_resolutions.get(&key) {
+                    // Extract class name from mangled name (format: "ClassName$method")
+                    if let Some(class_name) = mangled_name.split('$').next() {
+                        if self.di_singletons.contains(class_name) {
+                            self.accesses.insert(class_name.to_string());
+                        }
+                    }
+                    self.edges.insert(mangled_name.clone());
+                }
+            }
+            Expr::Spawn { call } => {
+                // Spawn is opaque to concurrency analysis for the spawned body.
+                // Only collect effects from spawn arg expressions.
+                if let Expr::Closure { body, .. } = &call.node {
+                    for stmt in &body.node.stmts {
+                        if let Stmt::Return(Some(ret_expr)) = &stmt.node {
+                            let args = match &ret_expr.node {
+                                Expr::Call { args, .. } => Some(args),
+                                Expr::MethodCall { args, .. } => Some(args),
+                                _ => None,
+                            };
+                            if let Some(args) = args {
+                                for arg in args {
+                                    self.visit_expr(arg);
+                                }
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+            Expr::StringInterp { parts } => {
+                for part in parts {
+                    if let StringInterpPart::Expr(e) = part {
+                        self.visit_expr(e);
+                    }
+                }
+                return;
+            }
+            Expr::QualifiedAccess { segments } => {
+                panic!(
+                    "QualifiedAccess should be resolved by module flattening before concurrency. Segments: {:?}",
+                    segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+                )
+            }
+            _ => {}
+        }
+        // Recurse into sub-expressions
+        walk_expr(self, expr);
+    }
+
+    fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+        // No special statement handling needed, just recurse
+        walk_stmt(self, stmt);
+    }
+}
+
 fn collect_block_accesses(
     block: &Block,
     current_fn: &str,
@@ -170,262 +247,16 @@ fn collect_block_accesses(
 ) -> (HashSet<String>, HashSet<String>) {
     let mut accesses = HashSet::new();
     let mut edges = HashSet::new();
+    let mut collector = AccessCollector {
+        accesses: &mut accesses,
+        edges: &mut edges,
+        current_fn,
+        env,
+        di_singletons,
+    };
     for stmt in &block.stmts {
-        collect_stmt_accesses(&stmt.node, &mut accesses, &mut edges, current_fn, env, di_singletons);
+        collector.visit_stmt(stmt);
     }
     (accesses, edges)
 }
 
-fn collect_stmt_accesses(
-    stmt: &Stmt,
-    accesses: &mut HashSet<String>,
-    edges: &mut HashSet<String>,
-    current_fn: &str,
-    env: &TypeEnv,
-    di_singletons: &HashSet<String>,
-) {
-    match stmt {
-        Stmt::Let { value, .. } => {
-            collect_expr_accesses(&value.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Stmt::Expr(expr) => {
-            collect_expr_accesses(&expr.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Stmt::Return(Some(expr)) => {
-            collect_expr_accesses(&expr.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Stmt::Return(None) => {}
-        Stmt::Assign { value, .. } => {
-            collect_expr_accesses(&value.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Stmt::FieldAssign { object, value, .. } => {
-            collect_expr_accesses(&object.node, accesses, edges, current_fn, env, di_singletons);
-            collect_expr_accesses(&value.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Stmt::IndexAssign { object, index, value } => {
-            collect_expr_accesses(&object.node, accesses, edges, current_fn, env, di_singletons);
-            collect_expr_accesses(&index.node, accesses, edges, current_fn, env, di_singletons);
-            collect_expr_accesses(&value.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Stmt::If { condition, then_block, else_block } => {
-            collect_expr_accesses(&condition.node, accesses, edges, current_fn, env, di_singletons);
-            for s in &then_block.node.stmts {
-                collect_stmt_accesses(&s.node, accesses, edges, current_fn, env, di_singletons);
-            }
-            if let Some(eb) = else_block {
-                for s in &eb.node.stmts {
-                    collect_stmt_accesses(&s.node, accesses, edges, current_fn, env, di_singletons);
-                }
-            }
-        }
-        Stmt::While { condition, body } => {
-            collect_expr_accesses(&condition.node, accesses, edges, current_fn, env, di_singletons);
-            for s in &body.node.stmts {
-                collect_stmt_accesses(&s.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Stmt::For { iterable, body, .. } => {
-            collect_expr_accesses(&iterable.node, accesses, edges, current_fn, env, di_singletons);
-            for s in &body.node.stmts {
-                collect_stmt_accesses(&s.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Stmt::Match { expr, arms } => {
-            collect_expr_accesses(&expr.node, accesses, edges, current_fn, env, di_singletons);
-            for arm in arms {
-                for s in &arm.body.node.stmts {
-                    collect_stmt_accesses(&s.node, accesses, edges, current_fn, env, di_singletons);
-                }
-            }
-        }
-        Stmt::Raise { fields, .. } => {
-            for (_, val) in fields {
-                collect_expr_accesses(&val.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Stmt::LetChan { capacity, .. } => {
-            if let Some(cap) = capacity {
-                collect_expr_accesses(&cap.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Stmt::Select { arms, default } => {
-            for arm in arms {
-                match &arm.op {
-                    SelectOp::Recv { channel, .. } => {
-                        collect_expr_accesses(&channel.node, accesses, edges, current_fn, env, di_singletons);
-                    }
-                    SelectOp::Send { channel, value } => {
-                        collect_expr_accesses(&channel.node, accesses, edges, current_fn, env, di_singletons);
-                        collect_expr_accesses(&value.node, accesses, edges, current_fn, env, di_singletons);
-                    }
-                }
-                for s in &arm.body.node.stmts {
-                    collect_stmt_accesses(&s.node, accesses, edges, current_fn, env, di_singletons);
-                }
-            }
-            if let Some(def) = default {
-                for s in &def.node.stmts {
-                    collect_stmt_accesses(&s.node, accesses, edges, current_fn, env, di_singletons);
-                }
-            }
-        }
-        Stmt::Scope { seeds, body, .. } => {
-            for seed in seeds {
-                collect_expr_accesses(&seed.node, accesses, edges, current_fn, env, di_singletons);
-            }
-            for s in &body.node.stmts {
-                collect_stmt_accesses(&s.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Stmt::Yield { value, .. } => {
-            collect_expr_accesses(&value.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Stmt::Break | Stmt::Continue => {}
-    }
-}
-
-fn collect_expr_accesses(
-    expr: &Expr,
-    accesses: &mut HashSet<String>,
-    edges: &mut HashSet<String>,
-    current_fn: &str,
-    env: &TypeEnv,
-    di_singletons: &HashSet<String>,
-) {
-    match expr {
-        Expr::Call { name, args, .. } => {
-            edges.insert(name.node.clone());
-            for arg in args {
-                collect_expr_accesses(&arg.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Expr::MethodCall { object, method, args } => {
-            collect_expr_accesses(&object.node, accesses, edges, current_fn, env, di_singletons);
-            for arg in args {
-                collect_expr_accesses(&arg.node, accesses, edges, current_fn, env, di_singletons);
-            }
-            // Check if the method call is on a DI singleton — use method_resolutions from typeck
-            let key = (current_fn.to_string(), method.span.start);
-            if let Some(crate::typeck::env::MethodResolution::Class { mangled_name }) = env.method_resolutions.get(&key) {
-                // Extract class name from mangled name (format: "ClassName$method")
-                if let Some(class_name) = mangled_name.split('$').next() {
-                    if di_singletons.contains(class_name) {
-                        accesses.insert(class_name.to_string());
-                    }
-                }
-                edges.insert(mangled_name.clone());
-            }
-        }
-        Expr::Propagate { expr: inner } => {
-            collect_expr_accesses(&inner.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Expr::Catch { expr: inner, handler } => {
-            collect_expr_accesses(&inner.node, accesses, edges, current_fn, env, di_singletons);
-            match handler {
-                CatchHandler::Wildcard { body, .. } => {
-                    for stmt in &body.node.stmts {
-                        collect_stmt_accesses(&stmt.node, accesses, edges, current_fn, env, di_singletons);
-                    }
-                }
-                CatchHandler::Shorthand(fb) => {
-                    collect_expr_accesses(&fb.node, accesses, edges, current_fn, env, di_singletons);
-                }
-            }
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            collect_expr_accesses(&lhs.node, accesses, edges, current_fn, env, di_singletons);
-            collect_expr_accesses(&rhs.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Expr::UnaryOp { operand, .. } => {
-            collect_expr_accesses(&operand.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Expr::Cast { expr: inner, .. } => {
-            collect_expr_accesses(&inner.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Expr::StructLit { fields, .. } => {
-            for (_, val) in fields {
-                collect_expr_accesses(&val.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Expr::FieldAccess { object, .. } => {
-            collect_expr_accesses(&object.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Expr::ArrayLit { elements } => {
-            for e in elements {
-                collect_expr_accesses(&e.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Expr::Index { object, index } => {
-            collect_expr_accesses(&object.node, accesses, edges, current_fn, env, di_singletons);
-            collect_expr_accesses(&index.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Expr::EnumData { fields, .. } => {
-            for (_, val) in fields {
-                collect_expr_accesses(&val.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Expr::StringInterp { parts } => {
-            for part in parts {
-                if let StringInterpPart::Expr(e) = part {
-                    collect_expr_accesses(&e.node, accesses, edges, current_fn, env, di_singletons);
-                }
-            }
-        }
-        Expr::Closure { body, .. } => {
-            for stmt in &body.node.stmts {
-                collect_stmt_accesses(&stmt.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Expr::Spawn { call } => {
-            // Spawn is opaque to concurrency analysis for the spawned body.
-            // Only collect effects from spawn arg expressions.
-            if let Expr::Closure { body, .. } = &call.node {
-                for stmt in &body.node.stmts {
-                    if let Stmt::Return(Some(ret_expr)) = &stmt.node {
-                        let args = match &ret_expr.node {
-                            Expr::Call { args, .. } => Some(args),
-                            Expr::MethodCall { args, .. } => Some(args),
-                            _ => None,
-                        };
-                        if let Some(args) = args {
-                            for arg in args {
-                                collect_expr_accesses(&arg.node, accesses, edges, current_fn, env, di_singletons);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Expr::MapLit { entries, .. } => {
-            for (k, v) in entries {
-                collect_expr_accesses(&k.node, accesses, edges, current_fn, env, di_singletons);
-                collect_expr_accesses(&v.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Expr::SetLit { elements, .. } => {
-            for e in elements {
-                collect_expr_accesses(&e.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Expr::Range { start, end, .. } => {
-            collect_expr_accesses(&start.node, accesses, edges, current_fn, env, di_singletons);
-            collect_expr_accesses(&end.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Expr::NullPropagate { expr: inner } => {
-            collect_expr_accesses(&inner.node, accesses, edges, current_fn, env, di_singletons);
-        }
-        Expr::StaticTraitCall { args, .. } => {
-            for arg in args {
-                collect_expr_accesses(&arg.node, accesses, edges, current_fn, env, di_singletons);
-            }
-        }
-        Expr::QualifiedAccess { segments } => {
-            panic!(
-                "QualifiedAccess should be resolved by module flattening before concurrency. Segments: {:?}",
-                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
-            )
-        }
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
-    }
-}
