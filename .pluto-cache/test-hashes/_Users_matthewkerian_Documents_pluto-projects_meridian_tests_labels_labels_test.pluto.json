@@ -1,0 +1,15 @@
+{
+  "source_hash": "887ba825d2eb7d5c",
+  "test_hashes": {
+    "make_label_key sorts by key": "99037361a9915eea",
+    "create_counter initializes to zero": "fb38ae736dfd9fe9",
+    "create_histogram initializes empty": "37418c88fa53efe1",
+    "make_label_key is deterministic regardless of input order": "7838a7f2fa56d5a2",
+    "empty batch has no metrics": "8a6f0a7f9fa2e8a8",
+    "make_label_key with empty labels": "e52b63e55ce223e9",
+    "make_label_key with single label": "762bd70a230f3244",
+    "create_gauge initializes to zero": "fc2a10cca9c95172",
+    "create_label creates label with key and value": "4545977b91698eb8"
+  },
+  "timestamp": 1770851949
+}

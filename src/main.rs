@@ -106,6 +106,17 @@ enum WatchCommands {
     },
 }
 
+/// Get the appropriate filename to display in error messages.
+/// For sibling file errors, returns the sibling file path instead of the entry file.
+fn error_filename(err: &plutoc::diagnostics::CompileError) -> Option<String> {
+    match err {
+        plutoc::diagnostics::CompileError::SiblingFile { path, .. } => {
+            Some(path.display().to_string())
+        }
+        _ => None,
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -125,7 +136,8 @@ fn main() {
                             eprintln!("system: {} member(s) compiled", members.len());
                         }
                         Err(err) => {
-                            let filename = file.to_string_lossy().to_string();
+                            let filename = error_filename(&err)
+                                .unwrap_or_else(|| file.to_string_lossy().to_string());
                             eprintln!("error [{}]: {err}", filename);
                             std::process::exit(1);
                         }
@@ -134,13 +146,15 @@ fn main() {
                 Ok(None) => {
                     // Regular file: compile to a single binary
                     if let Err(err) = plutoc::compile_file_with_stdlib(&file, &output, stdlib) {
-                        let filename = file.to_string_lossy().to_string();
+                        let filename = error_filename(&err)
+                            .unwrap_or_else(|| file.to_string_lossy().to_string());
                         eprintln!("error [{}]: {err}", filename);
                         std::process::exit(1);
                     }
                 }
                 Err(err) => {
-                    let filename = file.to_string_lossy().to_string();
+                    let filename = error_filename(&err)
+                        .unwrap_or_else(|| file.to_string_lossy().to_string());
                     eprintln!("error [{}]: {err}", filename);
                     std::process::exit(1);
                 }
@@ -155,7 +169,8 @@ fn main() {
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    let filename = file.to_string_lossy().to_string();
+                    let filename = error_filename(&err)
+                        .unwrap_or_else(|| file.to_string_lossy().to_string());
                     eprintln!("error [{}]: {err}", filename);
                     std::process::exit(1);
                 }
@@ -163,7 +178,8 @@ fn main() {
 
             let tmp = std::env::temp_dir().join("pluto_run");
             if let Err(err) = plutoc::compile_file_with_stdlib(&file, &tmp, stdlib) {
-                let filename = file.to_string_lossy().to_string();
+                let filename = error_filename(&err)
+                    .unwrap_or_else(|| file.to_string_lossy().to_string());
                 eprintln!("error [{}]: {err}", filename);
                 std::process::exit(1);
             }
@@ -250,7 +266,8 @@ fn main() {
                     }
                 }
                 Err(err) => {
-                    let filename = file.to_string_lossy().to_string();
+                    let filename = error_filename(&err)
+                        .unwrap_or_else(|| file.to_string_lossy().to_string());
                     eprintln!("error [{}]: {err}", filename);
                     std::process::exit(1);
                 }

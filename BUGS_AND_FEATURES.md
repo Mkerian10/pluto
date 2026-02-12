@@ -1,0 +1,343 @@
+# Bugs, Limitations, and Missing Features
+
+**Last Updated:** 2026-02-11
+**Purpose:** Centralized tracking of known issues, limitations, and planned features for the Pluto compiler
+
+---
+
+## 🐛 Active Bugs (Need Fixing)
+
+### P0 - Critical (Compiler Crashes)
+
+#### 1. Nested Field Access Parsed as Enum Variant
+- **File:** `bugs/nested-field-access.md`
+- **Status:** Active workaround exists, no fix yet
+- **Impact:** Blocks any code with `obj.field.field` patterns
+- **Example:**
+  ```pluto
+  let v = o.inner.value  // ERROR: unknown enum 'o.inner'
+  let count = self.registry.gauges.len()  // ERROR
+  ```
+- **Workaround:** Use intermediate variables
+  ```pluto
+  let inner = o.inner
+  let v = inner.value  // OK
+  ```
+- **Root Cause:** Parser at `src/parser/mod.rs:2297` speculatively treats `a.b.c` as qualified enum variant `module.Enum.Variant`
+- **Recommended Fix:** Option 1 (parser check for `self`) as quick fix, Option 3 (new AST node `QualifiedAccess`) for general solution
+
+#### 2. Errors in Closures Not Supported
+- **File:** `tests/codegen/BUG_FIXES_SUMMARY.md`, `tests/codegen/_06_error_handling.rs:84`
+- **Status:** Confirmed bug, pipeline timing issue
+- **Impact:** Cannot use `!` operator inside closures
+- **Root Cause:** Error inference runs before closure lifting
+- **Test:** `#[ignore] // FIXME: Errors in closures not supported - pipeline timing bug`
+
+### P1 - High Priority
+
+#### 3. Test Runner Generates Duplicate IDs for Multiple Files
+- **File:** `feedback/bugs/test-runner-duplicate-ids-multiple-files.md`
+- **Status:** Active, workaround exists
+- **Impact:** Cannot organize tests into multiple files in same directory
+- **Example:**
+  ```bash
+  # tests/lang/fstrings/test1.pluto + test2.pluto
+  cargo run -- test tests/lang/fstrings/test1.pluto
+  # ERROR: Duplicate definition of identifier: __test_0
+  ```
+- **Workaround:** Only one test file per directory
+- **Recommended Fix:**
+  - Option 1: Generate unique IDs with file hash (`__test_<hash>_0`)
+  - Option 2: Only compile specified file, not all siblings
+  - Option 3: Support directory-based test suites
+
+#### 4. Trait Method Without `self` Parameter Causes Compiler Panic
+- **File:** `tests/integration/traits.rs:4787`, `tests/integration/traits.rs:13688`
+- **Status:** Causes panic
+- **Impact:** Invalid trait definitions crash compiler instead of showing error
+
+#### 5. Assigning Concrete Class to Trait-Typed Field in Struct Literal Fails
+- **File:** `tests/integration/traits.rs:14963`
+- **Status:** Type error where coercion should work
+- **Impact:** Cannot directly assign implementing class to trait field in constructor
+
+#### 6. Same Trait Listed Twice in Impl List Silently Accepted
+- **File:** `tests/integration/traits.rs:14986`
+- **Status:** No error/warning for duplicate trait impl
+- **Impact:** Confusing, should be compiler error
+
+---
+
+## ⚠️ Known Limitations (Documented, Low Priority)
+
+### Language Features Not Supported
+
+1. **Empty Array Literals**
+   - Cannot infer type of `[]` even with type annotation
+   - Tests: 7 ignored tests in `tests/codegen/_12_edge_cases.rs`, `_01_type_representation.rs`
+   - Workaround: Use array with at least one element
+
+2. **If-as-Expression**
+   - `let x = if cond { a } else { b }` not supported
+   - Tests: `tests/codegen/_05_control_flow.rs:174`, `_13_codegen_correctness.rs:487`
+   - Workaround: Use statements with mutation
+
+3. **Match-as-Expression**
+   - `let x = match y { ... }` not supported
+   - Tests: `tests/codegen/_05_control_flow.rs:605`, `:973`
+   - Workaround: Use statements with mutation
+
+4. **Scientific Notation in Numeric Literals**
+   - `1.7976931348623157e308` not supported
+   - Tests: 4 ignored tests in `tests/codegen/_12_edge_cases.rs`, `_01_type_representation.rs`
+   - Workaround: Use decimal literals
+
+5. **Binary Literal Syntax**
+   - `0b1010` not supported
+   - Tests: `tests/codegen/_13_codegen_correctness.rs:256`, `_15_platform_specific.rs:395`
+   - Workaround: Use decimal or hex
+
+6. **Field Binding Syntax in Match Arms**
+   - `match shape { Circle { radius: r } => ... }` not supported
+   - Test: `tests/codegen/_15_platform_specific.rs:466`
+   - Workaround: Access fields after match
+
+7. **`?` Operator in `main()`**
+   - Using `?` in main causes parser/type errors
+   - Tests: `tests/codegen/_11_nullable.rs:139`, `:478`
+   - Workaround: Use explicit `if none` checks in main
+
+8. **Fixed-Size Array Syntax**
+   - `[Type; size]` not supported
+   - Test: `tests/codegen/_07_concurrency.rs:148`
+   - Workaround: Use dynamic arrays
+
+9. **Methods on Primitives**
+   - `42.to_string()` not supported
+   - Test: `tests/codegen/_14_abi_compliance.rs:123`
+   - Workaround: Use module functions
+
+10. **Nested Closures**
+    - Closure returning closure not supported by closure lifting pass
+    - Test: `tests/codegen/_04_function_calls.rs:740`
+
+11. **`\0` Escape Sequence**
+    - Null byte escape not supported
+    - Test: `tests/codegen/_01_type_representation.rs:355`
+    - Supported: `\n`, `\r`, `\t`, `\\`, `\"`
+
+### App/DI Limitations
+
+12. **Apps Cannot Have Regular Fields**
+    - Only bracket dependencies and methods allowed
+    - Tests: 3 ignored tests in `tests/codegen/_09_dependency_injection.rs`
+
+13. **App `main` Must Return Void**
+    - Cannot return exit code from app main
+    - Test: `tests/codegen/_09_dependency_injection.rs:261`
+
+14. **Cannot Manually Provide Bracket Dependencies**
+    - `Outer[dep] {}` syntax doesn't exist
+    - Tests: 2 ignored tests in `tests/codegen/_09_dependency_injection.rs`
+
+### Lexer Issues (Mostly Fixed)
+
+15. **i64::MIN Literal Overflow**
+    - `-9223372036854775808` causes lexer overflow
+    - Status: See `bugs/lexer-gaps.md` BUG-LEX-009
+    - Tests: 3 ignored tests in `tests/codegen/_12_edge_cases.rs`
+    - Fixed: Most lexer bugs (BUG-LEX-001 to -008) are now fixed per `bugs/LEXER-SUMMARY.md`
+
+### Concurrency/Channels Limitations (Phase 1)
+
+16. **Channel `close()` Waking Blocked Senders**
+    - Known bug: close doesn't wake blocked senders
+    - Test: `tests/integration/deterministic.rs:1459`
+    - Status: Documented in channel implementation
+
+17. **No `.cancel()` / `.detach()` on Tasks**
+    - Phase 1 limitation, Phase 2 feature
+
+18. **No Structured Concurrency**
+    - Task groups/scopes not yet implemented
+    - See `docs/design/concurrency.md`, `docs/design/rfc-concurrency-v2.md`
+
+19. **No Move Semantics on Spawn**
+    - Spawn captures by value (pointer copy for heap types)
+    - Shared mutable heap is programmer's responsibility
+    - See `docs/design/concurrency.md:319`
+
+20. **GC Suppression While Tasks Active**
+    - Unbounded heap growth during long-running tasks
+    - 1GB ceiling guardrail (fail-fast abort)
+    - See `docs/design/concurrency.md:315`
+
+---
+
+## 🔧 Missing Features / Future Work
+
+### From Open Questions (`docs/design/open-questions.md`)
+
+#### Communication
+- [ ] Geographic annotations — syntax for region/locality constraints
+- [ ] Service discovery — how do apps find each other?
+- [ ] Cross-pod calls — compiler-generated RPC code, serialization format
+
+#### Runtime
+- [ ] Configuration format — DI bindings, region constraints, restart policies
+- [ ] Supervision strategies — one-for-one, one-for-all, rest-for-one
+- [ ] Observability — built-in metrics, tracing, logging hooks
+- [ ] Runtime ↔ orchestration interface
+
+#### Dependency Injection
+- [ ] Provider registration — DI bindings per environment
+- [ ] Lifecycle — singleton vs per-request vs per-process
+- [ ] Module ↔ app relationship — can modules contain apps? composition?
+
+#### Concurrency
+- [ ] Move semantics on spawn — explicit `move` annotation?
+- [ ] Task groups / scopes — structured concurrency with auto-cancellation
+- [x] Select / race — waiting on first of multiple tasks/channels (implemented)
+
+#### Contracts
+- [ ] Contract inheritance on generics — does `Box<T>` inherit T's invariants?
+- [ ] Quantifiers — `forall item in self.items: item.price > 0`
+- [ ] Contract testing mode — `@test` with runtime assertions
+- [ ] `old()` deep copy semantics — what values can `old()` capture?
+- [ ] Protocol composition — can protocols be composed/extended?
+- [ ] `@assume` scope — single call, block, or entire function?
+- [ ] Gradual adoption — opt-in per module or always enforced?
+
+#### AI-Native Representation
+- [ ] Binary format — protobuf, FlatBuffers, Cap'n Proto, custom?
+- [ ] Derived data staleness — content hash? version counter?
+- [ ] Incremental analysis — partial recompute or full?
+- [ ] Cross-project UUIDs — namespace management across libraries
+- [ ] SDK language bindings — Python/TS for AI agents?
+- [ ] Diff tooling — custom `git diff` for binary `.pluto`?
+- [ ] IDE integration — `.pt` sync on save? SDK-powered LSP?
+- [ ] Concurrent SDK access — multiple agents, same file (locking? CRDT?)
+
+#### Tooling
+- [ ] Standard library scope — core modules (ongoing)
+- [ ] Package manager — dependency resolution
+- [ ] Formatter / linter — built-in code formatting (`go fmt` style)
+
+### Phased Implementation (In Progress)
+
+#### RPC Implementation (`docs/design/rfc-rpc-implementation.md`)
+- **Status:** Phase 1 starting
+- **Phase 1:** Wire format + `std.wire` module
+- **Phase 2:** `stage` declaration + service model
+- **Phase 3:** RPC codegen + HTTP transport
+- **Phase 4:** Service discovery + config system
+- **Phase 5:** Multi-service binaries
+
+#### String Literals (`docs/design/rfc-string-literals.md`)
+- **Phase 1:** ✅ F-strings implemented (`f"Hello {name}"`)
+- **Phase 2:** Break regular strings (remove interpolation from `"..."`)
+  - [ ] Update all existing Pluto code
+  - [ ] Regular strings reject `{...}` with helpful error
+  - [ ] Tests for migration
+
+#### Compile-Time Reflection (`docs/design/rfc-compile-time-reflection-and-encodings.md`)
+- **Phase 1:** `@generate` + basic intrinsics
+- **Phase 2:** Loop unrolling and compiler transforms
+- **Phase 3:** `JsonEncoding` implementation
+
+#### DI Lifecycle (`docs/design/rfc-di-lifecycle.md`)
+- **Phase 1:** Scoped services syntax
+- **Phase 2:** Scope block typeck
+- **Phase 3:** Codegen
+
+#### Deterministic Concurrency Testing (`docs/design/rfc-deterministic-concurrency-testing.md`)
+- Waiting for Phase 3 structured concurrency
+
+#### Compiler Metrics (`docs/design/rfc-compiler-metrics.md`)
+- **Phase 1:** Pipeline timing metrics
+- **Phase 2:** Code characteristic metrics
+- **Phase 3:** Error & diagnostic metrics
+
+---
+
+## 📋 Test Coverage Gaps
+
+### Ignored Tests by Category
+
+**Lexer stress tests:**
+- 3 ignored in `tests/integration/lexer/stress.rs` — too slow or stack overflow
+
+**Codegen tests:**
+- 28 duplicate tests in `tests/codegen/_02_arithmetic.rs` (already covered)
+- Various limitation tests (see Known Limitations above)
+
+---
+
+## 🚧 Incomplete/Stub Implementations
+
+1. **HTTP Client (stdlib)**
+   - File: `runtime/builtins.c:4423`
+   - Note: `// TODO: Implement actual HTTP client with libcurl or sockets`
+   - Current: Stub implementation
+
+2. **Regex Escape Sequences (stdlib)**
+   - File: `tests/integration/stdlib_tests.rs:128`
+   - Note: `// TODO: Full regex escape sequence support (\d, \w, \s) - Phase 2 work`
+
+3. **Installation Docs**
+   - File: `book/src/getting-started/installation.md`
+   - Note: `TODO: Installation instructions for the Pluto compiler.`
+
+4. **Wire Format Unknown Variant Error**
+   - File: `src/marshal.rs:889`
+   - Note: `// TODO: When Pluto supports error enums, use WireError.UnknownVariant { type_name, index }`
+
+---
+
+## ✅ Recently Fixed
+
+1. **`?` Operator Crash in Void-Returning Functions**
+   - Fixed in commit `ec589633` (2026-02-10)
+   - File: `docs/completed/bugs/null-propagate-void-crash.md`
+
+2. **Lexer Bugs (BUG-LEX-001 to -008)**
+   - Fixed per `bugs/LEXER-SUMMARY.md`
+   - Hex literal validation
+   - CRLF line endings
+   - Multiple decimal points
+   - Span tracking documentation
+
+---
+
+## 📊 Priority Recommendations
+
+### Fix Immediately (Blocking Real Projects)
+1. **Nested field access bug** — blocks OOP-style code
+2. **Test runner duplicate IDs** — blocks multi-file test organization
+3. **Errors in closures** — blocks functional patterns with error handling
+
+### Fix Soon (Quality of Life)
+4. Trait method validation (prevent panic, give proper error)
+5. Trait impl validation (duplicate traits, type coercion)
+6. Empty array literals (common pattern)
+
+### Design/Implement When Ready
+7. String literals Phase 2 (breaking change, coordinate with users)
+8. RPC implementation (per phase plan)
+9. Structured concurrency Phase 2
+10. Compile-time reflection (experimental, high value for serialization)
+
+---
+
+## 📝 Notes
+
+- This document consolidates information from:
+  - `bugs/` directory
+  - `docs/design/open-questions.md`
+  - `#[ignore]` test annotations
+  - TODO/FIXME comments in source
+  - Design RFCs with phased implementation
+  - Test failure documentation
+
+- For detailed information on specific bugs, see the referenced files
+- This is a living document — update as bugs are fixed and features are added
