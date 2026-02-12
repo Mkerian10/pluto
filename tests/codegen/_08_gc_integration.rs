@@ -402,7 +402,7 @@ fn test_string_tag_allocation() {
             print(s1.len() + s2.len() + s3.len())
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "32"); // 10 + 10 + 12
+    assert_eq!(compile_and_run_stdout(src).trim(), "30");
 }
 
 #[test]

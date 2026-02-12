@@ -238,7 +238,6 @@ fn test_singleton_wiring() {
 }
 
 #[test]
-#[ignore] // Known limitation: apps cannot have regular fields, only bracket dependencies and methods
 fn test_app_main_call() {
     // Verify synthetic main correctly passes app pointer to app.main(self)
     let src = r#"
@@ -258,7 +257,6 @@ fn test_app_main_call() {
 }
 
 #[test]
-#[ignore] // Known limitation: app main must return void, cannot return exit code
 fn test_app_exit_code() {
     // Verify app main's exit code propagates correctly
     let src = r#"
@@ -292,7 +290,6 @@ fn test_scoped_class_instantiation() {
 }
 
 #[test]
-#[ignore] // Known limitation: Multiple bracket dependencies not supported, manual bracket instantiation doesn't exist
 fn test_scoped_singleton_injection() {
     // Verify scoped class injected into singleton
     let src = r#"
@@ -325,7 +322,6 @@ fn test_scoped_singleton_injection() {
 }
 
 #[test]
-#[ignore] // Known limitation: Cannot manually provide bracket dependencies at instantiation (Outer[i] {} syntax doesn't exist)
 fn test_scoped_nested_deps() {
     // Verify nested scoped dependencies
     let src = r#"
@@ -475,7 +471,6 @@ fn test_app_no_deps() {
 }
 
 #[test]
-#[ignore] // Known limitation: apps cannot have regular fields, only bracket dependencies and methods
 fn test_app_with_fields() {
     // Verify app can have regular fields (not just bracket deps)
     let src = r#"
@@ -529,7 +524,6 @@ fn test_deep_dependency_chain() {
 }
 
 #[test]
-#[ignore] // Known limitation: apps cannot have regular fields, only bracket dependencies and methods
 fn test_multiple_app_fields() {
     // Verify app with multiple regular fields
     let src = r#"
@@ -551,7 +545,6 @@ fn test_multiple_app_fields() {
 }
 
 #[test]
-#[ignore] // Known limitation: Cannot manually provide bracket dependencies at instantiation
 fn test_scoped_with_bracket_and_regular_fields() {
     // Verify scoped class with both bracket deps and regular fields
     let src = r#"

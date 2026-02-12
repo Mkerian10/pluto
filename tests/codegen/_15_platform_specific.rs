@@ -441,18 +441,18 @@ fn test_cross_platform_class_methods() {
     let src = r#"
         class Counter {
             value: int
+        }
 
-            fn increment(mut self) {
-                self.value = self.value + 1
-            }
+        fn Counter.increment(mut self) {
+            self.value = self.value + 1
+        }
 
-            fn get(self) int {
-                return self.value
-            }
+        fn Counter.get(self) int {
+            return self.value
         }
 
         fn main() {
-            let mut c = Counter { value: 0 }
+            let c = Counter { value: 0 }
             c.increment()
             c.increment()
             c.increment()

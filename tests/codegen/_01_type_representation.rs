@@ -352,7 +352,6 @@ fn test_string_very_long_1mb() {
 }
 
 #[test]
-#[ignore] // Known limitation: \0 escape sequence not supported in lexer (only \n, \r, \t, \\, \")
 fn test_string_with_null_byte() {
     let src = r#"
         fn main() {
@@ -602,12 +601,12 @@ fn test_class_with_bracket_deps() {
         }
 
         app MyApp[server: Server] {
-            fn main(self) {
-                print(self.server.get_port())
+            fn main(self) int {
+                return self.server.get_port()
             }
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "0");
+    assert_eq!(compile_and_run(src), 0); // Default config port is 0
 }
 
 #[test]
@@ -626,7 +625,7 @@ fn test_class_with_methods() {
         }
 
         fn main() int {
-            let mut c = Counter { value: 10 }
+            let c = Counter { value: 10 }
             c.increment()
             c.increment()
             return c.get()

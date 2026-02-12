@@ -737,7 +737,6 @@ fn main() int {
 }
 
 #[test]
-#[ignore] // Known limitation: Nested closures (closure returning closure) not supported by closure lifting pass
 fn test_closure_nested_captures() {
     let source = r#"
 fn main() int {

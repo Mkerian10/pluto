@@ -145,7 +145,6 @@ fn test_spawn_calling_spawn_nested() {
 }
 
 #[test]
-#[ignore] // Known limitation: Fixed-size array syntax [Type; size] not supported in Pluto
 fn test_spawn_hundred_tasks_concurrent() {
     let src = r#"
         fn identity(x: int) int {
@@ -338,9 +337,8 @@ fn test_channel_send_on_full_channel() {
             let (tx, rx) = chan<int>(2)
             tx.try_send(1)!
             tx.try_send(2)!
-            tx.try_send(3) catch {
-                print(-1)
-            }
+            let result = tx.try_send(3) catch -1
+            print(result)
         }
     "#;
     assert_eq!(compile_and_run_stdout(src).trim(), "-1");
