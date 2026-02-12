@@ -2,13 +2,13 @@
 
 **Status:** Draft
 **Date:** 2026-02-12
-**Supersedes:** Previous decision to reject the visitor pattern (documented in MEMORY.md)
+**Supersedes:** Previous decision to reject the visitor pattern (documented in prior analysis)
 
 ---
 
 ## 1. Problem Statement
 
-The Pluto compiler currently has **58 walker functions** across **12+ source files** that manually traverse the AST. Every walker implements its own `match` dispatch over `Expr` (28 variants), `Stmt` (16 variants), and `TypeExpr` (7 variants) from scratch.
+The Pluto compiler currently has **58 walker functions** across **12+ source files** that manually traverse the AST. Every walker implements its own `match` dispatch over `Expr` (29 variants), `Stmt` (17 variants), and `TypeExpr` (7 variants) from scratch.
 
 This was last evaluated when there were 7 walkers across 4 files. The compiler has grown 8x since then. The original revisit criteria have all been exceeded:
 
@@ -20,7 +20,7 @@ This was last evaluated when there were 7 walkers across 4 files. The compiler h
 
 ### 1.1 Current bugs caused by manual walking
 
-**Bug 1 — `monomorphize.rs::resolve_generic_te_in_expr`:** Uses `_ => {}` catch-all that silently skips `MapLit`, `SetLit`, `Cast`, and `StaticTraitCall`. These variants contain `TypeExpr` children that need generic resolution. A user writing `Map<T, V> {}` inside a generic function body will get unresolved types.
+**Bug 1 — `monomorphize.rs::resolve_generic_te_in_expr`:** Uses `_ => {}` catch-all that silently skips `MapLit`, `SetLit`, `StaticTraitCall`, and `QualifiedAccess`. These variants contain `TypeExpr` children that need generic resolution (MapLit and SetLit have `key_type`/`value_type`/`elem_type` fields; StaticTraitCall has `type_args`). A user writing `Map<T, V> {}` inside a generic function body will get unresolved types.
 
 **Bug 2 — `typeck/errors.rs::contains_propagate`:** Uses `_ => {}` catch-all that misses `StaticTraitCall`. If `StaticTraitCall` args contain `!` (propagate), the error system won't detect it, potentially producing incorrect error-handling enforcement.
 
@@ -77,6 +77,15 @@ use crate::span::Spanned;
 /// the default recursion after your custom logic. Omit the walk call to prune
 /// traversal at that node.
 pub trait Visitor: Sized {
+    fn visit_program(&mut self, program: &Program) {
+        walk_program(self, program);
+    }
+    fn visit_function(&mut self, func: &Spanned<Function>) {
+        walk_function(self, func);
+    }
+    fn visit_class(&mut self, class: &Spanned<ClassDecl>) {
+        walk_class(self, class);
+    }
     fn visit_block(&mut self, block: &Spanned<Block>) {
         walk_block(self, block);
     }
@@ -92,11 +101,42 @@ pub trait Visitor: Sized {
 }
 ```
 
+**Note on scope-sensitive passes:** Some conversions (like `collect_free_vars` or ambient rewriting) need enter/exit hooks or explicit context stacks to track scope information. The visitor design supports this through per-visitor state fields. For example, a free variable collector can maintain a `Vec<HashSet<String>>` representing the scope stack, pushing/popping in custom `visit_block` implementations while still calling `walk_block` for the recursion.
+
 ### 3.2 The `walk_*` functions (read-only)
 
 These are free functions, not methods on the trait. This is critical — it lets visitors call `walk_expr(self, expr)` inside their overridden `visit_expr` to get default recursion after custom logic.
 
 ```rust
+pub fn walk_program<V: Visitor>(v: &mut V, program: &Program) {
+    for func in &program.functions {
+        v.visit_function(func);
+    }
+    for class in &program.classes {
+        v.visit_class(class);
+    }
+    // ... other top-level items
+}
+
+pub fn walk_function<V: Visitor>(v: &mut V, func: &Spanned<Function>) {
+    for param in &func.node.params {
+        v.visit_type_expr(&param.ty);
+    }
+    if let Some(rt) = &func.node.return_type {
+        v.visit_type_expr(rt);
+    }
+    v.visit_block(&func.node.body);
+}
+
+pub fn walk_class<V: Visitor>(v: &mut V, class: &Spanned<ClassDecl>) {
+    for field in &class.node.fields {
+        v.visit_type_expr(&field.ty);
+    }
+    for method in &class.node.methods {
+        v.visit_function(method);
+    }
+}
+
 pub fn walk_block<V: Visitor>(v: &mut V, block: &Spanned<Block>) {
     for stmt in &block.node.stmts {
         v.visit_stmt(stmt);
@@ -255,7 +295,7 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
         // Closures
         Expr::Closure { params, return_type, body } => {
             for p in params {
-                if let Some(te) = &p.ty { v.visit_type_expr(te); }
+                v.visit_type_expr(&p.ty);
             }
             if let Some(rt) = return_type { v.visit_type_expr(rt); }
             v.visit_block(body);
@@ -269,6 +309,9 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
                 CatchHandler::Shorthand(fallback) => v.visit_expr(fallback),
             }
         }
+
+        // Qualified access
+        Expr::QualifiedAccess { .. } => {}
     }
 }
 
@@ -295,6 +338,15 @@ Structurally identical to `Visitor` but takes `&mut` references. Enables rewriti
 
 ```rust
 pub trait VisitMut: Sized {
+    fn visit_program_mut(&mut self, program: &mut Program) {
+        walk_program_mut(self, program);
+    }
+    fn visit_function_mut(&mut self, func: &mut Spanned<Function>) {
+        walk_function_mut(self, func);
+    }
+    fn visit_class_mut(&mut self, class: &mut Spanned<ClassDecl>) {
+        walk_class_mut(self, class);
+    }
     fn visit_block_mut(&mut self, block: &mut Spanned<Block>) {
         walk_block_mut(self, block);
     }
@@ -309,8 +361,9 @@ pub trait VisitMut: Sized {
     }
 }
 
-// walk_block_mut, walk_stmt_mut, walk_expr_mut, walk_type_expr_mut
-// follow the same structure as the read-only versions but with &mut references.
+// walk_program_mut, walk_function_mut, walk_class_mut, walk_block_mut,
+// walk_stmt_mut, walk_expr_mut, walk_type_expr_mut follow the same
+// structure as the read-only versions but with &mut references.
 ```
 
 ### 3.4 No `Fold` trait
@@ -330,9 +383,9 @@ When a new `Expr` or `Stmt` variant is added to the AST:
 
 **Net effect:** Adding a new variant goes from "update 24 files and hope you don't miss the catch-all ones" to "update `visit.rs` + the 5 core walkers that don't use the visitor."
 
-### 4.2 Bug class elimination
+### 4.2 Bug class reduction
 
-The four bugs identified in Section 1.1 are all instances of the same pattern: a catch-all arm silently dropping children that need processing. With visitors, these become structurally impossible — the default walk visits all children, and you can only *stop* visiting (by not calling `walk_*`), never accidentally *miss* visiting.
+The four bugs identified in Section 1.1 are all instances of the same pattern: a catch-all arm silently dropping children that need processing. With visitors, the likelihood of such bugs is significantly reduced — the default walk visits all children, and you can only *stop* visiting (by not calling `walk_*`), never accidentally *miss* visiting. However, this protection applies only to passes that use the visitor; manual walkers and improperly-overridden visitor methods can still have bugs. Additionally, any override that doesn't call the walk function can skip recursion, which may be intentional or a bug depending on context.
 
 ### 4.3 Code reduction
 
@@ -358,7 +411,7 @@ fn walk_expr(expr: &Spanned<Expr>, names: &mut HashSet<String>) {
         }
     }
 }
-fn walk_stmt(stmt: &Spanned<Stmt>, names: &mut HashSet<String>) { /* 16 arms */ }
+fn walk_stmt(stmt: &Spanned<Stmt>, names: &mut HashSet<String>) { /* 17 arms */ }
 fn walk_block(block: &Spanned<Block>, names: &mut HashSet<String>) { /* iterate stmts */ }
 ```
 
@@ -419,7 +472,7 @@ This is already what several passes do manually (e.g., monomorphize collects ins
 
 ### 5.1 No benefit for core compiler passes
 
-The following 9 walker functions have **>80% custom logic per arm** and would gain nothing from a visitor:
+The following 13 walker functions have **>60% custom logic per arm** or are tightly coupled to their surrounding context and would gain nothing from a visitor:
 
 | Walker | File | Custom logic | Reason |
 |--------|------|-------------|--------|
@@ -431,13 +484,14 @@ The following 9 walker functions have **>80% custom logic per arm** and would ga
 | `emit_stmt` | pretty.rs | ~90% | Every arm formats differently |
 | `emit_expr` | pretty.rs | ~90% | Every arm formats differently |
 | `emit_type_expr` | pretty.rs | ~90% | Every arm formats differently |
-| `collect_*_effects` | typeck/errors.rs | ~60% | High custom logic per arm |
+| `collect_*_effects` | typeck/errors.rs | ~60% | High custom logic per arm, tightly coupled to error inference |
+| `enforce_*` | typeck/errors.rs | ~50-60% | Tightly coupled to error system, per-arm validation logic |
 
 These should **remain as hand-written match blocks**. Forcing them through a visitor would add indirection without reducing complexity. They already use exhaustive matching (no catch-all), so they get Rust's compile-time exhaustiveness guarantee naturally.
 
 ### 5.2 No protection for walkers that don't use the visitor
 
-If a developer writes a new walker as a raw `match` block instead of implementing `Visitor`, they get no benefit. The visitor is opt-in. Discipline (code review, convention) is needed to ensure new passes use the visitor when appropriate.
+If a developer writes a new walker as a raw `match` block instead of implementing `Visitor`, they get no benefit. The visitor is opt-in. Discipline (code review, convention, and enforcement mechanisms — see Section 10) is needed to ensure new passes use the visitor when appropriate.
 
 ### 5.3 The substitute_in_* functions don't fit cleanly
 
@@ -464,9 +518,16 @@ Recommendation: Option 1 for now. If they become a maintenance problem, revisit.
 
 ### 6.3 Risk: Migration introduces regressions
 
-**Severity: Medium.** Converting 34 walker functions to visitor impls is a non-trivial migration. Each conversion could subtly change traversal order or miss a nuance of the original code.
+**Severity: High.** Converting 34 walker functions to visitor impls is a non-trivial migration. Each conversion could subtly change traversal order or miss a nuance of the original code. Particularly hazardous are passes with intentionally non-standard traversal patterns.
 
-**Mitigation:** Incremental migration (Section 7). Each conversion is its own PR with its own test validation. The existing integration test suite (500+ tests) provides coverage.
+**Specific hazard — non-standard traversal:** Some passes intentionally DON'T recurse into certain AST nodes. For example:
+- Spawn desugaring (`spawn.rs`) doesn't recurse into spawn closure bodies (see `desugar_expr` — Spawn arm has no recursion)
+- Error analysis (`typeck/errors.rs:389, 764`) treats spawn closures as opaque — errors don't propagate across spawn boundaries
+- Concurrency analysis (`concurrency.rs:380`) similarly skips spawn closure interiors
+
+For these passes, the visitor's default recursive walking would be WRONG. They would need to override `visit_expr` to explicitly NOT call `walk_expr` for spawn nodes. During migration, it's easy to forget this and accidentally enable recursion where it shouldn't happen.
+
+**Mitigation:** Incremental migration (Section 7). Each conversion is its own PR with its own test validation. The existing integration test suite (500+ tests) provides coverage. Document non-standard traversal requirements clearly before conversion.
 
 ### 6.4 Risk: walk_* functions become a bottleneck for unusual traversal needs
 
@@ -476,7 +537,7 @@ Recommendation: Option 1 for now. If they become a maintenance problem, revisit.
 
 **Severity: Medium.** Having both patterns in the codebase could confuse contributors about which to use.
 
-**Mitigation:** Clear guideline: use `Visitor`/`VisitMut` for passes where >50% of arms are pure recursion. Use manual `match` for passes where >50% of arms have custom logic. Document this in `CLAUDE.md` or the module docs for `visit.rs`.
+**Mitigation:** Clear guideline: use `Visitor`/`VisitMut` for passes where >50% of arms are pure recursion. Use manual `match` for passes where >50% of arms have custom logic. Document this in `CLAUDE.md` or the module docs for `visit.rs`. See Section 10 for enforcement mechanisms.
 
 ---
 
@@ -515,7 +576,7 @@ Convert walkers where >85% of code is pure recursion:
 
 ### Phase 3: Medium-value walkers
 
-Convert walkers with 60-85% pure recursion:
+Convert walkers with 60-85% pure recursion. Note that `collect_*_effects` and `enforce_*` are NOT included in this phase — they remain as manual walkers per Section 5.1:
 
 | Walker group | File | Functions replaced |
 |-------------|------|--------------------|
@@ -526,13 +587,11 @@ Convert walkers with 60-85% pure recursion:
 | `collect_*_accesses` | concurrency.rs | 2 → 1 impl |
 | `collect_deps_from_*` | derived.rs | 2 → 1 impl |
 | `lift_in_*` (closures) | closures.rs | 2 → 1 impl |
-| `enforce_*` | typeck/errors.rs | 2 → 1 impl |
-| `collect_*_effects` | typeck/errors.rs | 2 → 1 impl |
 | Narrow-purpose codegen utilities | codegen/lower.rs | 3 → 3 impls |
 
 ### Phase 4: Evaluate remaining walkers
 
-After Phases 1-3 are complete, re-evaluate the core walkers (`check_stmt`, `infer_expr`, `lower_stmt`, `lower_expr`, `emit_*`). These likely stay as manual matches, but the assessment should be documented.
+After Phases 1-3 are complete, re-evaluate the core walkers (`check_stmt`, `infer_expr`, `lower_stmt`, `lower_expr`, `emit_*`, `collect_*_effects`, `enforce_*`). These likely stay as manual matches, but the assessment should be documented.
 
 ---
 
@@ -548,7 +607,7 @@ The compiler roadmap includes several features that will add new AST variants: `
 
 ### 8.2 Tooling passes
 
-Future compiler tooling (LSP, formatter, refactoring tools, linters) will need to walk the AST. Each new tool would currently require implementing its own 28-arm match block. With the visitor, each tool is a `Visitor` impl with only the relevant arms overridden.
+Future compiler tooling (LSP, formatter, refactoring tools, linters) will need to walk the AST. Each new tool would currently require implementing its own 29-arm match block. With the visitor, each tool is a `Visitor` impl with only the relevant arms overridden.
 
 Example — a "find all references" tool:
 ```rust
@@ -603,7 +662,7 @@ Use a proc macro to auto-derive traversal. E.g., `#[derive(Visitable)]` on the A
 
 Instead of `visit_expr(&mut self, expr: &Spanned<Expr>)`, provide `visit_call(&mut self, ...)`, `visit_bin_op(&mut self, ...)`, etc. — one method per variant.
 
-**Rejected because:** This creates a 51-method trait (28 Expr + 16 Stmt + 7 TypeExpr), most of which would have empty default implementations. It also prevents visitors from matching on multiple variants in one method (e.g., "do something for both `Call` and `MethodCall`"). The coarser `visit_expr`/`visit_stmt`/`visit_type_expr` granularity is more ergonomic for the patterns we actually see in the codebase.
+**Rejected because:** This creates a 53-method trait (29 Expr + 17 Stmt + 7 TypeExpr), most of which would have empty default implementations. It also prevents visitors from matching on multiple variants in one method (e.g., "do something for both `Call` and `MethodCall`"). The coarser `visit_expr`/`visit_stmt`/`visit_type_expr` granularity is more ergonomic for the patterns we actually see in the codebase.
 
 ### 9.5 Use an existing crate (e.g., `ast_node`, `visit_diff`)
 
@@ -611,13 +670,49 @@ Instead of `visit_expr(&mut self, expr: &Spanned<Expr>)`, provide `visit_call(&m
 
 ---
 
-## 10. Decision Criteria
+## 10. Enforcement and Policy
+
+To maximize the benefits of the visitor pattern and prevent the accidental introduction of bugs, we need both technical enforcement and clear conventions.
+
+### 10.1 Technical enforcement
+
+**Proposal:** Add a Clippy lint or CI check that rejects catch-all patterns (`_ => {}`) on AST enum matches in walker functions. This can be implemented as:
+
+1. A custom Clippy lint (ideal, but requires proc-macro infrastructure)
+2. A simple grep-based CI check: `rg "Expr::|Stmt::" src/ | rg "_ =>"` fails the build with a message directing developers to either use exhaustive matches or the visitor pattern
+3. A more sophisticated AST-based check using `syn` in a build-time test
+
+**Rationale:** The root cause of all four bugs (Section 1.1) was catch-all patterns. Mechanically preventing them forces developers to either be explicit about which variants are no-ops (listing them individually) or use the visitor (which has no catch-all).
+
+### 10.2 Convention and documentation
+
+**`CLAUDE.md` addition:** Add a section on AST traversal that states:
+
+- New analysis/collection passes that walk the AST should use `Visitor` unless >50% of arms have custom logic
+- New rewriting passes should use `VisitMut` unless >50% of arms have custom logic
+- Core passes (typeck, codegen, pretty printer) remain as manual `match` blocks
+- Any walker that uses a catch-all pattern (`_ => {}`) must have a comment justifying why it's safe
+
+**`src/visit.rs` module docs:** Include usage examples, guidelines for when to use visitors vs. manual matches, and warnings about non-standard traversal (spawn closures, error boundaries).
+
+### 10.3 Code review checklist
+
+PRs that add new walker functions should be reviewed with these questions:
+
+1. Does this walker use a catch-all pattern? If so, is it justified?
+2. Is >50% of this walker pure recursion? If so, should it use the visitor pattern?
+3. Does this walker have non-standard traversal needs (skipping spawn closures, etc.)? If so, is it documented?
+
+---
+
+## 11. Decision Criteria
 
 This RFC should be adopted if:
 
 1. The team agrees that 58 walkers with 4 known bugs justifies the infrastructure cost
 2. The incremental migration plan (Phase 0-3) is acceptable — no big-bang rewrite required
-3. The explicit carve-out for core passes (codegen, typeck, pretty printer) addresses the concern that the visitor forces abstraction where it doesn't help
+3. The explicit carve-out for core passes (codegen, typeck, pretty printer, error system) addresses the concern that the visitor forces abstraction where it doesn't help
+4. The enforcement mechanisms (Section 10) are acceptable as a way to prevent future bugs
 
 This RFC should be rejected if:
 
