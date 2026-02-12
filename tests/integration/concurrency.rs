@@ -674,10 +674,10 @@ fn main() {
     let t18 = spawn compute(18)
     let t19 = spawn compute(19)
     let t20 = spawn compute(20)
-    let sum = t1.get() + t2.get() + t3.get() + t4.get() + t5.get()
-        + t6.get() + t7.get() + t8.get() + t9.get() + t10.get()
-        + t11.get() + t12.get() + t13.get() + t14.get() + t15.get()
-        + t16.get() + t17.get() + t18.get() + t19.get() + t20.get()
+    let sum = t1.get() + t2.get() + t3.get() + t4.get() + t5.get() +
+        t6.get() + t7.get() + t8.get() + t9.get() + t10.get() +
+        t11.get() + t12.get() + t13.get() + t14.get() + t15.get() +
+        t16.get() + t17.get() + t18.get() + t19.get() + t20.get()
     print(sum)
 }
 "#);
