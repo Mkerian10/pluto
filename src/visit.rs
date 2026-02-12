@@ -6,7 +6,20 @@
 //! - `Visitor` — immutable reference traversal (for analysis/collection passes)
 //! - `VisitMut` — mutable reference traversal (for in-place rewriting passes)
 //!
-//! ## Usage
+//! ## When to Use
+//!
+//! **Use visitor pattern** for passes where >50% of match arms would be pure structural recursion:
+//! - Collecting identifiers, accesses, or other AST patterns
+//! - Counting or analyzing specific node types
+//! - In-place AST transformations with focused changes
+//!
+//! **Use manual `match` blocks** for core compiler passes where >50% of arms have domain-specific logic:
+//! - Type checking (`infer_expr`, `check_stmt`)
+//! - Code generation (`lower_expr`, `lower_stmt`)
+//! - Pretty printing (`emit_expr`, `emit_stmt`)
+//! - Error analysis (when most arms have custom error handling logic)
+//!
+//! ## Basic Usage
 //!
 //! Implement the visitor trait for your pass, overriding only the methods you need.
 //! Call the corresponding `walk_*` function inside your override to get default recursion.
@@ -31,10 +44,119 @@
 //! }
 //! ```
 //!
-//! ## When to Use
+//! ## Common Patterns
 //!
-//! Use `Visitor`/`VisitMut` for passes where >50% of match arms would be pure recursion.
-//! Use manual `match` blocks for passes where >50% of arms have custom logic (like codegen, typeck core).
+//! ### Scope Tracking
+//!
+//! Track variable scopes by pushing/popping state in block and function visitors:
+//!
+//! ```rust
+//! struct ScopeTracker {
+//!     scopes: Vec<HashSet<String>>,
+//! }
+//!
+//! impl Visitor for ScopeTracker {
+//!     fn visit_block(&mut self, block: &Spanned<Block>) {
+//!         self.scopes.push(HashSet::new());
+//!         walk_block(self, block);
+//!         self.scopes.pop();
+//!     }
+//!
+//!     fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+//!         if let Stmt::Let { name, .. } = &stmt.node {
+//!             self.scopes.last_mut().unwrap().insert(name.node.clone());
+//!         }
+//!         walk_stmt(self, stmt);
+//!     }
+//! }
+//! ```
+//!
+//! ### Error Collection
+//!
+//! Collect error information during analysis passes:
+//!
+//! ```rust
+//! struct ErrorCollector {
+//!     errors: Vec<String>,
+//! }
+//!
+//! impl Visitor for ErrorCollector {
+//!     fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+//!         if let Stmt::Raise { error_name, .. } = &stmt.node {
+//!             self.errors.push(error_name.node.clone());
+//!         }
+//!         walk_stmt(self, stmt);
+//!     }
+//! }
+//! ```
+//!
+//! ### Pruning/Early Termination
+//!
+//! Skip recursion into certain subtrees by omitting the `walk_*` call:
+//!
+//! ```rust
+//! impl Visitor for MyVisitor {
+//!     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+//!         match &expr.node {
+//!             Expr::Spawn { .. } => {
+//!                 // Don't recurse into spawn bodies (opacity boundary)
+//!                 return;
+//!             }
+//!             _ => walk_expr(self, expr), // Normal recursion
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! ### In-Place Rewriting
+//!
+//! Use `VisitMut` for transformations that modify the AST:
+//!
+//! ```rust
+//! use crate::visit::{VisitMut, walk_expr_mut};
+//!
+//! struct IntRewriter;
+//!
+//! impl VisitMut for IntRewriter {
+//!     fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+//!         if let Expr::IntLit(ref mut n) = &mut expr.node {
+//!             *n = *n * 2;  // Double all integer literals
+//!         }
+//!         walk_expr_mut(self, expr);
+//!     }
+//! }
+//! ```
+//!
+//! ## Special Cases
+//!
+//! ### Spawn Opacity
+//!
+//! Spawn expressions create opacity boundaries — their closure bodies are not visible
+//! to error analysis. If your pass needs spawn opacity, don't recurse into `Expr::Spawn`.
+//!
+//! ### String Interpolation
+//!
+//! String interpolation parts can contain both literals and expressions. Use
+//! `visit_string_interp_part` to handle both cases:
+//!
+//! ```rust
+//! fn visit_string_interp_part(&mut self, part: &StringInterpPart) {
+//!     if let StringInterpPart::Expr(expr) = part {
+//!         self.visit_expr(expr);
+//!     }
+//! }
+//! ```
+//!
+//! ## Walk Helper Functions
+//!
+//! The module provides `walk_*` functions for each AST node type:
+//! - `walk_expr` / `walk_expr_mut` — expressions
+//! - `walk_stmt` / `walk_stmt_mut` — statements
+//! - `walk_type_expr` / `walk_type_expr_mut` — type expressions
+//! - `walk_block` / `walk_block_mut` — statement blocks
+//!
+//! These implement the default recursive traversal. Call them from your visitor
+//! implementations to get structural recursion. Omit the call to prune the traversal.
 
 use crate::parser::ast::*;
 use crate::span::Spanned;
