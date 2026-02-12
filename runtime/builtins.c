@@ -236,9 +236,12 @@ static void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) 
             if (stopped > 0) gc_stw_resume_threads();
         } else {
             // Another thread is collecting - wait for it to finish
+            // Note: Cannot use usleep() here because SA_RESTART in signal handler
+            // would cause usleep() to restart when SIGUSR1 arrives, creating deadlock.
             pthread_mutex_unlock(&gc_mutex);
             while (atomic_load(&gc_collecting) == 1) {
-                usleep(100);  // Sleep 100 microseconds to avoid spinning
+                // Yield CPU to let GC thread make progress
+                __sync_synchronize();  // memory barrier
             }
             pthread_mutex_lock(&gc_mutex);
         }
