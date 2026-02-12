@@ -247,30 +247,32 @@
       </div>
     </div>
 
-    <div class="controls">
-      <input class="search-box search" placeholder="Search files..." type="text">
-    </div>
+    <div id="coverage-list">
+      <div class="controls">
+        <input class="search-box search" placeholder="Search files..." type="text">
+      </div>
 
-    <div class="table-container">
-      <table id="coverage-table">
-        <thead>
-          <tr>
-            <th class="sort" data-sort="filename">File</th>
-            <th class="sort" data-sort="line-percent">Lines</th>
-            <th class="sort" data-sort="line-count">Lines Covered</th>
-            <th class="sort" data-sort="function-percent">Functions</th>
-            <th class="sort" data-sort="function-count">Functions Covered</th>
-            <th class="sort" data-sort="region-percent">Regions</th>
-            <th class="sort" data-sort="region-count">Regions Covered</th>
-          </tr>
-        </thead>
-        <tbody class="list">
-          <!-- Populated by JavaScript -->
-        </tbody>
-      </table>
-      <div class="no-results" style="display: none;">
-        <div class="no-results-icon">🔍</div>
-        <p>No files found matching your search</p>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th class="sort" data-sort="filename">File</th>
+              <th class="sort" data-sort="line-percent">Lines</th>
+              <th class="sort" data-sort="line-count">Lines Covered</th>
+              <th class="sort" data-sort="function-percent">Functions</th>
+              <th class="sort" data-sort="function-count">Functions Covered</th>
+              <th class="sort" data-sort="region-percent">Regions</th>
+              <th class="sort" data-sort="region-count">Regions Covered</th>
+            </tr>
+          </thead>
+          <tbody class="list">
+            <!-- Populated by JavaScript -->
+          </tbody>
+        </table>
+        <div class="no-results" style="display: none;">
+          <div class="no-results-icon">🔍</div>
+          <p>No files found matching your search</p>
+        </div>
       </div>
     </div>
   </div>
@@ -354,7 +356,7 @@
           }
         };
 
-        const coverageList = new List('coverage-table', options, items);
+        const coverageList = new List('coverage-list', options, items);
 
         // Show/hide no results message
         coverageList.on('searchComplete', function() {
