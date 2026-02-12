@@ -327,7 +327,25 @@
 
 ## ✅ Recently Fixed
 
-1. **Duplicate Trait in Impl List** (Bug #6)
+1. **GC Soundness Trilogy** (Concurrency + GC Bugs)
+   - **GC Initiation Race** (Bug #4)
+     - Fixed in commit (previous session, 2026-02-12)
+     - Added atomic CAS to prevent multiple concurrent GC initiations
+     - Eliminated race where multiple threads could start GC simultaneously
+   - **Stop-The-World Timeout** (Bug #5)
+     - Fixed in commit `0e50f60` (2026-02-12)
+     - Replaced signal-based STW (1s timeout) with safepoint polling (no timeout)
+     - Injected safepoint calls at all loop back-edges
+     - Made `task.get()` interruptible with timed wait + safepoint checks
+     - Eliminated use-after-free crashes from premature GC resumption
+   - **TaskSync Destruction Race** (Bug #6 - Not a Bug)
+     - Verified in commit `0e50f60` (2026-02-12)
+     - GC correctly scans all worker thread stacks as roots
+     - Task pointers on worker stacks keep task objects alive
+     - No memory safety issue - working as designed
+     - See `BUG6_ANALYSIS.md` for detailed explanation
+
+2. **Duplicate Trait in Impl List**
    - Fixed in PR #48 (2026-02-12)
    - Added validation to reject duplicate traits in impl list
 
