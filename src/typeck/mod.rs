@@ -933,4 +933,28 @@ mod tests {
     fn select_recv_binding_type_infers() {
         check("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        x = r.recv() {\n            let y: int = x\n        }\n    }\n}").unwrap();
     }
+
+    // Phase 4: Scope Blocks Typeck Tests (4 new tests)
+
+    #[test]
+    fn scope_seed_type_checks() {
+        check("scoped class DB {}\nfn main() {\n    scope(DB {}) |db: DB| {\n    }\n}").unwrap();
+    }
+
+    #[test]
+    fn scope_binding_type_checks() {
+        check("scoped class DB {}\nscoped class Svc[db: DB] {}\nfn main() {\n    scope(DB {}) |svc: Svc| {\n    }\n}").unwrap();
+    }
+
+    #[test]
+    fn scope_undefined_seed_rejected() {
+        let result = check("fn main() {\n    scope(undefined) |x: int| {\n    }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn scope_binding_non_class_rejected() {
+        let result = check("fn main() {\n    let x = 42\n    scope(x) |y: int| {\n    }\n}");
+        assert!(result.is_err());
+    }
 }

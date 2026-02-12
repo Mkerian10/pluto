@@ -4762,4 +4762,59 @@ mod tests {
             _ => panic!("expected select statement"),
         }
     }
+
+    // Phase 4: Scope Blocks Parser Tests (4 new tests)
+
+    #[test]
+    fn parse_scope_basic() {
+        let prog = parse("scoped class DB {}\nfn main() {\n    scope(DB {}) |db: DB| {\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Scope { seeds, bindings, .. } => {
+                assert_eq!(seeds.len(), 1);
+                assert_eq!(bindings.len(), 1);
+            }
+            _ => panic!("expected scope statement"),
+        }
+    }
+
+    #[test]
+    fn parse_scope_multiple_seeds() {
+        let prog = parse("scoped class DB {}\nscoped class Cache {}\nfn main() {\n    scope(DB {}, Cache {}) |db: DB, cache: Cache| {\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Scope { seeds, bindings, .. } => {
+                assert_eq!(seeds.len(), 2);
+                assert_eq!(bindings.len(), 2);
+            }
+            _ => panic!("expected scope statement"),
+        }
+    }
+
+    #[test]
+    fn parse_scope_with_bindings() {
+        let prog = parse("scoped class DB {}\nscoped class Svc {}\nfn main() {\n    scope(DB {}) |svc: Svc| {\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Scope { bindings, .. } => {
+                assert_eq!(bindings.len(), 1);
+                assert_eq!(bindings[0].name.node, "svc");
+            }
+            _ => panic!("expected scope statement"),
+        }
+    }
+
+    #[test]
+    fn parse_scope_multiple_bindings() {
+        let prog = parse("scoped class DB {}\nscoped class Svc {}\nscoped class Cache {}\nfn main() {\n    scope(DB {}) |svc: Svc, cache: Cache| {\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Scope { bindings, .. } => {
+                assert_eq!(bindings.len(), 2);
+                assert_eq!(bindings[0].name.node, "svc");
+                assert_eq!(bindings[1].name.node, "cache");
+            }
+            _ => panic!("expected scope statement"),
+        }
+    }
 }
