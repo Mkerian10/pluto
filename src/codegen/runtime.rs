@@ -147,6 +147,7 @@ impl RuntimeRegistry {
         // GC
         reg.declare(module, "__pluto_gc_init", &[], &[])?;
         reg.declare(module, "__pluto_gc_heap_size", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_safepoint", &[], &[])?;
 
         // Concurrency
         reg.declare(module, "__pluto_task_spawn", &[types::I64], &[types::I64])?;
