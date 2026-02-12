@@ -1,0 +1,33 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Compiler
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build compiler
+        run: cargo build --verbose
+
+      - name: Check for warnings
+        run: cargo build 2>&1 | tee build.log
+
+      - name: Display build info
+        run: |
+          ls -lh target/debug/plutoc
+          echo "✅ Compiler built successfully on ${{ matrix.os }}"
