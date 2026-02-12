@@ -829,4 +829,28 @@ mod tests {
     fn for_loop_range_type_checks() {
         check("fn main() {\n    for i in 0..10 {\n        print(i)\n    }\n}").unwrap();
     }
+
+    // Phase 1: String Interpolation Typeck Tests (4 new tests)
+
+    #[test]
+    fn string_interp_type_checks_expressions() {
+        check("fn main() {\n    let x = 42\n    let s = \"value: {x}\"\n}").unwrap();
+    }
+
+    #[test]
+    fn string_interp_non_string_expr_ok() {
+        check("fn main() {\n    let x = 42\n    let s = \"int: {x}\"\n}").unwrap();
+    }
+
+    #[test]
+    fn string_interp_undefined_var_rejected() {
+        let result = check("fn main() {\n    let s = \"value: {undefined}\"\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn string_interp_type_mismatch_in_expr() {
+        let result = check("fn main() {\n    let s = \"sum: {1 + \\\"str\\\"}\"\n}");
+        assert!(result.is_err());
+    }
 }

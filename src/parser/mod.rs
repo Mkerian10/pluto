@@ -4507,4 +4507,80 @@ mod tests {
             _ => panic!("expected for statement"),
         }
     }
+
+    // Phase 1: String Interpolation Tests (3 new tests)
+
+    #[test]
+    fn parse_string_interp_multiple_expressions() {
+        let prog = parse("fn main() {\n    let s = \"x={x}, y={y}, z={z}\"\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::StringInterp { parts } => {
+                        // Should have 6 parts: "x=", expr, ", y=", expr, ", z=", expr
+                        assert_eq!(parts.len(), 6);
+                        assert!(matches!(&parts[0], StringInterpPart::Lit(s) if s == "x="));
+                        assert!(matches!(&parts[1], StringInterpPart::Expr(_)));
+                        assert!(matches!(&parts[2], StringInterpPart::Lit(s) if s == ", y="));
+                        assert!(matches!(&parts[3], StringInterpPart::Expr(_)));
+                        assert!(matches!(&parts[4], StringInterpPart::Lit(s) if s == ", z="));
+                        assert!(matches!(&parts[5], StringInterpPart::Expr(_)));
+                    }
+                    _ => panic!("expected string interp, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_string_interp_nested_calls() {
+        let prog = parse("fn main() {\n    let s = \"result: {foo(1, 2)}\"\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::StringInterp { parts } => {
+                        assert_eq!(parts.len(), 2);
+                        assert!(matches!(&parts[0], StringInterpPart::Lit(s) if s == "result: "));
+                        // Verify the expression is a Call
+                        match &parts[1] {
+                            StringInterpPart::Expr(expr) => {
+                                assert!(matches!(expr.node, Expr::Call { .. }));
+                            }
+                            _ => panic!("expected expr in interpolation"),
+                        }
+                    }
+                    _ => panic!("expected string interp, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_string_interp_complex_expr() {
+        let prog = parse("fn main() {\n    let s = \"sum: {x + y * 2}\"\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::StringInterp { parts } => {
+                        assert_eq!(parts.len(), 2);
+                        assert!(matches!(&parts[0], StringInterpPart::Lit(s) if s == "sum: "));
+                        // Verify the expression is a BinOp
+                        match &parts[1] {
+                            StringInterpPart::Expr(expr) => {
+                                assert!(matches!(expr.node, Expr::BinOp { .. }));
+                            }
+                            _ => panic!("expected expr in interpolation"),
+                        }
+                    }
+                    _ => panic!("expected string interp, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
 }
