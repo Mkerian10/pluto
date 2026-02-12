@@ -4863,3 +4863,260 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
 fn byte_to_line(source: &str, offset: usize) -> usize {
     source[..offset.min(source.len())].bytes().filter(|b| *b == b'\n').count() + 1
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cranelift_codegen::ir::types;
+
+    // ===== needs_deep_copy tests =====
+
+    #[test]
+    fn test_needs_deep_copy_primitives() {
+        assert!(!needs_deep_copy(&PlutoType::Int));
+        assert!(!needs_deep_copy(&PlutoType::Float));
+        assert!(!needs_deep_copy(&PlutoType::Bool));
+        assert!(!needs_deep_copy(&PlutoType::Byte));
+        assert!(!needs_deep_copy(&PlutoType::Void));
+        assert!(!needs_deep_copy(&PlutoType::Range));
+    }
+
+    #[test]
+    fn test_needs_deep_copy_string() {
+        // Strings are immutable, shared by reference
+        assert!(!needs_deep_copy(&PlutoType::String));
+    }
+
+    #[test]
+    fn test_needs_deep_copy_concurrency_types() {
+        assert!(!needs_deep_copy(&PlutoType::Sender(Box::new(PlutoType::Int))));
+        assert!(!needs_deep_copy(&PlutoType::Receiver(Box::new(PlutoType::Int))));
+        assert!(!needs_deep_copy(&PlutoType::Task(Box::new(PlutoType::Int))));
+        assert!(!needs_deep_copy(&PlutoType::Stream(Box::new(PlutoType::Int))));
+    }
+
+    #[test]
+    fn test_needs_deep_copy_error() {
+        assert!(!needs_deep_copy(&PlutoType::Error));
+    }
+
+    #[test]
+    fn test_needs_deep_copy_heap_types() {
+        assert!(needs_deep_copy(&PlutoType::Class("User".to_string())));
+        assert!(needs_deep_copy(&PlutoType::Array(Box::new(PlutoType::Int))));
+        assert!(needs_deep_copy(&PlutoType::Map(Box::new(PlutoType::String), Box::new(PlutoType::Int))));
+        assert!(needs_deep_copy(&PlutoType::Set(Box::new(PlutoType::Int))));
+        assert!(needs_deep_copy(&PlutoType::Enum("Option".to_string())));
+        assert!(needs_deep_copy(&PlutoType::Bytes));
+        assert!(needs_deep_copy(&PlutoType::Trait("Printable".to_string())));
+    }
+
+    #[test]
+    fn test_needs_deep_copy_closures() {
+        assert!(needs_deep_copy(&PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::String))));
+    }
+
+    #[test]
+    fn test_needs_deep_copy_nullable() {
+        assert!(!needs_deep_copy(&PlutoType::Nullable(Box::new(PlutoType::Int))));
+        assert!(!needs_deep_copy(&PlutoType::Nullable(Box::new(PlutoType::String))));
+        assert!(needs_deep_copy(&PlutoType::Nullable(Box::new(PlutoType::Array(Box::new(PlutoType::Int))))));
+        assert!(needs_deep_copy(&PlutoType::Nullable(Box::new(PlutoType::Class("User".to_string())))));
+    }
+
+    #[test]
+    fn test_needs_deep_copy_type_param() {
+        assert!(!needs_deep_copy(&PlutoType::TypeParam("T".to_string())));
+    }
+
+    #[test]
+    fn test_needs_deep_copy_generic_instance() {
+        assert!(!needs_deep_copy(&PlutoType::GenericInstance(
+            crate::typeck::types::GenericKind::Class,
+            "Pair".to_string(),
+            vec![PlutoType::Int, PlutoType::String],
+        )));
+    }
+
+    // ===== pluto_to_cranelift tests =====
+
+    #[test]
+    fn test_pluto_to_cranelift_primitives() {
+        assert_eq!(pluto_to_cranelift(&PlutoType::Int), types::I64);
+        assert_eq!(pluto_to_cranelift(&PlutoType::Float), types::F64);
+        assert_eq!(pluto_to_cranelift(&PlutoType::Bool), types::I8);
+        assert_eq!(pluto_to_cranelift(&PlutoType::Byte), types::I8);
+        assert_eq!(pluto_to_cranelift(&PlutoType::Void), types::I64);
+    }
+
+    #[test]
+    fn test_pluto_to_cranelift_heap_types() {
+        assert_eq!(pluto_to_cranelift(&PlutoType::String), types::I64);
+        assert_eq!(pluto_to_cranelift(&PlutoType::Class("User".to_string())), types::I64);
+        assert_eq!(pluto_to_cranelift(&PlutoType::Array(Box::new(PlutoType::Int))), types::I64);
+        assert_eq!(pluto_to_cranelift(&PlutoType::Trait("Printable".to_string())), types::I64);
+        assert_eq!(pluto_to_cranelift(&PlutoType::Enum("Option".to_string())), types::I64);
+        assert_eq!(pluto_to_cranelift(&PlutoType::Bytes), types::I64);
+    }
+
+    #[test]
+    fn test_pluto_to_cranelift_closures() {
+        assert_eq!(
+            pluto_to_cranelift(&PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::String))),
+            types::I64
+        );
+    }
+
+    #[test]
+    fn test_pluto_to_cranelift_collections() {
+        assert_eq!(
+            pluto_to_cranelift(&PlutoType::Map(Box::new(PlutoType::String), Box::new(PlutoType::Int))),
+            types::I64
+        );
+        assert_eq!(pluto_to_cranelift(&PlutoType::Set(Box::new(PlutoType::Int))), types::I64);
+    }
+
+    #[test]
+    fn test_pluto_to_cranelift_concurrency() {
+        assert_eq!(pluto_to_cranelift(&PlutoType::Task(Box::new(PlutoType::Int))), types::I64);
+        assert_eq!(pluto_to_cranelift(&PlutoType::Sender(Box::new(PlutoType::Int))), types::I64);
+        assert_eq!(pluto_to_cranelift(&PlutoType::Receiver(Box::new(PlutoType::Int))), types::I64);
+        assert_eq!(pluto_to_cranelift(&PlutoType::Stream(Box::new(PlutoType::Int))), types::I64);
+    }
+
+    #[test]
+    fn test_pluto_to_cranelift_error() {
+        assert_eq!(pluto_to_cranelift(&PlutoType::Error), types::I64);
+    }
+
+    #[test]
+    fn test_pluto_to_cranelift_nullable() {
+        assert_eq!(pluto_to_cranelift(&PlutoType::Nullable(Box::new(PlutoType::Int))), types::I64);
+    }
+
+    #[test]
+    fn test_pluto_to_cranelift_range() {
+        assert_eq!(pluto_to_cranelift(&PlutoType::Range), types::I64);
+    }
+
+    #[test]
+    #[should_panic(expected = "ICE: generic type parameter")]
+    fn test_pluto_to_cranelift_type_param_panics() {
+        pluto_to_cranelift(&PlutoType::TypeParam("T".to_string()));
+    }
+
+    #[test]
+    #[should_panic(expected = "ICE: generic instance")]
+    fn test_pluto_to_cranelift_generic_instance_panics() {
+        pluto_to_cranelift(&PlutoType::GenericInstance(
+            crate::typeck::types::GenericKind::Class,
+            "Pair".to_string(),
+            vec![PlutoType::Int, PlutoType::String],
+        ));
+    }
+
+    // ===== key_type_tag tests =====
+
+    #[test]
+    fn test_key_type_tag_int() {
+        assert_eq!(key_type_tag(&PlutoType::Int), 0);
+    }
+
+    #[test]
+    fn test_key_type_tag_float() {
+        assert_eq!(key_type_tag(&PlutoType::Float), 1);
+    }
+
+    #[test]
+    fn test_key_type_tag_bool() {
+        assert_eq!(key_type_tag(&PlutoType::Bool), 2);
+    }
+
+    #[test]
+    fn test_key_type_tag_string() {
+        assert_eq!(key_type_tag(&PlutoType::String), 3);
+    }
+
+    #[test]
+    fn test_key_type_tag_byte() {
+        // Byte hashes as integer
+        assert_eq!(key_type_tag(&PlutoType::Byte), 0);
+    }
+
+    #[test]
+    fn test_key_type_tag_enum() {
+        assert_eq!(key_type_tag(&PlutoType::Enum("Color".to_string())), 4);
+    }
+
+    #[test]
+    fn test_key_type_tag_fallback() {
+        // Other types fall back to 0
+        assert_eq!(key_type_tag(&PlutoType::Array(Box::new(PlutoType::Int))), 0);
+        assert_eq!(key_type_tag(&PlutoType::Class("User".to_string())), 0);
+    }
+
+    // ===== byte_to_line tests =====
+
+    #[test]
+    fn test_byte_to_line_first_line() {
+        assert_eq!(byte_to_line("hello", 0), 1);
+        assert_eq!(byte_to_line("hello", 3), 1);
+    }
+
+    #[test]
+    fn test_byte_to_line_multiple_lines() {
+        let source = "line1\nline2\nline3";
+        assert_eq!(byte_to_line(source, 0), 1);  // 'l' in line1
+        assert_eq!(byte_to_line(source, 5), 1);  // '\n' after line1
+        assert_eq!(byte_to_line(source, 6), 2);  // 'l' in line2
+        assert_eq!(byte_to_line(source, 11), 2); // '\n' after line2
+        assert_eq!(byte_to_line(source, 12), 3); // 'l' in line3
+    }
+
+    #[test]
+    fn test_byte_to_line_empty_string() {
+        assert_eq!(byte_to_line("", 0), 1);
+    }
+
+    #[test]
+    fn test_byte_to_line_offset_beyond_end() {
+        let source = "hello\nworld";
+        assert_eq!(byte_to_line(source, 100), 2);
+    }
+
+    #[test]
+    fn test_byte_to_line_crlf() {
+        let source = "line1\r\nline2\r\nline3";
+        // CRLF has two bytes but only one '\n'
+        assert_eq!(byte_to_line(source, 0), 1);
+        assert_eq!(byte_to_line(source, 6), 1);  // '\r'
+        assert_eq!(byte_to_line(source, 7), 2);  // after '\n'
+    }
+
+    #[test]
+    fn test_byte_to_line_only_newlines() {
+        let source = "\n\n\n";
+        assert_eq!(byte_to_line(source, 0), 1);
+        assert_eq!(byte_to_line(source, 1), 2);
+        assert_eq!(byte_to_line(source, 2), 3);
+        assert_eq!(byte_to_line(source, 3), 4);
+    }
+
+    #[test]
+    fn test_byte_to_line_trailing_newline() {
+        let source = "hello\n";
+        assert_eq!(byte_to_line(source, 0), 1);
+        assert_eq!(byte_to_line(source, 5), 1);
+        assert_eq!(byte_to_line(source, 6), 2);
+    }
+
+    #[test]
+    fn test_byte_to_line_multiline_document() {
+        let source = "fn main() {\n    print(\"hello\")\n}\n";
+        assert_eq!(byte_to_line(source, 0), 1);  // 'f' in fn
+        assert_eq!(byte_to_line(source, 11), 1); // '\n' after {
+        assert_eq!(byte_to_line(source, 12), 2); // space before print
+        assert_eq!(byte_to_line(source, 31), 3); // '}' - has 2 newlines before it
+        assert_eq!(byte_to_line(source, 32), 3); // '\n' after }
+    }
+}
