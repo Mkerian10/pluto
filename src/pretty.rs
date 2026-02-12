@@ -1308,6 +1308,14 @@ impl PrettyPrinter {
             Expr::NoneLit => {
                 self.write("none");
             }
+            Expr::QualifiedAccess { segments } => {
+                for (i, seg) in segments.iter().enumerate() {
+                    if i > 0 {
+                        self.write(".");
+                    }
+                    self.write(&seg.node);
+                }
+            }
             Expr::NullPropagate { expr } => {
                 self.emit_expr(&expr.node, 25);
                 self.write("?");

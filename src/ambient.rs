@@ -454,6 +454,9 @@ fn rewrite_expr(expr: &mut Expr, span: Span, active: &HashSet<String>) {
                 rewrite_expr(&mut arg.node, arg.span, active);
             }
         }
+        Expr::QualifiedAccess { .. } => {
+            // Empty arm - QualifiedAccess should be resolved by module flattening before ambient DI
+        }
         // Literals and non-rewritable expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}

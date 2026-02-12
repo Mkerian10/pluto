@@ -118,6 +118,12 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
         // None literal — allowed (useful for nullable comparisons in contracts)
         Expr::NoneLit => Ok(()),
 
+        // Qualified access — TODO: evaluate if should be allowed
+        Expr::QualifiedAccess { .. } => Err(CompileError::syntax(
+            "qualified access is not allowed in contract expressions",
+            span,
+        )),
+
         // Static trait calls — rejected (might not be pure)
         Expr::StaticTraitCall { .. } => Err(CompileError::syntax(
             "static trait calls are not allowed in contract expressions",

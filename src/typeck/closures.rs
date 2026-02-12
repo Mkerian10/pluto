@@ -327,6 +327,12 @@ fn collect_free_vars_expr(
                 collect_free_vars_expr(&arg.node, param_names, outer_depth, env, captures, seen);
             }
         }
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before closure analysis. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
+        }
         // Literals and other non-capturing expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) |
         Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}

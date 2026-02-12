@@ -1100,7 +1100,7 @@ fn rewrite_expr_for_module(expr: &mut Expr, module_name: &str, module_prog: &Pro
             }
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::Ident(_) | Expr::NoneLit => {}
+        | Expr::Ident(_) | Expr::NoneLit | Expr::QualifiedAccess { .. } => {}
     }
 }
 
@@ -1487,7 +1487,7 @@ fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
             }
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::Ident(_) | Expr::NoneLit => {}
+        | Expr::Ident(_) | Expr::NoneLit | Expr::QualifiedAccess { .. } => {}
     }
     let _ = span;
 }

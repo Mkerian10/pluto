@@ -236,6 +236,9 @@ fn desugar_expr(expr: &mut Expr, span: Span) {
                 desugar_expr(&mut arg.node, arg.span);
             }
         }
+        Expr::QualifiedAccess { .. } => {
+            // Empty arm - QualifiedAccess should be resolved by module flattening before spawn desugaring
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. }
         | Expr::NoneLit => {}

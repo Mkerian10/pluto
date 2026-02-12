@@ -4128,4 +4128,147 @@ mod tests {
         let result = parser.parse_program();
         assert!(result.is_err());
     }
+
+    // Nullable types parser tests
+
+    #[test]
+    fn parse_nullable_type_expr() {
+        let prog = parse("fn foo(x: int?) int? { return x }");
+        let f = &prog.functions[0].node;
+        assert_eq!(f.name.node, "foo");
+        assert_eq!(f.params.len(), 1);
+        // Verify param type is Nullable(Int)
+        match &f.params[0].ty.node {
+            TypeExpr::Nullable(inner) => {
+                assert!(matches!(inner.node, TypeExpr::Named(ref name) if name == "int"));
+            }
+            _ => panic!("expected nullable type for param"),
+        }
+        // Verify return type is Nullable(Int)
+        let ret_type = f.return_type.as_ref().unwrap();
+        match &ret_type.node {
+            TypeExpr::Nullable(inner) => {
+                assert!(matches!(inner.node, TypeExpr::Named(ref name) if name == "int"));
+            }
+            _ => panic!("expected nullable return type"),
+        }
+    }
+
+    #[test]
+    fn parse_none_literal() {
+        let prog = parse("fn main() { let x = none }");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::NoneLit));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_nullable_in_class_field() {
+        let prog = parse("class Foo { value: int? }");
+        let c = &prog.classes[0].node;
+        assert_eq!(c.name.node, "Foo");
+        assert_eq!(c.fields.len(), 1);
+        match &c.fields[0].ty.node {
+            TypeExpr::Nullable(inner) => {
+                assert!(matches!(inner.node, TypeExpr::Named(ref name) if name == "int"));
+            }
+            _ => panic!("expected nullable field type"),
+        }
+    }
+
+    #[test]
+    fn parse_nullable_in_array() {
+        let prog = parse("fn foo(xs: [int?]) { }");
+        let f = &prog.functions[0].node;
+        match &f.params[0].ty.node {
+            TypeExpr::Array(elem_type) => {
+                match &elem_type.node {
+                    TypeExpr::Nullable(inner) => {
+                        assert!(matches!(inner.node, TypeExpr::Named(ref name) if name == "int"));
+                    }
+                    _ => panic!("expected nullable element type"),
+                }
+            }
+            _ => panic!("expected array type"),
+        }
+    }
+
+    #[test]
+    fn parse_question_operator() {
+        let prog = parse("fn foo(x: int?) int { return x? }");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Return(Some(expr)) => {
+                assert!(matches!(expr.node, Expr::NullPropagate { .. }));
+            }
+            _ => panic!("expected return with null propagate"),
+        }
+    }
+
+    #[test]
+    fn parse_nested_nullable_rejected() {
+        // Parser doesn't reject nested nullable (typeck does),
+        // but we can verify the parse structure
+        let tokens = lex("fn main() { let x: int?? = none }");
+        // This will fail during lexing/parsing because ?? is not valid
+        // The second ? will be parsed as a separate token
+        assert!(tokens.is_ok()); // Lexing succeeds
+        let tokens_vec = tokens.unwrap();
+        let mut parser = Parser::new(&tokens_vec, "fn main() { let x: int?? = none }");
+        let result = parser.parse_program();
+        // Parser will fail trying to parse the second ?
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_nullable_map_value() {
+        let prog = parse("fn foo() Map<string, int?> { return Map<string, int?> {} }");
+        let f = &prog.functions[0].node;
+        let ret_type = f.return_type.as_ref().unwrap();
+        match &ret_type.node {
+            TypeExpr::Generic { name, type_args } => {
+                assert_eq!(name, "Map");
+                assert_eq!(type_args.len(), 2);
+                // Second type arg should be Nullable(Int)
+                match &type_args[1].node {
+                    TypeExpr::Nullable(inner) => {
+                        assert!(matches!(inner.node, TypeExpr::Named(ref n) if n == "int"));
+                    }
+                    _ => panic!("expected nullable value type in map"),
+                }
+            }
+            _ => panic!("expected generic Map type"),
+        }
+    }
+
+    #[test]
+    fn parse_nullable_in_generic() {
+        let prog = parse("enum Option<T> { Some { v: T } None }\nfn main() { let x: Option<int?> = Option<int?>.None }");
+        // Verify the type annotation on the let statement
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { ty, .. } => {
+                let type_ann = ty.as_ref().unwrap();
+                match &type_ann.node {
+                    TypeExpr::Generic { name, type_args } => {
+                        assert_eq!(name, "Option");
+                        assert_eq!(type_args.len(), 1);
+                        // Type arg should be Nullable(Int)
+                        match &type_args[0].node {
+                            TypeExpr::Nullable(inner) => {
+                                assert!(matches!(inner.node, TypeExpr::Named(ref n) if n == "int"));
+                            }
+                            _ => panic!("expected nullable type arg"),
+                        }
+                    }
+                    _ => panic!("expected generic type annotation"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
 }

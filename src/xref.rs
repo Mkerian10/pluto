@@ -326,7 +326,7 @@ fn resolve_expr(expr: &mut Expr, index: &DeclIndex) {
         }
         // Leaf expressions — no cross-references
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) |
-        Expr::StringLit(_) | Expr::Ident(_) | Expr::NoneLit => {}
+        Expr::StringLit(_) | Expr::Ident(_) | Expr::NoneLit | Expr::QualifiedAccess { .. } => {}
     }
 }
 

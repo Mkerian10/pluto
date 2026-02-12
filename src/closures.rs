@@ -349,6 +349,12 @@ fn lift_in_expr(
         Expr::NullPropagate { expr: inner } => {
             lift_in_expr(&mut inner.node, inner.span, env, counter, new_fns)?;
         }
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before closure lifting. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
+        }
         // Non-capturing expressions
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. }

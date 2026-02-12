@@ -332,6 +332,12 @@ pub(crate) fn infer_expr(
             }
             Ok(PlutoType::Task(Box::new(inner_type)))
         }
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before type checking. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
+        }
         Expr::NoneLit => {
             // Sentinel type — Nullable(Void) means "none literal, type not yet known"
             // The actual nullable type will be determined by context (let annotation, return type, etc.)

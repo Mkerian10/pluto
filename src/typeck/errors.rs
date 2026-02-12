@@ -428,6 +428,12 @@ fn collect_expr_effects(
                 collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
             }
         }
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before error checking. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
     }
@@ -794,6 +800,12 @@ fn enforce_expr(
                 enforce_expr(&arg.node, arg.span, current_fn, env)?;
             }
             Ok(())
+        }
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before error enforcement. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => Ok(()),

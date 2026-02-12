@@ -632,4 +632,73 @@ mod tests {
         let env = check("fn first<A, B>(a: A, b: B) A {\n    return a\n}\n\nfn main() {\n    let x: int = first(42, \"hello\")\n}").unwrap();
         assert!(env.functions.contains_key("first$$int$string"));
     }
+
+    // Nullable types typeck tests
+
+    #[test]
+    fn nullable_int_accepts_int() {
+        check("fn main() { let x: int? = 42 }").unwrap();
+    }
+
+    #[test]
+    fn nullable_int_rejects_float() {
+        let result = check("fn main() { let x: int? = 3.14 }");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn none_infers_as_nullable() {
+        check("fn main() { let x: int? = none }").unwrap();
+    }
+
+    #[test]
+    fn none_requires_context() {
+        let result = check("fn main() { let x = none }");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn nullable_not_assignable_to_non_nullable() {
+        let result = check("fn foo(x: int) { }\n\nfn main() {\n    let y: int? = 42\n    foo(y)\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn question_unwraps_nullable() {
+        check("fn get() int? {\n    return 42\n}\n\nfn use() int? {\n    let x = get()?\n    return x\n}").unwrap();
+    }
+
+    #[test]
+    fn question_early_returns_none() {
+        check("fn get() int? {\n    return none\n}\n\nfn use() int? {\n    let x = get()?\n    return x\n}").unwrap();
+    }
+
+    #[test]
+    fn question_requires_nullable_return() {
+        let result = check("fn foo() int {\n    let x: int? = 42\n    return x?\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn nested_nullable_rejected() {
+        let result = check("fn main() { let x: int?? = none }");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn void_nullable_rejected() {
+        let result = check("fn main() { let x: void? = none }");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn nullable_in_generic_instantiation() {
+        let env = check("class Box<T> {\n    value: T\n}\n\nfn main() {\n    let b = Box<int?> { value: none }\n}").unwrap();
+        assert!(env.classes.contains_key("Box$$int?"));
+    }
+
+    #[test]
+    fn nullable_method_chaining() {
+        check("fn a() int? {\n    return 42\n}\n\nfn b() int? {\n    return a()?\n}\n\nfn c() int? {\n    return b()?\n}").unwrap();
+    }
 }

@@ -468,6 +468,12 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
 
 fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
     match expr {
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before monomorphization. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
         | Expr::StringLit(_) | Expr::Ident(_) | Expr::NoneLit => {}
         Expr::NullPropagate { expr } => {
@@ -834,6 +840,9 @@ fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
 
 fn offset_expr_spans(expr: &mut Expr, offset: usize) {
     match expr {
+        Expr::QualifiedAccess { .. } => {
+            // Empty arm - QualifiedAccess should be resolved by module flattening before monomorphization
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
         | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. }
         | Expr::NoneLit => {}
@@ -1255,7 +1264,7 @@ fn rewrite_expr(expr: &mut Expr, start: usize, end: usize, rewrites: &HashMap<(u
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
         | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. }
-        | Expr::NoneLit => {}
+        | Expr::NoneLit | Expr::QualifiedAccess { .. } => {}
     }
 }
 

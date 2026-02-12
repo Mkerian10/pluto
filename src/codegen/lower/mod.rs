@@ -2103,6 +2103,10 @@ impl<'a> LowerContext<'a> {
             Expr::StaticTraitCall { trait_name, method_name, type_args, args } => {
                 self.lower_static_trait_call(trait_name, method_name, type_args, args)
             }
+            Expr::QualifiedAccess { .. } => {
+                // TODO: Implement codegen for qualified access
+                Err(CompileError::codegen("qualified access not yet implemented in codegen".to_string()))
+            }
         }
     }
 
@@ -4822,6 +4826,11 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 }
             }
             // Fallback to Void if not found (shouldn't happen after typeck)
+            PlutoType::Void
+        }
+        Expr::QualifiedAccess { .. } => {
+            // TODO: Proper type inference for qualified access
+            // For now, return Void as placeholder
             PlutoType::Void
         }
     }

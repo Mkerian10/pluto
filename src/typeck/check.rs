@@ -787,6 +787,11 @@ fn collect_idents_in_stmt(stmt: &Stmt, idents: &mut std::collections::HashSet<St
 fn collect_idents_in_expr(expr: &Expr, idents: &mut std::collections::HashSet<String>) {
     match expr {
         Expr::Ident(name) => { idents.insert(name.clone()); }
+        Expr::QualifiedAccess { segments } => {
+            if let Some(first) = segments.first() {
+                idents.insert(first.node.clone());
+            }
+        }
         Expr::BinOp { lhs, rhs, .. } => {
             collect_idents_in_expr(&lhs.node, idents);
             collect_idents_in_expr(&rhs.node, idents);

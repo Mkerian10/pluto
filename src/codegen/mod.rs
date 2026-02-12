@@ -1006,7 +1006,7 @@ fn collect_spawn_closure_names(program: &Program) -> HashSet<String> {
             }
             Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
             | Expr::StringLit(_) | Expr::Ident(_) | Expr::EnumUnit { .. }
-            | Expr::NoneLit => {}
+            | Expr::NoneLit | Expr::QualifiedAccess { .. } => {}
         }
     }
 
