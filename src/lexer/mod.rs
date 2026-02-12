@@ -165,4 +165,137 @@ mod tests {
         assert!(matches!(tokens[7].node, Token::Slash));    // /
         assert!(matches!(tokens[9].node, Token::Percent));  // %
     }
+
+    #[test]
+    fn lex_multiple_decimal_points_adjacent_error() {
+        // Test the validation that catches 1.2.3 (float followed by dot)
+        let src = "1.2.3";
+        let result = lex(src);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("multiple decimal points"));
+    }
+
+    #[test]
+    fn lex_float_followed_by_dot_with_space_ok() {
+        // Float followed by dot with space should be OK (e.g., "1.2 .method()")
+        let src = "1.2 .x";
+        let result = lex(src);
+        assert!(result.is_ok());
+        let tokens = result.unwrap();
+        assert!(matches!(tokens[0].node, Token::FloatLit(_)));
+        assert!(matches!(tokens[1].node, Token::Dot));
+    }
+
+    #[test]
+    fn lex_float_in_expression() {
+        // Float in arithmetic expression should work fine
+        let src = "1.5 + 2.5";
+        let tokens = lex(src).unwrap();
+        assert_eq!(tokens.len(), 3);
+        assert!(matches!(tokens[0].node, Token::FloatLit(_)));
+        assert!(matches!(tokens[1].node, Token::Plus));
+        assert!(matches!(tokens[2].node, Token::FloatLit(_)));
+    }
+
+    #[test]
+    fn lex_unexpected_character_error() {
+        // Test that unexpected characters produce errors
+        let src = "let x = @";
+        let result = lex(src);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("unexpected character"));
+    }
+
+    #[test]
+    fn lex_multiline_comment() {
+        // Multi-line with comment should work
+        let src = "let x = 1 // comment\nlet y = 2";
+        let tokens = lex(src).unwrap();
+        // Should have: let x = 1 \n let y = 2
+        // Verify no Comment tokens remain
+        for token in &tokens {
+            assert!(!matches!(token.node, Token::Comment));
+        }
+        // Should have tokens for both lines
+        assert!(tokens.len() > 5);
+    }
+
+    #[test]
+    fn lex_empty_source() {
+        let src = "";
+        let tokens = lex(src).unwrap();
+        assert_eq!(tokens.len(), 0);
+    }
+
+    #[test]
+    fn lex_only_whitespace() {
+        let src = "   \n\t  \n  ";
+        let tokens = lex(src).unwrap();
+        // Whitespace is not tokenized, except newlines
+        // Newlines are tokenized and preserved
+        assert!(tokens.iter().all(|t| matches!(t.node, Token::Newline)));
+    }
+
+    #[test]
+    fn lex_only_comments() {
+        let src = "// comment 1\n// comment 2";
+        let tokens = lex(src).unwrap();
+        // Should only have newlines, no Comment tokens
+        assert!(tokens.iter().all(|t| matches!(t.node, Token::Newline)));
+    }
+
+    #[test]
+    fn lex_adjacent_operators() {
+        // Test operators that could be confused when adjacent
+        let src = "a+-b";
+        let tokens = lex(src).unwrap();
+        assert!(matches!(tokens[0].node, Token::Ident));  // a
+        assert!(matches!(tokens[1].node, Token::Plus));   // +
+        assert!(matches!(tokens[2].node, Token::Minus));  // -
+        assert!(matches!(tokens[3].node, Token::Ident));  // b
+    }
+
+    #[test]
+    fn lex_compound_assignment_operators() {
+        let src = "+= -= *= /= %=";
+        let tokens = lex(src).unwrap();
+        assert!(matches!(tokens[0].node, Token::PlusEq));
+        assert!(matches!(tokens[1].node, Token::MinusEq));
+        assert!(matches!(tokens[2].node, Token::StarEq));
+        assert!(matches!(tokens[3].node, Token::SlashEq));
+        assert!(matches!(tokens[4].node, Token::PercentEq));
+    }
+
+    #[test]
+    fn lex_nullable_type_syntax() {
+        let src = "int?";
+        let tokens = lex(src).unwrap();
+        assert_eq!(tokens.len(), 2);
+        assert!(matches!(tokens[0].node, Token::Ident));     // int
+        assert!(matches!(tokens[1].node, Token::Question));  // ?
+    }
+
+    #[test]
+    fn lex_none_keyword() {
+        let src = "none";
+        let tokens = lex(src).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(tokens[0].node, Token::None));
+    }
+
+    #[test]
+    fn lex_arrow_function() {
+        let src = "(x) => x + 1";
+        let tokens = lex(src).unwrap();
+        // ( x ) => x + 1
+        assert!(matches!(tokens[0].node, Token::LParen));
+        assert!(matches!(tokens[1].node, Token::Ident));
+        assert!(matches!(tokens[2].node, Token::RParen));
+        assert!(matches!(tokens[3].node, Token::FatArrow));  // =>
+        assert!(matches!(tokens[4].node, Token::Ident));
+        assert!(matches!(tokens[5].node, Token::Plus));
+        assert!(matches!(tokens[6].node, Token::IntLit(1)));
+    }
 }
