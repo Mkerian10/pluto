@@ -805,6 +805,14 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
     Ok((graph.root, graph.source_map))
 }
 
+/// Resolve QualifiedAccess nodes for single-file programs (no imports).
+/// All QualifiedAccess nodes become FieldAccess chains since there are no modules.
+pub fn resolve_qualified_access_single_file(program: &mut Program) -> Result<(), CompileError> {
+    let module_names = HashSet::new(); // Empty set = no modules
+    resolve_qualified_access_in_program(program, &module_names);
+    Ok(())
+}
+
 /// Check if a type name refers to a class or trait defined in the given module.
 fn is_module_type(name: &str, module_prog: &Program) -> bool {
     module_prog.classes.iter().any(|c| c.node.name.node == name)
@@ -1622,7 +1630,20 @@ fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &
             let is_module_reference = module_names.contains(&segments[0].node);
 
             if is_module_reference {
-                // Keep as QualifiedAccess for type checker (module.Enum.Variant case)
+                // Convert module.Enum.Variant to EnumUnit
+                if segments.len() == 3 {
+                    let qualified_enum = format!("{}.{}", segments[0].node, segments[1].node);
+                    let enum_span = Span::new(segments[0].span.start, segments[1].span.end);
+                    *expr = Expr::EnumUnit {
+                        enum_name: Spanned::new(qualified_enum, enum_span),
+                        variant: segments[2].clone(),
+                        type_args: vec![],
+                        enum_id: None,
+                        variant_id: None,
+                    };
+                    return;
+                }
+                // For 2-segment patterns (module.Type), keep as QualifiedAccess for type checking
                 return;
             }
 
