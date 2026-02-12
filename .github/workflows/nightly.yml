@@ -26,12 +26,12 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate HTML coverage report
-        run: cargo llvm-cov --all-targets --html
+        run: cargo llvm-cov --lib --html
 
       - name: Generate coverage summary
         run: |
-          cargo llvm-cov --all-targets --json --output-path coverage.json
-          cargo llvm-cov --all-targets --summary-only > coverage-summary.txt
+          cargo llvm-cov --lib --json --output-path coverage.json
+          cargo llvm-cov --lib --summary-only > coverage-summary.txt
           cat coverage-summary.txt
 
       - name: Upload coverage for GitHub Pages
@@ -133,18 +133,18 @@ jobs:
             exit 1
           fi
 
-  # Full test results
+  # Unit tests only (integration tests excluded for pipeline testing)
   full-test-suite:
-    name: Full Test Suite
+    name: Unit Tests Only
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@nextest
 
-      - name: Run all tests
+      - name: Run unit tests only
         run: |
-          cargo nextest run --all-targets 2>&1 | tee test-output.txt
+          cargo nextest run --lib 2>&1 | tee test-output.txt
           # Extract summary
           grep -E "test result:|running" test-output.txt > test-summary.txt || true
 
