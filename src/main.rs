@@ -71,8 +71,6 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Start the LSP server (communicates over stdin/stdout)
-    Lsp,
     /// Watch files and automatically recompile/rerun on changes
     Watch {
         #[command(subcommand)]
@@ -195,12 +193,6 @@ fn main() {
 
             if !status.success() {
                 std::process::exit(status.code().unwrap_or(1));
-            }
-        }
-        Commands::Lsp => {
-            if let Err(err) = plutoc::lsp::run_lsp_server() {
-                eprintln!("LSP server error: {err}");
-                std::process::exit(1);
             }
         }
         Commands::Watch { command } => match command {
