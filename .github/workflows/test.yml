@@ -24,3 +24,6 @@ jobs:
 
       - name: Run unit tests only
         run: cargo nextest run --lib
+
+      - name: Run stdlib tests
+        run: cargo test --test stdlib_tests

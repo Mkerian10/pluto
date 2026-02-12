@@ -125,6 +125,15 @@ fn stdlib_base64() {
     assert!(stdout.contains("tests passed"), "Expected test summary in output:\n{stdout}");
 }
 
+#[test]
+fn stdlib_path() {
+    let (stdout, stderr, code) = run_pluto_test_file("path");
+    if code != 0 {
+        panic!("path tests failed (exit {code}):\nstdout: {stdout}\nstderr: {stderr}");
+    }
+    assert!(stdout.contains("tests passed"), "Expected test summary in output:\n{stdout}");
+}
+
 // TODO: Full regex escape sequence support (\d, \w, \s) - Phase 2 work
 // #[test]
 // fn stdlib_regex() {
