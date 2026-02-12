@@ -829,4 +829,170 @@ mod tests {
     fn for_loop_range_type_checks() {
         check("fn main() {\n    for i in 0..10 {\n        print(i)\n    }\n}").unwrap();
     }
+
+    // Phase 1: String Interpolation Typeck Tests (4 new tests)
+
+    #[test]
+    fn string_interp_type_checks_expressions() {
+        check("fn main() {\n    let x = 42\n    let s = \"value: {x}\"\n}").unwrap();
+    }
+
+    #[test]
+    fn string_interp_non_string_expr_ok() {
+        check("fn main() {\n    let x = 42\n    let s = \"int: {x}\"\n}").unwrap();
+    }
+
+    #[test]
+    fn string_interp_undefined_var_rejected() {
+        let result = check("fn main() {\n    let s = \"value: {undefined}\"\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn string_interp_type_mismatch_in_expr() {
+        let result = check("fn main() {\n    let s = \"sum: {1 + \\\"str\\\"}\"\n}");
+        assert!(result.is_err());
+    }
+
+    // Phase 2: Maps and Sets Typeck Tests (8 new tests)
+
+    #[test]
+    fn map_literal_type_infers() {
+        check("fn main() {\n    let m: Map<int, string> = Map<int, string> { 1: \"a\" }\n}").unwrap();
+    }
+
+    #[test]
+    fn map_key_type_mismatch_rejected() {
+        let result = check("fn main() {\n    let m = Map<int, string> { \"key\": \"val\" }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn map_value_type_mismatch_rejected() {
+        let result = check("fn main() {\n    let m = Map<int, string> { 1: 42 }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn map_empty_literal_requires_annotation() {
+        check("fn main() {\n    let m: Map<int, string> = Map<int, string> {}\n}").unwrap();
+    }
+
+    #[test]
+    fn set_literal_type_infers() {
+        check("fn main() {\n    let s: Set<int> = Set<int> { 1, 2, 3 }\n}").unwrap();
+    }
+
+    #[test]
+    fn set_element_type_mismatch_rejected() {
+        let result = check("fn main() {\n    let s = Set<int> { \"str\" }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn set_mixed_element_types_rejected() {
+        let result = check("fn main() {\n    let s = Set<int> { 1, \"str\" }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn set_empty_literal_requires_annotation() {
+        check("fn main() {\n    let s: Set<int> = Set<int> {}\n}").unwrap();
+    }
+
+    // Phase 3: Channels and Select Typeck Tests (6 new tests)
+
+    #[test]
+    fn chan_type_infers_from_generic() {
+        check("fn main() {\n    let (s, r) = chan<int>()\n}").unwrap();
+    }
+
+    #[test]
+    fn chan_capacity_must_be_int() {
+        let result = check("fn main() {\n    let (s, r) = chan<int>(\"10\")\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn select_recv_channel_type_checks() {
+        check("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        x = r.recv() {\n        }\n    }\n}").unwrap();
+    }
+
+    #[test]
+    fn select_send_channel_type_checks() {
+        check("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        s.send(42) {\n        }\n    }\n}").unwrap();
+    }
+
+    #[test]
+    fn select_send_value_type_mismatch_rejected() {
+        let result = check("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        s.send(\"str\") {\n        }\n    }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn select_recv_binding_type_infers() {
+        check("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        x = r.recv() {\n            let y: int = x\n        }\n    }\n}").unwrap();
+    }
+
+    // Phase 4: Scope Blocks Typeck Tests (4 new tests)
+
+    #[test]
+    fn scope_seed_type_checks() {
+        check("scoped class DB {}\nfn main() {\n    scope(DB {}) |db: DB| {\n    }\n}").unwrap();
+    }
+
+    #[test]
+    fn scope_binding_type_checks() {
+        check("scoped class DB {}\nscoped class Svc[db: DB] {}\nfn main() {\n    scope(DB {}) |svc: Svc| {\n    }\n}").unwrap();
+    }
+
+    #[test]
+    fn scope_undefined_seed_rejected() {
+        let result = check("fn main() {\n    scope(undefined) |x: int| {\n    }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn scope_binding_non_class_rejected() {
+        let result = check("fn main() {\n    let x = 42\n    scope(x) |y: int| {\n    }\n}");
+        assert!(result.is_err());
+    }
+
+    // Phase 5: Error Field Validation Typeck Tests (6 new tests)
+
+    #[test]
+    fn raise_missing_field_rejected() {
+        let result = check("error BadInput {\n    code: int\n    msg: string\n}\n\nfn main() {\n    raise BadInput { code: 5 }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn raise_extra_field_rejected() {
+        let result = check("error BadInput {\n    code: int\n}\n\nfn main() {\n    raise BadInput { code: 5, extra: \"x\" }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn raise_field_type_mismatch_rejected() {
+        let result = check("error BadInput {\n    code: int\n}\n\nfn main() {\n    raise BadInput { code: \"str\" }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn raise_wrong_field_name_rejected() {
+        let result = check("error BadInput {\n    code: int\n}\n\nfn main() {\n    raise BadInput { cde: 5 }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn raise_duplicate_field_rejected() {
+        let result = check("error BadInput {\n    code: int\n}\n\nfn main() {\n    raise BadInput { code: 5, code: 10 }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn raise_no_fields_on_fielded_error_rejected() {
+        let result = check("error BadInput {\n    code: int\n}\n\nfn main() {\n    raise BadInput {}\n}");
+        assert!(result.is_err());
+    }
 }
