@@ -986,3 +986,412 @@ fn type_expr_to_pluto_type(te: &TypeExpr, env: &TypeEnv) -> Result<PlutoType, Co
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::{Field, TypeExpr, Param, EnumVariant, Function, ClassDecl, EnumDecl, Block, Lifecycle};
+    use crate::typeck::types::PlutoType;
+    use crate::span::{Span, Spanned};
+    use std::collections::HashMap;
+
+    fn dummy_span() -> Span {
+        Span { start: 0, end: 0, file_id: 0 }
+    }
+
+    fn spanned<T>(node: T) -> Spanned<T> {
+        Spanned { node, span: dummy_span() }
+    }
+
+    // ── build_type_expr_bindings tests ──────────────────────────────────
+
+    #[test]
+    fn test_build_type_expr_bindings_single() {
+        let type_params = vec!["T".to_string()];
+        let type_args = vec![PlutoType::Int];
+        let bindings = build_type_expr_bindings(&type_params, &type_args);
+        
+        assert_eq!(bindings.len(), 1);
+        assert!(matches!(bindings.get("T"), Some(TypeExpr::Named(n)) if n == "int"));
+    }
+
+    #[test]
+    fn test_build_type_expr_bindings_multiple() {
+        let type_params = vec!["T".to_string(), "U".to_string()];
+        let type_args = vec![PlutoType::Int, PlutoType::String];
+        let bindings = build_type_expr_bindings(&type_params, &type_args);
+        
+        assert_eq!(bindings.len(), 2);
+        assert!(matches!(bindings.get("T"), Some(TypeExpr::Named(n)) if n == "int"));
+        assert!(matches!(bindings.get("U"), Some(TypeExpr::Named(n)) if n == "string"));
+    }
+
+    #[test]
+    fn test_build_type_expr_bindings_class_type() {
+        let type_params = vec!["T".to_string()];
+        let type_args = vec![PlutoType::Class("User".to_string())];
+        let bindings = build_type_expr_bindings(&type_params, &type_args);
+        
+        assert!(matches!(bindings.get("T"), Some(TypeExpr::Named(n)) if n == "User"));
+    }
+
+    // ── substitute_in_type_expr tests ───────────────────────────────────
+
+    #[test]
+    fn test_substitute_named_match() {
+        let mut te = TypeExpr::Named("T".to_string());
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+        
+        substitute_in_type_expr(&mut te, &bindings);
+        assert!(matches!(te, TypeExpr::Named(n) if n == "int"));
+    }
+
+    #[test]
+    fn test_substitute_named_no_match() {
+        let mut te = TypeExpr::Named("int".to_string());
+        let bindings = HashMap::new();
+        
+        substitute_in_type_expr(&mut te, &bindings);
+        assert!(matches!(te, TypeExpr::Named(n) if n == "int"));
+    }
+
+    #[test]
+    fn test_substitute_array() {
+        let mut te = TypeExpr::Array(Box::new(spanned(TypeExpr::Named("T".to_string()))));
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+        
+        substitute_in_type_expr(&mut te, &bindings);
+        if let TypeExpr::Array(inner) = te {
+            assert!(matches!(inner.node, TypeExpr::Named(n) if n == "int"));
+        } else {
+            panic!("Expected Array type");
+        }
+    }
+
+    #[test]
+    fn test_substitute_nullable() {
+        let mut te = TypeExpr::Nullable(Box::new(spanned(TypeExpr::Named("T".to_string()))));
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("string".to_string()));
+        
+        substitute_in_type_expr(&mut te, &bindings);
+        if let TypeExpr::Nullable(inner) = te {
+            assert!(matches!(inner.node, TypeExpr::Named(n) if n == "string"));
+        } else {
+            panic!("Expected Nullable type");
+        }
+    }
+
+    #[test]
+    fn test_substitute_generic_args() {
+        let mut te = TypeExpr::Generic {
+            name: "Box".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("T".to_string()))],
+        };
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_type_expr(&mut te, &bindings);
+        if let TypeExpr::Generic { type_args, .. } = te {
+            assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
+        } else {
+            panic!("Expected Generic type");
+        }
+    }
+
+    #[test]
+    fn test_substitute_fn_types() {
+        let mut te = TypeExpr::Fn {
+            params: vec![Box::new(spanned(TypeExpr::Named("T".to_string())))],
+            return_type: Box::new(spanned(TypeExpr::Named("U".to_string()))),
+        };
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+        bindings.insert("U".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_type_expr(&mut te, &bindings);
+        if let TypeExpr::Fn { params, return_type } = te {
+            assert!(matches!(&params[0].node, TypeExpr::Named(n) if n == "int"));
+            assert!(matches!(&return_type.node, TypeExpr::Named(n) if n == "string"));
+        } else {
+            panic!("Expected Fn type");
+        }
+    }
+
+    // ── offset_span tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_offset_span_basic() {
+        let mut span = Span { start: 10, end: 20, file_id: 0 };
+        offset_span(&mut span, 100);
+        assert_eq!(span.start, 110);
+        assert_eq!(span.end, 120);
+    }
+
+    #[test]
+    fn test_offset_span_zero() {
+        let mut span = Span { start: 10, end: 20, file_id: 0 };
+        offset_span(&mut span, 0);
+        assert_eq!(span.start, 10);
+        assert_eq!(span.end, 20);
+    }
+
+    #[test]
+    fn test_offset_spanned() {
+        let mut spanned = Spanned {
+            node: 42,
+            span: Span { start: 5, end: 15, file_id: 0 },
+        };
+        offset_spanned(&mut spanned, 50);
+        assert_eq!(spanned.span.start, 55);
+        assert_eq!(spanned.span.end, 65);
+        assert_eq!(spanned.node, 42); // Node unchanged
+    }
+
+    // ── reassign_*_uuids tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_reassign_function_uuids() {
+        let uuid1 = Uuid::new_v4();
+        let uuid2 = Uuid::new_v4();
+        let mut func = Function {
+            id: Uuid::new_v4(),
+            name: spanned("foo".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            params: vec![
+                Param { id: uuid1, name: spanned("x".to_string()), ty: spanned(TypeExpr::Named("int".to_string())), is_mut: false },
+                Param { id: uuid2, name: spanned("y".to_string()), ty: spanned(TypeExpr::Named("int".to_string())), is_mut: false },
+            ],
+            return_type: None,
+            body: spanned(Block { stmts: vec![] }),
+            contracts: vec![],
+            is_pub: false,
+            is_override: false,
+            is_generator: false,
+        };
+
+        reassign_function_uuids(&mut func);
+
+        // UUIDs should be different after reassignment
+        assert_ne!(func.params[0].id, uuid1);
+        assert_ne!(func.params[1].id, uuid2);
+        // Each param should have a unique UUID
+        assert_ne!(func.params[0].id, func.params[1].id);
+    }
+
+    #[test]
+    fn test_reassign_class_uuids() {
+        let field_uuid = Uuid::new_v4();
+        let method_uuid = Uuid::new_v4();
+        let mut class = ClassDecl {
+            id: Uuid::new_v4(),
+            name: spanned("User".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            fields: vec![
+                Field {
+                    id: field_uuid,
+                    name: spanned("name".to_string()),
+                    ty: spanned(TypeExpr::Named("string".to_string())),
+                    is_injected: false,
+                    is_ambient: false,
+                },
+            ],
+            methods: vec![
+                spanned(Function {
+                    id: method_uuid,
+                    name: spanned("get_name".to_string()),
+                    type_params: vec![],
+                    type_param_bounds: HashMap::new(),
+                    params: vec![],
+                    return_type: None,
+                    body: spanned(Block { stmts: vec![] }),
+                    contracts: vec![],
+                    is_pub: false,
+                    is_override: false,
+                    is_generator: false,
+                }),
+            ],
+            impl_traits: vec![],
+            uses: vec![],
+            is_pub: false,
+            lifecycle: Lifecycle::Singleton,
+            invariants: vec![],
+        };
+
+        reassign_class_uuids(&mut class);
+
+        assert_ne!(class.fields[0].id, field_uuid);
+        assert_ne!(class.methods[0].node.id, method_uuid);
+    }
+
+    #[test]
+    fn test_reassign_enum_uuids() {
+        let variant_uuid = Uuid::new_v4();
+        let field_uuid = Uuid::new_v4();
+        let mut edecl = EnumDecl {
+            id: Uuid::new_v4(),
+            name: spanned("Option".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            variants: vec![
+                EnumVariant {
+                    id: variant_uuid,
+                    name: spanned("Some".to_string()),
+                    fields: vec![
+                        Field {
+                            id: field_uuid,
+                            name: spanned("value".to_string()),
+                            ty: spanned(TypeExpr::Named("int".to_string())),
+                            is_injected: false,
+                            is_ambient: false,
+                        },
+                    ],
+                },
+            ],
+            is_pub: false,
+        };
+
+        reassign_enum_uuids(&mut edecl);
+
+        assert_ne!(edecl.variants[0].id, variant_uuid);
+        assert_ne!(edecl.variants[0].fields[0].id, field_uuid);
+    }
+
+    // ── type_expr_to_pluto_type tests ───────────────────────────────────
+
+    #[test]
+    fn test_type_expr_to_pluto_type_primitives() {
+        let env = TypeEnv::new();
+        
+        assert!(matches!(type_expr_to_pluto_type(&TypeExpr::Named("int".to_string()), &env), Ok(PlutoType::Int)));
+        assert!(matches!(type_expr_to_pluto_type(&TypeExpr::Named("float".to_string()), &env), Ok(PlutoType::Float)));
+        assert!(matches!(type_expr_to_pluto_type(&TypeExpr::Named("bool".to_string()), &env), Ok(PlutoType::Bool)));
+        assert!(matches!(type_expr_to_pluto_type(&TypeExpr::Named("string".to_string()), &env), Ok(PlutoType::String)));
+        assert!(matches!(type_expr_to_pluto_type(&TypeExpr::Named("void".to_string()), &env), Ok(PlutoType::Void)));
+        assert!(matches!(type_expr_to_pluto_type(&TypeExpr::Named("byte".to_string()), &env), Ok(PlutoType::Byte)));
+    }
+
+    #[test]
+    fn test_type_expr_to_pluto_type_array() {
+        let env = TypeEnv::new();
+        let te = TypeExpr::Array(Box::new(spanned(TypeExpr::Named("int".to_string()))));
+        
+        if let Ok(PlutoType::Array(inner)) = type_expr_to_pluto_type(&te, &env) {
+            assert!(matches!(*inner, PlutoType::Int));
+        } else {
+            panic!("Expected Array<int>");
+        }
+    }
+
+    #[test]
+    fn test_type_expr_to_pluto_type_nullable() {
+        let env = TypeEnv::new();
+        let te = TypeExpr::Nullable(Box::new(spanned(TypeExpr::Named("int".to_string()))));
+        
+        if let Ok(PlutoType::Nullable(inner)) = type_expr_to_pluto_type(&te, &env) {
+            assert!(matches!(*inner, PlutoType::Int));
+        } else {
+            panic!("Expected Nullable<int>");
+        }
+    }
+
+    #[test]
+    fn test_type_expr_to_pluto_type_fn() {
+        let env = TypeEnv::new();
+        let te = TypeExpr::Fn {
+            params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
+            return_type: Box::new(spanned(TypeExpr::Named("string".to_string()))),
+        };
+
+        if let Ok(PlutoType::Fn(params, ret)) = type_expr_to_pluto_type(&te, &env) {
+            assert_eq!(params.len(), 1);
+            assert!(matches!(params[0], PlutoType::Int));
+            assert!(matches!(*ret, PlutoType::String));
+        } else {
+            panic!("Expected Fn type");
+        }
+    }
+
+    #[test]
+    fn test_type_expr_to_pluto_type_map() {
+        let env = TypeEnv::new();
+        let te = TypeExpr::Generic {
+            name: "Map".to_string(),
+            type_args: vec![
+                spanned(TypeExpr::Named("string".to_string())),
+                spanned(TypeExpr::Named("int".to_string())),
+            ],
+        };
+        
+        if let Ok(PlutoType::Map(key, val)) = type_expr_to_pluto_type(&te, &env) {
+            assert!(matches!(*key, PlutoType::String));
+            assert!(matches!(*val, PlutoType::Int));
+        } else {
+            panic!("Expected Map<string, int>");
+        }
+    }
+
+    #[test]
+    fn test_type_expr_to_pluto_type_set() {
+        let env = TypeEnv::new();
+        let te = TypeExpr::Generic {
+            name: "Set".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        };
+        
+        if let Ok(PlutoType::Set(elem)) = type_expr_to_pluto_type(&te, &env) {
+            assert!(matches!(*elem, PlutoType::Int));
+        } else {
+            panic!("Expected Set<int>");
+        }
+    }
+
+    #[test]
+    fn test_type_expr_to_pluto_type_task() {
+        let env = TypeEnv::new();
+        let te = TypeExpr::Generic {
+            name: "Task".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        };
+        
+        if let Ok(PlutoType::Task(inner)) = type_expr_to_pluto_type(&te, &env) {
+            assert!(matches!(*inner, PlutoType::Int));
+        } else {
+            panic!("Expected Task<int>");
+        }
+    }
+
+    #[test]
+    fn test_type_expr_to_pluto_type_sender() {
+        let env = TypeEnv::new();
+        let te = TypeExpr::Generic {
+            name: "Sender".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("string".to_string()))],
+        };
+        
+        if let Ok(PlutoType::Sender(elem)) = type_expr_to_pluto_type(&te, &env) {
+            assert!(matches!(*elem, PlutoType::String));
+        } else {
+            panic!("Expected Sender<string>");
+        }
+    }
+
+    #[test]
+    fn test_type_expr_to_pluto_type_receiver() {
+        let env = TypeEnv::new();
+        let te = TypeExpr::Generic {
+            name: "Receiver".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        };
+        
+        if let Ok(PlutoType::Receiver(elem)) = type_expr_to_pluto_type(&te, &env) {
+            assert!(matches!(*elem, PlutoType::Int));
+        } else {
+            panic!("Expected Receiver<int>");
+        }
+    }
+}
