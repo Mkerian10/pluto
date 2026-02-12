@@ -1,0 +1,2 @@
+# Pluto language files - use Rust syntax highlighting
+*.pluto linguist-language=Rust
