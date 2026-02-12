@@ -2,6 +2,7 @@ pub mod span;
 pub mod diagnostics;
 pub mod lexer;
 pub mod parser;
+pub mod visit;
 pub mod typeck;
 pub mod codegen;
 pub mod modules;

@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
+use crate::span::Spanned;
+use crate::visit::{walk_expr, Visitor};
 use super::env::{mangle_method, MethodResolution, TypeEnv};
 
 pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
@@ -779,7 +781,7 @@ fn enforce_expr(
                         if let Some(args) = args {
                             for arg in args {
                                 enforce_expr(&arg.node, arg.span, current_fn, env)?;
-                                if contains_propagate(&arg.node) {
+                                if contains_propagate(arg) {
                                     return Err(CompileError::type_err(
                                         "error propagation (!) is not allowed in spawn arguments; evaluate before spawn",
                                         arg.span,
@@ -812,91 +814,25 @@ fn enforce_expr(
     }
 }
 
-/// Check if an expression tree contains any Expr::Propagate node.
-fn contains_propagate(expr: &Expr) -> bool {
-    match expr {
-        Expr::Propagate { .. } => true,
-        Expr::BinOp { lhs, rhs, .. } => contains_propagate(&lhs.node) || contains_propagate(&rhs.node),
-        Expr::UnaryOp { operand, .. } => contains_propagate(&operand.node),
-        Expr::Cast { expr: inner, .. } => contains_propagate(&inner.node),
-        Expr::Call { args, .. } => args.iter().any(|a| contains_propagate(&a.node)),
-        Expr::MethodCall { object, args, .. } => {
-            contains_propagate(&object.node) || args.iter().any(|a| contains_propagate(&a.node))
+/// Visitor that detects Expr::Propagate nodes in an expression tree.
+struct PropagateDetector {
+    found: bool,
+}
+
+impl Visitor for PropagateDetector {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        if matches!(expr.node, Expr::Propagate { .. }) {
+            self.found = true;
+            // No need to recurse once found (optimization)
+            return;
         }
-        Expr::FieldAccess { object, .. } => contains_propagate(&object.node),
-        Expr::StructLit { fields, .. } => fields.iter().any(|(_, v)| contains_propagate(&v.node)),
-        Expr::ArrayLit { elements } => elements.iter().any(|e| contains_propagate(&e.node)),
-        Expr::Index { object, index } => contains_propagate(&object.node) || contains_propagate(&index.node),
-        Expr::StringInterp { parts } => parts.iter().any(|p| {
-            if let StringInterpPart::Expr(e) = p { contains_propagate(&e.node) } else { false }
-        }),
-        Expr::EnumData { fields, .. } => fields.iter().any(|(_, v)| contains_propagate(&v.node)),
-        Expr::Closure { body, .. } => body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)),
-        Expr::Catch { expr: inner, handler } => {
-            contains_propagate(&inner.node) || match handler {
-                CatchHandler::Wildcard { body, .. } => body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)),
-                CatchHandler::Shorthand(fb) => contains_propagate(&fb.node),
-            }
-        }
-        Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| contains_propagate(&k.node) || contains_propagate(&v.node)),
-        Expr::SetLit { elements, .. } => elements.iter().any(|e| contains_propagate(&e.node)),
-        Expr::Range { start, end, .. } => contains_propagate(&start.node) || contains_propagate(&end.node),
-        Expr::Spawn { call } => contains_propagate(&call.node),
-        Expr::NullPropagate { expr: inner } => contains_propagate(&inner.node),
-        _ => false,
+        walk_expr(self, expr);
     }
 }
 
-fn stmt_contains_propagate(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Let { value, .. } => contains_propagate(&value.node),
-        Stmt::Return(Some(expr)) => contains_propagate(&expr.node),
-        Stmt::Return(None) => false,
-        Stmt::Assign { value, .. } => contains_propagate(&value.node),
-        Stmt::FieldAssign { object, value, .. } => contains_propagate(&object.node) || contains_propagate(&value.node),
-        Stmt::Expr(expr) => contains_propagate(&expr.node),
-        Stmt::If { condition, then_block, else_block } => {
-            contains_propagate(&condition.node)
-                || then_block.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
-                || else_block.as_ref().is_some_and(|eb| eb.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)))
-        }
-        Stmt::While { condition, body } => {
-            contains_propagate(&condition.node) || body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
-        }
-        Stmt::For { iterable, body, .. } => {
-            contains_propagate(&iterable.node) || body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
-        }
-        Stmt::IndexAssign { object, index, value } => {
-            contains_propagate(&object.node) || contains_propagate(&index.node) || contains_propagate(&value.node)
-        }
-        Stmt::Match { expr, arms } => {
-            contains_propagate(&expr.node) || arms.iter().any(|a| a.body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)))
-        }
-        Stmt::Raise { fields, .. } => fields.iter().any(|(_, v)| contains_propagate(&v.node)),
-        Stmt::LetChan { capacity, .. } => {
-            capacity.as_ref().is_some_and(|cap| contains_propagate(&cap.node))
-        }
-        Stmt::Select { arms, default } => {
-            for arm in arms {
-                let op_has = match &arm.op {
-                    SelectOp::Recv { channel, .. } => contains_propagate(&channel.node),
-                    SelectOp::Send { channel, value } => {
-                        contains_propagate(&channel.node) || contains_propagate(&value.node)
-                    }
-                };
-                if op_has { return true; }
-                if arm.body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)) { return true; }
-            }
-            if let Some(def) = default && def.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node)) {
-                return true;
-            }
-            false
-        }
-        Stmt::Scope { seeds, body, .. } => {
-            if seeds.iter().any(|s| contains_propagate(&s.node)) { return true; }
-            body.node.stmts.iter().any(|s| stmt_contains_propagate(&s.node))
-        }
-        Stmt::Yield { value, .. } => contains_propagate(&value.node),
-        Stmt::Break | Stmt::Continue => false,
-    }
+/// Check if an expression tree contains any Expr::Propagate node.
+fn contains_propagate(expr: &Spanned<Expr>) -> bool {
+    let mut detector = PropagateDetector { found: false };
+    detector.visit_expr(expr);
+    detector.found
 }

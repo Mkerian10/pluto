@@ -6,12 +6,14 @@
 //! type information, and DI wiring — keyed by AST node UUID — so that consumers
 //! (like the SDK) can query type information without re-running the compiler.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use uuid::Uuid;
 
 use crate::parser::ast::{Lifecycle, Program};
+use crate::span::Spanned;
 use crate::typeck::env::{mangle_method, TypeEnv};
 use crate::typeck::types::PlutoType;
+use crate::visit::{walk_expr, Visitor};
 
 /// Map an AST function node to the key used in TypeEnv.
 /// `class_name`: `Some("Counter")` for methods, `None` for top-level fns.
@@ -132,220 +134,72 @@ fn collect_test_dependencies(
     let test_fn = program.functions.iter().find(|f| f.node.name.node == test_fn_name);
     if let Some(func) = test_fn {
         // Collect dependencies from the function body
-        collect_deps_from_block(&func.node.body.node, program, visited, deps);
+        collect_deps_from_function_body(&func.node, program, visited, deps);
     }
 }
 
-/// Recursively collect dependencies from a block of statements
-fn collect_deps_from_block(
-    block: &crate::parser::ast::Block,
-    program: &Program,
-    visited: &mut std::collections::HashSet<String>,
-    deps: &mut Vec<String>,
-) {
-    use crate::parser::ast::Stmt;
+/// Visitor that collects test dependencies from expressions.
+struct DependencyCollector<'a> {
+    program: &'a Program,
+    visited: &'a mut HashSet<String>,
+    deps: &'a mut Vec<String>,
+}
 
-    for stmt in &block.stmts {
-        match &stmt.node {
-            Stmt::Let { value, .. } => {
-                collect_deps_from_expr(&value.node, program, visited, deps);
+impl Visitor for DependencyCollector<'_> {
+    fn visit_expr(&mut self, expr: &Spanned<crate::parser::ast::Expr>) {
+        use crate::parser::ast::Expr;
+
+        match &expr.node {
+            Expr::Call { name, .. } => {
+                let fn_name = &name.node;
+                // CRITICAL: Preserve transitive dependency collection
+                collect_test_dependencies(fn_name, self.program, self.visited, self.deps);
             }
-            Stmt::Return(Some(expr)) => {
-                collect_deps_from_expr(&expr.node, program, visited, deps);
-            }
-            Stmt::Assign { value, .. } => {
-                collect_deps_from_expr(&value.node, program, visited, deps);
-            }
-            Stmt::FieldAssign { object, value, .. } => {
-                collect_deps_from_expr(&object.node, program, visited, deps);
-                collect_deps_from_expr(&value.node, program, visited, deps);
-            }
-            Stmt::If { condition, then_block, else_block } => {
-                collect_deps_from_expr(&condition.node, program, visited, deps);
-                collect_deps_from_block(&then_block.node, program, visited, deps);
-                if let Some(else_blk) = else_block {
-                    collect_deps_from_block(&else_blk.node, program, visited, deps);
+            Expr::StaticTraitCall { trait_name, method_name, .. } => {
+                // NEW: Collect trait method as dependency
+                let dep_name = format!("{}::{}", trait_name.node, method_name.node);
+                if !self.visited.contains(&dep_name) {
+                    self.visited.insert(dep_name.clone());
+                    self.deps.push(dep_name);
+                    // Note: Trait methods don't have bodies to recurse into (interface only)
                 }
             }
-            Stmt::While { condition, body } => {
-                collect_deps_from_expr(&condition.node, program, visited, deps);
-                collect_deps_from_block(&body.node, program, visited, deps);
-            }
-            Stmt::For { iterable, body, .. } => {
-                collect_deps_from_expr(&iterable.node, program, visited, deps);
-                collect_deps_from_block(&body.node, program, visited, deps);
-            }
-            Stmt::IndexAssign { object, index, value } => {
-                collect_deps_from_expr(&object.node, program, visited, deps);
-                collect_deps_from_expr(&index.node, program, visited, deps);
-                collect_deps_from_expr(&value.node, program, visited, deps);
-            }
-            Stmt::Match { expr, arms } => {
-                collect_deps_from_expr(&expr.node, program, visited, deps);
-                for arm in arms {
-                    collect_deps_from_block(&arm.body.node, program, visited, deps);
+            Expr::StructLit { name, .. } => {
+                // Track class usage
+                let class_name = &name.node;
+                if !self.visited.contains(class_name) {
+                    self.visited.insert(class_name.clone());
+                    self.deps.push(class_name.clone());
                 }
             }
-            Stmt::Raise { fields, .. } => {
-                for (_name, expr) in fields {
-                    collect_deps_from_expr(&expr.node, program, visited, deps);
+            Expr::EnumUnit { enum_name, .. } | Expr::EnumData { enum_name, .. } => {
+                // Track enum usage
+                let enum_name_str = &enum_name.node;
+                if !self.visited.contains(enum_name_str) {
+                    self.visited.insert(enum_name_str.clone());
+                    self.deps.push(enum_name_str.clone());
                 }
             }
-            Stmt::Select { arms, default } => {
-                for arm in arms {
-                    use crate::parser::ast::SelectOp;
-                    match &arm.op {
-                        SelectOp::Recv { channel, .. } => {
-                            collect_deps_from_expr(&channel.node, program, visited, deps);
-                        }
-                        SelectOp::Send { channel, value } => {
-                            collect_deps_from_expr(&channel.node, program, visited, deps);
-                            collect_deps_from_expr(&value.node, program, visited, deps);
-                        }
-                    }
-                    collect_deps_from_block(&arm.body.node, program, visited, deps);
-                }
-                if let Some(default_block) = default {
-                    collect_deps_from_block(&default_block.node, program, visited, deps);
-                }
-            }
-            Stmt::Scope { seeds, body, .. } => {
-                for seed in seeds {
-                    collect_deps_from_expr(&seed.node, program, visited, deps);
-                }
-                collect_deps_from_block(&body.node, program, visited, deps);
-            }
-            Stmt::Yield { value } => {
-                collect_deps_from_expr(&value.node, program, visited, deps);
-            }
-            Stmt::Expr(expr) => {
-                collect_deps_from_expr(&expr.node, program, visited, deps);
+            Expr::ClosureCreate { fn_name, .. } => {
+                // Track closure dependencies
+                collect_test_dependencies(fn_name, self.program, self.visited, self.deps);
             }
             _ => {}
         }
+        // Always recurse to find nested dependencies
+        walk_expr(self, expr);
     }
 }
 
-/// Recursively collect dependencies from an expression
-fn collect_deps_from_expr(
-    expr: &crate::parser::ast::Expr,
+/// Collect dependencies from a function body using the visitor pattern.
+fn collect_deps_from_function_body(
+    func: &crate::parser::ast::Function,
     program: &Program,
-    visited: &mut std::collections::HashSet<String>,
+    visited: &mut HashSet<String>,
     deps: &mut Vec<String>,
 ) {
-    use crate::parser::ast::Expr;
-
-    match expr {
-        Expr::Call { name, args, .. } => {
-            let fn_name = &name.node;
-            // Recursively collect dependencies from called function
-            collect_test_dependencies(fn_name, program, visited, deps);
-            // Also collect deps from args
-            for arg in args {
-                collect_deps_from_expr(&arg.node, program, visited, deps);
-            }
-        }
-        Expr::StructLit { name, fields, .. } => {
-            // Track class usage
-            let class_name = &name.node;
-            if !visited.contains(class_name) {
-                visited.insert(class_name.clone());
-                deps.push(class_name.clone());
-            }
-            for (_field_name, field_expr) in fields {
-                collect_deps_from_expr(&field_expr.node, program, visited, deps);
-            }
-        }
-        Expr::EnumUnit { enum_name, .. } | Expr::EnumData { enum_name, .. } => {
-            // Track enum usage
-            let enum_name_str = &enum_name.node;
-            if !visited.contains(enum_name_str) {
-                visited.insert(enum_name_str.clone());
-                deps.push(enum_name_str.clone());
-            }
-            if let Expr::EnumData { fields, .. } = expr {
-                for (_field_name, field_expr) in fields {
-                    collect_deps_from_expr(&field_expr.node, program, visited, deps);
-                }
-            }
-        }
-        Expr::MethodCall { object, args, .. } => {
-            collect_deps_from_expr(&object.node, program, visited, deps);
-            for arg in args {
-                collect_deps_from_expr(&arg.node, program, visited, deps);
-            }
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            collect_deps_from_expr(&lhs.node, program, visited, deps);
-            collect_deps_from_expr(&rhs.node, program, visited, deps);
-        }
-        Expr::UnaryOp { operand, .. } => {
-            collect_deps_from_expr(&operand.node, program, visited, deps);
-        }
-        Expr::FieldAccess { object, .. } => {
-            collect_deps_from_expr(&object.node, program, visited, deps);
-        }
-        Expr::ArrayLit { elements } => {
-            for elem in elements {
-                collect_deps_from_expr(&elem.node, program, visited, deps);
-            }
-        }
-        Expr::Index { object, index } => {
-            collect_deps_from_expr(&object.node, program, visited, deps);
-            collect_deps_from_expr(&index.node, program, visited, deps);
-        }
-        Expr::StringInterp { parts } => {
-            for part in parts {
-                if let crate::parser::ast::StringInterpPart::Expr(e) = part {
-                    collect_deps_from_expr(&e.node, program, visited, deps);
-                }
-            }
-        }
-        Expr::Closure { body, .. } => {
-            collect_deps_from_block(&body.node, program, visited, deps);
-        }
-        Expr::MapLit { entries, .. } => {
-            for (k, v) in entries {
-                collect_deps_from_expr(&k.node, program, visited, deps);
-                collect_deps_from_expr(&v.node, program, visited, deps);
-            }
-        }
-        Expr::SetLit { elements, .. } => {
-            for elem in elements {
-                collect_deps_from_expr(&elem.node, program, visited, deps);
-            }
-        }
-        Expr::ClosureCreate { fn_name, .. } => {
-            // Track closure dependencies
-            collect_test_dependencies(fn_name, program, visited, deps);
-        }
-        Expr::Propagate { expr } | Expr::NullPropagate { expr } => {
-            collect_deps_from_expr(&expr.node, program, visited, deps);
-        }
-        Expr::Catch { expr, handler } => {
-            collect_deps_from_expr(&expr.node, program, visited, deps);
-            match handler {
-                crate::parser::ast::CatchHandler::Shorthand(e) => {
-                    collect_deps_from_expr(&e.node, program, visited, deps);
-                }
-                crate::parser::ast::CatchHandler::Wildcard { body, .. } => {
-                    collect_deps_from_block(&body.node, program, visited, deps);
-                }
-            }
-        }
-        Expr::Cast { expr, .. } => {
-            collect_deps_from_expr(&expr.node, program, visited, deps);
-        }
-        Expr::Range { start, end, .. } => {
-            collect_deps_from_expr(&start.node, program, visited, deps);
-            collect_deps_from_expr(&end.node, program, visited, deps);
-        }
-        Expr::Spawn { call } => {
-            collect_deps_from_expr(&call.node, program, visited, deps);
-        }
-        // Literals don't add dependencies
-        _ => {}
-    }
+    let mut collector = DependencyCollector { program, visited, deps };
+    collector.visit_block(&func.body);
 }
 
 /// Compute stable dependency hashes for all tests

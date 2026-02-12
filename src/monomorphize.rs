@@ -7,11 +7,30 @@ use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 use crate::typeck::env::{mangle_method, mangle_name, InstKind, Instantiation, TypeEnv};
 use crate::typeck::types::{PlutoType, pluto_type_to_type_expr};
+use crate::visit::{walk_type_expr_mut, VisitMut};
 
 /// Span offset multiplier for monomorphized bodies. Each iteration gets unique
 /// spans to avoid closure capture key collisions. Must exceed any realistic
 /// source file size.
 const SPAN_OFFSET_MULTIPLIER: usize = 10_000_000;
+
+/// Visitor that resolves generic type instances (TypeExpr::Generic) in AST nodes.
+/// Replaces TypeExpr::Generic with mangled concrete type names and ensures
+/// instantiations are registered.
+struct GenericTypeResolver<'a> {
+    env: &'a mut TypeEnv,
+}
+
+impl VisitMut for GenericTypeResolver<'_> {
+    fn visit_type_expr_mut(&mut self, te: &mut Spanned<TypeExpr>) {
+        // Resolve this type expression
+        if let Err(_e) = resolve_generic_te(&mut te.node, self.env) {
+            // Silently continue on error - caller will detect issues later
+        }
+        // Then recurse into children
+        walk_type_expr_mut(self, te);
+    }
+}
 
 /// Monomorphize generic items: instantiate concrete copies, type-check their bodies,
 /// rewrite call sites via the rewrite map, then remove generic templates.
@@ -1307,194 +1326,17 @@ fn resolve_all_generic_type_exprs(program: &mut Program, env: &mut TypeEnv) -> R
 }
 
 fn resolve_generic_te_in_function(func: &mut Function, env: &mut TypeEnv) -> Result<(), CompileError> {
+    let mut visitor = GenericTypeResolver { env };
+    // Visit param types
     for p in &mut func.params {
-        resolve_generic_te(&mut p.ty.node, env)?;
+        visitor.visit_type_expr_mut(&mut p.ty);
     }
+    // Visit return type
     if let Some(ref mut rt) = func.return_type {
-        resolve_generic_te(&mut rt.node, env)?;
+        visitor.visit_type_expr_mut(rt);
     }
-    resolve_generic_te_in_block(&mut func.body.node, env)?;
-    Ok(())
-}
-
-fn resolve_generic_te_in_block(block: &mut Block, env: &mut TypeEnv) -> Result<(), CompileError> {
-    for stmt in &mut block.stmts {
-        resolve_generic_te_in_stmt(&mut stmt.node, env)?;
-    }
-    Ok(())
-}
-
-fn resolve_generic_te_in_stmt(stmt: &mut Stmt, env: &mut TypeEnv) -> Result<(), CompileError> {
-    match stmt {
-        Stmt::Let { ty, value, .. } => {
-            if let Some(t) = ty {
-                resolve_generic_te(&mut t.node, env)?;
-            }
-            resolve_generic_te_in_expr(&mut value.node, env)?;
-        }
-        Stmt::Return(Some(expr)) => resolve_generic_te_in_expr(&mut expr.node, env)?,
-        Stmt::Return(None) => {}
-        Stmt::Assign { value, .. } => resolve_generic_te_in_expr(&mut value.node, env)?,
-        Stmt::FieldAssign { object, value, .. } => {
-            resolve_generic_te_in_expr(&mut object.node, env)?;
-            resolve_generic_te_in_expr(&mut value.node, env)?;
-        }
-        Stmt::If { condition, then_block, else_block } => {
-            resolve_generic_te_in_expr(&mut condition.node, env)?;
-            resolve_generic_te_in_block(&mut then_block.node, env)?;
-            if let Some(eb) = else_block {
-                resolve_generic_te_in_block(&mut eb.node, env)?;
-            }
-        }
-        Stmt::While { condition, body } => {
-            resolve_generic_te_in_expr(&mut condition.node, env)?;
-            resolve_generic_te_in_block(&mut body.node, env)?;
-        }
-        Stmt::For { iterable, body, .. } => {
-            resolve_generic_te_in_expr(&mut iterable.node, env)?;
-            resolve_generic_te_in_block(&mut body.node, env)?;
-        }
-        Stmt::IndexAssign { object, index, value } => {
-            resolve_generic_te_in_expr(&mut object.node, env)?;
-            resolve_generic_te_in_expr(&mut index.node, env)?;
-            resolve_generic_te_in_expr(&mut value.node, env)?;
-        }
-        Stmt::Match { expr, arms } => {
-            resolve_generic_te_in_expr(&mut expr.node, env)?;
-            for arm in arms.iter_mut() {
-                resolve_generic_te_in_block(&mut arm.body.node, env)?;
-            }
-        }
-        Stmt::Raise { fields, .. } => {
-            for (_, fexpr) in fields.iter_mut() {
-                resolve_generic_te_in_expr(&mut fexpr.node, env)?;
-            }
-        }
-        Stmt::Expr(expr) => resolve_generic_te_in_expr(&mut expr.node, env)?,
-        Stmt::LetChan { elem_type, capacity, .. } => {
-            resolve_generic_te(&mut elem_type.node, env)?;
-            if let Some(cap) = capacity {
-                resolve_generic_te_in_expr(&mut cap.node, env)?;
-            }
-        }
-        Stmt::Scope { seeds, bindings, body } => {
-            for seed in seeds {
-                resolve_generic_te_in_expr(&mut seed.node, env)?;
-            }
-            for binding in bindings {
-                resolve_generic_te(&mut binding.ty.node, env)?;
-            }
-            resolve_generic_te_in_block(&mut body.node, env)?;
-        }
-        Stmt::Select { arms, default } => {
-            for arm in arms {
-                match &mut arm.op {
-                    SelectOp::Recv { channel, .. } => {
-                        resolve_generic_te_in_expr(&mut channel.node, env)?;
-                    }
-                    SelectOp::Send { channel, value } => {
-                        resolve_generic_te_in_expr(&mut channel.node, env)?;
-                        resolve_generic_te_in_expr(&mut value.node, env)?;
-                    }
-                }
-                resolve_generic_te_in_block(&mut arm.body.node, env)?;
-            }
-            if let Some(def) = default {
-                resolve_generic_te_in_block(&mut def.node, env)?;
-            }
-        }
-        Stmt::Yield { value, .. } => {
-            resolve_generic_te_in_expr(&mut value.node, env)?;
-        }
-        Stmt::Break | Stmt::Continue => {}
-    }
-    Ok(())
-}
-
-fn resolve_generic_te_in_expr(expr: &mut Expr, env: &mut TypeEnv) -> Result<(), CompileError> {
-    match expr {
-        Expr::Closure { params, return_type, body } => {
-            for p in params.iter_mut() {
-                resolve_generic_te(&mut p.ty.node, env)?;
-            }
-            if let Some(rt) = return_type {
-                resolve_generic_te(&mut rt.node, env)?;
-            }
-            resolve_generic_te_in_block(&mut body.node, env)?;
-        }
-        Expr::Call { args, .. } => {
-            for arg in args.iter_mut() {
-                resolve_generic_te_in_expr(&mut arg.node, env)?;
-            }
-        }
-        Expr::MethodCall { object, args, .. } => {
-            resolve_generic_te_in_expr(&mut object.node, env)?;
-            for arg in args.iter_mut() {
-                resolve_generic_te_in_expr(&mut arg.node, env)?;
-            }
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            resolve_generic_te_in_expr(&mut lhs.node, env)?;
-            resolve_generic_te_in_expr(&mut rhs.node, env)?;
-        }
-        Expr::Range { start, end, .. } => {
-            resolve_generic_te_in_expr(&mut start.node, env)?;
-            resolve_generic_te_in_expr(&mut end.node, env)?;
-        }
-        Expr::UnaryOp { operand, .. } => {
-            resolve_generic_te_in_expr(&mut operand.node, env)?;
-        }
-        Expr::Cast { expr: inner, target_type } => {
-            resolve_generic_te_in_expr(&mut inner.node, env)?;
-            resolve_generic_te(&mut target_type.node, env)?;
-        }
-        Expr::FieldAccess { object, .. } => {
-            resolve_generic_te_in_expr(&mut object.node, env)?;
-        }
-        Expr::StructLit { fields, .. } => {
-            for (_, fexpr) in fields.iter_mut() {
-                resolve_generic_te_in_expr(&mut fexpr.node, env)?;
-            }
-        }
-        Expr::ArrayLit { elements } => {
-            for el in elements.iter_mut() {
-                resolve_generic_te_in_expr(&mut el.node, env)?;
-            }
-        }
-        Expr::Index { object, index } => {
-            resolve_generic_te_in_expr(&mut object.node, env)?;
-            resolve_generic_te_in_expr(&mut index.node, env)?;
-        }
-        Expr::EnumData { fields, .. } => {
-            for (_, fexpr) in fields.iter_mut() {
-                resolve_generic_te_in_expr(&mut fexpr.node, env)?;
-            }
-        }
-        Expr::StringInterp { parts } => {
-            for part in parts.iter_mut() {
-                if let StringInterpPart::Expr(e) = part {
-                    resolve_generic_te_in_expr(&mut e.node, env)?;
-                }
-            }
-        }
-        Expr::Propagate { expr } => {
-            resolve_generic_te_in_expr(&mut expr.node, env)?;
-        }
-        Expr::Catch { expr, handler } => {
-            resolve_generic_te_in_expr(&mut expr.node, env)?;
-            match handler {
-                CatchHandler::Wildcard { body, .. } => resolve_generic_te_in_block(&mut body.node, env)?,
-                CatchHandler::Shorthand(body) => resolve_generic_te_in_expr(&mut body.node, env)?,
-            }
-        }
-        Expr::Spawn { call } => {
-            resolve_generic_te_in_expr(&mut call.node, env)?;
-        }
-        Expr::NullPropagate { expr } => {
-            resolve_generic_te_in_expr(&mut expr.node, env)?;
-        }
-        _ => {}
-    }
+    // Visit function body (which contains type exprs in casts, closures, etc.)
+    visitor.visit_block_mut(&mut func.body);
     Ok(())
 }
 

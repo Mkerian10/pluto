@@ -815,3 +815,47 @@ app MyApp[h: Handler<int>] {
 "#);
     assert_eq!(out.trim(), "ok");
 }
+
+// ── Bug Fixes (PR 1.1) ───────────────────────────────────────────
+
+#[test]
+fn generic_fn_with_map_lit() {
+    // Tests that MapLit works inside generic function bodies
+    // Bug: resolve_generic_te_in_expr had _ => {} catch-all that skipped MapLit
+    let out = compile_and_run_stdout(r#"
+fn create_map<T>(default_val: T) Map<string, T> {
+    let m = Map<string, T> {}
+    m["key"] = default_val
+    return m
+}
+
+fn main() {
+    let m = create_map(42)
+    print(m["key"])
+}
+"#);
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn generic_fn_with_set_lit() {
+    // Tests that SetLit works inside generic function bodies
+    // Bug: resolve_generic_te_in_expr had _ => {} catch-all that skipped SetLit
+    let out = compile_and_run_stdout(r#"
+fn create_set<T>(val: T) Set<T> {
+    let s = Set<T> {}
+    s.insert(val)
+    return s
+}
+
+fn main() {
+    let s = create_set(42)
+    print(s.contains(42))
+}
+"#);
+    assert_eq!(out, "true\n");
+}
+
+// Note: StaticTraitCall test blocked on reflection intrinsics for generic functions
+// The bug fix ensures type_args are visited, but we need reflection to generate
+// intrinsics for monomorphized type parameters. This is a separate issue.
