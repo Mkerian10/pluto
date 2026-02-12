@@ -286,22 +286,26 @@ See also: [ROADMAP.md](ROADMAP.md) for high-level goals and milestones
 
 ### Language Features
 
-#### 26. Compile-Time Reflection (Phase 1)
-- **Status:** 🔵 In Progress
+#### 26. Compile-Time Reflection (Phase 1) ✅
+- **Status:** ✅ Complete (PR #56)
 - **Effort:** L
 - **Impact:** High
 - **Description:** `TypeInfo::kind<T>()` for introspecting types at compile-time
 - **RFC:** `docs/design/rfc-compile-time-reflection-and-encodings.md`
 - **Use Cases:** JSON/Protobuf encodings, ORMs, serialization
-- **Current:** Static trait calls parser support merged (PR #41)
-- **Next:** Typeck + codegen + stdlib `reflection` module
+- **Implemented:**
+  - Static trait methods: `TypeInfo::type_name<T>()`, `TypeInfo::kind<T>()`
+  - Metadata types: `FieldInfo`, `ClassInfo`, `VariantInfo`, `EnumInfo`, `TypeKind`
+  - Automatic intrinsic generation for all classes and enums
+  - Zero runtime overhead - all generated at compile time
+- **Example:** `examples/reflection_demo.pluto`
 
 #### 27. Compile-Time Reflection (Phase 2)
-- **Status:** 🔴 Blocked
+- **Status:** 🟡 Ready
 - **Effort:** L
 - **Impact:** High
 - **Description:** Loop unrolling, compiler transforms for generated code
-- **Depends On:** Phase 1 (Feature #26)
+- **Depends On:** Phase 1 (Feature #26) ✅
 
 #### 28. Generic JsonEncoding (Phase 3)
 - **Status:** 🔴 Blocked
