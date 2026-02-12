@@ -9,7 +9,6 @@ pub struct Program {
     pub imports: Vec<Spanned<ImportDecl>>,
     pub functions: Vec<Spanned<Function>>,
     pub extern_fns: Vec<Spanned<ExternFnDecl>>,
-    pub extern_rust_crates: Vec<Spanned<ExternRustDecl>>,
     pub classes: Vec<Spanned<ClassDecl>>,
     pub traits: Vec<Spanned<TraitDecl>>,
     pub enums: Vec<Spanned<EnumDecl>>,
@@ -19,7 +18,7 @@ pub struct Program {
     pub errors: Vec<Spanned<ErrorDecl>>,
     pub test_info: Vec<TestInfo>,
     pub tests: Option<Spanned<TestsDecl>>,
-    pub fallible_extern_fns: Vec<String>,  // populated by rust_ffi::inject_extern_fns for Result-returning FFI fns
+    pub fallible_extern_fns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,12 +59,6 @@ pub struct ExternFnDecl {
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub is_pub: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExternRustDecl {
-    pub crate_path: Spanned<String>,
-    pub alias: Spanned<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

@@ -745,6 +745,7 @@ impl PlutoMcp {
             entry_path,
             &binary_path,
             stdlib_path.as_deref(),
+            false,
         );
 
         if let Err(err) = compile_result {

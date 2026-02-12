@@ -113,14 +113,7 @@ impl PrettyPrinter {
             has_output = true;
         }
 
-        // 2. Extern rust
-        for ext in &program.extern_rust_crates {
-            sep!(self, has_output);
-            self.emit_extern_rust(&ext.node);
-            self.newline();
-        }
-
-        // 3. Extern fn
+        // 2. Extern fn
         for ext in &program.extern_fns {
             sep!(self, has_output);
             self.emit_extern_fn(&ext.node);
@@ -244,13 +237,6 @@ impl PrettyPrinter {
             self.write(" ");
             self.emit_type_expr(&ret.node);
         }
-    }
-
-    fn emit_extern_rust(&mut self, ext: &ExternRustDecl) {
-        self.write("extern rust ");
-        self.write(&ext.crate_path.node);
-        self.write(" as ");
-        self.write(&ext.alias.node);
     }
 
     // ── Error ────────────────────────────────────────────────────────

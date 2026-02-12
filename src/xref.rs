@@ -360,7 +360,6 @@ mod tests {
             imports: vec![],
             functions: vec![],
             extern_fns: vec![],
-            extern_rust_crates: vec![],
             classes: vec![],
             traits: vec![],
             enums: vec![],
