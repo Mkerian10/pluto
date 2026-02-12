@@ -1,7 +1,7 @@
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use crate::span::Spanned;
-use crate::visit::{walk_stmt, Visitor};
+use crate::span::{Span, Spanned};
+use crate::visit::{walk_expr, walk_stmt, Visitor};
 use super::env::{mangle_method, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::resolve_type;
@@ -727,155 +727,27 @@ pub(super) fn root_variable(expr: &Expr) -> Option<&str> {
 }
 
 /// Collect all `Expr::Ident` names referenced in a block.
+struct IdentCollector<'a> {
+    idents: &'a mut std::collections::HashSet<String>,
+}
+
+impl Visitor for IdentCollector<'_> {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        // Collect identifier if this is an Ident expression
+        if let Expr::Ident(name) = &expr.node {
+            self.idents.insert(name.clone());
+        }
+        // Recurse into sub-expressions
+        walk_expr(self, expr);
+    }
+}
+
 pub(super) fn collect_idents_in_block(block: &Block, idents: &mut std::collections::HashSet<String>) {
-    for stmt in &block.stmts {
-        collect_idents_in_stmt(&stmt.node, idents);
-    }
+    let spanned_block = Spanned::new(block.clone(), Span::dummy());
+    let mut collector = IdentCollector { idents };
+    collector.visit_block(&spanned_block);
 }
 
-fn collect_idents_in_stmt(stmt: &Stmt, idents: &mut std::collections::HashSet<String>) {
-    match stmt {
-        Stmt::Let { value, .. } => collect_idents_in_expr(&value.node, idents),
-        Stmt::Return(Some(expr)) => collect_idents_in_expr(&expr.node, idents),
-        Stmt::Return(None) => {}
-        Stmt::Assign { value, .. } => collect_idents_in_expr(&value.node, idents),
-        Stmt::FieldAssign { object, value, .. } => {
-            collect_idents_in_expr(&object.node, idents);
-            collect_idents_in_expr(&value.node, idents);
-        }
-        Stmt::If { condition, then_block, else_block } => {
-            collect_idents_in_expr(&condition.node, idents);
-            collect_idents_in_block(&then_block.node, idents);
-            if let Some(eb) = else_block {
-                collect_idents_in_block(&eb.node, idents);
-            }
-        }
-        Stmt::While { condition, body } => {
-            collect_idents_in_expr(&condition.node, idents);
-            collect_idents_in_block(&body.node, idents);
-        }
-        Stmt::For { iterable, body, .. } => {
-            collect_idents_in_expr(&iterable.node, idents);
-            collect_idents_in_block(&body.node, idents);
-        }
-        Stmt::IndexAssign { object, index, value } => {
-            collect_idents_in_expr(&object.node, idents);
-            collect_idents_in_expr(&index.node, idents);
-            collect_idents_in_expr(&value.node, idents);
-        }
-        Stmt::Match { expr, arms } => {
-            collect_idents_in_expr(&expr.node, idents);
-            for arm in arms {
-                collect_idents_in_block(&arm.body.node, idents);
-            }
-        }
-        Stmt::Raise { fields, .. } => {
-            for (_, val) in fields {
-                collect_idents_in_expr(&val.node, idents);
-            }
-        }
-        Stmt::Expr(expr) => collect_idents_in_expr(&expr.node, idents),
-        Stmt::Scope { seeds, body, .. } => {
-            for seed in seeds {
-                collect_idents_in_expr(&seed.node, idents);
-            }
-            collect_idents_in_block(&body.node, idents);
-        }
-        _ => {}
-    }
-}
-
-fn collect_idents_in_expr(expr: &Expr, idents: &mut std::collections::HashSet<String>) {
-    match expr {
-        Expr::Ident(name) => { idents.insert(name.clone()); }
-        Expr::BinOp { lhs, rhs, .. } => {
-            collect_idents_in_expr(&lhs.node, idents);
-            collect_idents_in_expr(&rhs.node, idents);
-        }
-        Expr::UnaryOp { operand, .. } => collect_idents_in_expr(&operand.node, idents),
-        Expr::Cast { expr: inner, .. } => collect_idents_in_expr(&inner.node, idents),
-        Expr::Call { args, .. } => {
-            for arg in args {
-                collect_idents_in_expr(&arg.node, idents);
-            }
-        }
-        Expr::FieldAccess { object, .. } => collect_idents_in_expr(&object.node, idents),
-        Expr::MethodCall { object, args, .. } => {
-            collect_idents_in_expr(&object.node, idents);
-            for arg in args {
-                collect_idents_in_expr(&arg.node, idents);
-            }
-        }
-        Expr::StructLit { fields, .. } => {
-            for (_, val) in fields {
-                collect_idents_in_expr(&val.node, idents);
-            }
-        }
-        Expr::ArrayLit { elements } => {
-            for elem in elements {
-                collect_idents_in_expr(&elem.node, idents);
-            }
-        }
-        Expr::Index { object, index } => {
-            collect_idents_in_expr(&object.node, idents);
-            collect_idents_in_expr(&index.node, idents);
-        }
-        Expr::StringInterp { parts } => {
-            for part in parts {
-                if let crate::parser::ast::StringInterpPart::Expr(e) = part {
-                    collect_idents_in_expr(&e.node, idents);
-                }
-            }
-        }
-        Expr::EnumData { fields, .. } => {
-            for (_, val) in fields {
-                collect_idents_in_expr(&val.node, idents);
-            }
-        }
-        Expr::Closure { body, .. } => collect_idents_in_block(&body.node, idents),
-        Expr::Propagate { expr: inner } => collect_idents_in_expr(&inner.node, idents),
-        Expr::Catch { expr: inner, handler } => {
-            collect_idents_in_expr(&inner.node, idents);
-            match handler {
-                crate::parser::ast::CatchHandler::Wildcard { body, .. } => {
-                    collect_idents_in_block(&body.node, idents);
-                }
-                crate::parser::ast::CatchHandler::Shorthand(fb) => {
-                    collect_idents_in_expr(&fb.node, idents);
-                }
-            }
-        }
-        Expr::MapLit { entries, .. } => {
-            for (k, v) in entries {
-                collect_idents_in_expr(&k.node, idents);
-                collect_idents_in_expr(&v.node, idents);
-            }
-        }
-        Expr::SetLit { elements, .. } => {
-            for elem in elements {
-                collect_idents_in_expr(&elem.node, idents);
-            }
-        }
-        Expr::Range { start, end, .. } => {
-            collect_idents_in_expr(&start.node, idents);
-            collect_idents_in_expr(&end.node, idents);
-        }
-        Expr::Spawn { call } => collect_idents_in_expr(&call.node, idents),
-        Expr::NullPropagate { expr: inner } => collect_idents_in_expr(&inner.node, idents),
-        Expr::StaticTraitCall { args, .. } => {
-            for arg in args {
-                collect_idents_in_expr(&arg.node, idents);
-            }
-        }
-        Expr::QualifiedAccess { segments } => {
-            if let Some(first) = segments.first() {
-                idents.insert(first.node.clone());
-            }
-        }
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
-    }
-}
 
 fn check_field_assign(
     object: &Spanned<Expr>,
