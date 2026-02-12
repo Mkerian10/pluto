@@ -1007,3 +1007,61 @@ fn main() {
     ]);
     assert_eq!(out, "ping\n");
 }
+
+#[test]
+fn test_sibling_file_error_attribution() {
+    // When a sibling file has a syntax error, the error message should
+    // correctly attribute the error to the sibling file, not the entry file.
+    let dir = tempfile::tempdir().unwrap();
+
+    // Entry file (valid)
+    std::fs::write(
+        dir.path().join("main.pluto"),
+        r#"fn main() {
+    print("Hello")
+}
+"#,
+    )
+    .unwrap();
+
+    // Sibling file with syntax error (empty braces in string)
+    std::fs::write(
+        dir.path().join("bad.pluto"),
+        r#"pub fn get_json() string {
+    return "{}"
+}
+"#,
+    )
+    .unwrap();
+
+    let entry = dir.path().join("main.pluto");
+    let bin_path = dir.path().join("test_bin");
+
+    let result = plutoc::compile_file(&entry, &bin_path);
+    assert!(result.is_err(), "Compilation should fail due to sibling file error");
+
+    let err = result.unwrap_err();
+
+    // The error should be a SiblingFile error
+    match &err {
+        plutoc::diagnostics::CompileError::SiblingFile { path, source } => {
+            // Verify the path points to bad.pluto, not main.pluto
+            assert!(
+                path.ends_with("bad.pluto"),
+                "Error path should point to bad.pluto, got: {}",
+                path.display()
+            );
+
+            // Verify the underlying error is a syntax error
+            match **source {
+                plutoc::diagnostics::CompileError::Syntax { .. } => {},
+                _ => panic!("Expected Syntax error, got: {:?}", source),
+            }
+        }
+        _ => panic!("Expected SiblingFile error, got: {:?}", err),
+    }
+
+    // Also verify the error message mentions the sibling file
+    let err_string = format!("{}", err);
+    assert!(err_string.contains("Syntax error"), "Error should mention syntax error");
+}

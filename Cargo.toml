@@ -133,9 +133,10 @@ path = "tests/integration/json_tests.rs"
 name = "http_tests"
 path = "tests/integration/http_tests.rs"
 
-[[test]]
-name = "rust_ffi"
-path = "tests/integration/rust_ffi.rs"
+# Commented out - file does not exist
+# [[test]]
+# name = "rust_ffi"
+# path = "tests/integration/rust_ffi.rs"
 
 [[test]]
 name = "concurrency"

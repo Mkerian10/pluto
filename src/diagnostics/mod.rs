@@ -18,6 +18,13 @@ pub enum CompileError {
 
     #[error("Manifest error: {msg}")]
     Manifest { msg: String, path: PathBuf },
+
+    /// Error from a sibling file that was auto-included during compilation
+    #[error("{source}")]
+    SiblingFile {
+        path: PathBuf,
+        source: Box<CompileError>
+    },
 }
 
 impl CompileError {
@@ -39,6 +46,10 @@ impl CompileError {
 
     pub fn manifest(msg: impl Into<String>, path: PathBuf) -> Self {
         Self::Manifest { msg: msg.into(), path }
+    }
+
+    pub fn sibling_file(path: PathBuf, source: CompileError) -> Self {
+        Self::SiblingFile { path, source: Box::new(source) }
     }
 }
 
@@ -92,6 +103,18 @@ pub fn render_error(source: &str, _filename: &str, err: &CompileError) {
         CompileError::Manifest { msg, path } => {
             eprintln!("error[manifest]: {msg}");
             eprintln!("  --> {}", path.display());
+        }
+        CompileError::SiblingFile { path, source } => {
+            // Load the sibling file's source to render the error correctly
+            if let Ok(sibling_source) = std::fs::read_to_string(path) {
+                // Render the underlying error with the sibling file's source
+                render_error(&sibling_source, &path.display().to_string(), source);
+                eprintln!("note: this file was auto-included as a sibling of the entry point");
+            } else {
+                // Fallback if we can't read the sibling file
+                eprintln!("error in sibling file: {}", path.display());
+                eprintln!("{source}");
+            }
         }
     }
 }

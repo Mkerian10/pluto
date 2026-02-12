@@ -619,7 +619,8 @@ fn resolve_modules_inner(
             if dep_names.contains(&stem.to_string()) {
                 continue;
             }
-            let (program, _file_id) = load_and_parse(file_path, &mut source_map)?;
+            let (program, _file_id) = load_and_parse(file_path, &mut source_map)
+                .map_err(|err| CompileError::sibling_file(file_path.clone(), err))?;
             // Merge sibling's imports into root (they might also have imports)
             root.imports.extend(program.imports);
             root.functions.extend(program.functions);
