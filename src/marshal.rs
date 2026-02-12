@@ -2042,3 +2042,626 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::{BinOp, TypeExpr};
+
+    // ===== type_expr_to_string tests =====
+
+    #[test]
+    fn test_type_expr_to_string_named() {
+        let ty = TypeExpr::Named("int".to_string());
+        assert_eq!(type_expr_to_string(&ty), "int");
+
+        let ty = TypeExpr::Named("MyClass".to_string());
+        assert_eq!(type_expr_to_string(&ty), "MyClass");
+    }
+
+    #[test]
+    fn test_type_expr_to_string_array() {
+        let ty = TypeExpr::Array(Box::new(Spanned {
+            node: TypeExpr::Named("int".to_string()),
+            span: Span { start: 0, end: 0, file_id: 0 },
+        }));
+        assert_eq!(type_expr_to_string(&ty), "array_int");
+    }
+
+    #[test]
+    fn test_type_expr_to_string_nested_array() {
+        let ty = TypeExpr::Array(Box::new(Spanned {
+            node: TypeExpr::Array(Box::new(Spanned {
+                node: TypeExpr::Named("string".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            })),
+            span: Span { start: 0, end: 0, file_id: 0 },
+        }));
+        assert_eq!(type_expr_to_string(&ty), "array_array_string");
+    }
+
+    #[test]
+    fn test_type_expr_to_string_generic() {
+        let ty = TypeExpr::Generic {
+            name: "Box".to_string(),
+            type_args: vec![Spanned {
+                node: TypeExpr::Named("int".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            }],
+        };
+        assert_eq!(type_expr_to_string(&ty), "Box$$int");
+    }
+
+    #[test]
+    fn test_type_expr_to_string_generic_multiple_args() {
+        let ty = TypeExpr::Generic {
+            name: "Pair".to_string(),
+            type_args: vec![
+                Spanned {
+                    node: TypeExpr::Named("int".to_string()),
+                    span: Span { start: 0, end: 0, file_id: 0 },
+                },
+                Spanned {
+                    node: TypeExpr::Named("string".to_string()),
+                    span: Span { start: 0, end: 0, file_id: 0 },
+                },
+            ],
+        };
+        assert_eq!(type_expr_to_string(&ty), "Pair$$int$string");
+    }
+
+    #[test]
+    fn test_type_expr_to_string_unknown() {
+        // Fn types should return "unknown"
+        let ty = TypeExpr::Fn {
+            params: vec![],
+            return_type: Box::new(Spanned {
+                node: TypeExpr::Named("void".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            }),
+        };
+        assert_eq!(type_expr_to_string(&ty), "unknown");
+    }
+
+    // ===== mangle_generic_name tests =====
+
+    #[test]
+    fn test_mangle_generic_name_single_arg() {
+        let type_args = vec![Spanned {
+            node: TypeExpr::Named("int".to_string()),
+            span: Span { start: 0, end: 0, file_id: 0 },
+        }];
+        let result = mangle_generic_name("Box", &type_args);
+        assert_eq!(result, "Box$$int");
+    }
+
+    #[test]
+    fn test_mangle_generic_name_multiple_args() {
+        let type_args = vec![
+            Spanned {
+                node: TypeExpr::Named("int".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            },
+            Spanned {
+                node: TypeExpr::Named("string".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            },
+        ];
+        let result = mangle_generic_name("Pair", &type_args);
+        assert_eq!(result, "Pair$$int$string");
+    }
+
+    #[test]
+    fn test_mangle_generic_name_three_args() {
+        let type_args = vec![
+            Spanned {
+                node: TypeExpr::Named("int".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            },
+            Spanned {
+                node: TypeExpr::Named("float".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            },
+            Spanned {
+                node: TypeExpr::Named("bool".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            },
+        ];
+        let result = mangle_generic_name("Triple", &type_args);
+        assert_eq!(result, "Triple$$int$float$bool");
+    }
+
+    #[test]
+    fn test_mangle_generic_name_nested_generic() {
+        let type_args = vec![Spanned {
+            node: TypeExpr::Generic {
+                name: "Box".to_string(),
+                type_args: vec![Spanned {
+                    node: TypeExpr::Named("int".to_string()),
+                    span: Span { start: 0, end: 0, file_id: 0 },
+                }],
+            },
+            span: Span { start: 0, end: 0, file_id: 0 },
+        }];
+        let result = mangle_generic_name("Container", &type_args);
+        assert_eq!(result, "Container$$Box$$int");
+    }
+
+    #[test]
+    fn test_mangle_generic_name_array_type_arg() {
+        let type_args = vec![Spanned {
+            node: TypeExpr::Array(Box::new(Spanned {
+                node: TypeExpr::Named("int".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            })),
+            span: Span { start: 0, end: 0, file_id: 0 },
+        }];
+        let result = mangle_generic_name("Wrapper", &type_args);
+        assert_eq!(result, "Wrapper$$array_int");
+    }
+
+    // ===== AST construction helper tests =====
+
+    #[test]
+    fn test_mk_var() {
+        let expr = mk_var("x");
+        match expr {
+            Expr::Ident(name) => assert_eq!(name, "x"),
+            _ => panic!("Expected Ident"),
+        }
+    }
+
+    #[test]
+    fn test_mk_int_lit() {
+        let expr = mk_int_lit(42);
+        match expr {
+            Expr::IntLit(value) => assert_eq!(value, 42),
+            _ => panic!("Expected IntLit"),
+        }
+
+        let expr = mk_int_lit(-100);
+        match expr {
+            Expr::IntLit(value) => assert_eq!(value, -100),
+            _ => panic!("Expected IntLit"),
+        }
+    }
+
+    #[test]
+    fn test_mk_string_lit() {
+        let expr = mk_string_lit("hello");
+        match expr {
+            Expr::StringLit(value) => assert_eq!(value, "hello"),
+            _ => panic!("Expected StringLit"),
+        }
+
+        let expr = mk_string_lit("");
+        match expr {
+            Expr::StringLit(value) => assert_eq!(value, ""),
+            _ => panic!("Expected StringLit"),
+        }
+    }
+
+    #[test]
+    fn test_mk_field_access() {
+        let expr = mk_field_access("obj", "field");
+        match expr {
+            Expr::FieldAccess { object, field } => {
+                match object.node {
+                    Expr::Ident(name) => assert_eq!(name, "obj"),
+                    _ => panic!("Expected Ident for object"),
+                }
+                assert_eq!(field.node, "field");
+            }
+            _ => panic!("Expected FieldAccess"),
+        }
+    }
+
+    #[test]
+    fn test_mk_propagate() {
+        let inner = mk_var("x");
+        let expr = mk_propagate(inner);
+        match expr {
+            Expr::Propagate { expr } => match expr.node {
+                Expr::Ident(name) => assert_eq!(name, "x"),
+                _ => panic!("Expected Ident inside Propagate"),
+            },
+            _ => panic!("Expected Propagate"),
+        }
+    }
+
+    #[test]
+    fn test_mk_method_call() {
+        let expr = mk_method_call("obj", "method", vec![mk_int_lit(42)]);
+        match expr {
+            Expr::MethodCall { object, method, args } => {
+                match object.node {
+                    Expr::Ident(name) => assert_eq!(name, "obj"),
+                    _ => panic!("Expected Ident for object"),
+                }
+                assert_eq!(method.node, "method");
+                assert_eq!(args.len(), 1);
+                match &args[0].node {
+                    Expr::IntLit(v) => assert_eq!(*v, 42),
+                    _ => panic!("Expected IntLit arg"),
+                }
+            }
+            _ => panic!("Expected MethodCall"),
+        }
+    }
+
+    #[test]
+    fn test_mk_method_call_no_args() {
+        let expr = mk_method_call("obj", "method", vec![]);
+        match expr {
+            Expr::MethodCall { args, .. } => assert_eq!(args.len(), 0),
+            _ => panic!("Expected MethodCall"),
+        }
+    }
+
+    #[test]
+    fn test_mk_method_call_on_expr() {
+        let inner_expr = mk_var("x");
+        let expr = mk_method_call_on_expr(inner_expr, "foo", vec![mk_string_lit("test")]);
+        match expr {
+            Expr::MethodCall { object, method, args } => {
+                match object.node {
+                    Expr::Ident(name) => assert_eq!(name, "x"),
+                    _ => panic!("Expected Ident for object"),
+                }
+                assert_eq!(method.node, "foo");
+                assert_eq!(args.len(), 1);
+            }
+            _ => panic!("Expected MethodCall"),
+        }
+    }
+
+    #[test]
+    fn test_mk_return() {
+        let stmt = mk_return(mk_int_lit(42));
+        match stmt.node {
+            Stmt::Return(Some(expr)) => match expr.node {
+                Expr::IntLit(v) => assert_eq!(v, 42),
+                _ => panic!("Expected IntLit in return"),
+            },
+            _ => panic!("Expected Return statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_struct_lit() {
+        let fields = vec![
+            ("x".to_string(), mk_int_lit(10)),
+            ("y".to_string(), mk_int_lit(20)),
+        ];
+        let expr = mk_struct_lit("Point", fields);
+        match expr {
+            Expr::StructLit { name, fields, .. } => {
+                assert_eq!(name.node, "Point");
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0].0.node, "x");
+                assert_eq!(fields[1].0.node, "y");
+            }
+            _ => panic!("Expected StructLit"),
+        }
+    }
+
+    #[test]
+    fn test_mk_struct_lit_empty() {
+        let expr = mk_struct_lit("Empty", vec![]);
+        match expr {
+            Expr::StructLit { name, fields, .. } => {
+                assert_eq!(name.node, "Empty");
+                assert_eq!(fields.len(), 0);
+            }
+            _ => panic!("Expected StructLit"),
+        }
+    }
+
+    #[test]
+    fn test_mk_call_function() {
+        let expr = mk_call("foo", vec![mk_int_lit(1), mk_int_lit(2)]);
+        match expr {
+            Expr::Call { name, args, .. } => {
+                assert_eq!(name.node, "foo");
+                assert_eq!(args.len(), 2);
+            }
+            _ => panic!("Expected Call"),
+        }
+    }
+
+    #[test]
+    fn test_mk_call_method_with_dot() {
+        let expr = mk_call("obj.method", vec![mk_int_lit(42)]);
+        match expr {
+            Expr::MethodCall { object, method, args } => {
+                match object.node {
+                    Expr::Ident(name) => assert_eq!(name, "obj"),
+                    _ => panic!("Expected Ident for object"),
+                }
+                assert_eq!(method.node, "method");
+                assert_eq!(args.len(), 1);
+            }
+            _ => panic!("Expected MethodCall"),
+        }
+    }
+
+    #[test]
+    fn test_mk_stmt_expr() {
+        let stmt = mk_stmt_expr(mk_int_lit(42));
+        match stmt.node {
+            Stmt::Expr(expr) => match expr.node {
+                Expr::IntLit(v) => assert_eq!(v, 42),
+                _ => panic!("Expected IntLit"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    // ===== substitute_type_in_type_expr tests =====
+
+    #[test]
+    fn test_substitute_type_exact_match() {
+        let ty = TypeExpr::Named("T".to_string());
+        let concrete = TypeExpr::Named("int".to_string());
+        let result = substitute_type_in_type_expr(&ty, "T", &concrete);
+        match result {
+            TypeExpr::Named(name) => assert_eq!(name, "int"),
+            _ => panic!("Expected Named"),
+        }
+    }
+
+    #[test]
+    fn test_substitute_type_no_match() {
+        let ty = TypeExpr::Named("SomeClass".to_string());
+        let concrete = TypeExpr::Named("int".to_string());
+        let result = substitute_type_in_type_expr(&ty, "T", &concrete);
+        match result {
+            TypeExpr::Named(name) => assert_eq!(name, "SomeClass"),
+            _ => panic!("Expected Named"),
+        }
+    }
+
+    #[test]
+    fn test_substitute_type_in_array() {
+        let ty = TypeExpr::Array(Box::new(Spanned {
+            node: TypeExpr::Named("T".to_string()),
+            span: Span { start: 0, end: 0, file_id: 0 },
+        }));
+        let concrete = TypeExpr::Named("string".to_string());
+        let result = substitute_type_in_type_expr(&ty, "T", &concrete);
+        match result {
+            TypeExpr::Array(elem) => match &elem.node {
+                TypeExpr::Named(name) => assert_eq!(name, "string"),
+                _ => panic!("Expected Named in array"),
+            },
+            _ => panic!("Expected Array"),
+        }
+    }
+
+    #[test]
+    fn test_substitute_type_in_nullable() {
+        let ty = TypeExpr::Nullable(Box::new(Spanned {
+            node: TypeExpr::Named("T".to_string()),
+            span: Span { start: 0, end: 0, file_id: 0 },
+        }));
+        let concrete = TypeExpr::Named("float".to_string());
+        let result = substitute_type_in_type_expr(&ty, "T", &concrete);
+        match result {
+            TypeExpr::Nullable(inner) => match &inner.node {
+                TypeExpr::Named(name) => assert_eq!(name, "float"),
+                _ => panic!("Expected Named in nullable"),
+            },
+            _ => panic!("Expected Nullable"),
+        }
+    }
+
+    #[test]
+    fn test_substitute_type_in_generic() {
+        let ty = TypeExpr::Generic {
+            name: "Box".to_string(),
+            type_args: vec![Spanned {
+                node: TypeExpr::Named("T".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            }],
+        };
+        let concrete = TypeExpr::Named("bool".to_string());
+        let result = substitute_type_in_type_expr(&ty, "T", &concrete);
+        match result {
+            TypeExpr::Generic { name, type_args } => {
+                assert_eq!(name, "Box");
+                assert_eq!(type_args.len(), 1);
+                match &type_args[0].node {
+                    TypeExpr::Named(n) => assert_eq!(n, "bool"),
+                    _ => panic!("Expected Named type arg"),
+                }
+            }
+            _ => panic!("Expected Generic"),
+        }
+    }
+
+    #[test]
+    fn test_substitute_type_nested() {
+        // Array<Array<T>> with T -> int
+        let ty = TypeExpr::Array(Box::new(Spanned {
+            node: TypeExpr::Array(Box::new(Spanned {
+                node: TypeExpr::Named("T".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            })),
+            span: Span { start: 0, end: 0, file_id: 0 },
+        }));
+        let concrete = TypeExpr::Named("int".to_string());
+        let result = substitute_type_in_type_expr(&ty, "T", &concrete);
+        match result {
+            TypeExpr::Array(outer) => match &outer.node {
+                TypeExpr::Array(inner) => match &inner.node {
+                    TypeExpr::Named(name) => assert_eq!(name, "int"),
+                    _ => panic!("Expected Named at innermost"),
+                },
+                _ => panic!("Expected Array at middle"),
+            },
+            _ => panic!("Expected Array at outermost"),
+        }
+    }
+
+    // ===== collect_types_from_type_expr tests =====
+
+    #[test]
+    fn test_collect_types_primitive() {
+        let mut types = HashSet::new();
+        let ty = TypeExpr::Named("int".to_string());
+        collect_types_from_type_expr(&ty, &mut types);
+        assert_eq!(types.len(), 0); // Primitives not collected
+    }
+
+    #[test]
+    fn test_collect_types_all_primitives() {
+        let mut types = HashSet::new();
+        for prim in &["int", "float", "bool", "string", "byte", "void"] {
+            let ty = TypeExpr::Named(prim.to_string());
+            collect_types_from_type_expr(&ty, &mut types);
+        }
+        assert_eq!(types.len(), 0); // No primitives collected
+    }
+
+    #[test]
+    fn test_collect_types_class() {
+        let mut types = HashSet::new();
+        let ty = TypeExpr::Named("MyClass".to_string());
+        collect_types_from_type_expr(&ty, &mut types);
+        assert_eq!(types.len(), 1);
+        assert!(types.contains("MyClass"));
+    }
+
+    #[test]
+    fn test_collect_types_from_array() {
+        let mut types = HashSet::new();
+        let ty = TypeExpr::Array(Box::new(Spanned {
+            node: TypeExpr::Named("User".to_string()),
+            span: Span { start: 0, end: 0, file_id: 0 },
+        }));
+        collect_types_from_type_expr(&ty, &mut types);
+        assert_eq!(types.len(), 1);
+        assert!(types.contains("User"));
+    }
+
+    #[test]
+    fn test_collect_types_from_nullable() {
+        let mut types = HashSet::new();
+        let ty = TypeExpr::Nullable(Box::new(Spanned {
+            node: TypeExpr::Named("Product".to_string()),
+            span: Span { start: 0, end: 0, file_id: 0 },
+        }));
+        collect_types_from_type_expr(&ty, &mut types);
+        assert_eq!(types.len(), 1);
+        assert!(types.contains("Product"));
+    }
+
+    #[test]
+    fn test_collect_types_from_map() {
+        let mut types = HashSet::new();
+        let ty = TypeExpr::Generic {
+            name: "Map".to_string(),
+            type_args: vec![
+                Spanned {
+                    node: TypeExpr::Named("string".to_string()),
+                    span: Span { start: 0, end: 0, file_id: 0 },
+                },
+                Spanned {
+                    node: TypeExpr::Named("User".to_string()),
+                    span: Span { start: 0, end: 0, file_id: 0 },
+                },
+            ],
+        };
+        collect_types_from_type_expr(&ty, &mut types);
+        // Map itself not collected (built-in), but User is
+        assert_eq!(types.len(), 1);
+        assert!(types.contains("User"));
+    }
+
+    #[test]
+    fn test_collect_types_from_set() {
+        let mut types = HashSet::new();
+        let ty = TypeExpr::Generic {
+            name: "Set".to_string(),
+            type_args: vec![Spanned {
+                node: TypeExpr::Named("Product".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            }],
+        };
+        collect_types_from_type_expr(&ty, &mut types);
+        assert_eq!(types.len(), 1);
+        assert!(types.contains("Product"));
+    }
+
+    #[test]
+    fn test_collect_types_from_user_generic() {
+        let mut types = HashSet::new();
+        let ty = TypeExpr::Generic {
+            name: "Box".to_string(),
+            type_args: vec![Spanned {
+                node: TypeExpr::Named("int".to_string()),
+                span: Span { start: 0, end: 0, file_id: 0 },
+            }],
+        };
+        collect_types_from_type_expr(&ty, &mut types);
+        // User-defined generic: collects mangled name
+        assert_eq!(types.len(), 1);
+        assert!(types.contains("Box$$int"));
+    }
+
+    #[test]
+    fn test_collect_types_from_qualified() {
+        let mut types = HashSet::new();
+        let ty = TypeExpr::Qualified {
+            module: "math".to_string(),
+            name: "Vector".to_string(),
+        };
+        collect_types_from_type_expr(&ty, &mut types);
+        assert_eq!(types.len(), 1);
+        assert!(types.contains("math.Vector"));
+    }
+
+    #[test]
+    fn test_collect_types_multiple() {
+        let mut types = HashSet::new();
+        
+        // Collect from multiple type expressions
+        let ty1 = TypeExpr::Named("User".to_string());
+        collect_types_from_type_expr(&ty1, &mut types);
+        
+        let ty2 = TypeExpr::Named("Product".to_string());
+        collect_types_from_type_expr(&ty2, &mut types);
+        
+        let ty3 = TypeExpr::Named("User".to_string()); // Duplicate
+        collect_types_from_type_expr(&ty3, &mut types);
+        
+        assert_eq!(types.len(), 2); // User and Product (no duplicate)
+        assert!(types.contains("User"));
+        assert!(types.contains("Product"));
+    }
+
+    #[test]
+    fn test_collect_types_complex_nested() {
+        let mut types = HashSet::new();
+        // Map<string, Array<User>>
+        let ty = TypeExpr::Generic {
+            name: "Map".to_string(),
+            type_args: vec![
+                Spanned {
+                    node: TypeExpr::Named("string".to_string()),
+                    span: Span { start: 0, end: 0, file_id: 0 },
+                },
+                Spanned {
+                    node: TypeExpr::Array(Box::new(Spanned {
+                        node: TypeExpr::Named("User".to_string()),
+                        span: Span { start: 0, end: 0, file_id: 0 },
+                    })),
+                    span: Span { start: 0, end: 0, file_id: 0 },
+                },
+            ],
+        };
+        collect_types_from_type_expr(&ty, &mut types);
+        assert_eq!(types.len(), 1);
+        assert!(types.contains("User"));
+    }
+}
