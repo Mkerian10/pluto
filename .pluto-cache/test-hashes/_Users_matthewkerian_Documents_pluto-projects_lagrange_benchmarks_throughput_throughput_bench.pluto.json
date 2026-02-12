@@ -1,0 +1,12 @@
+{
+  "source_hash": "3ee7ed3a560ea820",
+  "test_hashes": {
+    "throughput: multi partition produce": "8d9a57c8393bcfb3",
+    "throughput: produce and consume": "ab447391aaec67f8",
+    "throughput: batch consume performance": "e401a8f85bf514e1",
+    "throughput: concurrent partitions": "e111b86e86c46755",
+    "throughput: large messages": "d674733b33a66a0c",
+    "throughput: single partition produce": "4a55cd6490941141"
+  },
+  "timestamp": 1770856779
+}

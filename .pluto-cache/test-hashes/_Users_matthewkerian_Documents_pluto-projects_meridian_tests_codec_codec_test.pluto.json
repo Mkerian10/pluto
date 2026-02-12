@@ -1,0 +1,12 @@
+{
+  "source_hash": "91a94db857281ee6",
+  "test_hashes": {
+    "encode and decode histogram snapshot": "500d5438377f307a",
+    "decode invalid json returns empty batch": "eeab0554613375e",
+    "encode batch with all types": "a8cbb4dcdba694c8",
+    "encode query response": "17880e41fc281958",
+    "encode and decode counter snapshot": "bd826181e9a8cffa",
+    "encode and decode gauge snapshot": "65e60d098adf2218"
+  },
+  "timestamp": 1770851954
+}

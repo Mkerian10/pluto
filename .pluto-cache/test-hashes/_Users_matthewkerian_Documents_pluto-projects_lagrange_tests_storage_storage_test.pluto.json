@@ -1,0 +1,13 @@
+{
+  "source_hash": "2b447d3d457aa95",
+  "test_hashes": {
+    "partition append and read": "aaa5d4efc4de90b3",
+    "segment is_full": "b2c7f91d239864ad",
+    "topic key-based partitioning": "a76bc39af0ec185f",
+    "topic manager create, produce, consume round-trip": "20a4903b564ec1f1",
+    "segment read from offset": "2a058399ca2df63e",
+    "partition segment rollover": "916801ce95506064",
+    "segment append and read": "6e1ac9d5597ffa1"
+  },
+  "timestamp": 1770852299
+}

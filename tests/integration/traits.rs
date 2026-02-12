@@ -6806,10 +6806,10 @@ fn main() {
 }
 
 #[test]
-fn fail_trait_class_nested_field_access() {
-    // COMPILER GAP: Chained field access self.inner.val treated as unknown enum
-    // Compiler sees "self.inner" as an enum reference instead of nested field access
-    compile_should_fail_with(r#"
+fn trait_class_nested_field_access() {
+    // Regression test: nested field access self.inner.val should work correctly
+    // (Previously treated as unknown enum due to uppercase heuristic bug)
+    let out = compile_and_run_stdout(r#"
 class Inner {
     val: int
 }
@@ -6827,8 +6827,11 @@ class Outer impl HasInner {
 }
 
 fn main() {
+    let o = Outer { inner: Inner { val: 42 } }
+    print(o.get_inner_val())
 }
-"#, "unknown enum");
+"#);
+    assert_eq!(out, "42\n");
 }
 
 #[test]
