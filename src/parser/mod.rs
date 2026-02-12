@@ -4817,4 +4817,41 @@ mod tests {
             _ => panic!("expected scope statement"),
         }
     }
+
+    // Phase 6: Spawn/Task Parser Tests (2 new tests)
+
+    #[test]
+    fn parse_spawn_basic() {
+        let prog = parse("fn foo() int { return 42 }\nfn main() {\n    let t = spawn foo()\n}");
+        let f = &prog.functions[1].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::Spawn { .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_spawn_with_args() {
+        let prog = parse("fn foo(x: int, y: int) int { return x + y }\nfn main() {\n    let t = spawn foo(1, 2)\n}");
+        let f = &prog.functions[1].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::Spawn { call } => {
+                        // Verify the call has arguments
+                        match &call.node {
+                            Expr::Call { args, .. } => {
+                                assert_eq!(args.len(), 2);
+                            }
+                            _ => panic!("expected call inside spawn"),
+                        }
+                    }
+                    _ => panic!("expected spawn expression"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
 }
