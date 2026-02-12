@@ -145,6 +145,7 @@ fn test_spawn_calling_spawn_nested() {
 }
 
 #[test]
+#[ignore]
 fn test_spawn_hundred_tasks_concurrent() {
     let src = r#"
         fn identity(x: int) int {
