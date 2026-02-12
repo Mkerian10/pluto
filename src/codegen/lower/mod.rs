@@ -10,6 +10,7 @@ use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::typeck::env::{mangle_method, TypeEnv};
 use crate::typeck::types::PlutoType;
+use crate::visit::{walk_stmt, Visitor};
 
 use super::runtime::RuntimeRegistry;
 
@@ -3313,49 +3314,36 @@ impl<'a> LowerContext<'a> {
 }
 
 /// Collect sender variable names from LetChan statements in a function body.
+struct SenderVarCollector<'a> {
+    names: &'a mut Vec<String>,
+    seen: &'a mut HashSet<String>,
+}
+
+impl Visitor for SenderVarCollector<'_> {
+    fn visit_stmt(&mut self, stmt: &crate::span::Spanned<Stmt>) {
+        if let Stmt::LetChan { sender, .. } = &stmt.node {
+            if self.seen.insert(sender.node.clone()) {
+                self.names.push(sender.node.clone());
+            }
+        }
+        walk_stmt(self, stmt);
+    }
+}
+
 fn collect_sender_var_names(stmts: &[crate::span::Spanned<Stmt>]) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
+    let mut collector = SenderVarCollector {
+        names: &mut names,
+        seen: &mut seen,
+    };
     for stmt in stmts {
-        collect_sender_var_names_stmt(&stmt.node, &mut names, &mut seen);
+        collector.visit_stmt(stmt);
     }
     names
 }
 
-fn collect_sender_var_names_stmt(stmt: &Stmt, names: &mut Vec<String>, seen: &mut HashSet<String>) {
-    match stmt {
-        Stmt::LetChan { sender, .. } => {
-            if seen.insert(sender.node.clone()) {
-                names.push(sender.node.clone());
-            }
-        }
-        Stmt::If { then_block, else_block, .. } => {
-            for s in &then_block.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
-            if let Some(eb) = else_block {
-                for s in &eb.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
-            }
-        }
-        Stmt::While { body, .. } | Stmt::For { body, .. } => {
-            for s in &body.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
-        }
-        Stmt::Match { arms, .. } => {
-            for arm in arms {
-                for s in &arm.body.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
-            }
-        }
-        Stmt::Select { arms, default } => {
-            for arm in arms {
-                for s in &arm.body.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
-            }
-            if let Some(def) = default {
-                for s in &def.node.stmts { collect_sender_var_names_stmt(&s.node, names, seen); }
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Lower a function body into Cranelift IR.
+/// Lower a function body into Cranelift IR./// Lower a function body into Cranelift IR.
 #[allow(clippy::too_many_arguments)]
 pub fn lower_function(
     func: &Function,
@@ -3679,67 +3667,51 @@ pub fn lower_function(
 // ── Generator codegen ────────────────────────────────────────────────────
 
 /// Count yield points in a block (recursively enters if/while/for/match bodies).
-fn count_yields_in_block(stmts: &[crate::span::Spanned<Stmt>]) -> u32 {
-    let mut count = 0;
-    for stmt in stmts {
-        count += count_yields_in_stmt(&stmt.node);
-    }
-    count
+struct YieldCounter {
+    count: u32,
 }
 
-fn count_yields_in_stmt(stmt: &Stmt) -> u32 {
-    match stmt {
-        Stmt::Yield { .. } => 1,
-        Stmt::If { then_block, else_block, .. } => {
-            let mut c = count_yields_in_block(&then_block.node.stmts);
-            if let Some(eb) = else_block {
-                c += count_yields_in_block(&eb.node.stmts);
-            }
-            c
+impl Visitor for YieldCounter {
+    fn visit_stmt(&mut self, stmt: &crate::span::Spanned<Stmt>) {
+        if let Stmt::Yield { .. } = &stmt.node {
+            self.count += 1;
         }
-        Stmt::While { body, .. } => count_yields_in_block(&body.node.stmts),
-        Stmt::For { body, .. } => count_yields_in_block(&body.node.stmts),
-        Stmt::Match { arms, .. } => {
-            let mut c = 0;
-            for arm in arms {
-                c += count_yields_in_block(&arm.body.node.stmts);
-            }
-            c
-        }
-        _ => 0,
+        walk_stmt(self, stmt);
     }
+}
+
+fn count_yields_in_block(stmts: &[crate::span::Spanned<Stmt>]) -> u32 {
+    let mut counter = YieldCounter { count: 0 };
+    for stmt in stmts {
+        counter.visit_stmt(stmt);
+    }
+    counter.count
 }
 
 /// Collect all local variable declarations in a function body.
 /// Returns (name, type) pairs. Walks into if/while/for/match bodies.
-fn collect_local_decls(stmts: &[crate::span::Spanned<Stmt>], env: &TypeEnv) -> Vec<(String, PlutoType)> {
-    let mut locals = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    collect_local_decls_inner(stmts, env, &mut locals, &mut seen);
-    locals
+struct LocalDeclCollector<'a> {
+    env: &'a TypeEnv,
+    locals: &'a mut Vec<(String, PlutoType)>,
+    seen: &'a mut HashSet<String>,
 }
 
-fn collect_local_decls_inner(
-    stmts: &[crate::span::Spanned<Stmt>],
-    env: &TypeEnv,
-    locals: &mut Vec<(String, PlutoType)>,
-    seen: &mut std::collections::HashSet<String>,
-) {
-    for stmt in stmts {
+impl Visitor for LocalDeclCollector<'_> {
+    fn visit_stmt(&mut self, stmt: &crate::span::Spanned<Stmt>) {
         match &stmt.node {
             Stmt::Let { name, ty, value, .. } => {
-                if seen.insert(name.node.clone()) {
+                if self.seen.insert(name.node.clone()) {
                     let pty = if let Some(t) = ty {
-                        resolve_type_expr_to_pluto(&t.node, env)
+                        resolve_type_expr_to_pluto(&t.node, self.env)
                     } else {
-                        infer_type_for_expr(&value.node, env, &HashMap::new())
+                        infer_type_for_expr(&value.node, self.env, &HashMap::new())
                     };
-                    locals.push((name.node.clone(), pty));
+                    self.locals.push((name.node.clone(), pty));
                 }
             }
             Stmt::For { var, iterable, body, .. } => {
-                if seen.insert(var.node.clone()) {
-                    let iter_type = infer_type_for_expr(&iterable.node, env, &HashMap::new());
+                if self.seen.insert(var.node.clone()) {
+                    let iter_type = infer_type_for_expr(&iterable.node, self.env, &HashMap::new());
                     let elem_type = match iter_type {
                         PlutoType::Array(e) => *e,
                         PlutoType::Range => PlutoType::Int,
@@ -3749,30 +3721,35 @@ fn collect_local_decls_inner(
                         PlutoType::Stream(e) => *e,
                         _ => PlutoType::Int,
                     };
-                    locals.push((var.node.clone(), elem_type));
+                    self.locals.push((var.node.clone(), elem_type));
                 }
-                collect_local_decls_inner(&body.node.stmts, env, locals, seen);
-            }
-            Stmt::If { then_block, else_block, .. } => {
-                collect_local_decls_inner(&then_block.node.stmts, env, locals, seen);
-                if let Some(eb) = else_block {
-                    collect_local_decls_inner(&eb.node.stmts, env, locals, seen);
+                // Manually visit the body
+                for s in &body.node.stmts {
+                    self.visit_stmt(s);
                 }
-            }
-            Stmt::While { body, .. } => {
-                collect_local_decls_inner(&body.node.stmts, env, locals, seen);
-            }
-            Stmt::Match { arms, .. } => {
-                for arm in arms {
-                    collect_local_decls_inner(&arm.body.node.stmts, env, locals, seen);
-                }
+                return;
             }
             _ => {}
         }
+        walk_stmt(self, stmt);
     }
 }
 
-/// Lower the generator creator function.
+fn collect_local_decls(stmts: &[crate::span::Spanned<Stmt>], env: &TypeEnv) -> Vec<(String, PlutoType)> {
+    let mut locals = Vec::new();
+    let mut seen = HashSet::new();
+    let mut collector = LocalDeclCollector {
+        env,
+        locals: &mut locals,
+        seen: &mut seen,
+    };
+    for stmt in stmts {
+        collector.visit_stmt(stmt);
+    }
+    locals
+}
+
+/// Lower the generator creator function./// Lower the generator creator function.
 /// Allocates a generator object with [next_fn_ptr, state, done, result, params..., locals...]
 /// and stores the next function pointer + initial parameter values.
 #[allow(clippy::too_many_arguments)]
