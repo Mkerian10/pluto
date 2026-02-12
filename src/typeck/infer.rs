@@ -427,6 +427,12 @@ pub(crate) fn infer_expr(
                 segments.iter().map(|s| &s.node).collect::<Vec<_>>()
             )
         }
+        Expr::QualifiedAccess { segments } => {
+            panic!(
+                "QualifiedAccess should be resolved by module flattening before type checking. Segments: {:?}",
+                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+            )
+        }
     }
 }
 
