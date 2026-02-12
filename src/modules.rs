@@ -1114,271 +1114,130 @@ fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, import_names: &HashSet<String>)
     }
 }
 
-fn rewrite_block(block: &mut Block, import_names: &HashSet<String>) {
-    for stmt in &mut block.stmts {
-        rewrite_stmt(&mut stmt.node, import_names);
-    }
+struct QualifiedAccessRewriter<'a> {
+    import_names: &'a HashSet<String>,
 }
 
-fn rewrite_stmt(stmt: &mut Stmt, import_names: &HashSet<String>) {
-    match stmt {
-        Stmt::Let { ty, value, .. } => {
-            if let Some(t) = ty {
-                rewrite_type_expr(t, import_names);
-            }
-            rewrite_expr(&mut value.node, value.span, import_names);
-        }
-        Stmt::Return(Some(expr)) => {
-            rewrite_expr(&mut expr.node, expr.span, import_names);
-        }
-        Stmt::Return(None) => {}
-        Stmt::Assign { value, .. } => {
-            rewrite_expr(&mut value.node, value.span, import_names);
-        }
-        Stmt::FieldAssign { object, value, .. } => {
-            rewrite_expr(&mut object.node, object.span, import_names);
-            rewrite_expr(&mut value.node, value.span, import_names);
-        }
-        Stmt::If { condition, then_block, else_block } => {
-            rewrite_expr(&mut condition.node, condition.span, import_names);
-            rewrite_block(&mut then_block.node, import_names);
-            if let Some(eb) = else_block {
-                rewrite_block(&mut eb.node, import_names);
-            }
-        }
-        Stmt::While { condition, body } => {
-            rewrite_expr(&mut condition.node, condition.span, import_names);
-            rewrite_block(&mut body.node, import_names);
-        }
-        Stmt::For { iterable, body, .. } => {
-            rewrite_expr(&mut iterable.node, iterable.span, import_names);
-            rewrite_block(&mut body.node, import_names);
-        }
-        Stmt::IndexAssign { object, index, value } => {
-            rewrite_expr(&mut object.node, object.span, import_names);
-            rewrite_expr(&mut index.node, index.span, import_names);
-            rewrite_expr(&mut value.node, value.span, import_names);
-        }
-        Stmt::Match { expr, arms } => {
-            rewrite_expr(&mut expr.node, expr.span, import_names);
-            for arm in arms {
-                // Rewrite type_args in match arms
-                for ta in &mut arm.type_args {
-                    rewrite_type_expr(ta, import_names);
-                }
-                rewrite_block(&mut arm.body.node, import_names);
-            }
-        }
-        Stmt::Raise { fields, .. } => {
-            for (_, val) in fields {
-                rewrite_expr(&mut val.node, val.span, import_names);
-            }
-        }
-        Stmt::Expr(expr) => {
-            rewrite_expr(&mut expr.node, expr.span, import_names);
-        }
-        Stmt::LetChan { elem_type, capacity, .. } => {
-            rewrite_type_expr(elem_type, import_names);
-            if let Some(cap) = capacity {
-                rewrite_expr(&mut cap.node, cap.span, import_names);
-            }
-        }
-        Stmt::Select { arms, default } => {
-            for arm in arms {
-                match &mut arm.op {
-                    SelectOp::Recv { channel, .. } => {
-                        rewrite_expr(&mut channel.node, channel.span, import_names);
+impl VisitMut for QualifiedAccessRewriter<'_> {
+    fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+        // Handle expressions that need qualification rewriting
+        match &mut expr.node {
+            Expr::MethodCall { object, method, args } => {
+                // Check if object is Ident matching an import name → convert to qualified call
+                if let Expr::Ident(name) = &object.node
+                    && self.import_names.contains(name.as_str())
+                {
+                    let qualified_name = prefix_name(name, &method.node);
+                    let name_span = Span::new(object.span.start, method.span.end);
+                    // Rewrite args first
+                    for arg in args.iter_mut() {
+                        self.visit_expr_mut(arg);
                     }
-                    SelectOp::Send { channel, value } => {
-                        rewrite_expr(&mut channel.node, channel.span, import_names);
-                        rewrite_expr(&mut value.node, value.span, import_names);
-                    }
+                    expr.node = Expr::Call {
+                        name: Spanned::new(qualified_name, name_span),
+                        args: std::mem::take(args),
+                        type_args: vec![],
+                        target_id: None,
+                    };
+                    return;
                 }
-                rewrite_block(&mut arm.body.node, import_names);
             }
-            if let Some(def) = default {
-                rewrite_block(&mut def.node, import_names);
-            }
-        }
-        Stmt::Scope { seeds, bindings, body } => {
-            for seed in seeds {
-                rewrite_expr(&mut seed.node, seed.span, import_names);
-            }
-            for binding in bindings {
-                rewrite_type_expr(&mut binding.ty, import_names);
-            }
-            rewrite_block(&mut body.node, import_names);
-        }
-        Stmt::Yield { value, .. } => {
-            rewrite_expr(&mut value.node, value.span, import_names);
-        }
-        Stmt::Break | Stmt::Continue => {}
-    }
-}
+            Expr::FieldAccess { object, field } => {
+                // Check for module-qualified enum access: status.State.Active
+                // Pattern: FieldAccess { object: FieldAccess { object: Ident(module), field: enum_name }, field: variant }
+                if let Expr::FieldAccess { object: inner_object, field: inner_field } = &object.node {
+                    if let Expr::Ident(module_name) = &inner_object.node {
+                        if self.import_names.contains(module_name.as_str()) {
+                            // This is module.Enum.Variant - convert to EnumUnit
+                            let qualified_enum_name = prefix_name(module_name, &inner_field.node);
+                            let enum_name_span = Span::new(inner_object.span.start, inner_field.span.end);
+                            let variant = field.clone();
 
-fn rewrite_expr(expr: &mut Expr, span: Span, import_names: &HashSet<String>) {
-    match expr {
-        Expr::MethodCall { object, method, args } => {
-            // Check if object is Ident matching an import name → convert to qualified call
-            if let Expr::Ident(name) = &object.node
-                && import_names.contains(name.as_str())
-            {
-                let qualified_name = prefix_name(name, &method.node);
-                let name_span = Span::new(object.span.start, method.span.end);
-                // Rewrite args first
-                for arg in args.iter_mut() {
-                    rewrite_expr(&mut arg.node, arg.span, import_names);
+                            expr.node = Expr::EnumUnit {
+                                enum_name: Spanned::new(qualified_enum_name, enum_name_span),
+                                variant,
+                                type_args: vec![],
+                                enum_id: None,
+                                variant_id: None,
+                            };
+                            return;
+                        }
+                    }
                 }
-                *expr = Expr::Call {
-                    name: Spanned::new(qualified_name, name_span),
-                    args: std::mem::take(args),
-                    type_args: vec![],
-                    target_id: None,
-                };
+            }
+            Expr::StructLit { type_args, .. } => {
+                for ta in type_args {
+                    rewrite_type_expr(ta, self.import_names);
+                }
+            }
+            Expr::EnumUnit { type_args, .. } | Expr::EnumData { type_args, .. } => {
+                for ta in type_args {
+                    rewrite_type_expr(ta, self.import_names);
+                }
+            }
+            Expr::MapLit { key_type, value_type, .. } => {
+                rewrite_type_expr(key_type, self.import_names);
+                rewrite_type_expr(value_type, self.import_names);
+            }
+            Expr::SetLit { elem_type, .. } => {
+                rewrite_type_expr(elem_type, self.import_names);
+            }
+            Expr::Cast { target_type, .. } => {
+                rewrite_type_expr(target_type, self.import_names);
+            }
+            Expr::StringInterp { parts } => {
+                for part in parts {
+                    if let StringInterpPart::Expr(e) = part {
+                        self.visit_expr_mut(e);
+                    }
+                }
                 return;
             }
-            rewrite_expr(&mut object.node, object.span, import_names);
-            for arg in args {
-                rewrite_expr(&mut arg.node, arg.span, import_names);
-            }
+            _ => {}
         }
-        Expr::FieldAccess { object, field } => {
-            // Check for module-qualified enum access: status.State.Active
-            // Pattern: FieldAccess { object: FieldAccess { object: Ident(module), field: enum_name }, field: variant }
-            if let Expr::FieldAccess { object: inner_object, field: inner_field } = &object.node {
-                if let Expr::Ident(module_name) = &inner_object.node {
-                    if import_names.contains(module_name.as_str()) {
-                        // This is module.Enum.Variant - convert to EnumUnit/EnumData
-                        let qualified_enum_name = prefix_name(module_name, &inner_field.node);
-                        let enum_name_span = Span::new(inner_object.span.start, inner_field.span.end);
-                        let variant = field.clone();
+        // Recurse into sub-expressions
+        walk_expr_mut(self, expr);
+    }
 
-                        // The conversion happens here, and the caller (statement/expression context)
-                        // will handle whether it becomes EnumUnit or EnumData based on what follows.
-                        // For now, we create EnumUnit and let the parser's follow-on logic handle EnumData cases.
-                        *expr = Expr::EnumUnit {
-                            enum_name: Spanned::new(qualified_enum_name, enum_name_span),
-                            variant,
-                            type_args: vec![],
-                            enum_id: None,
-                            variant_id: None,
-                        };
-                        return;
+    fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
+        // Handle statements that need type expression rewriting
+        match &mut stmt.node {
+            Stmt::Let { ty, .. } => {
+                if let Some(t) = ty {
+                    rewrite_type_expr(t, self.import_names);
+                }
+            }
+            Stmt::Match { arms, .. } => {
+                for arm in arms {
+                    for ta in &mut arm.type_args {
+                        rewrite_type_expr(ta, self.import_names);
                     }
                 }
             }
-            rewrite_expr(&mut object.node, object.span, import_names);
-        }
-        Expr::Call { name, args, .. } => {
-            for arg in args {
-                rewrite_expr(&mut arg.node, arg.span, import_names);
+            Stmt::LetChan { elem_type, .. } => {
+                rewrite_type_expr(elem_type, self.import_names);
             }
-            let _ = name;
-        }
-        Expr::StructLit { type_args, fields, .. } => {
-            // name is already qualified from parser (e.g., "math.Point")
-            for ta in type_args {
-                rewrite_type_expr(ta, import_names);
-            }
-            for (_, val) in fields {
-                rewrite_expr(&mut val.node, val.span, import_names);
-            }
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            rewrite_expr(&mut lhs.node, lhs.span, import_names);
-            rewrite_expr(&mut rhs.node, rhs.span, import_names);
-        }
-        Expr::UnaryOp { operand, .. } => {
-            rewrite_expr(&mut operand.node, operand.span, import_names);
-        }
-        Expr::Cast { expr: inner, target_type } => {
-            rewrite_expr(&mut inner.node, inner.span, import_names);
-            rewrite_type_expr(target_type, import_names);
-        }
-        Expr::ArrayLit { elements } => {
-            for elem in elements {
-                rewrite_expr(&mut elem.node, elem.span, import_names);
-            }
-        }
-        Expr::Index { object, index } => {
-            rewrite_expr(&mut object.node, object.span, import_names);
-            rewrite_expr(&mut index.node, index.span, import_names);
-        }
-        Expr::EnumUnit { type_args, .. } => {
-            // enum_name is already qualified from parser (e.g., "math.Status")
-            for ta in type_args {
-                rewrite_type_expr(ta, import_names);
-            }
-        }
-        Expr::EnumData { type_args, fields, .. } => {
-            // enum_name is already qualified from parser (e.g., "math.Status")
-            for ta in type_args {
-                rewrite_type_expr(ta, import_names);
-            }
-            for (_, val) in fields {
-                rewrite_expr(&mut val.node, val.span, import_names);
-            }
-        }
-        Expr::StringInterp { parts } => {
-            for part in parts {
-                if let StringInterpPart::Expr(e) = part {
-                    rewrite_expr(&mut e.node, e.span, import_names);
+            Stmt::Scope { bindings, .. } => {
+                for binding in bindings {
+                    rewrite_type_expr(&mut binding.ty, self.import_names);
                 }
             }
+            _ => {}
         }
-        Expr::Closure { body, .. } => {
-            rewrite_block(&mut body.node, import_names);
-        }
-        Expr::MapLit { key_type, value_type, entries } => {
-            rewrite_type_expr(key_type, import_names);
-            rewrite_type_expr(value_type, import_names);
-            for (k, v) in entries {
-                rewrite_expr(&mut k.node, k.span, import_names);
-                rewrite_expr(&mut v.node, v.span, import_names);
-            }
-        }
-        Expr::SetLit { elem_type, elements } => {
-            rewrite_type_expr(elem_type, import_names);
-            for elem in elements {
-                rewrite_expr(&mut elem.node, elem.span, import_names);
-            }
-        }
-        Expr::ClosureCreate { .. } => {}
-        Expr::Propagate { expr } => {
-            rewrite_expr(&mut expr.node, expr.span, import_names);
-        }
-        Expr::Catch { expr, handler } => {
-            rewrite_expr(&mut expr.node, expr.span, import_names);
-            match handler {
-                CatchHandler::Wildcard { body, .. } => {
-                    rewrite_block(&mut body.node, import_names);
-                }
-                CatchHandler::Shorthand(fallback) => {
-                    rewrite_expr(&mut fallback.node, fallback.span, import_names);
-                }
-            }
-        }
-        Expr::Range { start, end, .. } => {
-            rewrite_expr(&mut start.node, start.span, import_names);
-            rewrite_expr(&mut end.node, end.span, import_names);
-        }
-        Expr::Spawn { call } => {
-            rewrite_expr(&mut call.node, call.span, import_names);
-        }
-        Expr::NullPropagate { expr } => {
-            rewrite_expr(&mut expr.node, expr.span, import_names);
-        }
-        Expr::StaticTraitCall { args, .. } => {
-            for arg in args {
-                rewrite_expr(&mut arg.node, arg.span, import_names);
-            }
-        }
-        Expr::QualifiedAccess { .. } => {}
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::Ident(_) | Expr::NoneLit => {}
+        // Recurse into sub-statements
+        walk_stmt_mut(self, stmt);
     }
-    let _ = span;
 }
+
+fn rewrite_block(block: &mut Block, import_names: &HashSet<String>) {
+    let mut rewriter = QualifiedAccessRewriter {
+        import_names,
+    };
+    for stmt in &mut block.stmts {
+        rewriter.visit_stmt_mut(stmt);
+    }
+}
+
 /// Resolve QualifiedAccess nodes after module flattening.
 /// If first segment is a module name, keep as QualifiedAccess for type checker (enum case).
 /// Otherwise, convert to nested FieldAccess chain (variable.field.field case).
