@@ -1719,3 +1719,4 @@ mod tests {
     }
 }
 pub mod composers;
+pub mod scope_tracker;
