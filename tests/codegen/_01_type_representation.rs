@@ -625,7 +625,7 @@ fn test_class_with_methods() {
         }
 
         fn main() int {
-            let c = Counter { value: 10 }
+            let mut c = Counter { value: 10 }
             c.increment()
             c.increment()
             return c.get()
