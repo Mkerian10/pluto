@@ -957,4 +957,42 @@ mod tests {
         let result = check("fn main() {\n    let x = 42\n    scope(x) |y: int| {\n    }\n}");
         assert!(result.is_err());
     }
+
+    // Phase 5: Error Field Validation Typeck Tests (6 new tests)
+
+    #[test]
+    fn raise_missing_field_rejected() {
+        let result = check("error BadInput {\n    code: int\n    msg: string\n}\n\nfn main() {\n    raise BadInput { code: 5 }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn raise_extra_field_rejected() {
+        let result = check("error BadInput {\n    code: int\n}\n\nfn main() {\n    raise BadInput { code: 5, extra: \"x\" }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn raise_field_type_mismatch_rejected() {
+        let result = check("error BadInput {\n    code: int\n}\n\nfn main() {\n    raise BadInput { code: \"str\" }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn raise_wrong_field_name_rejected() {
+        let result = check("error BadInput {\n    code: int\n}\n\nfn main() {\n    raise BadInput { cde: 5 }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn raise_duplicate_field_rejected() {
+        let result = check("error BadInput {\n    code: int\n}\n\nfn main() {\n    raise BadInput { code: 5, code: 10 }\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn raise_no_fields_on_fielded_error_rejected() {
+        let result = check("error BadInput {\n    code: int\n}\n\nfn main() {\n    raise BadInput {}\n}");
+        assert!(result.is_err());
+    }
 }
