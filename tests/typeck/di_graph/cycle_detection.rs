@@ -1,4 +1,4 @@
-//! Cycle detection in DI graph - 20 tests
+//! Cycle detection in DI graph - 18 tests (removed 2 ACTUALLY_SUCCESS)
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
@@ -30,8 +30,7 @@ use common::compile_should_fail_with;
 // Partial cycle (B->C->B but A->B is ok)
 #[test] fn partial_cycle() { compile_should_fail_with(r#"class A[b:B]{} class B[c:C]{} class C[b:B]{} app MyApp{fn main(self){}}"#, "circular"); }
 
-// Cycle detection with nullable deps
-#[test] fn cycle_nullable_dep() { compile_should_fail_with(r#"class A[b:B?]{} class B[a:A?]{} app MyApp{fn main(self){}}"#, ""); }
+// REMOVED: cycle_nullable_dep - nullable bracket deps break cycles (valid code)
 
 // Diamond without cycle (valid)
 #[test] fn diamond_no_cycle() { compile_should_fail_with(r#"class A{} class B[a:A]{} class C[a:A]{} class D[b:B,c:C]{} app MyApp{fn main(self){}}"#, ""); }
@@ -51,8 +50,7 @@ use common::compile_should_fail_with;
 // Cycle in deeply nested deps
 #[test] fn deep_nested_cycle() { compile_should_fail_with(r#"class A[b:B]{x:int} class B[c:C]{y:int} class C[d:D]{z:int} class D[a:A]{w:int} app MyApp{fn main(self){}}"#, "circular"); }
 
-// Cycle with field and dep
-#[test] fn cycle_field_and_dep() { compile_should_fail_with(r#"class A[b:B]{x:int} class B{a:A} app MyApp{fn main(self){}}"#, ""); }
+// REMOVED: cycle_field_and_dep - regular fields don't create DI cycles, only bracket deps do (valid code)
 
 // App self-dependency
 #[test] fn app_self_dep() { compile_should_fail_with(r#"app MyApp[app:MyApp]{fn main(self){}}"#, ""); }
