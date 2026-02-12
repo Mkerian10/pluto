@@ -231,6 +231,11 @@ fn desugar_expr(expr: &mut Expr, span: Span) {
         Expr::NullPropagate { expr: inner } => {
             desugar_expr(&mut inner.node, inner.span);
         }
+        Expr::StaticTraitCall { args, .. } => {
+            for arg in args {
+                desugar_expr(&mut arg.node, arg.span);
+            }
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. }
         | Expr::NoneLit => {}

@@ -2728,6 +2728,36 @@ impl<'a> Parser<'a> {
 
     /// Continue parsing an expression that started with an identifier (handles calls, struct literals, and plain ident).
     fn parse_expr_after_ident(&mut self, ident: Spanned<String>) -> Result<Spanned<Expr>, CompileError> {
+        // Check for static trait call: TraitName::method<TypeArgs>(args)
+        // We've already consumed the trait name, so check if `::` follows
+        if self.peek().is_some()
+            && matches!(self.peek().expect("token should exist after is_some check").node, Token::DoubleColon)
+        {
+            // Simplified check - just verify this is actually a trait call by looking ahead
+            // Pattern after :: should be: Ident <
+            let mut i = self.pos;
+            // skip newlines to find ::
+            while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+                i += 1;
+            }
+            if i < self.tokens.len() && matches!(self.tokens[i].node, Token::DoubleColon) {
+                i += 1;
+                // skip newlines after ::
+                while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+                    i += 1;
+                }
+                // Check for Ident followed by <
+                if i < self.tokens.len() && matches!(self.tokens[i].node, Token::Ident) {
+                    i += 1;
+                    while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+                        i += 1;
+                    }
+                    if i < self.tokens.len() && matches!(self.tokens[i].node, Token::Lt) {
+                        return self.parse_static_trait_call(ident);
+                    }
+                }
+            }
+        }
         // Check for explicit type args on function call: ident<type_args>(args)
         if self.peek().is_some()
             && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt)
@@ -2819,6 +2849,33 @@ impl<'a> Parser<'a> {
         } else {
             Ok(Spanned::new(Expr::Ident(ident.node.clone()), ident.span))
         }
+    }
+
+    /// Parse static trait call: TraitName::method<TypeArgs>(args)
+    fn parse_static_trait_call(&mut self, trait_name: Spanned<String>) -> Result<Spanned<Expr>, CompileError> {
+        let start = trait_name.span.start;
+        self.expect(&Token::DoubleColon)?;
+        let method_name = self.expect_ident()?;
+
+        // Parse type arguments
+        let type_args = self.parse_type_arg_list()?;
+
+        // Parse function arguments
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+        let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
+        let close = self.expect(&Token::RParen)?;
+
+        let span = Span::new(start, close.span.end);
+        Ok(Spanned::new(
+            Expr::StaticTraitCall {
+                trait_name,
+                method_name,
+                type_args,
+                args,
+            },
+            span,
+        ))
     }
 
     fn is_at_end(&self) -> bool {
@@ -3139,6 +3196,42 @@ impl<'a> Parser<'a> {
         }
         // Must be a colon
         matches!(self.tokens[i].node, Token::Colon)
+    }
+
+    /// Lookahead to determine if we have a static trait call: `TraitName::method<TypeArgs>`
+    fn is_static_trait_call_ahead(&self) -> bool {
+        // Pattern: Ident :: Ident <
+        let mut i = self.pos;
+        // skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Ident) {
+            return false;
+        }
+        i += 1;
+        // skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::DoubleColon) {
+            return false;
+        }
+        i += 1;
+        // skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Ident) {
+            return false;
+        }
+        i += 1;
+        // skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        // Must be followed by `<` for type args
+        i < self.tokens.len() && matches!(self.tokens[i].node, Token::Lt)
     }
 }
 

@@ -414,6 +414,11 @@ fn collect_expr_accesses(
         Expr::NullPropagate { expr: inner } => {
             collect_expr_accesses(&inner.node, accesses, edges, current_fn, env, di_singletons);
         }
+        Expr::StaticTraitCall { args, .. } => {
+            for arg in args {
+                collect_expr_accesses(&arg.node, accesses, edges, current_fn, env, di_singletons);
+            }
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
     }

@@ -861,6 +861,11 @@ fn collect_idents_in_expr(expr: &Expr, idents: &mut std::collections::HashSet<St
         }
         Expr::Spawn { call } => collect_idents_in_expr(&call.node, idents),
         Expr::NullPropagate { expr: inner } => collect_idents_in_expr(&inner.node, idents),
+        Expr::StaticTraitCall { args, .. } => {
+            for arg in args {
+                collect_idents_in_expr(&arg.node, idents);
+            }
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
     }

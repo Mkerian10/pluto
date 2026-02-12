@@ -319,6 +319,11 @@ fn resolve_expr(expr: &mut Expr, index: &DeclIndex) {
         Expr::NullPropagate { expr } => {
             resolve_expr(&mut expr.node, index);
         }
+        Expr::StaticTraitCall { args, .. } => {
+            for arg in args {
+                resolve_expr(&mut arg.node, index);
+            }
+        }
         // Leaf expressions — no cross-references
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) |
         Expr::StringLit(_) | Expr::Ident(_) | Expr::NoneLit => {}
