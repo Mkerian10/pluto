@@ -54,6 +54,10 @@ name = "strings"
 path = "tests/integration/strings.rs"
 
 [[test]]
+name = "fstrings"
+path = "tests/integration/fstrings.rs"
+
+[[test]]
 name = "arrays"
 path = "tests/integration/arrays.rs"
 
