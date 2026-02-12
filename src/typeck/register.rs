@@ -148,6 +148,14 @@ pub(crate) fn resolve_trait_signatures(program: &Program, env: &mut TypeEnv) -> 
 
         let mut methods = Vec::new();
         for m in &t.methods {
+            // Validate that trait methods have a self parameter
+            if m.params.is_empty() || m.params[0].name.node != "self" {
+                return Err(CompileError::type_err(
+                    format!("trait method '{}' must have a 'self' parameter as its first parameter", m.name.node),
+                    m.name.span,
+                ));
+            }
+
             let mut param_types = Vec::new();
             for p in &m.params {
                 if p.name.node == "self" {

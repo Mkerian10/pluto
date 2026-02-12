@@ -4805,6 +4805,26 @@ fn main() {
 }
 
 #[test]
+fn trait_method_without_self_shows_error() {
+    // Trait methods must have self parameter - should show helpful error, not panic
+    compile_should_fail_with(r#"
+trait Compute {
+    fn calculate() int
+}
+
+class Calculator impl Compute {
+    value: int
+    fn calculate() int { return 42 }
+}
+
+fn main() {
+    let c: Compute = Calculator { value: 0 }
+    print(c.calculate())
+}
+"#, "trait method 'calculate' must have a 'self' parameter");
+}
+
+#[test]
 fn trait_generic_class_three_instantiations_same_trait() {
     // Three different instantiations of a generic class, all dispatched through same trait
     let out = compile_and_run_stdout(r#"
@@ -13685,12 +13705,8 @@ fn main() {
 
 #[test]
 fn crash_trait_method_missing_self_with_impl() {
-    // BUG: Trait method without self + class impl panics the compiler
-    // (register.rs:1194 — index out of range for empty params slice)
-    // Just declaring the trait is fine, but implementing triggers the panic.
-    // Using catch_unwind to document without crashing the test suite.
-    let result = std::panic::catch_unwind(|| {
-        plutoc::compile_to_object(r#"
+    // FIXED: Trait method without self now shows proper error instead of panicking
+    compile_should_fail_with(r#"
 trait Bad {
     fn compute() int
 }
@@ -13704,9 +13720,7 @@ fn main() {
     let b: Bad = Impl { tag: 0 }
     print(b.compute())
 }
-"#)
-    });
-    assert!(result.is_err(), "Expected compiler to panic on trait method without self");
+"#, "trait method 'compute' must have a 'self' parameter");
 }
 
 #[test]
