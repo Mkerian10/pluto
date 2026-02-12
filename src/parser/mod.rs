@@ -2318,9 +2318,10 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Index operator: arr[i] — use peek_raw to prevent newline-separated
-            // expressions from being parsed as indexing (e.g. arr\n[1,2])
-            if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::LBracket) {
+            // Index operator: arr[i] — allow across newlines like method calls
+            // This enables: let x = arr\n    [0]
+            if self.peek().is_some() && matches!(self.peek().unwrap().node, Token::LBracket) {
+                self.skip_newlines(); // Skip newlines before consuming '['
                 self.advance(); // consume '['
                 let index = self.parse_expr(0)?;
                 let close = self.expect(&Token::RBracket)?;
@@ -3173,7 +3174,7 @@ impl<'a> Parser<'a> {
 
     /// Lookahead to determine if `{ ... }` is a struct literal (contains `ident :`)
     fn is_struct_lit_ahead(&self) -> bool {
-        // We're positioned at `{`. Look past it for `ident :`
+        // We're positioned at `{`. Look past it for `ident :` or `}`
         let mut i = self.pos + 1;
         // skip newlines
         while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
@@ -3181,6 +3182,10 @@ impl<'a> Parser<'a> {
         }
         if i >= self.tokens.len() {
             return false;
+        }
+        // Check for empty struct literal: Foo {}
+        if matches!(self.tokens[i].node, Token::RBrace) {
+            return true;
         }
         // Must be an identifier
         if !matches!(self.tokens[i].node, Token::Ident) {
