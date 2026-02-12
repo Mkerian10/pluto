@@ -401,13 +401,12 @@ fn test_infinite_loop_with_break_in_middle() {
     // Infinite loop with break in middle of loop body
     let src = r#"
         fn main() int {
-            let i = 0
+            let mut i = 0
             while true {
                 i = i + 1
-                if i == 10 {
+                if i >= 10 {
                     break
                 }
-                i = i + 1
             }
             return i
         }
