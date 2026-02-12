@@ -4507,4 +4507,351 @@ mod tests {
             _ => panic!("expected for statement"),
         }
     }
+
+    // Phase 1: String Interpolation Tests (3 new tests)
+
+    #[test]
+    fn parse_string_interp_multiple_expressions() {
+        let prog = parse("fn main() {\n    let s = \"x={x}, y={y}, z={z}\"\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::StringInterp { parts } => {
+                        // Should have 6 parts: "x=", expr, ", y=", expr, ", z=", expr
+                        assert_eq!(parts.len(), 6);
+                        assert!(matches!(&parts[0], StringInterpPart::Lit(s) if s == "x="));
+                        assert!(matches!(&parts[1], StringInterpPart::Expr(_)));
+                        assert!(matches!(&parts[2], StringInterpPart::Lit(s) if s == ", y="));
+                        assert!(matches!(&parts[3], StringInterpPart::Expr(_)));
+                        assert!(matches!(&parts[4], StringInterpPart::Lit(s) if s == ", z="));
+                        assert!(matches!(&parts[5], StringInterpPart::Expr(_)));
+                    }
+                    _ => panic!("expected string interp, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_string_interp_nested_calls() {
+        let prog = parse("fn main() {\n    let s = \"result: {foo(1, 2)}\"\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::StringInterp { parts } => {
+                        assert_eq!(parts.len(), 2);
+                        assert!(matches!(&parts[0], StringInterpPart::Lit(s) if s == "result: "));
+                        // Verify the expression is a Call
+                        match &parts[1] {
+                            StringInterpPart::Expr(expr) => {
+                                assert!(matches!(expr.node, Expr::Call { .. }));
+                            }
+                            _ => panic!("expected expr in interpolation"),
+                        }
+                    }
+                    _ => panic!("expected string interp, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_string_interp_complex_expr() {
+        let prog = parse("fn main() {\n    let s = \"sum: {x + y * 2}\"\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::StringInterp { parts } => {
+                        assert_eq!(parts.len(), 2);
+                        assert!(matches!(&parts[0], StringInterpPart::Lit(s) if s == "sum: "));
+                        // Verify the expression is a BinOp
+                        match &parts[1] {
+                            StringInterpPart::Expr(expr) => {
+                                assert!(matches!(expr.node, Expr::BinOp { .. }));
+                            }
+                            _ => panic!("expected expr in interpolation"),
+                        }
+                    }
+                    _ => panic!("expected string interp, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    // Phase 2: Maps and Sets Parser Tests (6 new tests)
+
+    #[test]
+    fn parse_map_literal_empty() {
+        let prog = parse("fn main() {\n    let m = Map<int, string> {}\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::MapLit { key_type, value_type, entries } => {
+                        assert_eq!(entries.len(), 0);
+                        assert!(matches!(key_type.node, TypeExpr::Named(_)));
+                        assert!(matches!(value_type.node, TypeExpr::Named(_)));
+                    }
+                    _ => panic!("expected map literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_map_literal_single_entry() {
+        let prog = parse("fn main() {\n    let m = Map<int, string> { 1: \"a\" }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::MapLit { entries, .. } => {
+                        assert_eq!(entries.len(), 1);
+                    }
+                    _ => panic!("expected map literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_map_literal_multiple_entries() {
+        let prog = parse("fn main() {\n    let m = Map<int, string> { 1: \"a\", 2: \"b\", 3: \"c\" }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::MapLit { entries, .. } => {
+                        assert_eq!(entries.len(), 3);
+                    }
+                    _ => panic!("expected map literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_set_literal_empty() {
+        let prog = parse("fn main() {\n    let s = Set<int> {}\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::SetLit { elem_type, elements } => {
+                        assert_eq!(elements.len(), 0);
+                        assert!(matches!(elem_type.node, TypeExpr::Named(_)));
+                    }
+                    _ => panic!("expected set literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_set_literal_single_element() {
+        let prog = parse("fn main() {\n    let s = Set<int> { 1 }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::SetLit { elements, .. } => {
+                        assert_eq!(elements.len(), 1);
+                    }
+                    _ => panic!("expected set literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_set_literal_multiple_elements() {
+        let prog = parse("fn main() {\n    let s = Set<int> { 1, 2, 3 }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::SetLit { elements, .. } => {
+                        assert_eq!(elements.len(), 3);
+                    }
+                    _ => panic!("expected set literal, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    // Phase 3: Channels and Select Parser Tests (5 new tests)
+
+    #[test]
+    fn parse_let_chan_basic() {
+        let prog = parse("fn main() {\n    let (sender, receiver) = chan<int>()\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::LetChan { sender, receiver, elem_type, .. } => {
+                assert_eq!(sender.node, "sender");
+                assert_eq!(receiver.node, "receiver");
+                assert!(matches!(elem_type.node, TypeExpr::Named(_)));
+            }
+            _ => panic!("expected let chan statement, got {:?}", f.body.node.stmts[0].node),
+        }
+    }
+
+    #[test]
+    fn parse_let_chan_with_capacity() {
+        let prog = parse("fn main() {\n    let (s, r) = chan<int>(10)\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::LetChan { capacity, .. } => {
+                assert!(capacity.is_some());
+            }
+            _ => panic!("expected let chan statement"),
+        }
+    }
+
+    #[test]
+    fn parse_select_recv_only() {
+        let prog = parse("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        val = r.recv() {\n        }\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[1].node {
+            Stmt::Select { arms, .. } => {
+                assert_eq!(arms.len(), 1);
+                match &arms[0].op {
+                    SelectOp::Recv { .. } => {},
+                    _ => panic!("expected recv operation"),
+                }
+            }
+            _ => panic!("expected select statement"),
+        }
+    }
+
+    #[test]
+    fn parse_select_send_only() {
+        let prog = parse("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        s.send(42) {\n        }\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[1].node {
+            Stmt::Select { arms, .. } => {
+                assert_eq!(arms.len(), 1);
+                match &arms[0].op {
+                    SelectOp::Send { .. } => {},
+                    _ => panic!("expected send operation"),
+                }
+            }
+            _ => panic!("expected select statement"),
+        }
+    }
+
+    #[test]
+    fn parse_select_with_default() {
+        let prog = parse("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        val = r.recv() {\n        }\n        default {\n        }\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[1].node {
+            Stmt::Select { default, .. } => {
+                assert!(default.is_some());
+            }
+            _ => panic!("expected select statement"),
+        }
+    }
+
+    // Phase 4: Scope Blocks Parser Tests (4 new tests)
+
+    #[test]
+    fn parse_scope_basic() {
+        let prog = parse("scoped class DB {}\nfn main() {\n    scope(DB {}) |db: DB| {\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Scope { seeds, bindings, .. } => {
+                assert_eq!(seeds.len(), 1);
+                assert_eq!(bindings.len(), 1);
+            }
+            _ => panic!("expected scope statement"),
+        }
+    }
+
+    #[test]
+    fn parse_scope_multiple_seeds() {
+        let prog = parse("scoped class DB {}\nscoped class Cache {}\nfn main() {\n    scope(DB {}, Cache {}) |db: DB, cache: Cache| {\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Scope { seeds, bindings, .. } => {
+                assert_eq!(seeds.len(), 2);
+                assert_eq!(bindings.len(), 2);
+            }
+            _ => panic!("expected scope statement"),
+        }
+    }
+
+    #[test]
+    fn parse_scope_with_bindings() {
+        let prog = parse("scoped class DB {}\nscoped class Svc {}\nfn main() {\n    scope(DB {}) |svc: Svc| {\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Scope { bindings, .. } => {
+                assert_eq!(bindings.len(), 1);
+                assert_eq!(bindings[0].name.node, "svc");
+            }
+            _ => panic!("expected scope statement"),
+        }
+    }
+
+    #[test]
+    fn parse_scope_multiple_bindings() {
+        let prog = parse("scoped class DB {}\nscoped class Svc {}\nscoped class Cache {}\nfn main() {\n    scope(DB {}) |svc: Svc, cache: Cache| {\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Scope { bindings, .. } => {
+                assert_eq!(bindings.len(), 2);
+                assert_eq!(bindings[0].name.node, "svc");
+                assert_eq!(bindings[1].name.node, "cache");
+            }
+            _ => panic!("expected scope statement"),
+        }
+    }
+
+    // Phase 6: Spawn/Task Parser Tests (2 new tests)
+
+    #[test]
+    fn parse_spawn_basic() {
+        let prog = parse("fn foo() int { return 42 }\nfn main() {\n    let t = spawn foo()\n}");
+        let f = &prog.functions[1].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::Spawn { .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_spawn_with_args() {
+        let prog = parse("fn foo(x: int, y: int) int { return x + y }\nfn main() {\n    let t = spawn foo(1, 2)\n}");
+        let f = &prog.functions[1].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::Spawn { call } => {
+                        // Verify the call has arguments
+                        match &call.node {
+                            Expr::Call { args, .. } => {
+                                assert_eq!(args.len(), 2);
+                            }
+                            _ => panic!("expected call inside spawn"),
+                        }
+                    }
+                    _ => panic!("expected spawn expression"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
 }
