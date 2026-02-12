@@ -2252,81 +2252,68 @@ impl<'a> Parser<'a> {
                         },
                         span,
                     );
-                } else if matches!(&lhs.node, Expr::FieldAccess { object, .. } if matches!(&object.node, Expr::Ident(_))) {
-                    // Possible qualified enum: module.Enum.Variant or module.Enum.Variant { fields }
-                    // vs. nested field access: outer.inner.value
-                    // Use naming convention heuristic: enums start with uppercase, fields with lowercase
-                    let (module_name, enum_local) = match &lhs.node {
-                        Expr::FieldAccess { object, field } => {
-                            match &object.node {
-                                Expr::Ident(n) => (n.clone(), field.node.clone()),
-                                _ => unreachable!(),
-                            }
-                        }
-                        _ => unreachable!(),
-                    };
-                    let qualified_enum_name = format!("{}.{}", module_name, enum_local);
-
-                    // Only treat as enum if the middle name starts with uppercase (Pluto naming convention)
-                    // This distinguishes `status.State.Active` (enum) from `outer.inner.value` (fields)
-                    let is_likely_enum = enum_local.chars().next().map_or(false, |c| c.is_uppercase());
-                    if is_likely_enum {
-                        let enum_name_span = Span::new(lhs.span.start, field_name.span.end);
-
-                        if !self.restrict_struct_lit
-                            && self.peek().is_some()
-                            && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
-                            && self.is_struct_lit_ahead()
-                        {
-                            // module.Enum.Variant { field: value }
-                            self.advance(); // consume '{'
-                            let (fields, close_end) = self.parse_field_list()?;
-                            let span = Span::new(lhs.span.start, close_end);
-                            lhs = Spanned::new(
-                                Expr::EnumData {
-                                    enum_name: Spanned::new(qualified_enum_name, enum_name_span),
-                                    variant: field_name,
-                                    type_args: vec![],
-                                    fields,
-                                    enum_id: None,
-                                    variant_id: None,
-                                },
-                                span,
-                            );
-                        } else {
-                            // module.Enum.Variant (unit)
-                            let span = Span::new(lhs.span.start, field_name.span.end);
-                            lhs = Spanned::new(
-                                Expr::EnumUnit {
-                                    enum_name: Spanned::new(qualified_enum_name, enum_name_span),
-                                    variant: field_name,
-                                    type_args: vec![],
-                                    enum_id: None,
-                                    variant_id: None,
-                                },
-                                span,
-                            );
-                        }
-                    } else {
-                        // Not a known enum - treat as regular field access (e.g., outer.inner.value)
-                        let span = Span::new(lhs.span.start, field_name.span.end);
-                        lhs = Spanned::new(
-                            Expr::FieldAccess {
-                                object: Box::new(lhs),
-                                field: field_name,
-                            },
-                            span,
-                        );
-                    }
                 } else {
+                    // All other cases: regular field access (obj.field, obj.inner.field, etc.)
+                    // Special case: a.b.c { fields } could be module.Enum.Variant { fields }
+                    // We defer the decision to the rewrite pass by creating a special node
                     let span = Span::new(lhs.span.start, field_name.span.end);
                     lhs = Spanned::new(
                         Expr::FieldAccess {
                             object: Box::new(lhs),
-                            field: field_name,
+                            field: field_name.clone(),
                         },
                         span,
                     );
+
+                    // Check if this FieldAccess is followed by { ... } for EnumData
+                    // Pattern: a.b.c { fields } where a is module, b is Enum, c is Variant
+                    if !self.restrict_struct_lit
+                        && matches!(&lhs.node, Expr::FieldAccess { object, .. } if matches!(&object.node, Expr::FieldAccess { .. }))
+                        && self.peek().is_some()
+                        && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
+                        && self.is_struct_lit_ahead()
+                    {
+                        // Create a temporary EnumData node - the rewrite pass will validate
+                        // whether this is actually an enum or needs to be converted back to field access
+                        let (module_name, enum_local) = match &lhs.node {
+                            Expr::FieldAccess { object, field: _variant } => {
+                                match &object.node {
+                                    Expr::FieldAccess { object: inner_obj, field: inner_field } => {
+                                        match &inner_obj.node {
+                                            Expr::Ident(m) => (m.clone(), inner_field.node.clone()),
+                                            _ => {
+                                                // Not the pattern we're looking for - just continue
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        // Not the pattern we're looking for - just continue
+                                        continue;
+                                    }
+                                }
+                            }
+                            _ => unreachable!(),
+                        };
+
+                        let qualified_enum_name = format!("{}.{}", module_name, enum_local);
+                        let enum_name_span = Span::new(lhs.span.start - field_name.node.len() - 1, field_name.span.end);
+
+                        self.advance(); // consume '{'
+                        let (fields, close_end) = self.parse_field_list()?;
+                        let span = Span::new(lhs.span.start, close_end);
+                        lhs = Spanned::new(
+                            Expr::EnumData {
+                                enum_name: Spanned::new(qualified_enum_name, enum_name_span),
+                                variant: field_name,
+                                type_args: vec![],
+                                fields,
+                                enum_id: None,
+                                variant_id: None,
+                            },
+                            span,
+                        );
+                    }
                 }
                 continue;
             }

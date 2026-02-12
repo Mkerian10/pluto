@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 use super::env::{mangle_method, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::{resolve_type, unify, ensure_generic_func_instantiated, ensure_generic_class_instantiated, ensure_generic_enum_instantiated, validate_type_bounds};
@@ -906,12 +906,26 @@ fn infer_enum_unit(
             .clone();
         (ei, mangled)
     } else {
-        let ei = env.enums.get(&enum_name.node).ok_or_else(|| {
-            CompileError::type_err(
-                format!("unknown enum '{}'", enum_name.node),
-                enum_name.span,
-            )
-        })?.clone();
+        let ei = match env.enums.get(&enum_name.node) {
+            Some(ei) => ei.clone(),
+            None => {
+                // Fallback: if enum_name contains '.', it might be field access misinterpreted as enum
+                // This handles cases where parser couldn't disambiguate (legacy EnumUnit nodes)
+                if enum_name.node.contains('.') {
+                    return try_as_nested_field_access(
+                        &enum_name.node,
+                        &variant.node,
+                        enum_name.span,
+                        variant.span,
+                        env,
+                    );
+                }
+                return Err(CompileError::type_err(
+                    format!("unknown enum '{}'", enum_name.node),
+                    enum_name.span,
+                ));
+            }
+        };
         (ei, enum_name.node.clone())
     };
     let variant_info = enum_info.variants.iter().find(|(n, _)| *n == variant.node);
@@ -925,6 +939,96 @@ fn infer_enum_unit(
             variant.span,
         )),
         Some(_) => Ok(PlutoType::Enum(effective_name)),
+    }
+}
+
+/// Attempts to re-interpret a qualified enum name as nested field access.
+/// Used when parser creates EnumUnit but type checker can't find the enum.
+/// Example: "obj.inner" with variant "value" → obj.inner.value field access
+fn try_as_nested_field_access(
+    qualified_name: &str,
+    final_field: &str,
+    qualified_span: crate::span::Span,
+    final_field_span: crate::span::Span,
+    env: &mut TypeEnv,
+) -> Result<PlutoType, CompileError> {
+    // Split "obj.inner" into ["obj", "inner"]
+    let segments: Vec<&str> = qualified_name.split('.').collect();
+
+    if segments.is_empty() {
+        return Err(CompileError::type_err(
+            format!("invalid qualified name '{}'", qualified_name),
+            qualified_span,
+        ));
+    }
+
+    // Start with base variable
+    let base_name = segments[0];
+    let mut current_type = env.lookup(base_name)
+        .ok_or_else(|| {
+            CompileError::type_err(
+                format!("unknown variable '{}'", base_name),
+                qualified_span,
+            )
+        })?
+        .clone();
+
+    // Walk through intermediate fields
+    for field_name in &segments[1..] {
+        current_type = match &current_type {
+            PlutoType::Class(class_name) => {
+                let class_info = env.classes.get(class_name)
+                    .ok_or_else(|| {
+                        CompileError::type_err(
+                            format!("unknown class '{}'", class_name),
+                            qualified_span,
+                        )
+                    })?;
+
+                class_info.fields.iter()
+                    .find(|(n, _, _)| n == field_name)
+                    .map(|(_, t, _)| t.clone())
+                    .ok_or_else(|| {
+                        CompileError::type_err(
+                            format!("class '{}' has no field '{}'", class_name, field_name),
+                            qualified_span,
+                        )
+                    })?
+            }
+            _ => {
+                return Err(CompileError::type_err(
+                    format!("field access on non-class type"),
+                    qualified_span,
+                ));
+            }
+        };
+    }
+
+    // Resolve final field
+    match &current_type {
+        PlutoType::Class(class_name) => {
+            let class_info = env.classes.get(class_name)
+                .ok_or_else(|| {
+                    CompileError::type_err(
+                        format!("unknown class '{}'", class_name),
+                        final_field_span,
+                    )
+                })?;
+
+            class_info.fields.iter()
+                .find(|(n, _, _)| n == final_field)
+                .map(|(_, t, _)| t.clone())
+                .ok_or_else(|| {
+                    CompileError::type_err(
+                        format!("class '{}' has no field '{}'", class_name, final_field),
+                        final_field_span,
+                    )
+                })
+        }
+        _ => Err(CompileError::type_err(
+            format!("field access on non-class type"),
+            final_field_span,
+        ))
     }
 }
 
