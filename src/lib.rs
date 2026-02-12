@@ -8,6 +8,7 @@ pub mod modules;
 pub mod closures;
 pub mod monomorphize;
 pub mod prelude;
+pub mod reflection;
 pub mod ambient;
 pub mod spawn;
 pub mod contracts;
@@ -56,6 +57,7 @@ fn run_frontend(program: &mut Program, test_mode: bool) -> Result<FrontendResult
     contracts::validate_contracts(program)?;
     marshal::generate_marshalers_phase_a(program)?;
     let (mut env, warnings) = typeck::type_check(program)?;
+    reflection::generate_type_info_impls(program, &env)?;
     monomorphize::monomorphize(program, &mut env)?;
     marshal::generate_marshalers_phase_b(program, &env)?;
     typeck::check_trait_conformance(program, &mut env)?;

@@ -22,6 +22,7 @@ pub struct TraitInfo {
     pub methods: Vec<(String, FuncSig)>,
     pub default_methods: Vec<String>,
     pub mut_self_methods: HashSet<String>,
+    pub static_methods: HashSet<String>,  // Methods without self parameter
     pub method_contracts: HashMap<String, Vec<Spanned<ContractClause>>>,
     /// Temporary storage for raw AST type expressions during registration
     /// Maps method_name -> (param_types, return_type)
