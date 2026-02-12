@@ -1,0 +1,271 @@
+// Comprehensive f-string tests
+
+// ===== Basic Interpolation =====
+
+test "f-string with single variable" {
+    let name = "Alice"
+    let result = f"Hello {name}"
+    expect(result).to_equal("Hello Alice")
+}
+
+test "f-string with integer" {
+    let x = 42
+    let result = f"The answer is {x}"
+    expect(result).to_equal("The answer is 42")
+}
+
+test "f-string with float" {
+    let pi = 3.14
+    let result = f"Pi is {pi}"
+    expect(result).to_equal("Pi is 3.140000")
+}
+
+test "f-string with boolean true" {
+    let b = true
+    let result = f"Value: {b}"
+    expect(result).to_equal("Value: true")
+}
+
+test "f-string with boolean false" {
+    let b = false
+    let result = f"Value: {b}"
+    expect(result).to_equal("Value: false")
+}
+
+// ===== Multiple Interpolations =====
+
+test "f-string with two variables" {
+    let first = "John"
+    let last = "Doe"
+    let result = f"{first} {last}"
+    expect(result).to_equal("John Doe")
+}
+
+test "f-string with three variables" {
+    let a = 1
+    let b = 2
+    let c = 3
+    let result = f"{a},{b},{c}"
+    expect(result).to_equal("1,2,3")
+}
+
+test "f-string with mixed types" {
+    let name = "Bob"
+    let age = 30
+    let active = true
+    let result = f"User: {name}, Age: {age}, Active: {active}"
+    expect(result).to_equal("User: Bob, Age: 30, Active: true")
+}
+
+// ===== Expression Interpolation =====
+
+test "f-string with arithmetic expression" {
+    let x = 5
+    let y = 3
+    let result = f"Sum: {x + y}"
+    expect(result).to_equal("Sum: 8")
+}
+
+test "f-string with comparison expression" {
+    let a = 10
+    let b = 20
+    let result = f"Is greater: {a > b}"
+    expect(result).to_equal("Is greater: false")
+}
+
+test "f-string with string concatenation" {
+    let prefix = "Mr."
+    let name = "Smith"
+    let result = f"Name: {prefix + name}"
+    expect(result).to_equal("Name: Mr.Smith")
+}
+
+// ===== Edge Cases =====
+
+test "f-string with empty interpolation content" {
+    let empty = ""
+    let result = f"Value: {empty}"
+    expect(result).to_equal("Value: ")
+}
+
+test "f-string with no interpolation" {
+    let result = f"Just plain text"
+    expect(result).to_equal("Just plain text")
+}
+
+test "empty f-string" {
+    let result = f""
+    expect(result).to_equal("")
+}
+
+test "f-string with only interpolation" {
+    let name = "Test"
+    let result = f"{name}"
+    expect(result).to_equal("Test")
+}
+
+test "f-string with adjacent interpolations" {
+    let a = "Hello"
+    let b = "World"
+    let result = f"{a}{b}"
+    expect(result).to_equal("HelloWorld")
+}
+
+test "f-string with interpolation at start" {
+    let name = "Alice"
+    let result = f"{name} says hello"
+    expect(result).to_equal("Alice says hello")
+}
+
+test "f-string with interpolation at end" {
+    let name = "Bob"
+    let result = f"Hello {name}"
+    expect(result).to_equal("Hello Bob")
+}
+
+// ===== Escape Sequences =====
+
+test "f-string with newline escape" {
+    let result = f"Line1\nLine2"
+    expect(result).to_equal("Line1\nLine2")
+}
+
+test "f-string with tab escape" {
+    let result = f"Col1\tCol2"
+    expect(result).to_equal("Col1\tCol2")
+}
+
+test "f-string with quote escape" {
+    let result = f"He said \"hello\""
+    expect(result).to_equal("He said \"hello\"")
+}
+
+test "f-string with backslash escape" {
+    let result = f"Path: C:\\Users"
+    expect(result).to_equal("Path: C:\\Users")
+}
+
+test "f-string with escape and interpolation" {
+    let name = "Alice"
+    let result = f"Name:\n{name}"
+    expect(result).to_equal("Name:\nAlice")
+}
+
+test "f-string with multiple escapes and interpolations" {
+    let x = 10
+    let y = 20
+    let result = f"Values:\n\tx={x}\n\ty={y}"
+    expect(result).to_equal("Values:\n\tx=10\n\ty=20")
+}
+
+// ===== Special Characters =====
+
+test "f-string with spaces" {
+    let name = "Alice"
+    let result = f"  {name}  "
+    expect(result).to_equal("  Alice  ")
+}
+
+test "f-string with punctuation" {
+    let word = "test"
+    let result = f"Word: {word}!"
+    expect(result).to_equal("Word: test!")
+}
+
+test "f-string with numbers in text" {
+    let count = 5
+    let result = f"Item #{count}"
+    expect(result).to_equal("Item #5")
+}
+
+// ===== Nested Braces (in expressions) =====
+
+test "f-string with method call" {
+    let text = "hello"
+    let result = f"Upper: {text.to_upper()}"
+    expect(result).to_equal("Upper: HELLO")
+}
+
+test "f-string with string length" {
+    let text = "test"
+    let result = f"Length: {text.len()}"
+    expect(result).to_equal("Length: 4")
+}
+
+// ===== Comparison with Regular Strings =====
+
+test "regular string still supports interpolation (backward compat)" {
+    let name = "Charlie"
+    let result = "Hello {name}"
+    expect(result).to_equal("Hello Charlie")
+}
+
+test "regular string without braces" {
+    let result = "Plain string"
+    expect(result).to_equal("Plain string")
+}
+
+test "regular string with escaped quote" {
+    let result = "She said \"hi\""
+    expect(result).to_equal("She said \"hi\"")
+}
+
+// ===== Complex Scenarios =====
+
+test "f-string in variable assignment chain" {
+    let x = 5
+    let msg = f"Value: {x}"
+    let final = f"Message: {msg}"
+    expect(final).to_equal("Message: Value: 5")
+}
+
+test "f-string with negative number" {
+    let x = -42
+    let result = f"Negative: {x}"
+    expect(result).to_equal("Negative: -42")
+}
+
+test "f-string with zero" {
+    let x = 0
+    let result = f"Zero: {x}"
+    expect(result).to_equal("Zero: 0")
+}
+
+test "f-string with large number" {
+    let x = 1000000
+    let result = f"Big: {x}"
+    expect(result).to_equal("Big: 1000000")
+}
+
+test "f-string with multiple spaces between interpolations" {
+    let a = "A"
+    let b = "B"
+    let result = f"{a}    {b}"
+    expect(result).to_equal("A    B")
+}
+
+test "f-string with carriage return" {
+    let result = f"Line1\rLine2"
+    expect(result).to_equal("Line1\rLine2")
+}
+
+test "f-string with unicode-like content" {
+    let emoji = "test"
+    let result = f"Text: {emoji}"
+    expect(result).to_equal("Text: test")
+}
+
+test "f-string with complex arithmetic" {
+    let a = 10
+    let b = 5
+    let c = 2
+    let result = f"Result: {a + b * c}"
+    expect(result).to_equal("Result: 20")
+}
+
+test "f-string concatenation" {
+    let part1 = f"Hello "
+    let part2 = f"World"
+    let result = part1 + part2
+    expect(result).to_equal("Hello World")
+}
