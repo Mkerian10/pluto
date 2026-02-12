@@ -337,8 +337,9 @@ fn test_channel_send_on_full_channel() {
             let (tx, rx) = chan<int>(2)
             tx.try_send(1)!
             tx.try_send(2)!
-            let result = tx.try_send(3) catch -1
-            print(result)
+            tx.try_send(3) catch err {
+                print(-1)
+            }
         }
     "#;
     assert_eq!(compile_and_run_stdout(src).trim(), "-1");
