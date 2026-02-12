@@ -187,3 +187,494 @@ pub fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ===== map_inner_types tests =====
+
+    #[test]
+    fn test_map_inner_types_array() {
+        let ty = PlutoType::Array(Box::new(PlutoType::Int));
+        let result = ty.map_inner_types(&|t| {
+            if matches!(t, PlutoType::Int) {
+                PlutoType::Float
+            } else {
+                t.clone()
+            }
+        });
+        assert_eq!(result, PlutoType::Array(Box::new(PlutoType::Float)));
+    }
+
+    #[test]
+    fn test_map_inner_types_fn() {
+        let ty = PlutoType::Fn(
+            vec![PlutoType::Int, PlutoType::Bool],
+            Box::new(PlutoType::String),
+        );
+        let result = ty.map_inner_types(&|t| {
+            if matches!(t, PlutoType::Int) {
+                PlutoType::Float
+            } else {
+                t.clone()
+            }
+        });
+        assert_eq!(
+            result,
+            PlutoType::Fn(
+                vec![PlutoType::Float, PlutoType::Bool],
+                Box::new(PlutoType::String)
+            )
+        );
+    }
+
+    #[test]
+    fn test_map_inner_types_map() {
+        let ty = PlutoType::Map(Box::new(PlutoType::Int), Box::new(PlutoType::String));
+        let result = ty.map_inner_types(&|t| {
+            if matches!(t, PlutoType::Int) {
+                PlutoType::Float
+            } else {
+                t.clone()
+            }
+        });
+        assert_eq!(
+            result,
+            PlutoType::Map(Box::new(PlutoType::Float), Box::new(PlutoType::String))
+        );
+    }
+
+    #[test]
+    fn test_map_inner_types_set() {
+        let ty = PlutoType::Set(Box::new(PlutoType::Int));
+        let result = ty.map_inner_types(&|t| {
+            if matches!(t, PlutoType::Int) {
+                PlutoType::Float
+            } else {
+                t.clone()
+            }
+        });
+        assert_eq!(result, PlutoType::Set(Box::new(PlutoType::Float)));
+    }
+
+    #[test]
+    fn test_map_inner_types_task() {
+        let ty = PlutoType::Task(Box::new(PlutoType::Int));
+        let result = ty.map_inner_types(&|t| {
+            if matches!(t, PlutoType::Int) {
+                PlutoType::String
+            } else {
+                t.clone()
+            }
+        });
+        assert_eq!(result, PlutoType::Task(Box::new(PlutoType::String)));
+    }
+
+    #[test]
+    fn test_map_inner_types_nullable() {
+        let ty = PlutoType::Nullable(Box::new(PlutoType::Int));
+        let result = ty.map_inner_types(&|t| {
+            if matches!(t, PlutoType::Int) {
+                PlutoType::Bool
+            } else {
+                t.clone()
+            }
+        });
+        assert_eq!(result, PlutoType::Nullable(Box::new(PlutoType::Bool)));
+    }
+
+    #[test]
+    fn test_map_inner_types_generic_instance() {
+        let ty = PlutoType::GenericInstance(
+            GenericKind::Class,
+            "Pair".to_string(),
+            vec![PlutoType::Int, PlutoType::String],
+        );
+        let result = ty.map_inner_types(&|t| {
+            if matches!(t, PlutoType::Int) {
+                PlutoType::Float
+            } else {
+                t.clone()
+            }
+        });
+        assert_eq!(
+            result,
+            PlutoType::GenericInstance(
+                GenericKind::Class,
+                "Pair".to_string(),
+                vec![PlutoType::Float, PlutoType::String]
+            )
+        );
+    }
+
+    #[test]
+    fn test_map_inner_types_leaf() {
+        let leaf_types = vec![
+            PlutoType::Int,
+            PlutoType::Float,
+            PlutoType::Bool,
+            PlutoType::String,
+            PlutoType::Void,
+            PlutoType::Byte,
+            PlutoType::Bytes,
+            PlutoType::Range,
+            PlutoType::Error,
+        ];
+        for ty in leaf_types {
+            let result = ty.map_inner_types(&|_| PlutoType::Float);
+            assert_eq!(result, ty); // Leaf types unchanged
+        }
+    }
+
+    // ===== any_inner_type tests =====
+
+    #[test]
+    fn test_any_inner_type_array() {
+        let ty = PlutoType::Array(Box::new(PlutoType::Int));
+        assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::Int)));
+        assert!(!ty.any_inner_type(&|t| matches!(t, PlutoType::Float)));
+    }
+
+    #[test]
+    fn test_any_inner_type_fn_params() {
+        let ty = PlutoType::Fn(
+            vec![PlutoType::Int, PlutoType::Bool],
+            Box::new(PlutoType::String),
+        );
+        assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::Int)));
+        assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::Bool)));
+    }
+
+    #[test]
+    fn test_any_inner_type_fn_return() {
+        let ty = PlutoType::Fn(
+            vec![PlutoType::Int],
+            Box::new(PlutoType::String),
+        );
+        assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::String)));
+    }
+
+    #[test]
+    fn test_any_inner_type_map() {
+        let ty = PlutoType::Map(Box::new(PlutoType::Int), Box::new(PlutoType::String));
+        assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::Int)));
+        assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::String)));
+        assert!(!ty.any_inner_type(&|t| matches!(t, PlutoType::Float)));
+    }
+
+    #[test]
+    fn test_any_inner_type_generic_instance() {
+        let ty = PlutoType::GenericInstance(
+            GenericKind::Class,
+            "Pair".to_string(),
+            vec![PlutoType::Int, PlutoType::Bool],
+        );
+        assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::Int)));
+        assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::Bool)));
+        assert!(!ty.any_inner_type(&|t| matches!(t, PlutoType::String)));
+    }
+
+    #[test]
+    fn test_any_inner_type_sender_receiver() {
+        let sender = PlutoType::Sender(Box::new(PlutoType::Int));
+        let receiver = PlutoType::Receiver(Box::new(PlutoType::Int));
+        assert!(sender.any_inner_type(&|t| matches!(t, PlutoType::Int)));
+        assert!(receiver.any_inner_type(&|t| matches!(t, PlutoType::Int)));
+    }
+
+    #[test]
+    fn test_any_inner_type_leaf_false() {
+        let ty = PlutoType::Int;
+        assert!(!ty.any_inner_type(&|_| true)); // Leaf has no inner types
+    }
+
+    // ===== Display tests =====
+
+    #[test]
+    fn test_display_primitives() {
+        assert_eq!(PlutoType::Int.to_string(), "int");
+        assert_eq!(PlutoType::Float.to_string(), "float");
+        assert_eq!(PlutoType::Bool.to_string(), "bool");
+        assert_eq!(PlutoType::String.to_string(), "string");
+        assert_eq!(PlutoType::Void.to_string(), "void");
+        assert_eq!(PlutoType::Byte.to_string(), "byte");
+        assert_eq!(PlutoType::Bytes.to_string(), "bytes");
+        assert_eq!(PlutoType::Range.to_string(), "range");
+        assert_eq!(PlutoType::Error.to_string(), "error");
+    }
+
+    #[test]
+    fn test_display_class() {
+        let ty = PlutoType::Class("User".to_string());
+        assert_eq!(ty.to_string(), "User");
+    }
+
+    #[test]
+    fn test_display_array() {
+        let ty = PlutoType::Array(Box::new(PlutoType::Int));
+        assert_eq!(ty.to_string(), "[int]");
+    }
+
+    #[test]
+    fn test_display_trait() {
+        let ty = PlutoType::Trait("Printable".to_string());
+        assert_eq!(ty.to_string(), "trait Printable");
+    }
+
+    #[test]
+    fn test_display_enum() {
+        let ty = PlutoType::Enum("Option".to_string());
+        assert_eq!(ty.to_string(), "Option");
+    }
+
+    #[test]
+    fn test_display_fn_no_params() {
+        let ty = PlutoType::Fn(vec![], Box::new(PlutoType::Int));
+        assert_eq!(ty.to_string(), "fn() int");
+    }
+
+    #[test]
+    fn test_display_fn_with_params() {
+        let ty = PlutoType::Fn(
+            vec![PlutoType::Int, PlutoType::String],
+            Box::new(PlutoType::Bool),
+        );
+        assert_eq!(ty.to_string(), "fn(int, string) bool");
+    }
+
+    #[test]
+    fn test_display_map() {
+        let ty = PlutoType::Map(Box::new(PlutoType::String), Box::new(PlutoType::Int));
+        assert_eq!(ty.to_string(), "Map<string, int>");
+    }
+
+    #[test]
+    fn test_display_set() {
+        let ty = PlutoType::Set(Box::new(PlutoType::Int));
+        assert_eq!(ty.to_string(), "Set<int>");
+    }
+
+    #[test]
+    fn test_display_task() {
+        let ty = PlutoType::Task(Box::new(PlutoType::String));
+        assert_eq!(ty.to_string(), "Task<string>");
+    }
+
+    #[test]
+    fn test_display_nullable() {
+        let ty = PlutoType::Nullable(Box::new(PlutoType::Int));
+        assert_eq!(ty.to_string(), "int?");
+    }
+
+    #[test]
+    fn test_display_generic_instance() {
+        let ty = PlutoType::GenericInstance(
+            GenericKind::Class,
+            "Pair".to_string(),
+            vec![PlutoType::Int, PlutoType::String],
+        );
+        assert_eq!(ty.to_string(), "Pair<int, string>");
+    }
+
+    #[test]
+    fn test_display_sender() {
+        let ty = PlutoType::Sender(Box::new(PlutoType::Int));
+        assert_eq!(ty.to_string(), "Sender<int>");
+    }
+
+    #[test]
+    fn test_display_receiver() {
+        let ty = PlutoType::Receiver(Box::new(PlutoType::Int));
+        assert_eq!(ty.to_string(), "Receiver<int>");
+    }
+
+    #[test]
+    fn test_display_stream() {
+        let ty = PlutoType::Stream(Box::new(PlutoType::Int));
+        assert_eq!(ty.to_string(), "stream int");
+    }
+
+    #[test]
+    fn test_display_type_param() {
+        let ty = PlutoType::TypeParam("T".to_string());
+        assert_eq!(ty.to_string(), "T");
+    }
+
+    // ===== pluto_type_to_type_expr tests =====
+
+    #[test]
+    fn test_type_expr_primitives() {
+        let int_expr = pluto_type_to_type_expr(&PlutoType::Int);
+        assert!(matches!(int_expr, TypeExpr::Named(s) if s == "int"));
+
+        let float_expr = pluto_type_to_type_expr(&PlutoType::Float);
+        assert!(matches!(float_expr, TypeExpr::Named(s) if s == "float"));
+
+        let bool_expr = pluto_type_to_type_expr(&PlutoType::Bool);
+        assert!(matches!(bool_expr, TypeExpr::Named(s) if s == "bool"));
+
+        let void_expr = pluto_type_to_type_expr(&PlutoType::Void);
+        assert!(matches!(void_expr, TypeExpr::Named(s) if s == "void"));
+    }
+
+    #[test]
+    fn test_type_expr_array() {
+        let ty = PlutoType::Array(Box::new(PlutoType::Int));
+        let expr = pluto_type_to_type_expr(&ty);
+        match expr {
+            TypeExpr::Array(inner) => {
+                assert!(matches!(inner.node, TypeExpr::Named(s) if s == "int"));
+            }
+            _ => panic!("Expected TypeExpr::Array"),
+        }
+    }
+
+    #[test]
+    fn test_type_expr_fn() {
+        let ty = PlutoType::Fn(
+            vec![PlutoType::Int, PlutoType::Bool],
+            Box::new(PlutoType::String),
+        );
+        let expr = pluto_type_to_type_expr(&ty);
+        match expr {
+            TypeExpr::Fn { params, return_type } => {
+                assert_eq!(params.len(), 2);
+                assert!(matches!(return_type.node, TypeExpr::Named(s) if s == "string"));
+            }
+            _ => panic!("Expected TypeExpr::Fn"),
+        }
+    }
+
+    #[test]
+    fn test_type_expr_map() {
+        let ty = PlutoType::Map(Box::new(PlutoType::String), Box::new(PlutoType::Int));
+        let expr = pluto_type_to_type_expr(&ty);
+        match expr {
+            TypeExpr::Generic { name, type_args } => {
+                assert_eq!(name, "Map");
+                assert_eq!(type_args.len(), 2);
+            }
+            _ => panic!("Expected TypeExpr::Generic"),
+        }
+    }
+
+    #[test]
+    fn test_type_expr_set() {
+        let ty = PlutoType::Set(Box::new(PlutoType::Int));
+        let expr = pluto_type_to_type_expr(&ty);
+        match expr {
+            TypeExpr::Generic { name, type_args } => {
+                assert_eq!(name, "Set");
+                assert_eq!(type_args.len(), 1);
+            }
+            _ => panic!("Expected TypeExpr::Generic"),
+        }
+    }
+
+    #[test]
+    fn test_type_expr_task() {
+        let ty = PlutoType::Task(Box::new(PlutoType::String));
+        let expr = pluto_type_to_type_expr(&ty);
+        match expr {
+            TypeExpr::Generic { name, type_args } => {
+                assert_eq!(name, "Task");
+                assert_eq!(type_args.len(), 1);
+            }
+            _ => panic!("Expected TypeExpr::Generic"),
+        }
+    }
+
+    #[test]
+    fn test_type_expr_nullable() {
+        let ty = PlutoType::Nullable(Box::new(PlutoType::Int));
+        let expr = pluto_type_to_type_expr(&ty);
+        match expr {
+            TypeExpr::Nullable(inner) => {
+                assert!(matches!(inner.node, TypeExpr::Named(s) if s == "int"));
+            }
+            _ => panic!("Expected TypeExpr::Nullable"),
+        }
+    }
+
+    #[test]
+    fn test_type_expr_generic_instance() {
+        let ty = PlutoType::GenericInstance(
+            GenericKind::Class,
+            "Pair".to_string(),
+            vec![PlutoType::Int, PlutoType::String],
+        );
+        let expr = pluto_type_to_type_expr(&ty);
+        match expr {
+            TypeExpr::Generic { name, type_args } => {
+                assert_eq!(name, "Pair");
+                assert_eq!(type_args.len(), 2);
+            }
+            _ => panic!("Expected TypeExpr::Generic"),
+        }
+    }
+
+    #[test]
+    fn test_type_expr_stream() {
+        let ty = PlutoType::Stream(Box::new(PlutoType::Int));
+        let expr = pluto_type_to_type_expr(&ty);
+        match expr {
+            TypeExpr::Stream(inner) => {
+                assert!(matches!(inner.node, TypeExpr::Named(s) if s == "int"));
+            }
+            _ => panic!("Expected TypeExpr::Stream"),
+        }
+    }
+
+    // ===== Additional tests =====
+
+    #[test]
+    fn test_equality() {
+        assert_eq!(PlutoType::Int, PlutoType::Int);
+        assert_ne!(PlutoType::Int, PlutoType::Float);
+        assert_eq!(
+            PlutoType::Array(Box::new(PlutoType::Int)),
+            PlutoType::Array(Box::new(PlutoType::Int))
+        );
+        assert_ne!(
+            PlutoType::Array(Box::new(PlutoType::Int)),
+            PlutoType::Array(Box::new(PlutoType::Float))
+        );
+    }
+
+    #[test]
+    fn test_clone() {
+        let ty = PlutoType::Fn(
+            vec![PlutoType::Int, PlutoType::String],
+            Box::new(PlutoType::Bool),
+        );
+        let cloned = ty.clone();
+        assert_eq!(ty, cloned);
+    }
+
+    #[test]
+    fn test_generic_kind_equality() {
+        assert_eq!(GenericKind::Class, GenericKind::Class);
+        assert_eq!(GenericKind::Enum, GenericKind::Enum);
+        assert_ne!(GenericKind::Class, GenericKind::Enum);
+    }
+
+    #[test]
+    fn test_nested_transformations() {
+        let ty = PlutoType::Array(Box::new(PlutoType::Nullable(Box::new(PlutoType::Int))));
+        let result = ty.map_inner_types(&|t| match t {
+            PlutoType::Nullable(inner) => PlutoType::Nullable(Box::new(
+                if matches!(**inner, PlutoType::Int) {
+                    PlutoType::Float
+                } else {
+                    (**inner).clone()
+                }
+            )),
+            other => other.clone(),
+        });
+        assert_eq!(
+            result,
+            PlutoType::Array(Box::new(PlutoType::Nullable(Box::new(PlutoType::Float))))
+        );
+    }
+}
