@@ -6,7 +6,20 @@
 //! - `Visitor` — immutable reference traversal (for analysis/collection passes)
 //! - `VisitMut` — mutable reference traversal (for in-place rewriting passes)
 //!
-//! ## Usage
+//! ## When to Use
+//!
+//! **Use visitor pattern** for passes where >50% of match arms would be pure structural recursion:
+//! - Collecting identifiers, accesses, or other AST patterns
+//! - Counting or analyzing specific node types
+//! - In-place AST transformations with focused changes
+//!
+//! **Use manual `match` blocks** for core compiler passes where >50% of arms have domain-specific logic:
+//! - Type checking (`infer_expr`, `check_stmt`)
+//! - Code generation (`lower_expr`, `lower_stmt`)
+//! - Pretty printing (`emit_expr`, `emit_stmt`)
+//! - Error analysis (when most arms have custom error handling logic)
+//!
+//! ## Basic Usage
 //!
 //! Implement the visitor trait for your pass, overriding only the methods you need.
 //! Call the corresponding `walk_*` function inside your override to get default recursion.
@@ -31,10 +44,119 @@
 //! }
 //! ```
 //!
-//! ## When to Use
+//! ## Common Patterns
 //!
-//! Use `Visitor`/`VisitMut` for passes where >50% of match arms would be pure recursion.
-//! Use manual `match` blocks for passes where >50% of arms have custom logic (like codegen, typeck core).
+//! ### Scope Tracking
+//!
+//! Track variable scopes by pushing/popping state in block and function visitors:
+//!
+//! ```rust
+//! struct ScopeTracker {
+//!     scopes: Vec<HashSet<String>>,
+//! }
+//!
+//! impl Visitor for ScopeTracker {
+//!     fn visit_block(&mut self, block: &Spanned<Block>) {
+//!         self.scopes.push(HashSet::new());
+//!         walk_block(self, block);
+//!         self.scopes.pop();
+//!     }
+//!
+//!     fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+//!         if let Stmt::Let { name, .. } = &stmt.node {
+//!             self.scopes.last_mut().unwrap().insert(name.node.clone());
+//!         }
+//!         walk_stmt(self, stmt);
+//!     }
+//! }
+//! ```
+//!
+//! ### Error Collection
+//!
+//! Collect error information during analysis passes:
+//!
+//! ```rust
+//! struct ErrorCollector {
+//!     errors: Vec<String>,
+//! }
+//!
+//! impl Visitor for ErrorCollector {
+//!     fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+//!         if let Stmt::Raise { error_name, .. } = &stmt.node {
+//!             self.errors.push(error_name.node.clone());
+//!         }
+//!         walk_stmt(self, stmt);
+//!     }
+//! }
+//! ```
+//!
+//! ### Pruning/Early Termination
+//!
+//! Skip recursion into certain subtrees by omitting the `walk_*` call:
+//!
+//! ```rust
+//! impl Visitor for MyVisitor {
+//!     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+//!         match &expr.node {
+//!             Expr::Spawn { .. } => {
+//!                 // Don't recurse into spawn bodies (opacity boundary)
+//!                 return;
+//!             }
+//!             _ => walk_expr(self, expr), // Normal recursion
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! ### In-Place Rewriting
+//!
+//! Use `VisitMut` for transformations that modify the AST:
+//!
+//! ```rust
+//! use crate::visit::{VisitMut, walk_expr_mut};
+//!
+//! struct IntRewriter;
+//!
+//! impl VisitMut for IntRewriter {
+//!     fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+//!         if let Expr::IntLit(ref mut n) = &mut expr.node {
+//!             *n = *n * 2;  // Double all integer literals
+//!         }
+//!         walk_expr_mut(self, expr);
+//!     }
+//! }
+//! ```
+//!
+//! ## Special Cases
+//!
+//! ### Spawn Opacity
+//!
+//! Spawn expressions create opacity boundaries — their closure bodies are not visible
+//! to error analysis. If your pass needs spawn opacity, don't recurse into `Expr::Spawn`.
+//!
+//! ### String Interpolation
+//!
+//! String interpolation parts can contain both literals and expressions. Use
+//! `visit_string_interp_part` to handle both cases:
+//!
+//! ```rust
+//! fn visit_string_interp_part(&mut self, part: &StringInterpPart) {
+//!     if let StringInterpPart::Expr(expr) = part {
+//!         self.visit_expr(expr);
+//!     }
+//! }
+//! ```
+//!
+//! ## Walk Helper Functions
+//!
+//! The module provides `walk_*` functions for each AST node type:
+//! - `walk_expr` / `walk_expr_mut` — expressions
+//! - `walk_stmt` / `walk_stmt_mut` — statements
+//! - `walk_type_expr` / `walk_type_expr_mut` — type expressions
+//! - `walk_block` / `walk_block_mut` — statement blocks
+//!
+//! These implement the default recursive traversal. Call them from your visitor
+//! implementations to get structural recursion. Omit the call to prune the traversal.
 
 use crate::parser::ast::*;
 use crate::span::Spanned;
@@ -289,6 +411,9 @@ pub fn walk_block<V: Visitor>(v: &mut V, block: &Spanned<Block>) {
     }
 }
 
+/// NOTE: When adding a new Stmt variant, update this function AND all core manual walkers.
+/// Follow the checklist in docs/checklists/add-ast-variant.md to ensure all necessary
+/// updates are made (visitor infrastructure, type checking, codegen, pretty printing, etc.).
 pub fn walk_stmt<V: Visitor>(v: &mut V, stmt: &Spanned<Stmt>) {
     match &stmt.node {
         Stmt::Let { ty, value, .. } => {
@@ -389,6 +514,9 @@ pub fn walk_stmt<V: Visitor>(v: &mut V, stmt: &Spanned<Stmt>) {
     }
 }
 
+/// NOTE: When adding a new Expr variant, update this function AND all core manual walkers.
+/// Follow the checklist in docs/checklists/add-ast-variant.md to ensure all necessary
+/// updates are made (visitor infrastructure, type checking, codegen, pretty printing, etc.).
 pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
     match &expr.node {
         // Leaves — no children
@@ -547,6 +675,9 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
     }
 }
 
+/// NOTE: When adding a new TypeExpr variant, update this function AND all core manual walkers.
+/// Follow the checklist in docs/checklists/add-ast-variant.md to ensure all necessary
+/// updates are made (visitor infrastructure, type checking, codegen, pretty printing, etc.).
 pub fn walk_type_expr<V: Visitor>(v: &mut V, te: &Spanned<TypeExpr>) {
     match &te.node {
         TypeExpr::Named(_) | TypeExpr::Qualified { .. } => {}
@@ -1053,5 +1184,537 @@ pub fn walk_type_expr_mut<V: VisitMut>(v: &mut V, te: &mut Spanned<TypeExpr>) {
                 v.visit_type_expr_mut(ta);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    // ============================================================================
+    // Test Visitor: Collects all visited expression types
+    // ============================================================================
+
+    #[derive(Default)]
+    struct ExprCollector {
+        visited: HashSet<String>,
+    }
+
+    impl Visitor for ExprCollector {
+        fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+            let expr_type = match &expr.node {
+                Expr::IntLit(_) => "IntLit",
+                Expr::FloatLit(_) => "FloatLit",
+                Expr::BoolLit(_) => "BoolLit",
+                Expr::StringLit(_) => "StringLit",
+                Expr::NoneLit => "NoneLit",
+                Expr::Ident(_) => "Ident",
+                Expr::BinOp { .. } => "BinOp",
+                Expr::UnaryOp { .. } => "UnaryOp",
+                Expr::Call { .. } => "Call",
+                Expr::MethodCall { .. } => "MethodCall",
+                Expr::StructLit { .. } => "StructLit",
+                Expr::FieldAccess { .. } => "FieldAccess",
+                Expr::ArrayLit { .. } => "ArrayLit",
+                Expr::Index { .. } => "Index",
+                Expr::EnumUnit { .. } => "EnumUnit",
+                Expr::EnumData { .. } => "EnumData",
+                Expr::Closure { .. } => "Closure",
+                Expr::Catch { .. } => "Catch",
+                Expr::Propagate { .. } => "Propagate",
+                Expr::Cast { .. } => "Cast",
+                Expr::StringInterp { .. } => "StringInterp",
+                Expr::Range { .. } => "Range",
+                Expr::ClosureCreate { .. } => "ClosureCreate",
+                Expr::Spawn { .. } => "Spawn",
+                Expr::MapLit { .. } => "MapLit",
+                Expr::SetLit { .. } => "SetLit",
+                Expr::NullPropagate { .. } => "NullPropagate",
+                Expr::StaticTraitCall { .. } => "StaticTraitCall",
+                Expr::QualifiedAccess { .. } => "QualifiedAccess",
+            };
+            self.visited.insert(expr_type.to_string());
+            walk_expr(self, expr);
+        }
+    }
+
+    // Helper to create dummy spanned nodes
+    fn dummy<T>(node: T) -> Spanned<T> {
+        Spanned::dummy(node)
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits BinOp children
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_binop_children() {
+        let lhs = Box::new(dummy(Expr::IntLit(1)));
+        let rhs = Box::new(dummy(Expr::IntLit(2)));
+        let binop = dummy(Expr::BinOp {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&binop);
+
+        // Should visit BinOp and both IntLit children
+        assert!(collector.visited.contains("BinOp"));
+        assert!(collector.visited.contains("IntLit"));
+        assert_eq!(collector.visited.len(), 2);
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits Call args
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_call_args() {
+        let call = dummy(Expr::Call {
+            name: dummy("func".to_string()),
+            type_args: vec![],
+            args: vec![dummy(Expr::IntLit(10)), dummy(Expr::IntLit(20))],
+            target_id: None,
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&call);
+
+        // Should visit Call and IntLit args
+        assert!(collector.visited.contains("Call"));
+        assert!(collector.visited.contains("IntLit"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits nested structures
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_nested_structures() {
+        // Build: StructLit { field: BinOp { lhs: IntLit(1), rhs: IntLit(2) } }
+        let binop = dummy(Expr::BinOp {
+            op: BinOp::Add,
+            lhs: Box::new(dummy(Expr::IntLit(1))),
+            rhs: Box::new(dummy(Expr::IntLit(2))),
+        });
+        let struct_lit = dummy(Expr::StructLit {
+            name: dummy("Foo".to_string()),
+            type_args: vec![],
+            fields: vec![(dummy("value".to_string()), binop)],
+            target_id: None,
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&struct_lit);
+
+        // Should visit StructLit, BinOp, and IntLit
+        assert!(collector.visited.contains("StructLit"));
+        assert!(collector.visited.contains("BinOp"));
+        assert!(collector.visited.contains("IntLit"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits ArrayLit elements
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_array_elements() {
+        let array = dummy(Expr::ArrayLit {
+            elements: vec![
+                dummy(Expr::IntLit(1)),
+                dummy(Expr::IntLit(2)),
+                dummy(Expr::IntLit(3)),
+            ],
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&array);
+
+        assert!(collector.visited.contains("ArrayLit"));
+        assert!(collector.visited.contains("IntLit"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits MethodCall object and args
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_method_call() {
+        let method_call = dummy(Expr::MethodCall {
+            object: Box::new(dummy(Expr::Ident("obj".to_string()))),
+            method: dummy("foo".to_string()),
+            args: vec![dummy(Expr::IntLit(42))],
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&method_call);
+
+        assert!(collector.visited.contains("MethodCall"));
+        assert!(collector.visited.contains("Ident"));
+        assert!(collector.visited.contains("IntLit"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits Index object and index
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_index() {
+        let index_expr = dummy(Expr::Index {
+            object: Box::new(dummy(Expr::Ident("arr".to_string()))),
+            index: Box::new(dummy(Expr::IntLit(0))),
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&index_expr);
+
+        assert!(collector.visited.contains("Index"));
+        assert!(collector.visited.contains("Ident"));
+        assert!(collector.visited.contains("IntLit"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits MapLit entries
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_map_lit() {
+        let map = dummy(Expr::MapLit {
+            key_type: dummy(TypeExpr::Named("int".to_string())),
+            value_type: dummy(TypeExpr::Named("string".to_string())),
+            entries: vec![
+                (dummy(Expr::IntLit(1)), dummy(Expr::StringLit("a".to_string()))),
+                (dummy(Expr::IntLit(2)), dummy(Expr::StringLit("b".to_string()))),
+            ],
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&map);
+
+        assert!(collector.visited.contains("MapLit"));
+        assert!(collector.visited.contains("IntLit"));
+        assert!(collector.visited.contains("StringLit"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits SetLit elements
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_set_lit() {
+        let set = dummy(Expr::SetLit {
+            elem_type: dummy(TypeExpr::Named("int".to_string())),
+            elements: vec![dummy(Expr::IntLit(1)), dummy(Expr::IntLit(2))],
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&set);
+
+        assert!(collector.visited.contains("SetLit"));
+        assert!(collector.visited.contains("IntLit"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits Range start and end
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_range() {
+        let range = dummy(Expr::Range {
+            start: Box::new(dummy(Expr::IntLit(0))),
+            end: Box::new(dummy(Expr::IntLit(10))),
+            inclusive: false,
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&range);
+
+        assert!(collector.visited.contains("Range"));
+        assert!(collector.visited.contains("IntLit"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits Propagate inner expression
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_propagate() {
+        let propagate = dummy(Expr::Propagate {
+            expr: Box::new(dummy(Expr::Call {
+                name: dummy("foo".to_string()),
+                type_args: vec![],
+                args: vec![],
+                target_id: None,
+            })),
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&propagate);
+
+        assert!(collector.visited.contains("Propagate"));
+        assert!(collector.visited.contains("Call"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits NullPropagate inner expression
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_null_propagate() {
+        let null_prop = dummy(Expr::NullPropagate {
+            expr: Box::new(dummy(Expr::Ident("x".to_string()))),
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&null_prop);
+
+        assert!(collector.visited.contains("NullPropagate"));
+        assert!(collector.visited.contains("Ident"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits Cast expression and target type
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_cast() {
+        let cast = dummy(Expr::Cast {
+            expr: Box::new(dummy(Expr::IntLit(42))),
+            target_type: dummy(TypeExpr::Named("float".to_string())),
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&cast);
+
+        assert!(collector.visited.contains("Cast"));
+        assert!(collector.visited.contains("IntLit"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr handles StringInterp parts
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_string_interp() {
+        let string_interp = dummy(Expr::StringInterp {
+            parts: vec![
+                StringInterpPart::Lit("Hello ".to_string()),
+                StringInterpPart::Expr(dummy(Expr::Ident("name".to_string()))),
+                StringInterpPart::Lit("!".to_string()),
+            ],
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&string_interp);
+
+        assert!(collector.visited.contains("StringInterp"));
+        assert!(collector.visited.contains("Ident"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits EnumData fields
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_enum_data() {
+        let enum_data = dummy(Expr::EnumData {
+            enum_name: dummy("Option".to_string()),
+            variant: dummy("Some".to_string()),
+            type_args: vec![],
+            fields: vec![(dummy("value".to_string()), dummy(Expr::IntLit(42)))],
+            enum_id: None,
+            variant_id: None,
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&enum_data);
+
+        assert!(collector.visited.contains("EnumData"));
+        assert!(collector.visited.contains("IntLit"));
+    }
+
+    // ============================================================================
+    // Test: walk_expr visits StaticTraitCall args
+    // ============================================================================
+
+    #[test]
+    fn test_walk_expr_visits_static_trait_call() {
+        let static_call = dummy(Expr::StaticTraitCall {
+            trait_name: dummy("TypeInfo".to_string()),
+            method_name: dummy("type_name".to_string()),
+            type_args: vec![dummy(TypeExpr::Named("int".to_string()))],
+            args: vec![],
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_expr(&static_call);
+
+        assert!(collector.visited.contains("StaticTraitCall"));
+    }
+
+    // ============================================================================
+    // Test: walk_stmt visits all statement types
+    // ============================================================================
+
+    #[test]
+    fn test_walk_stmt_visits_if_branches() {
+        let if_stmt = dummy(Stmt::If {
+            condition: dummy(Expr::BoolLit(true)),
+            then_block: dummy(Block {
+                stmts: vec![dummy(Stmt::Return(Some(dummy(Expr::IntLit(1)))))],
+            }),
+            else_block: Some(dummy(Block {
+                stmts: vec![dummy(Stmt::Return(Some(dummy(Expr::IntLit(2)))))],
+            })),
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_stmt(&if_stmt);
+
+        // Should visit condition and return expressions in both branches
+        assert!(collector.visited.contains("BoolLit"));
+        assert!(collector.visited.contains("IntLit"));
+    }
+
+    #[test]
+    fn test_walk_stmt_visits_let_value() {
+        let let_stmt = dummy(Stmt::Let {
+            name: dummy("x".to_string()),
+            ty: None,
+            value: dummy(Expr::IntLit(42)),
+            is_mut: false,
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_stmt(&let_stmt);
+
+        assert!(collector.visited.contains("IntLit"));
+    }
+
+    #[test]
+    fn test_walk_stmt_visits_match_arms() {
+        let match_stmt = dummy(Stmt::Match {
+            expr: dummy(Expr::Ident("x".to_string())),
+            arms: vec![
+                MatchArm {
+                    enum_name: dummy("Option".to_string()),
+                    variant_name: dummy("Some".to_string()),
+                    type_args: vec![],
+                    bindings: vec![],
+                    enum_id: None,
+                    variant_id: None,
+                    body: dummy(Block {
+                        stmts: vec![dummy(Stmt::Return(Some(dummy(Expr::IntLit(1)))))],
+                    }),
+                },
+                MatchArm {
+                    enum_name: dummy("Option".to_string()),
+                    variant_name: dummy("None".to_string()),
+                    type_args: vec![],
+                    bindings: vec![],
+                    enum_id: None,
+                    variant_id: None,
+                    body: dummy(Block {
+                        stmts: vec![dummy(Stmt::Return(Some(dummy(Expr::IntLit(0)))))],
+                    }),
+                },
+            ],
+        });
+
+        let mut collector = ExprCollector::default();
+        collector.visit_stmt(&match_stmt);
+
+        assert!(collector.visited.contains("Ident"));
+        assert!(collector.visited.contains("IntLit"));
+    }
+
+    // ============================================================================
+    // Test: walk_type_expr visits all type expression types
+    // ============================================================================
+
+    #[test]
+    fn test_walk_type_expr_visits_generic_args() {
+        let generic_te = dummy(TypeExpr::Generic {
+            name: "Map".to_string(),
+            type_args: vec![
+                dummy(TypeExpr::Named("int".to_string())),
+                dummy(TypeExpr::Named("string".to_string())),
+            ],
+        });
+
+        #[derive(Default)]
+        struct TypeExprCollector {
+            count: usize,
+        }
+
+        impl Visitor for TypeExprCollector {
+            fn visit_type_expr(&mut self, _te: &Spanned<TypeExpr>) {
+                self.count += 1;
+                walk_type_expr(self, _te);
+            }
+        }
+
+        let mut collector = TypeExprCollector::default();
+        collector.visit_type_expr(&generic_te);
+
+        // Should visit Generic + 2 Named type args = 3 total
+        assert_eq!(collector.count, 3);
+    }
+
+    #[test]
+    fn test_walk_type_expr_visits_array_element() {
+        let array_te = dummy(TypeExpr::Array(Box::new(dummy(TypeExpr::Named(
+            "int".to_string(),
+        )))));
+
+        #[derive(Default)]
+        struct TypeExprCollector {
+            count: usize,
+        }
+
+        impl Visitor for TypeExprCollector {
+            fn visit_type_expr(&mut self, _te: &Spanned<TypeExpr>) {
+                self.count += 1;
+                walk_type_expr(self, _te);
+            }
+        }
+
+        let mut collector = TypeExprCollector::default();
+        collector.visit_type_expr(&array_te);
+
+        // Should visit Array + Named = 2 total
+        assert_eq!(collector.count, 2);
+    }
+
+    #[test]
+    fn test_walk_type_expr_visits_fn_params_and_return() {
+        let fn_te = dummy(TypeExpr::Fn {
+            params: vec![
+                Box::new(dummy(TypeExpr::Named("int".to_string()))),
+                Box::new(dummy(TypeExpr::Named("float".to_string()))),
+            ],
+            return_type: Box::new(dummy(TypeExpr::Named("string".to_string()))),
+        });
+
+        #[derive(Default)]
+        struct TypeExprCollector {
+            count: usize,
+        }
+
+        impl Visitor for TypeExprCollector {
+            fn visit_type_expr(&mut self, _te: &Spanned<TypeExpr>) {
+                self.count += 1;
+                walk_type_expr(self, _te);
+            }
+        }
+
+        let mut collector = TypeExprCollector::default();
+        collector.visit_type_expr(&fn_te);
+
+        // Should visit Fn + 2 params + 1 return = 4 total
+        assert_eq!(collector.count, 4);
     }
 }

@@ -49,7 +49,13 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 
 **Codegen target** — Hardcoded to `aarch64-apple-darwin` in `src/codegen/mod.rs`. Needs platform detection in the future.
 
-**Linking with C runtime** — The compiler embeds `runtime/builtins.c` via `include_str!()` and compiles it with `cc` at link time. This provides `print`, memory allocation, string ops, array ops, and error handling runtime (`pluto_get_error`, `pluto_set_error`, `pluto_clear_error`).
+**Linking with C runtime** — The compiler embeds three C modules via `include_str!()` and compiles them separately with `cc` at link time:
+- `runtime/gc.c` (834 lines) — Garbage collector (mark & sweep, STW coordination)
+- `runtime/threading.c` (2056 lines) — Concurrency primitives (tasks, channels, select, fibers)
+- `runtime/builtins.c` (1786 lines) — Core runtime (strings, arrays, I/O, maps, sets, math, errors)
+- `runtime/builtins.h` (126 lines) — Shared declarations and GC tags
+
+Each `.c` file is compiled to a `.o` file, then linked with `ld -r` into a single relocatable `runtime.o`, which is finally linked with the Cranelift-generated object code. See `docs/design/runtime-architecture.md` for detailed module documentation.
 
 **AI-native representation (planned)** — Future direction where `.pluto` becomes a binary canonical representation (full semantic graph with stable UUIDs per declaration) and `.pt` files provide human-readable text views. AI agents write `.pluto` via an SDK (`plutoc-sdk`), the compiler enriches `.pluto` with derived analysis data on demand (`plutoc analyze`), and `plutoc sync` converts human `.pt` edits back to `.pluto`. See `docs/design/ai-native-representation.md` for the full RFC.
 
