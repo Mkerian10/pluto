@@ -1,0 +1,12 @@
+{
+  "source_hash": "b9cc0cd65920e112",
+  "test_hashes": {
+    "encode_response success": "967d806ed67a7781",
+    "parse_request invalid json": "bb7392833003ccce",
+    "encode_messages round trip": "9816b021fa2708c",
+    "parse_request basic": "ef53c74672f90725",
+    "encode_response error": "9fbc6d329f9b3760",
+    "parse_request with defaults": "6528fca575a675ab"
+  },
+  "timestamp": 1770852285
+}

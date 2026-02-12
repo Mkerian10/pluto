@@ -1,0 +1,10 @@
+{
+  "source_hash": "b10f0f5cd5ce89a8",
+  "test_hashes": {
+    "retention policy - delete by segment count": "1c0f76245f17d36c",
+    "topic cleanup works": "e1f4e166ebc6547c",
+    "topic manager cleanup_all works": "ca5081f8fbd2712d",
+    "retention policy - default policy does not delete": "8b456dc029aa6fc6"
+  },
+  "timestamp": 1770856289
+}

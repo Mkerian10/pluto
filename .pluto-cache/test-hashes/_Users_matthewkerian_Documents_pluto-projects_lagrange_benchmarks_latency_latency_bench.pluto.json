@@ -1,0 +1,12 @@
+{
+  "source_hash": "e3905f5ec6fa6a37",
+  "test_hashes": {
+    "latency: batch consume distribution": "abbee737af4a4ac4",
+    "latency: produce operation distribution": "e099729cce9bbc04",
+    "latency: large message produce": "54ea5e6ff920f4fc",
+    "latency: end-to-end produce and consume": "9316b6cd5a7b5ad5",
+    "latency: multi partition produce": "395a70cd5ece1ae5",
+    "latency: consume operation distribution": "41bb5d903d74b924"
+  },
+  "timestamp": 1770856768
+}
