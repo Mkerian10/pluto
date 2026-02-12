@@ -804,4 +804,27 @@ mod tests {
     fn bitwise_shift_on_int() {
         check("fn main() {\n    let x = 1 << 2\n    let y = 8 >> 1\n}").unwrap();
     }
+
+    // Array/Range expression typeck tests
+
+    #[test]
+    fn array_literal_infers_element_type() {
+        check("fn main() {\n    let xs: [int] = [1, 2, 3]\n}").unwrap();
+    }
+
+    #[test]
+    fn array_mixed_types_rejected() {
+        let result = check("fn main() {\n    let xs = [1, \"hi\"]\n}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn array_index_returns_element_type() {
+        check("fn main() {\n    let xs = [1, 2]\n    let x: int = xs[0]\n}").unwrap();
+    }
+
+    #[test]
+    fn for_loop_range_type_checks() {
+        check("fn main() {\n    for i in 0..10 {\n        print(i)\n    }\n}").unwrap();
+    }
 }

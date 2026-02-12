@@ -4416,4 +4416,60 @@ mod tests {
             _ => panic!("expected let statement"),
         }
     }
+
+    // Array/Range expression parser tests
+
+    #[test]
+    fn parse_array_literal() {
+        let prog = parse("fn main() {\n    let xs = [1, 2, 3]\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::ArrayLit { elements } => {
+                        assert_eq!(elements.len(), 3);
+                    }
+                    _ => panic!("expected array literal"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_array_index() {
+        let prog = parse("fn main() {\n    let xs = [1, 2]\n    let x = xs[0]\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[1].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::Index { .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_range_inclusive() {
+        let prog = parse("fn main() {\n    for i in 0..10 {\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::For { iterable, .. } => {
+                assert!(matches!(iterable.node, Expr::Range { .. }));
+            }
+            _ => panic!("expected for statement"),
+        }
+    }
+
+    #[test]
+    fn parse_range_in_for_loop() {
+        let prog = parse("fn main() {\n    for i in 0..5 {\n        print(i)\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::For { iterable, body, .. } => {
+                assert!(matches!(iterable.node, Expr::Range { .. }));
+                assert_eq!(body.node.stmts.len(), 1);
+            }
+            _ => panic!("expected for statement"),
+        }
+    }
 }
