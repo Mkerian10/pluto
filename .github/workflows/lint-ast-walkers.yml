@@ -1,0 +1,146 @@
+name: AST Walker Guidelines
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'src/typeck/infer.rs'
+      - 'src/typeck/check.rs'
+      - 'src/typeck/errors.rs'
+      - 'src/codegen/lower/mod.rs'
+      - 'src/pretty.rs'
+      - 'src/parser/ast.rs'
+      - 'src/visit.rs'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check-walker-guidelines:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for AST changes and remind about walker guidelines
+        run: |
+          echo "================================================================"
+          echo " AST Walker Guidelines Reminder"
+          echo "================================================================"
+          echo ""
+          echo "This PR modifies core compiler files that may contain AST walkers."
+          echo ""
+          echo "If you are:"
+          echo "  • Adding a new AST variant (Expr/Stmt/TypeExpr)"
+          echo "  • Modifying AST walker functions"
+          echo ""
+          echo "Please ensure:"
+          echo "  ✓ All core walker functions use EXHAUSTIVE matching (no _ => {})"
+          echo "  ✓ The visitor pattern walk functions are updated (src/visit.rs)"
+          echo "  ✓ The checklist is followed: docs/checklists/add-ast-variant.md"
+          echo ""
+          echo "Core walker functions (must use exhaustive matching):"
+          echo "  • src/typeck/infer.rs — type inference"
+          echo "  • src/typeck/check.rs — type checking"
+          echo "  • src/typeck/errors.rs — error analysis"
+          echo "  • src/codegen/lower/mod.rs — code generation"
+          echo "  • src/pretty.rs — pretty printing"
+          echo ""
+          echo "Why exhaustive matching?"
+          echo "  When a new AST variant is added, catch-all patterns (_ => {})"
+          echo "  cause the compiler to silently skip the new variant instead of"
+          echo "  forcing you to handle it explicitly. This leads to subtle bugs."
+          echo ""
+          echo "Example:"
+          echo "  // ❌ BAD: Catch-all pattern"
+          echo "  match &expr.node {"
+          echo "    Expr::Call { .. } => { /* handle */ }"
+          echo "    _ => {}"
+          echo "  }"
+          echo ""
+          echo "  // ✅ GOOD: Exhaustive matching"
+          echo "  match &expr.node {"
+          echo "    Expr::Call { .. } => { /* handle */ }"
+          echo "    Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)"
+          echo "    | Expr::StringLit(_) | Expr::NoneLit | Expr::Ident(_) => {}"
+          echo "  }"
+          echo ""
+          echo "For more details:"
+          echo "  • docs/checklists/add-ast-variant.md"
+          echo "  • docs/design/visitor-phase4-assessment.md"
+          echo "  • CLAUDE.md (AST Walker Policy section)"
+          echo ""
+          echo "================================================================"
+          echo ""
+          echo "✅ This is a reminder, not a blocker. Please review carefully."
+
+      - name: Post reminder comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const message = `## 🤖 AST Walker Guidelines Reminder
+
+This PR modifies core compiler files. If you're adding a new AST variant or modifying walker functions, please ensure:
+
+- ✅ **Exhaustive matching** — Core walker functions must NOT use \`_ => {}\` catch-all patterns
+- ✅ **Update visitor functions** — Add new variants to \`walk_expr\`/\`walk_stmt\`/\`walk_type_expr\` in \`src/visit.rs\`
+- ✅ **Follow the checklist** — See \`docs/checklists/add-ast-variant.md\`
+
+**Why exhaustive matching?**
+Catch-all patterns cause new AST variants to be silently skipped instead of forcing explicit handling. This prevents bugs.
+
+**Core walker functions** (require exhaustive matching):
+- \`src/typeck/infer.rs\` — type inference
+- \`src/typeck/check.rs\` — type checking
+- \`src/typeck/errors.rs\` — error analysis
+- \`src/codegen/lower/mod.rs\` — code generation
+- \`src/pretty.rs\` — pretty printing
+
+**Example:**
+\`\`\`rust
+// ❌ BAD: Catch-all pattern
+match &expr.node {
+    Expr::Call { .. } => { /* ... */ }
+    _ => {}
+}
+
+// ✅ GOOD: Exhaustive matching
+match &expr.node {
+    Expr::Call { .. } => { /* ... */ }
+    Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
+    | Expr::StringLit(_) | Expr::NoneLit | Expr::Ident(_) => {}
+}
+\`\`\`
+
+**More info:**
+- [AST Variant Checklist](../blob/master/docs/checklists/add-ast-variant.md)
+- [Visitor Pattern Assessment](../blob/master/docs/design/visitor-phase4-assessment.md)
+- [AST Walker Policy](../blob/master/CLAUDE.md#ast-walker-policy)
+
+---
+*This is an automated reminder to help maintain code quality. Review carefully, but it won't block your PR.*`;
+
+            // Check if we've already posted this comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user?.type === 'Bot' &&
+              comment.body?.includes('AST Walker Guidelines Reminder')
+            );
+
+            if (!botComment) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: message
+              });
+              console.log('Posted AST walker guidelines reminder comment');
+            } else {
+              console.log('Reminder comment already exists, skipping');
+            }
