@@ -249,7 +249,7 @@ plutoc generate-pt main.pluto               # Binary AST → readable source
 
 ## Project Status
 
-**Working today:** Functions, classes, traits, enums, generics, closures, DI (`app` + bracket deps + ambient deps + scoped deps), typed error handling, contracts (invariants + requires/ensures + interface guarantees), concurrency (spawn + channels + select), nullable types, modules, packages (local + git), maps, sets, bytes, test framework, Rust FFI, standard library, LSP, binary AST, MCP server, SDK.
+**Working today:** Functions, classes, traits, enums, generics, closures, DI (`app` + bracket deps + ambient deps + scoped deps), typed error handling, contracts (invariants + requires/ensures + interface guarantees), concurrency (spawn + channels + select), nullable types, modules, packages (local + git), maps, sets, bytes, test framework, Rust FFI, standard library, binary AST, MCP server, SDK.
 
 **Ahead:** Distribution (cross-pod RPC), orchestration layer, LLVM backend, package registry, stages (programmable entry points), inferred synchronization.
 

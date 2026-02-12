@@ -15,7 +15,6 @@ pub mod marshal;
 pub mod concurrency;
 pub mod manifest;
 pub mod git_cache;
-pub mod lsp;
 pub mod binary;
 pub mod derived;
 pub mod pretty;
