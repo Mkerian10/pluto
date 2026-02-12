@@ -4,86 +4,376 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Code Coverage Report - Pluto</title>
+  <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
-      background: #1e1e1e;
-      color: #d4d4d4;
-      padding: 40px;
-    }
-    .container { max-width: 1400px; margin: 0 auto; }
-    h1 { color: #4ec9b0; margin-bottom: 30px; }
-    pre {
-      background: #2d2d2d;
-      padding: 20px;
-      border-radius: 8px;
-      overflow-x: auto;
-      font-size: 13px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+      background: #f6f8fa;
+      color: #24292f;
       line-height: 1.6;
-      white-space: pre;
     }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    .header {
+      margin-bottom: 30px;
+    }
+
     .back-link {
       display: inline-block;
-      margin-bottom: 20px;
-      color: #4ec9b0;
+      margin-bottom: 15px;
+      color: #0969da;
       text-decoration: none;
-      font-weight: 600;
+      font-weight: 500;
+      font-size: 14px;
     }
-    .back-link:hover { text-decoration: underline; }
+
+    .back-link:hover {
+      text-decoration: underline;
+    }
+
+    h1 {
+      font-size: 32px;
+      font-weight: 600;
+      color: #24292f;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: #57606a;
+      font-size: 14px;
+    }
+
+    /* Summary Cards */
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .summary-card {
+      background: white;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      padding: 16px 20px;
+    }
+
+    .summary-label {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: #57606a;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+
+    .summary-value {
+      font-size: 28px;
+      font-weight: 600;
+      color: #24292f;
+    }
+
+    .summary-unit {
+      font-size: 16px;
+      color: #57606a;
+    }
+
+    /* Search */
+    .controls {
+      background: white;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    .search-box {
+      width: 100%;
+      max-width: 400px;
+      padding: 8px 12px;
+      font-size: 14px;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      outline: none;
+    }
+
+    .search-box:focus {
+      border-color: #0969da;
+      box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.1);
+    }
+
+    /* Table */
+    .table-container {
+      background: white;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead {
+      background: #f6f8fa;
+      border-bottom: 1px solid #d0d7de;
+    }
+
+    th {
+      padding: 12px 16px;
+      text-align: left;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: #57606a;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    th:hover {
+      background: #eaeef2;
+    }
+
+    th.sort {
+      position: relative;
+    }
+
+    th.sort::after {
+      content: '⇅';
+      position: absolute;
+      right: 8px;
+      opacity: 0.3;
+    }
+
+    th.asc::after {
+      content: '↑';
+      opacity: 1;
+    }
+
+    th.desc::after {
+      content: '↓';
+      opacity: 1;
+    }
+
+    tbody tr {
+      border-bottom: 1px solid #d0d7de;
+    }
+
+    tbody tr:last-child {
+      border-bottom: none;
+    }
+
+    tbody tr:hover {
+      background: #f6f8fa;
+    }
+
+    td {
+      padding: 12px 16px;
+      font-size: 14px;
+    }
+
+    .filename {
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace;
+      font-size: 13px;
+      color: #0969da;
+    }
+
+    .coverage-cell {
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .coverage-high { color: #1a7f37; }
+    .coverage-medium { color: #bf8700; }
+    .coverage-low { color: #cf222e; }
+
+    .count {
+      color: #57606a;
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Empty State */
+    .no-results {
+      text-align: center;
+      padding: 60px 20px;
+      color: #57606a;
+    }
+
+    .no-results-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      opacity: 0.3;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <a href="../" class="back-link">← Back to Dashboard</a>
-    <h1>Code Coverage Report</h1>
-    <pre>
-Filename                      Regions    Missed Regions     Cover   Functions  Missed Functions  Executed       Lines      Missed Lines     Cover    Branches   Missed Branches     Cover
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-ambient.rs                        628               628     0.00%          12                12     0.00%         362               362     0.00%           0                 0         -
-binary.rs                         603                30    95.02%          26                 4    84.62%         343                24    93.00%           0                 0         -
-cache/mod.rs                      150                88    41.33%          10                 5    50.00%          86                49    43.02%           0                 0         -
-closures.rs                       768               768     0.00%          10                10     0.00%         296               296     0.00%           0                 0         -
-codegen/lower/mod.rs             9369              9369     0.00%         144               144     0.00%        3547              3547     0.00%           0                 0         -
-codegen/mod.rs                   2291              2291     0.00%          69                69     0.00%         903               903     0.00%           0                 0         -
-codegen/runtime.rs                872               872     0.00%           4                 4     0.00%         169               169     0.00%           0                 0         -
-concurrency.rs                    825               812     1.58%           5                 4    20.00%         330               323     2.12%           0                 0         -
-contracts.rs                      545                61    88.81%          33                 2    93.94%         355                47    86.76%           0                 0         -
-derived.rs                        547               484    11.52%          29                24    17.24%         360               333     7.50%           0                 0         -
-diagnostics/mod.rs                 83                75     9.64%           8                 6    25.00%          60                54    10.00%           0                 0         -
-git_cache.rs                      235               154    34.47%          18                 8    55.56%         178               128    28.09%           0                 0         -
-lexer/mod.rs                      274                62    77.37%          12                 0   100.00%         115                10    91.30%           0                 0         -
-lexer/token.rs                    254               242     4.72%           4                 2    50.00%         110               102     7.27%           0                 0         -
-lib.rs                            955               940     1.57%          64                63     1.56%         476               469     1.47%           0                 0         -
-manifest.rs                       426               426     0.00%          25                25     0.00%         275               275     0.00%           0                 0         -
-marshal.rs                       1858              1858     0.00%          52                52     0.00%        1460              1460     0.00%           0                 0         -
-modules.rs                       2691              2397    10.93%          75                70     6.67%        1432              1257    12.22%           0                 0         -
-monomorphize.rs                  2229              2229     0.00%          50                50     0.00%        1181              1181     0.00%           0                 0         -
-parser/ast.rs                      24                 9    62.50%           4                 1    75.00%          15                 6    60.00%           0                 0         -
-parser/mod.rs                    7376              1707    76.86%         214                18    91.59%        3593               934    74.01%           0                 0         -
-prelude.rs                        153               107    30.07%           7                 1    85.71%         173               136    21.39%           0                 0         -
-pretty.rs                        3147               668    78.77%         120                 8    93.33%        1919               309    83.90%           0                 0         -
-reflection.rs                     215               215     0.00%           7                 7     0.00%         300               300     0.00%           0                 0         -
-span.rs                            16                 7    56.25%           5                 2    60.00%          15                 6    60.00%           0                 0         -
-spawn.rs                          550               258    53.09%          13                 1    92.31%         401               180    55.11%           0                 0         -
-stages.rs                         232               232     0.00%           7                 7     0.00%         130               130     0.00%           0                 0         -
-sync.rs                           413               145    64.89%          21                12    42.86%         260                92    64.62%           0                 0         -
-typeck/check.rs                  1846               929    49.67%          48                21    56.25%        1088               616    43.38%           0                 0         -
-typeck/closures.rs                659               475    27.92%           8                 2    75.00%         262               162    38.17%           0                 0         -
-typeck/env.rs                     380               129    66.05%          23                 4    82.61%         200                63    68.50%           0                 0         -
-typeck/errors.rs                 1494               606    59.44%          16                 6    62.50%         656               251    61.74%           0                 0         -
-typeck/infer.rs                  2647              1693    36.04%          57                30    47.37%        1921              1366    28.89%           0                 0         -
-typeck/mod.rs                    1319                64    95.15%         139                 0   100.00%         634                18    97.16%           0                 0         -
-typeck/register.rs               2109               701    66.76%          68                22    67.65%        1252               476    61.98%           0                 0         -
-typeck/resolve.rs                 890               520    41.57%          31                11    64.52%         457               234    48.80%           0                 0         -
-typeck/serializable.rs            326               326     0.00%           8                 8     0.00%         202               202     0.00%           0                 0         -
-typeck/types.rs                   263               244     7.22%          10                 8    20.00%         126               114     9.52%           0                 0         -
-visit.rs                         1174              1141     2.81%          60                57     5.00%         734               715     2.59%           0                 0         -
-watch.rs                          273               273     0.00%          22                22     0.00%         183               183     0.00%           0                 0         -
-xref.rs                           945               272    71.22%          20                 0   100.00%         631               186    70.52%           0                 0         -
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-TOTAL                           52054             34507    33.71%        1558               802    48.52%       27190             17668    35.02%           0                 0         -
-    </pre>
+    <div class="header">
+      <a href="../" class="back-link">← Back to Dashboard</a>
+      <h1>Code Coverage Report</h1>
+      <p class="subtitle">Unit test coverage • Generated by cargo-llvm-cov</p>
+    </div>
+
+    <div class="summary" id="summary">
+      <div class="summary-card">
+        <div class="summary-label">Line Coverage</div>
+        <div class="summary-value"><span id="total-line-coverage">--</span><span class="summary-unit">%</span></div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Function Coverage</div>
+        <div class="summary-value"><span id="total-function-coverage">--</span><span class="summary-unit">%</span></div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Region Coverage</div>
+        <div class="summary-value"><span id="total-region-coverage">--</span><span class="summary-unit">%</span></div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Files Covered</div>
+        <div class="summary-value"><span id="files-count">--</span></div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <input class="search-box search" placeholder="Search files..." type="text">
+    </div>
+
+    <div class="table-container">
+      <table id="coverage-table">
+        <thead>
+          <tr>
+            <th class="sort" data-sort="filename">File</th>
+            <th class="sort" data-sort="line-percent">Lines</th>
+            <th class="sort" data-sort="line-count">Lines Covered</th>
+            <th class="sort" data-sort="function-percent">Functions</th>
+            <th class="sort" data-sort="function-count">Functions Covered</th>
+            <th class="sort" data-sort="region-percent">Regions</th>
+            <th class="sort" data-sort="region-count">Regions Covered</th>
+          </tr>
+        </thead>
+        <tbody class="list">
+          <!-- Populated by JavaScript -->
+        </tbody>
+      </table>
+      <div class="no-results" style="display: none;">
+        <div class="no-results-icon">🔍</div>
+        <p>No files found matching your search</p>
+      </div>
+    </div>
   </div>
+
+  <script>
+    // Load and parse coverage data
+    fetch('coverage.json')
+      .then(response => response.json())
+      .then(data => {
+        const files = data.data[0].files;
+
+        // Calculate totals
+        let totalLines = 0, coveredLines = 0;
+        let totalFunctions = 0, coveredFunctions = 0;
+        let totalRegions = 0, coveredRegions = 0;
+
+        const items = files.map(file => {
+          const filename = file.filename.replace(/.*\/src\//, 'src/');
+          const summary = file.summary;
+
+          totalLines += summary.lines.count;
+          coveredLines += summary.lines.covered;
+          totalFunctions += summary.functions.count;
+          coveredFunctions += summary.functions.covered;
+          totalRegions += summary.regions.count;
+          coveredRegions += summary.regions.covered;
+
+          return {
+            filename: filename,
+            'line-percent': summary.lines.percent.toFixed(1),
+            'line-count': `${summary.lines.covered}/${summary.lines.count}`,
+            'line-percent-raw': summary.lines.percent,
+            'function-percent': summary.functions.percent.toFixed(1),
+            'function-count': `${summary.functions.covered}/${summary.functions.count}`,
+            'function-percent-raw': summary.functions.percent,
+            'region-percent': summary.regions.percent.toFixed(1),
+            'region-count': `${summary.regions.covered}/${summary.regions.count}`,
+            'region-percent-raw': summary.regions.percent
+          };
+        });
+
+        // Update summary
+        document.getElementById('total-line-coverage').textContent =
+          ((coveredLines / totalLines) * 100).toFixed(1);
+        document.getElementById('total-function-coverage').textContent =
+          ((coveredFunctions / totalFunctions) * 100).toFixed(1);
+        document.getElementById('total-region-coverage').textContent =
+          ((coveredRegions / totalRegions) * 100).toFixed(1);
+        document.getElementById('files-count').textContent = files.length;
+
+        // Helper to get coverage class
+        function getCoverageClass(percent) {
+          if (percent >= 80) return 'coverage-high';
+          if (percent >= 50) return 'coverage-medium';
+          return 'coverage-low';
+        }
+
+        // Initialize List.js
+        const options = {
+          valueNames: [
+            'filename',
+            { name: 'line-percent', attr: 'data-value' },
+            'line-count',
+            { name: 'function-percent', attr: 'data-value' },
+            'function-count',
+            { name: 'region-percent', attr: 'data-value' },
+            'region-count'
+          ],
+          item: function(values) {
+            return `
+              <tr>
+                <td class="filename">${values.filename}</td>
+                <td class="coverage-cell ${getCoverageClass(values['line-percent-raw'])}" data-value="${values['line-percent']}">${values['line-percent']}%</td>
+                <td class="count">${values['line-count']}</td>
+                <td class="coverage-cell ${getCoverageClass(values['function-percent-raw'])}" data-value="${values['function-percent']}">${values['function-percent']}%</td>
+                <td class="count">${values['function-count']}</td>
+                <td class="coverage-cell ${getCoverageClass(values['region-percent-raw'])}" data-value="${values['region-percent']}">${values['region-percent']}%</td>
+                <td class="count">${values['region-count']}</td>
+              </tr>
+            `;
+          }
+        };
+
+        const coverageList = new List('coverage-table', options, items);
+
+        // Show/hide no results message
+        coverageList.on('searchComplete', function() {
+          const noResults = document.querySelector('.no-results');
+          const table = document.querySelector('table');
+          if (coverageList.visibleItems.length === 0) {
+            noResults.style.display = 'block';
+            table.style.display = 'none';
+          } else {
+            noResults.style.display = 'none';
+            table.style.display = 'table';
+          }
+        });
+      })
+      .catch(error => {
+        console.error('Error loading coverage data:', error);
+        document.querySelector('.table-container').innerHTML =
+          '<div class="no-results"><div class="no-results-icon">⚠️</div><p>Error loading coverage data</p></div>';
+      });
+  </script>
 </body>
 </html>
