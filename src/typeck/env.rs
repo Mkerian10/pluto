@@ -434,3 +434,219 @@ fn mangle_type(ty: &PlutoType) -> String {
         PlutoType::Stream(inner) => format!("stream${}", mangle_type(inner)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ===== mangle_method tests =====
+
+    #[test]
+    fn test_mangle_method_class() {
+        assert_eq!(mangle_method("Counter", "increment"), "Counter$increment");
+        assert_eq!(mangle_method("User", "getName"), "User$getName");
+    }
+
+    #[test]
+    fn test_mangle_method_app() {
+        assert_eq!(mangle_method("MyApp", "main"), "MyApp$main");
+        assert_eq!(mangle_method("WebApp", "start"), "WebApp$start");
+    }
+
+    #[test]
+    fn test_mangle_method_module_prefixed() {
+        assert_eq!(mangle_method("math.Vector", "add"), "math.Vector$add");
+        assert_eq!(mangle_method("http.Server", "listen"), "http.Server$listen");
+    }
+
+    // ===== mangle_name tests =====
+
+    #[test]
+    fn test_mangle_name_single_type_arg() {
+        let type_args = vec![PlutoType::Int];
+        assert_eq!(mangle_name("identity", &type_args), "identity$$int");
+    }
+
+    #[test]
+    fn test_mangle_name_multiple_type_args() {
+        let type_args = vec![PlutoType::Int, PlutoType::String];
+        assert_eq!(mangle_name("Pair", &type_args), "Pair$$int$string");
+    }
+
+    #[test]
+    fn test_mangle_name_complex_type_args() {
+        let type_args = vec![
+            PlutoType::Array(Box::new(PlutoType::Int)),
+            PlutoType::Map(Box::new(PlutoType::String), Box::new(PlutoType::Float)),
+        ];
+        assert_eq!(mangle_name("process", &type_args), "process$$arr$int$map$string$float");
+    }
+
+    #[test]
+    fn test_mangle_name_no_type_args() {
+        let type_args = vec![];
+        assert_eq!(mangle_name("foo", &type_args), "foo$$");
+    }
+
+    // ===== mangle_type tests =====
+
+    #[test]
+    fn test_mangle_type_primitives() {
+        assert_eq!(mangle_type(&PlutoType::Int), "int");
+        assert_eq!(mangle_type(&PlutoType::Float), "float");
+        assert_eq!(mangle_type(&PlutoType::Bool), "bool");
+        assert_eq!(mangle_type(&PlutoType::String), "string");
+        assert_eq!(mangle_type(&PlutoType::Void), "void");
+        assert_eq!(mangle_type(&PlutoType::Byte), "byte");
+        assert_eq!(mangle_type(&PlutoType::Bytes), "bytes");
+        assert_eq!(mangle_type(&PlutoType::Range), "range");
+        assert_eq!(mangle_type(&PlutoType::Error), "error");
+    }
+
+    #[test]
+    fn test_mangle_type_class() {
+        assert_eq!(mangle_type(&PlutoType::Class("User".to_string())), "User");
+        assert_eq!(mangle_type(&PlutoType::Class("math.Point".to_string())), "math.Point");
+    }
+
+    #[test]
+    fn test_mangle_type_enum() {
+        assert_eq!(mangle_type(&PlutoType::Enum("Option".to_string())), "Option");
+        assert_eq!(mangle_type(&PlutoType::Enum("Result".to_string())), "Result");
+    }
+
+    #[test]
+    fn test_mangle_type_trait() {
+        assert_eq!(mangle_type(&PlutoType::Trait("Printable".to_string())), "Printable");
+        assert_eq!(mangle_type(&PlutoType::Trait("Comparable".to_string())), "Comparable");
+    }
+
+    #[test]
+    fn test_mangle_type_type_param() {
+        assert_eq!(mangle_type(&PlutoType::TypeParam("T".to_string())), "T");
+        assert_eq!(mangle_type(&PlutoType::TypeParam("U".to_string())), "U");
+    }
+
+    #[test]
+    fn test_mangle_type_array() {
+        assert_eq!(mangle_type(&PlutoType::Array(Box::new(PlutoType::Int))), "arr$int");
+        assert_eq!(
+            mangle_type(&PlutoType::Array(Box::new(PlutoType::String))),
+            "arr$string"
+        );
+    }
+
+    #[test]
+    fn test_mangle_type_nested_array() {
+        let nested = PlutoType::Array(Box::new(PlutoType::Array(Box::new(PlutoType::Int))));
+        assert_eq!(mangle_type(&nested), "arr$arr$int");
+    }
+
+    #[test]
+    fn test_mangle_type_map() {
+        let map = PlutoType::Map(Box::new(PlutoType::String), Box::new(PlutoType::Int));
+        assert_eq!(mangle_type(&map), "map$string$int");
+    }
+
+    #[test]
+    fn test_mangle_type_set() {
+        let set = PlutoType::Set(Box::new(PlutoType::Int));
+        assert_eq!(mangle_type(&set), "set$int");
+    }
+
+    #[test]
+    fn test_mangle_type_task() {
+        let task = PlutoType::Task(Box::new(PlutoType::Int));
+        assert_eq!(mangle_type(&task), "task$int");
+    }
+
+    #[test]
+    fn test_mangle_type_nullable() {
+        let nullable = PlutoType::Nullable(Box::new(PlutoType::String));
+        assert_eq!(mangle_type(&nullable), "nullable$string");
+    }
+
+    #[test]
+    fn test_mangle_type_stream() {
+        let stream = PlutoType::Stream(Box::new(PlutoType::Float));
+        assert_eq!(mangle_type(&stream), "stream$float");
+    }
+
+    #[test]
+    fn test_mangle_type_sender() {
+        let sender = PlutoType::Sender(Box::new(PlutoType::Int));
+        assert_eq!(mangle_type(&sender), "sender$int");
+    }
+
+    #[test]
+    fn test_mangle_type_receiver() {
+        let receiver = PlutoType::Receiver(Box::new(PlutoType::String));
+        assert_eq!(mangle_type(&receiver), "receiver$string");
+    }
+
+    #[test]
+    fn test_mangle_type_fn_no_params() {
+        let fn_type = PlutoType::Fn(vec![], Box::new(PlutoType::Void));
+        assert_eq!(mangle_type(&fn_type), "fn$$ret$void");
+    }
+
+    #[test]
+    fn test_mangle_type_fn_one_param() {
+        let fn_type = PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::String));
+        assert_eq!(mangle_type(&fn_type), "fn$int$ret$string");
+    }
+
+    #[test]
+    fn test_mangle_type_fn_multiple_params() {
+        let fn_type = PlutoType::Fn(
+            vec![PlutoType::Int, PlutoType::Float, PlutoType::Bool],
+            Box::new(PlutoType::String),
+        );
+        assert_eq!(mangle_type(&fn_type), "fn$int$float$bool$ret$string");
+    }
+
+    #[test]
+    fn test_mangle_type_generic_instance_single_arg() {
+        use crate::typeck::types::GenericKind;
+        let generic = PlutoType::GenericInstance(
+            GenericKind::Class,
+            "Box".to_string(),
+            vec![PlutoType::Int],
+        );
+        assert_eq!(mangle_type(&generic), "Box$$int");
+    }
+
+    #[test]
+    fn test_mangle_type_generic_instance_multiple_args() {
+        use crate::typeck::types::GenericKind;
+        let generic = PlutoType::GenericInstance(
+            GenericKind::Class,
+            "Pair".to_string(),
+            vec![PlutoType::String, PlutoType::Float],
+        );
+        assert_eq!(mangle_type(&generic), "Pair$$string$float");
+    }
+
+    #[test]
+    fn test_mangle_type_complex_nested() {
+        // Map<string, Array<int>>
+        let complex = PlutoType::Map(
+            Box::new(PlutoType::String),
+            Box::new(PlutoType::Array(Box::new(PlutoType::Int))),
+        );
+        assert_eq!(mangle_type(&complex), "map$string$arr$int");
+    }
+
+    #[test]
+    fn test_mangle_type_function_with_complex_params() {
+        // fn(Array<int>, Map<string, float>) bool
+        let fn_type = PlutoType::Fn(
+            vec![
+                PlutoType::Array(Box::new(PlutoType::Int)),
+                PlutoType::Map(Box::new(PlutoType::String), Box::new(PlutoType::Float)),
+            ],
+            Box::new(PlutoType::Bool),
+        );
+        assert_eq!(mangle_type(&fn_type), "fn$arr$int$map$string$float$ret$bool");
+    }
+}
