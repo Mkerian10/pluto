@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use super::types::PlutoType;
 use crate::parser::ast::{ContractClause, Lifecycle, TypeExpr};
 use crate::span::{Span, Spanned};
+use crate::visit::scope_tracker::ScopeTracker;
 
 #[derive(Debug, Clone)]
 pub struct FuncSig {
@@ -130,7 +131,8 @@ pub struct ScopeResolution {
 
 #[derive(Debug)]
 pub struct TypeEnv {
-    scopes: Vec<HashMap<String, PlutoType>>,
+    /// Variable bindings in nested scopes
+    variables: ScopeTracker<PlutoType>,
     pub functions: HashMap<String, FuncSig>,
     pub builtins: HashSet<String>,
     pub classes: HashMap<String, ClassInfo>,
@@ -169,7 +171,7 @@ pub struct TypeEnv {
     /// Spawn span → target function name
     pub spawn_target_fns: HashMap<(usize, usize), String>,
     /// Scope-mirrored: variable name → spawned function name (for let bindings only)
-    pub task_spawn_scopes: Vec<HashMap<String, String>>,
+    task_origins: ScopeTracker<String>,
     /// Function-level: task variable names whose origin is permanently unknown due to Stmt::Assign
     pub invalidated_task_vars: HashSet<String>,
     /// Closure span → return type (set during typeck, used during closure lifting)
@@ -179,7 +181,8 @@ pub struct TypeEnv {
     /// Mangled names of methods that declare `mut self`
     pub mut_self_methods: HashSet<String>,
     /// Scope-mirrored: tracks variables declared with `let` (not `let mut`)
-    pub immutable_bindings: Vec<HashSet<String>>,
+    /// Uses () as value type - presence of key indicates immutability
+    immutable_vars: ScopeTracker<()>,
     /// Variable declarations: (var_name, scope_depth) → declaration span
     pub variable_decls: HashMap<(String, usize), Span>,
     /// Variable reads: (var_name, scope_depth)
@@ -230,7 +233,7 @@ impl TypeEnv {
         builtins.insert("expect".to_string());
         builtins.insert("bytes_new".to_string());
         Self {
-            scopes: vec![HashMap::new()],
+            variables: ScopeTracker::with_initial_scope(),
             functions: HashMap::new(),
             builtins,
             classes: HashMap::new(),
@@ -256,12 +259,12 @@ impl TypeEnv {
             ambient_types: HashSet::new(),
             loop_depth: 0,
             spawn_target_fns: HashMap::new(),
-            task_spawn_scopes: vec![HashMap::new()],
+            task_origins: ScopeTracker::with_initial_scope(),
             invalidated_task_vars: HashSet::new(),
             closure_return_types: HashMap::new(),
             in_ensures_context: false,
             mut_self_methods: HashSet::new(),
-            immutable_bindings: vec![HashSet::new()],
+            immutable_vars: ScopeTracker::with_initial_scope(),
             variable_decls: HashMap::new(),
             variable_reads: HashSet::new(),
             scope_resolutions: HashMap::new(),
@@ -276,42 +279,32 @@ impl TypeEnv {
     }
 
     pub fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
-        self.task_spawn_scopes.push(HashMap::new());
-        self.immutable_bindings.push(HashSet::new());
+        self.variables.push_scope();
+        self.task_origins.push_scope();
+        self.immutable_vars.push_scope();
     }
 
     pub fn pop_scope(&mut self) {
-        self.scopes.pop();
-        self.task_spawn_scopes.pop();
-        self.immutable_bindings.pop();
+        self.variables.pop_scope();
+        self.task_origins.pop_scope();
+        self.immutable_vars.pop_scope();
     }
 
     pub fn define(&mut self, name: String, ty: PlutoType) {
-        self.scopes.last_mut().unwrap().insert(name, ty);
+        self.variables.insert(name, ty);
     }
 
     pub fn lookup(&self, name: &str) -> Option<&PlutoType> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(ty) = scope.get(name) {
-                return Some(ty);
-            }
-        }
-        None
+        self.variables.lookup(name)
     }
 
     pub fn scope_depth(&self) -> usize {
-        self.scopes.len()
+        self.variables.depth()
     }
 
     /// Look up a variable and return its type along with the scope depth it was found at (0-indexed from bottom)
     pub fn lookup_with_depth(&self, name: &str) -> Option<(&PlutoType, usize)> {
-        for (i, scope) in self.scopes.iter().enumerate().rev() {
-            if let Some(ty) = scope.get(name) {
-                return Some((ty, i));
-            }
-        }
-        None
+        self.variables.lookup_with_depth(name)
     }
 
     pub fn class_implements_trait(&self, class_name: &str, trait_name: &str) -> bool {
@@ -364,32 +357,22 @@ impl TypeEnv {
     }
 
     pub fn define_task_origin(&mut self, name: String, fn_name: String) {
-        self.task_spawn_scopes.last_mut().unwrap().insert(name, fn_name);
+        self.task_origins.insert(name, fn_name);
     }
 
     pub fn lookup_task_origin(&self, name: &str) -> Option<&String> {
         if self.invalidated_task_vars.contains(name) {
             return None;
         }
-        for scope in self.task_spawn_scopes.iter().rev() {
-            if let Some(fn_name) = scope.get(name) {
-                return Some(fn_name);
-            }
-        }
-        None
+        self.task_origins.lookup(name)
     }
 
     pub fn mark_immutable(&mut self, name: &str) {
-        self.immutable_bindings.last_mut().unwrap().insert(name.to_string());
+        self.immutable_vars.insert(name.to_string(), ());
     }
 
     pub fn is_immutable(&self, name: &str) -> bool {
-        for scope in self.immutable_bindings.iter().rev() {
-            if scope.contains(name) {
-                return true;
-            }
-        }
-        false
+        self.immutable_vars.contains(name)
     }
 }
 
