@@ -7,7 +7,7 @@ use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 use crate::typeck::env::{mangle_method, mangle_name, InstKind, Instantiation, TypeEnv};
 use crate::typeck::types::{PlutoType, pluto_type_to_type_expr};
-use crate::visit::{walk_type_expr_mut, VisitMut};
+use crate::visit::{walk_block_mut, walk_expr_mut, walk_stmt_mut, walk_type_expr_mut, VisitMut};
 
 /// Span offset multiplier for monomorphized bodies. Each iteration gets unique
 /// spans to avoid closure capture key collisions. Must exceed any realistic
@@ -29,6 +29,38 @@ impl VisitMut for GenericTypeResolver<'_> {
         }
         // Then recurse into children
         walk_type_expr_mut(self, te);
+    }
+}
+
+/// Visitor for offsetting all spans in an AST subtree by a fixed amount.
+/// Used during monomorphization to give each instantiation unique spans.
+struct SpanOffsetter {
+    offset: usize,
+}
+
+impl VisitMut for SpanOffsetter {
+    fn visit_type_expr_mut(&mut self, te: &mut Spanned<TypeExpr>) {
+        te.span.start += self.offset;
+        te.span.end += self.offset;
+        walk_type_expr_mut(self, te);
+    }
+
+    fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+        expr.span.start += self.offset;
+        expr.span.end += self.offset;
+        walk_expr_mut(self, expr);
+    }
+
+    fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
+        stmt.span.start += self.offset;
+        stmt.span.end += self.offset;
+        walk_stmt_mut(self, stmt);
+    }
+
+    fn visit_block_mut(&mut self, block: &mut Spanned<Block>) {
+        block.span.start += self.offset;
+        block.span.end += self.offset;
+        walk_block_mut(self, block);
     }
 }
 
@@ -631,29 +663,27 @@ fn offset_spanned<T>(s: &mut Spanned<T>, offset: usize) {
 }
 
 fn offset_function_spans(func: &mut Function, offset: usize) {
+    let mut offsetter = SpanOffsetter { offset };
     offset_spanned(&mut func.name, offset);
     for tp in &mut func.type_params {
         offset_spanned(tp, offset);
     }
     for p in &mut func.params {
         offset_spanned(&mut p.name, offset);
-        offset_spanned(&mut p.ty, offset);
-        offset_type_expr_spans(&mut p.ty.node, offset);
+        offsetter.visit_type_expr_mut(&mut p.ty);
     }
     if let Some(ref mut rt) = func.return_type {
-        offset_spanned(rt, offset);
-        offset_type_expr_spans(&mut rt.node, offset);
+        offsetter.visit_type_expr_mut(rt);
     }
-    offset_spanned(&mut func.body, offset);
-    offset_block_spans(&mut func.body.node, offset);
+    offsetter.visit_block_mut(&mut func.body);
 }
 
 fn offset_class_spans(class: &mut ClassDecl, offset: usize) {
+    let mut offsetter = SpanOffsetter { offset };
     offset_spanned(&mut class.name, offset);
     for f in &mut class.fields {
         offset_spanned(&mut f.name, offset);
-        offset_spanned(&mut f.ty, offset);
-        offset_type_expr_spans(&mut f.ty.node, offset);
+        offsetter.visit_type_expr_mut(&mut f.ty);
     }
     for method in &mut class.methods {
         offset_spanned(method, offset);
@@ -662,380 +692,21 @@ fn offset_class_spans(class: &mut ClassDecl, offset: usize) {
 }
 
 fn offset_enum_spans(edecl: &mut EnumDecl, offset: usize) {
+    let mut offsetter = SpanOffsetter { offset };
     offset_spanned(&mut edecl.name, offset);
     for variant in &mut edecl.variants {
         offset_spanned(&mut variant.name, offset);
         for field in &mut variant.fields {
             offset_spanned(&mut field.name, offset);
-            offset_spanned(&mut field.ty, offset);
-            offset_type_expr_spans(&mut field.ty.node, offset);
-        }
-    }
-}
-
-fn offset_type_expr_spans(te: &mut TypeExpr, offset: usize) {
-    match te {
-        TypeExpr::Named(_) | TypeExpr::Qualified { .. } => {}
-        TypeExpr::Array(inner) => {
-            offset_spanned(inner, offset);
-            offset_type_expr_spans(&mut inner.node, offset);
-        }
-        TypeExpr::Fn { params, return_type } => {
-            for p in params.iter_mut() {
-                offset_spanned(p, offset);
-                offset_type_expr_spans(&mut p.node, offset);
-            }
-            offset_spanned(return_type, offset);
-            offset_type_expr_spans(&mut return_type.node, offset);
-        }
-        TypeExpr::Generic { type_args, .. } => {
-            for arg in type_args.iter_mut() {
-                offset_spanned(arg, offset);
-                offset_type_expr_spans(&mut arg.node, offset);
-            }
-        }
-        TypeExpr::Nullable(inner) => {
-            offset_spanned(inner, offset);
-            offset_type_expr_spans(&mut inner.node, offset);
-        }
-        TypeExpr::Stream(inner) => {
-            offset_spanned(inner, offset);
-            offset_type_expr_spans(&mut inner.node, offset);
+            offsetter.visit_type_expr_mut(&mut field.ty);
         }
     }
 }
 
 fn offset_block_spans(block: &mut Block, offset: usize) {
+    let mut offsetter = SpanOffsetter { offset };
     for stmt in &mut block.stmts {
-        offset_spanned(stmt, offset);
-        offset_stmt_spans(&mut stmt.node, offset);
-    }
-}
-
-fn offset_stmt_spans(stmt: &mut Stmt, offset: usize) {
-    match stmt {
-        Stmt::Let { name, ty, value, .. } => {
-            offset_spanned(name, offset);
-            if let Some(t) = ty {
-                offset_spanned(t, offset);
-                offset_type_expr_spans(&mut t.node, offset);
-            }
-            offset_spanned(value, offset);
-            offset_expr_spans(&mut value.node, offset);
-        }
-        Stmt::Return(Some(expr)) => {
-            offset_spanned(expr, offset);
-            offset_expr_spans(&mut expr.node, offset);
-        }
-        Stmt::Return(None) => {}
-        Stmt::Assign { target, value } => {
-            offset_spanned(target, offset);
-            offset_spanned(value, offset);
-            offset_expr_spans(&mut value.node, offset);
-        }
-        Stmt::FieldAssign { object, field, value } => {
-            offset_spanned(object, offset);
-            offset_expr_spans(&mut object.node, offset);
-            offset_spanned(field, offset);
-            offset_spanned(value, offset);
-            offset_expr_spans(&mut value.node, offset);
-        }
-        Stmt::If { condition, then_block, else_block } => {
-            offset_spanned(condition, offset);
-            offset_expr_spans(&mut condition.node, offset);
-            offset_spanned(then_block, offset);
-            offset_block_spans(&mut then_block.node, offset);
-            if let Some(eb) = else_block {
-                offset_spanned(eb, offset);
-                offset_block_spans(&mut eb.node, offset);
-            }
-        }
-        Stmt::While { condition, body } => {
-            offset_spanned(condition, offset);
-            offset_expr_spans(&mut condition.node, offset);
-            offset_spanned(body, offset);
-            offset_block_spans(&mut body.node, offset);
-        }
-        Stmt::For { var, iterable, body } => {
-            offset_spanned(var, offset);
-            offset_spanned(iterable, offset);
-            offset_expr_spans(&mut iterable.node, offset);
-            offset_spanned(body, offset);
-            offset_block_spans(&mut body.node, offset);
-        }
-        Stmt::IndexAssign { object, index, value } => {
-            offset_spanned(object, offset);
-            offset_expr_spans(&mut object.node, offset);
-            offset_spanned(index, offset);
-            offset_expr_spans(&mut index.node, offset);
-            offset_spanned(value, offset);
-            offset_expr_spans(&mut value.node, offset);
-        }
-        Stmt::Match { expr, arms } => {
-            offset_spanned(expr, offset);
-            offset_expr_spans(&mut expr.node, offset);
-            for arm in arms.iter_mut() {
-                offset_spanned(&mut arm.enum_name, offset);
-                offset_spanned(&mut arm.variant_name, offset);
-                for ta in &mut arm.type_args {
-                    offset_spanned(ta, offset);
-                    offset_type_expr_spans(&mut ta.node, offset);
-                }
-                for (fname, binding) in &mut arm.bindings {
-                    offset_spanned(fname, offset);
-                    if let Some(b) = binding {
-                        offset_spanned(b, offset);
-                    }
-                }
-                offset_spanned(&mut arm.body, offset);
-                offset_block_spans(&mut arm.body.node, offset);
-            }
-        }
-        Stmt::Raise { error_name, fields, .. } => {
-            offset_spanned(error_name, offset);
-            for (fname, fexpr) in fields.iter_mut() {
-                offset_spanned(fname, offset);
-                offset_spanned(fexpr, offset);
-                offset_expr_spans(&mut fexpr.node, offset);
-            }
-        }
-        Stmt::Expr(expr) => {
-            offset_spanned(expr, offset);
-            offset_expr_spans(&mut expr.node, offset);
-        }
-        Stmt::LetChan { sender, receiver, elem_type, capacity } => {
-            offset_spanned(sender, offset);
-            offset_spanned(receiver, offset);
-            offset_spanned(elem_type, offset);
-            offset_type_expr_spans(&mut elem_type.node, offset);
-            if let Some(cap) = capacity {
-                offset_spanned(cap, offset);
-                offset_expr_spans(&mut cap.node, offset);
-            }
-        }
-        Stmt::Scope { seeds, bindings, body } => {
-            for seed in seeds {
-                offset_spanned(seed, offset);
-                offset_expr_spans(&mut seed.node, offset);
-            }
-            for binding in bindings {
-                offset_spanned(&mut binding.name, offset);
-                offset_spanned(&mut binding.ty, offset);
-                offset_type_expr_spans(&mut binding.ty.node, offset);
-            }
-            offset_spanned(body, offset);
-            offset_block_spans(&mut body.node, offset);
-        }
-        Stmt::Select { arms, default } => {
-            for arm in arms {
-                match &mut arm.op {
-                    SelectOp::Recv { binding, channel } => {
-                        offset_spanned(binding, offset);
-                        offset_spanned(channel, offset);
-                        offset_expr_spans(&mut channel.node, offset);
-                    }
-                    SelectOp::Send { channel, value } => {
-                        offset_spanned(channel, offset);
-                        offset_expr_spans(&mut channel.node, offset);
-                        offset_spanned(value, offset);
-                        offset_expr_spans(&mut value.node, offset);
-                    }
-                }
-                offset_spanned(&mut arm.body, offset);
-                offset_block_spans(&mut arm.body.node, offset);
-            }
-            if let Some(def) = default {
-                offset_spanned(def, offset);
-                offset_block_spans(&mut def.node, offset);
-            }
-        }
-        Stmt::Yield { value, .. } => {
-            offset_spanned(value, offset);
-            offset_expr_spans(&mut value.node, offset);
-        }
-        Stmt::Break | Stmt::Continue => {}
-    }
-}
-
-fn offset_expr_spans(expr: &mut Expr, offset: usize) {
-    match expr {
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
-        | Expr::StringLit(_) | Expr::Ident(_) | Expr::ClosureCreate { .. }
-        | Expr::NoneLit => {}
-        Expr::NullPropagate { expr } => {
-            offset_spanned(expr, offset);
-            offset_expr_spans(&mut expr.node, offset);
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            offset_spanned(lhs, offset);
-            offset_expr_spans(&mut lhs.node, offset);
-            offset_spanned(rhs, offset);
-            offset_expr_spans(&mut rhs.node, offset);
-        }
-        Expr::Range { start, end, .. } => {
-            offset_spanned(start, offset);
-            offset_expr_spans(&mut start.node, offset);
-            offset_spanned(end, offset);
-            offset_expr_spans(&mut end.node, offset);
-        }
-        Expr::UnaryOp { operand, .. } => {
-            offset_spanned(operand, offset);
-            offset_expr_spans(&mut operand.node, offset);
-        }
-        Expr::Cast { expr: inner, target_type } => {
-            offset_spanned(inner, offset);
-            offset_expr_spans(&mut inner.node, offset);
-            offset_spanned(target_type, offset);
-            offset_type_expr_spans(&mut target_type.node, offset);
-        }
-        Expr::Call { name, args, .. } => {
-            offset_spanned(name, offset);
-            for arg in args.iter_mut() {
-                offset_spanned(arg, offset);
-                offset_expr_spans(&mut arg.node, offset);
-            }
-        }
-        Expr::FieldAccess { object, field } => {
-            offset_spanned(object, offset);
-            offset_expr_spans(&mut object.node, offset);
-            offset_spanned(field, offset);
-        }
-        Expr::MethodCall { object, method, args } => {
-            offset_spanned(object, offset);
-            offset_expr_spans(&mut object.node, offset);
-            offset_spanned(method, offset);
-            for arg in args.iter_mut() {
-                offset_spanned(arg, offset);
-                offset_expr_spans(&mut arg.node, offset);
-            }
-        }
-        Expr::StructLit { name, type_args, fields, .. } => {
-            offset_spanned(name, offset);
-            for ta in type_args.iter_mut() {
-                offset_spanned(ta, offset);
-                offset_type_expr_spans(&mut ta.node, offset);
-            }
-            for (fname, fexpr) in fields.iter_mut() {
-                offset_spanned(fname, offset);
-                offset_spanned(fexpr, offset);
-                offset_expr_spans(&mut fexpr.node, offset);
-            }
-        }
-        Expr::ArrayLit { elements } => {
-            for el in elements.iter_mut() {
-                offset_spanned(el, offset);
-                offset_expr_spans(&mut el.node, offset);
-            }
-        }
-        Expr::Index { object, index } => {
-            offset_spanned(object, offset);
-            offset_expr_spans(&mut object.node, offset);
-            offset_spanned(index, offset);
-            offset_expr_spans(&mut index.node, offset);
-        }
-        Expr::EnumUnit { enum_name, variant, type_args, .. } => {
-            offset_spanned(enum_name, offset);
-            offset_spanned(variant, offset);
-            for ta in type_args.iter_mut() {
-                offset_spanned(ta, offset);
-                offset_type_expr_spans(&mut ta.node, offset);
-            }
-        }
-        Expr::EnumData { enum_name, variant, type_args, fields, .. } => {
-            offset_spanned(enum_name, offset);
-            offset_spanned(variant, offset);
-            for ta in type_args.iter_mut() {
-                offset_spanned(ta, offset);
-                offset_type_expr_spans(&mut ta.node, offset);
-            }
-            for (fname, fexpr) in fields.iter_mut() {
-                offset_spanned(fname, offset);
-                offset_spanned(fexpr, offset);
-                offset_expr_spans(&mut fexpr.node, offset);
-            }
-        }
-        Expr::StringInterp { parts } => {
-            for part in parts.iter_mut() {
-                if let StringInterpPart::Expr(e) = part {
-                    offset_spanned(e, offset);
-                    offset_expr_spans(&mut e.node, offset);
-                }
-            }
-        }
-        Expr::Closure { params, return_type, body } => {
-            for p in params.iter_mut() {
-                offset_spanned(&mut p.name, offset);
-                offset_spanned(&mut p.ty, offset);
-                offset_type_expr_spans(&mut p.ty.node, offset);
-            }
-            if let Some(rt) = return_type {
-                offset_spanned(rt, offset);
-                offset_type_expr_spans(&mut rt.node, offset);
-            }
-            offset_spanned(body, offset);
-            offset_block_spans(&mut body.node, offset);
-        }
-        Expr::Propagate { expr } => {
-            offset_spanned(expr, offset);
-            offset_expr_spans(&mut expr.node, offset);
-        }
-        Expr::Catch { expr, handler } => {
-            offset_spanned(expr, offset);
-            offset_expr_spans(&mut expr.node, offset);
-            match handler {
-                CatchHandler::Wildcard { var, body } => {
-                    offset_spanned(var, offset);
-                    offset_spanned(body, offset);
-                    offset_block_spans(&mut body.node, offset);
-                }
-                CatchHandler::Shorthand(body) => {
-                    offset_spanned(body, offset);
-                    offset_expr_spans(&mut body.node, offset);
-                }
-            }
-        }
-        Expr::MapLit { key_type, value_type, entries } => {
-            offset_spanned(key_type, offset);
-            offset_type_expr_spans(&mut key_type.node, offset);
-            offset_spanned(value_type, offset);
-            offset_type_expr_spans(&mut value_type.node, offset);
-            for (k, v) in entries.iter_mut() {
-                offset_spanned(k, offset);
-                offset_expr_spans(&mut k.node, offset);
-                offset_spanned(v, offset);
-                offset_expr_spans(&mut v.node, offset);
-            }
-        }
-        Expr::SetLit { elem_type, elements } => {
-            offset_spanned(elem_type, offset);
-            offset_type_expr_spans(&mut elem_type.node, offset);
-            for el in elements.iter_mut() {
-                offset_spanned(el, offset);
-                offset_expr_spans(&mut el.node, offset);
-            }
-        }
-        Expr::Spawn { call } => {
-            offset_spanned(call, offset);
-            offset_expr_spans(&mut call.node, offset);
-        }
-        Expr::StaticTraitCall { trait_name, method_name, type_args, args } => {
-            offset_spanned(trait_name, offset);
-            offset_spanned(method_name, offset);
-            for type_arg in type_args {
-                offset_spanned(type_arg, offset);
-                offset_type_expr_spans(&mut type_arg.node, offset);
-            }
-            for arg in args {
-                offset_spanned(arg, offset);
-                offset_expr_spans(&mut arg.node, offset);
-            }
-        }
-        Expr::QualifiedAccess { segments } => {
-            panic!(
-                "QualifiedAccess should be resolved by module flattening before monomorphize. Segments: {:?}",
-                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
-            )
-        }
+        offsetter.visit_stmt_mut(stmt);
     }
 }
 
