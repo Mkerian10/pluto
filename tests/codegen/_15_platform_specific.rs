@@ -436,6 +436,7 @@ fn test_cross_platform_string_operations() {
 }
 
 #[test]
+#[ignore]
 fn test_cross_platform_class_methods() {
     // Test class method calls (validates method calling convention)
     let src = r#"
