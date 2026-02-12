@@ -180,7 +180,9 @@ mod tests {
     fn check(src: &str) -> Result<TypeEnv, CompileError> {
         let tokens = lex(src).unwrap();
         let mut parser = Parser::new(&tokens, src);
-        let program = parser.parse_program().unwrap();
+        let mut program = parser.parse_program().unwrap();
+        // Resolve QualifiedAccess for single-file tests
+        crate::modules::resolve_qualified_access_single_file(&mut program)?;
         type_check(&program).map(|(env, _warnings)| env)
     }
 

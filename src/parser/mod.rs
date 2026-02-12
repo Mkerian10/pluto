@@ -1580,6 +1580,36 @@ impl<'a> Parser<'a> {
                                 Span::new(start, end),
                             ))
                         }
+                        Expr::QualifiedAccess { mut segments } => {
+                            // Convert QualifiedAccess to FieldAccess chain for assignment
+                            // e.g., a.b.c = value becomes FieldAssign { object: a.b, field: c, value }
+                            if segments.len() < 2 {
+                                return Err(CompileError::syntax(
+                                    "invalid assignment target",
+                                    expr.span,
+                                ));
+                            }
+
+                            let field = segments.pop().unwrap();
+
+                            // Build object expression from remaining segments
+                            let object_expr = if segments.len() == 1 {
+                                Expr::Ident(segments[0].node.clone())
+                            } else {
+                                Expr::QualifiedAccess { segments }
+                            };
+                            let object_span = Span::new(expr.span.start, field.span.start - 1);
+                            let object = Spanned::new(object_expr, object_span);
+
+                            Ok(Spanned::new(
+                                Stmt::FieldAssign {
+                                    object,
+                                    field,
+                                    value,
+                                },
+                                Span::new(start, end),
+                            ))
+                        }
                         _ => Err(CompileError::syntax(
                             "invalid assignment target",
                             expr.span,
@@ -2251,91 +2281,94 @@ impl<'a> Parser<'a> {
                             span,
                         );
                     }
-                } else if !self.restrict_struct_lit
-                    && matches!(&lhs.node, Expr::Ident(_))
-                    && self.peek().is_some()
-                    && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
-                    && self.is_struct_lit_ahead()
-                {
-                    // Qualified struct literal: module.Type { field: value }
-                    let module_name = match &lhs.node {
-                        Expr::Ident(n) => n.clone(),
-                        _ => unreachable!(),
-                    };
-                    let qualified_name = format!("{}.{}", module_name, field_name.node);
-                    let name_span = Span::new(lhs.span.start, field_name.span.end);
-
-                    self.advance(); // consume '{'
-                    let (fields, close_end) = self.parse_field_list()?;
-                    let span = Span::new(lhs.span.start, close_end);
-                    lhs = Spanned::new(
-                        Expr::StructLit {
-                            name: Spanned::new(qualified_name, name_span),
-                            type_args: vec![],
-                            fields,
-                            target_id: None,
-                        },
-                        span,
-                    );
                 } else {
-                    // All other cases: regular field access (obj.field, obj.inner.field, etc.)
-                    // Special case: a.b.c { fields } could be module.Enum.Variant { fields }
-                    // We defer the decision to the rewrite pass by creating a special node
-                    let span = Span::new(lhs.span.start, field_name.span.end);
-                    lhs = Spanned::new(
-                        Expr::FieldAccess {
-                            object: Box::new(lhs),
-                            field: field_name.clone(),
-                        },
-                        span,
-                    );
+                    // Ambiguous pattern: could be field access or qualified name (module.Type, module.Enum.Variant)
+                    // Collect all segments into QualifiedAccess for later resolution
+                    let mut segments = match &lhs.node {
+                        Expr::Ident(name) => {
+                            // Start new chain from simple identifier
+                            vec![Spanned::new(name.clone(), lhs.span)]
+                        }
+                        Expr::QualifiedAccess { segments } => {
+                            // Already have chain, extend it
+                            segments.clone()
+                        }
+                        _ => {
+                            // Complex expression (method call, index, etc.)
+                            // These can't be qualified names, so create FieldAccess directly
+                            let span = Span::new(lhs.span.start, field_name.span.end);
+                            lhs = Spanned::new(
+                                Expr::FieldAccess {
+                                    object: Box::new(lhs),
+                                    field: field_name.clone(),
+                                },
+                                span,
+                            );
+                            continue;
+                        }
+                    };
 
-                    // Check if this FieldAccess is followed by { ... } for EnumData
-                    // Pattern: a.b.c { fields } where a is module, b is Enum, c is Variant
+                    segments.push(field_name.clone());
+
+                    // Check if followed by struct literal: a.b { fields } or a.b.c { fields }
                     if !self.restrict_struct_lit
-                        && matches!(&lhs.node, Expr::FieldAccess { object, .. } if matches!(&object.node, Expr::FieldAccess { .. }))
                         && self.peek().is_some()
-                        && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
+                        && matches!(self.peek().unwrap().node, Token::LBrace)
                         && self.is_struct_lit_ahead()
                     {
-                        // Create a temporary EnumData node - the rewrite pass will validate
-                        // whether this is actually an enum or needs to be converted back to field access
-                        let (module_name, enum_local) = match &lhs.node {
-                            Expr::FieldAccess { object, field: _variant } => {
-                                match &object.node {
-                                    Expr::FieldAccess { object: inner_obj, field: inner_field } => {
-                                        match &inner_obj.node {
-                                            Expr::Ident(m) => (m.clone(), inner_field.node.clone()),
-                                            _ => {
-                                                // Not the pattern we're looking for - just continue
-                                                continue;
-                                            }
-                                        }
-                                    }
-                                    _ => {
-                                        // Not the pattern we're looking for - just continue
-                                        continue;
-                                    }
-                                }
-                            }
-                            _ => unreachable!(),
-                        };
-
-                        let qualified_enum_name = format!("{}.{}", module_name, enum_local);
-                        let enum_name_span = Span::new(lhs.span.start - field_name.node.len() - 1, field_name.span.end);
-
                         self.advance(); // consume '{'
                         let (fields, close_end) = self.parse_field_list()?;
-                        let span = Span::new(lhs.span.start, close_end);
+                        let span = Span::new(segments[0].span.start, close_end);
+
+                        if segments.len() >= 3 {
+                            // Pattern: module.Enum.Variant { fields }
+                            let qualified_enum = format!("{}.{}", segments[0].node, segments[1].node);
+                            let variant = segments.last().unwrap().clone();
+                            let enum_span = Span::new(segments[0].span.start, segments[1].span.end);
+
+                            lhs = Spanned::new(
+                                Expr::EnumData {
+                                    enum_name: Spanned::new(qualified_enum, enum_span),
+                                    variant,
+                                    type_args: vec![],
+                                    fields,
+                                    enum_id: None,
+                                    variant_id: None,
+                                },
+                                span,
+                            );
+                        } else if segments.len() == 2 {
+                            // Pattern: module.Type { fields }
+                            let qualified_name = format!("{}.{}", segments[0].node, segments[1].node);
+                            let name_span = Span::new(segments[0].span.start, segments[1].span.end);
+
+                            lhs = Spanned::new(
+                                Expr::StructLit {
+                                    name: Spanned::new(qualified_name, name_span),
+                                    type_args: vec![],
+                                    fields,
+                                    target_id: None,
+                                },
+                                span,
+                            );
+                        } else {
+                            // Single segment with fields - shouldn't happen, but handle it
+                            let name = segments[0].clone();
+                            lhs = Spanned::new(
+                                Expr::StructLit {
+                                    name,
+                                    type_args: vec![],
+                                    fields,
+                                    target_id: None,
+                                },
+                                span,
+                            );
+                        }
+                    } else {
+                        // No struct literal - create QualifiedAccess for module flattening to resolve
+                        let span = Span::new(segments[0].span.start, segments.last().unwrap().span.end);
                         lhs = Spanned::new(
-                            Expr::EnumData {
-                                enum_name: Spanned::new(qualified_enum_name, enum_name_span),
-                                variant: field_name,
-                                type_args: vec![],
-                                fields,
-                                enum_id: None,
-                                variant_id: None,
-                            },
+                            Expr::QualifiedAccess { segments },
                             span,
                         );
                     }
@@ -3417,10 +3450,12 @@ mod tests {
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
                 match &value.node {
-                    Expr::FieldAccess { field, .. } => {
-                        assert_eq!(field.node, "x");
+                    Expr::QualifiedAccess { segments } => {
+                        assert_eq!(segments.len(), 2);
+                        assert_eq!(segments[0].node, "p");
+                        assert_eq!(segments[1].node, "x");
                     }
-                    _ => panic!("expected field access"),
+                    _ => panic!("expected qualified access"),
                 }
             }
             _ => panic!("expected let"),

@@ -102,6 +102,8 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
             let mut program = parse_source(&source)?;
+            // Resolve QualifiedAccess for single-file programs (no module flattening)
+            modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
             codegen::codegen(&program, &result.env, &source)
         })
@@ -118,6 +120,8 @@ pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<Com
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
             let mut program = parse_source(&source)?;
+            // Resolve QualifiedAccess for single-file programs (no module flattening)
+            modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
             let obj = codegen::codegen(&program, &result.env, &source)?;
             Ok((obj, result.warnings))
@@ -152,6 +156,8 @@ pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
             let mut program = parse_source(&source)?;
+            // Resolve QualifiedAccess for single-file programs (no module flattening)
+            modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, true)?;
             codegen::codegen(&program, &result.env, &source)
         })
