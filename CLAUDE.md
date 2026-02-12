@@ -61,6 +61,26 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 - `InstBuilder` trait must be imported to use `builder.ins().*` methods
 - `FunctionBuilder::finalize()` takes ownership (pass by value, not `&mut`)
 
+## AST Walker Policy
+
+The compiler has two patterns for walking the AST:
+
+1. **Visitor pattern** (`src/visit.rs`) — for analysis/collection/rewriting passes where >50% of match arms are pure structural recursion. Use `Visitor` for read-only passes, `VisitMut` for in-place rewriting.
+
+2. **Manual `match` blocks** — for core compiler passes where >50% of each arm is domain-specific logic (type checking, code generation, pretty printing, error analysis). These walkers should use **exhaustive matching** (no `_ => {}` catch-all) to ensure new AST variants are handled explicitly.
+
+**When adding a new AST variant:**
+- Add the variant to `walk_expr`/`walk_stmt`/`walk_type_expr` in `src/visit.rs` (if it has children)
+- Update the core manual walkers: `infer_expr`, `check_stmt`, `lower_expr`, `lower_stmt`, `emit_expr`, `emit_stmt`
+- All visitor-based passes automatically handle the new variant
+
+**When writing a new walker:**
+- If >50% pure recursion → use `Visitor`/`VisitMut`
+- If >50% custom logic → manual `match` with exhaustive matching (no catch-all)
+- Never use `_ => {}` catch-all on AST enum matches — list no-op variants explicitly
+
+See `docs/design/visitor-phase4-assessment.md` for the full analysis of which walkers use which pattern.
+
 ## Test Infrastructure
 
 **Unit tests** — inline `#[cfg(test)]` modules in `src/lexer/mod.rs`, `src/parser/mod.rs`, and `src/typeck/mod.rs`.
