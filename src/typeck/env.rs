@@ -191,13 +191,15 @@ pub struct TypeEnv {
     pub scope_resolutions: HashMap<(usize, usize), ScopeResolution>,
     /// Stack of active scope binding names (for spawn-safety checks).
     /// Each entry is the set of binding names introduced by one scope block.
-    pub scope_binding_names: Vec<HashSet<String>>,
+    /// Uses () as value type - presence of key indicates binding exists in scope
+    pub scope_bindings: ScopeTracker<()>,
     /// Classes whose lifecycle was overridden by app-level directives
     pub lifecycle_overridden: HashSet<String>,
     /// Spans of closures that capture scope bindings (tainted closures)
     pub scope_tainted_closures: HashSet<(usize, usize)>,
     /// Stack of sets: local vars holding tainted closures at each scope-block depth
-    pub scope_tainted_vars: Vec<HashSet<String>>,
+    /// Uses () as value type - presence of key indicates var is tainted
+    pub scope_tainted: ScopeTracker<()>,
     /// Stack: scope_depth at each scope block entry (for detecting outer-variable assignments)
     pub scope_body_depths: Vec<usize>,
     /// Names of functions that are generators (return stream T)
@@ -268,10 +270,10 @@ impl TypeEnv {
             variable_decls: HashMap::new(),
             variable_reads: HashSet::new(),
             scope_resolutions: HashMap::new(),
-            scope_binding_names: Vec::new(),
+            scope_bindings: ScopeTracker::new(),
             lifecycle_overridden: HashSet::new(),
             scope_tainted_closures: HashSet::new(),
-            scope_tainted_vars: Vec::new(),
+            scope_tainted: ScopeTracker::new(),
             scope_body_depths: Vec::new(),
             generators: HashSet::new(),
             current_generator_elem: None,

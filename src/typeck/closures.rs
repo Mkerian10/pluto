@@ -58,9 +58,9 @@ pub(crate) fn infer_closure(
     env.closure_captures.insert((span.start, span.end), captures.clone());
 
     // Check if any captured variable is a scope binding → mark closure as tainted
-    if !env.scope_binding_names.is_empty() {
+    if !env.scope_bindings.is_empty() {
         let is_tainted = captures.iter().any(|(name, _)| {
-            env.scope_binding_names.iter().any(|set| set.contains(name))
+            env.scope_bindings.contains(name)
         });
         if is_tainted {
             env.scope_tainted_closures.insert((span.start, span.end));

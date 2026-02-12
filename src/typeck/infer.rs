@@ -314,18 +314,16 @@ pub(crate) fn infer_expr(
                 }
             }
             // Spawn-scope safety: reject spawn if it captures scope bindings
-            if !env.scope_binding_names.is_empty() {
+            if !env.scope_bindings.is_empty() {
                 if let Expr::Closure { body, .. } = &call.node {
                     let mut idents = std::collections::HashSet::new();
                     super::check::collect_idents_in_block(&body.node, &mut idents);
-                    for scope_bindings in &env.scope_binding_names {
-                        for name in scope_bindings {
-                            if idents.contains(name) {
-                                return Err(CompileError::type_err(
+                    for name in &idents {
+                        if env.scope_bindings.contains(name) {
+                            return Err(CompileError::type_err(
                                     format!("cannot spawn inside scope block: task would capture scope binding '{name}'"),
                                     span,
                                 ));
-                            }
                         }
                     }
                 }
