@@ -64,9 +64,8 @@ fn empty_array_in_closure() {
 }
 
 #[test]
-#[ignore] // Outdated error message assertion - expects "type mismatch", gets "index assignment" error
 fn assign_empty_to_typed_var() {
-    compile_should_fail_with(r#"fn main() { let x: [string] = [] x[0] = 5 }"#, "type mismatch");
+    compile_should_fail_with(r#"fn main() { let x: [string] = [] x[0] = 5 }"#, "index assignment");
 }
 
 #[test]
