@@ -860,6 +860,81 @@ void *__pluto_bool_to_string(int value) {
     return header;
 }
 
+// ── String slice functions ────────────────────────────────────────────────────
+// String slices are lightweight 24-byte views into owned strings: [backing_ptr][offset][len]
+// They avoid copying on substring/trim/split operations. Slices are materialized
+// (copied to owned) when escaping scope (stored in structs, arrays, closures, returned).
+
+// Extract (data_ptr, len) from either an owned string or a string slice.
+void __pluto_string_data(void *s, const char **data_out, long *len_out) {
+    GCHeader *h = (GCHeader *)((char *)s - sizeof(GCHeader));
+    if (h->type_tag == GC_TAG_STRING_SLICE) {
+        long *slice = (long *)s;
+        void *backing = (void *)slice[0];
+        long offset = slice[1];
+        long len = slice[2];
+        *data_out = (const char *)backing + 8 + offset;
+        *len_out = len;
+    } else {
+        *data_out = (const char *)s + 8;
+        *len_out = *(long *)s;
+    }
+}
+
+// Create a new string slice. Returns empty owned string for len==0.
+// Flattens slice-of-slice: if backing is itself a slice, points to original backing.
+void *__pluto_string_slice_new(void *backing, long offset, long len) {
+    if (len <= 0) {
+        return __pluto_string_new("", 0);
+    }
+    // Flatten slice-of-slice: always point to the original owned string
+    void *real_backing = backing;
+    long real_offset = offset;
+    GCHeader *h = (GCHeader *)((char *)backing - sizeof(GCHeader));
+    if (h->type_tag == GC_TAG_STRING_SLICE) {
+        long *parent_slice = (long *)backing;
+        real_backing = (void *)parent_slice[0];
+        real_offset = parent_slice[1] + offset;
+    }
+    long *slice = (long *)gc_alloc(24, GC_TAG_STRING_SLICE, 1);
+    slice[0] = (long)real_backing;
+    slice[1] = real_offset;
+    slice[2] = len;
+    return slice;
+}
+
+// Materialize a slice to an owned string. No-op if already owned.
+void *__pluto_string_slice_to_owned(void *s) {
+    if (!s) return s;
+    GCHeader *h = (GCHeader *)((char *)s - sizeof(GCHeader));
+    if (h->type_tag != GC_TAG_STRING_SLICE) return s;
+    long *slice = (long *)s;
+    void *backing = (void *)slice[0];
+    long offset = slice[1];
+    long len = slice[2];
+    const char *data = (const char *)backing + 8 + offset;
+    return __pluto_string_new(data, len);
+}
+
+// Null-safe escape wrapper: materializes slices, passes through owned strings.
+// Called by codegen at escape boundaries (return, struct field, array element, etc.)
+void *__pluto_string_escape(void *s) {
+    if (!s) return s;
+    return __pluto_string_slice_to_owned(s);
+}
+
+// Returns a null-terminated C string pointer. For owned strings, returns data directly.
+// For slices, materializes to owned first (since slices lack null terminators).
+const char *__pluto_string_to_cstr(void *s) {
+    if (!s) return "";
+    GCHeader *h = (GCHeader *)((char *)s - sizeof(GCHeader));
+    if (h->type_tag == GC_TAG_STRING_SLICE) {
+        void *owned = __pluto_string_slice_to_owned(s);
+        return (const char *)owned + 8;
+    }
+    return (const char *)s + 8;
+}
+
 // ── Error handling runtime ────────────────────────────────────────────────────
 
 void __pluto_raise_error(void *error_obj) {
