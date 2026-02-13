@@ -175,7 +175,7 @@ pub fn compile_test(source: &str, output_path: &Path) -> Result<(), CompileError
     std::fs::write(&obj_path, &object_bytes)
         .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
 
-    let config = LinkConfig::test_config(&obj_path)?;
+    let config = LinkConfig::test_config(&obj_path, GcBackend::default())?;
     link_from_config(&config, output_path)?;
 
     let _ = std::fs::remove_file(&obj_path);
@@ -194,10 +194,15 @@ pub fn compile_file(entry_file: &Path, output_path: &Path) -> Result<(), Compile
 
 /// Compile with an explicit stdlib root path.
 pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<(), CompileError> {
-    compile_file_impl(entry_file, output_path, stdlib_root, false)
+    compile_file_impl(entry_file, output_path, stdlib_root, false, GcBackend::default())
 }
 
-fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, skip_siblings: bool) -> Result<(), CompileError> {
+/// Compile with an explicit stdlib root path and GC backend.
+pub fn compile_file_with_options(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, gc: GcBackend) -> Result<(), CompileError> {
+    compile_file_impl(entry_file, output_path, stdlib_root, false, gc)
+}
+
+fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, skip_siblings: bool, gc: GcBackend) -> Result<(), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)
@@ -226,7 +231,7 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
     std::fs::write(&obj_path, &object_bytes)
         .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
 
-    let mut config = LinkConfig::default_config(&obj_path)?;
+    let config = LinkConfig::default_config(&obj_path, gc)?;
     link_from_config(&config, output_path)?;
 
     let _ = std::fs::remove_file(&obj_path);
@@ -319,6 +324,17 @@ pub fn compile_file_for_tests(
     stdlib_root: Option<&Path>,
     use_cache: bool,
 ) -> Result<(), CompileError> {
+    compile_file_for_tests_with_gc(entry_file, output_path, stdlib_root, use_cache, GcBackend::default())
+}
+
+/// Compile a file in test mode with a specific GC backend.
+pub fn compile_file_for_tests_with_gc(
+    entry_file: &Path,
+    output_path: &Path,
+    stdlib_root: Option<&Path>,
+    use_cache: bool,
+    gc: GcBackend,
+) -> Result<(), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)
@@ -402,7 +418,7 @@ pub fn compile_file_for_tests(
     std::fs::write(&obj_path, &object_bytes)
         .map_err(|e| CompileError::codegen(format!("failed to write object file: {e}")))?;
 
-    let mut config = LinkConfig::test_config(&obj_path)?;
+    let config = LinkConfig::test_config(&obj_path, gc)?;
     link_from_config(&config, output_path)?;
 
     let _ = std::fs::remove_file(&obj_path);
@@ -410,18 +426,97 @@ pub fn compile_file_for_tests(
     Ok(())
 }
 
-/// Compile gc.c, threading.c, and builtins.c to a single linked object file.
-/// In test mode, adds -DPLUTO_TEST_MODE for sequential task execution and no-mutex channels.
-fn compile_runtime_object(test_mode: bool) -> Result<PathBuf, CompileError> {
-    let gc_src = include_str!("../runtime/gc.c");
+/// Which garbage collector backend to use.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum GcBackend {
+    /// Conservative mark-and-sweep collector (default).
+    #[default]
+    MarkSweep,
+    /// No-op allocator that never collects. Useful for benchmarking.
+    Noop,
+}
+
+impl GcBackend {
+    fn name(&self) -> &'static str {
+        match self {
+            GcBackend::MarkSweep => "marksweep",
+            GcBackend::Noop => "noop",
+        }
+    }
+
+    fn gc_source(&self) -> &'static str {
+        match self {
+            GcBackend::MarkSweep => include_str!("../runtime/gc/marksweep.c"),
+            GcBackend::Noop => include_str!("../runtime/gc/noop.c"),
+        }
+    }
+}
+
+/// Compute a content-addressed cache key for the runtime object file.
+/// The key incorporates all C source content, compilation flags, GC backend,
+/// and host platform so that any change triggers a cache miss.
+fn runtime_cache_key(test_mode: bool, gc: GcBackend) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    gc.gc_source().hash(&mut hasher);
+    include_str!("../runtime/threading.c").hash(&mut hasher);
+    include_str!("../runtime/builtins.c").hash(&mut hasher);
+    include_str!("../runtime/builtins.h").hash(&mut hasher);
+    test_mode.hash(&mut hasher);
+    gc.name().hash(&mut hasher);
+    std::env::consts::ARCH.hash(&mut hasher);
+    std::env::consts::OS.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Check the persistent disk cache for a pre-compiled runtime object.
+/// Returns the cached path if it exists and is non-empty, None otherwise.
+fn check_disk_cache(cache_key: &str) -> Option<PathBuf> {
+    let cache_dir = git_cache::cache_root().join("runtime");
+    let cached_path = cache_dir.join(format!("{cache_key}.o"));
+    match std::fs::metadata(&cached_path) {
+        Ok(meta) if meta.len() > 0 => Some(cached_path),
+        _ => None,
+    }
+}
+
+/// Store a compiled runtime object in the persistent disk cache.
+/// Uses atomic write (write to .tmp, then rename) to avoid partial reads.
+fn store_disk_cache(cache_key: &str, object_path: &Path) -> Result<(), CompileError> {
+    let cache_dir = git_cache::cache_root().join("runtime");
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|e| CompileError::link(format!("failed to create runtime cache dir: {e}")))?;
+    let final_path = cache_dir.join(format!("{cache_key}.o"));
+    let tmp_path = cache_dir.join(format!("{cache_key}.o.tmp"));
+    std::fs::copy(object_path, &tmp_path)
+        .map_err(|e| CompileError::link(format!("failed to write runtime cache: {e}")))?;
+    std::fs::rename(&tmp_path, &final_path)
+        .map_err(|e| CompileError::link(format!("failed to finalize runtime cache: {e}")))?;
+    Ok(())
+}
+
+/// Compile gc, threading, and builtins C sources to a single linked object file.
+/// Uses a three-tier cache: OnceLock (in-process) → disk cache → full compilation.
+fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, CompileError> {
+    let cache_key = runtime_cache_key(test_mode, gc);
+
+    // Tier 2: Check persistent disk cache
+    if let Some(cached) = check_disk_cache(&cache_key) {
+        return Ok(cached);
+    }
+
+    // Tier 3: Full compilation
+    let gc_src = gc.gc_source();
     let threading_src = include_str!("../runtime/threading.c");
     let builtins_src = include_str!("../runtime/builtins.c");
     let header_src = include_str!("../runtime/builtins.h");
 
     let dir_suffix = if test_mode { "pluto_test_runtime" } else { "pluto_runtime" };
-    let dir = std::env::temp_dir().join(format!("{}_{}", dir_suffix, std::process::id()));
+    let dir = std::env::temp_dir().join(format!("{}_{}_{}", dir_suffix, gc.name(), std::process::id()));
     std::fs::create_dir_all(&dir)
-        .map_err(|e| CompileError::link(format!("failed to create runtime cache dir: {e}")))?;
+        .map_err(|e| CompileError::link(format!("failed to create runtime build dir: {e}")))?;
 
     // Write all source files
     let header_h = dir.join("builtins.h");
@@ -441,8 +536,7 @@ fn compile_runtime_object(test_mode: bool) -> Result<PathBuf, CompileError> {
     let gc_o = dir.join("gc.o");
     let threading_o = dir.join("threading.o");
     let builtins_o = dir.join("builtins.o");
-    let runtime_o_name = if test_mode { "runtime_test.o" } else { "runtime.o" };
-    let runtime_o = dir.join(runtime_o_name);
+    let runtime_o = dir.join("runtime.o");
 
     // Compile gc.c
     let mut cmd = std::process::Command::new("cc");
@@ -508,6 +602,9 @@ fn compile_runtime_object(test_mode: bool) -> Result<PathBuf, CompileError> {
         return Err(CompileError::link("failed to link runtime"));
     }
 
+    // Store in persistent disk cache before cleaning up
+    let _ = store_disk_cache(&cache_key, &runtime_o);
+
     // Cleanup intermediate files
     let _ = std::fs::remove_file(&header_h);
     let _ = std::fs::remove_file(&gc_c);
@@ -517,26 +614,58 @@ fn compile_runtime_object(test_mode: bool) -> Result<PathBuf, CompileError> {
     let _ = std::fs::remove_file(&threading_o);
     let _ = std::fs::remove_file(&builtins_o);
 
-    Ok(runtime_o)
-}
-
-/// Compile builtins.c once per process and cache the resulting .o path.
-fn cached_runtime_object() -> Result<&'static Path, CompileError> {
-    static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-    let result = CACHE.get_or_init(|| compile_runtime_object(false).map_err(|e| e.to_string()));
-    match result {
-        Ok(path) => Ok(path.as_path()),
-        Err(msg) => Err(CompileError::link(msg.clone())),
+    // Return the disk-cached path if it was stored successfully, otherwise the temp path
+    if let Some(cached) = check_disk_cache(&cache_key) {
+        let _ = std::fs::remove_file(&runtime_o);
+        let _ = std::fs::remove_dir(&dir);
+        Ok(cached)
+    } else {
+        Ok(runtime_o)
     }
 }
 
-/// Compile builtins.c with -DPLUTO_TEST_MODE once per process and cache the resulting .o path.
-fn cached_test_runtime_object() -> Result<&'static Path, CompileError> {
-    static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-    let result = CACHE.get_or_init(|| compile_runtime_object(true).map_err(|e| e.to_string()));
-    match result {
-        Ok(path) => Ok(path.as_path()),
-        Err(msg) => Err(CompileError::link(msg.clone())),
+/// Compile the runtime once per process (per backend) and cache the resulting .o path.
+/// Tier 1 (OnceLock) wraps Tier 2 (disk) and Tier 3 (full compile).
+fn cached_runtime_object(gc: GcBackend) -> Result<&'static Path, CompileError> {
+    match gc {
+        GcBackend::MarkSweep => {
+            static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+            let result = CACHE.get_or_init(|| compile_runtime_object(false, GcBackend::MarkSweep).map_err(|e| e.to_string()));
+            match result {
+                Ok(path) => Ok(path.as_path()),
+                Err(msg) => Err(CompileError::link(msg.clone())),
+            }
+        }
+        GcBackend::Noop => {
+            static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+            let result = CACHE.get_or_init(|| compile_runtime_object(false, GcBackend::Noop).map_err(|e| e.to_string()));
+            match result {
+                Ok(path) => Ok(path.as_path()),
+                Err(msg) => Err(CompileError::link(msg.clone())),
+            }
+        }
+    }
+}
+
+/// Compile the test runtime once per process (per backend) and cache the resulting .o path.
+fn cached_test_runtime_object(gc: GcBackend) -> Result<&'static Path, CompileError> {
+    match gc {
+        GcBackend::MarkSweep => {
+            static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+            let result = CACHE.get_or_init(|| compile_runtime_object(true, GcBackend::MarkSweep).map_err(|e| e.to_string()));
+            match result {
+                Ok(path) => Ok(path.as_path()),
+                Err(msg) => Err(CompileError::link(msg.clone())),
+            }
+        }
+        GcBackend::Noop => {
+            static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+            let result = CACHE.get_or_init(|| compile_runtime_object(true, GcBackend::Noop).map_err(|e| e.to_string()));
+            match result {
+                Ok(path) => Ok(path.as_path()),
+                Err(msg) => Err(CompileError::link(msg.clone())),
+            }
+        }
     }
 }
 
@@ -547,8 +676,8 @@ struct LinkConfig {
 }
 
 impl LinkConfig {
-    fn default_config(pluto_obj: &Path) -> Result<Self, CompileError> {
-        let runtime_o = cached_runtime_object()?;
+    fn default_config(pluto_obj: &Path, gc: GcBackend) -> Result<Self, CompileError> {
+        let runtime_o = cached_runtime_object(gc)?;
         #[allow(unused_mut)]
         let mut flags = vec!["-lm".to_string()];
         #[cfg(target_os = "linux")]
@@ -560,8 +689,8 @@ impl LinkConfig {
         })
     }
 
-    fn test_config(pluto_obj: &Path) -> Result<Self, CompileError> {
-        let runtime_o = cached_test_runtime_object()?;
+    fn test_config(pluto_obj: &Path, gc: GcBackend) -> Result<Self, CompileError> {
+        let runtime_o = cached_test_runtime_object(gc)?;
         let flags = vec!["-lm".to_string()];
         // No -pthread in test mode (single-threaded)
         Ok(Self {
@@ -597,7 +726,7 @@ fn link_from_config(config: &LinkConfig, output: &Path) -> Result<(), CompileErr
 }
 
 fn link(obj_path: &Path, output_path: &Path) -> Result<(), CompileError> {
-    let config = LinkConfig::default_config(obj_path)?;
+    let config = LinkConfig::default_config(obj_path, GcBackend::default())?;
     link_from_config(&config, output_path)
 }
 
@@ -733,7 +862,7 @@ pub fn compile_system_file_with_stdlib(
         };
 
         let output_path = output_dir.join(member_name);
-        compile_file_impl(&entry_file, &output_path, stdlib_root, true)?;
+        compile_file_impl(&entry_file, &output_path, stdlib_root, true, GcBackend::default())?;
         results.push((member_name.clone(), output_path));
     }
 
