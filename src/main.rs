@@ -8,8 +8,20 @@ struct Cli {
     #[arg(long, global = true)]
     stdlib: Option<PathBuf>,
 
+    /// Garbage collector backend: "marksweep" (default) or "noop"
+    #[arg(long, global = true, default_value = "marksweep")]
+    gc: String,
+
     #[command(subcommand)]
     command: Commands,
+}
+
+fn parse_gc_backend(s: &str) -> Result<plutoc::GcBackend, String> {
+    match s {
+        "marksweep" => Ok(plutoc::GcBackend::MarkSweep),
+        "noop" => Ok(plutoc::GcBackend::Noop),
+        other => Err(format!("unknown GC backend '{}'; expected 'marksweep' or 'noop'", other)),
+    }
 }
 
 #[derive(Subcommand)]
@@ -119,6 +131,13 @@ fn main() {
     let cli = Cli::parse();
 
     let stdlib = cli.stdlib.as_deref();
+    let gc = match parse_gc_backend(&cli.gc) {
+        Ok(gc) => gc,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            std::process::exit(1);
+        }
+    };
 
     match cli.command {
         Commands::Compile { file, output } => {
@@ -143,7 +162,7 @@ fn main() {
                 }
                 Ok(None) => {
                     // Regular file: compile to a single binary
-                    if let Err(err) = plutoc::compile_file_with_stdlib(&file, &output, stdlib) {
+                    if let Err(err) = plutoc::compile_file_with_options(&file, &output, stdlib, gc) {
                         let filename = error_filename(&err)
                             .unwrap_or_else(|| file.to_string_lossy().to_string());
                         eprintln!("error [{}]: {err}", filename);
@@ -175,7 +194,7 @@ fn main() {
             }
 
             let tmp = std::env::temp_dir().join("pluto_run");
-            if let Err(err) = plutoc::compile_file_with_stdlib(&file, &tmp, stdlib) {
+            if let Err(err) = plutoc::compile_file_with_options(&file, &tmp, stdlib, gc) {
                 let filename = error_filename(&err)
                     .unwrap_or_else(|| file.to_string_lossy().to_string());
                 eprintln!("error [{}]: {err}", filename);
@@ -213,7 +232,7 @@ fn main() {
         Commands::Test { file, seed, iterations, no_cache } => {
             let tmp = std::env::temp_dir().join("pluto_test");
             let use_cache = !no_cache;
-            if let Err(err) = plutoc::compile_file_for_tests(&file, &tmp, stdlib, use_cache) {
+            if let Err(err) = plutoc::compile_file_for_tests_with_gc(&file, &tmp, stdlib, use_cache, gc) {
                 let filename = file.to_string_lossy().to_string();
                 eprintln!("error [{}]: {err}", filename);
                 std::process::exit(1);
