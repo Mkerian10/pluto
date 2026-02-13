@@ -196,7 +196,7 @@ fn djb2_hex(s: &str) -> String {
 }
 
 /// The root cache directory. Defaults to `~/.pluto/cache`, overridden by `PLUTO_CACHE_DIR`.
-fn cache_root() -> PathBuf {
+pub fn cache_root() -> PathBuf {
     if let Ok(dir) = std::env::var("PLUTO_CACHE_DIR") {
         return PathBuf::from(dir);
     }
