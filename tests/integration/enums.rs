@@ -866,3 +866,373 @@ fn fail_generic_type_bound_violation() {
         "does not satisfy",
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MATCH-AS-EXPRESSION: POSITIVE TESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ============================================================
+// Match-as-Expression: Expression Contexts (5 tests)
+// ============================================================
+
+#[test]
+fn match_expr_in_return() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Status { Active Inactive }
+        fn get_code(s: Status) int {
+            return match s {
+                Status.Active => 1,
+                Status.Inactive => 0
+            }
+        }
+        fn main() {
+            print(get_code(Status.Active))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "1");
+}
+
+#[test]
+fn match_expr_in_function_arg() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Status { Active Inactive }
+        fn double(x: int) int { return x * 2 }
+        fn main() {
+            let s = Status.Active
+            let result = double(match s {
+                Status.Active => 5,
+                Status.Inactive => 10
+            })
+            print(result)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "10");
+}
+
+#[test]
+fn match_expr_in_binary_op() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Status { Active Inactive }
+        fn main() {
+            let s = Status.Active
+            let result = (match s {
+                Status.Active => 10,
+                Status.Inactive => 5
+            }) + 100
+            print(result)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "110");
+}
+
+#[test]
+fn match_expr_in_if_condition() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Status { Active Inactive }
+        fn main() {
+            let s = Status.Active
+            if match s { Status.Active => true, Status.Inactive => false } {
+                print("yes")
+            } else {
+                print("no")
+            }
+        }
+    "#);
+    assert_eq!(stdout.trim(), "yes");
+}
+
+#[test]
+fn match_expr_in_array_literal() {
+    let stdout = compile_and_run_stdout(r#"
+        enum E { A B }
+        fn main() {
+            let e1 = E.A
+            let e2 = E.B
+            let arr = [
+                match e1 { E.A => 1, E.B => 2 },
+                match e2 { E.A => 3, E.B => 4 }
+            ]
+            print(arr[0] + arr[1])
+        }
+    "#);
+    assert_eq!(stdout.trim(), "5");
+}
+
+// ============================================================
+// Match-as-Expression: Data Variant Patterns (4 tests)
+// ============================================================
+
+#[test]
+fn match_expr_data_variant_all_fields() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Shape {
+            Circle { radius: float }
+            Rectangle { width: float, height: float }
+        }
+        fn main() {
+            let s = Shape.Circle { radius: 5.0 }
+            let area = match s {
+                Shape.Circle { radius: r } => r * r * 3.0,
+                Shape.Rectangle { width: w, height: h } => w * h
+            }
+            print(area)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "75.000000");
+}
+
+#[test]
+fn match_expr_multiple_data_variants() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Result<T> {
+            Ok { value: T }
+            Err { message: string }
+        }
+        fn main() {
+            let r = Result<int>.Ok { value: 42 }
+            let n = match r {
+                Result.Ok { value: v } => v,
+                Result.Err { message: m } => 0
+            }
+            print(n)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "42");
+}
+
+#[test]
+fn match_expr_field_rename() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Wrapper {
+            Val { x: int }
+        }
+        fn main() {
+            let w = Wrapper.Val { x: 100 }
+            let result = match w {
+                Wrapper.Val { x: renamed } => renamed * 2
+            }
+            print(result)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "200");
+}
+
+#[test]
+fn match_expr_binding_shadows_outer() {
+    let stdout = compile_and_run_stdout(r#"
+        enum E {
+            V { x: int }
+        }
+        fn main() {
+            let x = 999
+            let e = E.V { x: 42 }
+            let inner = match e {
+                E.V { x: x } => x
+            }
+            print(inner)
+            print(x)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "42\n999");
+}
+
+// ============================================================
+// Match-as-Expression: Type Consistency (3 tests)
+// ============================================================
+
+#[test]
+fn match_expr_all_arms_same_class() {
+    let stdout = compile_and_run_stdout(r#"
+        class Point {
+            x: int
+            y: int
+        }
+        enum E { A B }
+        fn make_point_a() Point {
+            return Point {
+                x: 1
+                y: 2
+            }
+        }
+        fn make_point_b() Point {
+            return Point {
+                x: 3
+                y: 4
+            }
+        }
+        fn main() {
+            let e = E.A
+            let p = match e {
+                E.A => make_point_a(),
+                E.B => make_point_b()
+            }
+            print(p.x + p.y)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "3");
+}
+
+#[test]
+fn match_expr_all_arms_same_enum() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Color { Red Green Blue }
+        enum E { A B }
+        fn main() {
+            let e = E.A
+            let c = match e {
+                E.A => Color.Red,
+                E.B => Color.Blue
+            }
+            match c {
+                Color.Red { print("red") }
+                Color.Green { print("green") }
+                Color.Blue { print("blue") }
+            }
+        }
+    "#);
+    assert_eq!(stdout.trim(), "red");
+}
+
+#[test]
+fn match_expr_all_arms_string() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Status { Active Inactive Suspended }
+        fn main() {
+            let s = Status.Suspended
+            let msg = match s {
+                Status.Active => "running",
+                Status.Inactive => "stopped",
+                Status.Suspended => "paused"
+            }
+            print(msg)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "paused");
+}
+
+// ============================================================
+// Match-as-Expression: Generic Enums (3 tests)
+// ============================================================
+
+#[test]
+fn match_expr_generic_enum_concrete() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Option<T> {
+            Some { value: T }
+            None
+        }
+        fn main() {
+            let opt = Option<int>.Some { value: 100 }
+            let x = match opt {
+                Option.Some { value: v } => v,
+                Option.None => 0
+            }
+            print(x)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "100");
+}
+
+#[test]
+fn match_expr_generic_enum_inferred() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Option<T> {
+            Some { value: T }
+            None
+        }
+        fn unwrap<T>(opt: Option<T>, fallback: T) T {
+            return match opt {
+                Option.Some { value: v } => v,
+                Option.None => fallback
+            }
+        }
+        fn main() {
+            let opt = Option<int>.None
+            print(unwrap<int>(opt, 42))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "42");
+}
+
+#[test]
+fn match_expr_generic_enum_nested_match() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Option<T> {
+            Some { value: T }
+            None
+        }
+        fn main() {
+            let outer = Option<Option<int>>.Some {
+                value: Option<int>.Some { value: 10 }
+            }
+            let result = match outer {
+                Option.Some { value: inner } => match inner {
+                    Option.Some { value: v } => v,
+                    Option.None => 0
+                },
+                Option.None => 0
+            }
+            print(result)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "10");
+}
+
+// ============================================================
+// Match-as-Expression: Edge Cases (3 tests)
+// ============================================================
+
+#[test]
+fn match_expr_single_variant_enum() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Singleton { Only { x: int } }
+        fn main() {
+            let s = Singleton.Only { x: 777 }
+            let n = match s {
+                Singleton.Only { x: val } => val
+            }
+            print(n)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "777");
+}
+
+#[test]
+fn match_expr_many_arms() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Digit { D0 D1 D2 D3 D4 D5 D6 D7 D8 D9 }
+        fn main() {
+            let d = Digit.D5
+            let n = match d {
+                Digit.D0 => 0,
+                Digit.D1 => 1,
+                Digit.D2 => 2,
+                Digit.D3 => 3,
+                Digit.D4 => 4,
+                Digit.D5 => 5,
+                Digit.D6 => 6,
+                Digit.D7 => 7,
+                Digit.D8 => 8,
+                Digit.D9 => 9
+            }
+            print(n)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "5");
+}
+
+#[test]
+fn match_expr_trailing_comma_accepted() {
+    let stdout = compile_and_run_stdout(r#"
+        enum E { A B }
+        fn main() {
+            let e = E.A
+            let x = match e {
+                E.A => 1,
+                E.B => 2,
+            }
+            print(x)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "1");
+}

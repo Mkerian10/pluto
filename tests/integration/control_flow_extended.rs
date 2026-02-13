@@ -317,3 +317,167 @@ fn match_as_expression_in_let() {
     "#);
     assert_eq!(stdout.trim(), "100");
 }
+
+// ============================================================
+// Match-as-Expression: Nested Match (3 tests)
+// ============================================================
+
+#[test]
+fn match_expr_nested_in_match_arm() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Outer { A B }
+        enum Inner { X Y }
+        fn main() {
+            let o = Outer.A
+            let i = Inner.Y
+            let n = match o {
+                Outer.A => match i {
+                    Inner.X => 1,
+                    Inner.Y => 2
+                },
+                Outer.B => 3
+            }
+            print(n)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "2");
+}
+
+#[test]
+fn match_expr_deeply_nested_3_levels() {
+    let stdout = compile_and_run_stdout(r#"
+        enum L1 { A B }
+        enum L2 { X Y }
+        enum L3 { P Q }
+        fn main() {
+            let result = match L1.A {
+                L1.A => match L2.Y {
+                    L2.X => match L3.P {
+                        L3.P => 1,
+                        L3.Q => 2
+                    },
+                    L2.Y => match L3.Q {
+                        L3.P => 3,
+                        L3.Q => 4
+                    }
+                },
+                L1.B => 5
+            }
+            print(result)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "4");
+}
+
+#[test]
+fn match_expr_scrutinee_is_match_result() {
+    let stdout = compile_and_run_stdout(r#"
+        enum E1 { A B }
+        enum E2 { X Y }
+        fn main() {
+            let e = E1.A
+            let result = match (match e { E1.A => E2.X, E1.B => E2.Y }) {
+                E2.X => 10,
+                E2.Y => 20
+            }
+            print(result)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "10");
+}
+
+// ============================================================
+// Match-as-Expression: With Other Control Flow (5 tests)
+// ============================================================
+
+#[test]
+fn match_expr_in_while_condition() {
+    let stdout = compile_and_run_stdout(r#"
+        enum State { Running Stopped }
+        fn main() {
+            let mut state = State.Running
+            let mut count = 0
+            while match state { State.Running => count < 3, State.Stopped => false } {
+                count = count + 1
+                if count == 3 {
+                    state = State.Stopped
+                }
+            }
+            print(count)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "3");
+}
+
+#[test]
+fn match_expr_in_for_loop_range() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Size { Small Big }
+        fn main() {
+            let size = Size.Small
+            let mut total = 0
+            for i in 0..(match size { Size.Small => 3, Size.Big => 10 }) {
+                total = total + 1
+            }
+            print(total)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "3");
+}
+
+#[test]
+fn match_expr_with_break_value() {
+    let stdout = compile_and_run_stdout(r#"
+        enum E { A B C }
+        fn main() {
+            let e = E.B
+            let mut result = 0
+            while true {
+                result = match e {
+                    E.A => 1,
+                    E.B => 2,
+                    E.C => 3
+                }
+                break
+            }
+            print(result)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "2");
+}
+
+#[test]
+fn match_expr_in_if_else_chain() {
+    let stdout = compile_and_run_stdout(r#"
+        enum E1 { A B }
+        enum E2 { X Y }
+        fn main() {
+            let cond = true
+            let mut result = 0
+            if cond {
+                result = match E1.A { E1.A => 1, E1.B => 2 }
+            } else {
+                result = match E2.X { E2.X => 3, E2.Y => 4 }
+            }
+            print(result)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "1");
+}
+
+#[test]
+fn match_expr_with_spawn() {
+    let stdout = compile_and_run_stdout(r#"
+        enum E { A B }
+        fn compute(x: int) int { return x * 10 }
+        fn main() {
+            let e = E.A
+            let task = spawn compute(match e {
+                E.A => 5,
+                E.B => 10
+            })
+            print(task.get())
+        }
+    "#);
+    assert_eq!(stdout.trim(), "50");
+}

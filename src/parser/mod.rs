@@ -5030,4 +5030,178 @@ mod tests {
             _ => panic!("expected let statement"),
         }
     }
+
+    // ============================================================
+    // Match-as-Expression Parser Tests (8 tests)
+    // ============================================================
+
+    #[test]
+    fn parse_match_expr_basic_structure() {
+        let src = r#"
+            enum E { A B }
+            fn main() {
+                let x = match e {
+                    E.A => 1,
+                    E.B => 2
+                }
+            }
+        "#;
+        let prog = parse(src);
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::Match { .. }));
+                if let Expr::Match { arms, .. } = &value.node {
+                    assert_eq!(arms.len(), 2);
+                    assert_eq!(arms[0].variant_name.node, "A");
+                    assert_eq!(arms[1].variant_name.node, "B");
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_match_expr_with_bindings() {
+        let src = r#"
+            enum Shape {
+                Circle { radius: float }
+            }
+            fn main() {
+                let x = match s {
+                    Shape.Circle { radius: r } => r
+                }
+            }
+        "#;
+        let prog = parse(src);
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                if let Expr::Match { arms, .. } = &value.node {
+                    assert_eq!(arms.len(), 1);
+                    assert_eq!(arms[0].bindings.len(), 1);
+                    assert_eq!(arms[0].bindings[0].0.node, "radius");
+                    assert_eq!(arms[0].bindings[0].1.as_ref().unwrap().node, "r");
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_match_expr_trailing_comma() {
+        let src = r#"
+            enum E { A B }
+            fn main() {
+                let x = match e {
+                    E.A => 1,
+                    E.B => 2,
+                }
+            }
+        "#;
+        let result = parse(src);
+        // Should parse successfully
+        assert_eq!(result.functions.len(), 1);
+    }
+
+    #[test]
+    fn parse_match_expr_no_trailing_comma() {
+        let src = r#"
+            enum E { A B }
+            fn main() {
+                let x = match e {
+                    E.A => 1,
+                    E.B => 2
+                }
+            }
+        "#;
+        let result = parse(src);
+        // Should parse successfully
+        assert_eq!(result.functions.len(), 1);
+    }
+
+    #[test]
+    fn parse_match_expr_module_qualified() {
+        let src = r#"
+            enum E { A }
+            fn main() {
+                let x = match e {
+                    mod.E.A => 1
+                }
+            }
+        "#;
+        let prog = parse(src);
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                if let Expr::Match { arms, .. } = &value.node {
+                    assert_eq!(arms[0].enum_name.node, "mod.E");
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_match_expr_nested() {
+        let src = r#"
+            enum E { A }
+            enum F { X }
+            fn main() {
+                let x = match e {
+                    E.A => match f {
+                        F.X => 1
+                    }
+                }
+            }
+        "#;
+        let result = parse(src);
+        // Should parse successfully with nested match
+        assert_eq!(result.functions.len(), 1);
+    }
+
+    #[test]
+    fn parse_match_expr_in_parentheses() {
+        let src = r#"
+            enum E { A B }
+            fn main() {
+                let x = (match e {
+                    E.A => 1,
+                    E.B => 2
+                }) + 10
+            }
+        "#;
+        let prog = parse(src);
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                // Should be a binary op with match as left operand
+                assert!(matches!(value.node, Expr::BinOp { .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_match_expr_complex_arm_value() {
+        let src = r#"
+            enum E { A }
+            fn main() {
+                let x = match e {
+                    E.A => foo(bar(10 + 20))
+                }
+            }
+        "#;
+        let prog = parse(src);
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                if let Expr::Match { arms, .. } = &value.node {
+                    // Arm value should be a call expression
+                    assert!(matches!(arms[0].value.node, Expr::Call { .. }));
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
 }
