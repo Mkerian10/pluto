@@ -406,6 +406,12 @@ pub fn compile_error_to_diagnostic(err: &plutoc::diagnostics::CompileError, sour
             span: None,
             path: Some(path.display().to_string()),
         },
+        plutoc::diagnostics::CompileError::SiblingFile { path, source } => {
+            // Recursively convert the inner error
+            let mut inner = compile_error_to_diagnostic(source, None);
+            inner.path = Some(path.display().to_string());
+            inner
+        },
     }
 }
 
@@ -542,7 +548,6 @@ fn pretty_print_function(func: &Function) -> String {
         imports: vec![],
         functions: vec![plutoc::span::Spanned::new(func.clone(), plutoc::span::Span::dummy())],
         extern_fns: vec![],
-        extern_rust_crates: vec![],
         classes: vec![],
         traits: vec![],
         enums: vec![],
@@ -562,7 +567,6 @@ fn pretty_print_class(cls: &ClassDecl) -> String {
         imports: vec![],
         functions: vec![],
         extern_fns: vec![],
-        extern_rust_crates: vec![],
         classes: vec![plutoc::span::Spanned::new(cls.clone(), plutoc::span::Span::dummy())],
         traits: vec![],
         enums: vec![],
@@ -582,7 +586,6 @@ fn pretty_print_enum(en: &EnumDecl) -> String {
         imports: vec![],
         functions: vec![],
         extern_fns: vec![],
-        extern_rust_crates: vec![],
         classes: vec![],
         traits: vec![],
         enums: vec![plutoc::span::Spanned::new(en.clone(), plutoc::span::Span::dummy())],
@@ -602,7 +605,6 @@ fn pretty_print_trait(tr: &TraitDecl) -> String {
         imports: vec![],
         functions: vec![],
         extern_fns: vec![],
-        extern_rust_crates: vec![],
         classes: vec![],
         traits: vec![plutoc::span::Spanned::new(tr.clone(), plutoc::span::Span::dummy())],
         enums: vec![],
@@ -622,7 +624,6 @@ fn pretty_print_error_decl(err: &ErrorDecl) -> String {
         imports: vec![],
         functions: vec![],
         extern_fns: vec![],
-        extern_rust_crates: vec![],
         classes: vec![],
         traits: vec![],
         enums: vec![],
@@ -642,7 +643,6 @@ fn pretty_print_app(app: &AppDecl) -> String {
         imports: vec![],
         functions: vec![],
         extern_fns: vec![],
-        extern_rust_crates: vec![],
         classes: vec![],
         traits: vec![],
         enums: vec![],
