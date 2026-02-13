@@ -439,7 +439,7 @@ fn test_string_interpolation_empty() {
     let source = r#"
 fn main() {
     let name = ""
-    let msg = "Hello {name}!"
+    let msg = f"Hello {name}!"
     print(msg)
 }
 "#;

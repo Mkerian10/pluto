@@ -7,7 +7,7 @@ fn main() {
     let i = 0
     while i < 5 {
         let n = random.next()
-        print("  {n}")
+        print(f"  {n}")
         i = i + 1
     }
 
@@ -15,7 +15,7 @@ fn main() {
     i = 0
     while i < 5 {
         let n = random.between(1, 100)
-        print("  {n}")
+        print(f"  {n}")
         i = i + 1
     }
 
@@ -23,7 +23,7 @@ fn main() {
     i = 0
     while i < 5 {
         let d = random.decimal()
-        print("  {d}")
+        print(f"  {d}")
         i = i + 1
     }
 
@@ -31,7 +31,7 @@ fn main() {
     i = 0
     while i < 5 {
         let d = random.decimal_between(10.0, 20.0)
-        print("  {d}")
+        print(f"  {d}")
         i = i + 1
     }
 
@@ -39,7 +39,7 @@ fn main() {
     i = 0
     while i < 10 {
         let c = random.coin()
-        print("  {c}")
+        print(f"  {c}")
         i = i + 1
     }
 
@@ -47,12 +47,12 @@ fn main() {
     random.seed(42)
     let a = random.next()
     let b = random.next()
-    print("  First: {a}, {b}")
+    print(f"  First: {a}, {b}")
     random.seed(42)
     let c = random.next()
     let d = random.next()
-    print("  Second: {c}, {d}")
-    print("  Match: {a == c}, {b == d}")
+    print(f"  Second: {c}, {d}")
+    print(f"  Match: {a == c}, {b == d}")
 
     print("Done!")
 }

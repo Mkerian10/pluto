@@ -9,7 +9,7 @@ app RegexExample {
         print("--- Basic Matching ---")
         let text1 = "hello world"
         if regex.matches("hello", text1) {
-            print("✓ Found 'hello' in '{text1}'")
+            print(f"✓ Found 'hello' in '{text1}'")
         }
 
         if regex.matches("^hello", text1) {
@@ -26,11 +26,11 @@ app RegexExample {
         let email = "Contact: alice@example.com or bob@test.org"
         let at_pos = regex.find("@", email)
         if at_pos >= 0 {
-            print("Found @ at position {at_pos}")
+            print(f"Found @ at position {at_pos}")
         }
 
         let all_at = regex.find_all("@", email)
-        print("Found {all_at.len()} @ symbols")
+        print(f"Found {all_at.len()} @ symbols")
         print("")
 
         // Example 3: Wildcards and quantifiers
@@ -52,17 +52,17 @@ app RegexExample {
         print("--- Text Replacement ---")
         let original = "foo bar foo baz foo"
         let replaced = regex.replace_all("foo", "FOO", original)
-        print("Original: {original}")
-        print("Replaced: {replaced}")
+        print(f"Original: {original}")
+        print(f"Replaced: {replaced}")
         print("")
 
         // Example 5: Splitting
         print("--- Splitting Text ---")
         let csv = "apple,banana,cherry,date"
         let items = regex.split(",", csv)
-        print("Items: {items.len()} pieces")
+        print(f"Items: {items.len()} pieces")
         for i in 0..items.len() {
-            print("  [{i}] = {items[i]}")
+            print(f"  [{i}] = {items[i]}")
         }
         print("")
 

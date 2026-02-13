@@ -17,13 +17,13 @@ fn double_positive(x: int) int? {
 // Chaining nullable calls
 fn pipeline(x: int) string? {
     let doubled = double_positive(x)?
-    return "result: {doubled}"
+    return f"result: {doubled}"
 }
 
 // Nullable works with all types
 fn maybe_greet(name: string?) string? {
     let n = name?
-    return "Hello, {n}!"
+    return f"Hello, {n}!"
 }
 
 class Point {

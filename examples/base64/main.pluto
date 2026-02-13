@@ -8,28 +8,28 @@ app Base64Example {
         // Example 1: Encode text
         let text = "Hello, World!"
         let encoded = base64.encode(text)
-        print("Original: {text}")
-        print("Encoded:  {encoded}")
+        print(f"Original: {text}")
+        print(f"Encoded:  {encoded}")
         print("")
 
         // Example 2: Decode
         let decoded = base64.decode(encoded)
-        print("Decoded: {decoded}")
+        print(f"Decoded: {decoded}")
         print("")
 
         // Example 3: URL-safe encoding (replaces + and / with - and _)
         let data = "Binary data with special chars"
         let url_safe = base64.encode_url_safe(data)
-        print("URL-safe: {url_safe}")
+        print(f"URL-safe: {url_safe}")
         let url_decoded = base64.decode_url_safe(url_safe)
-        print("URL-decoded: {url_decoded}")
+        print(f"URL-decoded: {url_decoded}")
         print("")
 
         // Example 4: Using for data serialization
         let message = "Secret data to encode"
         let encoded_msg = base64.encode(message)
-        print("Encoded message: {encoded_msg}")
+        print(f"Encoded message: {encoded_msg}")
         let decoded_msg = base64.decode(encoded_msg)
-        print("Decoded message: {decoded_msg}")
+        print(f"Decoded message: {decoded_msg}")
     }
 }

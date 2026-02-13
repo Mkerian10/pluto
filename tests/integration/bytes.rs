@@ -408,7 +408,7 @@ fn byte_string_interpolation() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let b = 42 as byte
-    print("value: {b}")
+    print(f"value: {b}")
     return 0
 }
 "#);

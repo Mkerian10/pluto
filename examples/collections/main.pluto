@@ -3,36 +3,36 @@ fn main() int {
     let scores = Map<string, int> { "alice": 95, "bob": 87, "charlie": 92 }
     print("Scores:")
     for name in scores.keys() {
-        print("{name}: {scores[name]}")
+        print(f"{name}: {scores[name]}")
     }
-    print("Total students: {scores.len()}")
+    print(f"Total students: {scores.len()}")
 
     // Index assignment
     scores["dave"] = 88
-    print("After adding dave: {scores.len()}")
+    print(f"After adding dave: {scores.len()}")
 
     // Update existing
     scores["bob"] = 90
-    print("Bob's new score: {scores["bob"]}")
+    print(f"Bob's new score: {scores["bob"]}")
 
     // Contains + remove
-    print("Has alice? {scores.contains("alice")}")
+    print(f"Has alice? {scores.contains("alice")}")
     scores.remove("alice")
-    print("After removing alice: {scores.len()}")
+    print(f"After removing alice: {scores.len()}")
 
     // Sets: unique collections
     let fruits = Set<string> { "apple", "banana", "cherry" }
-    print("\nFruits: {fruits.len()} items")
-    print("Has apple? {fruits.contains("apple")}")
-    print("Has grape? {fruits.contains("grape")}")
+    print(f"\nFruits: {fruits.len()} items")
+    print(f"Has apple? {fruits.contains("apple")}")
+    print(f"Has grape? {fruits.contains("grape")}")
 
     // Duplicates are ignored
     fruits.insert("apple")
-    print("After re-inserting apple: {fruits.len()}")
+    print(f"After re-inserting apple: {fruits.len()}")
 
     // Remove
     fruits.remove("banana")
-    print("After removing banana: {fruits.len()}")
+    print(f"After removing banana: {fruits.len()}")
 
     // Iterate via to_array
     let total = 0
@@ -40,7 +40,7 @@ fn main() int {
     for n in numbers.to_array() {
         total = total + n
     }
-    print("\nSum of number set: {total}")
+    print(f"\nSum of number set: {total}")
 
     return 0
 }

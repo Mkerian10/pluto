@@ -48,14 +48,11 @@ fn fstring_brace_escaping() {
 }
 
 #[test]
-fn regular_string_interpolation_still_works() {
-    let output = compile_and_run_stdout(
-        r#"fn main() {
-            let name = "World"
-            print("Hello {name}")
-        }"#,
+fn regular_string_braces_are_literal() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let name = \"alice\"\n    print(\"{name}\")\n}",
     );
-    assert_eq!(output.trim(), "Hello World");
+    assert_eq!(out.trim(), "{name}");
 }
 
 // ===== Error Tests =====
@@ -151,17 +148,6 @@ fn multiple_interpolations_one_unterminated() {
             let a = 1
             let b = 2
             let result = f"{a} and {b"
-        }"#,
-        "unterminated interpolation expression",
-    );
-}
-
-#[test]
-fn regular_string_unterminated_interpolation() {
-    compile_should_fail_with(
-        r#"fn main() {
-            let x = 42
-            let result = "Value: {x"
         }"#,
         "unterminated interpolation expression",
     );

@@ -68,7 +68,7 @@ fn main() {
             if parsed == 1 {
                 pass = pass + 1
             } else {
-                print("FAIL (should parse): {name}")
+                print(f"FAIL (should parse): {name}")
                 fail = fail + 1
             }
         } else {
@@ -78,7 +78,7 @@ fn main() {
                 if parsed == 0 {
                     pass = pass + 1
                 } else {
-                    print("FAIL (should reject): {name}")
+                    print(f"FAIL (should reject): {name}")
                     fail = fail + 1
                 }
             } else {
@@ -88,6 +88,6 @@ fn main() {
     }
 
     print("")
-    print("JSON Conformance: {pass} passed, {fail} failed, {skip} skipped ({total} total)")
+    print(f"JSON Conformance: {pass} passed, {fail} failed, {skip} skipped ({total} total)")
 
 }

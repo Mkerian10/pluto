@@ -817,7 +817,7 @@ class Pet impl Named {
 }
 
 fn greet(x: Named) {
-    print("hello {x.name()}")
+    print(f"hello {x.name()}")
 }
 
 fn main() {
@@ -2921,7 +2921,7 @@ class Item impl Describer {
     count: int
 
     fn describe(self) string {
-        return "{self.name}: {self.count}"
+        return f"{self.name}: {self.count}"
     }
 }
 
@@ -3332,7 +3332,7 @@ class User impl Named {
 }
 
 fn greet(n: Named) {
-    print("hi {n.name()}")
+    print(f"hi {n.name()}")
 }
 
 fn main() {
@@ -3356,7 +3356,7 @@ class X impl Valued {
 }
 
 fn show(v: Valued) {
-    print("value={v.val()}")
+    print(f"value={v.val()}")
 }
 
 fn main() {
@@ -5612,7 +5612,7 @@ class Person impl Describable {
     age: int
 
     fn describe(self) string {
-        return "{self.name} is {self.age}"
+        return f"{self.name} is {self.age}"
     }
 }
 
@@ -5869,7 +5869,7 @@ class User impl Named {
 }
 
 fn greet(n: Named) {
-    print("hello {n.name()}")
+    print(f"hello {n.name()}")
 }
 
 fn main() {
@@ -5894,7 +5894,7 @@ class X impl Valued {
 
 fn show(v: Valued) {
     let n = v.val()
-    print("value is {n}")
+    print(f"value is {n}")
 }
 
 fn main() {
@@ -6191,7 +6191,7 @@ class Rich impl HasVal {
     fn val(self) int { return self.n }
     fn doubled(self) int { return self.n * 2 }
     fn tripled(self) int { return self.n * 3 }
-    fn as_string(self) string { return "{self.n}" }
+    fn as_string(self) string { return f"{self.n}" }
 }
 
 fn show(h: HasVal) {
@@ -7713,7 +7713,7 @@ class Item impl Descriptor {
     count: int
 
     fn describe(self) string {
-        return "{self.count}x {self.name}"
+        return f"{self.count}x {self.name}"
     }
 }
 
@@ -8106,9 +8106,9 @@ class Record impl Summary {
 
     fn summarize(self) string {
         if self.active {
-            return "{self.name} ({self.age}) - active"
+            return f"{self.name} ({self.age}) - active"
         }
-        return "{self.name} ({self.age}) - inactive"
+        return f"{self.name} ({self.age}) - inactive"
     }
 }
 
@@ -8531,7 +8531,7 @@ trait Printable {
 class Person impl Printable {
     name: string
     age: int
-    fn to_str(self) string { return "{self.name}:{self.age}" }
+    fn to_str(self) string { return f"{self.name}:{self.age}" }
 }
 
 fn show(p: Printable) { print(p.to_str()) }
@@ -8557,7 +8557,7 @@ class User impl Named {
 }
 
 fn greet(n: Named) {
-    print("hello {n.get_name()}")
+    print(f"hello {n.get_name()}")
 }
 
 fn main() {
@@ -8790,8 +8790,8 @@ class Thing impl Namer {
 
 fn run(n: Namer, c: Choice) {
     match c {
-        Choice.A { print("a:{n.name()}") }
-        Choice.B { print("b:{n.name()}") }
+        Choice.A { print(f"a:{n.name()}") }
+        Choice.B { print(f"b:{n.name()}") }
     }
 }
 
@@ -8962,7 +8962,7 @@ trait Greeting {
 class Formal impl Greeting {
     prefix: string
     fn greet(self, name: string) string {
-        return "{self.prefix} {name}"
+        return f"{self.prefix} {name}"
     }
 }
 
@@ -9528,12 +9528,12 @@ trait Container {
 
 class IntItem impl Printable {
     v: int
-    fn to_str(self) string { return "{self.v}" }
+    fn to_str(self) string { return f"{self.v}" }
 }
 
 class Wrapper<T: Printable> impl Container {
     item: T
-    fn describe(self) string { return "wrapped:{self.item.to_str()}" }
+    fn describe(self) string { return f"wrapped:{self.item.to_str()}" }
 }
 
 fn show(c: Container) {
@@ -9753,7 +9753,7 @@ class Player impl Named, Scored {
 }
 
 fn report(n: Named, s: Scored) {
-    print("{n.name()}: {s.score()}")
+    print(f"{n.name()}: {s.score()}")
 }
 
 fn main() {
@@ -9870,7 +9870,7 @@ trait Emitter {
 class HelloEmitter impl Emitter {
     name: string
     fn emit(self, tx: Sender<string>) {
-        tx.send("hello {self.name}")!
+        tx.send(f"hello {self.name}")!
     }
 }
 
@@ -10230,7 +10230,7 @@ trait Identifiable {
     fn id(self) int
 
     fn display(self) string {
-        return "ID={self.id()}"
+        return f"ID={self.id()}"
     }
 }
 
@@ -10317,7 +10317,7 @@ trait Greeter {
 
 class Hello impl Greeter {
     name: string
-    fn greet(self) string { return "hello {self.name}" }
+    fn greet(self) string { return f"hello {self.name}" }
 }
 
 fn make_greeter(name: string) Greeter {
@@ -10342,12 +10342,12 @@ trait Formatter {
 
 class PlainFormatter impl Formatter {
     tag: int
-    fn format(self, x: int) string { return "{x}" }
+    fn format(self, x: int) string { return f"{x}" }
 }
 
 class FancyFormatter impl Formatter {
     tag: int
-    fn format(self, x: int) string { return "[{x}]" }
+    fn format(self, x: int) string { return f"[{x}]" }
 }
 
 fn make_formatter(fancy: bool) Formatter {
@@ -10681,7 +10681,7 @@ trait Labeled {
 
 class Dog impl Labeled {
     name: string
-    fn label(self) string { return "dog:{self.name}" }
+    fn label(self) string { return f"dog:{self.name}" }
 }
 
 fn main() {
@@ -10701,12 +10701,12 @@ trait Labeled {
 
 class Dog impl Labeled {
     name: string
-    fn label(self) string { return "dog:{self.name}" }
+    fn label(self) string { return f"dog:{self.name}" }
 }
 
 class Cat impl Labeled {
     name: string
-    fn label(self) string { return "cat:{self.name}" }
+    fn label(self) string { return f"cat:{self.name}" }
 }
 
 fn add_animal(animals: [Labeled], a: Labeled) {
@@ -10770,11 +10770,11 @@ trait Named {
 class Person impl Named {
     first: string
     last: string
-    fn name(self) string { return "{self.first} {self.last}" }
+    fn name(self) string { return f"{self.first} {self.last}" }
 }
 
 fn greet(n: Named) {
-    print("Hello, {n.name()}!")
+    print(f"Hello, {n.name()}!")
 }
 
 fn main() {
@@ -10865,7 +10865,7 @@ trait Describable {
 
 class Item impl Describable {
     name: string
-    fn describe(self) string { return "item:{self.name}" }
+    fn describe(self) string { return f"item:{self.name}" }
 }
 
 fn make_item(n: string) Describable {
@@ -11297,7 +11297,7 @@ trait Describer {
 class Point impl Describer {
     x: int
     y: int
-    fn desc(self) string { return "({self.x}, {self.y})" }
+    fn desc(self) string { return f"({self.x}, {self.y})" }
 }
 
 fn show(d: Describer) {
@@ -11527,7 +11527,7 @@ class Complex_ impl Summary {
     c: string
     d: float
     e: bool
-    fn summarize(self) string { return "complex:{self.a},{self.b},{self.c}" }
+    fn summarize(self) string { return f"complex:{self.a},{self.b},{self.c}" }
 }
 
 fn show(s: Summary) {
@@ -11664,7 +11664,7 @@ class NumProvider impl Provider {
 
 class Printer_ impl Consumer_ {
     prefix: string
-    fn consume(self, val: int) string { return "{self.prefix}{val}" }
+    fn consume(self, val: int) string { return f"{self.prefix}{val}" }
 }
 
 fn main() {
@@ -11842,7 +11842,7 @@ trait KeyMaker {
 
 class Prefixer impl KeyMaker {
     prefix: string
-    fn key(self) string { return "{self.prefix}_key" }
+    fn key(self) string { return f"{self.prefix}_key" }
 }
 
 fn main() {
@@ -12075,7 +12075,7 @@ trait Logger_ {
 class StdoutLogger impl Logger_ {
     prefix: string
     fn log(self, msg: string) {
-        print("{self.prefix}: {msg}")
+        print(f"{self.prefix}: {msg}")
     }
 }
 
@@ -12489,7 +12489,7 @@ trait Greeter_ {
 
 class Hello_ impl Greeter_ {
     name: string
-    fn greet(self) string { return "hi {self.name}" }
+    fn greet(self) string { return f"hi {self.name}" }
 }
 
 fn add(arr: [Greeter_], g: Greeter_) {
@@ -12879,7 +12879,7 @@ trait Printer__ {
 class NumPrinter impl Printer__ {
     val: int
     fn print_val(self, prefix: string) {
-        print("{prefix}{self.val}")
+        print(f"{prefix}{self.val}")
     }
 }
 
@@ -13360,7 +13360,7 @@ trait Logger {
 class PrintLogger impl Logger {
     prefix: string
     fn log(self, msg: string) {
-        print("{self.prefix}: {msg}")
+        print(f"{self.prefix}: {msg}")
     }
 }
 
@@ -13992,7 +13992,7 @@ fn trait_default_method_with_interp_of_required() {
 trait Named_ {
     fn name(self) string
     fn greeting(self) string {
-        return "Hello, {self.name()}!"
+        return f"Hello, {self.name()}!"
     }
 }
 
@@ -14138,7 +14138,7 @@ trait PrintTrait {
 class SimpleFormat impl FormatTrait {
     tag: int
     fn format(self, val: int) string {
-        return "val={val}"
+        return f"val={val}"
     }
 }
 

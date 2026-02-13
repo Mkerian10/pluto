@@ -167,7 +167,7 @@ fn string_interpolation_nested() {
     let stdout = compile_and_run_stdout(r#"
         fn main() {
             let x = 42
-            let s = "value: {x}"
+            let s = f"value: {x}"
             print(s)
         }
     "#);

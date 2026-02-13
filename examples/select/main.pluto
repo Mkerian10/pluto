@@ -18,11 +18,11 @@ fn try_select(num_rx: Receiver<int>, str_rx: Receiver<string>) {
     while count < 10 {
         select {
             n = num_rx.recv() {
-                print("number: {n}")
+                print(f"number: {n}")
                 count = count + 1
             }
             s = str_rx.recv() {
-                print("letter: {s}")
+                print(f"letter: {s}")
                 count = count + 1
             }
         }
@@ -46,7 +46,7 @@ fn main() {
     let (tx, rx) = chan<int>(1)
     select {
         val = rx.recv() {
-            print("got {val}")
+            print(f"got {val}")
         }
         default {
             print("no data ready, moving on")

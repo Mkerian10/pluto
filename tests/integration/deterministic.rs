@@ -1890,7 +1890,7 @@ tests[scheduler: RoundRobin] {
 fn rr_task_string_interpolation() {
     let (stdout, _stderr, code) = compile_test_and_run(r#"
 fn greet_interp(name: string) string {
-    return "hi {name}!"
+    return f"hi {name}!"
 }
 
 tests[scheduler: RoundRobin] {
@@ -5546,7 +5546,7 @@ fn exhaustive_spawn_returns_string() {
     // Heap-allocated return type from spawned task
     let (stdout, _stderr, code) = compile_test_and_run(r#"
 fn greet(name: string) string {
-    return "hello {name}"
+    return f"hello {name}"
 }
 
 tests[scheduler: Exhaustive] {

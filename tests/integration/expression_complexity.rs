@@ -169,7 +169,7 @@ fn string_interpolation_with_complex_expression() {
 
         fn main() {
             let arr = [1, 2, 3]
-            print("result: {add(double(arr[0]), arr[1] + arr[2])}")
+            print(f"result: {add(double(arr[0]), arr[1] + arr[2])}")
         }
     "#);
     assert_eq!(stdout.trim(), "result: 7"); // add(double(1), 2+3) = add(2, 5) = 7

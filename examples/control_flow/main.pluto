@@ -8,7 +8,7 @@ fn fizzbuzz(n: int) string {
     if n % 5 == 0 {
         return "buzz"
     }
-    return "{n}"
+    return f"{n}"
 }
 
 fn main() {
@@ -32,7 +32,7 @@ fn main() {
     // Find first multiple of 7 using break
     for i in 1..100 {
         if i % 7 == 0 {
-            print("first multiple of 7: {i}")
+            print(f"first multiple of 7: {i}")
             break
         }
     }

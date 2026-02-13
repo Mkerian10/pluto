@@ -136,7 +136,7 @@ fn main() {
     let i = 0
     let last = ""
     while i < 5000 {
-        last = "item_{i}"
+        last = f"item_{i}"
         i = i + 1
     }
     print(last)
@@ -166,7 +166,7 @@ app MyApp[counter: Counter] {
         let i = 0
         while i < 10000 {
             // Create garbage strings
-            let s = "garbage_{i}"
+            let s = f"garbage_{i}"
             self.counter.increment()
             i = i + 1
         }
@@ -269,7 +269,7 @@ fn main() {
     let arr = ["seed"]
     let i = 1
     while i < 5000 {
-        arr.push("item_{i}")
+        arr.push(f"item_{i}")
         i = i + 1
     }
     print(arr.len())
@@ -364,7 +364,7 @@ fn main() {
     if size < 1048576 {
         print("bounded")
     } else {
-        print("LEAK: heap size = {size}")
+        print(f"LEAK: heap size = {size}")
     }
 }
 "#);

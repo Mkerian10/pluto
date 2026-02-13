@@ -22,7 +22,7 @@ fn fetch_user(id: int) string {
     if id == 999 {
         raise NetworkError { message: "service unavailable" }
     }
-    return "user_{id}"
+    return f"user_{id}"
 }
 
 // Function that propagates errors using ! operator
@@ -49,7 +49,7 @@ fn fetch_with_default(id: int) string {
 // Demonstration of error propagation through call chain
 fn process_user(id: int) string {
     let name = get_user_name(id)!
-    return "Processing: {name}"
+    return f"Processing: {name}"
 }
 
 fn main() {

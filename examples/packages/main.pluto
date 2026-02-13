@@ -5,12 +5,12 @@ fn main() {
     print("=== Package Dependencies ===")
 
     let sum = mathlib.add(10, 20)
-    print("add(10, 20) = {sum}")
+    print(f"add(10, 20) = {sum}")
 
     let product = mathlib.multiply(6, 7)
-    print("multiply(6, 7) = {product}")
+    print(f"multiply(6, 7) = {product}")
 
     let p = mathlib.Point { x: 3, y: 4 }
     let dist = mathlib.distance(p)
-    print("distance(3, 4) = {dist}")
+    print(f"distance(3, 4) = {dist}")
 }

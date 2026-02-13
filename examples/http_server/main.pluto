@@ -41,14 +41,14 @@ fn content_type(path: string) string {
 }
 
 fn respond(conn: net.TcpConnection, status: string, ctype: string, body: string) {
-    let len = "{body.len()}"
-    let response = "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}"
+    let len = f"{body.len()}"
+    let response = f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}"
     conn.write(response)
     conn.close()
 }
 
 fn respond_404(conn: net.TcpConnection, path: string) {
-    let body = "<html><body><h1>404 Not Found</h1><p>The path <code>{path}</code> was not found.</p></body></html>"
+    let body = f"<html><body><h1>404 Not Found</h1><p>The path <code>{path}</code> was not found.</p></body></html>"
     respond(conn, "404 Not Found", "text/html", body)
 }
 
@@ -83,7 +83,7 @@ fn serve_file(conn: net.TcpConnection, root: string, url_path: string) {
 
     let body = fs.read_all(file_path) catch ""
     let ctype = content_type(file_path)
-    print("  200 {ctype} ({body.len()} bytes)")
+    print(f"  200 {ctype} ({body.len()} bytes)")
     respond(conn, "200 OK", ctype, body)
 }
 
@@ -92,8 +92,8 @@ fn main() {
     let server = net.listen("127.0.0.1", 8080)
     let port = server.port()
     print("Pluto HTTP Server")
-    print("Serving files from: {root}")
-    print("Listening on http://127.0.0.1:{port}")
+    print(f"Serving files from: {root}")
+    print(f"Listening on http://127.0.0.1:{port}")
     print("")
 
     while true {
@@ -102,7 +102,7 @@ fn main() {
 
         if request.len() > 0 {
             let path = parse_request_path(request)
-            print("{path}")
+            print(f"{path}")
             serve_file(conn, root, path)
         }
     }
