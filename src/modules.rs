@@ -1514,3 +1514,386 @@ fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &
     }
     let _ = span;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::{TypeExpr, ExternFnDecl, Param};
+    use crate::span::{Span, Spanned};
+
+    fn mk_span() -> Span {
+        Span { start: 0, end: 0, file_id: 0 }
+    }
+
+    fn spanned<T>(node: T) -> Spanned<T> {
+        Spanned { node, span: mk_span() }
+    }
+
+    // ===== type_expr_eq tests =====
+
+    #[test]
+    fn test_type_expr_eq_named_same() {
+        let a = TypeExpr::Named("int".to_string());
+        let b = TypeExpr::Named("int".to_string());
+        assert!(type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_named_different() {
+        let a = TypeExpr::Named("int".to_string());
+        let b = TypeExpr::Named("string".to_string());
+        assert!(!type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_array_same() {
+        let a = TypeExpr::Array(Box::new(spanned(TypeExpr::Named("int".to_string()))));
+        let b = TypeExpr::Array(Box::new(spanned(TypeExpr::Named("int".to_string()))));
+        assert!(type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_array_different_element() {
+        let a = TypeExpr::Array(Box::new(spanned(TypeExpr::Named("int".to_string()))));
+        let b = TypeExpr::Array(Box::new(spanned(TypeExpr::Named("string".to_string()))));
+        assert!(!type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_nested_array() {
+        let a = TypeExpr::Array(Box::new(spanned(TypeExpr::Array(Box::new(spanned(
+            TypeExpr::Named("int".to_string())
+        ))))));
+        let b = TypeExpr::Array(Box::new(spanned(TypeExpr::Array(Box::new(spanned(
+            TypeExpr::Named("int".to_string())
+        ))))));
+        assert!(type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_qualified_same() {
+        let a = TypeExpr::Qualified {
+            module: "math".to_string(),
+            name: "Vector".to_string(),
+        };
+        let b = TypeExpr::Qualified {
+            module: "math".to_string(),
+            name: "Vector".to_string(),
+        };
+        assert!(type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_qualified_different_module() {
+        let a = TypeExpr::Qualified {
+            module: "math".to_string(),
+            name: "Vector".to_string(),
+        };
+        let b = TypeExpr::Qualified {
+            module: "geometry".to_string(),
+            name: "Vector".to_string(),
+        };
+        assert!(!type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_qualified_different_name() {
+        let a = TypeExpr::Qualified {
+            module: "math".to_string(),
+            name: "Vector".to_string(),
+        };
+        let b = TypeExpr::Qualified {
+            module: "math".to_string(),
+            name: "Matrix".to_string(),
+        };
+        assert!(!type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_fn_same() {
+        let a = TypeExpr::Fn {
+            params: vec![
+                Box::new(spanned(TypeExpr::Named("int".to_string()))),
+                Box::new(spanned(TypeExpr::Named("string".to_string()))),
+            ],
+            return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
+        };
+        let b = TypeExpr::Fn {
+            params: vec![
+                Box::new(spanned(TypeExpr::Named("int".to_string()))),
+                Box::new(spanned(TypeExpr::Named("string".to_string()))),
+            ],
+            return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
+        };
+        assert!(type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_fn_different_param_count() {
+        let a = TypeExpr::Fn {
+            params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
+            return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
+        };
+        let b = TypeExpr::Fn {
+            params: vec![
+                Box::new(spanned(TypeExpr::Named("int".to_string()))),
+                Box::new(spanned(TypeExpr::Named("string".to_string()))),
+            ],
+            return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
+        };
+        assert!(!type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_fn_different_param_type() {
+        let a = TypeExpr::Fn {
+            params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
+            return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
+        };
+        let b = TypeExpr::Fn {
+            params: vec![Box::new(spanned(TypeExpr::Named("float".to_string())))],
+            return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
+        };
+        assert!(!type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_fn_different_return_type() {
+        let a = TypeExpr::Fn {
+            params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
+            return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
+        };
+        let b = TypeExpr::Fn {
+            params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
+            return_type: Box::new(spanned(TypeExpr::Named("string".to_string()))),
+        };
+        assert!(!type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_generic_same() {
+        let a = TypeExpr::Generic {
+            name: "Box".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        };
+        let b = TypeExpr::Generic {
+            name: "Box".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        };
+        assert!(type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_generic_different_name() {
+        let a = TypeExpr::Generic {
+            name: "Box".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        };
+        let b = TypeExpr::Generic {
+            name: "Container".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        };
+        assert!(!type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_generic_different_arg_count() {
+        let a = TypeExpr::Generic {
+            name: "Pair".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        };
+        let b = TypeExpr::Generic {
+            name: "Pair".to_string(),
+            type_args: vec![
+                spanned(TypeExpr::Named("int".to_string())),
+                spanned(TypeExpr::Named("string".to_string())),
+            ],
+        };
+        assert!(!type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_generic_different_arg_type() {
+        let a = TypeExpr::Generic {
+            name: "Box".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        };
+        let b = TypeExpr::Generic {
+            name: "Box".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("string".to_string()))],
+        };
+        assert!(!type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_nullable_same() {
+        let a = TypeExpr::Nullable(Box::new(spanned(TypeExpr::Named("int".to_string()))));
+        let b = TypeExpr::Nullable(Box::new(spanned(TypeExpr::Named("int".to_string()))));
+        assert!(type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_nullable_different() {
+        let a = TypeExpr::Nullable(Box::new(spanned(TypeExpr::Named("int".to_string()))));
+        let b = TypeExpr::Nullable(Box::new(spanned(TypeExpr::Named("string".to_string()))));
+        assert!(!type_expr_eq(&a, &b));
+    }
+
+    #[test]
+    fn test_type_expr_eq_different_variants() {
+        let a = TypeExpr::Named("int".to_string());
+        let b = TypeExpr::Array(Box::new(spanned(TypeExpr::Named("int".to_string()))));
+        assert!(!type_expr_eq(&a, &b));
+    }
+
+    // ===== extern_fn_sigs_match tests =====
+
+    #[test]
+    fn test_extern_fn_sigs_match_same_no_params() {
+        let a = ExternFnDecl {
+            name: spanned("foo".to_string()),
+            params: vec![],
+            return_type: None,
+            is_pub: false,
+        };
+        let b = ExternFnDecl {
+            name: spanned("foo".to_string()),
+            params: vec![],
+            return_type: None,
+            is_pub: false,
+        };
+        assert!(extern_fn_sigs_match(&a, &b));
+    }
+
+    #[test]
+    fn test_extern_fn_sigs_match_same_with_params() {
+        use uuid::Uuid;
+
+        let a = ExternFnDecl {
+            name: spanned("foo".to_string()),
+            params: vec![
+                Param {
+                    id: Uuid::new_v4(),
+                    name: spanned("x".to_string()),
+                    ty: spanned(TypeExpr::Named("int".to_string())),
+                    is_mut: false,
+                },
+                Param {
+                    id: Uuid::new_v4(),
+                    name: spanned("y".to_string()),
+                    ty: spanned(TypeExpr::Named("string".to_string())),
+                    is_mut: false,
+                },
+            ],
+            return_type: Some(spanned(TypeExpr::Named("bool".to_string()))),
+            is_pub: false,
+        };
+        let b = ExternFnDecl {
+            name: spanned("foo".to_string()),
+            params: vec![
+                Param {
+                    id: Uuid::new_v4(),
+                    name: spanned("a".to_string()),
+                    ty: spanned(TypeExpr::Named("int".to_string())),
+                    is_mut: false,
+                },
+                Param {
+                    id: Uuid::new_v4(),
+                    name: spanned("b".to_string()),
+                    ty: spanned(TypeExpr::Named("string".to_string())),
+                    is_mut: false,
+                },
+            ],
+            return_type: Some(spanned(TypeExpr::Named("bool".to_string()))),
+            is_pub: false,
+        };
+        assert!(extern_fn_sigs_match(&a, &b));
+    }
+
+    #[test]
+    fn test_extern_fn_sigs_match_different_param_count() {
+        use uuid::Uuid;
+
+        let a = ExternFnDecl {
+            name: spanned("foo".to_string()),
+            params: vec![Param {
+                id: Uuid::new_v4(),
+                name: spanned("x".to_string()),
+                ty: spanned(TypeExpr::Named("int".to_string())),
+                is_mut: false,
+            }],
+            return_type: None,
+            is_pub: false,
+        };
+        let b = ExternFnDecl {
+            name: spanned("foo".to_string()),
+            params: vec![],
+            return_type: None,
+            is_pub: false,
+        };
+        assert!(!extern_fn_sigs_match(&a, &b));
+    }
+
+    #[test]
+    fn test_extern_fn_sigs_match_different_param_type() {
+        use uuid::Uuid;
+
+        let a = ExternFnDecl {
+            name: spanned("foo".to_string()),
+            params: vec![Param {
+                id: Uuid::new_v4(),
+                name: spanned("x".to_string()),
+                ty: spanned(TypeExpr::Named("int".to_string())),
+                is_mut: false,
+            }],
+            return_type: None,
+            is_pub: false,
+        };
+        let b = ExternFnDecl {
+            name: spanned("foo".to_string()),
+            params: vec![Param {
+                id: Uuid::new_v4(),
+                name: spanned("x".to_string()),
+                ty: spanned(TypeExpr::Named("float".to_string())),
+                is_mut: false,
+            }],
+            return_type: None,
+            is_pub: false,
+        };
+        assert!(!extern_fn_sigs_match(&a, &b));
+    }
+
+    #[test]
+    fn test_extern_fn_sigs_match_different_return_type() {
+        let a = ExternFnDecl {
+            name: spanned("foo".to_string()),
+            params: vec![],
+            return_type: Some(spanned(TypeExpr::Named("int".to_string()))),
+            is_pub: false,
+        };
+        let b = ExternFnDecl {
+            name: spanned("foo".to_string()),
+            params: vec![],
+            return_type: Some(spanned(TypeExpr::Named("string".to_string()))),
+            is_pub: false,
+        };
+        assert!(!extern_fn_sigs_match(&a, &b));
+    }
+
+    #[test]
+    fn test_extern_fn_sigs_match_one_has_return_other_doesnt() {
+        let a = ExternFnDecl {
+            name: spanned("foo".to_string()),
+            params: vec![],
+            return_type: Some(spanned(TypeExpr::Named("int".to_string()))),
+            is_pub: false,
+        };
+        let b = ExternFnDecl {
+            name: spanned("foo".to_string()),
+            params: vec![],
+            return_type: None,
+            is_pub: false,
+        };
+        assert!(!extern_fn_sigs_match(&a, &b));
+    }
+}
