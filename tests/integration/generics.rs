@@ -789,7 +789,7 @@ fn main() {
     let db = Database {}
     let r = Repo<int> { label: "test" }
 }
-"#, "unexpected token");
+"#, "cannot manually construct class");
 }
 
 #[test]

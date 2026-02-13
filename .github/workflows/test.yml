@@ -22,6 +22,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
 
+      - name: Build workspace
+        run: cargo build --workspace
+
+      - name: Test workspace members
+        run: cargo test --workspace --exclude plutoc
+
       - name: Run unit tests only
         run: cargo nextest run --lib
 
