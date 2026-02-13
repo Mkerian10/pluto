@@ -242,6 +242,31 @@ The resulting `runtime.o` is then linked with the Cranelift-generated object cod
 - Send/receive on buffered channel: O(1) when not blocking
 - Select on N channels: O(N) to check all channels
 
+## String Slices
+
+String-returning operations (`substring`, `trim`, `trim_start`, `trim_end`, `split`) return
+lightweight 24-byte **slices** instead of copying data. A slice is a GC-tracked view into an
+existing owned string:
+
+```
+Owned string:  [len: i64][data bytes...][null terminator]   GC_TAG_STRING
+String slice:  [backing_ptr: i64][offset: i64][len: i64]    GC_TAG_STRING_SLICE
+```
+
+**Key properties:**
+- All string-consuming functions (`eq`, `concat`, `contains`, `print`, etc.) accept both owned
+  strings and slices transparently via `__pluto_string_data()`, which dispatches on the GC tag.
+- Slice-of-slice is flattened: creating a slice of a slice points back to the original backing
+  string (no reference chains).
+- Slices are **materialized** (copied to an owned string) at escape boundaries in codegen:
+  function returns, struct/enum field stores, array/map/set inserts, and closure captures.
+  This prevents large backing strings from being kept alive by small slices.
+- The GC traces the backing pointer (`field_count=1`), keeping the backing string alive as long
+  as any slice references it.
+- Empty slices (len == 0) are returned as empty owned strings.
+- C interop functions that need null-terminated strings use `__pluto_string_to_cstr()`, which
+  materializes slices on demand.
+
 ## Future Optimizations
 
 Potential improvements (not yet implemented):
