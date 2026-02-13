@@ -576,23 +576,21 @@ pub(crate) fn infer_expr(
                 }
             }
 
-            // Unify all arm types
-            if arm_types.is_empty() {
-                return Err(CompileError::type_err(
-                    "match expression must have at least one arm".to_string(),
-                    span,
-                ));
-            }
-
-            // Start with first arm's type
-            let mut unified = arm_types[0].0.clone();
-
-            // Unify with each subsequent arm
+            // All arms must unify to same type
+            let first_type = &arm_types[0].0;
             for (arm_type, arm_span) in &arm_types[1..] {
-                unified = unify_branch_types(&unified, arm_type, arm_types[0].1, *arm_span)?;
+                if !types_compatible(arm_type, first_type, env) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "match arms have incompatible types: expected {}, found {}",
+                            first_type, arm_type
+                        ),
+                        *arm_span,
+                    ));
+                }
             }
 
-            Ok(unified)
+            Ok(first_type.clone())
         }
         Expr::QualifiedAccess { segments } => {
             panic!(
