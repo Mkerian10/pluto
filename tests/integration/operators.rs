@@ -282,7 +282,6 @@ fn compound_assign_float() {
 }
 
 #[test]
-#[ignore] // Parser bug: compound assignment on field not supported
 fn compound_assign_field() {
     let out = compile_and_run_stdout(
         "class Counter {\n    value: int\n}\n\nfn main() {\n    let mut c = Counter { value: 0 }\n    c.value += 10\n    print(c.value)\n}",
@@ -333,7 +332,6 @@ fn decrement_countdown() {
 }
 
 #[test]
-#[ignore] // Parser bug: increment on field not supported
 fn increment_field() {
     let out = compile_and_run_stdout(
         "class Counter {\n    value: int\n}\n\nfn main() {\n    let mut c = Counter { value: 0 }\n    c.value++\n    c.value++\n    c.value++\n    print(c.value)\n}",

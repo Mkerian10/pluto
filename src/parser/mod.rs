@@ -1668,6 +1668,36 @@ impl<'a> Parser<'a> {
                 },
                 span,
             )),
+            Expr::QualifiedAccess { mut segments } => {
+                // Convert QualifiedAccess to FieldAssign for compound assignment
+                // e.g., c.value += 10 becomes FieldAssign { object: c, field: value, value: c.value + 10 }
+                if segments.len() < 2 {
+                    return Err(CompileError::syntax(
+                        "invalid compound assignment target",
+                        target_expr.span,
+                    ));
+                }
+
+                let field = segments.pop().unwrap();
+
+                // Build object expression from remaining segments
+                let object_expr = if segments.len() == 1 {
+                    Expr::Ident(segments[0].node.clone())
+                } else {
+                    Expr::QualifiedAccess { segments }
+                };
+                let object_span = Span::new(target_expr.span.start, field.span.start - 1);
+                let object = Spanned::new(object_expr, object_span);
+
+                Ok(Spanned::new(
+                    Stmt::FieldAssign {
+                        object,
+                        field,
+                        value: bin_expr,
+                    },
+                    span,
+                ))
+            }
             _ => Err(CompileError::syntax(
                 "invalid compound assignment target",
                 target_expr.span,
