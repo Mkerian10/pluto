@@ -2664,4 +2664,863 @@ mod tests {
         assert_eq!(types.len(), 1);
         assert!(types.contains("User"));
     }
+
+    // ===== Phase 1: value_expr_to_string tests =====
+
+    #[test]
+    fn test_value_expr_to_string_ident() {
+        let expr = Expr::Ident("myVar".to_string());
+        let result = value_expr_to_string(&expr).unwrap();
+        assert_eq!(result, "myVar");
+    }
+
+    #[test]
+    fn test_value_expr_to_string_field_access() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(Spanned {
+                node: Expr::Ident("obj".to_string()),
+                span: mk_span(),
+            }),
+            field: Spanned {
+                node: "field".to_string(),
+                span: mk_span(),
+            },
+        };
+        let result = value_expr_to_string(&expr).unwrap();
+        assert_eq!(result, "obj.field");
+    }
+
+    #[test]
+    fn test_value_expr_to_string_nested_field_access() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(Spanned {
+                node: Expr::FieldAccess {
+                    object: Box::new(Spanned {
+                        node: Expr::Ident("a".to_string()),
+                        span: mk_span(),
+                    }),
+                    field: Spanned {
+                        node: "b".to_string(),
+                        span: mk_span(),
+                    },
+                },
+                span: mk_span(),
+            }),
+            field: Spanned {
+                node: "c".to_string(),
+                span: mk_span(),
+            },
+        };
+        let result = value_expr_to_string(&expr).unwrap();
+        assert_eq!(result, "a.b.c");
+    }
+
+    #[test]
+    fn test_value_expr_to_string_complex_expr_fails() {
+        let expr = Expr::IntLit(42);
+        let result = value_expr_to_string(&expr);
+        assert!(result.is_err());
+    }
+
+    // ===== Phase 2: Generic instantiation tests =====
+
+    #[test]
+    fn test_instantiate_generic_class_single_param() {
+        use crate::parser::ast::{ClassDecl, Field, Lifecycle};
+        use uuid::Uuid;
+
+        let template = ClassDecl {
+            id: Uuid::new_v4(),
+            name: Spanned {
+                node: "Box".to_string(),
+                span: mk_span(),
+            },
+            type_params: vec![Spanned {
+                node: "T".to_string(),
+                span: mk_span(),
+            }],
+            type_param_bounds: HashMap::new(),
+            fields: vec![Field {
+                id: Uuid::new_v4(),
+                name: Spanned {
+                    node: "value".to_string(),
+                    span: mk_span(),
+                },
+                ty: Spanned {
+                    node: TypeExpr::Named("T".to_string()),
+                    span: mk_span(),
+                },
+                is_injected: false,
+                is_ambient: false,
+            }],
+            methods: vec![],
+            invariants: vec![],
+            impl_traits: vec![],
+            uses: vec![],
+            is_pub: false,
+            lifecycle: Lifecycle::Singleton,
+        };
+
+        let result = instantiate_generic_class(&template, "Box$$int", "int").unwrap();
+
+        assert_eq!(result.name.node, "Box$$int");
+        assert_eq!(result.type_params.len(), 0);
+        assert_eq!(result.fields.len(), 1);
+        match &result.fields[0].ty.node {
+            TypeExpr::Named(name) => assert_eq!(name, "int"),
+            _ => panic!("Expected Named type"),
+        }
+    }
+
+    #[test]
+    fn test_instantiate_generic_class_nested_type() {
+        use crate::parser::ast::{ClassDecl, Field, Lifecycle};
+        use uuid::Uuid;
+
+        let template = ClassDecl {
+            id: Uuid::new_v4(),
+            name: Spanned {
+                node: "Container".to_string(),
+                span: mk_span(),
+            },
+            type_params: vec![Spanned {
+                node: "T".to_string(),
+                span: mk_span(),
+            }],
+            type_param_bounds: HashMap::new(),
+            fields: vec![Field {
+                id: Uuid::new_v4(),
+                name: Spanned {
+                    node: "items".to_string(),
+                    span: mk_span(),
+                },
+                ty: Spanned {
+                    node: TypeExpr::Array(Box::new(Spanned {
+                        node: TypeExpr::Named("T".to_string()),
+                        span: mk_span(),
+                    })),
+                    span: mk_span(),
+                },
+                is_injected: false,
+                is_ambient: false,
+            }],
+            methods: vec![],
+            invariants: vec![],
+            impl_traits: vec![],
+            uses: vec![],
+            is_pub: false,
+            lifecycle: Lifecycle::Singleton,
+        };
+
+        let result = instantiate_generic_class(&template, "Container$$string", "string").unwrap();
+
+        assert_eq!(result.fields.len(), 1);
+        match &result.fields[0].ty.node {
+            TypeExpr::Array(elem) => match &elem.node {
+                TypeExpr::Named(name) => assert_eq!(name, "string"),
+                _ => panic!("Expected Named type in array"),
+            },
+            _ => panic!("Expected Array type"),
+        }
+    }
+
+    #[test]
+    fn test_instantiate_generic_enum_single_param() {
+        use crate::parser::ast::{EnumDecl, EnumVariant, Field};
+        use uuid::Uuid;
+
+        let template = EnumDecl {
+            id: Uuid::new_v4(),
+            name: Spanned {
+                node: "Option".to_string(),
+                span: mk_span(),
+            },
+            type_params: vec![Spanned {
+                node: "T".to_string(),
+                span: mk_span(),
+            }],
+            type_param_bounds: HashMap::new(),
+            variants: vec![
+                EnumVariant {
+                    id: Uuid::new_v4(),
+                    name: Spanned {
+                        node: "Some".to_string(),
+                        span: mk_span(),
+                    },
+                    fields: vec![Field {
+                        id: Uuid::new_v4(),
+                        name: Spanned {
+                            node: "value".to_string(),
+                            span: mk_span(),
+                        },
+                        ty: Spanned {
+                            node: TypeExpr::Named("T".to_string()),
+                            span: mk_span(),
+                        },
+                        is_injected: false,
+                        is_ambient: false,
+                    }],
+                },
+                EnumVariant {
+                    id: Uuid::new_v4(),
+                    name: Spanned {
+                        node: "None".to_string(),
+                        span: mk_span(),
+                    },
+                    fields: vec![],
+                },
+            ],
+            is_pub: false,
+        };
+
+        let result = instantiate_generic_enum(&template, "Option$$int", "int").unwrap();
+
+        assert_eq!(result.name.node, "Option$$int");
+        assert_eq!(result.type_params.len(), 0);
+        assert_eq!(result.variants.len(), 2);
+        assert_eq!(result.variants[0].fields.len(), 1);
+        match &result.variants[0].fields[0].ty.node {
+            TypeExpr::Named(name) => assert_eq!(name, "int"),
+            _ => panic!("Expected Named type"),
+        }
+        assert_eq!(result.variants[1].fields.len(), 0);
+    }
+
+    #[test]
+    fn test_instantiate_generic_enum_complex_field() {
+        use crate::parser::ast::{EnumDecl, EnumVariant, Field};
+        use uuid::Uuid;
+
+        let template = EnumDecl {
+            id: Uuid::new_v4(),
+            name: Spanned {
+                node: "Result".to_string(),
+                span: mk_span(),
+            },
+            type_params: vec![Spanned {
+                node: "T".to_string(),
+                span: mk_span(),
+            }],
+            type_param_bounds: HashMap::new(),
+            variants: vec![EnumVariant {
+                id: Uuid::new_v4(),
+                name: Spanned {
+                    node: "Ok".to_string(),
+                    span: mk_span(),
+                },
+                fields: vec![Field {
+                    id: Uuid::new_v4(),
+                    name: Spanned {
+                        node: "value".to_string(),
+                        span: mk_span(),
+                    },
+                    ty: Spanned {
+                        node: TypeExpr::Nullable(Box::new(Spanned {
+                            node: TypeExpr::Named("T".to_string()),
+                            span: mk_span(),
+                        })),
+                        span: mk_span(),
+                    },
+                    is_injected: false,
+                    is_ambient: false,
+                }],
+            }],
+            is_pub: false,
+        };
+
+        let result = instantiate_generic_enum(&template, "Result$$bool", "bool").unwrap();
+
+        assert_eq!(result.variants[0].fields.len(), 1);
+        match &result.variants[0].fields[0].ty.node {
+            TypeExpr::Nullable(inner) => match &inner.node {
+                TypeExpr::Named(name) => assert_eq!(name, "bool"),
+                _ => panic!("Expected Named type in nullable"),
+            },
+            _ => panic!("Expected Nullable type"),
+        }
+    }
+
+    // ===== Phase 3: mk_encode_value tests =====
+
+    #[test]
+    fn test_mk_encode_value_int() {
+        let ty = TypeExpr::Named("int".to_string());
+        let expr = mk_var("x");
+        let stmts = mk_encode_value(&ty, expr).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::MethodCall { object, method, args } => {
+                    assert!(matches!(&object.node, Expr::Ident(n) if n == "enc"));
+                    assert_eq!(method.node, "encode_int");
+                    assert_eq!(args.len(), 1);
+                }
+                _ => panic!("Expected MethodCall"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_encode_value_float() {
+        let ty = TypeExpr::Named("float".to_string());
+        let expr = mk_var("y");
+        let stmts = mk_encode_value(&ty, expr).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::MethodCall { method, .. } => {
+                    assert_eq!(method.node, "encode_float");
+                }
+                _ => panic!("Expected MethodCall"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_encode_value_bool() {
+        let ty = TypeExpr::Named("bool".to_string());
+        let expr = mk_var("flag");
+        let stmts = mk_encode_value(&ty, expr).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::MethodCall { method, .. } => {
+                    assert_eq!(method.node, "encode_bool");
+                }
+                _ => panic!("Expected MethodCall"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_encode_value_string() {
+        let ty = TypeExpr::Named("string".to_string());
+        let expr = mk_var("s");
+        let stmts = mk_encode_value(&ty, expr).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::MethodCall { method, .. } => {
+                    assert_eq!(method.node, "encode_string");
+                }
+                _ => panic!("Expected MethodCall"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_encode_value_byte() {
+        let ty = TypeExpr::Named("byte".to_string());
+        let expr = mk_var("b");
+        let stmts = mk_encode_value(&ty, expr).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::MethodCall { method, args, .. } => {
+                    assert_eq!(method.node, "encode_int");
+                    // Should cast byte to int
+                    match &args[0].node {
+                        Expr::Cast { target_type, .. } => {
+                            assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+                        }
+                        _ => panic!("Expected Cast"),
+                    }
+                }
+                _ => panic!("Expected MethodCall"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_encode_value_void() {
+        let ty = TypeExpr::Named("void".to_string());
+        let expr = mk_var("v");
+        let stmts = mk_encode_value(&ty, expr).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        // void encoding should be a no-op (just IntLit(0))
+        match &stmts[0].node {
+            Stmt::Expr(_) => {} // Accept any expr statement for void
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_encode_value_user_class() {
+        let ty = TypeExpr::Named("MyClass".to_string());
+        let expr = mk_var("obj");
+        let stmts = mk_encode_value(&ty, expr).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::Call { name, args, .. } => {
+                    assert_eq!(name.node, "__marshal_MyClass");
+                    assert_eq!(args.len(), 2); // value, enc
+                }
+                _ => panic!("Expected Call"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_encode_value_array() {
+        let ty = TypeExpr::Array(Box::new(Spanned {
+            node: TypeExpr::Named("int".to_string()),
+            span: mk_span(),
+        }));
+        let expr = mk_var("arr");
+        let stmts = mk_encode_value(&ty, expr).unwrap();
+
+        // Should generate multiple statements: encode_array_start, while loop, encode_array_end
+        assert!(stmts.len() > 1);
+
+        // First statement should be encode_array_start
+        match &stmts[0].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::MethodCall { method, .. } => {
+                    assert_eq!(method.node, "encode_array_start");
+                }
+                _ => panic!("Expected MethodCall"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+
+        // Should have a while loop
+        assert!(stmts.iter().any(|s| matches!(&s.node, Stmt::While { .. })));
+
+        // Last statement should be encode_array_end
+        match &stmts[stmts.len() - 1].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::MethodCall { method, .. } => {
+                    assert_eq!(method.node, "encode_array_end");
+                }
+                _ => panic!("Expected MethodCall"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_encode_value_nullable() {
+        let ty = TypeExpr::Nullable(Box::new(Spanned {
+            node: TypeExpr::Named("int".to_string()),
+            span: mk_span(),
+        }));
+        let expr = mk_var("maybe");
+        let stmts = mk_encode_value(&ty, expr).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        // Should generate an if statement checking for none
+        match &stmts[0].node {
+            Stmt::If { condition, then_block, else_block } => {
+                // Condition should compare to none
+                match &condition.node {
+                    Expr::BinOp { op, .. } => {
+                        assert_eq!(*op, BinOp::Eq);
+                    }
+                    _ => panic!("Expected BinOp"),
+                }
+                // Then block should encode_null
+                assert!(!then_block.node.stmts.is_empty());
+                // Else block should encode the unwrapped value
+                assert!(else_block.is_some());
+            }
+            _ => panic!("Expected If statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_encode_value_map() {
+        let ty = TypeExpr::Generic {
+            name: "Map".to_string(),
+            type_args: vec![
+                Spanned {
+                    node: TypeExpr::Named("string".to_string()),
+                    span: mk_span(),
+                },
+                Spanned {
+                    node: TypeExpr::Named("int".to_string()),
+                    span: mk_span(),
+                },
+            ],
+        };
+        let expr = mk_var("m");
+        let stmts = mk_encode_value(&ty, expr).unwrap();
+
+        // Should generate multiple statements: encode_map_start, keys binding, while loop, encode_map_end
+        assert!(stmts.len() > 1);
+
+        // First statement should be encode_map_start
+        match &stmts[0].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::MethodCall { method, .. } => {
+                    assert_eq!(method.node, "encode_map_start");
+                }
+                _ => panic!("Expected MethodCall"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+
+        // Should have a while loop
+        assert!(stmts.iter().any(|s| matches!(&s.node, Stmt::While { .. })));
+
+        // Last statement should be encode_map_end
+        match &stmts[stmts.len() - 1].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::MethodCall { method, .. } => {
+                    assert_eq!(method.node, "encode_map_end");
+                }
+                _ => panic!("Expected MethodCall"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_encode_value_set() {
+        let ty = TypeExpr::Generic {
+            name: "Set".to_string(),
+            type_args: vec![Spanned {
+                node: TypeExpr::Named("string".to_string()),
+                span: mk_span(),
+            }],
+        };
+        let expr = mk_var("s");
+        let stmts = mk_encode_value(&ty, expr).unwrap();
+
+        // Should generate multiple statements (encode as array)
+        assert!(stmts.len() > 1);
+
+        // First statement should be encode_array_start
+        match &stmts[0].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::MethodCall { method, .. } => {
+                    assert_eq!(method.node, "encode_array_start");
+                }
+                _ => panic!("Expected MethodCall"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+
+        // Last statement should be encode_array_end
+        match &stmts[stmts.len() - 1].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::MethodCall { method, .. } => {
+                    assert_eq!(method.node, "encode_array_end");
+                }
+                _ => panic!("Expected MethodCall"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_encode_value_user_generic() {
+        let ty = TypeExpr::Generic {
+            name: "Box".to_string(),
+            type_args: vec![Spanned {
+                node: TypeExpr::Named("int".to_string()),
+                span: mk_span(),
+            }],
+        };
+        let expr = mk_var("box");
+        let stmts = mk_encode_value(&ty, expr).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Expr(e) => match &e.node {
+                Expr::Call { name, args, .. } => {
+                    // Should call __marshal_Box$$int
+                    assert_eq!(name.node, "__marshal_Box$$int");
+                    assert_eq!(args.len(), 2); // value, enc
+                }
+                _ => panic!("Expected Call"),
+            },
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    // ===== Phase 4: mk_let_decode tests =====
+
+    #[test]
+    fn test_mk_let_decode_int() {
+        let ty = TypeExpr::Named("int".to_string());
+        let stmts = mk_let_decode("x", &ty).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Let { name, ty: Some(ty_expr), value, .. } => {
+                assert_eq!(name.node, "x");
+                assert!(matches!(&ty_expr.node, TypeExpr::Named(n) if n == "int"));
+                // Value should be propagate(decode_int)
+                match &value.node {
+                    Expr::Propagate { expr } => match &expr.node {
+                        Expr::MethodCall { method, .. } => {
+                            assert_eq!(method.node, "decode_int");
+                        }
+                        _ => panic!("Expected MethodCall inside Propagate"),
+                    },
+                    _ => panic!("Expected Propagate"),
+                }
+            }
+            _ => panic!("Expected Let statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_let_decode_float() {
+        let ty = TypeExpr::Named("float".to_string());
+        let stmts = mk_let_decode("y", &ty).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Let { value, .. } => match &value.node {
+                Expr::Propagate { expr } => match &expr.node {
+                    Expr::MethodCall { method, .. } => {
+                        assert_eq!(method.node, "decode_float");
+                    }
+                    _ => panic!("Expected MethodCall"),
+                },
+                _ => panic!("Expected Propagate"),
+            },
+            _ => panic!("Expected Let statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_let_decode_bool() {
+        let ty = TypeExpr::Named("bool".to_string());
+        let stmts = mk_let_decode("flag", &ty).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Let { value, .. } => match &value.node {
+                Expr::Propagate { expr } => match &expr.node {
+                    Expr::MethodCall { method, .. } => {
+                        assert_eq!(method.node, "decode_bool");
+                    }
+                    _ => panic!("Expected MethodCall"),
+                },
+                _ => panic!("Expected Propagate"),
+            },
+            _ => panic!("Expected Let statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_let_decode_string() {
+        let ty = TypeExpr::Named("string".to_string());
+        let stmts = mk_let_decode("s", &ty).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Let { value, .. } => match &value.node {
+                Expr::Propagate { expr } => match &expr.node {
+                    Expr::MethodCall { method, .. } => {
+                        assert_eq!(method.node, "decode_string");
+                    }
+                    _ => panic!("Expected MethodCall"),
+                },
+                _ => panic!("Expected Propagate"),
+            },
+            _ => panic!("Expected Let statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_let_decode_byte() {
+        let ty = TypeExpr::Named("byte".to_string());
+        let stmts = mk_let_decode("b", &ty).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Let { value, .. } => match &value.node {
+                Expr::Cast { target_type, .. } => {
+                    // Should cast decode_int() to byte
+                    assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "byte"));
+                }
+                _ => panic!("Expected Cast"),
+            },
+            _ => panic!("Expected Let statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_let_decode_void() {
+        let ty = TypeExpr::Named("void".to_string());
+        let stmts = mk_let_decode("v", &ty).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        // void decoding should be a no-op
+        match &stmts[0].node {
+            Stmt::Expr(_) => {} // Accept any expr statement for void
+            _ => panic!("Expected Expr statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_let_decode_user_class() {
+        let ty = TypeExpr::Named("MyClass".to_string());
+        let stmts = mk_let_decode("obj", &ty).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Let { value, .. } => match &value.node {
+                Expr::Propagate { expr } => match &expr.node {
+                    Expr::Call { name, .. } => {
+                        assert_eq!(name.node, "__unmarshal_MyClass");
+                    }
+                    _ => panic!("Expected Call"),
+                },
+                _ => panic!("Expected Propagate"),
+            },
+            _ => panic!("Expected Let statement"),
+        }
+    }
+
+    #[test]
+    fn test_mk_let_decode_array() {
+        let ty = TypeExpr::Array(Box::new(Spanned {
+            node: TypeExpr::Named("int".to_string()),
+            span: mk_span(),
+        }));
+        let stmts = mk_let_decode("arr", &ty).unwrap();
+
+        // Should generate multiple statements: decode_array_start, empty array, while loop, final let
+        assert!(stmts.len() > 1);
+
+        // Should have decode_array_start
+        assert!(stmts.iter().any(|s| {
+            matches!(&s.node, Stmt::Let { value, .. } if matches!(&value.node, Expr::Propagate { .. }))
+        }));
+
+        // Should have a while loop
+        assert!(stmts.iter().any(|s| matches!(&s.node, Stmt::While { .. })));
+
+        // Final statement should be the let binding for arr
+        match &stmts[stmts.len() - 1].node {
+            Stmt::Let { name, .. } => {
+                assert_eq!(name.node, "arr");
+            }
+            _ => panic!("Expected Let statement at end"),
+        }
+    }
+
+    #[test]
+    fn test_mk_let_decode_nullable() {
+        let ty = TypeExpr::Nullable(Box::new(Spanned {
+            node: TypeExpr::Named("int".to_string()),
+            span: mk_span(),
+        }));
+        let stmts = mk_let_decode("maybe", &ty).unwrap();
+
+        // Should generate: let __is_null = ..., if statement, final let
+        assert!(stmts.len() > 1);
+
+        // Should have an if statement
+        assert!(stmts.iter().any(|s| matches!(&s.node, Stmt::If { .. })));
+
+        // Final statement should be the let binding for maybe
+        match &stmts[stmts.len() - 1].node {
+            Stmt::Let { name, .. } => {
+                assert_eq!(name.node, "maybe");
+            }
+            _ => panic!("Expected Let statement at end"),
+        }
+    }
+
+    #[test]
+    fn test_mk_let_decode_map() {
+        let ty = TypeExpr::Generic {
+            name: "Map".to_string(),
+            type_args: vec![
+                Spanned {
+                    node: TypeExpr::Named("string".to_string()),
+                    span: mk_span(),
+                },
+                Spanned {
+                    node: TypeExpr::Named("int".to_string()),
+                    span: mk_span(),
+                },
+            ],
+        };
+        let stmts = mk_let_decode("m", &ty).unwrap();
+
+        // Should generate multiple statements: decode_map_start, empty map, while loop, final let
+        assert!(stmts.len() > 1);
+
+        // Should have a while loop
+        assert!(stmts.iter().any(|s| matches!(&s.node, Stmt::While { .. })));
+
+        // Final statement should be the let binding for m
+        match &stmts[stmts.len() - 1].node {
+            Stmt::Let { name, .. } => {
+                assert_eq!(name.node, "m");
+            }
+            _ => panic!("Expected Let statement at end"),
+        }
+    }
+
+    #[test]
+    fn test_mk_let_decode_set() {
+        let ty = TypeExpr::Generic {
+            name: "Set".to_string(),
+            type_args: vec![Spanned {
+                node: TypeExpr::Named("string".to_string()),
+                span: mk_span(),
+            }],
+        };
+        let stmts = mk_let_decode("s", &ty).unwrap();
+
+        // Should generate multiple statements (decode as array, build set)
+        assert!(stmts.len() > 1);
+
+        // Should have a while loop
+        assert!(stmts.iter().any(|s| matches!(&s.node, Stmt::While { .. })));
+
+        // Final statement should be the let binding for s
+        match &stmts[stmts.len() - 1].node {
+            Stmt::Let { name, .. } => {
+                assert_eq!(name.node, "s");
+            }
+            _ => panic!("Expected Let statement at end"),
+        }
+    }
+
+    #[test]
+    fn test_mk_let_decode_user_generic() {
+        let ty = TypeExpr::Generic {
+            name: "Box".to_string(),
+            type_args: vec![Spanned {
+                node: TypeExpr::Named("int".to_string()),
+                span: mk_span(),
+            }],
+        };
+        let stmts = mk_let_decode("box", &ty).unwrap();
+
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0].node {
+            Stmt::Let { value, .. } => match &value.node {
+                // Generic user types do NOT wrap in Propagate (unlike Named user types)
+                Expr::Call { name, .. } => {
+                    // Should call __unmarshal_Box$$int
+                    assert_eq!(name.node, "__unmarshal_Box$$int");
+                }
+                _ => panic!("Expected Call (not Propagate) for generic user types"),
+            },
+            _ => panic!("Expected Let statement"),
+        }
+    }
 }
