@@ -1588,3 +1588,54 @@ fn main() {
 "#);
     assert_eq!(out.trim(), "20");
 }
+
+// ============================================================
+// If-Expression Integration Tests
+// ============================================================
+
+#[test]
+fn if_expr_in_spawn_argument() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn compute(x: int) int { return x * 10 }
+        fn main() {
+            let task = spawn compute(if true { 5 } else { 10 })
+            print(task.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "50");
+}
+
+#[test]
+fn spawn_in_if_expr_branch() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn compute(x: int) int { return x * 10 }
+        fn main() {
+            let task = if true {
+                spawn compute(5)
+            } else {
+                spawn compute(10)
+            }
+            print(task.get()!)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "50");
+}
+
+#[test]
+fn task_get_in_if_expr_condition() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn is_positive(x: int) bool { return x > 0 }
+        fn main() {
+            let task = spawn is_positive(10)
+            let x = if task.get() { 100 } else { 200 }
+            print(x)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "100");
+}

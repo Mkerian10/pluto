@@ -96,3 +96,66 @@ fn closure_capture_mixed_types() {
     );
     assert_eq!(out, "42\nhello\n3\n");
 }
+
+// ============================================================
+// If-Expression Integration Tests
+// ============================================================
+
+#[test]
+fn if_expr_in_closure_body() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn main() {
+            let f = (x: int) => if x > 0 { x } else { -x }
+            print(f(10))
+            print(f(-5))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "10\n5");
+}
+
+#[test]
+fn closure_in_if_expr_branch() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn main() {
+            let f = if true {
+                (x: int) => x * 2
+            } else {
+                (x: int) => x * 3
+            }
+            print(f(10))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "20");
+}
+
+#[test]
+fn closure_capturing_if_expr_value() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn main() {
+            let x = if true { 10 } else { 20 }
+            let f = () => x + 5
+            print(f())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "15");
+}
+
+#[test]
+fn nested_closures_with_if_expr() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn main() {
+            let outer = (a: int) => (b: int) => if a > b { a } else { b }
+            let inner = outer(10)
+            print(inner(5))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "10");
+}

@@ -1587,3 +1587,11 @@ fn main() {
     );
     assert_eq!(out, "2\n");
 }
+
+// ============================================================
+// If-Expression Integration Tests
+// ============================================================
+// Note: If-expressions are not allowed in contract clauses per the decidable
+// fragment restriction. Contract expressions are limited to comparisons, arithmetic,
+// logical ops, .len(), field access, and literals. No function calls, indexing,
+// closures, casts, or if-expressions.
