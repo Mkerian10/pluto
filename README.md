@@ -230,7 +230,7 @@ plutoc test tests.pluto               # Run test blocks
 plutoc run app.pluto --stdlib stdlib   # With standard library
 ```
 
-**Pipeline:** Lex &rarr; Parse &rarr; Module Resolve &rarr; Flatten &rarr; Closure Lift &rarr; Type Check &rarr; Monomorphize &rarr; Codegen (Cranelift) &rarr; Link
+**Pipeline:** Lex &rarr; Parse &rarr; Module Resolve &rarr; Flatten &rarr; Prelude/Stage/Ambient/Spawn transforms &rarr; Contract + Marshal validation &rarr; Type Check &rarr; Reflection + Monomorphize &rarr; Trait/Serializable checks &rarr; Closure Lift + Xref &rarr; Codegen (Cranelift) &rarr; Link
 
 **Targets:** `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
 
