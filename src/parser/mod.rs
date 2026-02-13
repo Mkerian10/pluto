@@ -5248,4 +5248,122 @@ mod tests {
             _ => panic!("expected let statement"),
         }
     }
+
+    // ============================================================
+    // If-Expression Unit Tests
+    // ============================================================
+
+    #[test]
+    fn parse_if_expr_basic_structure() {
+        let src = "fn main() { let x = if true { 1 } else { 2 } }";
+        let prog = parse(src);
+        let f = &prog.functions[0].node;
+
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::If { condition, then_block, else_block } => {
+                        // Verify condition is boolean literal
+                        assert!(matches!(condition.node, Expr::BoolLit(true)));
+                        // Verify then block has one statement (expression)
+                        assert_eq!(then_block.node.stmts.len(), 1);
+                        // Verify else block has one statement (always required for if-expressions)
+                        assert_eq!(else_block.node.stmts.len(), 1);
+                    }
+                    _ => panic!("expected if expression"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_if_expr_else_if_desugaring() {
+        let src = "fn main() { let x = if a { 1 } else if b { 2 } else { 3 } }";
+        let prog = parse(src);
+        let f = &prog.functions[0].node;
+
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::If { else_block, .. } => {
+                        // Else block should contain a single statement wrapping nested If
+                        assert_eq!(else_block.node.stmts.len(), 1);
+                        // The statement should be an Expr statement containing an If
+                        match &else_block.node.stmts[0].node {
+                            Stmt::Expr(inner_expr) => {
+                                assert!(matches!(inner_expr.node, Expr::If { .. }));
+                            }
+                            _ => panic!("expected expr statement in else block"),
+                        }
+                    }
+                    _ => panic!("expected if expression"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_if_expr_nested() {
+        let src = "fn main() { let x = if a { if b { 1 } else { 2 } } else { 3 } }";
+        let prog = parse(src);
+        let f = &prog.functions[0].node;
+
+        // Should parse successfully without errors - verify basic structure
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                // Outer if-expression should parse correctly
+                assert!(matches!(value.node, Expr::If { .. }));
+                if let Expr::If { then_block, .. } = &value.node {
+                    // Then block should have at least one statement
+                    assert!(!then_block.node.stmts.is_empty());
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_if_expr_in_parentheses() {
+        let src = "fn main() { let x = (if true { 1 } else { 2 }) + 10 }";
+        let prog = parse(src);
+        let f = &prog.functions[0].node;
+
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                // Should be a binary op with if-expression as left operand
+                match &value.node {
+                    Expr::BinOp { op: BinOp::Add, lhs, .. } => {
+                        assert!(matches!(lhs.node, Expr::If { .. }));
+                    }
+                    _ => panic!("expected binary op, got {:?}", value.node),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_if_expr_requires_else() {
+        let src = "fn main() { let x = if true { 1 } }";
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let result = parser.parse_program();
+
+        // Should fail because if-expression requires else clause
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_if_expr_struct_literal_restriction() {
+        // This should fail because struct literals are restricted in if conditions
+        let src = "fn main() { let x = if Foo { x: 1 } { 2 } else { 3 } }";
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let result = parser.parse_program();
+
+        // Should fail due to restrict_struct_lit in condition
+        assert!(result.is_err());
+    }
 }
