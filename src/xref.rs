@@ -150,11 +150,10 @@ impl VisitMut for XrefResolver<'_> {
             Expr::ClosureCreate { fn_name, target_id, .. } => {
                 *target_id = self.index.fn_index.get(fn_name).copied();
             }
-            Expr::QualifiedAccess { segments } => {
-                panic!(
-                    "QualifiedAccess should be resolved by module flattening before xref. Segments: {:?}",
-                    segments.iter().map(|s| &s.node).collect::<Vec<_>>()
-                )
+            Expr::QualifiedAccess { .. } => {
+                // QualifiedAccess is expected to be resolved by module flattening in normal compilation.
+                // However, SDK code may parse snippets that bypass the full pipeline.
+                // Just skip xref resolution for these - they have no target_id to resolve.
             }
             Expr::StringInterp { parts } => {
                 for part in parts {
