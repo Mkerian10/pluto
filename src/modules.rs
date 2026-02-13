@@ -1509,6 +1509,21 @@ fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &
                 resolve_qualified_access_in_expr(&mut arg.node, arg.span, module_names);
             }
         }
+        Expr::If { condition, then_block, else_block } => {
+            resolve_qualified_access_in_expr(&mut condition.node, condition.span, module_names);
+            for stmt in &mut then_block.node.stmts {
+                resolve_qualified_access_in_stmt(&mut stmt.node, module_names);
+            }
+            for stmt in &mut else_block.node.stmts {
+                resolve_qualified_access_in_stmt(&mut stmt.node, module_names);
+            }
+        }
+        Expr::Match { expr, arms } => {
+            resolve_qualified_access_in_expr(&mut expr.node, expr.span, module_names);
+            for arm in arms {
+                resolve_qualified_access_in_expr(&mut arm.value.node, arm.value.span, module_names);
+            }
+        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
     }

@@ -1954,6 +1954,181 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn is_match_expr_bindings_ahead(&self) -> bool {
+        // For expression match: distinguish between:
+        //   Status.Active => expr  -- unit variant, no bindings
+        //   Status.Suspended { reason } => expr  -- variant with bindings
+        // Look for pattern: { (ident (: ident)? ,?)* } =>
+        if self.pos >= self.tokens.len() || !matches!(self.tokens[self.pos].node, Token::LBrace) {
+            return false;
+        }
+        // Skip past newlines after the opening brace
+        let mut i = self.pos + 1;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        // Scan tokens: must only be Ident, Comma, Colon, Newline until we hit }
+        loop {
+            if i >= self.tokens.len() {
+                return false;
+            }
+            match &self.tokens[i].node {
+                Token::RBrace => {
+                    // Found closing }. Now check if next non-newline is =>
+                    i += 1;
+                    while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+                        i += 1;
+                    }
+                    return i < self.tokens.len() && matches!(self.tokens[i].node, Token::FatArrow);
+                }
+                Token::Ident | Token::Comma | Token::Colon | Token::Newline => {
+                    i += 1;
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    fn parse_match_expr(&mut self) -> Result<Spanned<Expr>, CompileError> {
+        let match_tok = self.expect(&Token::Match)?;
+        let start = match_tok.span.start;
+
+        // Parse scrutinee (restrict struct literals)
+        let old_restrict = self.restrict_struct_lit;
+        self.restrict_struct_lit = true;
+        let expr = self.parse_expr(0)?;
+        self.restrict_struct_lit = old_restrict;
+
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut arms = Vec::new();
+
+        // Parse comma-delimited arms
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+            let arm = self.parse_match_expr_arm()?;
+            arms.push(arm);
+
+            self.skip_newlines();
+
+            // Check for comma
+            if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
+                self.advance(); // consume comma
+                self.skip_newlines();
+
+                // Allow trailing comma before closing brace
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+                    break;
+                }
+            } else if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+                // Missing comma between arms (not at end)
+                return Err(CompileError::syntax(
+                    "expected ',' between match arms".to_string(),
+                    self.peek().expect("token should exist after is_some check").span,
+                ));
+            }
+        }
+
+        if arms.is_empty() {
+            return Err(CompileError::syntax(
+                "match expression must have at least one arm".to_string(),
+                Span::new(start, start + 5),
+            ));
+        }
+
+        let end_brace = self.expect(&Token::RBrace)?;
+
+        Ok(Spanned::new(
+            Expr::Match {
+                expr: Box::new(expr),
+                arms,
+            },
+            Span::new(start, end_brace.span.end),
+        ))
+    }
+
+    fn parse_match_expr_arm(&mut self) -> Result<MatchExprArm, CompileError> {
+        // Parse enum and variant name
+        let first_ident = self.expect_ident()?;
+        self.expect(&Token::Dot)?;
+        let second_ident = self.expect_ident()?;
+
+        let (enum_name, variant_name) = if self.peek().is_some()
+            && matches!(self.peek().expect("token should exist after is_some check").node, Token::Dot)
+        {
+            // Module qualified: module.Enum.Variant
+            self.advance();
+            let third_ident = self.expect_ident()?;
+            (
+                Spanned::new(
+                    format!("{}.{}", first_ident.node, second_ident.node),
+                    Span::new(first_ident.span.start, second_ident.span.end),
+                ),
+                third_ident,
+            )
+        } else {
+            (first_ident, second_ident)
+        };
+
+        // Parse bindings if present
+        let bindings = if self.peek().is_some()
+            && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
+            && self.is_match_expr_bindings_ahead()
+        {
+            self.parse_match_bindings()?
+        } else {
+            Vec::new()
+        };
+
+        self.expect(&Token::FatArrow)?;
+
+        // Parse arm value (restrict struct literals)
+        let old_restrict = self.restrict_struct_lit;
+        self.restrict_struct_lit = true;
+        let value = self.parse_expr(0)?;
+        self.restrict_struct_lit = old_restrict;
+
+        Ok(MatchExprArm {
+            enum_name,
+            variant_name,
+            type_args: Vec::new(),
+            bindings,
+            value,
+            enum_id: None,
+            variant_id: None,
+        })
+    }
+
+    fn parse_match_bindings(
+        &mut self,
+    ) -> Result<Vec<(Spanned<String>, Option<Spanned<String>>)>, CompileError> {
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut bindings = Vec::new();
+
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+            let field_name = self.expect_ident()?;
+
+            let rename = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Colon) {
+                self.advance();
+                Some(self.expect_ident()?)
+            } else {
+                None
+            };
+
+            bindings.push((field_name, rename));
+
+            if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+
+        self.expect(&Token::RBrace)?;
+        Ok(bindings)
+    }
+
     fn parse_select_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
         let select_tok = self.expect(&Token::Select)?;
         let start = select_tok.span.start;
@@ -2778,6 +2953,7 @@ impl<'a> Parser<'a> {
                 let tok = self.advance().expect("token should exist after peek");
                 Ok(Spanned::new(Expr::NoneLit, tok.span))
             }
+            Token::Match => self.parse_match_expr(),
             _ => Err(CompileError::syntax(
                 format!("unexpected token {} in expression", tok.node),
                 tok.span,

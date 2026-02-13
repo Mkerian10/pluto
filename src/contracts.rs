@@ -187,6 +187,14 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
             "enum expressions are not allowed in contract expressions",
             span,
         )),
+        Expr::If { .. } => Err(CompileError::syntax(
+            "if expressions are not allowed in contract expressions",
+            span,
+        )),
+        Expr::Match { .. } => Err(CompileError::syntax(
+            "match expressions are not allowed in contract expressions",
+            span,
+        )),
         Expr::QualifiedAccess { segments } => {
             panic!(
                 "QualifiedAccess should be resolved by module flattening before contracts. Segments: {:?}",

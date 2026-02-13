@@ -430,6 +430,21 @@ fn collect_expr_effects(
                 collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
             }
         }
+        Expr::If { condition, then_block, else_block } => {
+            collect_expr_effects(&condition.node, direct_errors, edges, current_fn, env);
+            for stmt in &then_block.node.stmts {
+                collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
+            }
+            for stmt in &else_block.node.stmts {
+                collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
+            }
+        }
+        Expr::Match { expr, arms } => {
+            collect_expr_effects(&expr.node, direct_errors, edges, current_fn, env);
+            for arm in arms {
+                collect_expr_effects(&arm.value.node, direct_errors, edges, current_fn, env);
+            }
+        }
         Expr::QualifiedAccess { segments } => {
             panic!(
                 "QualifiedAccess should be resolved by module flattening before error analysis. Segments: {:?}",
@@ -803,13 +818,30 @@ fn enforce_expr(
             }
             Ok(())
         }
+        Expr::If { condition, then_block, else_block } => {
+            enforce_expr(&condition.node, condition.span, current_fn, env)?;
+            for stmt in &then_block.node.stmts {
+                enforce_stmt(&stmt.node, stmt.span, current_fn, env)?;
+            }
+            for stmt in &else_block.node.stmts {
+                enforce_stmt(&stmt.node, stmt.span, current_fn, env)?;
+            }
+            Ok(())
+        }
+        Expr::Match { expr, arms } => {
+            enforce_expr(&expr.node, expr.span, current_fn, env)?;
+            for arm in arms {
+                enforce_expr(&arm.value.node, arm.value.span, current_fn, env)?;
+            }
+            Ok(())
+        }
         Expr::QualifiedAccess { segments } => {
             panic!(
                 "QualifiedAccess should be resolved by module flattening before error analysis. Segments: {:?}",
                 segments.iter().map(|s| &s.node).collect::<Vec<_>>()
             )
         }
-        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::StringLit(_)
+        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => Ok(()),
     }
 }

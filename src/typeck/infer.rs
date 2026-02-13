@@ -419,11 +419,180 @@ pub(crate) fn infer_expr(
 
             Ok(method_sig.return_type.clone())
         }
-        Expr::QualifiedAccess { segments } => {
-            panic!(
-                "QualifiedAccess should be resolved by module flattening before type checking. Segments: {:?}",
-                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+        Expr::If { condition, then_block, else_block } => {
+            // Check condition is bool
+            let cond_type = infer_expr(&condition.node, condition.span, env)?;
+            if cond_type != PlutoType::Bool {
+                return Err(CompileError::type_err(
+                    format!("if condition must be bool, found {cond_type}"),
+                    condition.span,
+                ));
+            }
+
+            // Infer type of both branches
+            env.push_scope();
+            let then_type = infer_block_type(&then_block.node, env)?;
+            env.pop_scope();
+
+            env.push_scope();
+            let else_type = infer_block_type(&else_block.node, env)?;
+            env.pop_scope();
+
+            // Unify branch types
+            unify_branch_types(
+                &then_type,
+                &else_type,
+                then_block.span,
+                else_block.span
             )
+        }
+        Expr::Match { expr: match_expr, arms } => {
+            use std::collections::HashSet;
+
+            // Infer scrutinee type → must be Enum
+            let scrutinee_type = infer_expr(&match_expr.node, match_expr.span, env)?;
+
+            let enum_name = match &scrutinee_type {
+                PlutoType::Enum(name) => name.clone(),
+                other => {
+                    return Err(CompileError::type_err(
+                        format!("match requires enum type, found {}", other),
+                        match_expr.span,
+                    ));
+                }
+            };
+
+            // Get enum info for exhaustiveness checking
+            let enum_info = env.enums.get(&enum_name).ok_or_else(|| {
+                CompileError::type_err(
+                    format!("undefined enum '{}'", enum_name),
+                    match_expr.span,
+                )
+            })?.clone();
+
+            let mut arm_types = Vec::new();
+            let mut covered = HashSet::new();
+
+            // Type-check each arm
+            for arm in arms {
+                // Validate enum name matches (handle generics via prefix)
+                let arm_enum_base = arm
+                    .enum_name
+                    .node
+                    .split("$$")
+                    .next()
+                    .unwrap_or(&arm.enum_name.node);
+                let scrutinee_enum_base = enum_name.split("$$").next().unwrap_or(&enum_name);
+
+                if arm_enum_base != scrutinee_enum_base {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "match arm enum '{}' does not match scrutinee enum '{}'",
+                            arm.enum_name.node, enum_name
+                        ),
+                        arm.enum_name.span,
+                    ));
+                }
+
+                // Lookup variant
+                let variant = enum_info
+                    .variants
+                    .iter()
+                    .find(|(name, _)| name == &arm.variant_name.node)
+                    .ok_or_else(|| {
+                        CompileError::type_err(
+                            format!(
+                                "enum '{}' has no variant '{}'",
+                                enum_name, arm.variant_name.node
+                            ),
+                            arm.variant_name.span,
+                        )
+                    })?;
+
+                // Check for duplicates
+                if !covered.insert(arm.variant_name.node.clone()) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "duplicate match arm for variant '{}'",
+                            arm.variant_name.node
+                        ),
+                        arm.variant_name.span,
+                    ));
+                }
+
+                // Validate bindings
+                if arm.bindings.len() != variant.1.len() {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "variant '{}' has {} fields, but {} bindings provided",
+                            arm.variant_name.node,
+                            variant.1.len(),
+                            arm.bindings.len()
+                        ),
+                        arm.variant_name.span,
+                    ));
+                }
+
+                // Create new scope and bind fields
+                env.push_scope();
+
+                for (binding_field, opt_rename) in arm.bindings.iter() {
+                    // Find field in variant
+                    let field = variant
+                        .1
+                        .iter()
+                        .find(|(fname, _)| fname == &binding_field.node)
+                        .ok_or_else(|| {
+                            CompileError::type_err(
+                                format!(
+                                    "variant '{}' has no field '{}'",
+                                    arm.variant_name.node, binding_field.node
+                                ),
+                                binding_field.span,
+                            )
+                        })?;
+
+                    // Bind variable (use rename if provided)
+                    let var_name = opt_rename
+                        .as_ref()
+                        .map_or(&binding_field.node, |r| &r.node);
+                    env.define(var_name.clone(), field.1.clone());
+                }
+
+                // Infer arm value type
+                let arm_type = infer_expr(&arm.value.node, arm.value.span, env)?;
+                arm_types.push((arm_type, arm.value.span));
+
+                env.pop_scope();
+            }
+
+            // Check exhaustiveness
+            for (variant_name, _) in &enum_info.variants {
+                if !covered.contains(variant_name) {
+                    return Err(CompileError::type_err(
+                        format!("non-exhaustive match: missing variant '{}'", variant_name),
+                        span,
+                    ));
+                }
+            }
+
+            // Unify all arm types
+            if arm_types.is_empty() {
+                return Err(CompileError::type_err(
+                    "match expression must have at least one arm".to_string(),
+                    span,
+                ));
+            }
+
+            // Start with first arm's type
+            let mut unified = arm_types[0].0.clone();
+
+            // Unify with each subsequent arm
+            for (arm_type, arm_span) in &arm_types[1..] {
+                unified = unify_branch_types(&unified, arm_type, arm_types[0].1, *arm_span)?;
+            }
+
+            Ok(unified)
         }
         Expr::QualifiedAccess { segments } => {
             panic!(
@@ -2249,4 +2418,128 @@ fn infer_method_call(
     }
 
     Ok(sig.return_type.clone())
+}
+
+
+/// Infer the type of a block (the last expression, or void)
+fn infer_block_type(
+    block: &crate::parser::ast::Block,
+    env: &mut TypeEnv
+) -> Result<PlutoType, CompileError> {
+    use crate::parser::ast::{Block, Stmt};
+
+    if block.stmts.is_empty() {
+        return Ok(PlutoType::Void);
+    }
+
+    // Check all statements except last
+    for stmt in &block.stmts[..block.stmts.len() - 1] {
+        infer_stmt(&stmt.node, env)?;
+    }
+
+    // Last statement determines block type
+    let last = &block.stmts[block.stmts.len() - 1];
+    match &last.node {
+        Stmt::Expr(expr) => {
+            // Last statement is an expression → that's the block's value
+            infer_expr(&expr.node, expr.span, env)
+        }
+        Stmt::If { condition, then_block, else_block: Some(else_block) } => {
+            // If-statement with else clause can act as an expression
+            // Check condition is bool
+            let cond_type = infer_expr(&condition.node, condition.span, env)?;
+            if cond_type != PlutoType::Bool {
+                return Err(CompileError::type_err(
+                    format!("if condition must be bool, found {cond_type}"),
+                    condition.span,
+                ));
+            }
+
+            // Infer type of both branches
+            env.push_scope();
+            let then_type = infer_block_type(&then_block.node, env)?;
+            env.pop_scope();
+
+            env.push_scope();
+            let else_type = infer_block_type(&else_block.node, env)?;
+            env.pop_scope();
+
+            // Unify branch types
+            unify_branch_types(&then_type, &else_type, then_block.span, else_block.span)
+        }
+        Stmt::Return(_) | Stmt::Break | Stmt::Continue | Stmt::Raise { .. } => {
+            // Diverging statement → never returns
+            Ok(PlutoType::Void)
+        }
+        _ => {
+            // Last is a non-expression statement → block is void
+            infer_stmt(&last.node, env)?;
+            Ok(PlutoType::Void)
+        }
+    }
+}
+
+/// Helper to check statements (needed by infer_block_type)
+fn infer_stmt(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) -> Result<(), CompileError> {
+    use crate::parser::ast::Stmt;
+
+    // Simple inference for statements - we don't need full validation here
+    // since type checking will validate everything later
+    match stmt {
+        Stmt::Let { value, .. } => {
+            infer_expr(&value.node, value.span, env)?;
+            Ok(())
+        }
+        Stmt::Expr(expr) => {
+            infer_expr(&expr.node, expr.span, env)?;
+            Ok(())
+        }
+        _ => Ok(())
+    }
+}
+
+/// Unify two branch types for if-expression
+fn unify_branch_types(
+    t1: &PlutoType,
+    t2: &PlutoType,
+    _span1: crate::span::Span,
+    span2: crate::span::Span,
+) -> Result<PlutoType, CompileError> {
+    // If both types are identical, return that type
+    if t1 == t2 {
+        return Ok(t1.clone());
+    }
+
+    // Handle none literal coercion: Nullable(Void) → any Nullable(T)
+    if matches!(t1, PlutoType::Nullable(inner) if **inner == PlutoType::Void) {
+        if matches!(t2, PlutoType::Nullable(_)) {
+            return Ok(t2.clone());
+        }
+    }
+    if matches!(t2, PlutoType::Nullable(inner) if **inner == PlutoType::Void) {
+        if matches!(t1, PlutoType::Nullable(_)) {
+            return Ok(t1.clone());
+        }
+    }
+
+    // If one is T and other is T?, allow it (widen to T?)
+    if let PlutoType::Nullable(inner2) = t2 {
+        if t1 == inner2.as_ref() {
+            return Ok(t2.clone());  // Widen to T?
+        }
+    }
+    if let PlutoType::Nullable(inner1) = t1 {
+        if t2 == inner1.as_ref() {
+            return Ok(t1.clone());  // Widen to T?
+        }
+    }
+
+    // Otherwise, types are incompatible
+    Err(CompileError::type_err(
+        format!(
+            "if-expression branches have incompatible types: then-branch has type {}, else-branch has type {}",
+            t1, t2
+        ),
+        span2,
+    ))
 }

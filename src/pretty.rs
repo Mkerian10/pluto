@@ -1332,6 +1332,45 @@ impl PrettyPrinter {
                 }
                 self.write(")");
             }
+            Expr::If { condition, then_block, else_block } => {
+                self.write("if ");
+                self.emit_expr(&condition.node, 0);
+                self.write(" ");
+                self.emit_block(&then_block.node);
+                self.write(" else ");
+                self.emit_block(&else_block.node);
+            }
+            Expr::Match { expr, arms } => {
+                self.write("match ");
+                self.emit_expr(&expr.node, 0);
+                self.write(" {");
+                self.indent += 1;
+                for arm in arms {
+                    self.newline();
+                    self.write(&arm.enum_name.node);
+                    self.write(".");
+                    self.write(&arm.variant_name.node);
+                    if !arm.bindings.is_empty() {
+                        self.write(" { ");
+                        for (i, (field, rename)) in arm.bindings.iter().enumerate() {
+                            if i > 0 {
+                                self.write(", ");
+                            }
+                            self.write(&field.node);
+                            if let Some(r) = rename {
+                                self.write(": ");
+                                self.write(&r.node);
+                            }
+                        }
+                        self.write(" }");
+                    }
+                    self.write(" => ");
+                    self.emit_expr(&arm.value.node, 0);
+                }
+                self.indent -= 1;
+                self.newline();
+                self.write("}");
+            }
             Expr::QualifiedAccess { segments } => {
                 self.write(&segments.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join("."));
             }
