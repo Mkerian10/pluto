@@ -125,7 +125,7 @@ fn check_stmt(
                         value.span,
                     ));
                 }
-                env.define(name.node.clone(), expected);
+                env.define(name.node.clone(), expected.clone());
             } else {
                 env.define(name.node.clone(), val_type.clone());
             }
