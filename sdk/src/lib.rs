@@ -60,7 +60,6 @@ mod tests {
             imports: vec![],
             functions: vec![],
             extern_fns: vec![],
-            extern_rust_crates: vec![],
             classes: vec![],
             traits: vec![],
             enums: vec![],
@@ -226,6 +225,7 @@ fn main() {
             stmts: vec![PlutoSpanned::new(Stmt::Expr(PlutoSpanned::new(Expr::Call {
                 name: sp("greet".to_string()),
                 args: vec![],
+                type_args: vec![],
                 target_id: Some(target_id),
             }, call_span)), call_span)],
         });
@@ -252,6 +252,7 @@ fn main() {
             id: class_id,
             name: sp("Point".to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             fields: vec![],
             methods: vec![],
             invariants: vec![],
@@ -293,6 +294,7 @@ fn main() {
             id: enum_id,
             name: sp("Color".to_string()),
             type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             variants: vec![EnumVariant {
                 id: variant_id,
                 name: sp("Red".to_string()),
@@ -366,6 +368,7 @@ fn main() {
             stmts: vec![sp(Stmt::Expr(sp(Expr::Call {
                 name: sp("print".to_string()),
                 args: vec![],
+                type_args: vec![],
                 target_id: None,
             })))],
         });
@@ -390,6 +393,7 @@ fn main() {
             name: sp("MyApp".to_string()),
             inject_fields: vec![],
             ambient_types: vec![],
+            lifecycle_overrides: vec![],
             methods: vec![make_function("main")],
         }));
 
