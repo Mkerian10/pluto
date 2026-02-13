@@ -69,18 +69,7 @@
 - **File:** `tests/integration/traits.rs:14963`
 - **Workaround:** `let obj = Foo { other_fields... }; obj.trait_field = ConcreteClass { ... }`
 
-#### 6. 🔴 Reassignment to Immutable Bindings Is Accepted
-- **Status:** 🔴 Active (no compile-time rejection yet)
-- **Effort:** S (<3 days)
-- **Impact:** Violates mutability guarantees (`let` without `mut` can still be reassigned)
-- **Root Cause:** `Stmt::Assign` checks type compatibility but does not reject immutable bindings in `src/typeck/check.rs`
-- **Example:**
-  ```pluto
-  let x = 1
-  x = 2  // currently accepted
-  ```
-
-#### 7. ✅ Same Trait Listed Twice in Impl List Silently Accepted
+#### 6. ✅ Same Trait Listed Twice in Impl List Silently Accepted
 - **Status:** ✅ **FIXED** in PR #48 (2026-02-12)
 - **Impact:** Duplicate traits were silently accepted, now properly rejected
 - **Fix:** Added validation in `check_trait_conformance()` to detect and reject duplicates
@@ -339,11 +328,19 @@
    - Fixed in PR #48 (2026-02-12)
    - Added validation to reject duplicate traits in impl list
 
-2. **`?` Operator Crash in Void-Returning Functions**
+3. **Reassignment to Immutable Bindings (Not a Bug - Spec Conflict)**
+   - Removed from bug list (2026-02-13)
+   - Originally filed as Bug #6 based on `docs/design/control-flow.md`
+   - `docs/design/mutability.md:38` explicitly states reassignment does NOT require `let mut`
+   - Current implementation is correct per detailed spec
+   - Existing tests depend on this behavior (`variable_reassignment`, compound assignment tests)
+   - Identified via Erebus workflow (adversarial test critique caught the spec conflict)
+
+4. **`?` Operator Crash in Void-Returning Functions**
    - Fixed in commit `ec589633` (2026-02-10)
    - File: `docs/completed/bugs/null-propagate-void-crash.md`
 
-3. **Lexer Bugs (BUG-LEX-001 to -008)**
+5. **Lexer Bugs (BUG-LEX-001 to -008)**
    - Fixed per `bugs/LEXER-SUMMARY.md`
    - Hex literal validation
    - CRLF line endings
@@ -356,8 +353,7 @@
 
 ### Fix Immediately (Blocking Real Projects)
 1. 🔴 **Errors in closures** (#2) — blocks functional patterns with error handling (Effort: L)
-2. 🔴 **Immutable reassignment accepted** (#6) — breaks mutability guarantees (Effort: S)
-3. 🟡 **Trait type coercion in struct literals** (#5) — blocks ergonomic trait field initialization (Effort: M)
+2. 🟡 **Trait type coercion in struct literals** (#5) — blocks ergonomic trait field initialization (Effort: M)
 
 ### Fix Soon (Quality of Life)
 4. ✅ ~~Trait method validation~~ — **FIXED** in PR #43
