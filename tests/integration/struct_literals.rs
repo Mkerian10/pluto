@@ -82,7 +82,6 @@ fn struct_literal_single_field() {
 }
 
 #[test]
-#[ignore] // Bug: Chained field access (class.field.field) not supported
 fn struct_literal_nested() {
     let stdout = compile_and_run_stdout(r#"
         class Inner { x: int }
