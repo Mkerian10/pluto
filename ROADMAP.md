@@ -32,8 +32,8 @@ Pluto is designed to make building **distributed, geographically-aware backend s
 
 ### Must-Have for v0.2
 - ✅ Trait method validation (PR #43)
-- [ ] **Fix critical bugs** (Nested field access, errors in closures, test runner duplicate IDs)
-- [ ] **Empty array literals** - Blocks too much natural code
+- [ ] **Fix critical bugs** (errors in closures, immutable reassignment, trait-field coercion)
+- [ ] **Unannotated empty array literals** - Blocks too much natural code
 - [ ] **If/Match as expressions** - Essential for functional style
 - [ ] **HTTP client** - Replace stub with real implementation
 - [ ] **RPC Phase 1** - Wire format + std.wire module
@@ -71,10 +71,9 @@ Pluto is designed to make building **distributed, geographically-aware backend s
 - 🔵 Compile-time reflection Phase 1
 
 **Remaining:**
-- [ ] Fix nested field access bug (P0)
 - [ ] Fix errors in closures bug (P0)
-- [ ] Fix test runner duplicate IDs (P1)
-- [ ] Empty array literals
+- [ ] Fix immutable reassignment bug (P1)
+- [ ] Unannotated empty array literals
 - [ ] If/Match as expressions
 
 ### Q2 2026 (Apr-Jun) - **Distributed Systems MVP**
@@ -145,7 +144,7 @@ Pluto is designed to make building **distributed, geographically-aware backend s
 - **Binary `.pluto` format** - Stable UUIDs, semantic graph representation
 - **Human-readable `.pt` views** - Text files for humans, `plutoc sync` reconciles
 - **`plutoc-sdk`** - Python/TS bindings for AI agents
-- **Incremental analysis** - `plutoc analyze` computes derived data on demand
+- **Incremental analysis** - planned `plutoc analyze` command computes derived data on demand
 - **Collaborative editing** - Multiple AI agents, same codebase (CRDT-based)
 
 **Impact:** AI agents as first-class contributors to Pluto projects
@@ -201,7 +200,7 @@ Pluto is designed to make building **distributed, geographically-aware backend s
 | **Reflection** | 🔵 Phase 1 | 20% (parser done, typeck/codegen pending) |
 | **Tooling** | 🟡 Basic | 30% (formatter, linter, LSP pending) |
 | **Geographic** | ⬜ Not Started | 0% |
-| **AI-Native** | ⬜ Not Started | 0% |
+| **AI-Native** | 🟡 Foundations | 20% (PLTO container + emit/sync/sdk shipped; analyze workflow pending) |
 
 ### By Quarter
 

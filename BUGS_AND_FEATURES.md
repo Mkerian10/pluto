@@ -11,8 +11,8 @@
 
 ## 📊 Key Metrics
 
-**Active Bugs:** 5 total (2 P0, 3 P1)
-**Known Limitations:** 20
+**Active Bugs:** See the "Active Bugs" section below (source of truth)
+**Known Limitations:** See the "Known Limitations" section below
 **Missing Features:** See [FEATURES.md](FEATURES.md) (49 tracked features)
 
 ---
@@ -28,27 +28,16 @@
 
 ---
 
-## 🐛 Active Bugs (Need Fixing)
+## 🐛 Active Bugs + Recently Fixed Context
 
 ### P0 - Critical (Compiler Crashes)
 
-#### 1. 🔴 Nested Field Access Parsed as Enum Variant
-- **Status:** 🟡 Active (workaround exists)
-- **Effort:** M (1 week)
-- **Impact:** Blocks any code with `obj.field.field` patterns
-- **File:** `bugs/nested-field-access.md`
-- **Example:**
-  ```pluto
-  let v = o.inner.value  // ERROR: unknown enum 'o.inner'
-  let count = self.registry.gauges.len()  // ERROR
-  ```
-- **Workaround:** Use intermediate variables
-  ```pluto
-  let inner = o.inner
-  let v = inner.value  // OK
-  ```
-- **Root Cause:** Parser at `src/parser/mod.rs:2297` speculatively treats `a.b.c` as qualified enum variant `module.Enum.Variant`
-- **Recommended Fix:** Option 1 (parser check for `self`) as quick fix, Option 3 (new AST node `QualifiedAccess`) for general solution
+#### 1. ✅ Nested Field Access Parsed as Enum Variant (Fixed)
+- **Status:** ✅ **FIXED** (verified 2026-02-12)
+- **Impact:** Previously blocked `obj.field.field` patterns
+- **Original File:** `bugs/nested-field-access.md`
+- **Fix:** Parser now preserves ambiguous chains as `QualifiedAccess`, then module rewriting resolves to either field access or module-qualified enum access (`src/parser/mod.rs`, `src/modules.rs`).
+- **Validation:** Nested field access (`let v = o.inner.value`) compiles and runs in current compiler.
 
 #### 2. 🔴 Errors in Closures Not Supported
 - **Status:** 🔴 Critical (no workaround)
@@ -60,22 +49,13 @@
 
 ### P1 - High Priority
 
-#### 3. 🟡 Test Runner Generates Duplicate IDs for Multiple Files
-- **Status:** 🟡 Active (workaround: one file per directory)
+#### 3. ✅ Test Runner Duplicate IDs for Multiple Files (Fixed)
+- **Status:** ✅ **FIXED** (verified 2026-02-12)
 - **Effort:** S (<3 days)
-- **Impact:** Cannot organize tests into multiple files in same directory
+- **Impact:** Previously blocked multi-file test layout in one directory
 - **File:** `feedback/bugs/test-runner-duplicate-ids-multiple-files.md`
-- **Example:**
-  ```bash
-  # tests/lang/fstrings/test1.pluto + test2.pluto
-  cargo run -- test tests/lang/fstrings/test1.pluto
-  # ERROR: Duplicate definition of identifier: __test_0
-  ```
-- **Workaround:** Only one test file per directory
-- **Recommended Fix:**
-  - Option 1: Generate unique IDs with file hash (`__test_<hash>_0`)
-  - Option 2: Only compile specified file, not all siblings
-  - Option 3: Support directory-based test suites
+- **Fix:** Test function names include a file-path hash prefix via `Parser::new_with_path()` + `test_id_prefix()` (`src/parser/mod.rs`).
+- **Validation:** Two sibling files with `test` blocks run successfully in one `plutoc test` invocation.
 
 #### 4. ✅ Trait Method Without `self` Parameter Causes Compiler Panic
 - **Status:** ✅ **FIXED** in PR #43 (2026-02-11)
@@ -89,7 +69,18 @@
 - **File:** `tests/integration/traits.rs:14963`
 - **Workaround:** `let obj = Foo { other_fields... }; obj.trait_field = ConcreteClass { ... }`
 
-#### 6. ✅ Same Trait Listed Twice in Impl List Silently Accepted
+#### 6. 🔴 Reassignment to Immutable Bindings Is Accepted
+- **Status:** 🔴 Active (no compile-time rejection yet)
+- **Effort:** S (<3 days)
+- **Impact:** Violates mutability guarantees (`let` without `mut` can still be reassigned)
+- **Root Cause:** `Stmt::Assign` checks type compatibility but does not reject immutable bindings in `src/typeck/check.rs`
+- **Example:**
+  ```pluto
+  let x = 1
+  x = 2  // currently accepted
+  ```
+
+#### 7. ✅ Same Trait Listed Twice in Impl List Silently Accepted
 - **Status:** ✅ **FIXED** in PR #48 (2026-02-12)
 - **Impact:** Duplicate traits were silently accepted, now properly rejected
 - **Fix:** Added validation in `check_trait_conformance()` to detect and reject duplicates
@@ -101,9 +92,10 @@
 ### Language Features Not Supported
 
 1. **Empty Array Literals**
-   - Cannot infer type of `[]` even with type annotation
-   - Tests: 7 ignored tests in `tests/codegen/_12_edge_cases.rs`, `_01_type_representation.rs`
-   - Workaround: Use array with at least one element
+   - Unannotated `[]` still cannot be inferred in all contexts
+   - Annotated empty arrays are supported (`let arr: [int] = []`)
+   - Tests: ignored cases are mostly unannotated in `tests/codegen/_12_edge_cases.rs`, `_01_type_representation.rs`
+   - Workaround: add explicit annotation (`let arr: [int] = []`)
 
 2. **If-as-Expression**
    - `let x = if cond { a } else { b }` not supported
@@ -176,15 +168,17 @@
     - Tests: 3 ignored tests in `tests/codegen/_12_edge_cases.rs`
     - Fixed: Most lexer bugs (BUG-LEX-001 to -008) are now fixed per `bugs/LEXER-SUMMARY.md`
 
-### Concurrency/Channels Limitations (Phase 1)
+### Concurrency/Channels Notes
 
 16. **Channel `close()` Waking Blocked Senders**
-    - Known bug: close doesn't wake blocked senders
-    - Test: `tests/integration/deterministic.rs:1459`
-    - Status: Documented in channel implementation
+    - ✅ Fixed in runtime + deterministic tests
+    - Runtime: wake/broadcast on both wait directions (`runtime/threading.c`)
+    - Tests: `tests/integration/deterministic.rs`
 
-17. **No `.cancel()` / `.detach()` on Tasks**
-    - Phase 1 limitation, Phase 2 feature
+17. **Task `.cancel()` / `.detach()`**
+    - ✅ Implemented (type checking + codegen + runtime)
+    - Type checker: task method resolution in `src/typeck/infer.rs`
+    - Runtime: `__pluto_task_cancel` / `__pluto_task_detach` in `runtime/threading.c`
 
 18. **No Structured Concurrency**
     - Task groups/scopes not yet implemented
@@ -307,7 +301,7 @@
 ## 🚧 Incomplete/Stub Implementations
 
 1. **HTTP Client (stdlib)**
-   - File: `runtime/builtins.c:4423`
+   - File: `runtime/threading.c` (`__pluto_http_post`)
    - Note: `// TODO: Implement actual HTTP client with libcurl or sockets`
    - Current: Stub implementation
 
@@ -315,11 +309,7 @@
    - File: `tests/integration/stdlib_tests.rs:128`
    - Note: `// TODO: Full regex escape sequence support (\d, \w, \s) - Phase 2 work`
 
-3. **Installation Docs**
-   - File: `book/src/getting-started/installation.md`
-   - Note: `TODO: Installation instructions for the Pluto compiler.`
-
-4. **Wire Format Unknown Variant Error**
+3. **Wire Format Unknown Variant Error**
    - File: `src/marshal.rs:889`
    - Note: `// TODO: When Pluto supports error enums, use WireError.UnknownVariant { type_name, index }`
 
@@ -365,20 +355,21 @@
 ## 📊 Priority Recommendations
 
 ### Fix Immediately (Blocking Real Projects)
-1. 🔴 **Nested field access bug** (#1) — blocks OOP-style code (Effort: M)
-2. 🔴 **Errors in closures** (#2) — blocks functional patterns with error handling (Effort: L)
-3. 🟡 **Test runner duplicate IDs** (#3) — blocks multi-file test organization (Effort: S)
+1. 🔴 **Errors in closures** (#2) — blocks functional patterns with error handling (Effort: L)
+2. 🔴 **Immutable reassignment accepted** (#6) — breaks mutability guarantees (Effort: S)
+3. 🟡 **Trait type coercion in struct literals** (#5) — blocks ergonomic trait field initialization (Effort: M)
 
 ### Fix Soon (Quality of Life)
 4. ✅ ~~Trait method validation~~ — **FIXED** in PR #43
 5. ✅ ~~Duplicate trait impl~~ — **FIXED** in PR #48
-6. 🟡 **Trait type coercion** (#5) — struct literal field assignment (Effort: M)
+6. ✅ ~~Nested field access bug~~ (#1) — **FIXED**
+7. ✅ ~~Test runner duplicate IDs~~ (#3) — **FIXED**
 
 ### Features to Implement (See FEATURES.md)
-7. **Empty array literals** ([FEATURES.md #1](FEATURES.md)) — P0, high impact (Effort: S)
-8. **If/Match as expressions** ([FEATURES.md #2-3](FEATURES.md)) — P0, ergonomics (Effort: M)
-9. **HTTP client** ([FEATURES.md #4](FEATURES.md)) — P0, real apps (Effort: M)
-10. **RPC implementation** ([FEATURES.md #5, 17-18](FEATURES.md)) — P0/P1, distributed (Effort: L)
+8. **Unannotated empty array literals** ([FEATURES.md #1](FEATURES.md)) — P0, high impact (Effort: S)
+9. **If/Match as expressions** ([FEATURES.md #2-3](FEATURES.md)) — P0, ergonomics (Effort: M)
+10. **HTTP client** ([FEATURES.md #4](FEATURES.md)) — P0, real apps (Effort: M)
+11. **RPC implementation** ([FEATURES.md #5, 17-18](FEATURES.md)) — P0/P1, distributed (Effort: L)
 
 ### See Also
 - **[FEATURES.md](FEATURES.md)** - 49 tracked features with priorities, effort, status

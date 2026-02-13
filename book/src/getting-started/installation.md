@@ -1,6 +1,11 @@
 # Installation
 
-TODO: Installation instructions for the Pluto compiler.
+Pluto is currently installed from source.
+
+## Prerequisites
+
+- Rust toolchain (stable): <https://rustup.rs>
+- C toolchain for linking generated binaries (`clang` or `gcc`)
 
 ## Building from source
 
@@ -11,3 +16,15 @@ cargo build --release
 ```
 
 The compiler binary will be at `target/release/plutoc`.
+
+## Optional: Install to PATH
+
+```bash
+cargo install --path .
+```
+
+Then verify installation:
+
+```bash
+plutoc --help
+```

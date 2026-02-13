@@ -53,6 +53,7 @@ Areas that need further design work before implementation.
 - [ ] **Standard library** — scope and core modules
 - [ ] **Package manager** — dependency resolution for libraries
 - [ ] **Formatter / linter** — built-in code formatting (like `go fmt`)
+- [ ] **Language server (`plutoc lsp`)** — define scope and ship a real CLI/server implementation (current Zed config assumes this command)
 
 ---
 
@@ -91,6 +92,6 @@ Previously open questions that have been designed and implemented.
 - [x] **Range syntax** — `0..n` (exclusive) and `0..=n` (inclusive) for integer iteration in `for` loops
 - [x] **`loop` keyword** — rejected; use `while true` instead. No dedicated infinite loop construct needed
 - [x] **Channels** — `chan<T>()` with `Sender<T>`/`Receiver<T>`, blocking/non-blocking send/recv, for-in iteration, error integration
-- [x] **LSP** — language server (`plutoc lsp`) with diagnostics, go-to-definition, hover, and document symbols. Zed extension with tree-sitter grammar for syntax highlighting.
+- [x] **Editor syntax support** — Zed extension + tree-sitter grammar for Pluto syntax highlighting.
 - [x] **Null / optional** — first-class nullable types (`T?`, `none`, `?` operator). `T?` for any type, `none` for absent, `?` for null propagation. Compiler infers nullability transitively.
 - [x] **Testing** — built-in test framework (`test "name" { body }`, `expect().to_equal()` assertions, `plutoc test` runner)

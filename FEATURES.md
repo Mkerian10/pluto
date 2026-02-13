@@ -29,10 +29,11 @@ See also: [ROADMAP.md](ROADMAP.md) for high-level goals and milestones
 - **Status:** 🟢 Ready
 - **Effort:** S
 - **Impact:** High
-- **Description:** Support `let arr: [int] = []` with type inference from annotation
-- **Rationale:** Common pattern, blocks natural code. Workaround: `let arr = [0]; arr = []` is clunky
-- **Tests:** 7 ignored tests in `tests/codegen/_12_edge_cases.rs`, `_01_type_representation.rs`
-- **Implementation:** Typeck enhancement to infer element type from context
+- **Description:** Support unannotated `let arr = []` when element type can be inferred from context
+- **Current:** Annotated empty arrays already work (`let arr: [int] = []`)
+- **Rationale:** Unannotated empty literals are still awkward and block natural patterns
+- **Tests:** Remaining ignored cases are primarily unannotated empty-array inference in `tests/codegen/_12_edge_cases.rs`, `_01_type_representation.rs`
+- **Implementation:** Extend type inference/context propagation for empty array literals
 
 #### 2. If-as-Expression
 - **Status:** 🟢 Ready
@@ -60,7 +61,7 @@ See also: [ROADMAP.md](ROADMAP.md) for high-level goals and milestones
 - **Effort:** M
 - **Impact:** High
 - **Description:** Real HTTP client using libcurl or sockets (replace stub)
-- **File:** `runtime/builtins.c:4423`
+- **File:** `runtime/threading.c` (`__pluto_http_post`)
 - **Rationale:** Needed for real-world applications
 - **Implementation:** Link libcurl, implement GET/POST/PUT/DELETE methods
 
@@ -529,11 +530,11 @@ See also: [ROADMAP.md](ROADMAP.md) for high-level goals and milestones
 ## 🎯 Recommended Next Steps
 
 ### Quick Wins (High Impact, Low Effort)
-1. Empty array literals (P0, S)
+1. Unannotated empty array literals (P0, S)
 2. Field binding in match arms (P1, S)
 3. Scientific notation literals (P1, S)
 4. Binary literal syntax (P1, S)
-5. Channel close fix (P1, S)
+5. Null byte escape `\\0` (P1, S)
 
 ### High-Value Epics
 1. RPC implementation (P0/P1, phases 1-5)
