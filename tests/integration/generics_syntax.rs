@@ -127,7 +127,6 @@ fn generic_comparison_ambiguity() {
 }
 
 #[test]
-#[ignore] // Compiler bug: Chained field access (x.second.second) not supported
 fn generic_shift_right_in_nested() {
     // Pair<int, Pair<int, int>> → the >> should NOT be parsed as shift operator
     let stdout = compile_and_run_stdout(r#"
