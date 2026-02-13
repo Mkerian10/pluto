@@ -5,262 +5,11 @@
 use super::common::compile_and_run_stdout;
 
 // ============================================================================
-// 1. Integer Arithmetic (20 tests)
+// 1. Integer Arithmetic (duplicate tests removed - covered in integration tests)
 // ============================================================================
 
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_add_zero() {
-    let source = r#"
-fn main() {
-    let result = 0 + 0
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "0");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_add_simple() {
-    let source = r#"
-fn main() {
-    let result = 1 + 1
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "2");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_add_large() {
-    let source = r#"
-fn main() {
-    let result = 1000000 + 2000000
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "3000000");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_add_negative() {
-    let source = r#"
-fn main() {
-    let result = -5 + 3
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "-2");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_sub_simple() {
-    let source = r#"
-fn main() {
-    let result = 5 - 3
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "2");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_sub_zero() {
-    let source = r#"
-fn main() {
-    let result = 0 - 0
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "0");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_sub_negative_result() {
-    let source = r#"
-fn main() {
-    let result = 3 - 5
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "-2");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_mul_simple() {
-    let source = r#"
-fn main() {
-    let result = 2 * 3
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "6");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_mul_zero() {
-    let source = r#"
-fn main() {
-    let result = 0 * 999999
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "0");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_mul_large() {
-    let source = r#"
-fn main() {
-    let result = 1000 * 2000
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "2000000");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_mul_negative() {
-    let source = r#"
-fn main() {
-    let result = -5 * 3
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "-15");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_div_simple() {
-    let source = r#"
-fn main() {
-    let result = 6 / 2
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "3");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_div_truncation() {
-    let source = r#"
-fn main() {
-    let result = 5 / 2
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "2");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_div_negative() {
-    let source = r#"
-fn main() {
-    let result = -10 / 3
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "-3");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_mod_simple() {
-    let source = r#"
-fn main() {
-    let result = 7 % 3
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "1");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_mod_negative_dividend() {
-    let source = r#"
-fn main() {
-    let result = -7 % 3
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "-1");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_mod_negative_divisor() {
-    let source = r#"
-fn main() {
-    let result = 7 % -3
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "1");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_associativity_add() {
-    let source = r#"
-fn main() {
-    let a = 1
-    let b = 2
-    let c = 3
-    let left = (a + b) + c
-    let right = a + (b + c)
-    print(left)
-    print(right)
-}
-"#;
-    let output = compile_and_run_stdout(source);
-    let lines: Vec<&str> = output.trim().lines().collect();
-    assert_eq!(lines[0], "6");
-    assert_eq!(lines[1], "6");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_precedence_mul_add() {
-    let source = r#"
-fn main() {
-    let result = 2 + 3 * 4
-    print(result)
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "14");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_complex_expression() {
-    let source = r#"
-fn main() {
-    let a = 10
-    let b = 5
-    let c = 2
-    let d = 3
-    let e = 7
-    let result = ((((a + b) * c) / d) % e)
-    print(result)
-}
-"#;
-    // ((10+5)*2)/3 % 7 = (15*2)/3 % 7 = 30/3 % 7 = 10 % 7 = 3
-    assert_eq!(compile_and_run_stdout(source).trim(), "3");
-}
+// All duplicate integer arithmetic tests removed - already covered by
+// tests/integration/operators.rs and basics.rs
 
 // ============================================================================
 // 2. Float Arithmetic (20 tests)
@@ -390,7 +139,7 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Platform-specific float edge case - NaN/Infinity representation varies
+#[ignore] // LIMITATION: NaN/Infinity formatting inconsistent across platforms. See issue #130
 fn test_float_div_by_zero_positive_infinity() {
     let source = r#"
 fn main() {
@@ -402,7 +151,7 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Platform-specific float edge case - NaN/Infinity representation varies
+#[ignore] // LIMITATION: NaN/Infinity formatting inconsistent across platforms. See issue #130
 fn test_float_div_by_zero_negative_infinity() {
     let source = r#"
 fn main() {
@@ -414,7 +163,7 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Platform-specific float edge case - NaN/Infinity representation varies
+#[ignore] // LIMITATION: NaN/Infinity formatting inconsistent across platforms. See issue #130
 fn test_float_div_zero_by_zero_nan() {
     let source = r#"
 fn main() {
@@ -619,120 +368,10 @@ fn main() {
 }
 
 // ============================================================================
-// 4. Comparison Operations (10 tests)
+// 4. Comparison Operations (3 tests - integer comparison duplicates removed)
 // ============================================================================
 
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_less_than_true() {
-    let source = r#"
-fn main() {
-    let result = 3 < 5
-    if result {
-        print(1)
-    } else {
-        print(0)
-    }
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "1");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_less_than_false() {
-    let source = r#"
-fn main() {
-    let result = 5 < 3
-    if result {
-        print(1)
-    } else {
-        print(0)
-    }
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "0");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_less_equal_true() {
-    let source = r#"
-fn main() {
-    let result = 5 <= 5
-    if result {
-        print(1)
-    } else {
-        print(0)
-    }
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "1");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_greater_than() {
-    let source = r#"
-fn main() {
-    let result = 10 > 5
-    if result {
-        print(1)
-    } else {
-        print(0)
-    }
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "1");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_greater_equal() {
-    let source = r#"
-fn main() {
-    let result = 5 >= 5
-    if result {
-        print(1)
-    } else {
-        print(0)
-    }
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "1");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_equal() {
-    let source = r#"
-fn main() {
-    let result = 42 == 42
-    if result {
-        print(1)
-    } else {
-        print(0)
-    }
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "1");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/operators.rs and basics.rs
-fn test_int_not_equal() {
-    let source = r#"
-fn main() {
-    let result = 42 != 43
-    if result {
-        print(1)
-    } else {
-        print(0)
-    }
-}
-"#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "1");
-}
+// Integer comparison tests removed - already covered by tests/integration/operators.rs and basics.rs
 
 #[test]
 fn test_float_equality_exact() {
@@ -814,7 +453,7 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Platform-specific float edge case - NaN/Infinity representation varies
+#[ignore] // LIMITATION: NaN/Infinity formatting inconsistent across platforms. See issue #130
 fn test_float_inf_addition() {
     let source = r#"
 fn main() {
@@ -827,7 +466,7 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Platform-specific float edge case - NaN/Infinity representation varies
+#[ignore] // LIMITATION: NaN/Infinity formatting inconsistent across platforms. See issue #130
 fn test_float_inf_minus_inf() {
     let source = r#"
 fn main() {
@@ -842,7 +481,7 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Platform-specific float edge case - NaN/Infinity representation varies
+#[ignore] // LIMITATION: NaN/Infinity formatting inconsistent across platforms. See issue #130
 fn test_float_inf_times_zero() {
     let source = r#"
 fn main() {

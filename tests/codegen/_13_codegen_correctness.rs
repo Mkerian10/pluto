@@ -484,7 +484,7 @@ fn main() {
 }
 
 #[test]
-#[ignore] // LIMITATION: If-as-expression not supported (let x = if cond { ... })
+#[ignore] // BUG/FEATURE: If-as-expression support unclear. See issue #139
 fn test_register_allocation_with_conditionals() {
     // Mix of live variables and conditionals
     let source = r#"

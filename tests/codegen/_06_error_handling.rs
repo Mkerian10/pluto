@@ -81,11 +81,7 @@ fn test_raise_error_in_method() {
 }
 
 #[test]
-#[ignore] // FIXME: Errors in closures not supported - pipeline timing bug
-          // Error inference runs before closure lifting, so lifted __closure_N
-          // functions don't get their error sets inferred. This should work but
-          // requires restructuring the compiler pipeline to run error inference
-          // after closure lifting, or re-run it on lifted functions.
+#[ignore] // BUG: Errors in closures not supported - pipeline timing bug. See issue #137
 fn test_raise_error_in_closure() {
     let src = r#"
         error ClosureError {

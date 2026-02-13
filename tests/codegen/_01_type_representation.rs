@@ -355,7 +355,7 @@ fn test_string_very_long_1mb() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // LIMITATION: Escape sequences in string literals not supported. See issue #138
 fn test_string_with_null_byte() {
     let src = r#"
         fn main() {
@@ -590,7 +590,7 @@ fn test_class_nested_5_deep() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // BUG: Compiler incorrectly reports "cannot have both app and top-level main" for nested bracket deps. See issue #132
 fn test_class_with_bracket_deps() {
     let src = r#"
         class Config {
@@ -615,7 +615,7 @@ fn test_class_with_bracket_deps() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // BUG: Compiler error "TypeInfo has no method 'mangled_name'" for mut self methods. See issue #131
 fn test_class_with_methods() {
     let src = r#"
         class Counter {
@@ -801,62 +801,6 @@ fn test_array_bool() {
     "#;
     let output = compile_and_run_stdout(src);
     assert_eq!(output.trim(), "first is true");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/arrays.rs::test_string_array
-fn test_array_string() {
-    let src = r#"
-        fn main() {
-            let arr = ["hello", "world", "!"]
-            print(arr[0])
-            print(arr[1])
-            print(arr[2])
-        }
-    "#;
-    let output = compile_and_run_stdout(src);
-    assert!(output.contains("hello"));
-    assert!(output.contains("world"));
-    assert!(output.contains("!"));
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/arrays.rs::test_array_of_objects
-fn test_array_class() {
-    let src = r#"
-        class Point {
-            x: int
-            y: int
-        }
-
-        fn main() {
-            let points = [
-                Point { x: 1, y: 2 },
-                Point { x: 3, y: 4 }
-            ]
-            print(points[0].x)
-            print(points[1].y)
-        }
-    "#;
-    let output = compile_and_run_stdout(src);
-    assert!(output.contains("1"));
-    assert!(output.contains("4"));
-}
-
-#[test]
-#[ignore] // DUPLICATE: Already covered by tests/integration/arrays.rs::test_nested_arrays
-fn test_array_nested() {
-    let src = r#"
-        fn main() {
-            let matrix: [[int]] = [
-                [1, 2, 3],
-                [4, 5, 6],
-                [7, 8, 9]
-            ]
-            print(matrix[1][1])  // Should be 5
-        }
-    "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "5");
 }
 
 #[test]
