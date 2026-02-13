@@ -686,6 +686,7 @@ fn main() {
 }
 
 #[test]
+#[ignore] // Long-running stress test - run manually or on release cycles
 fn stress_gc_pressure_under_suppression() {
     // Tasks allocate many strings while GC runs concurrently.
     // Validates that thread stack scanning keeps objects alive correctly.
