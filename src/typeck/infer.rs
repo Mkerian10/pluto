@@ -1085,22 +1085,8 @@ fn infer_struct_lit(
             })?;
         let val_type = infer_expr(&lit_val.node, lit_val.span, env)?;
 
-        // Check type compatibility with nullable coercion
-        let types_match = if val_type == field_type {
-            true
-        } else if let PlutoType::Nullable(inner) = &field_type {
-            // Allow T -> T? (auto-wrap)
-            if **inner == val_type {
-                true
-            // Allow none -> T? (context inference: none infers as Nullable(Void))
-            } else if let PlutoType::Nullable(void_box) = &val_type {
-                matches!(**void_box, PlutoType::Void)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        // Check type compatibility (==, Class→Trait, T→T?, Class→Trait?, none→T?)
+        let types_match = field_types_compatible(&val_type, &field_type, env);
 
         if !types_match {
             return Err(CompileError::type_err(
@@ -2542,4 +2528,33 @@ fn unify_branch_types(
         ),
         span2,
     ))
+}
+
+/// Narrow compatibility check for struct/enum literal fields.
+/// Accepts exactly: exact equality, Class→Trait (via impl check),
+/// T→T? (auto-wrap), none→T?, and Class→Trait? (composite).
+/// Does NOT include Fn structural compatibility — that is intentionally
+/// excluded from field-level coercion for PLUTO-002 scope.
+fn field_types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> bool {
+    // Exact equality
+    if actual == expected {
+        return true;
+    }
+    // Class → Trait (via class_implements_trait)
+    if let (PlutoType::Class(cn), PlutoType::Trait(tn)) = (actual, expected) {
+        return env.class_implements_trait(cn, tn);
+    }
+    // T → T? (auto-wrap): recurse into the nullable inner type
+    if let PlutoType::Nullable(inner) = expected {
+        if field_types_compatible(actual, inner, env) {
+            return true;
+        }
+    }
+    // none → T? (Nullable(Void) is the none literal)
+    if actual == &PlutoType::Nullable(Box::new(PlutoType::Void))
+        && matches!(expected, PlutoType::Nullable(_))
+    {
+        return true;
+    }
+    false
 }
