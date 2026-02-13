@@ -136,7 +136,7 @@ fn test_none_literal_equals_zero_representation() {
 }
 
 #[test]
-#[ignore] // Known limitation: ? operator in main() causes parser/type errors
+#[ignore] // DESIGN: ? operator requires nullable return type; main() returns void. See RFC issue #127
 fn test_check_if_value_is_none_via_propagation() {
     // Using ? operator to check if value is none
     // If none, function returns early
@@ -475,7 +475,7 @@ fn test_nullable_to_float_valid() {
 }
 
 #[test]
-#[ignore] // Known limitation: ? operator in main() causes parser/type errors
+#[ignore] // DESIGN: ? operator requires nullable return type; main() returns void. See RFC issue #127
 fn test_nullable_coercion_from_concrete_type() {
     // int should be assignable to int? (implicit wrap)
     let src = r#"

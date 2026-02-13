@@ -742,7 +742,7 @@ fn main() int {
 }
 
 #[test]
-#[ignore]
+#[ignore] // LIMITATION: Test requires fn main() int to return exit code, but main must return void. See issue #127
 fn test_closure_nested_captures() {
     let source = r#"
 fn main() int {

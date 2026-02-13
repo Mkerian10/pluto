@@ -392,7 +392,6 @@ fn test_closure_captures_survive_gc() {
 // ============================================================================
 
 #[test]
-#[ignore]
 fn test_string_tag_allocation() {
     // Verify string allocations work (tag is implicit via runtime)
     let src = r#"

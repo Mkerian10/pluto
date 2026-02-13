@@ -406,7 +406,6 @@ fn test_bool_abi_compliance() {
 }
 
 #[test]
-#[ignore]
 fn test_error_state_abi_compliance() {
     // Verify error state (TLS) is correctly managed across C calls
     let src = r#"
@@ -439,7 +438,7 @@ fn test_closure_abi_compliance() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // BUG: Compiler error "TypeInfo has no method 'mangled_name'" for mut self methods. See issue #131
 fn test_method_call_abi_compliance() {
     // Verify method calls (self parameter) follow correct ABI
     let src = r#"

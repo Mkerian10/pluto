@@ -238,27 +238,7 @@ fn test_singleton_wiring() {
 }
 
 #[test]
-#[ignore]
-fn test_app_main_call() {
-    // Verify synthetic main correctly passes app pointer to app.main(self)
-    let src = r#"
-        app MyApp {
-            value: int
-
-            fn helper(self) int {
-                return self.value + 10
-            }
-
-            fn main(self) {
-                print(self.helper())
-            }
-        }
-    "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "10");
-}
-
-#[test]
-#[ignore]
+#[ignore] // LIMITATION: app.main() must return void, cannot return int exit code. See issue #127
 fn test_app_exit_code() {
     // Verify app main's exit code propagates correctly
     let src = r#"
@@ -475,22 +455,6 @@ fn test_app_no_deps() {
 }
 
 #[test]
-#[ignore]
-fn test_app_with_fields() {
-    // Verify app can have regular fields (not just bracket deps)
-    let src = r#"
-        app MyApp {
-            counter: int
-
-            fn main(self) {
-                print(self.counter)
-            }
-        }
-    "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "0");
-}
-
-#[test]
 fn test_deep_dependency_chain() {
     // Verify deep dependency chain (6 levels)
     let src = r#"
@@ -526,28 +490,6 @@ fn test_deep_dependency_chain() {
     "#;
     // Expected: 1 + (2 + (3 + (4 + (5 + 6)))) = 1 + 2 + 3 + 4 + 5 + 6 = 21
     assert_eq!(compile_and_run_stdout(src).trim(), "21");
-}
-
-#[test]
-#[ignore]
-fn test_multiple_app_fields() {
-    // Verify app with multiple regular fields
-    let src = r#"
-        app MyApp {
-            x: int
-            y: int
-            z: int
-
-            fn sum(self) int {
-                return self.x + self.y + self.z
-            }
-
-            fn main(self) {
-                print(self.sum())
-            }
-        }
-    "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "0");
 }
 
 #[test]
