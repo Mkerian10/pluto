@@ -1387,11 +1387,2026 @@ mod tests {
             name: "Receiver".to_string(),
             type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
         };
-        
+
         if let Ok(PlutoType::Receiver(elem)) = type_expr_to_pluto_type(&te, &env) {
             assert!(matches!(*elem, PlutoType::Int));
         } else {
             panic!("Expected Receiver<int>");
+        }
+    }
+
+    // ── substitute_in_function tests ────────────────────────────────────
+
+    #[test]
+    fn test_substitute_in_function_params() {
+        let mut func = Function {
+            id: Uuid::new_v4(),
+            name: spanned("identity".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            params: vec![
+                Param {
+                    id: Uuid::new_v4(),
+                    name: spanned("x".to_string()),
+                    ty: spanned(TypeExpr::Named("T".to_string())),
+                    is_mut: false,
+                },
+            ],
+            return_type: Some(spanned(TypeExpr::Named("T".to_string()))),
+            body: spanned(Block { stmts: vec![] }),
+            contracts: vec![],
+            is_pub: false,
+            is_override: false,
+            is_generator: false,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_function(&mut func, &bindings);
+
+        assert!(matches!(func.params[0].ty.node, TypeExpr::Named(ref n) if n == "int"));
+        assert!(matches!(func.return_type.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "int"));
+    }
+
+    #[test]
+    fn test_substitute_in_function_multiple_params() {
+        let mut func = Function {
+            id: Uuid::new_v4(),
+            name: spanned("pair".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            params: vec![
+                Param {
+                    id: Uuid::new_v4(),
+                    name: spanned("x".to_string()),
+                    ty: spanned(TypeExpr::Named("T".to_string())),
+                    is_mut: false,
+                },
+                Param {
+                    id: Uuid::new_v4(),
+                    name: spanned("y".to_string()),
+                    ty: spanned(TypeExpr::Named("U".to_string())),
+                    is_mut: false,
+                },
+            ],
+            return_type: None,
+            body: spanned(Block { stmts: vec![] }),
+            contracts: vec![],
+            is_pub: false,
+            is_override: false,
+            is_generator: false,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+        bindings.insert("U".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_function(&mut func, &bindings);
+
+        assert!(matches!(func.params[0].ty.node, TypeExpr::Named(ref n) if n == "int"));
+        assert!(matches!(func.params[1].ty.node, TypeExpr::Named(ref n) if n == "string"));
+    }
+
+    #[test]
+    fn test_substitute_in_function_array_return() {
+        let mut func = Function {
+            id: Uuid::new_v4(),
+            name: spanned("to_array".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            params: vec![],
+            return_type: Some(spanned(TypeExpr::Array(Box::new(spanned(TypeExpr::Named("T".to_string())))))),
+            body: spanned(Block { stmts: vec![] }),
+            contracts: vec![],
+            is_pub: false,
+            is_override: false,
+            is_generator: false,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_function(&mut func, &bindings);
+
+        if let Some(TypeExpr::Array(inner)) = &func.return_type.as_ref().map(|s| &s.node) {
+            assert!(matches!(inner.node, TypeExpr::Named(ref n) if n == "int"));
+        } else {
+            panic!("Expected Array return type");
+        }
+    }
+
+    // ── substitute_in_class tests ───────────────────────────────────────
+
+    #[test]
+    fn test_substitute_in_class_fields() {
+        let mut class = ClassDecl {
+            id: Uuid::new_v4(),
+            name: spanned("Box".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            fields: vec![
+                Field {
+                    id: Uuid::new_v4(),
+                    name: spanned("value".to_string()),
+                    ty: spanned(TypeExpr::Named("T".to_string())),
+                    is_injected: false,
+                    is_ambient: false,
+                },
+            ],
+            methods: vec![],
+            impl_traits: vec![],
+            uses: vec![],
+            is_pub: false,
+            lifecycle: Lifecycle::Singleton,
+            invariants: vec![],
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_class(&mut class, &bindings);
+
+        assert!(matches!(class.fields[0].ty.node, TypeExpr::Named(ref n) if n == "int"));
+    }
+
+    #[test]
+    fn test_substitute_in_class_method_params() {
+        let mut class = ClassDecl {
+            id: Uuid::new_v4(),
+            name: spanned("Container".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            fields: vec![],
+            methods: vec![
+                spanned(Function {
+                    id: Uuid::new_v4(),
+                    name: spanned("add".to_string()),
+                    type_params: vec![],
+                    type_param_bounds: HashMap::new(),
+                    params: vec![
+                        Param {
+                            id: Uuid::new_v4(),
+                            name: spanned("item".to_string()),
+                            ty: spanned(TypeExpr::Named("T".to_string())),
+                            is_mut: false,
+                        },
+                    ],
+                    return_type: None,
+                    body: spanned(Block { stmts: vec![] }),
+                    contracts: vec![],
+                    is_pub: false,
+                    is_override: false,
+                    is_generator: false,
+                }),
+            ],
+            impl_traits: vec![],
+            uses: vec![],
+            is_pub: false,
+            lifecycle: Lifecycle::Singleton,
+            invariants: vec![],
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_class(&mut class, &bindings);
+
+        assert!(matches!(
+            class.methods[0].node.params[0].ty.node,
+            TypeExpr::Named(ref n) if n == "string"
+        ));
+    }
+
+    #[test]
+    fn test_substitute_in_class_multiple_fields() {
+        let mut class = ClassDecl {
+            id: Uuid::new_v4(),
+            name: spanned("Pair".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            fields: vec![
+                Field {
+                    id: Uuid::new_v4(),
+                    name: spanned("first".to_string()),
+                    ty: spanned(TypeExpr::Named("A".to_string())),
+                    is_injected: false,
+                    is_ambient: false,
+                },
+                Field {
+                    id: Uuid::new_v4(),
+                    name: spanned("second".to_string()),
+                    ty: spanned(TypeExpr::Named("B".to_string())),
+                    is_injected: false,
+                    is_ambient: false,
+                },
+            ],
+            methods: vec![],
+            impl_traits: vec![],
+            uses: vec![],
+            is_pub: false,
+            lifecycle: Lifecycle::Singleton,
+            invariants: vec![],
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("A".to_string(), TypeExpr::Named("int".to_string()));
+        bindings.insert("B".to_string(), TypeExpr::Named("float".to_string()));
+
+        substitute_in_class(&mut class, &bindings);
+
+        assert!(matches!(class.fields[0].ty.node, TypeExpr::Named(ref n) if n == "int"));
+        assert!(matches!(class.fields[1].ty.node, TypeExpr::Named(ref n) if n == "float"));
+    }
+
+    // ── substitute_in_enum tests ────────────────────────────────────────
+
+    #[test]
+    fn test_substitute_in_enum_variant_fields() {
+        let mut edecl = EnumDecl {
+            id: Uuid::new_v4(),
+            name: spanned("Option".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            variants: vec![
+                EnumVariant {
+                    id: Uuid::new_v4(),
+                    name: spanned("Some".to_string()),
+                    fields: vec![
+                        Field {
+                            id: Uuid::new_v4(),
+                            name: spanned("value".to_string()),
+                            ty: spanned(TypeExpr::Named("T".to_string())),
+                            is_injected: false,
+                            is_ambient: false,
+                        },
+                    ],
+                },
+                EnumVariant {
+                    id: Uuid::new_v4(),
+                    name: spanned("None".to_string()),
+                    fields: vec![],
+                },
+            ],
+            is_pub: false,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_enum(&mut edecl, &bindings);
+
+        assert!(matches!(
+            edecl.variants[0].fields[0].ty.node,
+            TypeExpr::Named(ref n) if n == "int"
+        ));
+    }
+
+    #[test]
+    fn test_substitute_in_enum_multiple_variants() {
+        let mut edecl = EnumDecl {
+            id: Uuid::new_v4(),
+            name: spanned("Result".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            variants: vec![
+                EnumVariant {
+                    id: Uuid::new_v4(),
+                    name: spanned("Ok".to_string()),
+                    fields: vec![
+                        Field {
+                            id: Uuid::new_v4(),
+                            name: spanned("value".to_string()),
+                            ty: spanned(TypeExpr::Named("T".to_string())),
+                            is_injected: false,
+                            is_ambient: false,
+                        },
+                    ],
+                },
+                EnumVariant {
+                    id: Uuid::new_v4(),
+                    name: spanned("Err".to_string()),
+                    fields: vec![
+                        Field {
+                            id: Uuid::new_v4(),
+                            name: spanned("error".to_string()),
+                            ty: spanned(TypeExpr::Named("E".to_string())),
+                            is_injected: false,
+                            is_ambient: false,
+                        },
+                    ],
+                },
+            ],
+            is_pub: false,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+        bindings.insert("E".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_enum(&mut edecl, &bindings);
+
+        assert!(matches!(
+            edecl.variants[0].fields[0].ty.node,
+            TypeExpr::Named(ref n) if n == "int"
+        ));
+        assert!(matches!(
+            edecl.variants[1].fields[0].ty.node,
+            TypeExpr::Named(ref n) if n == "string"
+        ));
+    }
+
+    // ── offset_function_spans tests ─────────────────────────────────────
+
+    #[test]
+    fn test_offset_function_spans_basic() {
+        let mut func = Function {
+            id: Uuid::new_v4(),
+            name: Spanned {
+                node: "foo".to_string(),
+                span: Span { start: 10, end: 13, file_id: 0 },
+            },
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            params: vec![
+                Param {
+                    id: Uuid::new_v4(),
+                    name: Spanned {
+                        node: "x".to_string(),
+                        span: Span { start: 14, end: 15, file_id: 0 },
+                    },
+                    ty: spanned(TypeExpr::Named("int".to_string())),
+                    is_mut: false,
+                },
+            ],
+            return_type: None,
+            body: spanned(Block { stmts: vec![] }),
+            contracts: vec![],
+            is_pub: false,
+            is_override: false,
+            is_generator: false,
+        };
+
+        offset_function_spans(&mut func, 1000);
+
+        assert_eq!(func.name.span.start, 1010);
+        assert_eq!(func.name.span.end, 1013);
+        assert_eq!(func.params[0].name.span.start, 1014);
+        assert_eq!(func.params[0].name.span.end, 1015);
+    }
+
+    #[test]
+    fn test_offset_function_spans_with_return_type() {
+        let mut func = Function {
+            id: Uuid::new_v4(),
+            name: spanned("bar".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            params: vec![],
+            return_type: Some(Spanned {
+                node: TypeExpr::Named("int".to_string()),
+                span: Span { start: 20, end: 23, file_id: 0 },
+            }),
+            body: spanned(Block { stmts: vec![] }),
+            contracts: vec![],
+            is_pub: false,
+            is_override: false,
+            is_generator: false,
+        };
+
+        offset_function_spans(&mut func, 500);
+
+        if let Some(ref rt) = func.return_type {
+            assert_eq!(rt.span.start, 520);
+            assert_eq!(rt.span.end, 523);
+        } else {
+            panic!("Expected return type");
+        }
+    }
+
+    // ── offset_enum_spans tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_offset_enum_spans() {
+        let mut edecl = EnumDecl {
+            id: Uuid::new_v4(),
+            name: Spanned {
+                node: "Color".to_string(),
+                span: Span { start: 5, end: 10, file_id: 0 },
+            },
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            variants: vec![
+                EnumVariant {
+                    id: Uuid::new_v4(),
+                    name: Spanned {
+                        node: "Red".to_string(),
+                        span: Span { start: 11, end: 14, file_id: 0 },
+                    },
+                    fields: vec![],
+                },
+            ],
+            is_pub: false,
+        };
+
+        offset_enum_spans(&mut edecl, 2000);
+
+        assert_eq!(edecl.name.span.start, 2005);
+        assert_eq!(edecl.name.span.end, 2010);
+        assert_eq!(edecl.variants[0].name.span.start, 2011);
+        assert_eq!(edecl.variants[0].name.span.end, 2014);
+    }
+
+    // ── resolve_generic_te tests ────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_generic_te_builtin_map() {
+        let mut te = TypeExpr::Generic {
+            name: "Map".to_string(),
+            type_args: vec![
+                spanned(TypeExpr::Named("string".to_string())),
+                spanned(TypeExpr::Named("int".to_string())),
+            ],
+        };
+        let mut env = TypeEnv::new();
+
+        // Built-in generics (Map, Set, Task, Sender, Receiver) are kept as-is
+        assert!(resolve_generic_te(&mut te, &mut env).is_ok());
+        assert!(matches!(te, TypeExpr::Generic { name, .. } if name == "Map"));
+    }
+
+    #[test]
+    fn test_resolve_generic_te_builtin_set() {
+        let mut te = TypeExpr::Generic {
+            name: "Set".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        };
+        let mut env = TypeEnv::new();
+
+        assert!(resolve_generic_te(&mut te, &mut env).is_ok());
+        assert!(matches!(te, TypeExpr::Generic { name, .. } if name == "Set"));
+    }
+
+    #[test]
+    fn test_resolve_generic_te_builtin_task() {
+        let mut te = TypeExpr::Generic {
+            name: "Task".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        };
+        let mut env = TypeEnv::new();
+
+        assert!(resolve_generic_te(&mut te, &mut env).is_ok());
+        assert!(matches!(te, TypeExpr::Generic { name, .. } if name == "Task"));
+    }
+
+    #[test]
+    fn test_resolve_generic_te_builtin_sender() {
+        let mut te = TypeExpr::Generic {
+            name: "Sender".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        };
+        let mut env = TypeEnv::new();
+
+        assert!(resolve_generic_te(&mut te, &mut env).is_ok());
+        assert!(matches!(te, TypeExpr::Generic { name, .. } if name == "Sender"));
+    }
+
+    #[test]
+    fn test_resolve_generic_te_builtin_receiver() {
+        let mut te = TypeExpr::Generic {
+            name: "Receiver".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("string".to_string()))],
+        };
+        let mut env = TypeEnv::new();
+
+        assert!(resolve_generic_te(&mut te, &mut env).is_ok());
+        assert!(matches!(te, TypeExpr::Generic { name, .. } if name == "Receiver"));
+    }
+
+    #[test]
+    fn test_resolve_generic_te_named_passthrough() {
+        let mut te = TypeExpr::Named("int".to_string());
+        let mut env = TypeEnv::new();
+
+        // Named types pass through unchanged
+        assert!(resolve_generic_te(&mut te, &mut env).is_ok());
+        assert!(matches!(te, TypeExpr::Named(ref n) if n == "int"));
+    }
+
+    #[test]
+    fn test_resolve_generic_te_array_recursion() {
+        let mut te = TypeExpr::Array(Box::new(spanned(TypeExpr::Generic {
+            name: "Map".to_string(),
+            type_args: vec![
+                spanned(TypeExpr::Named("string".to_string())),
+                spanned(TypeExpr::Named("int".to_string())),
+            ],
+        })));
+        let mut env = TypeEnv::new();
+
+        // Should recursively resolve inner generic type
+        assert!(resolve_generic_te(&mut te, &mut env).is_ok());
+        if let TypeExpr::Array(inner) = te {
+            assert!(matches!(inner.node, TypeExpr::Generic { name, .. } if name == "Map"));
+        } else {
+            panic!("Expected Array type");
+        }
+    }
+
+    #[test]
+    fn test_resolve_generic_te_nullable_recursion() {
+        let mut te = TypeExpr::Nullable(Box::new(spanned(TypeExpr::Generic {
+            name: "Task".to_string(),
+            type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+        })));
+        let mut env = TypeEnv::new();
+
+        assert!(resolve_generic_te(&mut te, &mut env).is_ok());
+        if let TypeExpr::Nullable(inner) = te {
+            assert!(matches!(inner.node, TypeExpr::Generic { name, .. } if name == "Task"));
+        } else {
+            panic!("Expected Nullable type");
+        }
+    }
+
+    // ── substitute_in_stmt tests ────────────────────────────────────────
+
+    #[test]
+    fn test_substitute_in_stmt_let_with_type() {
+        use crate::parser::ast::Stmt;
+
+        let mut stmt = Stmt::Let {
+            name: spanned("x".to_string()),
+            ty: Some(spanned(TypeExpr::Named("T".to_string()))),
+            value: spanned(Expr::IntLit(42)),
+            is_mut: false,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::Let { ty, .. } = stmt {
+            assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "int"));
+        } else {
+            panic!("Expected Let statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_match_with_type_args() {
+        use crate::parser::ast::{Stmt, MatchArm};
+
+        let mut stmt = Stmt::Match {
+            expr: spanned(Expr::Ident("x".to_string())),
+            arms: vec![
+                MatchArm {
+                    enum_name: spanned("Option".to_string()),
+                    variant_name: spanned("Some".to_string()),
+                    bindings: vec![(spanned("val".to_string()), None)],
+                    type_args: vec![spanned(TypeExpr::Named("T".to_string()))],
+                    body: spanned(Block { stmts: vec![] }),
+                    enum_id: None,
+                    variant_id: None,
+                },
+            ],
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::Match { arms, .. } = stmt {
+            assert!(matches!(
+                &arms[0].type_args[0].node,
+                TypeExpr::Named(n) if n == "string"
+            ));
+        } else {
+            panic!("Expected Match statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_let_chan() {
+        use crate::parser::ast::Stmt;
+
+        let mut stmt = Stmt::LetChan {
+            sender: spanned("tx".to_string()),
+            receiver: spanned("rx".to_string()),
+            elem_type: spanned(TypeExpr::Named("T".to_string())),
+            capacity: None,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::LetChan { elem_type, .. } = stmt {
+            assert!(matches!(elem_type.node, TypeExpr::Named(ref n) if n == "int"));
+        } else {
+            panic!("Expected LetChan statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_scope_bindings() {
+        use crate::parser::ast::{Stmt, ScopeBinding};
+
+        let mut stmt = Stmt::Scope {
+            seeds: vec![],
+            bindings: vec![
+                ScopeBinding {
+                    name: spanned("x".to_string()),
+                    ty: spanned(TypeExpr::Named("T".to_string())),
+                },
+            ],
+            body: spanned(Block { stmts: vec![] }),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::Scope { bindings: scope_bindings, .. } = stmt {
+            assert!(matches!(
+                scope_bindings[0].ty.node,
+                TypeExpr::Named(ref n) if n == "string"
+            ));
+        } else {
+            panic!("Expected Scope statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_if_with_blocks() {
+        use crate::parser::ast::Stmt;
+
+        let mut stmt = Stmt::If {
+            condition: spanned(Expr::BoolLit(true)),
+            then_block: spanned(Block {
+                stmts: vec![
+                    spanned(Stmt::Let {
+                        name: spanned("x".to_string()),
+                        ty: Some(spanned(TypeExpr::Named("T".to_string()))),
+                        value: spanned(Expr::IntLit(1)),
+                        is_mut: false,
+                    }),
+                ],
+            }),
+            else_block: Some(spanned(Block {
+                stmts: vec![
+                    spanned(Stmt::Let {
+                        name: spanned("y".to_string()),
+                        ty: Some(spanned(TypeExpr::Named("U".to_string()))),
+                        value: spanned(Expr::IntLit(2)),
+                        is_mut: false,
+                    }),
+                ],
+            })),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+        bindings.insert("U".to_string(), TypeExpr::Named("float".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::If { then_block, else_block, .. } = stmt {
+            // Check then block
+            if let Stmt::Let { ty, .. } = &then_block.node.stmts[0].node {
+                assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "int"));
+            }
+            // Check else block
+            if let Some(eb) = else_block {
+                if let Stmt::Let { ty, .. } = &eb.node.stmts[0].node {
+                    assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "float"));
+                }
+            }
+        } else {
+            panic!("Expected If statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_return_with_expr() {
+        use crate::parser::ast::Stmt;
+
+        let mut stmt = Stmt::Return(Some(spanned(Expr::Cast {
+            expr: Box::new(spanned(Expr::IntLit(42))),
+            target_type: spanned(TypeExpr::Named("T".to_string())),
+        })));
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("float".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::Return(Some(expr)) = stmt {
+            if let Expr::Cast { target_type, .. } = &expr.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "float"));
+            }
+        } else {
+            panic!("Expected Return statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_assign() {
+        use crate::parser::ast::Stmt;
+
+        let mut stmt = Stmt::Assign {
+            target: spanned("x".to_string()),
+            value: spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::IntLit(10))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            }),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::Assign { value, .. } = stmt {
+            if let Expr::Cast { target_type, .. } = &value.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            }
+        } else {
+            panic!("Expected Assign statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_field_assign() {
+        use crate::parser::ast::Stmt;
+
+        let mut stmt = Stmt::FieldAssign {
+            object: spanned(Expr::Ident("obj".to_string())),
+            field: spanned("field".to_string()),
+            value: spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::IntLit(5))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            }),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::FieldAssign { value, .. } = stmt {
+            if let Expr::Cast { target_type, .. } = &value.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "string"));
+            }
+        } else {
+            panic!("Expected FieldAssign statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_while() {
+        use crate::parser::ast::Stmt;
+
+        let mut stmt = Stmt::While {
+            condition: spanned(Expr::BoolLit(true)),
+            body: spanned(Block {
+                stmts: vec![spanned(Stmt::Let {
+                    name: spanned("x".to_string()),
+                    ty: Some(spanned(TypeExpr::Named("T".to_string()))),
+                    value: spanned(Expr::IntLit(1)),
+                    is_mut: false,
+                })],
+            }),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::While { body, .. } = stmt {
+            if let Stmt::Let { ty, .. } = &body.node.stmts[0].node {
+                assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "int"));
+            }
+        } else {
+            panic!("Expected While statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_for() {
+        use crate::parser::ast::Stmt;
+
+        let mut stmt = Stmt::For {
+            var: spanned("i".to_string()),
+            iterable: spanned(Expr::Ident("items".to_string())),
+            body: spanned(Block {
+                stmts: vec![spanned(Stmt::Let {
+                    name: spanned("x".to_string()),
+                    ty: Some(spanned(TypeExpr::Named("T".to_string()))),
+                    value: spanned(Expr::IntLit(1)),
+                    is_mut: false,
+                })],
+            }),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::For { body, .. } = stmt {
+            if let Stmt::Let { ty, .. } = &body.node.stmts[0].node {
+                assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "string"));
+            }
+        } else {
+            panic!("Expected For statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_index_assign() {
+        use crate::parser::ast::Stmt;
+
+        let mut stmt = Stmt::IndexAssign {
+            object: spanned(Expr::Ident("arr".to_string())),
+            index: spanned(Expr::IntLit(0)),
+            value: spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::IntLit(42))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            }),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("float".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::IndexAssign { value, .. } = stmt {
+            if let Expr::Cast { target_type, .. } = &value.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "float"));
+            }
+        } else {
+            panic!("Expected IndexAssign statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_raise() {
+        use crate::parser::ast::Stmt;
+
+        let mut stmt = Stmt::Raise {
+            error_name: spanned("MyError".to_string()),
+            fields: vec![(
+                spanned("value".to_string()),
+                spanned(Expr::Cast {
+                    expr: Box::new(spanned(Expr::IntLit(100))),
+                    target_type: spanned(TypeExpr::Named("T".to_string())),
+                }),
+            )],
+            error_id: None,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::Raise { fields, .. } = stmt {
+            if let Expr::Cast { target_type, .. } = &fields[0].1.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            }
+        } else {
+            panic!("Expected Raise statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_expr() {
+        use crate::parser::ast::Stmt;
+
+        let mut stmt = Stmt::Expr(spanned(Expr::Cast {
+            expr: Box::new(spanned(Expr::IntLit(42))),
+            target_type: spanned(TypeExpr::Named("T".to_string())),
+        }));
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("bool".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::Expr(expr) = stmt {
+            if let Expr::Cast { target_type, .. } = &expr.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "bool"));
+            }
+        } else {
+            panic!("Expected Expr statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_select() {
+        use crate::parser::ast::{Stmt, SelectArm, SelectOp};
+
+        let mut stmt = Stmt::Select {
+            arms: vec![
+                SelectArm {
+                    op: SelectOp::Recv {
+                        binding: spanned("msg".to_string()),
+                        channel: spanned(Expr::Ident("rx".to_string())),
+                    },
+                    body: spanned(Block {
+                        stmts: vec![spanned(Stmt::Let {
+                            name: spanned("x".to_string()),
+                            ty: Some(spanned(TypeExpr::Named("T".to_string()))),
+                            value: spanned(Expr::IntLit(1)),
+                            is_mut: false,
+                        })],
+                    }),
+                },
+                SelectArm {
+                    op: SelectOp::Send {
+                        channel: spanned(Expr::Ident("tx".to_string())),
+                        value: spanned(Expr::IntLit(42)),
+                    },
+                    body: spanned(Block { stmts: vec![] }),
+                },
+            ],
+            default: Some(spanned(Block {
+                stmts: vec![spanned(Stmt::Let {
+                    name: spanned("y".to_string()),
+                    ty: Some(spanned(TypeExpr::Named("U".to_string()))),
+                    value: spanned(Expr::IntLit(2)),
+                    is_mut: false,
+                })],
+            })),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+        bindings.insert("U".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::Select { arms, default } = stmt {
+            // Check Recv arm body
+            if let Stmt::Let { ty, .. } = &arms[0].body.node.stmts[0].node {
+                assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "int"));
+            }
+            // Check default block
+            if let Some(def) = default {
+                if let Stmt::Let { ty, .. } = &def.node.stmts[0].node {
+                    assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "string"));
+                }
+            }
+        } else {
+            panic!("Expected Select statement");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_stmt_yield() {
+        use crate::parser::ast::Stmt;
+
+        let mut stmt = Stmt::Yield {
+            value: spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::IntLit(10))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            }),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_stmt(&mut stmt, &bindings);
+
+        if let Stmt::Yield { value } = stmt {
+            if let Expr::Cast { target_type, .. } = &value.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            }
+        } else {
+            panic!("Expected Yield statement");
+        }
+    }
+
+    // ── substitute_in_expr tests ────────────────────────────────────────
+
+    #[test]
+    fn test_substitute_in_expr_call_with_type_args() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::Call {
+            name: spanned("identity".to_string()),
+            args: vec![spanned(Expr::IntLit(42))],
+            type_args: vec![spanned(TypeExpr::Named("T".to_string()))],
+            target_id: None,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::Call { type_args, .. } = expr {
+            assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
+        } else {
+            panic!("Expected Call expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_struct_lit_with_type_args() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::StructLit {
+            name: spanned("Box".to_string()),
+            type_args: vec![spanned(TypeExpr::Named("T".to_string()))],
+            fields: vec![
+                (spanned("value".to_string()), spanned(Expr::IntLit(42))),
+            ],
+            target_id: None,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::StructLit { type_args, .. } = expr {
+            assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "string"));
+        } else {
+            panic!("Expected StructLit expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_enum_unit_with_type_args() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::EnumUnit {
+            enum_name: spanned("Option".to_string()),
+            variant: spanned("None".to_string()),
+            type_args: vec![spanned(TypeExpr::Named("T".to_string()))],
+            enum_id: None,
+            variant_id: None,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::EnumUnit { type_args, .. } = expr {
+            assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
+        } else {
+            panic!("Expected EnumUnit expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_enum_data_with_type_args() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::EnumData {
+            enum_name: spanned("Option".to_string()),
+            variant: spanned("Some".to_string()),
+            type_args: vec![spanned(TypeExpr::Named("T".to_string()))],
+            fields: vec![
+                (spanned("value".to_string()), spanned(Expr::IntLit(42))),
+            ],
+            enum_id: None,
+            variant_id: None,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("float".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::EnumData { type_args, .. } = expr {
+            assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "float"));
+        } else {
+            panic!("Expected EnumData expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_cast_target_type() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::Cast {
+            expr: Box::new(spanned(Expr::IntLit(42))),
+            target_type: spanned(TypeExpr::Named("T".to_string())),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("float".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::Cast { target_type, .. } = expr {
+            assert!(matches!(target_type.node, TypeExpr::Named(ref n) if n == "float"));
+        } else {
+            panic!("Expected Cast expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_closure_param_types() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::Closure {
+            params: vec![
+                Param {
+                    id: Uuid::new_v4(),
+                    name: spanned("x".to_string()),
+                    ty: spanned(TypeExpr::Named("T".to_string())),
+                    is_mut: false,
+                },
+            ],
+            return_type: Some(spanned(TypeExpr::Named("U".to_string()))),
+            body: spanned(Block { stmts: vec![] }),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+        bindings.insert("U".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::Closure { params, return_type, .. } = expr {
+            assert!(matches!(params[0].ty.node, TypeExpr::Named(ref n) if n == "int"));
+            assert!(matches!(
+                return_type.as_ref().unwrap().node,
+                TypeExpr::Named(ref n) if n == "string"
+            ));
+        } else {
+            panic!("Expected Closure expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_static_trait_call() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::StaticTraitCall {
+            trait_name: spanned("TypeInfo".to_string()),
+            method_name: spanned("type_name".to_string()),
+            type_args: vec![spanned(TypeExpr::Named("T".to_string()))],
+            args: vec![],
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::StaticTraitCall { type_args, .. } = expr {
+            assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
+        } else {
+            panic!("Expected StaticTraitCall expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_map_lit_types() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::MapLit {
+            key_type: spanned(TypeExpr::Named("K".to_string())),
+            value_type: spanned(TypeExpr::Named("V".to_string())),
+            entries: vec![],
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("K".to_string(), TypeExpr::Named("string".to_string()));
+        bindings.insert("V".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::MapLit { key_type, value_type, .. } = expr {
+            assert!(matches!(&key_type.node, TypeExpr::Named(n) if n == "string"));
+            assert!(matches!(&value_type.node, TypeExpr::Named(n) if n == "int"));
+        } else {
+            panic!("Expected MapLit expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_set_lit_elem_type() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::SetLit {
+            elem_type: spanned(TypeExpr::Named("T".to_string())),
+            elements: vec![],
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::SetLit { elem_type, .. } = expr {
+            assert!(matches!(&elem_type.node, TypeExpr::Named(n) if n == "int"));
+        } else {
+            panic!("Expected SetLit expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_null_propagate() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::NullPropagate {
+            expr: Box::new(spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::IntLit(42))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            })),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::NullPropagate { expr: inner } = expr {
+            if let Expr::Cast { target_type, .. } = &inner.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            }
+        } else {
+            panic!("Expected NullPropagate expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_binop() {
+        use crate::parser::ast::{Expr, BinOp};
+
+        let mut expr = Expr::BinOp {
+            op: BinOp::Add,
+            lhs: Box::new(spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::IntLit(1))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            })),
+            rhs: Box::new(spanned(Expr::IntLit(2))),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::BinOp { lhs, .. } = expr {
+            if let Expr::Cast { target_type, .. } = &lhs.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            }
+        } else {
+            panic!("Expected BinOp expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_unary_op() {
+        use crate::parser::ast::{Expr, UnaryOp};
+
+        let mut expr = Expr::UnaryOp {
+            op: UnaryOp::Neg,
+            operand: Box::new(spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::IntLit(5))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            })),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("float".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::UnaryOp { operand, .. } = expr {
+            if let Expr::Cast { target_type, .. } = &operand.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "float"));
+            }
+        } else {
+            panic!("Expected UnaryOp expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_field_access() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::FieldAccess {
+            object: Box::new(spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::Ident("obj".to_string()))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            })),
+            field: spanned("field".to_string()),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("MyClass".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::FieldAccess { object, .. } = expr {
+            if let Expr::Cast { target_type, .. } = &object.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "MyClass"));
+            }
+        } else {
+            panic!("Expected FieldAccess expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_method_call() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::MethodCall {
+            object: Box::new(spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::Ident("obj".to_string()))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            })),
+            method: spanned("process".to_string()),
+            args: vec![spanned(Expr::IntLit(10))],
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("Handler".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::MethodCall { object, .. } = expr {
+            if let Expr::Cast { target_type, .. } = &object.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "Handler"));
+            }
+        } else {
+            panic!("Expected MethodCall expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_array_lit() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::ArrayLit {
+            elements: vec![
+                spanned(Expr::Cast {
+                    expr: Box::new(spanned(Expr::IntLit(1))),
+                    target_type: spanned(TypeExpr::Named("T".to_string())),
+                }),
+                spanned(Expr::IntLit(2)),
+            ],
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::ArrayLit { elements } = expr {
+            if let Expr::Cast { target_type, .. } = &elements[0].node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            }
+        } else {
+            panic!("Expected ArrayLit expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_index() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::Index {
+            object: Box::new(spanned(Expr::Ident("arr".to_string()))),
+            index: Box::new(spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::IntLit(0))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            })),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::Index { index, .. } = expr {
+            if let Expr::Cast { target_type, .. } = &index.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            }
+        } else {
+            panic!("Expected Index expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_string_interp() {
+        use crate::parser::ast::{Expr, StringInterpPart};
+
+        let mut expr = Expr::StringInterp {
+            parts: vec![
+                StringInterpPart::Lit("value: ".to_string()),
+                StringInterpPart::Expr(spanned(Expr::Cast {
+                    expr: Box::new(spanned(Expr::IntLit(42))),
+                    target_type: spanned(TypeExpr::Named("T".to_string())),
+                })),
+            ],
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::StringInterp { parts } = expr {
+            if let StringInterpPart::Expr(e) = &parts[1] {
+                if let Expr::Cast { target_type, .. } = &e.node {
+                    assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "string"));
+                }
+            }
+        } else {
+            panic!("Expected StringInterp expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_range() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::Range {
+            start: Box::new(spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::IntLit(1))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            })),
+            end: Box::new(spanned(Expr::IntLit(10))),
+            inclusive: false,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::Range { start, .. } = expr {
+            if let Expr::Cast { target_type, .. } = &start.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            }
+        } else {
+            panic!("Expected Range expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_propagate() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::Propagate {
+            expr: Box::new(spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::IntLit(42))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            })),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::Propagate { expr: inner } = expr {
+            if let Expr::Cast { target_type, .. } = &inner.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            }
+        } else {
+            panic!("Expected Propagate expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_catch() {
+        use crate::parser::ast::{Expr, CatchHandler};
+
+        let mut expr = Expr::Catch {
+            expr: Box::new(spanned(Expr::IntLit(42))),
+            handler: CatchHandler::Shorthand(Box::new(spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::IntLit(0))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            }))),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::Catch { handler, .. } = expr {
+            if let CatchHandler::Shorthand(body) = handler {
+                if let Expr::Cast { target_type, .. } = &body.node {
+                    assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+                }
+            }
+        } else {
+            panic!("Expected Catch expression");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_expr_spawn() {
+        use crate::parser::ast::Expr;
+
+        let mut expr = Expr::Spawn {
+            call: Box::new(spanned(Expr::Cast {
+                expr: Box::new(spanned(Expr::IntLit(42))),
+                target_type: spanned(TypeExpr::Named("T".to_string())),
+            })),
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_expr(&mut expr, &bindings);
+
+        if let Expr::Spawn { call } = expr {
+            if let Expr::Cast { target_type, .. } = &call.node {
+                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            }
+        } else {
+            panic!("Expected Spawn expression");
+        }
+    }
+
+    // ── offset_class_spans tests ────────────────────────────────────────
+
+    #[test]
+    fn test_offset_class_spans_basic() {
+        let mut class = ClassDecl {
+            id: Uuid::new_v4(),
+            name: Spanned {
+                node: "User".to_string(),
+                span: Span { start: 10, end: 14, file_id: 0 },
+            },
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            fields: vec![
+                Field {
+                    id: Uuid::new_v4(),
+                    name: Spanned {
+                        node: "name".to_string(),
+                        span: Span { start: 20, end: 24, file_id: 0 },
+                    },
+                    ty: spanned(TypeExpr::Named("string".to_string())),
+                    is_injected: false,
+                    is_ambient: false,
+                },
+            ],
+            methods: vec![],
+            impl_traits: vec![],
+            uses: vec![],
+            is_pub: false,
+            lifecycle: Lifecycle::Singleton,
+            invariants: vec![],
+        };
+
+        offset_class_spans(&mut class, 1000);
+
+        assert_eq!(class.name.span.start, 1010);
+        assert_eq!(class.name.span.end, 1014);
+        assert_eq!(class.fields[0].name.span.start, 1020);
+        assert_eq!(class.fields[0].name.span.end, 1024);
+    }
+
+    #[test]
+    fn test_offset_class_spans_with_methods() {
+        let mut class = ClassDecl {
+            id: Uuid::new_v4(),
+            name: Spanned {
+                node: "Container".to_string(),
+                span: Span { start: 5, end: 14, file_id: 0 },
+            },
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            fields: vec![],
+            methods: vec![
+                Spanned {
+                    node: Function {
+                        id: Uuid::new_v4(),
+                        name: Spanned {
+                            node: "add".to_string(),
+                            span: Span { start: 20, end: 23, file_id: 0 },
+                        },
+                        type_params: vec![],
+                        type_param_bounds: HashMap::new(),
+                        params: vec![],
+                        return_type: None,
+                        body: spanned(Block { stmts: vec![] }),
+                        contracts: vec![],
+                        is_pub: false,
+                        is_override: false,
+                        is_generator: false,
+                    },
+                    span: Span { start: 15, end: 30, file_id: 0 },
+                },
+            ],
+            impl_traits: vec![],
+            uses: vec![],
+            is_pub: false,
+            lifecycle: Lifecycle::Singleton,
+            invariants: vec![],
+        };
+
+        offset_class_spans(&mut class, 500);
+
+        assert_eq!(class.name.span.start, 505);
+        assert_eq!(class.name.span.end, 514);
+        assert_eq!(class.methods[0].span.start, 515);
+        assert_eq!(class.methods[0].span.end, 530);
+        assert_eq!(class.methods[0].node.name.span.start, 520);
+        assert_eq!(class.methods[0].node.name.span.end, 523);
+    }
+
+    // ── resolve_generic_te_in_function tests ────────────────────────────
+
+    #[test]
+    fn test_resolve_generic_te_in_function_params_and_return() {
+        let mut func = Function {
+            id: Uuid::new_v4(),
+            name: spanned("process".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            params: vec![
+                Param {
+                    id: Uuid::new_v4(),
+                    name: spanned("x".to_string()),
+                    ty: spanned(TypeExpr::Generic {
+                        name: "Map".to_string(),
+                        type_args: vec![
+                            spanned(TypeExpr::Named("string".to_string())),
+                            spanned(TypeExpr::Named("int".to_string())),
+                        ],
+                    }),
+                    is_mut: false,
+                },
+            ],
+            return_type: Some(spanned(TypeExpr::Generic {
+                name: "Set".to_string(),
+                type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+            })),
+            body: spanned(Block { stmts: vec![] }),
+            contracts: vec![],
+            is_pub: false,
+            is_override: false,
+            is_generator: false,
+        };
+
+        let mut env = TypeEnv::new();
+        assert!(resolve_generic_te_in_function(&mut func, &mut env).is_ok());
+
+        // Built-in generics stay as Generic type expressions
+        assert!(matches!(&func.params[0].ty.node, TypeExpr::Generic { name, .. } if name == "Map"));
+        assert!(matches!(
+            &func.return_type.as_ref().unwrap().node,
+            TypeExpr::Generic { name, .. } if name == "Set"
+        ));
+    }
+
+    #[test]
+    fn test_resolve_generic_te_in_function_body_with_cast() {
+        use crate::parser::ast::{Stmt, Expr};
+
+        let mut func = Function {
+            id: Uuid::new_v4(),
+            name: spanned("cast_example".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            params: vec![],
+            return_type: None,
+            body: spanned(Block {
+                stmts: vec![
+                    spanned(Stmt::Let {
+                        name: spanned("x".to_string()),
+                        ty: None,
+                        value: spanned(Expr::Cast {
+                            expr: Box::new(spanned(Expr::IntLit(42))),
+                            target_type: spanned(TypeExpr::Generic {
+                                name: "Task".to_string(),
+                                type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+                            }),
+                        }),
+                        is_mut: false,
+                    }),
+                ],
+            }),
+            contracts: vec![],
+            is_pub: false,
+            is_override: false,
+            is_generator: false,
+        };
+
+        let mut env = TypeEnv::new();
+        assert!(resolve_generic_te_in_function(&mut func, &mut env).is_ok());
+
+        // Check that the cast target type was visited
+        if let Stmt::Let { value, .. } = &func.body.node.stmts[0].node {
+            if let Expr::Cast { target_type, .. } = &value.node {
+                assert!(matches!(&target_type.node, TypeExpr::Generic { name, .. } if name == "Task"));
+            }
+        }
+    }
+
+    // ── Edge case tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_substitute_in_function_with_body() {
+        let mut func = Function {
+            id: Uuid::new_v4(),
+            name: spanned("process".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            params: vec![],
+            return_type: None,
+            body: spanned(Block {
+                stmts: vec![spanned(Stmt::Let {
+                    name: spanned("x".to_string()),
+                    ty: Some(spanned(TypeExpr::Named("T".to_string()))),
+                    value: spanned(Expr::IntLit(42)),
+                    is_mut: false,
+                })],
+            }),
+            contracts: vec![],
+            is_pub: false,
+            is_override: false,
+            is_generator: false,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_function(&mut func, &bindings);
+
+        // Check that body was substituted
+        if let Stmt::Let { ty, .. } = &func.body.node.stmts[0].node {
+            assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "int"));
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_function_with_contracts() {
+        use crate::parser::ast::{ContractClause, ContractKind};
+
+        let mut func = Function {
+            id: Uuid::new_v4(),
+            name: spanned("checked".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            params: vec![],
+            return_type: None,
+            body: spanned(Block { stmts: vec![] }),
+            contracts: vec![spanned(ContractClause {
+                kind: ContractKind::Requires,
+                expr: spanned(Expr::BoolLit(true)),
+            })],
+            is_pub: false,
+            is_override: false,
+            is_generator: false,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        // Should not panic
+        substitute_in_function(&mut func, &bindings);
+    }
+
+    #[test]
+    fn test_substitute_in_class_with_invariants() {
+        use crate::parser::ast::{ContractClause, ContractKind};
+
+        let mut class = ClassDecl {
+            id: Uuid::new_v4(),
+            name: spanned("Counter".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            fields: vec![Field {
+                id: Uuid::new_v4(),
+                name: spanned("value".to_string()),
+                ty: spanned(TypeExpr::Named("T".to_string())),
+                is_injected: false,
+                is_ambient: false,
+            }],
+            methods: vec![],
+            impl_traits: vec![],
+            uses: vec![],
+            is_pub: false,
+            lifecycle: Lifecycle::Singleton,
+            invariants: vec![spanned(ContractClause {
+                kind: ContractKind::Invariant,
+                expr: spanned(Expr::BoolLit(true)),
+            })],
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_class(&mut class, &bindings);
+
+        assert!(matches!(&class.fields[0].ty.node, TypeExpr::Named(n) if n == "int"));
+    }
+
+    #[test]
+    fn test_substitute_in_class_with_impl_traits() {
+        let mut class = ClassDecl {
+            id: Uuid::new_v4(),
+            name: spanned("Handler".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            fields: vec![Field {
+                id: Uuid::new_v4(),
+                name: spanned("data".to_string()),
+                ty: spanned(TypeExpr::Named("T".to_string())),
+                is_injected: false,
+                is_ambient: false,
+            }],
+            methods: vec![],
+            impl_traits: vec![spanned("Printable".to_string())],
+            uses: vec![],
+            is_pub: false,
+            lifecycle: Lifecycle::Singleton,
+            invariants: vec![],
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("string".to_string()));
+
+        substitute_in_class(&mut class, &bindings);
+
+        assert!(matches!(&class.fields[0].ty.node, TypeExpr::Named(n) if n == "string"));
+    }
+
+    #[test]
+    fn test_substitute_in_enum_mixed_variants() {
+        let mut edecl = EnumDecl {
+            id: Uuid::new_v4(),
+            name: spanned("Result".to_string()),
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            variants: vec![
+                EnumVariant {
+                    id: Uuid::new_v4(),
+                    name: spanned("Error".to_string()),
+                    fields: vec![], // Unit variant has empty fields
+                },
+                EnumVariant {
+                    id: Uuid::new_v4(),
+                    name: spanned("Ok".to_string()),
+                    fields: vec![Field {
+                        id: Uuid::new_v4(),
+                        name: spanned("value".to_string()),
+                        ty: spanned(TypeExpr::Named("T".to_string())),
+                        is_injected: false,
+                        is_ambient: false,
+                    }],
+                },
+            ],
+            is_pub: false,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_enum(&mut edecl, &bindings);
+
+        // Check that the Data variant field type was substituted
+        assert!(matches!(&edecl.variants[1].fields[0].ty.node, TypeExpr::Named(n) if n == "int"));
+    }
+
+    #[test]
+    fn test_offset_function_spans_with_contracts() {
+        use crate::parser::ast::{ContractClause, ContractKind};
+
+        let mut func = Function {
+            id: Uuid::new_v4(),
+            name: Spanned {
+                node: "checked".to_string(),
+                span: Span { start: 10, end: 17, file_id: 0 },
+            },
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            params: vec![],
+            return_type: None,
+            body: spanned(Block { stmts: vec![] }),
+            contracts: vec![Spanned {
+                node: ContractClause {
+                    kind: ContractKind::Requires,
+                    expr: Spanned {
+                        node: Expr::BoolLit(true),
+                        span: Span { start: 30, end: 34, file_id: 0 },
+                    },
+                },
+                span: Span { start: 20, end: 35, file_id: 0 },
+            }],
+            is_pub: false,
+            is_override: false,
+            is_generator: false,
+        };
+
+        offset_function_spans(&mut func, 1000);
+
+        // Name gets offset
+        assert_eq!(func.name.span.start, 1010);
+        // Contracts do NOT get offset (not implemented in offset_function_spans)
+        assert_eq!(func.contracts[0].span.start, 20);
+        assert_eq!(func.contracts[0].node.expr.span.start, 30);
+    }
+
+    #[test]
+    fn test_offset_class_spans_with_invariants() {
+        use crate::parser::ast::{ContractClause, ContractKind};
+
+        let mut class = ClassDecl {
+            id: Uuid::new_v4(),
+            name: Spanned {
+                node: "Counter".to_string(),
+                span: Span { start: 10, end: 17, file_id: 0 },
+            },
+            type_params: vec![],
+            type_param_bounds: HashMap::new(),
+            fields: vec![],
+            methods: vec![],
+            impl_traits: vec![],
+            uses: vec![],
+            is_pub: false,
+            lifecycle: Lifecycle::Singleton,
+            invariants: vec![Spanned {
+                node: ContractClause {
+                    kind: ContractKind::Invariant,
+                    expr: Spanned {
+                        node: Expr::BoolLit(true),
+                        span: Span { start: 30, end: 34, file_id: 0 },
+                    },
+                },
+                span: Span { start: 20, end: 35, file_id: 0 },
+            }],
+        };
+
+        offset_class_spans(&mut class, 500);
+
+        // Name gets offset
+        assert_eq!(class.name.span.start, 510);
+        // Invariants do NOT get offset (not implemented in offset_class_spans)
+        assert_eq!(class.invariants[0].span.start, 20);
+        assert_eq!(class.invariants[0].node.expr.span.start, 30);
+    }
+
+    #[test]
+    fn test_resolve_generic_te_nested_generics() {
+        let mut te = TypeExpr::Generic {
+            name: "Map".to_string(),
+            type_args: vec![
+                spanned(TypeExpr::Named("string".to_string())),
+                spanned(TypeExpr::Generic {
+                    name: "Set".to_string(),
+                    type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
+                }),
+            ],
+        };
+
+        let mut env = TypeEnv::new();
+        assert!(resolve_generic_te(&mut te, &mut env).is_ok());
+
+        // Built-in generics stay as Generic even when nested
+        if let TypeExpr::Generic { name, type_args } = te {
+            assert_eq!(name, "Map");
+            if let TypeExpr::Generic { name, .. } = &type_args[1].node {
+                assert_eq!(name, "Set");
+            } else {
+                panic!("Expected nested Set generic");
+            }
+        } else {
+            panic!("Expected Map generic");
+        }
+    }
+
+    #[test]
+    fn test_substitute_in_type_expr_nested_array_nullable() {
+        let mut te = TypeExpr::Array(Box::new(spanned(TypeExpr::Nullable(Box::new(spanned(
+            TypeExpr::Named("T".to_string()),
+        ))))));
+
+        let mut bindings = HashMap::new();
+        bindings.insert("T".to_string(), TypeExpr::Named("int".to_string()));
+
+        substitute_in_type_expr(&mut te, &bindings);
+
+        if let TypeExpr::Array(inner) = te {
+            if let TypeExpr::Nullable(inner2) = &inner.node {
+                assert!(matches!(&inner2.node, TypeExpr::Named(n) if n == "int"));
+            } else {
+                panic!("Expected Nullable");
+            }
+        } else {
+            panic!("Expected Array");
         }
     }
 }
