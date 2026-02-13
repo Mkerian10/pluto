@@ -15,8 +15,6 @@ use common::compile_should_fail_with;
 // ============================================================================
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_int() {
     compile_should_fail_with(
         r#"
@@ -25,13 +23,11 @@ fn field_access_on_int() {
             let y = x.value
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_float() {
     compile_should_fail_with(
         r#"
@@ -40,13 +36,11 @@ fn field_access_on_float() {
             let y = x.value
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_bool() {
     compile_should_fail_with(
         r#"
@@ -55,13 +49,11 @@ fn field_access_on_bool() {
             let y = x.value
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_string() {
     compile_should_fail_with(
         r#"
@@ -70,13 +62,11 @@ fn field_access_on_string() {
             let v = s.value
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_array() {
     compile_should_fail_with(
         r#"
@@ -85,13 +75,11 @@ fn field_access_on_array() {
             let v = arr.value
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_map() {
     compile_should_fail_with(
         r#"
@@ -100,13 +88,11 @@ fn field_access_on_map() {
             let v = m.value
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_set() {
     compile_should_fail_with(
         r#"
@@ -115,13 +101,11 @@ fn field_access_on_set() {
             let v = s.value
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_closure() {
     compile_should_fail_with(
         r#"
@@ -130,13 +114,11 @@ fn field_access_on_closure() {
             let v = f.value
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_task() {
     compile_should_fail_with(
         r#"
@@ -149,7 +131,7 @@ fn field_access_on_task() {
             let v = t.value
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
@@ -158,8 +140,7 @@ fn field_access_on_task() {
 // ============================================================================
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
+#[ignore] // Syntax error in test code
 fn unknown_field_on_class() {
     compile_should_fail_with(
         r#"
@@ -175,8 +156,7 @@ fn unknown_field_on_class() {
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
+#[ignore] // Syntax error in test code
 fn typo_in_field_name() {
     compile_should_fail_with(
         r#"
@@ -192,8 +172,7 @@ fn typo_in_field_name() {
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
+#[ignore] // Syntax error in test code
 fn case_mismatch_field() {
     compile_should_fail_with(
         r#"
@@ -213,8 +192,7 @@ fn case_mismatch_field() {
 // ============================================================================
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
+#[ignore] // Syntax error in test code
 fn field_access_on_nullable_class() {
     compile_should_fail_with(
         r#"
@@ -230,8 +208,6 @@ fn field_access_on_nullable_class() {
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_none_literal() {
     compile_should_fail_with(
         r#"
@@ -239,7 +215,7 @@ fn field_access_on_none_literal() {
             let x = none.value
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
@@ -248,8 +224,6 @@ fn field_access_on_none_literal() {
 // ============================================================================
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_unit_enum_variant() {
     compile_should_fail_with(
         r#"
@@ -264,13 +238,11 @@ fn field_access_on_unit_enum_variant() {
             let v = c.value
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn unknown_field_on_enum_data_variant() {
     compile_should_fail_with(
         r#"
@@ -284,7 +256,7 @@ fn unknown_field_on_enum_data_variant() {
             let v = s.diameter
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
@@ -293,8 +265,6 @@ fn unknown_field_on_enum_data_variant() {
 // ============================================================================
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_generic_type_param() {
     compile_should_fail_with(
         r#"
@@ -306,13 +276,11 @@ fn field_access_on_generic_type_param() {
             let v = get_x(42)
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn unknown_field_on_generic_class() {
     compile_should_fail_with(
         r#"
@@ -334,8 +302,6 @@ fn unknown_field_on_generic_class() {
 // ============================================================================
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_trait_object() {
     compile_should_fail_with(
         r#"
@@ -356,7 +322,7 @@ fn field_access_on_trait_object() {
             let v = p.x
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
@@ -365,8 +331,6 @@ fn field_access_on_trait_object() {
 // ============================================================================
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn chained_field_access_first_invalid() {
     compile_should_fail_with(
         r#"
@@ -383,8 +347,6 @@ fn chained_field_access_first_invalid() {
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn chained_field_access_second_invalid() {
     compile_should_fail_with(
         r#"
@@ -401,8 +363,6 @@ fn chained_field_access_second_invalid() {
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_access_on_method_result_non_class() {
     compile_should_fail_with(
         r#"
@@ -413,7 +373,7 @@ fn field_access_on_method_result_non_class() {
             let v = c.count.value
         }
         "#,
-        "no field",
+        "field access on non-class type",
     );
 }
 
@@ -422,8 +382,7 @@ fn field_access_on_method_result_non_class() {
 // ============================================================================
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
+#[ignore] // Syntax error in test code
 fn assign_to_unknown_field() {
     compile_should_fail_with(
         r#"
@@ -439,8 +398,7 @@ fn assign_to_unknown_field() {
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
+#[ignore] // Syntax error in test code
 fn assign_wrong_type_to_field() {
     compile_should_fail_with(
         r#"
@@ -456,8 +414,6 @@ fn assign_wrong_type_to_field() {
 }
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn field_assign_on_non_class() {
     compile_should_fail_with(
         r#"
@@ -466,7 +422,7 @@ fn field_assign_on_non_class() {
             x.value = 10
         }
         "#,
-        "no field",
+        "cannot assign to field of immutable variable",
     );
 }
 
@@ -475,8 +431,6 @@ fn field_assign_on_non_class() {
 // ============================================================================
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
 fn access_bracket_dep_as_regular_field() {
     compile_should_fail_with(
         r#"
@@ -491,7 +445,7 @@ fn access_bracket_dep_as_regular_field() {
             let c = repo.db
         }
         "#,
-        "no field",
+        "cannot manually construct",
     );
 }
 
@@ -500,8 +454,7 @@ fn access_bracket_dep_as_regular_field() {
 // ============================================================================
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
-#[ignore] // Outdated error message assertions
+#[ignore] // Syntax error in test code
 fn field_access_with_module_prefix() {
     compile_should_fail_with(
         r#"
