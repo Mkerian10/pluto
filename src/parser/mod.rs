@@ -1989,6 +1989,49 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_if_expr(&mut self) -> Result<Spanned<Expr>, CompileError> {
+        let if_tok = self.expect(&Token::If)?;
+        let start = if_tok.span.start;
+
+        // Parse condition with struct literal restriction
+        let old_restrict = self.restrict_struct_lit;
+        self.restrict_struct_lit = true;
+        let condition = self.parse_expr(0)?;
+        self.restrict_struct_lit = old_restrict;
+
+        let then_block = self.parse_block()?;
+
+        // REQUIRE else clause for if-expression
+        self.expect(&Token::Else)?;
+
+        // Handle else if → desugar to nested if-expression
+        let else_block = if self.peek().is_some()
+            && matches!(self.peek().expect("token should exist after is_some check").node, Token::If)
+        {
+            let nested_if = self.parse_if_expr()?;
+            let span = nested_if.span;
+            // Wrap nested if-expr in a block with single expression statement
+            Spanned::new(
+                Block {
+                    stmts: vec![Spanned::new(Stmt::Expr(nested_if), span)]
+                },
+                span,
+            )
+        } else {
+            self.parse_block()?
+        };
+
+        let end = else_block.span.end;
+        Ok(Spanned::new(
+            Expr::If {
+                condition: Box::new(condition),
+                then_block,
+                else_block,
+            },
+            Span::new(start, end),
+        ))
+    }
+
     fn parse_match_expr(&mut self) -> Result<Spanned<Expr>, CompileError> {
         let match_tok = self.expect(&Token::Match)?;
         let start = match_tok.span.start;
@@ -2953,6 +2996,7 @@ impl<'a> Parser<'a> {
                 let tok = self.advance().expect("token should exist after peek");
                 Ok(Spanned::new(Expr::NoneLit, tok.span))
             }
+            Token::If => self.parse_if_expr(),
             Token::Match => self.parse_match_expr(),
             _ => Err(CompileError::syntax(
                 format!("unexpected token {} in expression", tok.node),
