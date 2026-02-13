@@ -332,7 +332,6 @@ fn nested_ternary_simulation_with_if() {
 }
 
 #[test]
-#[ignore] // Feature not supported: match expressions (only match statements)
 fn closure_inside_match_arm() {
     // Match expression with closure in arm
     let stdout = compile_and_run_stdout(r#"

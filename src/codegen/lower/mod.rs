@@ -2121,6 +2121,9 @@ impl<'a> LowerContext<'a> {
             Expr::If { condition, then_block, else_block } => {
                 self.lower_if_expr(condition, then_block, else_block)
             }
+            Expr::Match { expr, arms } => {
+                self.lower_match_expr(&expr.node, arms, crate::span::Span::dummy())
+            }
             Expr::QualifiedAccess { segments } => {
                 panic!(
                     "QualifiedAccess should be resolved by module flattening before codegen. Segments: {:?}",
@@ -2686,6 +2689,148 @@ impl<'a> LowerContext<'a> {
         self.builder.ins().jump(merge_bb, &[else_val]);
 
         // Switch to merge block and get result from parameter
+        self.builder.switch_to_block(merge_bb);
+        self.builder.seal_block(merge_bb);
+
+        Ok(self.builder.block_params(merge_bb)[0])
+    }
+
+    fn lower_match_expr(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[crate::parser::ast::MatchExprArm],
+        _span: crate::span::Span,
+    ) -> Result<Value, CompileError> {
+        use cranelift_codegen::ir::condcodes::IntCC;
+        use cranelift_codegen::ir::types;
+
+        // Lower scrutinee to get enum pointer
+        let ptr = self.lower_expr(scrutinee)?;
+
+        // Infer result type
+        let match_type = infer_type_for_expr_match(arms, scrutinee, self.env, &self.var_types);
+        let cl_type = pluto_to_cranelift(&match_type);
+
+        // Load tag (discriminant) from offset 0
+        let tag = self.builder.ins().load(types::I64, MemFlags::new(), ptr, 0);
+
+        // Create blocks
+        let mut check_blocks = Vec::new();
+        let mut body_blocks = Vec::new();
+        for _ in arms {
+            check_blocks.push(self.builder.create_block());
+            body_blocks.push(self.builder.create_block());
+        }
+        let merge_bb = self.builder.create_block();
+
+        // Add parameter to merge block to receive result
+        self.builder.append_block_param(merge_bb, cl_type);
+
+        // Jump to first check block
+        self.builder.ins().jump(check_blocks[0], &[]);
+
+        // Get enum info for variant indices
+        let scrutinee_type = infer_type_for_expr(scrutinee, self.env, &self.var_types);
+        let enum_name = match &scrutinee_type {
+            PlutoType::Enum(name) => name.clone(),
+            _ => return Err(CompileError::codegen("match scrutinee must be enum".to_string())),
+        };
+        let enum_info = self.env.enums.get(&enum_name)
+            .ok_or_else(|| CompileError::codegen(format!("undefined enum '{enum_name}'")))?.clone();
+
+        // Lower each arm
+        for (i, arm) in arms.iter().enumerate() {
+            // === Check block: compare tag ===
+            self.builder.switch_to_block(check_blocks[i]);
+            self.builder.seal_block(check_blocks[i]);
+
+            // Find variant index in enum definition
+            let variant_idx = enum_info.variants
+                .iter()
+                .position(|(name, _)| name == &arm.variant_name.node)
+                .ok_or_else(|| CompileError::codegen(
+                    format!("variant '{}' not found", arm.variant_name.node)
+                ))? as i64;
+
+            // For the last arm, exhaustiveness guarantees a match, so skip the check
+            if i + 1 < arms.len() {
+                // Not the last arm - check the tag and branch
+                let expected_tag = self.builder.ins().iconst(types::I64, variant_idx);
+                let cmp = self.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
+                self.builder.ins().brif(cmp, body_blocks[i], &[], check_blocks[i + 1], &[]);
+            } else {
+                // Last arm - exhaustiveness guarantees match, unconditional jump to body
+                self.builder.ins().jump(body_blocks[i], &[]);
+            }
+
+            // === Body block: extract fields and evaluate expression ===
+            self.builder.switch_to_block(body_blocks[i]);
+            self.builder.seal_block(body_blocks[i]);
+
+            // Save current variable bindings
+            let mut prev_vars = Vec::new();
+
+            // Extract and bind fields from variant
+            let variant = &enum_info.variants
+                .iter()
+                .find(|(name, _)| name == &arm.variant_name.node)
+                .unwrap()
+                .1;
+
+            for (binding_field, opt_rename) in &arm.bindings {
+                // Find field index
+                let field_idx = variant
+                    .iter()
+                    .position(|(fname, _)| fname == &binding_field.node)
+                    .unwrap();
+                let field_type = &variant[field_idx].1;
+
+                // Load field value from heap: offset = (1 + field_idx) * 8
+                let offset = ((1 + field_idx) as i32) * 8;
+                let raw = self.builder.ins().load(types::I64, MemFlags::new(), ptr, offset);
+                let val = from_array_slot(raw, field_type, &mut self.builder);
+
+                // Determine variable name (use rename if provided)
+                let var_name = match opt_rename {
+                    Some(r) => &r.node,
+                    None => &binding_field.node,
+                };
+
+                // Save previous binding
+                let prev_var = self.variables.get(var_name).cloned();
+                let prev_type = self.var_types.get(var_name).cloned();
+                prev_vars.push((var_name.clone(), prev_var, prev_type));
+
+                // Define new binding
+                let new_var = Variable::from_u32(self.next_var);
+                self.next_var += 1;
+                self.builder.declare_var(new_var, pluto_to_cranelift(field_type));
+                self.builder.def_var(new_var, val);
+                self.variables.insert(var_name.clone(), new_var);
+                self.var_types.insert(var_name.clone(), field_type.clone());
+            }
+
+            // Lower arm expression to get result value
+            let arm_val = self.lower_expr(&arm.value.node)?;
+
+            // Restore previous bindings
+            for (name, prev_var, prev_type) in prev_vars {
+                if let Some(var) = prev_var {
+                    self.variables.insert(name.clone(), var);
+                    if let Some(ty) = prev_type {
+                        self.var_types.insert(name, ty);
+                    }
+                } else {
+                    self.variables.remove(&name);
+                    self.var_types.remove(&name);
+                }
+            }
+
+            // Jump to merge with arm value
+            self.builder.ins().jump(merge_bb, &[arm_val]);
+        }
+
+        // === Merge block: receive result from block parameter ===
         self.builder.switch_to_block(merge_bb);
         self.builder.seal_block(merge_bb);
 
@@ -4636,6 +4781,47 @@ fn infer_type_for_expr_if(
     PlutoType::Void
 }
 
+/// Quick type inference for match-expression at codegen time
+fn infer_type_for_expr_match(
+    arms: &[crate::parser::ast::MatchExprArm],
+    scrutinee: &Expr,
+    env: &TypeEnv,
+    var_types: &HashMap<String, PlutoType>
+) -> PlutoType {
+    // Infer from the first arm's value expression (typeck guarantees all arms have same type)
+    if let Some(arm) = arms.first() {
+        // Get scrutinee type to find enum info
+        let scrutinee_type = infer_type_for_expr(scrutinee, env, var_types);
+        let enum_name = match &scrutinee_type {
+            PlutoType::Enum(name) => name,
+            _ => return PlutoType::Void,
+        };
+
+        // Get variant info to find field types
+        if let Some(enum_info) = env.enums.get(enum_name) {
+            if let Some((_, variant_fields)) = enum_info.variants.iter()
+                .find(|(name, _)| name == &arm.variant_name.node)
+            {
+                // Create temporary var_types with bindings
+                let mut temp_var_types = var_types.clone();
+                for (binding_field, opt_rename) in &arm.bindings {
+                    if let Some((_, field_type)) = variant_fields.iter()
+                        .find(|(fname, _)| fname == &binding_field.node)
+                    {
+                        let var_name = opt_rename.as_ref()
+                            .map_or(&binding_field.node, |r| &r.node);
+                        temp_var_types.insert(var_name.clone(), field_type.clone());
+                    }
+                }
+                return infer_type_for_expr(&arm.value.node, env, &temp_var_types);
+            }
+        }
+    }
+
+    // Default to void if no arms (shouldn't happen after typeck)
+    PlutoType::Void
+}
+
 /// Whether a type needs deep-copying at spawn sites.
 /// Heap-allocated mutable types need copying; primitives, immutable strings,
 /// and shared-by-reference types (tasks, channels) do not.
@@ -4966,6 +5152,9 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
         Expr::If { then_block, else_block, .. } => {
             // Use the helper function we already defined
             infer_type_for_expr_if(then_block, else_block, env, var_types)
+        }
+        Expr::Match { expr, arms } => {
+            infer_type_for_expr_match(arms, &expr.node, env, var_types)
         }
         Expr::QualifiedAccess { segments } => {
             panic!(

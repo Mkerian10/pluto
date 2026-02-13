@@ -401,6 +401,11 @@ pub enum Expr {
         then_block: Spanned<Block>,
         else_block: Spanned<Block>,
     },
+    /// Match-expression: all arms must return same type, exhaustiveness required
+    Match {
+        expr: Box<Spanned<Expr>>,
+        arms: Vec<MatchExprArm>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -510,6 +515,17 @@ pub struct MatchArm {
     pub type_args: Vec<Spanned<TypeExpr>>,
     pub bindings: Vec<(Spanned<String>, Option<Spanned<String>>)>,
     pub body: Spanned<Block>,
+    pub enum_id: Option<Uuid>,
+    pub variant_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchExprArm {
+    pub enum_name: Spanned<String>,
+    pub variant_name: Spanned<String>,
+    pub type_args: Vec<Spanned<TypeExpr>>,
+    pub bindings: Vec<(Spanned<String>, Option<Spanned<String>>)>,
+    pub value: Spanned<Expr>,
     pub enum_id: Option<Uuid>,
     pub variant_id: Option<Uuid>,
 }

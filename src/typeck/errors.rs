@@ -439,6 +439,12 @@ fn collect_expr_effects(
                 collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
             }
         }
+        Expr::Match { expr, arms } => {
+            collect_expr_effects(&expr.node, direct_errors, edges, current_fn, env);
+            for arm in arms {
+                collect_expr_effects(&arm.value.node, direct_errors, edges, current_fn, env);
+            }
+        }
         Expr::QualifiedAccess { segments } => {
             panic!(
                 "QualifiedAccess should be resolved by module flattening before error analysis. Segments: {:?}",
@@ -819,6 +825,13 @@ fn enforce_expr(
             }
             for stmt in &else_block.node.stmts {
                 enforce_stmt(&stmt.node, stmt.span, current_fn, env)?;
+            }
+            Ok(())
+        }
+        Expr::Match { expr, arms } => {
+            enforce_expr(&expr.node, expr.span, current_fn, env)?;
+            for arm in arms {
+                enforce_expr(&arm.value.node, arm.value.span, current_fn, env)?;
             }
             Ok(())
         }

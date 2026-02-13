@@ -171,22 +171,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn consume_statement_end(&mut self) -> Result<(), CompileError> {
-        match self.peek_raw() {
-            None => Ok(()), // EOF is valid statement terminator
-            Some(tok) if matches!(tok.node, Token::Newline) => {
-                self.advance();
-                Ok(())
-            }
-            Some(tok) if matches!(tok.node, Token::RBrace) => {
-                Ok(()) // Closing brace ends statement without consuming it
-            }
-            Some(tok) => {
-                Err(CompileError::syntax(
-                    "expected newline or '}' after statement",
-                    tok.span,
-                ))
-            }
+    fn consume_statement_end(&mut self) {
+        // Consume a newline if present, or we're at } or EOF
+        if let Some(tok) = self.peek_raw() && matches!(tok.node, Token::Newline) {
+            self.advance();
         }
     }
 
@@ -709,7 +697,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        self.consume_statement_end()?;
+        self.consume_statement_end();
         Ok(Spanned::new(ImportDecl { path, alias }, Span::new(start, end)))
     }
 
@@ -740,7 +728,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        self.consume_statement_end()?;
+        self.consume_statement_end();
         Ok(Spanned::new(ExternFnDecl { name, params, return_type, is_pub }, Span::new(start, end)))
     }
 
@@ -778,17 +766,17 @@ impl<'a> Parser<'a> {
             if matches!(self.peek().expect("token should exist after is_some check").node, Token::Ambient) {
                 self.advance(); // consume 'ambient'
                 ambient_types.push(self.expect_ident()?);
-                self.consume_statement_end()?;
+                self.consume_statement_end();
             } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Scoped) {
                 self.advance(); // consume 'scoped'
                 let class_name = self.expect_ident()?;
                 lifecycle_overrides.push((class_name, Lifecycle::Scoped));
-                self.consume_statement_end()?;
+                self.consume_statement_end();
             } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Transient) {
                 self.advance(); // consume 'transient'
                 let class_name = self.expect_ident()?;
                 lifecycle_overrides.push((class_name, Lifecycle::Transient));
-                self.consume_statement_end()?;
+                self.consume_statement_end();
             } else {
                 methods.push(self.parse_method()?);
             }
@@ -828,17 +816,17 @@ impl<'a> Parser<'a> {
             if matches!(self.peek().expect("token should exist after is_some check").node, Token::Ambient) {
                 self.advance(); // consume 'ambient'
                 ambient_types.push(self.expect_ident()?);
-                self.consume_statement_end()?;
+                self.consume_statement_end();
             } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Scoped) {
                 self.advance(); // consume 'scoped'
                 let class_name = self.expect_ident()?;
                 lifecycle_overrides.push((class_name, Lifecycle::Scoped));
-                self.consume_statement_end()?;
+                self.consume_statement_end();
             } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::Transient) {
                 self.advance(); // consume 'transient'
                 let class_name = self.expect_ident()?;
                 lifecycle_overrides.push((class_name, Lifecycle::Transient));
-                self.consume_statement_end()?;
+                self.consume_statement_end();
             } else {
                 // Parse optional 'pub' before methods/requires
                 let is_pub = if matches!(self.peek().expect("token should exist after is_some check").node, Token::Pub) {
@@ -933,7 +921,7 @@ impl<'a> Parser<'a> {
         };
 
         let end = return_type.as_ref().map(|rt| rt.span.end).unwrap_or(rparen_end);
-        self.consume_statement_end()?;
+        self.consume_statement_end();
 
         Ok(Spanned::new(RequiredMethod {
             id: Uuid::new_v4(),
@@ -1132,7 +1120,7 @@ impl<'a> Parser<'a> {
             Some(self.parse_block()?)
         } else {
             if contracts.is_empty() {
-                self.consume_statement_end()?;
+                self.consume_statement_end();
             }
             None
         };
@@ -1197,13 +1185,13 @@ impl<'a> Parser<'a> {
                     ContractClause { kind: ContractKind::Invariant, expr },
                     Span::new(inv_start, inv_end),
                 ));
-                self.consume_statement_end()?;
+                self.consume_statement_end();
             } else {
                 let fname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
                 fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false });
-                self.consume_statement_end()?;
+                self.consume_statement_end();
             }
             self.skip_newlines();
         }
@@ -1347,7 +1335,7 @@ impl<'a> Parser<'a> {
                         ContractClause { kind: ContractKind::Requires, expr },
                         Span::new(req_start, req_end),
                     ));
-                    self.consume_statement_end()?;
+                    self.consume_statement_end();
                 }
                 Token::Ensures => {
                     self.skip_newlines();
@@ -1359,7 +1347,7 @@ impl<'a> Parser<'a> {
                         ContractClause { kind: ContractKind::Ensures, expr },
                         Span::new(ens_start, ens_end),
                     ));
-                    self.consume_statement_end()?;
+                    self.consume_statement_end();
                 }
                 _ => break,
             }
@@ -1512,12 +1500,12 @@ impl<'a> Parser<'a> {
             Token::Raise => self.parse_raise_stmt(),
             Token::Break => {
                 let span = self.advance().expect("token should exist after peek").span;
-                self.consume_statement_end()?;
+                self.consume_statement_end();
                 Ok(Spanned::new(Stmt::Break, span))
             }
             Token::Continue => {
                 let span = self.advance().expect("token should exist after peek").span;
-                self.consume_statement_end()?;
+                self.consume_statement_end();
                 Ok(Spanned::new(Stmt::Continue, span))
             }
             _ => {
@@ -1540,7 +1528,7 @@ impl<'a> Parser<'a> {
                     self.advance(); // consume compound assignment token
                     let rhs = self.parse_expr(0)?;
                     let end = rhs.span.end;
-                    self.consume_statement_end()?;
+                    self.consume_statement_end();
                     // Desugar: x += y  =>  x = x + y
                     return self.desugar_compound_assign(expr, op, rhs, start, end);
                 }
@@ -1550,7 +1538,7 @@ impl<'a> Parser<'a> {
                     let inc_tok = self.advance().expect("token should exist after peek");
                     let op = if matches!(inc_tok.node, Token::PlusPlus) { BinOp::Add } else { BinOp::Sub };
                     let end = inc_tok.span.end;
-                    self.consume_statement_end()?;
+                    self.consume_statement_end();
                     // Desugar: x++  =>  x = x + 1
                     let one = Spanned::new(Expr::IntLit(1), Span::new(end, end));
                     return self.desugar_compound_assign(expr, op, one, start, end);
@@ -1560,7 +1548,7 @@ impl<'a> Parser<'a> {
                     self.advance(); // consume '='
                     let value = self.parse_expr(0)?;
                     let end = value.span.end;
-                    self.consume_statement_end()?;
+                    self.consume_statement_end();
 
                     match expr.node {
                         Expr::Ident(name) => {
@@ -1629,7 +1617,7 @@ impl<'a> Parser<'a> {
                     }
                 } else {
                     let end = expr.span.end;
-                    self.consume_statement_end()?;
+                    self.consume_statement_end();
                     Ok(Spanned::new(Stmt::Expr(expr), Span::new(start, end)))
                 }
             }
@@ -1680,36 +1668,6 @@ impl<'a> Parser<'a> {
                 },
                 span,
             )),
-            Expr::QualifiedAccess { mut segments } => {
-                // Convert QualifiedAccess to FieldAssign for compound assignment
-                // e.g., c.value += 10 becomes FieldAssign { object: c, field: value, value: c.value + 10 }
-                if segments.len() < 2 {
-                    return Err(CompileError::syntax(
-                        "invalid compound assignment target",
-                        target_expr.span,
-                    ));
-                }
-
-                let field = segments.pop().unwrap();
-
-                // Build object expression from remaining segments
-                let object_expr = if segments.len() == 1 {
-                    Expr::Ident(segments[0].node.clone())
-                } else {
-                    Expr::QualifiedAccess { segments }
-                };
-                let object_span = Span::new(target_expr.span.start, field.span.start - 1);
-                let object = Spanned::new(object_expr, object_span);
-
-                Ok(Spanned::new(
-                    Stmt::FieldAssign {
-                        object,
-                        field,
-                        value: bin_expr,
-                    },
-                    span,
-                ))
-            }
             _ => Err(CompileError::syntax(
                 "invalid compound assignment target",
                 target_expr.span,
@@ -1746,7 +1704,7 @@ impl<'a> Parser<'a> {
         self.expect(&Token::Eq)?;
         let value = self.parse_expr(0)?;
         let end = value.span.end;
-        self.consume_statement_end()?;
+        self.consume_statement_end();
 
         Ok(Spanned::new(Stmt::Let { name, ty, value, is_mut }, Span::new(start, end)))
     }
@@ -1782,7 +1740,7 @@ impl<'a> Parser<'a> {
         };
         let close = self.expect(&Token::RParen)?;
         let end = close.span.end;
-        self.consume_statement_end()?;
+        self.consume_statement_end();
 
         Ok(Spanned::new(
             Stmt::LetChan { sender, receiver, elem_type, capacity },
@@ -1802,7 +1760,7 @@ impl<'a> Parser<'a> {
         };
 
         let end = value.as_ref().map_or(ret_span.end, |v| v.span.end);
-        self.consume_statement_end()?;
+        self.consume_statement_end();
 
         Ok(Spanned::new(Stmt::Return(value), Span::new(start, end)))
     }
@@ -1814,16 +1772,12 @@ impl<'a> Parser<'a> {
         // yield always requires a value expression
         let value = self.parse_expr(0)?;
         let end = value.span.end;
-        self.consume_statement_end()?;
+        self.consume_statement_end();
 
         Ok(Spanned::new(Stmt::Yield { value }, Span::new(start, end)))
     }
 
     fn parse_if_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
-        self.parse_if_stmt_inner(true)
-    }
-
-    fn parse_if_stmt_inner(&mut self, check_boundary: bool) -> Result<Spanned<Stmt>, CompileError> {
         let if_tok = self.expect(&Token::If)?;
         let start = if_tok.span.start;
         let old_restrict = self.restrict_struct_lit;
@@ -1836,8 +1790,7 @@ impl<'a> Parser<'a> {
             self.advance(); // consume 'else'
             // Desugar `else if` into `else { if ... }`
             if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::If) {
-                // Recursive call for else-if: don't check boundary, as it's part of this statement
-                let nested_if = self.parse_if_stmt_inner(false)?;
+                let nested_if = self.parse_if_stmt()?;
                 let span = nested_if.span;
                 Some(Spanned::new(
                     Block { stmts: vec![nested_if] },
@@ -1851,55 +1804,9 @@ impl<'a> Parser<'a> {
         };
 
         let end = else_block.as_ref().map_or(then_block.span.end, |b| b.span.end);
-        if check_boundary {
-            self.consume_statement_end()?;
-        }
 
         Ok(Spanned::new(
             Stmt::If { condition, then_block, else_block },
-            Span::new(start, end),
-        ))
-    }
-
-    fn parse_if_expr(&mut self) -> Result<Spanned<Expr>, CompileError> {
-        let if_tok = self.expect(&Token::If)?;
-        let start = if_tok.span.start;
-
-        // Parse condition with struct literal restriction
-        let old_restrict = self.restrict_struct_lit;
-        self.restrict_struct_lit = true;
-        let condition = self.parse_expr(0)?;
-        self.restrict_struct_lit = old_restrict;
-
-        let then_block = self.parse_block()?;
-
-        // REQUIRE else clause for if-expression
-        self.expect(&Token::Else)?;
-
-        // Handle else if → desugar to nested if-expression
-        let else_block = if self.peek().is_some()
-            && matches!(self.peek().expect("token should exist after is_some check").node, Token::If)
-        {
-            let nested_if = self.parse_if_expr()?;
-            let span = nested_if.span;
-            // Wrap nested if-expr in a block with single expression statement
-            Spanned::new(
-                Block {
-                    stmts: vec![Spanned::new(Stmt::Expr(nested_if), span)]
-                },
-                span,
-            )
-        } else {
-            self.parse_block()?
-        };
-
-        let end = else_block.span.end;
-        Ok(Spanned::new(
-            Expr::If {
-                condition: Box::new(condition),
-                then_block,
-                else_block,
-            },
             Span::new(start, end),
         ))
     }
@@ -1913,7 +1820,6 @@ impl<'a> Parser<'a> {
         self.restrict_struct_lit = old_restrict;
         let body = self.parse_block()?;
         let end = body.span.end;
-        self.consume_statement_end()?;
 
         Ok(Spanned::new(
             Stmt::While { condition, body },
@@ -1932,7 +1838,6 @@ impl<'a> Parser<'a> {
         self.restrict_struct_lit = old_restrict;
         let body = self.parse_block()?;
         let end = body.span.end;
-        self.consume_statement_end()?;
 
         Ok(Spanned::new(
             Stmt::For { var, iterable, body },
@@ -2010,7 +1915,6 @@ impl<'a> Parser<'a> {
 
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
-        self.consume_statement_end()?;
 
         Ok(Spanned::new(Stmt::Match { expr: scrutinee, arms }, Span::new(start, end)))
     }
@@ -2048,6 +1952,181 @@ impl<'a> Parser<'a> {
                 _ => return false,
             }
         }
+    }
+
+    fn is_match_expr_bindings_ahead(&self) -> bool {
+        // For expression match: distinguish between:
+        //   Status.Active => expr  -- unit variant, no bindings
+        //   Status.Suspended { reason } => expr  -- variant with bindings
+        // Look for pattern: { (ident (: ident)? ,?)* } =>
+        if self.pos >= self.tokens.len() || !matches!(self.tokens[self.pos].node, Token::LBrace) {
+            return false;
+        }
+        // Skip past newlines after the opening brace
+        let mut i = self.pos + 1;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        // Scan tokens: must only be Ident, Comma, Colon, Newline until we hit }
+        loop {
+            if i >= self.tokens.len() {
+                return false;
+            }
+            match &self.tokens[i].node {
+                Token::RBrace => {
+                    // Found closing }. Now check if next non-newline is =>
+                    i += 1;
+                    while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+                        i += 1;
+                    }
+                    return i < self.tokens.len() && matches!(self.tokens[i].node, Token::FatArrow);
+                }
+                Token::Ident | Token::Comma | Token::Colon | Token::Newline => {
+                    i += 1;
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    fn parse_match_expr(&mut self) -> Result<Spanned<Expr>, CompileError> {
+        let match_tok = self.expect(&Token::Match)?;
+        let start = match_tok.span.start;
+
+        // Parse scrutinee (restrict struct literals)
+        let old_restrict = self.restrict_struct_lit;
+        self.restrict_struct_lit = true;
+        let expr = self.parse_expr(0)?;
+        self.restrict_struct_lit = old_restrict;
+
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut arms = Vec::new();
+
+        // Parse comma-delimited arms
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+            let arm = self.parse_match_expr_arm()?;
+            arms.push(arm);
+
+            self.skip_newlines();
+
+            // Check for comma
+            if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
+                self.advance(); // consume comma
+                self.skip_newlines();
+
+                // Allow trailing comma before closing brace
+                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+                    break;
+                }
+            } else if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+                // Missing comma between arms (not at end)
+                return Err(CompileError::syntax(
+                    "expected ',' between match arms".to_string(),
+                    self.peek().expect("token should exist after is_some check").span,
+                ));
+            }
+        }
+
+        if arms.is_empty() {
+            return Err(CompileError::syntax(
+                "match expression must have at least one arm".to_string(),
+                Span::new(start, start + 5),
+            ));
+        }
+
+        let end_brace = self.expect(&Token::RBrace)?;
+
+        Ok(Spanned::new(
+            Expr::Match {
+                expr: Box::new(expr),
+                arms,
+            },
+            Span::new(start, end_brace.span.end),
+        ))
+    }
+
+    fn parse_match_expr_arm(&mut self) -> Result<MatchExprArm, CompileError> {
+        // Parse enum and variant name
+        let first_ident = self.expect_ident()?;
+        self.expect(&Token::Dot)?;
+        let second_ident = self.expect_ident()?;
+
+        let (enum_name, variant_name) = if self.peek().is_some()
+            && matches!(self.peek().expect("token should exist after is_some check").node, Token::Dot)
+        {
+            // Module qualified: module.Enum.Variant
+            self.advance();
+            let third_ident = self.expect_ident()?;
+            (
+                Spanned::new(
+                    format!("{}.{}", first_ident.node, second_ident.node),
+                    Span::new(first_ident.span.start, second_ident.span.end),
+                ),
+                third_ident,
+            )
+        } else {
+            (first_ident, second_ident)
+        };
+
+        // Parse bindings if present
+        let bindings = if self.peek().is_some()
+            && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
+            && self.is_match_expr_bindings_ahead()
+        {
+            self.parse_match_bindings()?
+        } else {
+            Vec::new()
+        };
+
+        self.expect(&Token::FatArrow)?;
+
+        // Parse arm value (restrict struct literals)
+        let old_restrict = self.restrict_struct_lit;
+        self.restrict_struct_lit = true;
+        let value = self.parse_expr(0)?;
+        self.restrict_struct_lit = old_restrict;
+
+        Ok(MatchExprArm {
+            enum_name,
+            variant_name,
+            type_args: Vec::new(),
+            bindings,
+            value,
+            enum_id: None,
+            variant_id: None,
+        })
+    }
+
+    fn parse_match_bindings(
+        &mut self,
+    ) -> Result<Vec<(Spanned<String>, Option<Spanned<String>>)>, CompileError> {
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut bindings = Vec::new();
+
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+            let field_name = self.expect_ident()?;
+
+            let rename = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Colon) {
+                self.advance();
+                Some(self.expect_ident()?)
+            } else {
+                None
+            };
+
+            bindings.push((field_name, rename));
+
+            if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+
+        self.expect(&Token::RBrace)?;
+        Ok(bindings)
     }
 
     fn parse_select_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
@@ -2139,8 +2218,6 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        self.consume_statement_end()?;
-
         Ok(Spanned::new(Stmt::Select { arms, default: default_block }, Span::new(start, end)))
     }
 
@@ -2203,7 +2280,6 @@ impl<'a> Parser<'a> {
 
         let body = self.parse_block()?;
         let end = body.span.end;
-        self.consume_statement_end()?;
 
         Ok(Spanned::new(
             Stmt::Scope { seeds, bindings, body },
@@ -2271,7 +2347,7 @@ impl<'a> Parser<'a> {
 
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
-        self.consume_statement_end()?;
+        self.consume_statement_end();
 
         Ok(Spanned::new(
             Stmt::Raise { error_name, fields, error_id: None },
@@ -2877,7 +2953,7 @@ impl<'a> Parser<'a> {
                 let tok = self.advance().expect("token should exist after peek");
                 Ok(Spanned::new(Expr::NoneLit, tok.span))
             }
-            Token::If => self.parse_if_expr(),
+            Token::Match => self.parse_match_expr(),
             _ => Err(CompileError::syntax(
                 format!("unexpected token {} in expression", tok.node),
                 tok.span,
@@ -3395,56 +3471,6 @@ impl<'a> Parser<'a> {
         }
         // Must be followed by `<` for type args
         i < self.tokens.len() && matches!(self.tokens[i].node, Token::Lt)
-    }
-
-    /// Lookahead to check if an if statement has an else clause.
-    /// Used to determine if we should parse it as an if-expression vs if-statement.
-    fn if_has_else_ahead(&self) -> bool {
-        // We're currently at the `if` token. We need to skip past:
-        // - the condition (arbitrary expression)
-        // - the then-block (balanced braces)
-        // and check if there's an `else` keyword after that.
-
-        let mut i = self.pos + 1; // skip the `if` token
-        let mut depth = 0;
-        let mut in_then_block = false;
-
-        // Skip condition (ends when we hit the opening { of the then-block)
-        while i < self.tokens.len() {
-            match &self.tokens[i].node {
-                Token::LBrace if depth == 0 => {
-                    in_then_block = true;
-                    depth = 1;
-                    i += 1;
-                    break;
-                }
-                _ => i += 1,
-            }
-        }
-
-        // Skip the then-block (count braces)
-        while i < self.tokens.len() && in_then_block {
-            match &self.tokens[i].node {
-                Token::LBrace => depth += 1,
-                Token::RBrace => {
-                    depth -= 1;
-                    if depth == 0 {
-                        i += 1;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-            i += 1;
-        }
-
-        // Skip newlines
-        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
-            i += 1;
-        }
-
-        // Check if there's an else keyword
-        i < self.tokens.len() && matches!(self.tokens[i].node, Token::Else)
     }
 }
 
@@ -5005,25 +5031,30 @@ mod tests {
         }
     }
 
+    // ============================================================
+    // Match-as-Expression Parser Tests (8 tests)
+    // ============================================================
+
     #[test]
-    fn parse_deep_chained_field_access() {
-        // Test 5-level chaining: a.b.c.d.e
-        let prog = parse("fn main() {\n    let x = a.b.c.d.e\n}");
+    fn parse_match_expr_basic_structure() {
+        let src = r#"
+            enum E { A B }
+            fn main() {
+                let x = match e {
+                    E.A => 1,
+                    E.B => 2
+                }
+            }
+        "#;
+        let prog = parse(src);
         let f = &prog.functions[0].node;
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
-                // Should parse as nested QualifiedAccess initially (before module resolution)
-                // a.b.c.d.e becomes QualifiedAccess with segments ["a", "b", "c", "d", "e"]
-                match &value.node {
-                    Expr::QualifiedAccess { segments } => {
-                        assert_eq!(segments.len(), 5);
-                        assert_eq!(segments[0].node, "a");
-                        assert_eq!(segments[1].node, "b");
-                        assert_eq!(segments[2].node, "c");
-                        assert_eq!(segments[3].node, "d");
-                        assert_eq!(segments[4].node, "e");
-                    }
-                    _ => panic!("expected qualified access, got {:?}", value.node),
+                assert!(matches!(value.node, Expr::Match { .. }));
+                if let Expr::Match { arms, .. } = &value.node {
+                    assert_eq!(arms.len(), 2);
+                    assert_eq!(arms[0].variant_name.node, "A");
+                    assert_eq!(arms[1].variant_name.node, "B");
                 }
             }
             _ => panic!("expected let statement"),
@@ -5031,22 +5062,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_chained_after_parenthesized_expr() {
-        // Test (expr).field.field
-        // Parser may produce QualifiedAccess, module resolution converts to FieldAccess
-        let prog = parse("fn main() {\n    let x = (obj).field.inner\n}");
+    fn parse_match_expr_with_bindings() {
+        let src = r#"
+            enum Shape {
+                Circle { radius: float }
+            }
+            fn main() {
+                let x = match s {
+                    Shape.Circle { radius: r } => r
+                }
+            }
+        "#;
+        let prog = parse(src);
         let f = &prog.functions[0].node;
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
-                // Parser produces QualifiedAccess for obj.field.inner (parentheses don't affect parsing)
-                match &value.node {
-                    Expr::QualifiedAccess { segments } => {
-                        assert_eq!(segments.len(), 3);
-                        assert_eq!(segments[0].node, "obj");
-                        assert_eq!(segments[1].node, "field");
-                        assert_eq!(segments[2].node, "inner");
-                    }
-                    _ => panic!("expected qualified access, got {:?}", value.node),
+                if let Expr::Match { arms, .. } = &value.node {
+                    assert_eq!(arms.len(), 1);
+                    assert_eq!(arms[0].bindings.len(), 1);
+                    assert_eq!(arms[0].bindings[0].0.node, "radius");
+                    assert_eq!(arms[0].bindings[0].1.as_ref().unwrap().node, "r");
                 }
             }
             _ => panic!("expected let statement"),
@@ -5054,31 +5089,53 @@ mod tests {
     }
 
     #[test]
-    fn parse_chained_after_function_call() {
-        // Test func().field.inner
-        let prog = parse("fn main() {\n    let x = foo().result.value\n}");
+    fn parse_match_expr_trailing_comma() {
+        let src = r#"
+            enum E { A B }
+            fn main() {
+                let x = match e {
+                    E.A => 1,
+                    E.B => 2,
+                }
+            }
+        "#;
+        let result = parse(src);
+        // Should parse successfully
+        assert_eq!(result.functions.len(), 1);
+    }
+
+    #[test]
+    fn parse_match_expr_no_trailing_comma() {
+        let src = r#"
+            enum E { A B }
+            fn main() {
+                let x = match e {
+                    E.A => 1,
+                    E.B => 2
+                }
+            }
+        "#;
+        let result = parse(src);
+        // Should parse successfully
+        assert_eq!(result.functions.len(), 1);
+    }
+
+    #[test]
+    fn parse_match_expr_module_qualified() {
+        let src = r#"
+            enum E { A }
+            fn main() {
+                let x = match e {
+                    mod.E.A => 1
+                }
+            }
+        "#;
+        let prog = parse(src);
         let f = &prog.functions[0].node;
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
-                // Should parse as FieldAccess(FieldAccess(Call("foo"), "result"), "value")
-                match &value.node {
-                    Expr::FieldAccess { object, field } => {
-                        assert_eq!(field.node, "value");
-                        match &object.node {
-                            Expr::FieldAccess { object: inner_obj, field: inner_field } => {
-                                assert_eq!(inner_field.node, "result");
-                                match &inner_obj.node {
-                                    Expr::Call { name, args, .. } => {
-                                        assert_eq!(name.node, "foo");
-                                        assert_eq!(args.len(), 0);
-                                    }
-                                    _ => panic!("expected call"),
-                                }
-                            }
-                            _ => panic!("expected field access"),
-                        }
-                    }
-                    _ => panic!("expected field access, got {:?}", value.node),
+                if let Expr::Match { arms, .. } = &value.node {
+                    assert_eq!(arms[0].enum_name.node, "mod.E");
                 }
             }
             _ => panic!("expected let statement"),
@@ -5086,62 +5143,62 @@ mod tests {
     }
 
     #[test]
-    fn parse_mixed_method_and_field_access() {
-        // Test obj.method().field.another()
-        let prog = parse("fn main() {\n    let x = obj.method().field.another()\n}");
+    fn parse_match_expr_nested() {
+        let src = r#"
+            enum E { A }
+            enum F { X }
+            fn main() {
+                let x = match e {
+                    E.A => match f {
+                        F.X => 1
+                    }
+                }
+            }
+        "#;
+        let result = parse(src);
+        // Should parse successfully with nested match
+        assert_eq!(result.functions.len(), 1);
+    }
+
+    #[test]
+    fn parse_match_expr_in_parentheses() {
+        let src = r#"
+            enum E { A B }
+            fn main() {
+                let x = (match e {
+                    E.A => 1,
+                    E.B => 2
+                }) + 10
+            }
+        "#;
+        let prog = parse(src);
         let f = &prog.functions[0].node;
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
-                // Should parse as Call(FieldAccess(Call(QualifiedAccess(["obj", "method"])), "field"), "another")
-                match &value.node {
-                    Expr::MethodCall { object, method, args, .. } => {
-                        assert_eq!(method.node, "another");
-                        assert_eq!(args.len(), 0);
-                        match &object.node {
-                            Expr::FieldAccess { object: inner_obj, field } => {
-                                assert_eq!(field.node, "field");
-                                match &inner_obj.node {
-                                    Expr::MethodCall { object: innermost_obj, method: innermost_method, .. } => {
-                                        assert_eq!(innermost_method.node, "method");
-                                        match &innermost_obj.node {
-                                            Expr::Ident(name) => {
-                                                assert_eq!(name, "obj");
-                                            }
-                                            _ => panic!("expected ident"),
-                                        }
-                                    }
-                                    _ => panic!("expected method call"),
-                                }
-                            }
-                            _ => panic!("expected field access"),
-                        }
-                    }
-                    _ => panic!("expected method call, got {:?}", value.node),
-                }
+                // Should be a binary op with match as left operand
+                assert!(matches!(value.node, Expr::BinOp { .. }));
             }
             _ => panic!("expected let statement"),
         }
     }
 
     #[test]
-    fn parse_chained_with_array_indexing() {
-        // Test obj.field[0].inner.value
-        let prog = parse("fn main() {\n    let x = obj.field[0].inner.value\n}");
+    fn parse_match_expr_complex_arm_value() {
+        let src = r#"
+            enum E { A }
+            fn main() {
+                let x = match e {
+                    E.A => foo(bar(10 + 20))
+                }
+            }
+        "#;
+        let prog = parse(src);
         let f = &prog.functions[0].node;
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
-                // Should parse as FieldAccess(FieldAccess(Index(QualifiedAccess, 0), "inner"), "value")
-                match &value.node {
-                    Expr::QualifiedAccess { segments } => {
-                        // obj.field[0].inner.value might parse as QualifiedAccess initially
-                        // Let's just verify it parses without error
-                        assert!(!segments.is_empty());
-                    }
-                    Expr::FieldAccess { .. } => {
-                        // Alternative: might parse as nested FieldAccess
-                        // Either way is fine, module resolution will handle it
-                    }
-                    _ => panic!("expected qualified access or field access, got {:?}", value.node),
+                if let Expr::Match { arms, .. } = &value.node {
+                    // Arm value should be a call expression
+                    assert!(matches!(arms[0].value.node, Expr::Call { .. }));
                 }
             }
             _ => panic!("expected let statement"),

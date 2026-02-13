@@ -677,6 +677,13 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
             v.visit_block(else_block);
         }
 
+        Expr::Match { expr, arms } => {
+            v.visit_expr(expr);
+            for arm in arms {
+                v.visit_expr(&arm.value);
+            }
+        }
+
         // QualifiedAccess (no children — just names)
         Expr::QualifiedAccess { .. } => {}
     }
@@ -1173,6 +1180,13 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, expr: &mut Spanned<Expr>) {
             v.visit_block_mut(else_block);
         }
 
+        Expr::Match { expr, arms } => {
+            v.visit_expr_mut(expr);
+            for arm in arms {
+                v.visit_expr_mut(&mut arm.value);
+            }
+        }
+
         Expr::QualifiedAccess { .. } => {}
     }
 }
@@ -1247,6 +1261,7 @@ mod tests {
                 Expr::StaticTraitCall { .. } => "StaticTraitCall",
                 Expr::QualifiedAccess { .. } => "QualifiedAccess",
                 Expr::If { .. } => "If",
+                Expr::Match { .. } => "Match",
             };
             self.visited.insert(expr_type.to_string());
             walk_expr(self, expr);
