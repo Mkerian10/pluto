@@ -1,6 +1,6 @@
 [workspace]
 members = [".", "sdk", "mcp"]
-exclude = ["tests/fixtures/test_math_crate"]
+exclude = ["tests/fixtures/test_math_crate", "fuzz"]
 resolver = "2"
 
 [package]
@@ -246,6 +246,10 @@ path = "tests/integration/struct_literals.rs"
 [[test]]
 name = "parser_edges"
 path = "tests/integration/edge_cases.rs"
+
+[[test]]
+name = "chained_field_access"
+path = "tests/integration/chained_field_access.rs"
 
 [[test]]
 name = "parser_property"
