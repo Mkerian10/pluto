@@ -965,3 +965,120 @@ fn main() {
 "#);
     assert_eq!(out, "hello\nworld\n");
 }
+
+// ── Escape sequences ──
+
+#[test]
+fn string_escape_null() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let s = "a\0b"
+    print(s.len())
+}"#,
+    );
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn string_escape_hex() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    print("\x48\x65\x6C\x6C\x6F")
+}"#,
+    );
+    assert_eq!(out, "Hello\n");
+}
+
+#[test]
+fn string_escape_hex_ff() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let s = "\xFF"
+    print(s.len())
+}"#,
+    );
+    // \xFF is U+00FF (ÿ), which is 2 bytes in UTF-8
+    assert_eq!(out, "2\n");
+}
+
+#[test]
+fn string_escape_unicode_ascii() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    print("\u{41}")
+}"#,
+    );
+    assert_eq!(out, "A\n");
+}
+
+#[test]
+fn string_escape_unicode_emoji() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    print("\u{1F680}")
+}"#,
+    );
+    assert_eq!(out, "\u{1F680}\n");
+}
+
+#[test]
+fn string_escape_unicode_len() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let s = "\u{1F680}"
+    print(s.len())
+}"#,
+    );
+    // Rocket emoji is 4 bytes in UTF-8
+    assert_eq!(out, "4\n");
+}
+
+#[test]
+fn string_escape_mixed() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    print("tab:\there\nnewline")
+}"#,
+    );
+    assert_eq!(out, "tab:\there\nnewline\n");
+}
+
+#[test]
+fn string_escape_hex_invalid() {
+    compile_should_fail_with(
+        r#"fn main() {
+    let s = "\xGG"
+}"#,
+        "invalid hex escape",
+    );
+}
+
+#[test]
+fn string_escape_unknown() {
+    compile_should_fail_with(
+        r#"fn main() {
+    let s = "\k"
+}"#,
+        "unknown escape sequence",
+    );
+}
+
+#[test]
+fn string_escape_unicode_invalid_surrogate() {
+    compile_should_fail_with(
+        r#"fn main() {
+    let s = "\u{D800}"
+}"#,
+        "surrogate",
+    );
+}
+
+#[test]
+fn string_escape_unicode_unclosed() {
+    compile_should_fail_with(
+        r#"fn main() {
+    let s = "\u{41"
+}"#,
+        "missing closing",
+    );
+}

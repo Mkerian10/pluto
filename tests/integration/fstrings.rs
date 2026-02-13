@@ -170,3 +170,47 @@ fn regular_string_unterminated_interpolation() {
 // Note: {{{x} is actually valid - {{ escapes to { and then {x} is interpolation
 // Result would be "{42"
 // This is not an error case, so we removed this test
+
+// ===== Escape Sequence Tests =====
+
+#[test]
+fn fstring_hex_escape() {
+    let output = compile_and_run_stdout(
+        r#"fn main() {
+            print(f"\x48ello")
+        }"#,
+    );
+    assert_eq!(output.trim(), "Hello");
+}
+
+#[test]
+fn fstring_unicode_escape() {
+    let output = compile_and_run_stdout(
+        r#"fn main() {
+            print(f"\u{1F680}")
+        }"#,
+    );
+    assert_eq!(output.trim(), "\u{1F680}");
+}
+
+#[test]
+fn fstring_unicode_escape_with_interpolation() {
+    let output = compile_and_run_stdout(
+        r#"fn main() {
+            let name = "World"
+            print(f"\u{41}{name}")
+        }"#,
+    );
+    assert_eq!(output.trim(), "AWorld");
+}
+
+#[test]
+fn fstring_null_escape() {
+    let output = compile_and_run_stdout(
+        r#"fn main() {
+            let s = f"a\0b"
+            print(s.len())
+        }"#,
+    );
+    assert_eq!(output.trim(), "3");
+}
