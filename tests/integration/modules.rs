@@ -1065,3 +1065,27 @@ fn test_sibling_file_error_attribution() {
     let err_string = format!("{}", err);
     assert!(err_string.contains("Syntax error"), "Error should mention syntax error");
 }
+
+// ============================================================
+// If-Expression Integration Tests
+// ============================================================
+
+#[test]
+fn if_expr_with_qualified_types() {
+    let files = vec![
+        ("types.pluto", "pub class Point {\n    x: int\n    y: int\n}"),
+        ("main.pluto", "import types\nfn main() {\n    let p = if true {\n        types.Point { x: 1, y: 2 }\n    } else {\n        types.Point { x: 3, y: 4 }\n    }\n    print(p.x + p.y)\n}"),
+    ];
+    let stdout = run_project(&files);
+    assert_eq!(stdout.trim(), "3");
+}
+
+#[test]
+fn if_expr_with_qualified_enum() {
+    let files = vec![
+        ("colors.pluto", "pub enum Color { Red Green Blue }"),
+        ("main.pluto", "import colors\nfn main() {\n    let c = if true { colors.Color.Red } else { colors.Color.Blue }\n    match c {\n        colors.Color.Red { print(\"red\") }\n        colors.Color.Green { print(\"green\") }\n        colors.Color.Blue { print(\"blue\") }\n    }\n}"),
+    ];
+    let stdout = run_project(&files);
+    assert_eq!(stdout.trim(), "red");
+}
