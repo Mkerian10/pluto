@@ -1209,3 +1209,184 @@ fn check_body_for_self_mutation(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::span::{Span, Spanned};
+
+    fn mk_span() -> Span {
+        Span { start: 0, end: 0, file_id: 0 }
+    }
+
+    fn spanned<T>(node: T) -> Spanned<T> {
+        Spanned { node, span: mk_span() }
+    }
+
+    // ---- root_variable tests ----
+
+    #[test]
+    fn root_variable_simple_ident() {
+        let expr = Expr::Ident("x".to_string());
+        assert_eq!(root_variable(&expr), Some("x"));
+    }
+
+    #[test]
+    fn root_variable_field_access() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(spanned(Expr::Ident("obj".to_string()))),
+            field: spanned("field".to_string()),
+        };
+        assert_eq!(root_variable(&expr), Some("obj"));
+    }
+
+    #[test]
+    fn root_variable_nested_field_access() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(spanned(Expr::FieldAccess {
+                object: Box::new(spanned(Expr::Ident("root".to_string()))),
+                field: spanned("middle".to_string()),
+            })),
+            field: spanned("leaf".to_string()),
+        };
+        assert_eq!(root_variable(&expr), Some("root"));
+    }
+
+    #[test]
+    fn root_variable_three_level_nesting() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(spanned(Expr::FieldAccess {
+                object: Box::new(spanned(Expr::FieldAccess {
+                    object: Box::new(spanned(Expr::Ident("a".to_string()))),
+                    field: spanned("b".to_string()),
+                })),
+                field: spanned("c".to_string()),
+            })),
+            field: spanned("d".to_string()),
+        };
+        assert_eq!(root_variable(&expr), Some("a"));
+    }
+
+    #[test]
+    fn root_variable_non_ident() {
+        let expr = Expr::IntLit(42);
+        assert_eq!(root_variable(&expr), None);
+    }
+
+    #[test]
+    fn root_variable_call_result() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(spanned(Expr::Call {
+                name: spanned("get_thing".to_string()),
+                args: vec![],
+                type_args: vec![],
+                target_id: None,
+            })),
+            field: spanned("value".to_string()),
+        };
+        assert_eq!(root_variable(&expr), None);
+    }
+
+    #[test]
+    fn root_variable_index_expression() {
+        let expr = Expr::Index {
+            object: Box::new(spanned(Expr::Ident("arr".to_string()))),
+            index: Box::new(spanned(Expr::IntLit(0))),
+        };
+        assert_eq!(root_variable(&expr), None);
+    }
+
+    // ---- is_mutation_on_self tests ----
+
+    #[test]
+    fn is_mutation_on_self_simple() {
+        let expr = Expr::Ident("self".to_string());
+        assert!(is_mutation_on_self(&expr));
+    }
+
+    #[test]
+    fn is_mutation_on_self_field_access() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(spanned(Expr::Ident("self".to_string()))),
+            field: spanned("count".to_string()),
+        };
+        assert!(is_mutation_on_self(&expr));
+    }
+
+    #[test]
+    fn is_mutation_on_self_nested_field_access() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(spanned(Expr::FieldAccess {
+                object: Box::new(spanned(Expr::Ident("self".to_string()))),
+                field: spanned("inner".to_string()),
+            })),
+            field: spanned("value".to_string()),
+        };
+        assert!(is_mutation_on_self(&expr));
+    }
+
+    #[test]
+    fn is_mutation_on_self_index_access() {
+        let expr = Expr::Index {
+            object: Box::new(spanned(Expr::Ident("self".to_string()))),
+            index: Box::new(spanned(Expr::IntLit(0))),
+        };
+        assert!(is_mutation_on_self(&expr));
+    }
+
+    #[test]
+    fn is_mutation_on_self_nested_index_access() {
+        let expr = Expr::Index {
+            object: Box::new(spanned(Expr::Index {
+                object: Box::new(spanned(Expr::Ident("self".to_string()))),
+                index: Box::new(spanned(Expr::IntLit(0))),
+            })),
+            index: Box::new(spanned(Expr::IntLit(1))),
+        };
+        assert!(is_mutation_on_self(&expr));
+    }
+
+    #[test]
+    fn is_mutation_on_self_mixed_field_and_index() {
+        let expr = Expr::Index {
+            object: Box::new(spanned(Expr::FieldAccess {
+                object: Box::new(spanned(Expr::Ident("self".to_string()))),
+                field: spanned("items".to_string()),
+            })),
+            index: Box::new(spanned(Expr::IntLit(0))),
+        };
+        assert!(is_mutation_on_self(&expr));
+    }
+
+    #[test]
+    fn is_mutation_on_self_other_ident() {
+        let expr = Expr::Ident("other".to_string());
+        assert!(!is_mutation_on_self(&expr));
+    }
+
+    #[test]
+    fn is_mutation_on_self_other_field_access() {
+        let expr = Expr::FieldAccess {
+            object: Box::new(spanned(Expr::Ident("obj".to_string()))),
+            field: spanned("field".to_string()),
+        };
+        assert!(!is_mutation_on_self(&expr));
+    }
+
+    #[test]
+    fn is_mutation_on_self_literal() {
+        let expr = Expr::IntLit(42);
+        assert!(!is_mutation_on_self(&expr));
+    }
+
+    #[test]
+    fn is_mutation_on_self_call() {
+        let expr = Expr::Call {
+            name: spanned("foo".to_string()),
+            args: vec![],
+            type_args: vec![],
+            target_id: None,
+        };
+        assert!(!is_mutation_on_self(&expr));
+    }
+}
