@@ -5,44 +5,36 @@ use common::compile_should_fail_with;
 
 // Direct cycle A -> B -> A
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn direct_cycle() { compile_should_fail_with(r#"class A[b:B]{} class B[a:A]{} app MyApp{fn main(self){}}"#, "circular"); }
 
 // Indirect cycle A -> B -> C -> A
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn indirect_cycle() { compile_should_fail_with(r#"class A[b:B]{} class B[c:C]{} class C[a:A]{} app MyApp{fn main(self){}}"#, "circular"); }
 
 // Self-cycle
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn self_cycle() { compile_should_fail_with(r#"class A[a:A]{} app MyApp{fn main(self){}}"#, "circular"); }
 
 // Cycle with app dependency
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn cycle_with_app() { compile_should_fail_with(r#"class A[b:B]{} class B[a:A]{} app MyApp[a:A]{fn main(self){}}"#, "circular"); }
 
 // Cycle in long chain
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn long_chain_cycle() { compile_should_fail_with(r#"class A[b:B]{} class B[c:C]{} class C[d:D]{} class D[e:E]{} class E[a:A]{} app MyApp{fn main(self){}}"#, "circular"); }
 
 // Multiple independent cycles
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn multiple_cycles() { compile_should_fail_with(r#"class A[b:B]{} class B[a:A]{} class C[d:D]{} class D[c:C]{} app MyApp{fn main(self){}}"#, "circular"); }
 
 // Cycle through multiple deps
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn cycle_multi_deps() { compile_should_fail_with(r#"class A[b:B,c:C]{} class B[a:A]{} class C{} app MyApp{fn main(self){}}"#, "circular"); }
 
 // REMOVED: generic_cycle - generic class self-dependency is valid (ACTUALLY_SUCCESS)
 
 // Partial cycle (B->C->B but A->B is ok)
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn partial_cycle() { compile_should_fail_with(r#"class A[b:B]{} class B[c:C]{} class C[b:B]{} app MyApp{fn main(self){}}"#, "circular"); }
 
 // REMOVED: cycle_nullable_dep - nullable bracket deps break cycles (valid code)
@@ -51,42 +43,34 @@ fn partial_cycle() { compile_should_fail_with(r#"class A[b:B]{} class B[c:C]{} c
 
 // Cycle only in unused classes
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn unused_cycle() { compile_should_fail_with(r#"class A[b:B]{} class B[a:A]{} class C{} app MyApp[c:C]{fn main(self){}}"#, ""); }
 
 // Cycle through scoped classes
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn scoped_cycle() { compile_should_fail_with(r#"scoped class A[b:B]{} scoped class B[a:A]{} app MyApp{fn main(self){}}"#, "circular"); }
 
 // Cycle through transient classes
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn transient_cycle() { compile_should_fail_with(r#"transient class A[b:B]{} transient class B[a:A]{} app MyApp{fn main(self){}}"#, "circular"); }
 
 // Mixed lifecycle cycle
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn mixed_lifecycle_cycle() { compile_should_fail_with(r#"class A[b:B]{} scoped class B[a:A]{} app MyApp{fn main(self){}}"#, "circular"); }
 
 // Cycle in deeply nested deps
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn deep_nested_cycle() { compile_should_fail_with(r#"class A[b:B]{x:int} class B[c:C]{y:int} class C[d:D]{z:int} class D[a:A]{w:int} app MyApp{fn main(self){}}"#, "circular"); }
 
 // REMOVED: cycle_field_and_dep - regular fields don't create DI cycles, only bracket deps do (valid code)
 
 // App self-dependency
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn app_self_dep() { compile_should_fail_with(r#"app MyApp[app:MyApp]{fn main(self){}}"#, ""); }
 
 // Cycle with conditional deps
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn conditional_cycle() { compile_should_fail_with(r#"class A[b:B]{} class B[c:C]{} class C[a:A]{} app MyApp{fn main(self){if true{}}}"#, "circular"); }
 
 // Detect cycle early
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn early_cycle_detection() { compile_should_fail_with(r#"class A[b:B]{} class B[c:C]{} class C[d:D]{} class D[a:A]{} app MyApp[a:A]{fn main(self){}}"#, "circular"); }
