@@ -1332,6 +1332,14 @@ impl PrettyPrinter {
                 }
                 self.write(")");
             }
+            Expr::If { condition, then_block, else_block } => {
+                self.write("if ");
+                self.emit_expr(&condition.node, 0);
+                self.write(" ");
+                self.emit_block(&then_block.node);
+                self.write(" else ");
+                self.emit_block(&else_block.node);
+            }
             Expr::QualifiedAccess { segments } => {
                 self.write(&segments.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join("."));
             }

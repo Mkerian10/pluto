@@ -1,0 +1,6 @@
+---
+source: tests/integration/error_snapshots.rs
+assertion_line: 110
+expression: format_error(&err.to_string())
+---
+Type error: trait method 'type_name' must have a 'self' parameter

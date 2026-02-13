@@ -1,0 +1,44 @@
+// If-expression examples
+// Demonstrates using if as an expression (returns a value)
+
+fn main() {
+    // Basic if-expression
+    let x = 10
+    let category = if x > 20 {
+        "high"
+    } else {
+        "low"
+    }
+    print(category)  // Output: low
+
+    // Nested if-expressions
+    let score = 75
+    let grade = if score >= 90 {
+        "A"
+    } else {
+        if score >= 80 {
+            "B"
+        } else {
+            if score >= 70 {
+                "C"
+            } else {
+                "F"
+            }
+        }
+    }
+    print(grade)  // Output: C
+
+    // If-expression in function argument
+    print(if true { "yes" } else { "no" })  // Output: yes
+
+    // If-expression with numeric values
+    let a = 5
+    let b = 10
+    let max = if a > b { a } else { b }
+    print(max)  // Output: 10
+
+    // If-expression in condition
+    if (if x > 5 { true } else { false }) {
+        print("x is greater than 5")  // Output: x is greater than 5
+    }
+}

@@ -1841,6 +1841,49 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    fn parse_if_expr(&mut self) -> Result<Spanned<Expr>, CompileError> {
+        let if_tok = self.expect(&Token::If)?;
+        let start = if_tok.span.start;
+
+        // Parse condition with struct literal restriction
+        let old_restrict = self.restrict_struct_lit;
+        self.restrict_struct_lit = true;
+        let condition = self.parse_expr(0)?;
+        self.restrict_struct_lit = old_restrict;
+
+        let then_block = self.parse_block()?;
+
+        // REQUIRE else clause for if-expression
+        self.expect(&Token::Else)?;
+
+        // Handle else if → desugar to nested if-expression
+        let else_block = if self.peek().is_some()
+            && matches!(self.peek().expect("token should exist after is_some check").node, Token::If)
+        {
+            let nested_if = self.parse_if_expr()?;
+            let span = nested_if.span;
+            // Wrap nested if-expr in a block with single expression statement
+            Spanned::new(
+                Block {
+                    stmts: vec![Spanned::new(Stmt::Expr(nested_if), span)]
+                },
+                span,
+            )
+        } else {
+            self.parse_block()?
+        };
+
+        let end = else_block.span.end;
+        Ok(Spanned::new(
+            Expr::If {
+                condition: Box::new(condition),
+                then_block,
+                else_block,
+            },
+            Span::new(start, end),
+        ))
+    }
+
     fn parse_while_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
         let while_tok = self.expect(&Token::While)?;
         let start = while_tok.span.start;
@@ -2808,6 +2851,7 @@ impl<'a> Parser<'a> {
                 let tok = self.advance().expect("token should exist after peek");
                 Ok(Spanned::new(Expr::NoneLit, tok.span))
             }
+            Token::If => self.parse_if_expr(),
             _ => Err(CompileError::syntax(
                 format!("unexpected token {} in expression", tok.node),
                 tok.span,
@@ -3325,6 +3369,56 @@ impl<'a> Parser<'a> {
         }
         // Must be followed by `<` for type args
         i < self.tokens.len() && matches!(self.tokens[i].node, Token::Lt)
+    }
+
+    /// Lookahead to check if an if statement has an else clause.
+    /// Used to determine if we should parse it as an if-expression vs if-statement.
+    fn if_has_else_ahead(&self) -> bool {
+        // We're currently at the `if` token. We need to skip past:
+        // - the condition (arbitrary expression)
+        // - the then-block (balanced braces)
+        // and check if there's an `else` keyword after that.
+
+        let mut i = self.pos + 1; // skip the `if` token
+        let mut depth = 0;
+        let mut in_then_block = false;
+
+        // Skip condition (ends when we hit the opening { of the then-block)
+        while i < self.tokens.len() {
+            match &self.tokens[i].node {
+                Token::LBrace if depth == 0 => {
+                    in_then_block = true;
+                    depth = 1;
+                    i += 1;
+                    break;
+                }
+                _ => i += 1,
+            }
+        }
+
+        // Skip the then-block (count braces)
+        while i < self.tokens.len() && in_then_block {
+            match &self.tokens[i].node {
+                Token::LBrace => depth += 1,
+                Token::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        i += 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+
+        // Skip newlines
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+
+        // Check if there's an else keyword
+        i < self.tokens.len() && matches!(self.tokens[i].node, Token::Else)
     }
 }
 
