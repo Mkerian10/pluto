@@ -12,7 +12,6 @@ mod common;
 use common::*;
 
 #[test]
-#[ignore] // Compiler bug: Generic nullable field doesn't accept T values (expected string?, found string)
 fn generic_nested_three_levels() {
     let stdout = compile_and_run_stdout(r#"
         class Box<T> {
@@ -76,7 +75,6 @@ fn generic_array_of_generics() {
 }
 
 #[test]
-#[ignore] // Compiler bug: Generic nullable field doesn't accept T values (expected [int]?, found [int])
 fn generic_fn_return_nested() {
     let stdout = compile_and_run_stdout(r#"
         class Option<T> {
