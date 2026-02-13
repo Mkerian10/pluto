@@ -1,6 +1,6 @@
 # Pluto Feature Tracker
 
-**Last Updated:** 2026-02-11
+**Last Updated:** 2026-02-12
 **Purpose:** Detailed feature tracking with priorities, effort estimates, and implementation status
 
 See also: [ROADMAP.md](ROADMAP.md) for high-level goals and milestones
@@ -36,14 +36,15 @@ See also: [ROADMAP.md](ROADMAP.md) for high-level goals and milestones
 - **Implementation:** Extend type inference/context propagation for empty array literals
 
 #### 2. If-as-Expression
-- **Status:** 🟢 Ready
+- **Status:** ✅ Done
 - **Effort:** M
 - **Impact:** High
 - **Description:** `let x = if cond { a } else { b }`
 - **Rationale:** Reduces verbosity, enables functional style
-- **Tests:** `tests/codegen/_05_control_flow.rs:174`, `_13_codegen_correctness.rs:487`
+- **Tests:** All if-expression tests passing (4 tests in `control_flow_extended.rs`, `expression_complexity.rs`, `enums.rs`)
 - **Dependencies:** None
-- **Implementation:** Parser + typeck to treat if/else as expression when all branches return same type
+- **Completed:** 2026-02-12
+- **Implementation:** Added `Expr::If` variant, parser support for expression contexts, branch type unification with nullable coercion, Cranelift block parameters for value passing
 
 #### 3. Match-as-Expression
 - **Status:** 🟢 Ready
