@@ -392,7 +392,7 @@ class Processor {
 
     fn process(self, line: string?) {
         let value = line?
-        print("{self.tag}: {value}")
+        print(f"{self.tag}: {value}")
     }
 }
 

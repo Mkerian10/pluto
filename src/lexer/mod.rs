@@ -6,6 +6,162 @@ use crate::span::{Span, Spanned};
 use crate::diagnostics::CompileError;
 use token::Token;
 
+/// Process escape sequences in a raw string literal.
+///
+/// `raw` is the string content between quotes (no escape processing yet).
+/// `string_span` is the span of the full token in source (for error messages).
+/// `quote_prefix_len` is 1 for `"..."`, 2 for `f"..."` — used to compute byte offsets.
+fn process_escapes(raw: &str, string_span: Span, quote_prefix_len: usize) -> Result<String, CompileError> {
+    let mut result = String::with_capacity(raw.len());
+    let mut chars = raw.char_indices().peekable();
+
+    while let Some((i, c)) = chars.next() {
+        if c != '\\' {
+            result.push(c);
+            continue;
+        }
+
+        // Byte offset of the backslash in the original source
+        let escape_start = string_span.start + quote_prefix_len + i;
+
+        match chars.next() {
+            Some((_, 'n')) => result.push('\n'),
+            Some((_, 'r')) => result.push('\r'),
+            Some((_, 't')) => result.push('\t'),
+            Some((_, '\\')) => result.push('\\'),
+            Some((_, '"')) => result.push('"'),
+            Some((_, '0')) => result.push('\0'),
+            Some((_, 'x')) => {
+                // \xNN — exactly 2 hex digits
+                let mut hex = String::with_capacity(2);
+                for _ in 0..2 {
+                    match chars.peek() {
+                        Some(&(_, ch)) if ch.is_ascii_hexdigit() => {
+                            hex.push(ch);
+                            chars.next();
+                        }
+                        _ => {
+                            let escape_end = string_span.start + quote_prefix_len
+                                + chars.peek().map_or(raw.len(), |&(j, _)| j);
+                            return Err(CompileError::syntax(
+                                format!(
+                                    "invalid hex escape: expected 2 hex digits after \\x, found '{}'",
+                                    if hex.is_empty() {
+                                        chars.peek().map_or("end of string".to_string(), |&(_, ch)| ch.to_string())
+                                    } else {
+                                        hex.clone()
+                                    }
+                                ),
+                                Span::new(escape_start, escape_end),
+                            ));
+                        }
+                    }
+                }
+                let byte = u8::from_str_radix(&hex, 16).unwrap();
+                result.push(byte as char);
+            }
+            Some((_, 'u')) => {
+                // \u{N...N} — 1-6 hex digits inside braces
+                match chars.peek() {
+                    Some(&(_, '{')) => { chars.next(); }
+                    _ => {
+                        let escape_end = string_span.start + quote_prefix_len
+                            + chars.peek().map_or(raw.len(), |&(j, _)| j);
+                        return Err(CompileError::syntax(
+                            "invalid unicode escape: expected '{' after \\u".to_string(),
+                            Span::new(escape_start, escape_end),
+                        ));
+                    }
+                }
+
+                let mut hex = String::with_capacity(6);
+                loop {
+                    match chars.peek() {
+                        Some(&(_, '}')) => {
+                            chars.next();
+                            break;
+                        }
+                        Some(&(_, ch)) if ch.is_ascii_hexdigit() => {
+                            if hex.len() >= 6 {
+                                let escape_end = string_span.start + quote_prefix_len
+                                    + chars.peek().map_or(raw.len(), |&(j, _)| j);
+                                return Err(CompileError::syntax(
+                                    "invalid unicode escape: too many hex digits (max 6)".to_string(),
+                                    Span::new(escape_start, escape_end),
+                                ));
+                            }
+                            hex.push(ch);
+                            chars.next();
+                        }
+                        Some(&(j, ch)) => {
+                            let escape_end = string_span.start + quote_prefix_len + j + ch.len_utf8();
+                            return Err(CompileError::syntax(
+                                format!("invalid unicode escape: unexpected character '{}'", ch),
+                                Span::new(escape_start, escape_end),
+                            ));
+                        }
+                        None => {
+                            let escape_end = string_span.start + quote_prefix_len + raw.len();
+                            return Err(CompileError::syntax(
+                                "invalid unicode escape: missing closing '}'".to_string(),
+                                Span::new(escape_start, escape_end),
+                            ));
+                        }
+                    }
+                }
+
+                if hex.is_empty() {
+                    let escape_end = string_span.start + quote_prefix_len
+                        + chars.peek().map_or(raw.len(), |&(j, _)| j);
+                    return Err(CompileError::syntax(
+                        "invalid unicode escape: empty \\u{}".to_string(),
+                        Span::new(escape_start, escape_end),
+                    ));
+                }
+
+                let codepoint = u32::from_str_radix(&hex, 16).unwrap();
+                if (0xD800..=0xDFFF).contains(&codepoint) {
+                    let escape_end = string_span.start + quote_prefix_len
+                        + chars.peek().map_or(raw.len(), |&(j, _)| j);
+                    return Err(CompileError::syntax(
+                        format!("invalid unicode escape: U+{:04X} is a surrogate codepoint", codepoint),
+                        Span::new(escape_start, escape_end),
+                    ));
+                }
+
+                match char::from_u32(codepoint) {
+                    Some(ch) => result.push(ch),
+                    None => {
+                        let escape_end = string_span.start + quote_prefix_len
+                            + chars.peek().map_or(raw.len(), |&(j, _)| j);
+                        return Err(CompileError::syntax(
+                            format!("invalid unicode escape: U+{:04X} is not a valid Unicode codepoint", codepoint),
+                            Span::new(escape_start, escape_end),
+                        ));
+                    }
+                }
+            }
+            Some((j, other)) => {
+                // Unknown escape — error
+                let escape_end = string_span.start + quote_prefix_len + j + other.len_utf8();
+                return Err(CompileError::syntax(
+                    format!("unknown escape sequence '\\{}'", other),
+                    Span::new(escape_start, escape_end),
+                ));
+            }
+            None => {
+                let escape_end = string_span.start + quote_prefix_len + raw.len();
+                return Err(CompileError::syntax(
+                    "unexpected backslash at end of string".to_string(),
+                    Span::new(escape_start, escape_end),
+                ));
+            }
+        }
+    }
+
+    Ok(result)
+}
+
 pub fn lex(source: &str) -> Result<Vec<Spanned<Token>>, CompileError> {
     let mut tokens = Vec::new();
     let mut lexer = Token::lexer(source);
@@ -31,6 +187,21 @@ pub fn lex(source: &str) -> Result<Vec<Spanned<Token>>, CompileError> {
 
     tokens
         .retain(|t| !matches!(t.node, Token::Comment));
+
+    // Process escape sequences in string literals
+    for token in &mut tokens {
+        match &token.node {
+            Token::StringLit(raw) => {
+                let processed = process_escapes(raw, token.span, 1)?;
+                token.node = Token::StringLit(processed);
+            }
+            Token::FStringLit(raw) => {
+                let processed = process_escapes(raw, token.span, 2)?;
+                token.node = Token::FStringLit(processed);
+            }
+            _ => {}
+        }
+    }
 
     // Validate no float immediately followed by dot (e.g., 1.2.3)
     // This catches invalid number formats like 1.2.3 which would otherwise
@@ -297,5 +468,111 @@ mod tests {
         assert!(matches!(tokens[4].node, Token::Ident));
         assert!(matches!(tokens[5].node, Token::Plus));
         assert!(matches!(tokens[6].node, Token::IntLit(1)));
+    }
+
+    // ===== process_escapes unit tests =====
+
+    fn escape(raw: &str) -> Result<String, CompileError> {
+        process_escapes(raw, Span::new(0, raw.len() + 2), 1)
+    }
+
+    #[test]
+    fn escape_basic_sequences() {
+        assert_eq!(escape(r"\n").unwrap(), "\n");
+        assert_eq!(escape(r"\r").unwrap(), "\r");
+        assert_eq!(escape(r"\t").unwrap(), "\t");
+        assert_eq!(escape(r"\\").unwrap(), "\\");
+        assert_eq!(escape(r#"\""#).unwrap(), "\"");
+        assert_eq!(escape(r"\0").unwrap(), "\0");
+    }
+
+    #[test]
+    fn escape_null_byte() {
+        let result = escape(r"\0").unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.as_bytes()[0], 0);
+    }
+
+    #[test]
+    fn escape_hex() {
+        assert_eq!(escape(r"\x41").unwrap(), "A");
+        assert_eq!(escape(r"\x61").unwrap(), "a");
+        assert_eq!(escape(r"\x00").unwrap(), "\0");
+        assert_eq!(escape(r"\x7F").unwrap(), "\x7F");
+        assert_eq!(escape(r"\xFF").unwrap(), "\u{FF}");
+    }
+
+    #[test]
+    fn escape_hex_errors() {
+        assert!(escape(r"\xGG").is_err());
+        assert!(escape(r"\x4").is_err());
+        assert!(escape(r"\x").is_err());
+    }
+
+    #[test]
+    fn escape_unicode() {
+        assert_eq!(escape(r"\u{41}").unwrap(), "A");
+        assert_eq!(escape(r"\u{0041}").unwrap(), "A");
+        assert_eq!(escape(r"\u{1F680}").unwrap(), "\u{1F680}");
+        assert_eq!(escape(r"\u{0}").unwrap(), "\0");
+    }
+
+    #[test]
+    fn escape_unicode_errors() {
+        assert!(escape(r"\u{}").is_err());       // empty
+        assert!(escape(r"\u{D800}").is_err());   // surrogate
+        assert!(escape(r"\u{DFFF}").is_err());   // surrogate
+        assert!(escape(r"\u{110000}").is_err()); // too large
+        assert!(escape(r"\u{41").is_err());      // unclosed
+        assert!(escape(r"\u41").is_err());       // no brace
+    }
+
+    #[test]
+    fn escape_unknown_errors() {
+        assert!(escape(r"\k").is_err());
+        assert!(escape(r"\a").is_err());
+        assert!(escape(r"\1").is_err());
+    }
+
+    #[test]
+    fn escape_passthrough_plain_text() {
+        assert_eq!(escape("hello world").unwrap(), "hello world");
+        assert_eq!(escape("").unwrap(), "");
+    }
+
+    #[test]
+    fn escape_mixed() {
+        assert_eq!(escape(r"hello\nworld").unwrap(), "hello\nworld");
+        assert_eq!(escape(r"\x48\x69").unwrap(), "Hi");
+        assert_eq!(escape(r"\t\n\r").unwrap(), "\t\n\r");
+    }
+
+    #[test]
+    fn lex_string_escape_null() {
+        let tokens = lex(r#""\0""#).unwrap();
+        assert!(matches!(&tokens[0].node, Token::StringLit(s) if s == "\0"));
+    }
+
+    #[test]
+    fn lex_string_escape_hex() {
+        let tokens = lex(r#""\x41""#).unwrap();
+        assert!(matches!(&tokens[0].node, Token::StringLit(s) if s == "A"));
+    }
+
+    #[test]
+    fn lex_string_escape_unicode() {
+        let tokens = lex(r#""\u{1F680}""#).unwrap();
+        assert!(matches!(&tokens[0].node, Token::StringLit(s) if s == "\u{1F680}"));
+    }
+
+    #[test]
+    fn lex_fstring_escape_hex() {
+        let tokens = lex(r#"f"\x48ello""#).unwrap();
+        assert!(matches!(&tokens[0].node, Token::FStringLit(s) if s == "Hello"));
+    }
+
+    #[test]
+    fn lex_string_unknown_escape_error() {
+        assert!(lex(r#""\k""#).is_err());
     }
 }

@@ -48,14 +48,11 @@ fn fstring_brace_escaping() {
 }
 
 #[test]
-fn regular_string_interpolation_still_works() {
-    let output = compile_and_run_stdout(
-        r#"fn main() {
-            let name = "World"
-            print("Hello {name}")
-        }"#,
+fn regular_string_braces_are_literal() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let name = \"alice\"\n    print(\"{name}\")\n}",
     );
-    assert_eq!(output.trim(), "Hello World");
+    assert_eq!(out.trim(), "{name}");
 }
 
 // ===== Error Tests =====
@@ -156,17 +153,50 @@ fn multiple_interpolations_one_unterminated() {
     );
 }
 
-#[test]
-fn regular_string_unterminated_interpolation() {
-    compile_should_fail_with(
-        r#"fn main() {
-            let x = 42
-            let result = "Value: {x"
-        }"#,
-        "unterminated interpolation expression",
-    );
-}
-
 // Note: {{{x} is actually valid - {{ escapes to { and then {x} is interpolation
 // Result would be "{42"
 // This is not an error case, so we removed this test
+
+// ===== Escape Sequence Tests =====
+
+#[test]
+fn fstring_hex_escape() {
+    let output = compile_and_run_stdout(
+        r#"fn main() {
+            print(f"\x48ello")
+        }"#,
+    );
+    assert_eq!(output.trim(), "Hello");
+}
+
+#[test]
+fn fstring_unicode_escape() {
+    let output = compile_and_run_stdout(
+        r#"fn main() {
+            print(f"\u{1F680}")
+        }"#,
+    );
+    assert_eq!(output.trim(), "\u{1F680}");
+}
+
+#[test]
+fn fstring_unicode_escape_with_interpolation() {
+    let output = compile_and_run_stdout(
+        r#"fn main() {
+            let name = "World"
+            print(f"\u{41}{name}")
+        }"#,
+    );
+    assert_eq!(output.trim(), "AWorld");
+}
+
+#[test]
+fn fstring_null_escape() {
+    let output = compile_and_run_stdout(
+        r#"fn main() {
+            let s = f"a\0b"
+            print(s.len())
+        }"#,
+    );
+    assert_eq!(output.trim(), "3");
+}

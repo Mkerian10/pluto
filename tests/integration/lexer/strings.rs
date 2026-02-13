@@ -86,40 +86,105 @@ fn string_escape_quote() {
 }
 
 #[test]
-fn string_invalid_escape_preserved() {
-    // "\x" is not a valid escape in current lexer
-    // Code: Some(other) => { result.push('\\'); result.push(other); }
-    // So \x becomes \\x in the string
-    let tokens = lex_ok(r#""hello\xworld""#);
-    assert!(matches!(&tokens[0].0, Token::StringLit(s) if s == "hello\\xworld"));
+fn string_invalid_escape_errors() {
+    // \k is not a valid escape — now produces a compile error
+    let result = lex(r#""hello\kworld""#);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("unknown escape sequence"));
 }
 
 #[test]
-fn string_invalid_escape_k() {
-    let tokens = lex_ok(r#""hello\kworld""#);
-    assert!(matches!(&tokens[0].0, Token::StringLit(s) if s == "hello\\kworld"));
-}
-
-#[test]
-fn string_unicode_escape_not_supported() {
-    // \u{1F4A9} for emoji - not in current lexer
+fn string_unicode_escape_supported() {
+    // \u{1F4A9} for poop emoji
     let tokens = lex_ok(r#""hello\u{1F4A9}world""#);
-    // Will preserve as \\u{1F4A9}
-    assert!(matches!(&tokens[0].0, Token::StringLit(s) if s.contains("\\u")));
+    assert!(matches!(&tokens[0].0, Token::StringLit(s) if s == "hello\u{1F4A9}world"));
 }
 
 #[test]
-fn string_hex_escape_not_supported() {
-    // \x41 for 'A' - not supported
+fn string_hex_escape_supported() {
+    // \x41 for 'A'
     let tokens = lex_ok(r#""hello\x41world""#);
-    assert!(matches!(&tokens[0].0, Token::StringLit(s) if s.contains("\\x")));
+    assert!(matches!(&tokens[0].0, Token::StringLit(s) if s == "helloAworld"));
+}
+
+#[test]
+fn string_null_escape() {
+    // \0 for null byte
+    let tokens = lex_ok(r#""hello\0world""#);
+    assert!(matches!(&tokens[0].0, Token::StringLit(s) if s == "hello\0world"));
 }
 
 #[test]
 fn string_octal_escape_not_supported() {
-    // \101 for 'A' - not supported
-    let tokens = lex_ok(r#""hello\101world""#);
-    assert!(matches!(&tokens[0].0, Token::StringLit(s) if s.contains("\\1")));
+    // \1 is unknown escape — errors
+    let result = lex(r#""hello\101world""#);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("unknown escape sequence"));
+}
+
+#[test]
+fn string_hex_escape_incomplete() {
+    // \x without 2 hex digits
+    let result = lex(r#""hello\xworld""#);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("invalid hex escape"));
+}
+
+#[test]
+fn string_hex_escape_one_digit() {
+    // \x4 without second hex digit
+    let result = lex(r#""hello\x4world""#);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("invalid hex escape"));
+}
+
+#[test]
+fn string_unicode_escape_empty() {
+    // \u{} — empty
+    let result = lex(r#""\u{}""#);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("empty"));
+}
+
+#[test]
+fn string_unicode_escape_surrogate() {
+    // \u{D800} — surrogate codepoint
+    let result = lex(r#""\u{D800}""#);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("surrogate"));
+}
+
+#[test]
+fn string_unicode_escape_too_large() {
+    // \u{110000} — above max codepoint
+    let result = lex(r#""\u{110000}""#);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("not a valid Unicode codepoint"));
+}
+
+#[test]
+fn string_unicode_escape_unclosed() {
+    // \u{41 — missing closing brace
+    let result = lex(r#""\u{41""#);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("missing closing"));
+}
+
+#[test]
+fn string_unicode_escape_no_brace() {
+    // \u41 — missing opening brace
+    let result = lex(r#""\u41""#);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("expected '{'"));
 }
 
 // ===== String Interpolation (Pluto-specific) =====
@@ -136,9 +201,10 @@ fn string_with_braces_no_interpolation() {
 
 #[test]
 fn string_escaped_braces() {
-    // Not clear if \{ is valid escape - current code doesn't handle it specially
-    let tokens = lex_ok(r#""hello \{name\}""#);
-    assert!(matches!(&tokens[0].0, Token::StringLit(_)));
+    // \{ is not a valid escape — now produces a compile error
+    // Pluto uses {{ and }} for brace escaping in interpolation, not \{ and \}
+    let result = lex(r#""hello \{name\}""#);
+    assert!(result.is_err());
 }
 
 // ===== Edge Cases =====

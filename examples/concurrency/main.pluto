@@ -42,17 +42,17 @@ fn main() {
     log.debug("Task 3 complete")
 
     log.info("Fibonacci results computed")
-    print("fib(30) = {r1}")
-    print("fib(25) = {r2}")
-    print("fib(20) = {r3}")
-    print("sum     = {r1 + r2 + r3}")
+    print(f"fib(30) = {r1}")
+    print(f"fib(25) = {r2}")
+    print(f"fib(20) = {r3}")
+    print(f"sum     = {r1 + r2 + r3}")
 
     // Error handling: spawned function raises, .get() catch handles it
     log.debug("Testing error handling")
     let t4 = spawn checked_fib(-1)
     let result = t4.get() catch -1
-    log.warn("checked_fib(-1) raised error, caught and returned: {result}")
-    print("checked_fib(-1) caught: {result}")
+    log.warn(f"checked_fib(-1) raised error, caught and returned: {result}")
+    print(f"checked_fib(-1) caught: {result}")
 
     // Void spawn: fire and forget, .get() just waits
     log.debug("Spawning void task")

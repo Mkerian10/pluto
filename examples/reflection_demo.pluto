@@ -19,11 +19,11 @@ fn main() {
     
     // Get type name for a class
     let user_type = TypeInfo::type_name<User>()
-    print("User type name: {user_type}")
+    print(f"User type name: {user_type}")
     
     // Get type name for an enum
     let role_type = TypeInfo::type_name<Role>()
-    print("Role type name: {role_type}")
+    print(f"Role type name: {role_type}")
     
     print("")
     print("TypeInfo::kind<T>() provides detailed metadata:")

@@ -11,7 +11,7 @@ class Config {
 
 class Database[config: Config] {
     fn query(self, sql: string) string {
-        return "result: {sql} (db={self.config.db_url()})"
+        return f"result: {sql} (db={self.config.db_url()})"
     }
 }
 

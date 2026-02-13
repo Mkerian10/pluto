@@ -6,13 +6,13 @@ fn main() {
     print("Parsed JSON:")
     print("  Name: " + data.get("name").get_string())
     let age = data.get("age").get_int()
-    print("  Age: {age}")
+    print(f"  Age: {age}")
 
     let scores = data.get("scores")
     let s0 = scores.at(0).get_int()
     let s1 = scores.at(1).get_int()
     let s2 = scores.at(2).get_int()
-    print("  Scores: {s0}, {s1}, {s2}")
+    print(f"  Scores: {s0}, {s1}, {s2}")
 
     // Build JSON programmatically
     let response = json.object()
@@ -38,8 +38,8 @@ fn main() {
     print("Round-trip verified:")
     print("  status: " + parsed.get("status").get_string())
     let count = parsed.get("count").get_int()
-    print("  count: {count}")
+    print(f"  count: {count}")
     print("  first item: " + parsed.get("items").at(0).get_string())
     let is_null = parsed.get("metadata").is_null()
-    print("  metadata is null: {is_null}")
+    print(f"  metadata is null: {is_null}")
 }

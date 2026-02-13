@@ -1169,7 +1169,7 @@ impl PrettyPrinter {
                 self.write(" }");
             }
             Expr::StringInterp { parts } => {
-                self.write("\"");
+                self.write("f\"");
                 for part in parts {
                     match part {
                         StringInterpPart::Lit(s) => {
@@ -1427,8 +1427,6 @@ fn escape_string(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            '{' => out.push_str("{{"),
-            '}' => out.push_str("}}"),
             other => out.push(other),
         }
     }
@@ -1915,9 +1913,10 @@ fn main() {
 
     #[test]
     fn test_string_interpolation() {
-        let src = "fn main() {\n    let name = \"world\"\n    let s = \"hello {name}\"\n}\n";
+        // String interpolation requires f-prefix
+        let src = "fn main() {\n    let name = \"world\"\n    let s = f\"hello {name}\"\n}\n";
         let result = pp(src);
-        assert!(result.contains("\"hello {name}\""));
+        assert!(result.contains("f\"hello {name}\""));
         assert_roundtrip_stable(src);
     }
 
@@ -2603,15 +2602,16 @@ fn main() {
 
     #[test]
     fn test_escape_string_braces() {
-        assert_eq!(escape_string("{value}"), "{{value}}");
-        assert_eq!(escape_string("{{escaped}}"), "{{{{escaped}}}}");
+        // Braces are literal in regular strings (no interpolation)
+        assert_eq!(escape_string("{value}"), "{value}");
+        assert_eq!(escape_string("{{escaped}}"), "{{escaped}}");
     }
 
     #[test]
     fn test_escape_string_mixed() {
         assert_eq!(
             escape_string("\"hello\"\n\t{world}\\"),
-            "\\\"hello\\\"\\n\\t{{world}}\\\\"
+            "\\\"hello\\\"\\n\\t{world}\\\\"
         );
     }
 

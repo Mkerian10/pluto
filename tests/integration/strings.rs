@@ -91,7 +91,7 @@ fn string_concat_chain() {
 #[test]
 fn string_interp_basic() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let name = \"alice\"\n    print(\"hello {name}\")\n}",
+        "fn main() {\n    let name = \"alice\"\n    print(f\"hello {name}\")\n}",
     );
     assert_eq!(out, "hello alice\n");
 }
@@ -99,7 +99,7 @@ fn string_interp_basic() {
 #[test]
 fn string_interp_int() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let x = 42\n    print(\"x is {x}\")\n}",
+        "fn main() {\n    let x = 42\n    print(f\"x is {x}\")\n}",
     );
     assert_eq!(out, "x is 42\n");
 }
@@ -107,7 +107,7 @@ fn string_interp_int() {
 #[test]
 fn string_interp_float() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let pi = 3.14\n    print(\"pi is {pi}\")\n}",
+        "fn main() {\n    let pi = 3.14\n    print(f\"pi is {pi}\")\n}",
     );
     assert_eq!(out, "pi is 3.140000\n");
 }
@@ -115,7 +115,7 @@ fn string_interp_float() {
 #[test]
 fn string_interp_bool() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let flag = true\n    print(\"flag is {flag}\")\n}",
+        "fn main() {\n    let flag = true\n    print(f\"flag is {flag}\")\n}",
     );
     assert_eq!(out, "flag is true\n");
 }
@@ -123,7 +123,7 @@ fn string_interp_bool() {
 #[test]
 fn string_interp_expr() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = 1\n    let b = 2\n    print(\"sum is {a + b}\")\n}",
+        "fn main() {\n    let a = 1\n    let b = 2\n    print(f\"sum is {a + b}\")\n}",
     );
     assert_eq!(out, "sum is 3\n");
 }
@@ -131,7 +131,7 @@ fn string_interp_expr() {
 #[test]
 fn string_interp_multiple() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = 1\n    let b = 2\n    print(\"{a} + {b} = {a + b}\")\n}",
+        "fn main() {\n    let a = 1\n    let b = 2\n    print(f\"{a} + {b} = {a + b}\")\n}",
     );
     assert_eq!(out, "1 + 2 = 3\n");
 }
@@ -147,7 +147,7 @@ fn string_interp_no_interp() {
 #[test]
 fn string_interp_escaped_braces() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    print(\"use {{braces}}\")\n}",
+        "fn main() {\n    print(f\"use {{braces}}\")\n}",
     );
     assert_eq!(out, "use {braces}\n");
 }
@@ -155,7 +155,7 @@ fn string_interp_escaped_braces() {
 #[test]
 fn string_interp_concat() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let name = \"alice\"\n    print(\"hi {name}\" + \"!\")\n}",
+        "fn main() {\n    let name = \"alice\"\n    print(f\"hi {name}\" + \"!\")\n}",
     );
     assert_eq!(out, "hi alice!\n");
 }
@@ -163,7 +163,7 @@ fn string_interp_concat() {
 #[test]
 fn string_interp_class_rejected() {
     compile_should_fail_with(
-        "class Foo {\n    x: int\n}\n\nfn main() {\n    let p = Foo { x: 1 }\n    let s = \"value is {p}\"\n}",
+        "class Foo {\n    x: int\n}\n\nfn main() {\n    let p = Foo { x: 1 }\n    let s = f\"value is {p}\"\n}",
         "cannot interpolate",
     );
 }
@@ -171,7 +171,7 @@ fn string_interp_class_rejected() {
 #[test]
 fn string_interp_trailing_tokens_rejected() {
     compile_should_fail_with(
-        "fn main() {\n    let a = 1\n    let s = \"{a b}\"\n}",
+        "fn main() {\n    let a = 1\n    let s = f\"{a b}\"\n}",
         "unexpected tokens",
     );
 }
@@ -179,7 +179,7 @@ fn string_interp_trailing_tokens_rejected() {
 #[test]
 fn string_interp_unterminated_rejected() {
     compile_should_fail_with(
-        "fn main() {\n    let name = \"alice\"\n    let s = \"hello {name\"\n}",
+        "fn main() {\n    let name = \"alice\"\n    let s = f\"hello {name\"\n}",
         "unterminated",
     );
 }
@@ -187,7 +187,7 @@ fn string_interp_unterminated_rejected() {
 #[test]
 fn string_interp_stray_close_rejected() {
     compile_should_fail_with(
-        "fn main() {\n    let s = \"hello }\"\n}",
+        "fn main() {\n    let s = f\"hello }\"\n}",
         "unexpected '}'",
     );
 }
@@ -693,7 +693,7 @@ fn string_to_int_pass_nullable_to_function() {
     let out = compile_and_run_stdout(
         r#"fn describe(val: int?) int? {
     let v = val?
-    print("got {v}")
+    print(f"got {v}")
     return none
 }
 
@@ -711,7 +711,7 @@ fn string_to_float_pass_nullable_to_function() {
     let out = compile_and_run_stdout(
         r#"fn describe(val: float?) float? {
     let v = val?
-    print("got {v}")
+    print(f"got {v}")
     return none
 }
 
@@ -964,4 +964,121 @@ fn main() {
 }
 "#);
     assert_eq!(out, "hello\nworld\n");
+}
+
+// ── Escape sequences ──
+
+#[test]
+fn string_escape_null() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let s = "a\0b"
+    print(s.len())
+}"#,
+    );
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn string_escape_hex() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    print("\x48\x65\x6C\x6C\x6F")
+}"#,
+    );
+    assert_eq!(out, "Hello\n");
+}
+
+#[test]
+fn string_escape_hex_ff() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let s = "\xFF"
+    print(s.len())
+}"#,
+    );
+    // \xFF is U+00FF (ÿ), which is 2 bytes in UTF-8
+    assert_eq!(out, "2\n");
+}
+
+#[test]
+fn string_escape_unicode_ascii() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    print("\u{41}")
+}"#,
+    );
+    assert_eq!(out, "A\n");
+}
+
+#[test]
+fn string_escape_unicode_emoji() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    print("\u{1F680}")
+}"#,
+    );
+    assert_eq!(out, "\u{1F680}\n");
+}
+
+#[test]
+fn string_escape_unicode_len() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    let s = "\u{1F680}"
+    print(s.len())
+}"#,
+    );
+    // Rocket emoji is 4 bytes in UTF-8
+    assert_eq!(out, "4\n");
+}
+
+#[test]
+fn string_escape_mixed() {
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    print("tab:\there\nnewline")
+}"#,
+    );
+    assert_eq!(out, "tab:\there\nnewline\n");
+}
+
+#[test]
+fn string_escape_hex_invalid() {
+    compile_should_fail_with(
+        r#"fn main() {
+    let s = "\xGG"
+}"#,
+        "invalid hex escape",
+    );
+}
+
+#[test]
+fn string_escape_unknown() {
+    compile_should_fail_with(
+        r#"fn main() {
+    let s = "\k"
+}"#,
+        "unknown escape sequence",
+    );
+}
+
+#[test]
+fn string_escape_unicode_invalid_surrogate() {
+    compile_should_fail_with(
+        r#"fn main() {
+    let s = "\u{D800}"
+}"#,
+        "surrogate",
+    );
+}
+
+#[test]
+fn string_escape_unicode_unclosed() {
+    compile_should_fail_with(
+        r#"fn main() {
+    let s = "\u{41"
+}"#,
+        "missing closing",
+    );
 }

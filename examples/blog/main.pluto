@@ -199,7 +199,7 @@ fn generate(input_dir: string, output_dir: string, style_path: string) {
     let index_html = render_index_page(post_entries)
     fs.write_all(output_dir + "/index.html", index_html)!
     print("Generated: index.html")
-    print("Done! {count} posts generated.")
+    print(f"Done! {count} posts generated.")
 }
 
 app Blog {

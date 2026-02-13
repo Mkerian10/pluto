@@ -4,22 +4,22 @@ fn main() {
     print("=== Time Module Demo ===")
 
     let wall = time.now()
-    print("Wall clock (ms since epoch): {wall}")
+    print(f"Wall clock (ms since epoch): {wall}")
 
     let wall_ns = time.now_ns()
-    print("Wall clock (ns since epoch): {wall_ns}")
+    print(f"Wall clock (ns since epoch): {wall_ns}")
 
     let mono = time.monotonic()
-    print("Monotonic clock (ms): {mono}")
+    print(f"Monotonic clock (ms): {mono}")
 
     let mono_ns = time.monotonic_ns()
-    print("Monotonic clock (ns): {mono_ns}")
+    print(f"Monotonic clock (ns): {mono_ns}")
 
     print("Sleeping 100ms...")
     let start = time.monotonic()
     time.sleep(100)
     let elapsed = time.elapsed(start)
-    print("Elapsed after sleep: {elapsed}ms")
+    print(f"Elapsed after sleep: {elapsed}ms")
 
     print("Done!")
 }

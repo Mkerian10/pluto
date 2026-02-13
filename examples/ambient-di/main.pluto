@@ -25,7 +25,7 @@ class Config {
 
 class Database {
     fn query(self, sql: string) string {
-        return "result: {sql}"
+        return f"result: {sql}"
     }
 }
 
@@ -34,19 +34,19 @@ class Database {
 class OrderService uses Logger, Config [db: Database] {
     fn process_order(self, id: int) {
         // Ambient deps accessed as bare variables
-        logger.info("Processing order {id}")
+        logger.info(f"Processing order {id}")
         let url = config.db_url()
-        logger.info("Using database: {url}")
+        logger.info(f"Using database: {url}")
 
         // Explicit deps accessed via self
-        let result = self.db.query("SELECT * FROM orders WHERE id = {id}")
+        let result = self.db.query(f"SELECT * FROM orders WHERE id = {id}")
         logger.info(result)
     }
 }
 
 class NotificationService uses Logger {
     fn notify(self, message: string) {
-        logger.info("Sending notification: {message}")
+        logger.info(f"Sending notification: {message}")
     }
 }
 

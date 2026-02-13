@@ -56,10 +56,10 @@ fn area(s: Shape) int {
 fn process_result(r: Result) string {
     match r {
         Result.Ok { value } {
-            return "Success: {value}"
+            return f"Success: {value}"
         }
         Result.Err { code } {
-            return "Error code: {code}"
+            return f"Error code: {code}"
         }
         Result.Pending {
             return "Still processing"

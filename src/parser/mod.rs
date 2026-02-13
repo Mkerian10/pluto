@@ -2844,11 +2844,7 @@ impl<'a> Parser<'a> {
                 let Token::StringLit(s) = &tok.node else { unreachable!() };
                 let s = s.clone();
                 let span = tok.span;
-                if s.contains('{') || s.contains('}') {
-                    self.parse_string_interp(&s, span)
-                } else {
-                    Ok(Spanned::new(Expr::StringLit(s), span))
-                }
+                Ok(Spanned::new(Expr::StringLit(s), span))
             }
             Token::Ident => {
                 let ident = self.expect_ident()?;
@@ -3921,7 +3917,8 @@ mod tests {
 
     #[test]
     fn parse_string_interpolation() {
-        let prog = parse("fn main() {\n    let x = \"hello {name}\"\n}");
+        // String interpolation requires f-prefix
+        let prog = parse("fn main() {\n    let x = f\"hello {name}\"\n}");
         let f = &prog.functions[0].node;
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
@@ -3940,7 +3937,8 @@ mod tests {
 
     #[test]
     fn parse_string_interp_escaped_braces() {
-        let prog = parse("fn main() {\n    let x = \"{{x}}\"\n}");
+        // Escaped braces in f-strings produce literal braces
+        let prog = parse("fn main() {\n    let x = f\"{{x}}\"\n}");
         let f = &prog.functions[0].node;
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
@@ -3950,6 +3948,19 @@ mod tests {
                     }
                     _ => panic!("expected string lit, got {:?}", value.node),
                 }
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn parse_regular_string_no_interpolation() {
+        // Regular strings (without f-prefix) do NOT interpolate
+        let prog = parse("fn main() {\n    let x = \"hello {name}\"\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(&value.node, Expr::StringLit(s) if s == "hello {name}"));
             }
             _ => panic!("expected let"),
         }
@@ -4732,7 +4743,7 @@ mod tests {
 
     #[test]
     fn parse_string_interp_multiple_expressions() {
-        let prog = parse("fn main() {\n    let s = \"x={x}, y={y}, z={z}\"\n}");
+        let prog = parse("fn main() {\n    let s = f\"x={x}, y={y}, z={z}\"\n}");
         let f = &prog.functions[0].node;
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
@@ -4756,7 +4767,7 @@ mod tests {
 
     #[test]
     fn parse_string_interp_nested_calls() {
-        let prog = parse("fn main() {\n    let s = \"result: {foo(1, 2)}\"\n}");
+        let prog = parse("fn main() {\n    let s = f\"result: {foo(1, 2)}\"\n}");
         let f = &prog.functions[0].node;
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
@@ -4781,7 +4792,7 @@ mod tests {
 
     #[test]
     fn parse_string_interp_complex_expr() {
-        let prog = parse("fn main() {\n    let s = \"sum: {x + y * 2}\"\n}");
+        let prog = parse("fn main() {\n    let s = f\"sum: {x + y * 2}\"\n}");
         let f = &prog.functions[0].node;
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {

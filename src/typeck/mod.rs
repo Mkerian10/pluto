@@ -839,18 +839,18 @@ mod tests {
 
     #[test]
     fn string_interp_non_string_expr_ok() {
-        check("fn main() {\n    let x = 42\n    let s = \"int: {x}\"\n}").unwrap();
+        check("fn main() {\n    let x = 42\n    let s = f\"int: {x}\"\n}").unwrap();
     }
 
     #[test]
     fn string_interp_undefined_var_rejected() {
-        let result = check("fn main() {\n    let s = \"value: {undefined}\"\n}");
+        let result = check("fn main() {\n    let s = f\"value: {undefined}\"\n}");
         assert!(result.is_err());
     }
 
     #[test]
     fn string_interp_type_mismatch_in_expr() {
-        let result = check("fn main() {\n    let s = \"sum: {1 + \\\"str\\\"}\"\n}");
+        let result = check("fn main() {\n    let s = f\"sum: {1 + \\\"str\\\"}\"\n}");
         assert!(result.is_err());
     }
 

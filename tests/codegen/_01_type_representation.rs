@@ -371,7 +371,7 @@ fn test_string_interpolation_result() {
     let src = r#"
         fn main() {
             let x = 42
-            let s = "The answer is {x}"
+            let s = f"The answer is {x}"
             print(s)
         }
     "#;
@@ -385,7 +385,7 @@ fn test_string_interpolation_multiple() {
             let a = 1
             let b = 2
             let c = 3
-            let s = "{a} + {b} = {c}"
+            let s = f"{a} + {b} = {c}"
             print(s)
         }
     "#;
@@ -396,7 +396,7 @@ fn test_string_interpolation_multiple() {
 fn test_string_interpolation_expression() {
     let src = r#"
         fn main() {
-            let s = "2 + 3 = {2 + 3}"
+            let s = f"2 + 3 = {2 + 3}"
             print(s)
         }
     "#;
@@ -652,7 +652,7 @@ fn test_class_implementing_trait() {
             y: int
 
             fn to_string(self) string {
-                return "Point({self.x}, {self.y})"
+                return f"Point({self.x}, {self.y})"
             }
         }
 
@@ -675,7 +675,7 @@ fn test_class_as_trait_object() {
             radius: int
 
             fn draw(self) string {
-                return "Circle(radius={self.radius})"
+                return f"Circle(radius={self.radius})"
             }
         }
 

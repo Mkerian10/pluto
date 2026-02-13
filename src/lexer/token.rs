@@ -142,49 +142,13 @@ pub enum Token {
 
     #[regex(r#"f"([^"\\]|\\.)*""#, |lex| {
         let s = lex.slice();
-        let raw = &s[2..s.len()-1];  // Skip f" prefix
-        let mut result = String::with_capacity(raw.len());
-        let mut chars = raw.chars();
-        while let Some(c) = chars.next() {
-            if c == '\\' {
-                match chars.next() {
-                    Some('n') => result.push('\n'),
-                    Some('r') => result.push('\r'),
-                    Some('t') => result.push('\t'),
-                    Some('\\') => result.push('\\'),
-                    Some('"') => result.push('"'),
-                    Some(other) => { result.push('\\'); result.push(other); }
-                    None => result.push('\\'),
-                }
-            } else {
-                result.push(c);
-            }
-        }
-        Some(result)
+        Some(s[2..s.len()-1].to_string())  // Strip f" and ", return raw content
     })]
     FStringLit(String),
 
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {
         let s = lex.slice();
-        let raw = &s[1..s.len()-1];
-        let mut result = String::with_capacity(raw.len());
-        let mut chars = raw.chars();
-        while let Some(c) = chars.next() {
-            if c == '\\' {
-                match chars.next() {
-                    Some('n') => result.push('\n'),
-                    Some('r') => result.push('\r'),
-                    Some('t') => result.push('\t'),
-                    Some('\\') => result.push('\\'),
-                    Some('"') => result.push('"'),
-                    Some(other) => { result.push('\\'); result.push(other); }
-                    None => result.push('\\'),
-                }
-            } else {
-                result.push(c);
-            }
-        }
-        Some(result)
+        Some(s[1..s.len()-1].to_string())  // Strip " and ", return raw content
     })]
     StringLit(String),
 
@@ -738,39 +702,41 @@ mod tests {
     }
 
     #[test]
-    fn test_string_escape_newline() {
+    fn test_string_escape_newline_raw() {
+        // Logos returns raw content; escape processing is done by lex()
         let mut lex = Token::lexer(r#""hello\nworld""#);
-        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\nworld".to_string()))));
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\\nworld".to_string()))));
     }
 
     #[test]
-    fn test_string_escape_tab() {
+    fn test_string_escape_tab_raw() {
         let mut lex = Token::lexer(r#""hello\tworld""#);
-        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\tworld".to_string()))));
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\\tworld".to_string()))));
     }
 
     #[test]
-    fn test_string_escape_carriage_return() {
+    fn test_string_escape_carriage_return_raw() {
         let mut lex = Token::lexer(r#""hello\rworld""#);
-        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\rworld".to_string()))));
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\\rworld".to_string()))));
     }
 
     #[test]
-    fn test_string_escape_backslash() {
+    fn test_string_escape_backslash_raw() {
         let mut lex = Token::lexer(r#""hello\\world""#);
-        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\\world".to_string()))));
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\\\\world".to_string()))));
     }
 
     #[test]
-    fn test_string_escape_quote() {
+    fn test_string_escape_quote_raw() {
         let mut lex = Token::lexer(r#""hello\"world""#);
-        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\"world".to_string()))));
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\\\"world".to_string()))));
     }
 
     #[test]
-    fn test_string_invalid_escape() {
-        let mut lex = Token::lexer(r#""hello\xworld""#);
-        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\\xworld".to_string()))));
+    fn test_string_raw_content_no_escape_processing() {
+        // Logos callback now returns raw content; escape processing happens in lex()
+        let mut lex = Token::lexer(r#""hello\nworld""#);
+        assert_eq!(lex.next(), Some(Ok(Token::StringLit("hello\\nworld".to_string()))));
     }
 
     #[test]
@@ -780,21 +746,10 @@ mod tests {
     }
 
     #[test]
-    fn test_fstring_escape_newline() {
+    fn test_fstring_raw_content_no_escape_processing() {
+        // Logos callback now returns raw content; escape processing happens in lex()
         let mut lex = Token::lexer(r#"f"hello\nworld""#);
-        assert_eq!(lex.next(), Some(Ok(Token::FStringLit("hello\nworld".to_string()))));
-    }
-
-    #[test]
-    fn test_fstring_escape_tab() {
-        let mut lex = Token::lexer(r#"f"hello\tworld""#);
-        assert_eq!(lex.next(), Some(Ok(Token::FStringLit("hello\tworld".to_string()))));
-    }
-
-    #[test]
-    fn test_fstring_escape_backslash() {
-        let mut lex = Token::lexer(r#"f"hello\\world""#);
-        assert_eq!(lex.next(), Some(Ok(Token::FStringLit("hello\\world".to_string()))));
+        assert_eq!(lex.next(), Some(Ok(Token::FStringLit("hello\\nworld".to_string()))));
     }
 
     // ===== Identifier tests =====

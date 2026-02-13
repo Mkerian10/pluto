@@ -694,7 +694,7 @@ fn stress_gc_pressure_under_suppression() {
 fn allocate_strings(n: int) {
     let i = 0
     while i < n {
-        let s = "item number {i}"
+        let s = f"item number {i}"
         i = i + 1
     }
 }
@@ -1425,7 +1425,7 @@ fn build_strings(prefix: string, count: int) string {
     let result = ""
     let i = 0
     while i < count {
-        result = "{result}{prefix}_{i}"
+        result = f"{result}{prefix}_{i}"
         i = i + 1
     }
     return result
@@ -1519,7 +1519,7 @@ fn build_nodes(n: int, prefix: string) string {
     let i = 0
     let last = ""
     while i < n {
-        let node = Node { value: i, label: "{prefix}_{i}" }
+        let node = Node { value: i, label: f"{prefix}_{i}" }
         last = node.label
         i = i + 1
     }
@@ -1572,7 +1572,7 @@ fn gc_stress_many_short_tasks() {
     // registration/deregistration churn
     let out = compile_and_run_stdout(r#"
 fn make_string(n: int) string {
-    return "task_{n}"
+    return f"task_{n}"
 }
 
 fn main() {
