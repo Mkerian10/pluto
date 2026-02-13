@@ -283,6 +283,10 @@ path = "tests/integration/statement_boundaries.rs"
 name = "control_flow_extended"
 path = "tests/integration/control_flow_extended.rs"
 
+[[test]]
+name = "if_expression_errors"
+path = "tests/integration/if_expression_errors.rs"
+
 # Typeck edge case tests - inference category
 [[test]]
 name = "typeck_binop_type_mismatches"
