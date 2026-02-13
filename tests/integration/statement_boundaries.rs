@@ -92,7 +92,6 @@ fn array_access_after_newline() {
 // ============================================================
 
 #[test]
-#[ignore] // Test expectation unclear: compiler allows this, but test expects failure. Spec doesn't clarify if multiple statements on one line should be forbidden.
 fn multiple_let_statements_same_line() {
     // Parser behavior with multiple statements without newlines
     compile_should_fail(r#"
@@ -103,7 +102,6 @@ fn multiple_let_statements_same_line() {
 }
 
 #[test]
-#[ignore] // Test expectation unclear: compiler allows statement after closing brace without newline, but test expects failure
 fn statement_after_closing_brace() {
     // if true { x } y - behavior after block
     compile_should_fail(r#"
