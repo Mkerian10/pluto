@@ -1552,12 +1552,6 @@ fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &
                 resolve_qualified_access_in_expr(&mut arm.value.node, arm.value.span, module_names, enum_name_map);
             }
         }
-        Expr::Match { expr, arms } => {
-            resolve_qualified_access_in_expr(&mut expr.node, expr.span, module_names);
-            for arm in arms {
-                resolve_qualified_access_in_expr(&mut arm.value.node, arm.value.span, module_names);
-            }
-        }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
         | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
     }
