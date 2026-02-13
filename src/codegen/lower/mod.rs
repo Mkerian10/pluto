@@ -4765,15 +4765,29 @@ fn infer_type_for_expr_if(
 
     // Try to infer from then block's last statement
     if let Some(last) = then_block.node.stmts.last() {
-        if let Stmt::Expr(expr) = &last.node {
-            return infer_type_for_expr(&expr.node, env, var_types);
+        match &last.node {
+            Stmt::Expr(expr) => {
+                return infer_type_for_expr(&expr.node, env, var_types);
+            }
+            Stmt::If { then_block: inner_then, else_block: Some(inner_else), .. } => {
+                // Nested if-statement with else acts as an expression
+                return infer_type_for_expr_if(inner_then, inner_else, env, var_types);
+            }
+            _ => {}
         }
     }
 
     // Fallback to else block's last statement
     if let Some(last) = else_block.node.stmts.last() {
-        if let Stmt::Expr(expr) = &last.node {
-            return infer_type_for_expr(&expr.node, env, var_types);
+        match &last.node {
+            Stmt::Expr(expr) => {
+                return infer_type_for_expr(&expr.node, env, var_types);
+            }
+            Stmt::If { then_block: inner_then, else_block: Some(inner_else), .. } => {
+                // Nested if-statement with else acts as an expression
+                return infer_type_for_expr_if(inner_then, inner_else, env, var_types);
+            }
+            _ => {}
         }
     }
 
