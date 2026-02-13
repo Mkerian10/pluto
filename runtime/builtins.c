@@ -562,45 +562,27 @@ void *__pluto_string_split(void *s, void *delim) {
     void *arr = __pluto_array_new(4);
     if (dlen == 0) {
         for (long i = 0; i < slen; i++) {
-            void *ch = gc_alloc(8 + 1 + 1, GC_TAG_STRING, 0);
-            *(long *)ch = 1;
-            ((char *)ch)[8] = sdata[i];
-            ((char *)ch)[9] = '\0';
+            void *ch = __pluto_string_slice_new(s, i, 1);
             __pluto_array_push(arr, (long)ch);
         }
         return arr;
     }
-    const char *p = sdata;
+    long pos = 0;
     long remaining = slen;
     while (1) {
         if (remaining < dlen) {
-            size_t alloc_size = 8 + remaining + 1;
-            void *seg = gc_alloc(alloc_size, GC_TAG_STRING, 0);
-            *(long *)seg = remaining;
-            memcpy((char *)seg + 8, p, remaining);
-            ((char *)seg)[8 + remaining] = '\0';
-            __pluto_array_push(arr, (long)seg);
+            __pluto_array_push(arr, (long)__pluto_string_slice_new(s, pos, remaining));
             break;
         }
-        const char *found = (const char *)memmem(p, remaining, ddata, dlen);
+        const char *found = (const char *)memmem(sdata + pos, remaining, ddata, dlen);
         if (!found) {
-            size_t alloc_size = 8 + remaining + 1;
-            void *seg = gc_alloc(alloc_size, GC_TAG_STRING, 0);
-            *(long *)seg = remaining;
-            memcpy((char *)seg + 8, p, remaining);
-            ((char *)seg)[8 + remaining] = '\0';
-            __pluto_array_push(arr, (long)seg);
+            __pluto_array_push(arr, (long)__pluto_string_slice_new(s, pos, remaining));
             break;
         }
-        long seglen = found - p;
-        size_t alloc_size = 8 + seglen + 1;
-        void *seg = gc_alloc(alloc_size, GC_TAG_STRING, 0);
-        *(long *)seg = seglen;
-        memcpy((char *)seg + 8, p, seglen);
-        ((char *)seg)[8 + seglen] = '\0';
-        __pluto_array_push(arr, (long)seg);
+        long seglen = found - (sdata + pos);
+        __pluto_array_push(arr, (long)__pluto_string_slice_new(s, pos, seglen));
+        pos += seglen + dlen;
         remaining -= seglen + dlen;
-        p = found + dlen;
     }
     return arr;
 }
