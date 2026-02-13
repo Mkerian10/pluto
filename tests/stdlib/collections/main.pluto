@@ -13,7 +13,7 @@ test "map doubles integers" {
 
 test "map int to string" {
     let nums = [10, 20]
-    let strs = collections.map(nums, (x: int) => "{x}")
+    let strs = collections.map(nums, (x: int) => f"{x}")
     expect(strs[0]).to_equal("10")
     expect(strs[1]).to_equal("20")
 }
