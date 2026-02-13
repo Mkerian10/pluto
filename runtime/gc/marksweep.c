@@ -504,6 +504,16 @@ static void gc_trace_object(void *user_ptr) {
         (void)count;
         break;
     }
+    case GC_TAG_STRING_SLICE: {
+        // String slice: [backing_ptr][offset][len]; trace backing to keep it alive
+        long *slice = (long *)user_ptr;
+        void *backing = (void *)slice[0];
+        GCHeader *child = gc_find_object(backing);
+        if (child && !child->mark) {
+            gc_mark_object((char *)child + sizeof(GCHeader));
+        }
+        break;
+    }
     case GC_TAG_CHANNEL: {
         // Channel handle: [sync_ptr][buf_ptr][capacity][count][head][tail][closed]
         long *ch = (long *)user_ptr;

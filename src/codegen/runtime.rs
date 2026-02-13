@@ -58,6 +58,9 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_string_is_whitespace", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_string_repeat", &[types::I64, types::I64], &[types::I64])?;
 
+        // String slice escape (materializes slices to owned strings at escape boundaries)
+        reg.declare(module, "__pluto_string_escape", &[types::I64], &[types::I64])?;
+
         // Error handling
         reg.declare(module, "__pluto_raise_error", &[types::I64], &[])?;
         reg.declare(module, "__pluto_has_error", &[], &[types::I64])?;

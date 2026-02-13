@@ -81,6 +81,16 @@ impl<'a> LowerContext<'a> {
         self.builder.ins().call(func_ref, args);
     }
 
+    /// Materialize a string slice to an owned string at escape boundaries.
+    /// No-op for non-string types.
+    fn emit_string_escape(&mut self, val: Value, ty: &PlutoType) -> Value {
+        if matches!(ty, PlutoType::String) {
+            self.call_runtime("__pluto_string_escape", &[val])
+        } else {
+            val
+        }
+    }
+
     /// Wrap a class pointer as a trait handle by calling __pluto_trait_wrap.
     fn wrap_class_as_trait(
         &mut self,
@@ -430,6 +440,8 @@ impl<'a> LowerContext<'a> {
                     Some(expr) => {
                         let val = self.lower_expr(&expr.node)?;
                         let val_type = infer_type_for_expr(&expr.node, self.env, &self.var_types);
+                        // Materialize string slices at function return boundary
+                        let val = self.emit_string_escape(val, &val_type);
 
                         // If returning a void expression (e.g., spawn closure wrapping a void function),
                         // lower the expr for side effects but emit default return
@@ -490,6 +502,9 @@ impl<'a> LowerContext<'a> {
             Stmt::FieldAssign { object, field, value } => {
                 let ptr = self.lower_expr(&object.node)?;
                 let val = self.lower_expr(&value.node)?;
+                let val_type = infer_type_for_expr(&value.node, self.env, &self.var_types);
+                // Materialize string slices before storing into struct fields
+                let val = self.emit_string_escape(val, &val_type);
                 let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
                 if let PlutoType::Class(class_name) = &obj_type
                     && let Some(class_info) = self.env.classes.get(class_name)
@@ -508,6 +523,7 @@ impl<'a> LowerContext<'a> {
                 let val = self.lower_expr(&value.node)?;
                 let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
                 if let PlutoType::Array(elem) = &obj_type {
+                    let val = self.emit_string_escape(val, elem);
                     let slot = to_array_slot(val, elem, &mut self.builder);
                     self.call_runtime_void("__pluto_array_set", &[handle, idx, slot]);
                 } else if obj_type == PlutoType::Bytes {
@@ -515,6 +531,8 @@ impl<'a> LowerContext<'a> {
                     self.call_runtime_void("__pluto_bytes_set", &[handle, idx, val_wide]);
                 } else if let PlutoType::Map(key_ty, val_ty) = &obj_type {
                     let tag = self.builder.ins().iconst(types::I64, key_type_tag(key_ty));
+                    let idx = self.emit_string_escape(idx, key_ty);
+                    let val = self.emit_string_escape(val, val_ty);
                     let key_slot = to_array_slot(idx, key_ty, &mut self.builder);
                     let val_slot = to_array_slot(val, val_ty, &mut self.builder);
                     self.call_runtime_void("__pluto_map_insert", &[handle, tag, key_slot, val_slot]);
@@ -1945,6 +1963,7 @@ impl<'a> LowerContext<'a> {
                     let func_ref_push = self.module.declare_func_in_func(self.runtime.get("__pluto_array_push"), self.builder.func);
                     for elem in elements {
                         let val = self.lower_expr(&elem.node)?;
+                        let val = self.emit_string_escape(val, &elem_type);
                         let slot = to_array_slot(val, &elem_type, &mut self.builder);
                         self.builder.ins().call(func_ref_push, &[handle, slot]);
                     }
@@ -1960,6 +1979,8 @@ impl<'a> LowerContext<'a> {
                 for (k_expr, v_expr) in entries {
                     let k_val = self.lower_expr(&k_expr.node)?;
                     let v_val = self.lower_expr(&v_expr.node)?;
+                    let k_val = self.emit_string_escape(k_val, &kt);
+                    let v_val = self.emit_string_escape(v_val, &vt);
                     let key_slot = to_array_slot(k_val, &kt, &mut self.builder);
                     let val_slot = to_array_slot(v_val, &vt, &mut self.builder);
                     self.call_runtime_void("__pluto_map_insert", &[handle, tag, key_slot, val_slot]);
@@ -1972,6 +1993,7 @@ impl<'a> LowerContext<'a> {
                 let handle = self.call_runtime("__pluto_set_new", &[tag]);
                 for elem in elements {
                     let val = self.lower_expr(&elem.node)?;
+                    let val = self.emit_string_escape(val, &et);
                     let slot = to_array_slot(val, &et, &mut self.builder);
                     self.call_runtime_void("__pluto_set_insert", &[handle, tag, slot]);
                 }
@@ -2464,6 +2486,8 @@ impl<'a> LowerContext<'a> {
         for (lit_name, lit_val) in fields {
             let val = self.lower_expr(&lit_val.node)?;
             let val_type = infer_type_for_expr(&lit_val.node, self.env, &self.var_types);
+            // Materialize string slices before storing into struct fields
+            let val = self.emit_string_escape(val, &val_type);
 
             let field_idx = field_info.iter()
                 .position(|(n, _, _)| *n == lit_name.node)
@@ -2513,6 +2537,8 @@ impl<'a> LowerContext<'a> {
         for (lit_name, lit_val) in fields {
             let val = self.lower_expr(&lit_val.node)?;
             let val_type = infer_type_for_expr(&lit_val.node, self.env, &self.var_types);
+            // Materialize string slices before storing into enum variant fields
+            let val = self.emit_string_escape(val, &val_type);
 
             let field_idx = variant_fields.iter().position(|(n, _)| *n == lit_name.node)
                 .expect("field should exist after typeck validation");
@@ -3026,6 +3052,7 @@ impl<'a> LowerContext<'a> {
                 "push" => {
                     let elem = elem.clone();
                     let arg_val = self.lower_expr(&args[0].node)?;
+                    let arg_val = self.emit_string_escape(arg_val, &elem);
                     let slot = to_array_slot(arg_val, &elem, &mut self.builder);
                     self.call_runtime_void("__pluto_array_push", &[obj_ptr, slot]);
                     return Ok(self.builder.ins().iconst(types::I64, 0));
@@ -3113,6 +3140,8 @@ impl<'a> LowerContext<'a> {
                 "insert" => {
                     let k = self.lower_expr(&args[0].node)?;
                     let v = self.lower_expr(&args[1].node)?;
+                    let k = self.emit_string_escape(k, key_ty);
+                    let v = self.emit_string_escape(v, val_ty);
                     let key_slot = to_array_slot(k, key_ty, &mut self.builder);
                     let val_slot = to_array_slot(v, val_ty, &mut self.builder);
                     self.call_runtime_void("__pluto_map_insert", &[obj_ptr, tag, key_slot, val_slot]);
@@ -3143,6 +3172,7 @@ impl<'a> LowerContext<'a> {
                 }
                 "insert" => {
                     let e = self.lower_expr(&args[0].node)?;
+                    let e = self.emit_string_escape(e, elem_ty);
                     let slot = to_array_slot(e, elem_ty, &mut self.builder);
                     self.call_runtime_void("__pluto_set_insert", &[obj_ptr, tag, slot]);
                     return Ok(self.builder.ins().iconst(types::I64, 0));
@@ -3521,6 +3551,8 @@ impl<'a> LowerContext<'a> {
             })?;
             let cap_val = self.builder.use_var(*cap_var);
             let cap_type = self.var_types.get(cap_name).cloned().unwrap_or(PlutoType::Int);
+            // Materialize string slices before capturing into closures
+            let cap_val = self.emit_string_escape(cap_val, &cap_type);
             let slot = to_array_slot(cap_val, &cap_type, &mut self.builder);
             let offset = (1 + i) as i32 * POINTER_SIZE;
             self.builder.ins().store(MemFlags::new(), slot, closure_ptr, Offset32::new(offset));

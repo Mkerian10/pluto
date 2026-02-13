@@ -68,6 +68,7 @@
 #define GC_TAG_TASK    7   // [closure][result][error][done][sync_ptr][detached][cancelled]
 #define GC_TAG_BYTES   8   // [len][cap][data_ptr]; 1 byte per element
 #define GC_TAG_CHANNEL 9   // [sync_ptr][buf_ptr][capacity][count][head][tail][closed]
+#define GC_TAG_STRING_SLICE 10 // [backing_ptr][offset][len]; lightweight view into owned string
 
 // ── Thread-Local Storage ─────────────────────────────────────────────────────
 
@@ -138,6 +139,13 @@ void __pluto_raise_error(void *error_obj);
 
 // String functions (needed by threading for error messages)
 void *__pluto_string_new(const char *src, long len);
+
+// String slice functions (needed by codegen for escape materialization)
+void *__pluto_string_slice_new(void *backing, long offset, long len);
+void *__pluto_string_slice_to_owned(void *s);
+void *__pluto_string_escape(void *s);
+const char *__pluto_string_to_cstr(void *s);
+void __pluto_string_data(void *s, const char **data_out, long *len_out);
 
 // Array functions (needed by GC for marking)
 void *__pluto_array_new(long cap);

@@ -32,8 +32,10 @@ void __pluto_print_float(double value) {
 }
 
 void __pluto_print_string(void *header) {
-    const char *data = (const char *)header + 8;
-    printf("%s\n", data);
+    const char *data;
+    long len;
+    __pluto_string_data(header, &data, &len);
+    printf("%.*s\n", (int)len, data);
 }
 
 void __pluto_print_bool(int value) {
@@ -41,8 +43,10 @@ void __pluto_print_bool(int value) {
 }
 
 void __pluto_print_string_no_newline(void *header) {
-    const char *data = (const char *)header + 8;
-    printf("%s", data);
+    const char *data;
+    long len;
+    __pluto_string_data(header, &data, &len);
+    printf("%.*s", (int)len, data);
 }
 
 // ── Memory allocation ─────────────────────────────────────────────────────────
@@ -82,8 +86,10 @@ void *__pluto_io_read_line(void) {
 }
 
 void *__pluto_string_concat(void *a, void *b) {
-    long len_a = *(long *)a;
-    long len_b = *(long *)b;
+    const char *data_a, *data_b;
+    long len_a, len_b;
+    __pluto_string_data(a, &data_a, &len_a);
+    __pluto_string_data(b, &data_b, &len_b);
     if (len_a > LONG_MAX - len_b) {
         fprintf(stderr, "pluto: string concatenation overflow\n");
         exit(1);
@@ -92,21 +98,26 @@ void *__pluto_string_concat(void *a, void *b) {
     size_t alloc_size = 8 + total + 1;
     void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
     *(long *)header = total;
-    memcpy((char *)header + 8, (char *)a + 8, len_a);
-    memcpy((char *)header + 8 + len_a, (char *)b + 8, len_b);
+    memcpy((char *)header + 8, data_a, len_a);
+    memcpy((char *)header + 8 + len_a, data_b, len_b);
     ((char *)header)[8 + total] = '\0';
     return header;
 }
 
 int __pluto_string_eq(void *a, void *b) {
-    long len_a = *(long *)a;
-    long len_b = *(long *)b;
+    const char *data_a, *data_b;
+    long len_a, len_b;
+    __pluto_string_data(a, &data_a, &len_a);
+    __pluto_string_data(b, &data_b, &len_b);
     if (len_a != len_b) return 0;
-    return memcmp((char *)a + 8, (char *)b + 8, len_a) == 0 ? 1 : 0;
+    return memcmp(data_a, data_b, len_a) == 0 ? 1 : 0;
 }
 
 long __pluto_string_len(void *s) {
-    return *(long *)s;
+    const char *data;
+    long len;
+    __pluto_string_data(s, &data, &len);
+    return len;
 }
 
 // ── Array runtime functions ───────────────────────────────────────────────────
@@ -379,8 +390,9 @@ long __pluto_bytes_to_string(long handle) {
 
 long __pluto_string_to_bytes(long str_handle) {
     void *s = (void *)str_handle;
-    long len = *(long *)s;
-    const char *str_data = (const char *)s + 8;
+    const char *str_data;
+    long len;
+    __pluto_string_data(s, &str_data, &len);
     long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
     long cap = len > 16 ? len : 16;
     handle[0] = len;
@@ -395,77 +407,74 @@ long __pluto_string_to_bytes(long str_handle) {
 // ── String utility functions ──────────────────────────────────────────────────
 
 void *__pluto_string_substring(void *s, long start, long len) {
-    long slen = *(long *)s;
-    const char *data = (const char *)s + 8;
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     if (start < 0) start = 0;
     if (start > slen) start = slen;
     if (len < 0) len = 0;
     if (start + len > slen) len = slen - start;
-    size_t alloc_size = 8 + len + 1;
-    void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
-    *(long *)header = len;
-    memcpy((char *)header + 8, data + start, len);
-    ((char *)header)[8 + len] = '\0';
-    return header;
+    return __pluto_string_slice_new(s, start, len);
 }
 
 long __pluto_string_contains(void *haystack, void *needle) {
-    long hlen = *(long *)haystack;
-    long nlen = *(long *)needle;
+    const char *hdata, *ndata;
+    long hlen, nlen;
+    __pluto_string_data(haystack, &hdata, &hlen);
+    __pluto_string_data(needle, &ndata, &nlen);
     if (nlen == 0) return 1;
     if (nlen > hlen) return 0;
-    const char *hdata = (const char *)haystack + 8;
-    const char *ndata = (const char *)needle + 8;
     return memmem(hdata, hlen, ndata, nlen) != NULL ? 1 : 0;
 }
 
 long __pluto_string_starts_with(void *s, void *prefix) {
-    long slen = *(long *)s;
-    long plen = *(long *)prefix;
+    const char *sdata, *pdata;
+    long slen, plen;
+    __pluto_string_data(s, &sdata, &slen);
+    __pluto_string_data(prefix, &pdata, &plen);
     if (plen == 0) return 1;
     if (plen > slen) return 0;
-    return memcmp((const char *)s + 8, (const char *)prefix + 8, plen) == 0 ? 1 : 0;
+    return memcmp(sdata, pdata, plen) == 0 ? 1 : 0;
 }
 
 long __pluto_string_ends_with(void *s, void *suffix) {
-    long slen = *(long *)s;
-    long sfxlen = *(long *)suffix;
+    const char *sdata, *sfxdata;
+    long slen, sfxlen;
+    __pluto_string_data(s, &sdata, &slen);
+    __pluto_string_data(suffix, &sfxdata, &sfxlen);
     if (sfxlen == 0) return 1;
     if (sfxlen > slen) return 0;
-    return memcmp((const char *)s + 8 + slen - sfxlen, (const char *)suffix + 8, sfxlen) == 0 ? 1 : 0;
+    return memcmp(sdata + slen - sfxlen, sfxdata, sfxlen) == 0 ? 1 : 0;
 }
 
 long __pluto_string_index_of(void *haystack, void *needle) {
-    long hlen = *(long *)haystack;
-    long nlen = *(long *)needle;
+    const char *hdata, *ndata;
+    long hlen, nlen;
+    __pluto_string_data(haystack, &hdata, &hlen);
+    __pluto_string_data(needle, &ndata, &nlen);
     if (nlen == 0) return 0;
     if (nlen > hlen) return -1;
-    const char *hdata = (const char *)haystack + 8;
-    const char *ndata = (const char *)needle + 8;
     const char *found = (const char *)memmem(hdata, hlen, ndata, nlen);
     if (!found) return -1;
     return (long)(found - hdata);
 }
 
 void *__pluto_string_trim(void *s) {
-    long slen = *(long *)s;
-    const char *data = (const char *)s + 8;
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     long start = 0;
     long end = slen;
     while (start < end && (data[start] == ' ' || data[start] == '\t' || data[start] == '\n' || data[start] == '\r')) start++;
     while (end > start && (data[end-1] == ' ' || data[end-1] == '\t' || data[end-1] == '\n' || data[end-1] == '\r')) end--;
     long newlen = end - start;
-    size_t alloc_size = 8 + newlen + 1;
-    void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
-    *(long *)header = newlen;
-    memcpy((char *)header + 8, data + start, newlen);
-    ((char *)header)[8 + newlen] = '\0';
-    return header;
+    return __pluto_string_slice_new(s, start, newlen);
 }
 
 void *__pluto_string_to_upper(void *s) {
-    long slen = *(long *)s;
-    const char *data = (const char *)s + 8;
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     size_t alloc_size = 8 + slen + 1;
     void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
     *(long *)header = slen;
@@ -478,8 +487,9 @@ void *__pluto_string_to_upper(void *s) {
 }
 
 void *__pluto_string_to_lower(void *s) {
-    long slen = *(long *)s;
-    const char *data = (const char *)s + 8;
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     size_t alloc_size = 8 + slen + 1;
     void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
     *(long *)header = slen;
@@ -492,12 +502,11 @@ void *__pluto_string_to_lower(void *s) {
 }
 
 void *__pluto_string_replace(void *s, void *old, void *new_str) {
-    long slen = *(long *)s;
-    long olen = *(long *)old;
-    long nlen = *(long *)new_str;
-    const char *sdata = (const char *)s + 8;
-    const char *odata = (const char *)old + 8;
-    const char *ndata = (const char *)new_str + 8;
+    const char *sdata, *odata, *ndata;
+    long slen, olen, nlen;
+    __pluto_string_data(s, &sdata, &slen);
+    __pluto_string_data(old, &odata, &olen);
+    __pluto_string_data(new_str, &ndata, &nlen);
     if (olen == 0) {
         size_t alloc_size = 8 + slen + 1;
         void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
@@ -546,63 +555,46 @@ void *__pluto_string_replace(void *s, void *old, void *new_str) {
 }
 
 void *__pluto_string_split(void *s, void *delim) {
-    long slen = *(long *)s;
-    long dlen = *(long *)delim;
-    const char *sdata = (const char *)s + 8;
-    const char *ddata = (const char *)delim + 8;
+    const char *sdata, *ddata;
+    long slen, dlen;
+    __pluto_string_data(s, &sdata, &slen);
+    __pluto_string_data(delim, &ddata, &dlen);
     void *arr = __pluto_array_new(4);
     if (dlen == 0) {
         for (long i = 0; i < slen; i++) {
-            void *ch = gc_alloc(8 + 1 + 1, GC_TAG_STRING, 0);
-            *(long *)ch = 1;
-            ((char *)ch)[8] = sdata[i];
-            ((char *)ch)[9] = '\0';
+            void *ch = __pluto_string_slice_new(s, i, 1);
             __pluto_array_push(arr, (long)ch);
         }
         return arr;
     }
-    const char *p = sdata;
+    long pos = 0;
     long remaining = slen;
     while (1) {
         if (remaining < dlen) {
-            size_t alloc_size = 8 + remaining + 1;
-            void *seg = gc_alloc(alloc_size, GC_TAG_STRING, 0);
-            *(long *)seg = remaining;
-            memcpy((char *)seg + 8, p, remaining);
-            ((char *)seg)[8 + remaining] = '\0';
-            __pluto_array_push(arr, (long)seg);
+            __pluto_array_push(arr, (long)__pluto_string_slice_new(s, pos, remaining));
             break;
         }
-        const char *found = (const char *)memmem(p, remaining, ddata, dlen);
+        const char *found = (const char *)memmem(sdata + pos, remaining, ddata, dlen);
         if (!found) {
-            size_t alloc_size = 8 + remaining + 1;
-            void *seg = gc_alloc(alloc_size, GC_TAG_STRING, 0);
-            *(long *)seg = remaining;
-            memcpy((char *)seg + 8, p, remaining);
-            ((char *)seg)[8 + remaining] = '\0';
-            __pluto_array_push(arr, (long)seg);
+            __pluto_array_push(arr, (long)__pluto_string_slice_new(s, pos, remaining));
             break;
         }
-        long seglen = found - p;
-        size_t alloc_size = 8 + seglen + 1;
-        void *seg = gc_alloc(alloc_size, GC_TAG_STRING, 0);
-        *(long *)seg = seglen;
-        memcpy((char *)seg + 8, p, seglen);
-        ((char *)seg)[8 + seglen] = '\0';
-        __pluto_array_push(arr, (long)seg);
+        long seglen = found - (sdata + pos);
+        __pluto_array_push(arr, (long)__pluto_string_slice_new(s, pos, seglen));
+        pos += seglen + dlen;
         remaining -= seglen + dlen;
-        p = found + dlen;
     }
     return arr;
 }
 
 void *__pluto_string_char_at(void *s, long index) {
-    long slen = *(long *)s;
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     if (index < 0 || index >= slen) {
         fprintf(stderr, "pluto: string index out of bounds: index %ld, length %ld\n", index, slen);
         exit(1);
     }
-    const char *data = (const char *)s + 8;
     void *header = gc_alloc(8 + 1 + 1, GC_TAG_STRING, 0);
     *(long *)header = 1;
     ((char *)header)[8] = data[index];
@@ -611,12 +603,13 @@ void *__pluto_string_char_at(void *s, long index) {
 }
 
 long __pluto_string_byte_at(void *s, long index) {
-    long slen = *(long *)s;
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     if (index < 0 || index >= slen) {
         fprintf(stderr, "pluto: string byte_at index out of bounds: index %ld, length %ld\n", index, slen);
         exit(1);
     }
-    const char *data = (const char *)s + 8;
     return (long)(unsigned char)data[index];
 }
 
@@ -630,8 +623,9 @@ void *__pluto_string_format_float(double value) {
 }
 
 void *__pluto_string_to_int(void *s) {
-    long slen = *(long *)s;
-    const char *data = (const char *)s + 8;
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     char *tmp = (char *)malloc(slen + 1);
     memcpy(tmp, data, slen);
     tmp[slen] = '\0';
@@ -655,8 +649,9 @@ void *__pluto_string_to_int(void *s) {
 }
 
 void *__pluto_string_to_float(void *s) {
-    long slen = *(long *)s;
-    const char *data = (const char *)s + 8;
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     char *tmp = (char *)malloc(slen + 1);
     memcpy(tmp, data, slen);
     tmp[slen] = '\0';
@@ -680,46 +675,37 @@ void *__pluto_string_to_float(void *s) {
 }
 
 void *__pluto_string_trim_start(void *s) {
-    long slen = *(long *)s;
-    const char *data = (const char *)s + 8;
-    // Skip leading whitespace
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     long start_idx = 0;
     while (start_idx < slen && (data[start_idx] == ' ' || data[start_idx] == '\t' || data[start_idx] == '\n' || data[start_idx] == '\r')) {
         start_idx++;
     }
     long new_len = slen - start_idx;
-    void *obj = gc_alloc(8 + new_len + 1, GC_TAG_STRING, 0);
-    *(long *)obj = new_len;
-    memcpy((char *)obj + 8, data + start_idx, new_len);
-    ((char *)obj + 8)[new_len] = '\0';
-    return obj;
+    return __pluto_string_slice_new(s, start_idx, new_len);
 }
 
 void *__pluto_string_trim_end(void *s) {
-    long slen = *(long *)s;
-    const char *data = (const char *)s + 8;
-    // Skip trailing whitespace
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     long end_idx = slen - 1;
     while (end_idx >= 0 && (data[end_idx] == ' ' || data[end_idx] == '\t' || data[end_idx] == '\n' || data[end_idx] == '\r')) {
         end_idx--;
     }
     long new_len = end_idx + 1;
     if (new_len < 0) new_len = 0;
-    void *obj = gc_alloc(8 + new_len + 1, GC_TAG_STRING, 0);
-    *(long *)obj = new_len;
-    if (new_len > 0) memcpy((char *)obj + 8, data, new_len);
-    ((char *)obj + 8)[new_len] = '\0';
-    return obj;
+    return __pluto_string_slice_new(s, 0, new_len);
 }
 
 long __pluto_string_last_index_of(void *haystack, void *needle) {
-    long hlen = *(long *)haystack;
-    long nlen = *(long *)needle;
+    const char *hdata, *ndata;
+    long hlen, nlen;
+    __pluto_string_data(haystack, &hdata, &hlen);
+    __pluto_string_data(needle, &ndata, &nlen);
     if (nlen == 0) return hlen;
     if (nlen > hlen) return -1;
-
-    const char *hdata = (const char *)haystack + 8;
-    const char *ndata = (const char *)needle + 8;
 
     for (long i = hlen - nlen; i >= 0; i--) {
         if (memcmp(hdata + i, ndata, nlen) == 0) {
@@ -730,13 +716,12 @@ long __pluto_string_last_index_of(void *haystack, void *needle) {
 }
 
 long __pluto_string_count(void *haystack, void *needle) {
-    long hlen = *(long *)haystack;
-    long nlen = *(long *)needle;
+    const char *hdata, *ndata;
+    long hlen, nlen;
+    __pluto_string_data(haystack, &hdata, &hlen);
+    __pluto_string_data(needle, &ndata, &nlen);
     if (nlen == 0) return 0;
     if (nlen > hlen) return 0;
-
-    const char *hdata = (const char *)haystack + 8;
-    const char *ndata = (const char *)needle + 8;
 
     long count = 0;
     for (long i = 0; i <= hlen - nlen; i++) {
@@ -749,13 +734,16 @@ long __pluto_string_count(void *haystack, void *needle) {
 }
 
 long __pluto_string_is_empty(void *s) {
-    long slen = *(long *)s;
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     return slen == 0 ? 1 : 0;
 }
 
 long __pluto_string_is_whitespace(void *s) {
-    long slen = *(long *)s;
-    const char *data = (const char *)s + 8;
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     if (slen == 0) return 1;
     for (long i = 0; i < slen; i++) {
         if (data[i] != ' ' && data[i] != '\t' && data[i] != '\n' && data[i] != '\r') {
@@ -766,8 +754,9 @@ long __pluto_string_is_whitespace(void *s) {
 }
 
 void *__pluto_string_repeat(void *s, long count) {
-    long slen = *(long *)s;
-    const char *data = (const char *)s + 8;
+    const char *data;
+    long slen;
+    __pluto_string_data(s, &data, &slen);
     if (count <= 0) {
         void *obj = gc_alloc(8 + 1, GC_TAG_STRING, 0);
         *(long *)obj = 0;
@@ -787,25 +776,13 @@ void *__pluto_string_repeat(void *s, long count) {
 }
 
 long __pluto_json_parse_int(void *s) {
-    long slen = *(long *)s;
-    const char *data = (const char *)s + 8;
-    char *tmp = (char *)malloc(slen + 1);
-    memcpy(tmp, data, slen);
-    tmp[slen] = '\0';
-    long result = strtol(tmp, NULL, 10);
-    free(tmp);
-    return result;
+    const char *cstr = __pluto_string_to_cstr(s);
+    return strtol(cstr, NULL, 10);
 }
 
 double __pluto_json_parse_float(void *s) {
-    long slen = *(long *)s;
-    const char *data = (const char *)s + 8;
-    char *tmp = (char *)malloc(slen + 1);
-    memcpy(tmp, data, slen);
-    tmp[slen] = '\0';
-    double result = strtod(tmp, NULL);
-    free(tmp);
-    return result;
+    const char *cstr = __pluto_string_to_cstr(s);
+    return strtod(cstr, NULL);
 }
 
 void *__pluto_codepoint_to_string(long cp) {
@@ -858,6 +835,81 @@ void *__pluto_bool_to_string(int value) {
     memcpy((char *)header + 8, s, len);
     ((char *)header)[8 + len] = '\0';
     return header;
+}
+
+// ── String slice functions ────────────────────────────────────────────────────
+// String slices are lightweight 24-byte views into owned strings: [backing_ptr][offset][len]
+// They avoid copying on substring/trim/split operations. Slices are materialized
+// (copied to owned) when escaping scope (stored in structs, arrays, closures, returned).
+
+// Extract (data_ptr, len) from either an owned string or a string slice.
+void __pluto_string_data(void *s, const char **data_out, long *len_out) {
+    GCHeader *h = (GCHeader *)((char *)s - sizeof(GCHeader));
+    if (h->type_tag == GC_TAG_STRING_SLICE) {
+        long *slice = (long *)s;
+        void *backing = (void *)slice[0];
+        long offset = slice[1];
+        long len = slice[2];
+        *data_out = (const char *)backing + 8 + offset;
+        *len_out = len;
+    } else {
+        *data_out = (const char *)s + 8;
+        *len_out = *(long *)s;
+    }
+}
+
+// Create a new string slice. Returns empty owned string for len==0.
+// Flattens slice-of-slice: if backing is itself a slice, points to original backing.
+void *__pluto_string_slice_new(void *backing, long offset, long len) {
+    if (len <= 0) {
+        return __pluto_string_new("", 0);
+    }
+    // Flatten slice-of-slice: always point to the original owned string
+    void *real_backing = backing;
+    long real_offset = offset;
+    GCHeader *h = (GCHeader *)((char *)backing - sizeof(GCHeader));
+    if (h->type_tag == GC_TAG_STRING_SLICE) {
+        long *parent_slice = (long *)backing;
+        real_backing = (void *)parent_slice[0];
+        real_offset = parent_slice[1] + offset;
+    }
+    long *slice = (long *)gc_alloc(24, GC_TAG_STRING_SLICE, 1);
+    slice[0] = (long)real_backing;
+    slice[1] = real_offset;
+    slice[2] = len;
+    return slice;
+}
+
+// Materialize a slice to an owned string. No-op if already owned.
+void *__pluto_string_slice_to_owned(void *s) {
+    if (!s) return s;
+    GCHeader *h = (GCHeader *)((char *)s - sizeof(GCHeader));
+    if (h->type_tag != GC_TAG_STRING_SLICE) return s;
+    long *slice = (long *)s;
+    void *backing = (void *)slice[0];
+    long offset = slice[1];
+    long len = slice[2];
+    const char *data = (const char *)backing + 8 + offset;
+    return __pluto_string_new(data, len);
+}
+
+// Null-safe escape wrapper: materializes slices, passes through owned strings.
+// Called by codegen at escape boundaries (return, struct field, array element, etc.)
+void *__pluto_string_escape(void *s) {
+    if (!s) return s;
+    return __pluto_string_slice_to_owned(s);
+}
+
+// Returns a null-terminated C string pointer. For owned strings, returns data directly.
+// For slices, materializes to owned first (since slices lack null terminators).
+const char *__pluto_string_to_cstr(void *s) {
+    if (!s) return "";
+    GCHeader *h = (GCHeader *)((char *)s - sizeof(GCHeader));
+    if (h->type_tag == GC_TAG_STRING_SLICE) {
+        void *owned = __pluto_string_slice_to_owned(s);
+        return (const char *)owned + 8;
+    }
+    return (const char *)s + 8;
 }
 
 // ── Error handling runtime ────────────────────────────────────────────────────
@@ -949,7 +1001,7 @@ long __pluto_socket_create(long domain, long type, long protocol) {
 }
 
 long __pluto_socket_bind(long fd, void *host_str, long port) {
-    const char *host = (const char *)host_str + 8;
+    const char *host = __pluto_string_to_cstr(host_str);
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -969,7 +1021,7 @@ long __pluto_socket_accept(long fd) {
 }
 
 long __pluto_socket_connect(long fd, void *host_str, long port) {
-    const char *host = (const char *)host_str + 8;
+    const char *host = __pluto_string_to_cstr(host_str);
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -996,8 +1048,9 @@ void *__pluto_socket_read(long fd, long max_bytes) {
 }
 
 long __pluto_socket_write(long fd, void *data_str) {
-    long len = *(long *)data_str;
-    const char *data = (const char *)data_str + 8;
+    const char *data;
+    long len;
+    __pluto_string_data(data_str, &data, &len);
     return (long)write((int)fd, data, (size_t)len);
 }
 
@@ -1038,8 +1091,10 @@ static unsigned long ht_hash(long key, long key_type) {
     }
     case 3: { // string — FNV-1a
         void *s = (void *)key;
-        long slen = *(long *)s;
-        const unsigned char *data = (const unsigned char *)s + 8;
+        const char *str_data;
+        long slen;
+        __pluto_string_data(s, &str_data, &slen);
+        const unsigned char *data = (const unsigned char *)str_data;
         h = 0xcbf29ce484222325ULL;
         for (long i = 0; i < slen; i++) {
             h ^= data[i];
@@ -1341,17 +1396,17 @@ void *__pluto_fs_strerror(void) {
 }
 
 long __pluto_fs_open_read(void *path_str) {
-    const char *path = (const char *)path_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
     return (long)open(path, O_RDONLY);
 }
 
 long __pluto_fs_open_write(void *path_str) {
-    const char *path = (const char *)path_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
     return (long)open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 }
 
 long __pluto_fs_open_append(void *path_str) {
-    const char *path = (const char *)path_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
     return (long)open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
 }
 
@@ -1375,8 +1430,9 @@ void *__pluto_fs_read(long fd, long max_bytes) {
 }
 
 long __pluto_fs_write(long fd, void *data_str) {
-    long len = *(long *)data_str;
-    const char *data = (const char *)data_str + 8;
+    const char *data;
+    long len;
+    __pluto_string_data(data_str, &data, &len);
     ssize_t written = write((int)fd, data, (size_t)len);
     return (long)written;
 }
@@ -1387,7 +1443,7 @@ long __pluto_fs_seek(long fd, long offset, long whence) {
 }
 
 void *__pluto_fs_read_all(void *path_str) {
-    const char *path = (const char *)path_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
     int fd = open(path, O_RDONLY);
     if (fd < 0) return __pluto_string_new("", 0);
     struct stat st;
@@ -1414,9 +1470,10 @@ void *__pluto_fs_read_all(void *path_str) {
 }
 
 long __pluto_fs_write_all(void *path_str, void *data_str) {
-    const char *path = (const char *)path_str + 8;
-    long len = *(long *)data_str;
-    const char *data = (const char *)data_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
+    const char *data;
+    long len;
+    __pluto_string_data(data_str, &data, &len);
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) return -1;
     size_t total_written = 0;
@@ -1430,9 +1487,10 @@ long __pluto_fs_write_all(void *path_str, void *data_str) {
 }
 
 long __pluto_fs_append_all(void *path_str, void *data_str) {
-    const char *path = (const char *)path_str + 8;
-    long len = *(long *)data_str;
-    const char *data = (const char *)data_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
+    const char *data;
+    long len;
+    __pluto_string_data(data_str, &data, &len);
     int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) return -1;
     size_t total_written = 0;
@@ -1446,56 +1504,56 @@ long __pluto_fs_append_all(void *path_str, void *data_str) {
 }
 
 long __pluto_fs_exists(void *path_str) {
-    const char *path = (const char *)path_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
     struct stat st;
     return stat(path, &st) == 0 ? 1 : 0;
 }
 
 long __pluto_fs_file_size(void *path_str) {
-    const char *path = (const char *)path_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
     struct stat st;
     if (stat(path, &st) != 0) return -1;
     return (long)st.st_size;
 }
 
 long __pluto_fs_is_dir(void *path_str) {
-    const char *path = (const char *)path_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
     struct stat st;
     if (stat(path, &st) != 0) return 0;
     return S_ISDIR(st.st_mode) ? 1 : 0;
 }
 
 long __pluto_fs_is_file(void *path_str) {
-    const char *path = (const char *)path_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
     struct stat st;
     if (stat(path, &st) != 0) return 0;
     return S_ISREG(st.st_mode) ? 1 : 0;
 }
 
 long __pluto_fs_remove(void *path_str) {
-    const char *path = (const char *)path_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
     return unlink(path) == 0 ? 0 : -1;
 }
 
 long __pluto_fs_mkdir(void *path_str) {
-    const char *path = (const char *)path_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
     return mkdir(path, 0755) == 0 ? 0 : -1;
 }
 
 long __pluto_fs_rmdir(void *path_str) {
-    const char *path = (const char *)path_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
     return rmdir(path) == 0 ? 0 : -1;
 }
 
 long __pluto_fs_rename(void *from_str, void *to_str) {
-    const char *from = (const char *)from_str + 8;
-    const char *to = (const char *)to_str + 8;
+    const char *from = __pluto_string_to_cstr(from_str);
+    const char *to = __pluto_string_to_cstr(to_str);
     return rename(from, to) == 0 ? 0 : -1;
 }
 
 long __pluto_fs_copy(void *from_str, void *to_str) {
-    const char *from = (const char *)from_str + 8;
-    const char *to = (const char *)to_str + 8;
+    const char *from = __pluto_string_to_cstr(from_str);
+    const char *to = __pluto_string_to_cstr(to_str);
     int src_fd = open(from, O_RDONLY);
     if (src_fd < 0) return -1;
     int dst_fd = open(to, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -1516,7 +1574,7 @@ long __pluto_fs_copy(void *from_str, void *to_str) {
 }
 
 void *__pluto_fs_list_dir(void *path_str) {
-    const char *path = (const char *)path_str + 8;
+    const char *path = __pluto_string_to_cstr(path_str);
     void *arr = __pluto_array_new(8);
     DIR *d = opendir(path);
     if (!d) return arr;
@@ -1654,10 +1712,10 @@ void __pluto_expect_equal_bool(long actual, long expected, long line) {
 
 void __pluto_expect_equal_string(void *actual, void *expected, long line) {
     if (!__pluto_string_eq(actual, expected)) {
-        long len_a = *(long *)actual;
-        long len_e = *(long *)expected;
-        const char *data_a = (const char *)actual + 8;
-        const char *data_e = (const char *)expected + 8;
+        const char *data_a, *data_e;
+        long len_a, len_e;
+        __pluto_string_data(actual, &data_a, &len_a);
+        __pluto_string_data(expected, &data_e, &len_e);
         fprintf(stderr, "FAIL (line %ld): expected \"%.*s\" to equal \"%.*s\"\n",
                 line, (int)len_a, data_a, (int)len_e, data_e);
         exit(1);
@@ -1679,8 +1737,9 @@ void __pluto_expect_false(long actual, long line) {
 }
 
 void __pluto_test_start(void *name_str) {
-    long len = *(long *)name_str;
-    const char *data = (const char *)name_str + 8;
+    const char *data;
+    long len;
+    __pluto_string_data(name_str, &data, &len);
     printf("test %.*s ... ", (int)len, data);
     fflush(stdout);
 }
@@ -1757,8 +1816,9 @@ void *__pluto_http_read_request(long fd) {
 }
 
 void *__pluto_http_url_decode(void *pluto_str) {
-    long slen = *(long *)pluto_str;
-    const char *src = (const char *)pluto_str + 8;
+    const char *src;
+    long slen;
+    __pluto_string_data(pluto_str, &src, &slen);
     char *out = (char *)malloc(slen + 1);
     int olen = 0;
     for (long i = 0; i < slen; i++) {
