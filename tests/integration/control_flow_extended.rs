@@ -60,7 +60,6 @@ fn else_if_chain_10_branches() {
 }
 
 #[test]
-#[ignore] // Feature not supported: if expressions (only if statements)
 fn if_as_expression_assigned_to_variable() {
     // let x = if cond { 1 } else { 2 }
     let stdout = compile_and_run_stdout(r#"
@@ -74,7 +73,6 @@ fn if_as_expression_assigned_to_variable() {
 }
 
 #[test]
-#[ignore] // Unimplemented feature: if-expressions not supported yet (if is statement-only)
 fn if_in_if_condition() {
     // if (if x { true } else { false }) { }
     let stdout = compile_and_run_stdout(r#"

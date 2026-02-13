@@ -642,6 +642,11 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
         Expr::Spawn { call } => {
             substitute_in_expr(&mut call.node, bindings);
         }
+        Expr::If { condition, then_block, else_block } => {
+            substitute_in_expr(&mut condition.node, bindings);
+            substitute_in_block(&mut then_block.node, bindings);
+            substitute_in_block(&mut else_block.node, bindings);
+        }
         Expr::QualifiedAccess { segments } => {
             panic!(
                 "QualifiedAccess should be resolved by module flattening before monomorphize. Segments: {:?}",

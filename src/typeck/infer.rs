@@ -419,10 +419,31 @@ pub(crate) fn infer_expr(
 
             Ok(method_sig.return_type.clone())
         }
-        Expr::QualifiedAccess { segments } => {
-            panic!(
-                "QualifiedAccess should be resolved by module flattening before type checking. Segments: {:?}",
-                segments.iter().map(|s| &s.node).collect::<Vec<_>>()
+        Expr::If { condition, then_block, else_block } => {
+            // Check condition is bool
+            let cond_type = infer_expr(&condition.node, condition.span, env)?;
+            if cond_type != PlutoType::Bool {
+                return Err(CompileError::type_err(
+                    format!("if condition must be bool, found {cond_type}"),
+                    condition.span,
+                ));
+            }
+
+            // Infer type of both branches
+            env.push_scope();
+            let then_type = infer_block_type(&then_block.node, env)?;
+            env.pop_scope();
+
+            env.push_scope();
+            let else_type = infer_block_type(&else_block.node, env)?;
+            env.pop_scope();
+
+            // Unify branch types
+            unify_branch_types(
+                &then_type,
+                &else_type,
+                then_block.span,
+                else_block.span
             )
         }
         Expr::QualifiedAccess { segments } => {
@@ -2249,4 +2270,128 @@ fn infer_method_call(
     }
 
     Ok(sig.return_type.clone())
+}
+
+
+/// Infer the type of a block (the last expression, or void)
+fn infer_block_type(
+    block: &crate::parser::ast::Block,
+    env: &mut TypeEnv
+) -> Result<PlutoType, CompileError> {
+    use crate::parser::ast::{Block, Stmt};
+
+    if block.stmts.is_empty() {
+        return Ok(PlutoType::Void);
+    }
+
+    // Check all statements except last
+    for stmt in &block.stmts[..block.stmts.len() - 1] {
+        infer_stmt(&stmt.node, env)?;
+    }
+
+    // Last statement determines block type
+    let last = &block.stmts[block.stmts.len() - 1];
+    match &last.node {
+        Stmt::Expr(expr) => {
+            // Last statement is an expression → that's the block's value
+            infer_expr(&expr.node, expr.span, env)
+        }
+        Stmt::If { condition, then_block, else_block: Some(else_block) } => {
+            // If-statement with else clause can act as an expression
+            // Check condition is bool
+            let cond_type = infer_expr(&condition.node, condition.span, env)?;
+            if cond_type != PlutoType::Bool {
+                return Err(CompileError::type_err(
+                    format!("if condition must be bool, found {cond_type}"),
+                    condition.span,
+                ));
+            }
+
+            // Infer type of both branches
+            env.push_scope();
+            let then_type = infer_block_type(&then_block.node, env)?;
+            env.pop_scope();
+
+            env.push_scope();
+            let else_type = infer_block_type(&else_block.node, env)?;
+            env.pop_scope();
+
+            // Unify branch types
+            unify_branch_types(&then_type, &else_type, then_block.span, else_block.span)
+        }
+        Stmt::Return(_) | Stmt::Break | Stmt::Continue | Stmt::Raise { .. } => {
+            // Diverging statement → never returns
+            Ok(PlutoType::Void)
+        }
+        _ => {
+            // Last is a non-expression statement → block is void
+            infer_stmt(&last.node, env)?;
+            Ok(PlutoType::Void)
+        }
+    }
+}
+
+/// Helper to check statements (needed by infer_block_type)
+fn infer_stmt(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) -> Result<(), CompileError> {
+    use crate::parser::ast::Stmt;
+
+    // Simple inference for statements - we don't need full validation here
+    // since type checking will validate everything later
+    match stmt {
+        Stmt::Let { value, .. } => {
+            infer_expr(&value.node, value.span, env)?;
+            Ok(())
+        }
+        Stmt::Expr(expr) => {
+            infer_expr(&expr.node, expr.span, env)?;
+            Ok(())
+        }
+        _ => Ok(())
+    }
+}
+
+/// Unify two branch types for if-expression
+fn unify_branch_types(
+    t1: &PlutoType,
+    t2: &PlutoType,
+    _span1: crate::span::Span,
+    span2: crate::span::Span,
+) -> Result<PlutoType, CompileError> {
+    // If both types are identical, return that type
+    if t1 == t2 {
+        return Ok(t1.clone());
+    }
+
+    // Handle none literal coercion: Nullable(Void) → any Nullable(T)
+    if matches!(t1, PlutoType::Nullable(inner) if **inner == PlutoType::Void) {
+        if matches!(t2, PlutoType::Nullable(_)) {
+            return Ok(t2.clone());
+        }
+    }
+    if matches!(t2, PlutoType::Nullable(inner) if **inner == PlutoType::Void) {
+        if matches!(t1, PlutoType::Nullable(_)) {
+            return Ok(t1.clone());
+        }
+    }
+
+    // If one is T and other is T?, allow it (widen to T?)
+    if let PlutoType::Nullable(inner2) = t2 {
+        if t1 == inner2.as_ref() {
+            return Ok(t2.clone());  // Widen to T?
+        }
+    }
+    if let PlutoType::Nullable(inner1) = t1 {
+        if t2 == inner1.as_ref() {
+            return Ok(t1.clone());  // Widen to T?
+        }
+    }
+
+    // Otherwise, types are incompatible
+    Err(CompileError::type_err(
+        format!(
+            "if-expression branches have incompatible types: then-branch has type {}, else-branch has type {}",
+            t1, t2
+        ),
+        span2,
+    ))
 }

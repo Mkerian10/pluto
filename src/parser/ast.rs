@@ -395,6 +395,12 @@ pub enum Expr {
     QualifiedAccess {
         segments: Vec<Spanned<String>>,
     },
+    /// If-expression: must have else clause, all branches return same type
+    If {
+        condition: Box<Spanned<Expr>>,
+        then_block: Spanned<Block>,
+        else_block: Spanned<Block>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

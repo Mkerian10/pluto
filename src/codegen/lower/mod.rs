@@ -2118,11 +2118,8 @@ impl<'a> LowerContext<'a> {
             Expr::StaticTraitCall { trait_name, method_name, type_args, args } => {
                 self.lower_static_trait_call(trait_name, method_name, type_args, args)
             }
-            Expr::QualifiedAccess { segments } => {
-                panic!(
-                    "QualifiedAccess should be resolved by module flattening before codegen. Segments: {:?}",
-                    segments.iter().map(|s| &s.node).collect::<Vec<_>>()
-                )
+            Expr::If { condition, then_block, else_block } => {
+                self.lower_if_expr(condition, then_block, else_block)
             }
             Expr::QualifiedAccess { segments } => {
                 panic!(
@@ -2651,6 +2648,118 @@ impl<'a> LowerContext<'a> {
         self.builder.switch_to_block(merge_bb);
         self.builder.seal_block(merge_bb);
         Ok(self.builder.block_params(merge_bb)[0])
+    }
+
+    fn lower_if_expr(
+        &mut self,
+        condition: &crate::span::Spanned<Expr>,
+        then_block: &crate::span::Spanned<crate::parser::ast::Block>,
+        else_block: &crate::span::Spanned<crate::parser::ast::Block>,
+    ) -> Result<Value, CompileError> {
+        let cond_val = self.lower_expr(&condition.node)?;
+
+        // Infer the type of the if-expression
+        let if_type = infer_type_for_expr_if(then_block, else_block, self.env, &self.var_types);
+        let cl_type = pluto_to_cranelift(&if_type);
+
+        // Create blocks
+        let then_bb = self.builder.create_block();
+        let else_bb = self.builder.create_block();
+        let merge_bb = self.builder.create_block();
+
+        // Add parameter to merge block to receive result
+        self.builder.append_block_param(merge_bb, cl_type);
+
+        // Branch based on condition
+        self.builder.ins().brif(cond_val, then_bb, &[], else_bb, &[]);
+
+        // Lower then branch
+        self.builder.switch_to_block(then_bb);
+        self.builder.seal_block(then_bb);
+        let then_val = self.lower_block_value(&then_block.node)?;
+        self.builder.ins().jump(merge_bb, &[then_val]);
+
+        // Lower else branch
+        self.builder.switch_to_block(else_bb);
+        self.builder.seal_block(else_bb);
+        let else_val = self.lower_block_value(&else_block.node)?;
+        self.builder.ins().jump(merge_bb, &[else_val]);
+
+        // Switch to merge block and get result from parameter
+        self.builder.switch_to_block(merge_bb);
+        self.builder.seal_block(merge_bb);
+
+        Ok(self.builder.block_params(merge_bb)[0])
+    }
+
+    fn lower_block_value(
+        &mut self,
+        block: &crate::parser::ast::Block
+    ) -> Result<Value, CompileError> {
+        use crate::parser::ast::Stmt;
+
+        if block.stmts.is_empty() {
+            // Empty block → void → return 0
+            return Ok(self.builder.ins().iconst(types::I64, 0));
+        }
+
+        // Lower all statements except the last
+        let mut terminated = false;
+        for stmt in &block.stmts[..block.stmts.len() - 1] {
+            self.lower_stmt(&stmt.node, &mut terminated)?;
+        }
+
+        // Last statement determines the value
+        let last = &block.stmts[block.stmts.len() - 1];
+        match &last.node {
+            Stmt::Expr(expr) => {
+                // Last is an expression → return its value
+                self.lower_expr(&expr.node)
+            }
+            Stmt::If { condition, then_block, else_block: Some(else_block) } => {
+                // If-statement with else clause can act as an expression
+                // Generate the same code as for Expr::If
+                let cond_val = self.lower_expr(&condition.node)?;
+
+                // Infer the type of the if branches
+                let if_type = infer_type_for_expr_if(then_block, else_block, self.env, &self.var_types);
+                let cl_type = pluto_to_cranelift(&if_type);
+
+                // Create blocks
+                let then_bb = self.builder.create_block();
+                let else_bb = self.builder.create_block();
+                let merge_bb = self.builder.create_block();
+
+                // Add parameter to merge block to receive result
+                self.builder.append_block_param(merge_bb, cl_type);
+
+                // Branch based on condition
+                self.builder.ins().brif(cond_val, then_bb, &[], else_bb, &[]);
+
+                // Lower then branch
+                self.builder.switch_to_block(then_bb);
+                self.builder.seal_block(then_bb);
+                let then_val = self.lower_block_value(&then_block.node)?;
+                self.builder.ins().jump(merge_bb, &[then_val]);
+
+                // Lower else branch
+                self.builder.switch_to_block(else_bb);
+                self.builder.seal_block(else_bb);
+                let else_val = self.lower_block_value(&else_block.node)?;
+                self.builder.ins().jump(merge_bb, &[else_val]);
+
+                // Switch to merge block and get result from parameter
+                self.builder.switch_to_block(merge_bb);
+                self.builder.seal_block(merge_bb);
+
+                Ok(self.builder.block_params(merge_bb)[0])
+            }
+            _ => {
+                // Last is a statement → lower it, return void (0)
+                self.lower_stmt(&last.node, &mut terminated)?;
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+        }
     }
 
     fn lower_method_call(
@@ -4500,6 +4609,33 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
     }
 }
 
+/// Quick type inference for if-expression at codegen time
+fn infer_type_for_expr_if(
+    then_block: &crate::span::Spanned<crate::parser::ast::Block>,
+    else_block: &crate::span::Spanned<crate::parser::ast::Block>,
+    env: &TypeEnv,
+    var_types: &HashMap<String, PlutoType>
+) -> PlutoType {
+    use crate::parser::ast::Stmt;
+
+    // Try to infer from then block's last statement
+    if let Some(last) = then_block.node.stmts.last() {
+        if let Stmt::Expr(expr) = &last.node {
+            return infer_type_for_expr(&expr.node, env, var_types);
+        }
+    }
+
+    // Fallback to else block's last statement
+    if let Some(last) = else_block.node.stmts.last() {
+        if let Stmt::Expr(expr) = &last.node {
+            return infer_type_for_expr(&expr.node, env, var_types);
+        }
+    }
+
+    // Default to void if both blocks are empty or end with statements
+    PlutoType::Void
+}
+
 /// Whether a type needs deep-copying at spawn sites.
 /// Heap-allocated mutable types need copying; primitives, immutable strings,
 /// and shared-by-reference types (tasks, channels) do not.
@@ -4826,6 +4962,10 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
             // Fallback to Void if not found (shouldn't happen after typeck)
             PlutoType::Void
+        }
+        Expr::If { then_block, else_block, .. } => {
+            // Use the helper function we already defined
+            infer_type_for_expr_if(then_block, else_block, env, var_types)
         }
         Expr::QualifiedAccess { segments } => {
             panic!(

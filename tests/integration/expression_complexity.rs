@@ -311,7 +311,6 @@ fn expression_with_all_literal_types() {
 }
 
 #[test]
-#[ignore] // Feature not supported: if expressions (only if statements)
 fn nested_ternary_simulation_with_if() {
     // Simulating nested ternary with nested if expressions
     let stdout = compile_and_run_stdout(r#"
