@@ -5,50 +5,40 @@ use common::compile_should_fail_with;
 
 // Private method called from outside
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn private_method_external() { compile_should_fail_with(r#"class C{} fn foo(self){} fn main(){let c=C{} c.foo()}"#, ""); }
 
 // Public method (if supported)
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn public_method() { compile_should_fail_with(r#"class C{} pub fn foo(self){} fn main(){let c=C{} c.foo()}"#, ""); }
 
 // Method visibility in module
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn module_method_visibility() { compile_should_fail_with(r#"import mod1 fn main(){let c=mod1.C{} c.foo()}"#, ""); }
 
 // Trait method visibility
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn trait_method_visibility() { compile_should_fail_with(r#"trait T{fn foo(self)} class C{} impl T{fn foo(self){}} fn main(){}"#, ""); }
 
 // Method from imported module
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn imported_method() { compile_should_fail_with(r#"import math fn main(){let v=math.Vector{x:1} v.foo()}"#, ""); }
 
 // Private trait method
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn private_trait_method() { compile_should_fail_with(r#"trait T{fn foo(self)} class C{} impl T{fn foo(self){}} fn use_t(t:T){t.foo()} fn main(){}"#, ""); }
 
 // Method visibility in generic class
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn generic_class_visibility() { compile_should_fail_with(r#"class Box<T>{value:T} fn foo(self){} fn main(){let b=Box<int>{value:1}b.foo()}"#, ""); }
 
 // Cross-module method call
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn cross_module_method() { compile_should_fail_with(r#"import other fn main(){let c=other.C{} c.private_method()}"#, ""); }
 
 // Method on app class
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn app_method_visibility() { compile_should_fail_with(r#"app MyApp{fn helper(self){} fn main(self){self.helper()}}"#, ""); }
 
 // Method visibility with contracts
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn contract_method_visibility() { compile_should_fail_with(r#"class C{} fn foo(self)int ensures result>0{return 1} fn main(){let c=C{} c.foo()}"#, ""); }

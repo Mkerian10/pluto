@@ -11,7 +11,6 @@ use common::compile_should_fail_with;
 
 // Nested empty blocks
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn nested_empty_blocks() { compile_should_fail_with(r#"fn main(){{{{}}}}}"#, ""); }
 
 // REMOVED: while_false - unreachable code is allowed
@@ -19,7 +18,6 @@ fn nested_empty_blocks() { compile_should_fail_with(r#"fn main(){{{{}}}}}"#, "")
 
 // Match with single arm
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn match_single_arm() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{E.A{}}}"#, ""); }
 
 // REMOVED: for_empty_range - empty ranges are valid
@@ -28,7 +26,6 @@ fn match_single_arm() { compile_should_fail_with(r#"enum E{A B} fn main(){match 
 
 // Match with wildcard only
 #[test]
-#[ignore] // PR #46 - outdated assertions
 fn match_wildcard_only() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{_={}}}"#, ""); }
 
 // REMOVED: nested_loops_breaks - nested loops with breaks are valid

@@ -108,6 +108,46 @@ impl<'a> LowerContext<'a> {
         Ok(self.call_runtime("__pluto_trait_wrap", &[class_val, vtable_ptr]))
     }
 
+    /// Coerce a Cranelift value from `val_type` to `expected_type`.
+    /// Handles Class→Trait (vtable wrap), Class→Trait? (vtable wrap; nullable
+    /// is identity for heap types), and T→T? (nullable box).
+    /// Returns the original value unchanged if no coercion is needed.
+    fn coerce_to_expected_type(
+        &mut self,
+        val: Value,
+        val_type: &PlutoType,
+        expected_type: &PlutoType,
+    ) -> Result<Value, CompileError> {
+        match (val_type, expected_type) {
+            // Class → Trait: wrap with vtable
+            (PlutoType::Class(cn), PlutoType::Trait(tn)) => {
+                self.wrap_class_as_trait(val, cn, tn)
+            }
+            // Class → Trait?: wrap with vtable (nullable is identity for heap types)
+            (PlutoType::Class(cn), PlutoType::Nullable(inner))
+                if matches!(**inner, PlutoType::Trait(_)) =>
+            {
+                let tn = match &**inner {
+                    PlutoType::Trait(tn) => tn,
+                    _ => unreachable!(),
+                };
+                // wrap_class_as_trait returns a trait handle (heap pointer).
+                // Nullable for heap types is the pointer itself (0 = none, non-zero = value),
+                // so no additional nullable boxing is needed. See emit_nullable_wrap line 203-206.
+                self.wrap_class_as_trait(val, cn, tn)
+            }
+            // T → T? (non-nullable to nullable, excluding double-wrap and Nullable(Void))
+            (inner, PlutoType::Nullable(expected_inner))
+                if !matches!(inner, PlutoType::Nullable(_))
+                    && **expected_inner != PlutoType::Void =>
+            {
+                Ok(self.emit_nullable_wrap(val, inner))
+            }
+            // No coercion needed
+            _ => Ok(val),
+        }
+    }
+
     /// Load a singleton pointer from its module-level global.
     /// Used by scope block codegen to wire singleton dependencies into scoped instances.
     fn load_singleton(&mut self, class_name: &str) -> Result<Value, CompileError> {
@@ -2494,14 +2534,7 @@ impl<'a> LowerContext<'a> {
                 .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{}'", lit_name.node, name.node)))?;
             let field_type = &field_info[field_idx].1;
 
-            // Handle T → T? coercion
-            let final_val = match (&val_type, field_type) {
-                (inner, PlutoType::Nullable(expected_inner))
-                    if !matches!(inner, PlutoType::Nullable(_)) && **expected_inner != PlutoType::Void => {
-                    self.emit_nullable_wrap(val, inner)
-                }
-                _ => val,
-            };
+            let final_val = self.coerce_to_expected_type(val, &val_type, field_type)?;
 
             let offset = (field_idx as i32) * POINTER_SIZE;
             self.builder.ins().store(MemFlags::new(), final_val, ptr, Offset32::new(offset));
@@ -2544,14 +2577,7 @@ impl<'a> LowerContext<'a> {
                 .expect("field should exist after typeck validation");
             let field_type = &variant_fields[field_idx].1;
 
-            // Handle T → T? coercion first, then array slot conversion
-            let wrapped_val = match (&val_type, field_type) {
-                (inner, PlutoType::Nullable(expected_inner))
-                    if !matches!(inner, PlutoType::Nullable(_)) && **expected_inner != PlutoType::Void => {
-                    self.emit_nullable_wrap(val, inner)
-                }
-                _ => val,
-            };
+            let wrapped_val = self.coerce_to_expected_type(val, &val_type, field_type)?;
             let slot = to_array_slot(wrapped_val, field_type, &mut self.builder);
             let offset = ((1 + field_idx) as i32) * POINTER_SIZE;
             self.builder.ins().store(MemFlags::new(), slot, ptr, Offset32::new(offset));

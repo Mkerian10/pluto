@@ -389,8 +389,7 @@ fn main() {
 
 #[test]
 fn trait_typed_class_field() {
-    // COMPILER GAP: struct literal doesn't coerce concrete class to trait-typed field
-    compile_should_fail_with(r#"
+    let out = compile_and_run_stdout(r#"
 trait Worker {
     fn work(self) int
 }
@@ -414,7 +413,8 @@ fn main() {
     print(m.employee.work())
     print(m.bonus)
 }
-"#, "expected trait Worker");
+"#);
+    assert_eq!(out, "20\n5\n");
 }
 
 #[test]
@@ -14978,8 +14978,8 @@ fn main() {
 
 #[test]
 fn fail_trait_as_class_field_type_coercion() {
-    // BUG: Assigning concrete class to trait-typed field in struct literal fails
-    compile_should_fail_with(r#"
+    // Fixed: concrete class coerces to trait-typed field in struct literal
+    let out = compile_and_run_stdout(r#"
 trait Worker {
     fn work(self) int
 }
@@ -14995,8 +14995,10 @@ class Container {
 
 fn main() {
     let c = Container { worker: MyWorker { n: 1 } }
+    print(c.worker.work())
 }
-"#, "field 'worker': expected trait Worker, found MyWorker");
+"#);
+    assert_eq!(out, "1\n");
 }
 
 #[test]
@@ -15121,4 +15123,49 @@ fn main() {
 }
 "#);
     assert_eq!(out, "500\n15\n");
+}
+
+// ===== PLUTO-002: Trait Coercion in Struct Literals =====
+
+#[test]
+fn pluto_002_struct_lit_trait_nullable_move_dispatch() {
+    // Class→Trait? in struct literal, container copied to new variable.
+    // Verifies the trait handle survives struct copy and nullable comparison works.
+    // Note: ! unwrap on nullable trait has a pre-existing typeck limitation,
+    // so we verify non-none instead of dispatching through the nullable.
+    let out = compile_and_run_stdout(r#"
+trait Worker {
+    fn work(self) int
+}
+class W impl Worker {
+    fn work(self) int { return 9 }
+}
+class Box {
+    w: Worker?
+}
+fn main() {
+    let a = Box { w: W {} }
+    let b = a
+    if b.w != none { print(1) }
+}
+"#);
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn pluto_002_reject_non_impl_nullable_trait_struct() {
+    compile_should_fail_with(r#"
+trait Worker {
+    fn work(self) int
+}
+class NotAWorker {
+    n: int
+}
+class Container {
+    worker: Worker?
+}
+fn main() {
+    let c = Container { worker: NotAWorker { n: 1 } }
+}
+"#, "expected trait Worker");
 }
