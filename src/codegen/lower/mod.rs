@@ -2708,7 +2708,7 @@ impl<'a> LowerContext<'a> {
         let ptr = self.lower_expr(scrutinee)?;
 
         // Infer result type
-        let match_type = infer_type_for_expr_match(arms, self.env, &self.var_types);
+        let match_type = infer_type_for_expr_match(arms, scrutinee, self.env, &self.var_types);
         let cl_type = pluto_to_cranelift(&match_type);
 
         // Load tag (discriminant) from offset 0
@@ -2752,16 +2752,16 @@ impl<'a> LowerContext<'a> {
                     format!("variant '{}' not found", arm.variant_name.node)
                 ))? as i64;
 
-            let expected_tag = self.builder.ins().iconst(types::I64, variant_idx);
-            let cmp = self.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
-
-            // If tag matches → jump to body, else → next check (or merge for last arm)
-            let fallthrough = if i + 1 < arms.len() {
-                check_blocks[i + 1]
+            // For the last arm, exhaustiveness guarantees a match, so skip the check
+            if i + 1 < arms.len() {
+                // Not the last arm - check the tag and branch
+                let expected_tag = self.builder.ins().iconst(types::I64, variant_idx);
+                let cmp = self.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
+                self.builder.ins().brif(cmp, body_blocks[i], &[], check_blocks[i + 1], &[]);
             } else {
-                merge_bb  // Last arm falls through to merge (exhaustiveness guarantees match)
-            };
-            self.builder.ins().brif(cmp, body_blocks[i], &[], fallthrough, &[]);
+                // Last arm - exhaustiveness guarantees match, unconditional jump to body
+                self.builder.ins().jump(body_blocks[i], &[]);
+            }
 
             // === Body block: extract fields and evaluate expression ===
             self.builder.switch_to_block(body_blocks[i]);
@@ -4784,12 +4784,38 @@ fn infer_type_for_expr_if(
 /// Quick type inference for match-expression at codegen time
 fn infer_type_for_expr_match(
     arms: &[crate::parser::ast::MatchExprArm],
+    scrutinee: &Expr,
     env: &TypeEnv,
     var_types: &HashMap<String, PlutoType>
 ) -> PlutoType {
     // Infer from the first arm's value expression (typeck guarantees all arms have same type)
     if let Some(arm) = arms.first() {
-        return infer_type_for_expr(&arm.value.node, env, var_types);
+        // Get scrutinee type to find enum info
+        let scrutinee_type = infer_type_for_expr(scrutinee, env, var_types);
+        let enum_name = match &scrutinee_type {
+            PlutoType::Enum(name) => name,
+            _ => return PlutoType::Void,
+        };
+
+        // Get variant info to find field types
+        if let Some(enum_info) = env.enums.get(enum_name) {
+            if let Some((_, variant_fields)) = enum_info.variants.iter()
+                .find(|(name, _)| name == &arm.variant_name.node)
+            {
+                // Create temporary var_types with bindings
+                let mut temp_var_types = var_types.clone();
+                for (binding_field, opt_rename) in &arm.bindings {
+                    if let Some((_, field_type)) = variant_fields.iter()
+                        .find(|(fname, _)| fname == &binding_field.node)
+                    {
+                        let var_name = opt_rename.as_ref()
+                            .map_or(&binding_field.node, |r| &r.node);
+                        temp_var_types.insert(var_name.clone(), field_type.clone());
+                    }
+                }
+                return infer_type_for_expr(&arm.value.node, env, &temp_var_types);
+            }
+        }
     }
 
     // Default to void if no arms (shouldn't happen after typeck)
@@ -5127,8 +5153,8 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             // Use the helper function we already defined
             infer_type_for_expr_if(then_block, else_block, env, var_types)
         }
-        Expr::Match { arms, .. } => {
-            infer_type_for_expr_match(arms, env, var_types)
+        Expr::Match { expr, arms } => {
+            infer_type_for_expr_match(arms, &expr.node, env, var_types)
         }
         Expr::QualifiedAccess { segments } => {
             panic!(

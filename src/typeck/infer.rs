@@ -447,35 +447,150 @@ pub(crate) fn infer_expr(
             )
         }
         Expr::Match { expr: match_expr, arms } => {
-            // Infer the type of the matched expression
-            let _expr_type = infer_expr(&match_expr.node, match_expr.span, env)?;
+            use std::collections::HashSet;
 
-            // All arms must have the same type
-            if arms.is_empty() {
-                return Err(CompileError::type_err(
-                    "match expression must have at least one arm".to_string(),
-                    span,
-                ));
-            }
+            // Infer scrutinee type → must be Enum
+            let scrutinee_type = infer_expr(&match_expr.node, match_expr.span, env)?;
 
-            // Infer type of first arm
-            let first_arm_type = infer_expr(&arms[0].value.node, arms[0].value.span, env)?;
+            let enum_name = match &scrutinee_type {
+                PlutoType::Enum(name) => name.clone(),
+                other => {
+                    return Err(CompileError::type_err(
+                        format!("match requires enum type, found {}", other),
+                        match_expr.span,
+                    ));
+                }
+            };
 
-            // Check that all other arms have compatible types
-            for arm in &arms[1..] {
-                let arm_type = infer_expr(&arm.value.node, arm.value.span, env)?;
-                if !types_compatible(&arm_type, &first_arm_type, env) {
+            // Get enum info for exhaustiveness checking
+            let enum_info = env.enums.get(&enum_name).ok_or_else(|| {
+                CompileError::type_err(
+                    format!("undefined enum '{}'", enum_name),
+                    match_expr.span,
+                )
+            })?.clone();
+
+            let mut arm_types = Vec::new();
+            let mut covered = HashSet::new();
+
+            // Type-check each arm
+            for arm in arms {
+                // Validate enum name matches (handle generics via prefix)
+                let arm_enum_base = arm
+                    .enum_name
+                    .node
+                    .split("$$")
+                    .next()
+                    .unwrap_or(&arm.enum_name.node);
+                let scrutinee_enum_base = enum_name.split("$$").next().unwrap_or(&enum_name);
+
+                if arm_enum_base != scrutinee_enum_base {
                     return Err(CompileError::type_err(
                         format!(
-                            "match arms have incompatible types: expected {}, found {}",
-                            first_arm_type, arm_type
+                            "match arm enum '{}' does not match scrutinee enum '{}'",
+                            arm.enum_name.node, enum_name
                         ),
-                        arm.value.span,
+                        arm.enum_name.span,
+                    ));
+                }
+
+                // Lookup variant
+                let variant = enum_info
+                    .variants
+                    .iter()
+                    .find(|(name, _)| name == &arm.variant_name.node)
+                    .ok_or_else(|| {
+                        CompileError::type_err(
+                            format!(
+                                "enum '{}' has no variant '{}'",
+                                enum_name, arm.variant_name.node
+                            ),
+                            arm.variant_name.span,
+                        )
+                    })?;
+
+                // Check for duplicates
+                if !covered.insert(arm.variant_name.node.clone()) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "duplicate match arm for variant '{}'",
+                            arm.variant_name.node
+                        ),
+                        arm.variant_name.span,
+                    ));
+                }
+
+                // Validate bindings
+                if arm.bindings.len() != variant.1.len() {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "variant '{}' has {} fields, but {} bindings provided",
+                            arm.variant_name.node,
+                            variant.1.len(),
+                            arm.bindings.len()
+                        ),
+                        arm.variant_name.span,
+                    ));
+                }
+
+                // Create new scope and bind fields
+                env.push_scope();
+
+                for (binding_field, opt_rename) in arm.bindings.iter() {
+                    // Find field in variant
+                    let field = variant
+                        .1
+                        .iter()
+                        .find(|(fname, _)| fname == &binding_field.node)
+                        .ok_or_else(|| {
+                            CompileError::type_err(
+                                format!(
+                                    "variant '{}' has no field '{}'",
+                                    arm.variant_name.node, binding_field.node
+                                ),
+                                binding_field.span,
+                            )
+                        })?;
+
+                    // Bind variable (use rename if provided)
+                    let var_name = opt_rename
+                        .as_ref()
+                        .map_or(&binding_field.node, |r| &r.node);
+                    env.define(var_name.clone(), field.1.clone());
+                }
+
+                // Infer arm value type
+                let arm_type = infer_expr(&arm.value.node, arm.value.span, env)?;
+                arm_types.push((arm_type, arm.value.span));
+
+                env.pop_scope();
+            }
+
+            // Check exhaustiveness
+            for (variant_name, _) in &enum_info.variants {
+                if !covered.contains(variant_name) {
+                    return Err(CompileError::type_err(
+                        format!("non-exhaustive match: missing variant '{}'", variant_name),
+                        span,
                     ));
                 }
             }
 
-            Ok(first_arm_type)
+            // All arms must unify to same type
+            let first_type = &arm_types[0].0;
+            for (arm_type, arm_span) in &arm_types[1..] {
+                if !types_compatible(arm_type, first_type, env) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "match arms have incompatible types: expected {}, found {}",
+                            first_type, arm_type
+                        ),
+                        *arm_span,
+                    ));
+                }
+            }
+
+            Ok(first_type.clone())
         }
         Expr::QualifiedAccess { segments } => {
             panic!(
