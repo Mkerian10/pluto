@@ -653,7 +653,7 @@ fn if_expr_nullable_widening_int() {
     let stdout = compile_and_run_stdout(r#"
         fn main() {
             let x: int? = if true { 10 } else { 0 }
-            if x == 10 {
+            if x != none && x? == 10 {
                 print("ten")
             } else {
                 print("other")
@@ -671,7 +671,7 @@ fn if_expr_nullable_widening_class() {
             let f1 = Foo { x: 42 }
             let f2 = Foo { x: 99 }
             let f: Foo? = if true { f1 } else { f2 }
-            if f.x == 42 {
+            if f != none && f?.x == 42 {
                 print("42")
             } else {
                 print("other")
