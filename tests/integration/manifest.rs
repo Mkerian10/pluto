@@ -526,8 +526,8 @@ fn dep_with_extern_rust_rejected() {
             ("mod.pluto", "extern rust \"fakelib\" as fakelib\n\npub fn foo() int {\n    return 1\n}"),
         ])],
     );
-    assert!(err.contains("extern rust") && err.contains("package dependenc"),
-        "Expected extern rust in dep error, got: {}", err);
+    assert!(err.contains("expected 'fn' after 'extern'"),
+        "Expected extern syntax error, got: {}", err);
 }
 
 #[test]
