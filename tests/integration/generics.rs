@@ -859,3 +859,60 @@ fn main() {
 // Note: StaticTraitCall test blocked on reflection intrinsics for generic functions
 // The bug fix ensures type_args are visited, but we need reflection to generate
 // intrinsics for monomorphized type parameters. This is a separate issue.
+
+// ============================================================
+// If-Expression Integration Tests
+// ============================================================
+
+#[test]
+fn if_expr_with_generic_types() {
+    let out = compile_and_run_stdout(
+        r#"
+        class Box<T> { value: T }
+        fn main() {
+            let b = if true { Box<int> { value: 10 } } else { Box<int> { value: 20 } }
+            print(b.value)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "10");
+}
+
+#[test]
+fn generic_function_returning_if_expr() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn choose<T>(a: T, b: T, first: bool) T {
+            return if first { a } else { b }
+        }
+        fn main() {
+            print(choose(10, 20, true))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "10");
+}
+
+#[test]
+fn if_expr_type_parameter_unification() {
+    let out = compile_and_run_stdout(
+        r#"
+        enum Option<T> {
+            Some { value: T }
+            None
+        }
+        fn main() {
+            let opt = if true {
+                Option<int>.Some { value: 42 }
+            } else {
+                Option<int>.None
+            }
+            match opt {
+                Option.Some { value: v } { print(v) }
+                Option.None { print("none") }
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "42");
+}

@@ -406,3 +406,88 @@ fn main() {
     assert_eq!(out.trim(), "P: hello\ndone");
 }
 
+// ============================================================
+// If-Expression Integration Tests
+// ============================================================
+
+#[test]
+fn if_expr_nullable_widening_t_to_t_nullable() {
+    // int widened to int? when assigned to nullable variable
+    let out = compile_and_run_stdout(
+        r#"
+        fn main() {
+            let x: int? = if true { 10 } else { 5 }
+            print(x?)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "10");
+}
+
+#[test]
+fn if_expr_none_literal_in_branches() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn main() {
+            let x: int? = if false { none } else { none }
+            if x == none {
+                print("none")
+            } else {
+                print("some")
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "none");
+}
+
+#[test]
+fn if_expr_null_propagate_in_branch() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn main() {
+            let opt: int? = 10
+            let x = if true { opt? } else { 0 }
+            print(x)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "10");
+}
+
+#[test]
+fn if_expr_returning_nullable() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn maybe_value(flag: bool) int? {
+            if flag {
+                return 42
+            } else {
+                return none
+            }
+        }
+        fn main() {
+            let x = maybe_value(true)
+            print(x?)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn if_expr_nullable_class() {
+    let out = compile_and_run_stdout(
+        r#"
+        class Foo { x: int }
+        fn main() {
+            let f: Foo? = if true { Foo { x: 10 } } else { Foo { x: 20 } }
+            if f != none {
+                print(f?.x)
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "10");
+}
+

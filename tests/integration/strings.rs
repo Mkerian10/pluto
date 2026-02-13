@@ -723,3 +723,245 @@ fn main() {
     );
     assert_eq!(out, "got 3.140000\ndone\n");
 }
+
+// ── String Slice Tests ──────────────────────────────────────────────────────
+
+#[test]
+fn string_slice_substring() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello world"
+    let sub = s.substring(0, 5)
+    print(sub)
+    print(sub.len())
+}
+"#);
+    assert_eq!(out, "hello\n5\n");
+}
+
+#[test]
+fn string_slice_trim() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "  hello  "
+    print(s.trim())
+    print(s.trim_start())
+    print(s.trim_end())
+}
+"#);
+    assert_eq!(out, "hello\nhello  \n  hello\n");
+}
+
+#[test]
+fn string_slice_of_slice() {
+    // Nested slicing: substring of a substring should flatten correctly
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello world"
+    let sub1 = s.substring(0, 7)
+    let sub2 = sub1.substring(2, 5)
+    print(sub2)
+    print(sub2.len())
+}
+"#);
+    assert_eq!(out, "llo w\n5\n");
+}
+
+#[test]
+fn string_slice_equality() {
+    // Slice should equal an equivalent owned string
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello world"
+    let sub = s.substring(0, 5)
+    print(sub == "hello")
+    print(sub != "world")
+}
+"#);
+    assert_eq!(out, "true\ntrue\n");
+}
+
+#[test]
+fn string_slice_escape_on_return() {
+    // Returned slices should be materialized to owned strings
+    let out = compile_and_run_stdout(r#"
+fn get_first_word(s: string) string {
+    return s.substring(0, 5)
+}
+
+fn main() {
+    let result = get_first_word("hello world")
+    print(result)
+    print(result.len())
+}
+"#);
+    assert_eq!(out, "hello\n5\n");
+}
+
+#[test]
+fn string_slice_escape_in_struct() {
+    // Slices stored in struct fields should be materialized
+    let out = compile_and_run_stdout(r#"
+class Wrapper {
+    value: string
+}
+
+fn main() {
+    let s = "hello world"
+    let w = Wrapper { value: s.substring(6, 11) }
+    print(w.value)
+}
+"#);
+    assert_eq!(out, "world\n");
+}
+
+#[test]
+fn string_slice_escape_in_array() {
+    // Slices stored in array should be materialized
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello world"
+    let arr = [s.substring(0, 5), s.substring(6, 11)]
+    print(arr[0])
+    print(arr[1])
+}
+"#);
+    assert_eq!(out, "hello\nworld\n");
+}
+
+#[test]
+fn string_slice_escape_in_closure() {
+    // Slices captured by closures should be materialized
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello world"
+    let sub = s.substring(0, 5)
+    let f = () => { print(sub) }
+    f()
+}
+"#);
+    assert_eq!(out, "hello\n");
+}
+
+#[test]
+fn string_slice_split() {
+    // Split should return correct values (now backed by slices)
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let parts = "a,b,c".split(",")
+    print(parts[0])
+    print(parts[1])
+    print(parts[2])
+    print(parts.len())
+}
+"#);
+    assert_eq!(out, "a\nb\nc\n3\n");
+}
+
+#[test]
+fn string_slice_concat() {
+    // Concatenating slices should work correctly
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello world"
+    let a = s.substring(0, 5)
+    let b = s.substring(5, 11)
+    print(a + b)
+}
+"#);
+    assert_eq!(out, "hello world\n");
+}
+
+#[test]
+fn string_slice_contains() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello world"
+    let sub = s.substring(0, 5)
+    print(sub.contains("ell"))
+    print(sub.contains("xyz"))
+}
+"#);
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn string_slice_replace() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello world"
+    let sub = s.substring(0, 5)
+    print(sub.replace("l", "r"))
+}
+"#);
+    assert_eq!(out, "herro\n");
+}
+
+#[test]
+fn string_slice_len() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello world"
+    print(s.substring(0, 5).len())
+    print(s.trim().len())
+}
+"#);
+    assert_eq!(out, "5\n11\n");
+}
+
+#[test]
+fn string_slice_index_of() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello world"
+    let sub = s.substring(0, 5)
+    print(sub.index_of("ll"))
+    print(sub.index_of("xyz"))
+}
+"#);
+    assert_eq!(out, "2\n-1\n");
+}
+
+#[test]
+fn string_slice_split_of_slice() {
+    // Split a substring (slice of slice via split)
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello world foo bar"
+    let sub = s.substring(6, 19)
+    let parts = sub.split(" ")
+    print(parts[0])
+    print(parts[1])
+    print(parts.len())
+}
+"#);
+    assert_eq!(out, "world\nfoo\n3\n");
+}
+
+#[test]
+fn string_slice_escape_in_map() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello"
+    let key = s.substring(0, 3)
+    let m = Map<string, int> { key: 42 }
+    print(m.contains("hel"))
+}
+"#);
+    assert_eq!(out, "true\n");
+}
+
+#[test]
+fn string_slice_array_push() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let s = "hello world"
+    let arr: [string] = []
+    arr.push(s.substring(0, 5))
+    arr.push(s.substring(6, 11))
+    print(arr[0])
+    print(arr[1])
+}
+"#);
+    assert_eq!(out, "hello\nworld\n");
+}

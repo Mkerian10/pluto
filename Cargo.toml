@@ -649,6 +649,10 @@ path = "tests/typeck/type_system/pattern_matching_exhaustiveness.rs"
 name = "match_expression_errors"
 path = "tests/integration/match_expression_errors.rs"
 
+[[test]]
+name = "if_expression_errors"
+path = "tests/integration/if_expression_errors.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false

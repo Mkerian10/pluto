@@ -416,3 +416,40 @@ fn builtin_service_unavailable() {
     );
     assert_eq!(out, "service unavailable\n");
 }
+
+// ============================================================
+// If-Expression Integration Tests
+// ============================================================
+
+#[test]
+fn if_expr_with_error_propagation_in_branch() {
+    let out = compile_and_run_stdout(
+        "error ParseError {\n    msg: string\n}\n\nfn parse(s: string) int {\n    if s == \"bad\" {\n        raise ParseError { msg: \"bad\" }\n    }\n    return 42\n}\n\nfn main() {\n    let result = if true { parse(\"good\")! } else { 0 }\n    print(result)\n}",
+    );
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn if_expr_with_catch_in_branch() {
+    let out = compile_and_run_stdout(
+        "error ParseError {\n    msg: string\n}\n\nfn parse(s: string) int {\n    raise ParseError { msg: \"bad\" }\n}\n\nfn main() {\n    let result = if true {\n        parse(\"bad\") catch ParseError { 99 }\n    } else {\n        0\n    }\n    print(result)\n}",
+    );
+    assert_eq!(out.trim(), "99");
+}
+
+#[test]
+fn if_expr_fallible_in_condition() {
+    let out = compile_and_run_stdout(
+        "error CheckError {\n    code: int\n}\n\nfn check(x: int) bool {\n    if x < 0 {\n        raise CheckError { code: -1 }\n    }\n    return x > 5\n}\n\nfn main() {\n    let x = if check(10)! { 100 } else { 200 }\n    print(x)\n}",
+    );
+    assert_eq!(out.trim(), "100");
+}
+
+#[test]
+fn if_expr_error_type_unification() {
+    // Both branches fallible with same error type
+    let out = compile_and_run_stdout(
+        "error MyError {\n    val: int\n}\n\nfn foo() int {\n    if false {\n        raise MyError { val: 1 }\n    }\n    return 10\n}\n\nfn bar() int {\n    if false {\n        raise MyError { val: 2 }\n    }\n    return 20\n}\n\nfn main() {\n    let x = if true { foo()! } else { bar()! }\n    print(x)\n}",
+    );
+    assert_eq!(out.trim(), "10");
+}

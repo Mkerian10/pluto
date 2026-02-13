@@ -1740,27 +1740,27 @@ void __pluto_log_set_level(long level) {
 }
 
 void __pluto_log_write(void *level_str, long timestamp, void *message) {
-    const char *level = (const char *)level_str + 8;
-    const char *msg = (const char *)message + 8;
+    const char *level = __pluto_string_to_cstr(level_str);
+    const char *msg = __pluto_string_to_cstr(message);
     fprintf(stderr, "[%s] %ld %s\n", level, timestamp, msg);
     fflush(stderr);
 }
 
 void __pluto_log_write_structured(void *level_str, long timestamp, void *message, long fields_ptr) {
-    const char *level = (const char *)level_str + 8;
-    const char *msg = (const char *)message + 8;
+    const char *level = __pluto_string_to_cstr(level_str);
+    const char *msg = __pluto_string_to_cstr(message);
     fprintf(stderr, "[%s] %ld %s", level, timestamp, msg);
-    
+
     long *arr_header = (long *)fields_ptr;
     long len = arr_header[0];
     long *data = (long *)arr_header[2];
-    
+
     for (long i = 0; i < len; i++) {
         long *field_obj = (long *)data[i];
         void *key_ptr = (void *)field_obj[1];
         void *value_ptr = (void *)field_obj[2];
-        const char *key = (const char *)key_ptr + 8;
-        const char *value = (const char *)value_ptr + 8;
+        const char *key = __pluto_string_to_cstr(key_ptr);
+        const char *value = __pluto_string_to_cstr(value_ptr);
         fprintf(stderr, " %s=%s", key, value);
     }
     fprintf(stderr, "\n");
@@ -1787,34 +1787,12 @@ static void *__pluto_make_string(const char *c_str) {
 }
 
 void *__pluto_env_get(void *name_ptr) {
-    long *name_header = (long *)name_ptr;
-    long name_len = name_header[0];
-    char *name_data = (char *)&name_header[1];
-
-    char name_buf[1024];
-    if (name_len >= 1024) {
-        return __pluto_make_string("");
-    }
-    memcpy(name_buf, name_data, name_len);
-    name_buf[name_len] = '\0';
-
-    const char *val = getenv(name_buf);
+    const char *val = getenv(__pluto_string_to_cstr(name_ptr));
     return __pluto_make_string(val);
 }
 
 void *__pluto_env_get_or(void *name_ptr, void *default_ptr) {
-    long *name_header = (long *)name_ptr;
-    long name_len = name_header[0];
-    char *name_data = (char *)&name_header[1];
-
-    char name_buf[1024];
-    if (name_len >= 1024) {
-        return default_ptr;
-    }
-    memcpy(name_buf, name_data, name_len);
-    name_buf[name_len] = '\0';
-
-    const char *val = getenv(name_buf);
+    const char *val = getenv(__pluto_string_to_cstr(name_ptr));
     if (!val) {
         return default_ptr;
     }
@@ -1822,42 +1800,13 @@ void *__pluto_env_get_or(void *name_ptr, void *default_ptr) {
 }
 
 void __pluto_env_set(void *name_ptr, void *value_ptr) {
-    long *name_header = (long *)name_ptr;
-    long name_len = name_header[0];
-    char *name_data = (char *)&name_header[1];
-
-    long *val_header = (long *)value_ptr;
-    long val_len = val_header[0];
-    char *val_data = (char *)&val_header[1];
-
-    char name_buf[1024];
-    char val_buf[4096];
-
-    if (name_len >= 1024 || val_len >= 4096) {
-        return;
-    }
-
-    memcpy(name_buf, name_data, name_len);
-    name_buf[name_len] = '\0';
-    memcpy(val_buf, val_data, val_len);
-    val_buf[val_len] = '\0';
-
-    setenv(name_buf, val_buf, 1);
+    const char *name = __pluto_string_to_cstr(name_ptr);
+    const char *val = __pluto_string_to_cstr(value_ptr);
+    setenv(name, val, 1);
 }
 
 long __pluto_env_exists(void *name_ptr) {
-    long *name_header = (long *)name_ptr;
-    long name_len = name_header[0];
-    char *name_data = (char *)&name_header[1];
-
-    char name_buf[1024];
-    if (name_len >= 1024) {
-        return 0;
-    }
-    memcpy(name_buf, name_data, name_len);
-    name_buf[name_len] = '\0';
-
-    return getenv(name_buf) != NULL ? 1 : 0;
+    return getenv(__pluto_string_to_cstr(name_ptr)) != NULL ? 1 : 0;
 }
 
 void *__pluto_env_list_names() {
