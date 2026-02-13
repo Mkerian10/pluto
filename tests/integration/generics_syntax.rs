@@ -12,7 +12,6 @@ mod common;
 use common::*;
 
 #[test]
-#[ignore] // Compiler bug: Generic nullable field doesn't accept T values (expected string?, found string)
 fn generic_nested_three_levels() {
     let stdout = compile_and_run_stdout(r#"
         class Box<T> {
@@ -40,7 +39,6 @@ fn generic_nested_three_levels() {
 }
 
 #[test]
-#[ignore] // Compiler bug: Generic TypeExpr should not reach codegen (monomorphization issue)
 fn generic_map_with_nested_value() {
     let stdout = compile_and_run_stdout(r#"
         class Pair<A, B> {
@@ -76,7 +74,6 @@ fn generic_array_of_generics() {
 }
 
 #[test]
-#[ignore] // Compiler bug: Generic nullable field doesn't accept T values (expected [int]?, found [int])
 fn generic_fn_return_nested() {
     let stdout = compile_and_run_stdout(r#"
         class Option<T> {
@@ -127,7 +124,6 @@ fn generic_comparison_ambiguity() {
 }
 
 #[test]
-#[ignore] // Compiler bug: Chained field access (x.second.second) not supported
 fn generic_shift_right_in_nested() {
     // Pair<int, Pair<int, int>> → the >> should NOT be parsed as shift operator
     let stdout = compile_and_run_stdout(r#"
@@ -148,7 +144,6 @@ fn generic_shift_right_in_nested() {
 }
 
 #[test]
-#[ignore] // Parser currently accepts trailing commas in generic type args (design decision needed)
 fn generic_trailing_comma_rejected() {
     // Box<int,> → trailing comma should be rejected
     compile_should_fail(r#"
@@ -175,7 +170,6 @@ fn generic_empty_type_args_rejected() {
 }
 
 #[test]
-#[ignore] // Parser currently accepts space before < in generic syntax (design decision needed)
 fn generic_space_before_bracket() {
     // Box <int> → space before < should either fail or parse as comparison
     // This tests that the parser doesn't accidentally accept this as generic syntax

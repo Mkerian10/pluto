@@ -119,12 +119,11 @@ fn enum_two_enums_in_same_program() {
 
 #[test]
 fn enum_in_if_else_branches() {
-    // Pluto does not support if-as-expression (let x = if ... { } else { })
-    // COMPILER GAP: if-as-expression not implemented
-    compile_should_fail_with(
+    // If-expressions are now supported
+    let out = compile_and_run_stdout(
         "enum Result {\n    Ok { value: int }\n    Err { code: int }\n}\n\nfn main() {\n    let flag = true\n    let r = if flag {\n        Result.Ok { value: 10 }\n    } else {\n        Result.Err { code: -1 }\n    }\n    match r {\n        Result.Ok { value } { print(value) }\n        Result.Err { code } { print(code) }\n    }\n}",
-        "unexpected token if",
     );
+    assert_eq!(out, "10\n");
 }
 
 #[test]

@@ -121,6 +121,14 @@ Demonstrates enum pattern matching: unit variants (no data), data-carrying varia
 cargo run -- run examples/pattern_matching/main.pluto
 ```
 
+## if_expressions
+
+Demonstrates if-as-expression: using `if` as an expression that returns a value, basic if-expressions in variable assignments, nested if-expressions for multi-way branches, if-expressions as function arguments, and if-expressions in conditions. All if-expressions require an else clause and all branches must return compatible types (with nullable coercion support).
+
+```bash
+cargo run -- run examples/if_expressions.pluto
+```
+
 ## git-packages
 
 Demonstrates git-based dependencies via `pluto.toml`. A project declares a `strutils` dependency pointing to a git repository, then imports and uses string utility functions from it.
