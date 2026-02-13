@@ -1,0 +1,174 @@
+import std.path
+
+test "join simple paths" {
+    expect(path.join("foo", "bar")).to_equal("foo/bar")
+    expect(path.join("a", "b")).to_equal("a/b")
+    expect(path.join("hello", "world")).to_equal("hello/world")
+}
+
+test "join with trailing slash" {
+    expect(path.join("foo/", "bar")).to_equal("foo/bar")
+    expect(path.join("base/", "rel")).to_equal("base/rel")
+}
+
+test "join with leading slash" {
+    expect(path.join("foo", "/bar")).to_equal("foo/bar")
+    expect(path.join("base", "/rel")).to_equal("base/rel")
+}
+
+test "join with both slashes" {
+    expect(path.join("foo/", "/bar")).to_equal("foo/bar")
+    expect(path.join("base/", "/rel")).to_equal("base/rel")
+}
+
+test "join with empty base" {
+    expect(path.join("", "bar")).to_equal("bar")
+    expect(path.join("", "path/to/file")).to_equal("path/to/file")
+}
+
+test "join with empty rel" {
+    expect(path.join("foo", "")).to_equal("foo")
+    expect(path.join("/usr/local", "")).to_equal("/usr/local")
+}
+
+test "join absolute paths" {
+    expect(path.join("/usr", "bin")).to_equal("/usr/bin")
+    expect(path.join("/home/", "user")).to_equal("/home/user")
+}
+
+test "basename simple" {
+    expect(path.basename("foo/bar")).to_equal("bar")
+    expect(path.basename("a/b/c")).to_equal("c")
+    expect(path.basename("/usr/bin/ls")).to_equal("ls")
+}
+
+test "basename without directory" {
+    expect(path.basename("file.txt")).to_equal("file.txt")
+    expect(path.basename("README")).to_equal("README")
+}
+
+test "basename empty string" {
+    expect(path.basename("")).to_equal("")
+}
+
+test "basename root" {
+    expect(path.basename("/")).to_equal("")
+}
+
+test "basename trailing slash" {
+    expect(path.basename("foo/bar/")).to_equal("")
+}
+
+test "dirname simple" {
+    expect(path.dirname("foo/bar")).to_equal("foo")
+    expect(path.dirname("a/b/c")).to_equal("a/b")
+    expect(path.dirname("/usr/bin/ls")).to_equal("/usr/bin")
+}
+
+test "dirname without directory" {
+    expect(path.dirname("file.txt")).to_equal(".")
+    expect(path.dirname("README")).to_equal(".")
+}
+
+test "dirname empty string" {
+    expect(path.dirname("")).to_equal(".")
+}
+
+test "dirname root" {
+    expect(path.dirname("/")).to_equal("/")
+    expect(path.dirname("/usr")).to_equal("/")
+}
+
+test "ext with extension" {
+    expect(path.ext("file.txt")).to_equal(".txt")
+    expect(path.ext("foo/bar.rs")).to_equal(".rs")
+    expect(path.ext("archive.tar.gz")).to_equal(".gz")
+}
+
+test "ext without extension" {
+    expect(path.ext("README")).to_equal("")
+    expect(path.ext("foo/bar")).to_equal("")
+}
+
+test "ext hidden file" {
+    expect(path.ext(".gitignore")).to_equal(".gitignore")
+    expect(path.ext("foo/.hidden")).to_equal(".hidden")
+}
+
+test "is_absolute true cases" {
+    expect(path.is_absolute("/usr/bin")).to_be_true()
+    expect(path.is_absolute("/")).to_be_true()
+    expect(path.is_absolute("/home/user/file.txt")).to_be_true()
+}
+
+test "is_absolute false cases" {
+    expect(path.is_absolute("foo/bar")).to_be_false()
+    expect(path.is_absolute("./file")).to_be_false()
+    expect(path.is_absolute("")).to_be_false()
+    expect(path.is_absolute("relative/path")).to_be_false()
+}
+
+test "has_trailing_slash true cases" {
+    expect(path.has_trailing_slash("foo/")).to_be_true()
+    expect(path.has_trailing_slash("/usr/bin/")).to_be_true()
+    expect(path.has_trailing_slash("/")).to_be_true()
+}
+
+test "has_trailing_slash false cases" {
+    expect(path.has_trailing_slash("foo")).to_be_false()
+    expect(path.has_trailing_slash("/usr/bin")).to_be_false()
+    expect(path.has_trailing_slash("")).to_be_false()
+}
+
+test "normalize removes double slashes" {
+    expect(path.normalize("foo//bar")).to_equal("foo/bar")
+    expect(path.normalize("a///b///c")).to_equal("a/b/c")
+}
+
+test "normalize removes current directory" {
+    expect(path.normalize("foo/./bar")).to_equal("foo/bar")
+    expect(path.normalize("./foo")).to_equal("foo")
+    expect(path.normalize("foo/././bar")).to_equal("foo/bar")
+}
+
+test "normalize handles parent directory" {
+    expect(path.normalize("foo/bar/../baz")).to_equal("foo/baz")
+    expect(path.normalize("a/b/../c")).to_equal("a/c")
+    expect(path.normalize("foo/../bar")).to_equal("bar")
+}
+
+test "normalize empty string" {
+    expect(path.normalize("")).to_equal(".")
+}
+
+test "normalize absolute paths" {
+    expect(path.normalize("/foo/bar")).to_equal("/foo/bar")
+    expect(path.normalize("/foo//bar")).to_equal("/foo/bar")
+    expect(path.normalize("/foo/./bar")).to_equal("/foo/bar")
+}
+
+test "normalize complex paths" {
+    expect(path.normalize("foo/bar/./baz/../qux")).to_equal("foo/bar/qux")
+    expect(path.normalize("/a/./b/../c")).to_equal("/a/c")
+}
+
+test "split_ext with extension" {
+    expect(path.split_ext("file.txt")).to_equal("file")
+    expect(path.split_ext("foo/bar.rs")).to_equal("bar")
+    expect(path.split_ext("archive.tar.gz")).to_equal("archive.tar")
+}
+
+test "split_ext without extension" {
+    expect(path.split_ext("README")).to_equal("README")
+    expect(path.split_ext("foo/bar")).to_equal("bar")
+}
+
+test "split_ext hidden file" {
+    expect(path.split_ext(".gitignore")).to_equal("")
+    expect(path.split_ext("foo/.hidden")).to_equal("")
+}
+
+test "split_ext full path" {
+    expect(path.split_ext("/usr/bin/file.exe")).to_equal("file")
+    expect(path.split_ext("a/b/c/d.pluto")).to_equal("d")
+}
