@@ -13,6 +13,7 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use uuid::Uuid;
 
+use crate::coverage::CoverageMap;
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::Spanned;
@@ -79,7 +80,7 @@ fn extract_fn_contracts(contracts: &[Spanned<ContractClause>]) -> Option<FnContr
     }
 }
 
-pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>, CompileError> {
+pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Option<&CoverageMap>) -> Result<Vec<u8>, CompileError> {
     let mut flag_builder = settings::builder();
     flag_builder.set("is_pic", "true").unwrap();
 
@@ -108,6 +109,12 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
 
     // Pre-pass: collect spawn closure function names (needed before declarations)
     let spawn_closure_fns = collect_spawn_closure_names(program);
+
+    // Build coverage lookup table (empty when coverage is disabled)
+    let empty_lookup = HashMap::new();
+    let coverage_lookup = coverage_map
+        .map(|m| m.build_span_lookup())
+        .unwrap_or(empty_lookup);
 
     // Pass 0: Declare extern fns with Import linkage
     for ext in &program.extern_fns {
@@ -372,7 +379,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut next_builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut next_ctx.func, &mut next_builder_ctx);
-                lower_generator_next(f, builder, env, &mut module, &func_ids, &runtime, &vtable_ids, source, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
+                lower_generator_next(f, builder, env, &mut module, &func_ids, &runtime, &vtable_ids, source, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
             }
             module
                 .define_function(next_id, &mut next_ctx)
@@ -392,7 +399,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
+                lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
             }
 
             module
@@ -416,7 +423,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
             }
 
             module
@@ -473,7 +480,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
                             }
 
                             module
@@ -532,7 +539,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
             }
 
             module
@@ -557,7 +564,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(stage_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(stage_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
             }
 
             module
@@ -587,6 +594,27 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             // Initialize GC
             let gc_init_ref = module.declare_func_in_func(runtime.get("__pluto_gc_init"), builder.func);
             builder.ins().call(gc_init_ref, &[]);
+
+            // Initialize coverage if enabled
+            if let Some(cov_map) = coverage_map {
+                let cov_init_ref = module.declare_func_in_func(runtime.get("__pluto_coverage_init"), builder.func);
+                let num_points_val = builder.ins().iconst(types::I64, cov_map.num_points() as i64);
+
+                // Embed the coverage output path as a C string
+                let cov_path = ".pluto-coverage/coverage-data.bin";
+                let mut cov_path_bytes = cov_path.as_bytes().to_vec();
+                cov_path_bytes.push(0);
+                let mut cov_data_desc = DataDescription::new();
+                cov_data_desc.define(cov_path_bytes.into_boxed_slice());
+                let cov_data_id = module.declare_anonymous_data(false, false)
+                    .map_err(|e| CompileError::codegen(format!("declare coverage path data error: {e}")))?;
+                module.define_data(cov_data_id, &cov_data_desc)
+                    .map_err(|e| CompileError::codegen(format!("define coverage path data error: {e}")))?;
+                let cov_gv = module.declare_data_in_func(cov_data_id, builder.func);
+                let cov_path_ptr = builder.ins().global_value(types::I64, cov_gv);
+
+                builder.ins().call(cov_init_ref, &[num_points_val, cov_path_ptr]);
+            }
 
             let test_start_ref = module.declare_func_in_func(runtime.get("__pluto_test_start"), builder.func);
             let test_pass_ref = module.declare_func_in_func(runtime.get("__pluto_test_pass"), builder.func);
@@ -684,6 +712,26 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             // Initialize GC before any allocations
             let gc_init_ref = module.declare_func_in_func(runtime.get("__pluto_gc_init"), builder.func);
             builder.ins().call(gc_init_ref, &[]);
+
+            // Initialize coverage if enabled
+            if let Some(cov_map) = coverage_map {
+                let cov_init_ref = module.declare_func_in_func(runtime.get("__pluto_coverage_init"), builder.func);
+                let num_points_val = builder.ins().iconst(types::I64, cov_map.num_points() as i64);
+
+                let cov_path = ".pluto-coverage/coverage-data.bin";
+                let mut cov_path_bytes = cov_path.as_bytes().to_vec();
+                cov_path_bytes.push(0);
+                let mut cov_data_desc = DataDescription::new();
+                cov_data_desc.define(cov_path_bytes.into_boxed_slice());
+                let cov_data_id = module.declare_anonymous_data(false, false)
+                    .map_err(|e| CompileError::codegen(format!("declare coverage path data error: {e}")))?;
+                module.define_data(cov_data_id, &cov_data_desc)
+                    .map_err(|e| CompileError::codegen(format!("define coverage path data error: {e}")))?;
+                let cov_gv = module.declare_data_in_func(cov_data_id, builder.func);
+                let cov_path_ptr = builder.ins().global_value(types::I64, cov_gv);
+
+                builder.ins().call(cov_init_ref, &[num_points_val, cov_path_ptr]);
+            }
 
             let alloc_ref = module.declare_func_in_func(runtime.get("__pluto_alloc"), builder.func);
 
@@ -806,6 +854,26 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str) -> Result<Vec<u8>
             // Initialize GC before any allocations
             let gc_init_ref = module.declare_func_in_func(runtime.get("__pluto_gc_init"), builder.func);
             builder.ins().call(gc_init_ref, &[]);
+
+            // Initialize coverage if enabled
+            if let Some(cov_map) = coverage_map {
+                let cov_init_ref = module.declare_func_in_func(runtime.get("__pluto_coverage_init"), builder.func);
+                let num_points_val = builder.ins().iconst(types::I64, cov_map.num_points() as i64);
+
+                let cov_path = ".pluto-coverage/coverage-data.bin";
+                let mut cov_path_bytes = cov_path.as_bytes().to_vec();
+                cov_path_bytes.push(0);
+                let mut cov_data_desc = DataDescription::new();
+                cov_data_desc.define(cov_path_bytes.into_boxed_slice());
+                let cov_data_id = module.declare_anonymous_data(false, false)
+                    .map_err(|e| CompileError::codegen(format!("declare coverage path data error: {e}")))?;
+                module.define_data(cov_data_id, &cov_data_desc)
+                    .map_err(|e| CompileError::codegen(format!("define coverage path data error: {e}")))?;
+                let cov_gv = module.declare_data_in_func(cov_data_id, builder.func);
+                let cov_path_ptr = builder.ins().global_value(types::I64, cov_gv);
+
+                builder.ins().call(cov_init_ref, &[num_points_val, cov_path_ptr]);
+            }
 
             let alloc_ref = module.declare_func_in_func(runtime.get("__pluto_alloc"), builder.func);
 

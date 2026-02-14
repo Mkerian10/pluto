@@ -25,6 +25,7 @@ pub mod sync;
 pub mod stages;
 pub mod cache;
 pub mod watch;
+pub mod coverage;
 
 use diagnostics::{CompileError, CompileWarning};
 use std::path::{Path, PathBuf};
@@ -73,7 +74,7 @@ fn run_frontend(program: &mut Program, test_mode: bool) -> Result<FrontendResult
 /// Add Rust FFI artifact static libs and native lib flags to a link config.
 
 /// Parse a source string and reject extern rust declarations (which need file-based compilation).
-fn parse_source(source: &str) -> Result<Program, CompileError> {
+pub fn parse_source(source: &str) -> Result<Program, CompileError> {
     let tokens = lexer::lex(source)?;
     let mut parser = parser::Parser::new(&tokens, source);
     let program = parser.parse_program()?;
@@ -105,7 +106,7 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
-            codegen::codegen(&program, &result.env, &source)
+            codegen::codegen(&program, &result.env, &source, None)
         })
         .expect("failed to spawn compilation thread")
         .join()
@@ -123,7 +124,7 @@ pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<Com
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
-            let obj = codegen::codegen(&program, &result.env, &source)?;
+            let obj = codegen::codegen(&program, &result.env, &source, None)?;
             Ok((obj, result.warnings))
         })
         .expect("failed to spawn compilation thread")
@@ -159,7 +160,7 @@ pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, true)?;
-            codegen::codegen(&program, &result.env, &source)
+            codegen::codegen(&program, &result.env, &source, None)
         })
         .expect("failed to spawn compilation thread")
         .join()
@@ -194,15 +195,21 @@ pub fn compile_file(entry_file: &Path, output_path: &Path) -> Result<(), Compile
 
 /// Compile with an explicit stdlib root path.
 pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<(), CompileError> {
-    compile_file_impl(entry_file, output_path, stdlib_root, false, GcBackend::default())
+    compile_file_impl(entry_file, output_path, stdlib_root, false, GcBackend::default(), false).map(|_| ())
 }
 
 /// Compile with an explicit stdlib root path and GC backend.
 pub fn compile_file_with_options(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, gc: GcBackend) -> Result<(), CompileError> {
-    compile_file_impl(entry_file, output_path, stdlib_root, false, gc)
+    compile_file_impl(entry_file, output_path, stdlib_root, false, gc, false).map(|_| ())
 }
 
-fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, skip_siblings: bool, gc: GcBackend) -> Result<(), CompileError> {
+/// Compile with coverage instrumentation. Returns the coverage map.
+pub fn compile_file_with_coverage(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<coverage::CoverageMap, CompileError> {
+    compile_file_impl(entry_file, output_path, stdlib_root, false, GcBackend::default(), true)?
+        .ok_or_else(|| CompileError::codegen("coverage map should have been generated".to_string()))
+}
+
+fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, skip_siblings: bool, gc: GcBackend, coverage: bool) -> Result<Option<coverage::CoverageMap>, CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)
@@ -218,14 +225,20 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
     };
 
 
-    let (mut program, _source_map) = modules::flatten_modules(graph)?;
+    let (mut program, source_map) = modules::flatten_modules(graph)?;
 
 
     let result = run_frontend(&mut program, false)?;
     for w in &result.warnings {
         diagnostics::render_warning(&source, &entry_file.display().to_string(), w);
     }
-    let object_bytes = codegen::codegen(&program, &result.env, &source)?;
+
+    let cov_map = if coverage {
+        Some(coverage::build_coverage_map(&program, &source_map))
+    } else {
+        None
+    };
+    let object_bytes = codegen::codegen(&program, &result.env, &source, cov_map.as_ref())?;
 
     let obj_path = output_path.with_extension("o");
     std::fs::write(&obj_path, &object_bytes)
@@ -236,7 +249,7 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
 
     let _ = std::fs::remove_file(&obj_path);
 
-    Ok(())
+    Ok(cov_map)
 }
 
 use parser::ast::Program;
@@ -263,7 +276,6 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
 
 
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
-
 
     let result = run_frontend(&mut program, false)?;
     let derived = derived::DerivedInfo::build(&result.env, &program);
@@ -324,7 +336,7 @@ pub fn compile_file_for_tests(
     stdlib_root: Option<&Path>,
     use_cache: bool,
 ) -> Result<(), CompileError> {
-    compile_file_for_tests_with_gc(entry_file, output_path, stdlib_root, use_cache, GcBackend::default())
+    compile_file_for_tests_with_coverage(entry_file, output_path, stdlib_root, use_cache, false).map(|_| ())
 }
 
 /// Compile a file in test mode with a specific GC backend.
@@ -335,6 +347,29 @@ pub fn compile_file_for_tests_with_gc(
     use_cache: bool,
     gc: GcBackend,
 ) -> Result<(), CompileError> {
+    compile_file_for_tests_impl(entry_file, output_path, stdlib_root, use_cache, gc, false).map(|_| ())
+}
+
+/// Compile a file in test mode with optional coverage instrumentation.
+/// Returns Option<CoverageMap> when coverage is enabled.
+pub fn compile_file_for_tests_with_coverage(
+    entry_file: &Path,
+    output_path: &Path,
+    stdlib_root: Option<&Path>,
+    use_cache: bool,
+    coverage: bool,
+) -> Result<Option<coverage::CoverageMap>, CompileError> {
+    compile_file_for_tests_impl(entry_file, output_path, stdlib_root, use_cache, GcBackend::default(), coverage)
+}
+
+fn compile_file_for_tests_impl(
+    entry_file: &Path,
+    output_path: &Path,
+    stdlib_root: Option<&Path>,
+    use_cache: bool,
+    gc: GcBackend,
+    coverage: bool,
+) -> Result<Option<coverage::CoverageMap>, CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)
@@ -346,7 +381,7 @@ pub fn compile_file_for_tests_with_gc(
     let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
 
 
-    let (mut program, _source_map) = modules::flatten_modules(graph)?;
+    let (mut program, source_map) = modules::flatten_modules(graph)?;
 
     if program.test_info.is_empty() {
         return Err(CompileError::codegen(format!(
@@ -391,7 +426,7 @@ pub fn compile_file_for_tests_with_gc(
             &source,
             derived_info.test_dep_hashes.clone().into_iter().collect(),
         );
-        return Ok(());
+        return Ok(None);
     }
 
     if use_cache && tests_to_run < original_test_count {
@@ -403,7 +438,12 @@ pub fn compile_file_for_tests_with_gc(
         );
     }
 
-    let object_bytes = codegen::codegen(&program, &result.env, &source)?;
+    let cov_map = if coverage {
+        Some(coverage::build_coverage_map(&program, &source_map))
+    } else {
+        None
+    };
+    let object_bytes = codegen::codegen(&program, &result.env, &source, cov_map.as_ref())?;
 
     // Save cache after successful compilation
     if use_cache {
@@ -423,7 +463,7 @@ pub fn compile_file_for_tests_with_gc(
 
     let _ = std::fs::remove_file(&obj_path);
 
-    Ok(())
+    Ok(cov_map)
 }
 
 /// Which garbage collector backend to use.
@@ -511,6 +551,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     let gc_src = gc.gc_source();
     let threading_src = include_str!("../runtime/threading.c");
     let builtins_src = include_str!("../runtime/builtins.c");
+    let coverage_src = include_str!("../runtime/coverage.c");
     let header_src = include_str!("../runtime/builtins.h");
 
     let dir_suffix = if test_mode { "pluto_test_runtime" } else { "pluto_runtime" };
@@ -523,6 +564,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     let gc_c = dir.join("gc.c");
     let threading_c = dir.join("threading.c");
     let builtins_c = dir.join("builtins.c");
+    let coverage_c = dir.join("coverage.c");
 
     std::fs::write(&header_h, header_src)
         .map_err(|e| CompileError::link(format!("failed to write header: {e}")))?;
@@ -532,10 +574,13 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
         .map_err(|e| CompileError::link(format!("failed to write threading.c: {e}")))?;
     std::fs::write(&builtins_c, builtins_src)
         .map_err(|e| CompileError::link(format!("failed to write builtins.c: {e}")))?;
+    std::fs::write(&coverage_c, coverage_src)
+        .map_err(|e| CompileError::link(format!("failed to write coverage.c: {e}")))?;
 
     let gc_o = dir.join("gc.o");
     let threading_o = dir.join("threading.o");
     let builtins_o = dir.join("builtins.o");
+    let coverage_o = dir.join("coverage.o");
     let runtime_o = dir.join("runtime.o");
 
     // Compile gc.c
@@ -592,10 +637,24 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
         return Err(CompileError::link("failed to compile builtins.c"));
     }
 
-    // Link all three object files into one
+    // Compile coverage.c
+    let mut cmd = std::process::Command::new("cc");
+    cmd.arg("-c");
+    if test_mode {
+        cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
+    }
+    cmd.arg("-I").arg(&dir);
+    cmd.arg(&coverage_c).arg("-o").arg(&coverage_o);
+    let status = cmd.status()
+        .map_err(|e| CompileError::link(format!("failed to compile coverage.c: {e}")))?;
+    if !status.success() {
+        return Err(CompileError::link("failed to compile coverage.c"));
+    }
+
+    // Link all object files into one
     let mut cmd = std::process::Command::new("ld");
     cmd.arg("-r");
-    cmd.arg(&gc_o).arg(&threading_o).arg(&builtins_o).arg("-o").arg(&runtime_o);
+    cmd.arg(&gc_o).arg(&threading_o).arg(&builtins_o).arg(&coverage_o).arg("-o").arg(&runtime_o);
     let status = cmd.status()
         .map_err(|e| CompileError::link(format!("failed to link runtime: {e}")))?;
     if !status.success() {
@@ -610,9 +669,11 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     let _ = std::fs::remove_file(&gc_c);
     let _ = std::fs::remove_file(&threading_c);
     let _ = std::fs::remove_file(&builtins_c);
+    let _ = std::fs::remove_file(&coverage_c);
     let _ = std::fs::remove_file(&gc_o);
     let _ = std::fs::remove_file(&threading_o);
     let _ = std::fs::remove_file(&builtins_o);
+    let _ = std::fs::remove_file(&coverage_o);
 
     // Return the disk-cached path if it was stored successfully, otherwise the temp path
     if let Some(cached) = check_disk_cache(&cache_key) {
@@ -862,7 +923,7 @@ pub fn compile_system_file_with_stdlib(
         };
 
         let output_path = output_dir.join(member_name);
-        compile_file_impl(&entry_file, &output_path, stdlib_root, true, GcBackend::default())?;
+        compile_file_impl(&entry_file, &output_path, stdlib_root, true, GcBackend::default(), false)?;
         results.push((member_name.clone(), output_path));
     }
 

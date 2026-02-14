@@ -38,6 +38,9 @@ enum Commands {
     Run {
         /// Source file path
         file: PathBuf,
+        /// Enable code coverage instrumentation
+        #[arg(long)]
+        coverage: bool,
     },
     /// Run tests in a .pluto source file
     Test {
@@ -52,6 +55,9 @@ enum Commands {
         /// Disable test caching, run all tests
         #[arg(long)]
         no_cache: bool,
+        /// Enable code coverage instrumentation
+        #[arg(long)]
+        coverage: bool,
     },
     /// Analyze a .pt source file and emit a .pluto binary AST
     EmitAst {
@@ -87,6 +93,27 @@ enum Commands {
     Watch {
         #[command(subcommand)]
         command: WatchCommands,
+    },
+    /// Generate coverage reports from .pluto-coverage/ data
+    Coverage {
+        #[command(subcommand)]
+        command: CoverageCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum CoverageCommands {
+    /// Generate a coverage report
+    Report {
+        /// Output format: terminal (default), lcov, json, html
+        #[arg(long, default_value = "terminal")]
+        format: String,
+        /// Coverage data directory (defaults to .pluto-coverage/)
+        #[arg(long, default_value = ".pluto-coverage")]
+        dir: PathBuf,
+        /// Output file (defaults to stdout for lcov/json, stderr for terminal)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -148,7 +175,7 @@ fn main() {
                     match plutoc::compile_system_file_with_stdlib(&file, &output, stdlib) {
                         Ok(members) => {
                             for (name, path) in &members {
-                                eprintln!("  compiled {} → {}", name, path.display());
+                                eprintln!("  compiled {} \u{2192} {}", name, path.display());
                             }
                             eprintln!("system: {} member(s) compiled", members.len());
                         }
@@ -177,7 +204,7 @@ fn main() {
                 }
             }
         }
-        Commands::Run { file } => {
+        Commands::Run { file, coverage } => {
             // Reject system files — they produce multiple binaries
             match plutoc::detect_system_file(&file) {
                 Ok(Some(_)) => {
@@ -194,11 +221,34 @@ fn main() {
             }
 
             let tmp = std::env::temp_dir().join("pluto_run");
-            if let Err(err) = plutoc::compile_file_with_options(&file, &tmp, stdlib, gc) {
-                let filename = error_filename(&err)
-                    .unwrap_or_else(|| file.to_string_lossy().to_string());
-                eprintln!("error [{}]: {err}", filename);
-                std::process::exit(1);
+
+            let coverage_map = if coverage {
+                match plutoc::compile_file_with_coverage(&file, &tmp, stdlib) {
+                    Ok(map) => Some(map),
+                    Err(err) => {
+                        let filename = error_filename(&err)
+                            .unwrap_or_else(|| file.to_string_lossy().to_string());
+                        eprintln!("error [{}]: {err}", filename);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                if let Err(err) = plutoc::compile_file_with_options(&file, &tmp, stdlib, gc) {
+                    let filename = error_filename(&err)
+                        .unwrap_or_else(|| file.to_string_lossy().to_string());
+                    eprintln!("error [{}]: {err}", filename);
+                    std::process::exit(1);
+                }
+                None
+            };
+
+            // Write coverage map before running
+            if let Some(ref map) = coverage_map {
+                let cov_dir = std::path::Path::new(".pluto-coverage");
+                let _ = std::fs::create_dir_all(cov_dir);
+                if let Err(e) = map.write_json(&cov_dir.join("coverage-map.json")) {
+                    eprintln!("warning: failed to write coverage map: {e}");
+                }
             }
 
             let status = std::process::Command::new(&tmp)
@@ -209,6 +259,22 @@ fn main() {
                 });
 
             let _ = std::fs::remove_file(&tmp);
+
+            // Print coverage summary after run
+            if coverage_map.is_some() {
+                let cov_dir = std::path::Path::new(".pluto-coverage");
+                let data_path = cov_dir.join("coverage-data.bin");
+                match plutoc::coverage::CoverageData::read_binary(&data_path) {
+                    Ok(data) => {
+                        let map = coverage_map.as_ref().unwrap();
+                        let stats = plutoc::coverage::generate_terminal_report(map, &data);
+                        plutoc::coverage::print_terminal_summary(&stats);
+                    }
+                    Err(e) => {
+                        eprintln!("warning: failed to read coverage data: {e}");
+                    }
+                }
+            }
 
             if !status.success() {
                 std::process::exit(status.code().unwrap_or(1));
@@ -229,13 +295,25 @@ fn main() {
                 }
             }
         },
-        Commands::Test { file, seed, iterations, no_cache } => {
+        Commands::Test { file, seed, iterations, no_cache, coverage } => {
             let tmp = std::env::temp_dir().join("pluto_test");
             let use_cache = !no_cache;
-            if let Err(err) = plutoc::compile_file_for_tests_with_gc(&file, &tmp, stdlib, use_cache, gc) {
-                let filename = file.to_string_lossy().to_string();
-                eprintln!("error [{}]: {err}", filename);
-                std::process::exit(1);
+            let coverage_map = match plutoc::compile_file_for_tests_with_coverage(&file, &tmp, stdlib, use_cache, coverage) {
+                Ok(map) => map,
+                Err(err) => {
+                    let filename = file.to_string_lossy().to_string();
+                    eprintln!("error [{}]: {err}", filename);
+                    std::process::exit(1);
+                }
+            };
+
+            // Write coverage map before running tests
+            if let Some(ref map) = coverage_map {
+                let cov_dir = std::path::Path::new(".pluto-coverage");
+                let _ = std::fs::create_dir_all(cov_dir);
+                if let Err(e) = map.write_json(&cov_dir.join("coverage-map.json")) {
+                    eprintln!("warning: failed to write coverage map: {e}");
+                }
             }
 
             let mut cmd = std::process::Command::new(&tmp);
@@ -253,6 +331,22 @@ fn main() {
                 });
 
             let _ = std::fs::remove_file(&tmp);
+
+            // Print coverage summary after tests
+            if coverage_map.is_some() {
+                let cov_dir = std::path::Path::new(".pluto-coverage");
+                let data_path = cov_dir.join("coverage-data.bin");
+                match plutoc::coverage::CoverageData::read_binary(&data_path) {
+                    Ok(data) => {
+                        let map = coverage_map.as_ref().unwrap();
+                        let stats = plutoc::coverage::generate_terminal_report(map, &data);
+                        plutoc::coverage::print_terminal_summary(&stats);
+                    }
+                    Err(e) => {
+                        eprintln!("warning: failed to read coverage data: {e}");
+                    }
+                }
+            }
 
             if !status.success() {
                 std::process::exit(status.code().unwrap_or(1));
@@ -341,7 +435,7 @@ fn main() {
                         }
                     }
                     eprintln!(
-                        "synced {} → {} ({} added, {} removed, {} unchanged)",
+                        "synced {} \u{2192} {} ({} added, {} removed, {} unchanged)",
                         file.display(),
                         pluto_path.display(),
                         result.added.len(),
@@ -361,5 +455,99 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::Coverage { command } => match command {
+            CoverageCommands::Report { format, dir, output } => {
+                let map_path = dir.join("coverage-map.json");
+                let data_path = dir.join("coverage-data.bin");
+
+                if !map_path.exists() {
+                    eprintln!("error: coverage map not found at {}", map_path.display());
+                    eprintln!("hint: run with --coverage flag first, e.g. `plutoc test file.pluto --coverage`");
+                    std::process::exit(1);
+                }
+                if !data_path.exists() {
+                    eprintln!("error: coverage data not found at {}", data_path.display());
+                    eprintln!("hint: run with --coverage flag first, e.g. `plutoc test file.pluto --coverage`");
+                    std::process::exit(1);
+                }
+
+                let map = match plutoc::coverage::CoverageMap::read_json(&map_path) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("error: failed to read coverage map: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                let data = match plutoc::coverage::CoverageData::read_binary(&data_path) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        eprintln!("error: failed to read coverage data: {e}");
+                        std::process::exit(1);
+                    }
+                };
+
+                match format.as_str() {
+                    "terminal" => {
+                        let stats = plutoc::coverage::generate_terminal_report(&map, &data);
+                        plutoc::coverage::print_terminal_summary(&stats);
+                    }
+                    "lcov" => {
+                        let lcov = plutoc::coverage::generate_lcov(&map, &data);
+                        match output {
+                            Some(path) => {
+                                if let Err(e) = std::fs::write(&path, &lcov) {
+                                    eprintln!("error: failed to write {}: {e}", path.display());
+                                    std::process::exit(1);
+                                }
+                                eprintln!("LCOV report written to {}", path.display());
+                            }
+                            None => print!("{}", lcov),
+                        }
+                    }
+                    "json" => {
+                        let report = plutoc::coverage::generate_json_report(&map, &data);
+                        let json = serde_json::to_string_pretty(&report).unwrap();
+                        match output {
+                            Some(path) => {
+                                if let Err(e) = std::fs::write(&path, &json) {
+                                    eprintln!("error: failed to write {}: {e}", path.display());
+                                    std::process::exit(1);
+                                }
+                                eprintln!("JSON report written to {}", path.display());
+                            }
+                            None => println!("{}", json),
+                        }
+                    }
+                    "html" => {
+                        // Determine source directory from file paths in the coverage map
+                        let source_dir = map.files.first()
+                            .and_then(|f| {
+                                let p = std::path::Path::new(&f.path);
+                                p.parent().map(|d| {
+                                    if d.as_os_str().is_empty() {
+                                        // File is at root level — use the coverage dir's parent
+                                        dir.parent().unwrap_or(std::path::Path::new(".")).to_path_buf()
+                                    } else {
+                                        dir.parent().unwrap_or(std::path::Path::new(".")).join(d)
+                                    }
+                                })
+                            })
+                            .unwrap_or_else(|| dir.parent().unwrap_or(std::path::Path::new(".")).to_path_buf());
+
+                        let html = plutoc::coverage::generate_html_report(&map, &data, &source_dir);
+                        let out_path = output.unwrap_or_else(|| dir.join("report.html"));
+                        if let Err(e) = std::fs::write(&out_path, &html) {
+                            eprintln!("error: failed to write {}: {e}", out_path.display());
+                            std::process::exit(1);
+                        }
+                        eprintln!("HTML report written to {}", out_path.display());
+                    }
+                    other => {
+                        eprintln!("error: unknown format '{}'; expected 'terminal', 'lcov', 'json', or 'html'", other);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        },
     }
 }

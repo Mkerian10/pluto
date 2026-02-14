@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 /// Synthetic span for generated code
 fn synthetic_span() -> Span {
-    Span { start: 0, end: 0, file_id: 0 }
+    Span::synthetic()
 }
 
 /// Generate TypeInfo implementations for all types in the program.

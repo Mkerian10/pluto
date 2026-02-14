@@ -674,6 +674,10 @@ path = "tests/integration/match_expression_errors.rs"
 name = "if_expression_errors"
 path = "tests/integration/if_expression_errors.rs"
 
+[[test]]
+name = "coverage"
+path = "tests/integration/coverage.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false

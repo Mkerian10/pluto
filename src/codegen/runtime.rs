@@ -199,6 +199,10 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_rpc_extract_string", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_rpc_extract_bool", &[types::I64], &[types::I64])?;
 
+        // Coverage functions
+        reg.declare(module, "__pluto_coverage_init", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_coverage_hit", &[types::I64], &[])?;
+
         Ok(reg)
     }
 
