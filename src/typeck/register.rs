@@ -8,7 +8,7 @@ use crate::span::Spanned;
 use super::env::{self, mangle_method, ClassInfo, EnumInfo, ErrorInfo, FuncSig, GenericClassInfo, GenericEnumInfo, GenericFuncSig, TraitInfo, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::{resolve_type, resolve_type_with_params};
-use super::check::check_function;
+use super::check::{check_function, has_potential_return_path};
 use crate::parser::ast::ContractKind;
 
 /// Type-check requires/ensures contracts on a function or method.
@@ -587,6 +587,16 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
                 Some(t) => resolve_type_with_params(t, env, &tp_names)?,
                 None => PlutoType::Void,
             };
+
+            // Basic check: non-void generic functions must have SOME potential return path
+            // (prevents Cranelift panics on straight-line code with no return)
+            if !matches!(return_type, PlutoType::Void) && !has_potential_return_path(&f.body.node) {
+                return Err(CompileError::type_err(
+                    format!("missing return statement in function with return type {}", return_type),
+                    f.body.span,
+                ));
+            }
+
             // Extract and validate type param bounds
             let bounds: HashMap<String, Vec<String>> = f.type_param_bounds.iter()
                 .map(|(tp, traits)| {

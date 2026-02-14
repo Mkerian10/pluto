@@ -1,7 +1,10 @@
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use crate::span::{Span, Spanned};
+use crate::span::Spanned;
 use crate::visit::{walk_expr_mut, VisitMut};
+
+#[cfg(test)]
+use crate::span::Span;
 
 /// Desugar `spawn func(args)` into `spawn (=> { return func(args) })`.
 ///

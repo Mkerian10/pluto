@@ -21,6 +21,27 @@ pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Opt
     result
 }
 
+/// Checks if a block has ANY potential return path.
+/// This is a very conservative check - it returns true if there's any statement that COULD
+/// provide a return (return, raise, if, match, while, for). The goal is to avoid Cranelift
+/// panics on straight-line code with no return. Actual control flow validation happens at codegen.
+pub(crate) fn has_potential_return_path(block: &Block) -> bool {
+    for stmt in &block.stmts {
+        if stmt_has_potential_return(&stmt.node) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Checks if a statement could potentially provide a return path.
+fn stmt_has_potential_return(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::Return(_) | Stmt::Raise { .. } | Stmt::If { .. } | Stmt::Match { .. } | Stmt::While { .. } | Stmt::For { .. }
+    )
+}
+
 fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
     env.invalidated_task_vars.clear();
     env.push_scope();
@@ -66,6 +87,16 @@ fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&s
 
     // Check body
     check_block(&func.body.node, env, &effective_return)?;
+
+    // Verify non-void functions have a return statement.
+    // This catches the simple cases that cause Cranelift to panic (no control flow at all).
+    // Complex control flow (incomplete if/else, match, loops) is still validated at codegen.
+    if !matches!(effective_return, PlutoType::Void) && !has_potential_return_path(&func.body.node) {
+        return Err(CompileError::type_err(
+            format!("missing return statement in function with return type {}", effective_return),
+            func.body.span,
+        ));
+    }
 
     env.current_generator_elem = prev_gen_elem;
     env.pop_scope();

@@ -3,15 +3,13 @@
 mod common;
 use common::compile_should_fail_with;
 
-// Missing return in non-void function - compiler panics on these
+// Missing return in non-void function - now properly detected at typeck
 #[test]
-#[ignore] // #180: compiler panics instead of reporting missing return
 fn missing_return_int() { compile_should_fail_with(r#"fn f()int{let x=1}"#, "missing return"); }
 #[test]
 #[ignore] // #156: string literals don't work in compact syntax
 fn missing_return_string() { compile_should_fail_with(r#"fn f()string{let x=\"hi\"}"#, "missing return"); }
 #[test]
-#[ignore] // #180: compiler panics instead of reporting missing return
 fn missing_return_class() { compile_should_fail_with(r#"class C{x:int} fn f()C{let c=C{x:1}}"#, "missing return"); }
 
 // If without else, missing return - correctly detected at codegen
@@ -50,7 +48,6 @@ fn return_only_in_else() { compile_should_fail_with(r#"fn f()int{if true{let x=1
 
 // Empty function body
 #[test]
-#[ignore] // #180: compiler panics instead of reporting missing return
 fn empty_body_non_void() { compile_should_fail_with(r#"fn f()int{}"#, "missing return"); }
 
 // Return after unreachable
@@ -102,12 +99,10 @@ fn return_type_mismatch() { compile_should_fail_with(r#"fn f()int{return \"hi\"}
 
 // Implicit return from expression (not supported in Pluto)
 #[test]
-#[ignore] // #180: compiler panics instead of reporting missing return
 fn implicit_return_not_supported() { compile_should_fail_with(r#"fn f()int{1}"#, "missing return"); }
 
 // Generic function missing return
 #[test]
-#[ignore] // #180: compiler panics instead of reporting missing return
 fn generic_missing_return() { compile_should_fail_with(r#"fn f<T>(x:T)T{let y=x}"#, "missing return"); }
 
 // Closure missing return
