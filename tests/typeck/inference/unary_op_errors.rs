@@ -4,32 +4,24 @@ mod common;
 use common::compile_should_fail_with;
 
 #[test]
-#[ignore] // PR #46 - outdated assertions
+#[ignore] // #156: string literals don't work in compact syntax
 fn negate_string() { compile_should_fail_with(r#"fn main(){let x=-\"hi\"}"#, "type mismatch"); }
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn negate_bool() { compile_should_fail_with(r#"fn main(){let x=-true}"#, "type mismatch"); }
+fn negate_bool() { compile_should_fail_with(r#"fn main(){let x=-true}"#, "cannot negate type bool"); }
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn negate_array() { compile_should_fail_with(r#"fn main(){let x=-[1,2,3]}"#, "type mismatch"); }
+fn negate_array() { compile_should_fail_with(r#"fn main(){let x=-[1,2,3]}"#, "cannot negate type [int]"); }
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn not_int() { compile_should_fail_with(r#"fn main(){let x=!42}"#, "type mismatch"); }
+fn not_int() { compile_should_fail_with(r#"fn main(){let x=!42}"#, "cannot apply '!' to type int"); }
 #[test]
-#[ignore] // PR #46 - outdated assertions
+#[ignore] // #156: string literals don't work in compact syntax
 fn not_string() { compile_should_fail_with(r#"fn main(){let x=!\"hi\"}"#, "type mismatch"); }
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn not_array() { compile_should_fail_with(r#"fn main(){let x=![1,2,3]}"#, "type mismatch"); }
+fn not_array() { compile_should_fail_with(r#"fn main(){let x=![1,2,3]}"#, "cannot apply '!' to type [int]"); }
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn bitwise_not_bool() { compile_should_fail_with(r#"fn main(){let x=~true}"#, "type mismatch"); }
+fn bitwise_not_bool() { compile_should_fail_with(r#"fn main(){let x=~true}"#, "cannot apply '~' to type bool"); }
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn bitwise_not_float() { compile_should_fail_with(r#"fn main(){let x=~3.14}"#, "type mismatch"); }
+fn bitwise_not_float() { compile_should_fail_with(r#"fn main(){let x=~3.14}"#, "cannot apply '~' to type float"); }
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn negate_nullable() { compile_should_fail_with(r#"fn main(){let x:int?=5 let y=-x}"#, "type mismatch"); }
+fn negate_nullable() { compile_should_fail_with(r#"fn main(){let x:int?=5 let y=-x}"#, "cannot negate type int?"); }
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn not_nullable() { compile_should_fail_with(r#"fn main(){let x:bool?=true let y=!x}"#, "type mismatch"); }
+fn not_nullable() { compile_should_fail_with(r#"fn main(){let x:bool?=true let y=!x}"#, "cannot apply '!' to type bool?"); }
