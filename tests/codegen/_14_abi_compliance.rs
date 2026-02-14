@@ -406,7 +406,7 @@ fn test_bool_abi_compliance() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // DUPLICATE: Error state ABI already covered by integration tests in tests/integration/errors.rs
 fn test_error_state_abi_compliance() {
     // Verify error state (TLS) is correctly managed across C calls
     let src = r#"
@@ -439,7 +439,7 @@ fn test_closure_abi_compliance() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Compiler warnings in output causing test to fail
 fn test_method_call_abi_compliance() {
     // Verify method calls (self parameter) follow correct ABI
     let src = r#"
