@@ -147,6 +147,10 @@ void *__pluto_string_escape(void *s);
 const char *__pluto_string_to_cstr(void *s);
 void __pluto_string_data(void *s, const char **data_out, long *len_out);
 
+// Coverage functions
+void __pluto_coverage_init(long num_points, void *path_str);
+void __pluto_coverage_hit(long point_id);
+
 // Array functions (needed by GC for marking)
 void *__pluto_array_new(long cap);
 void __pluto_array_push(void *handle, long value);

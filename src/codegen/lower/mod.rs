@@ -40,6 +40,8 @@ struct LowerContext<'a> {
     singleton_globals: &'a HashMap<String, DataId>,
     /// Module-level globals holding rwlock pointers for synchronized singletons.
     rwlock_globals: &'a HashMap<String, DataId>,
+    /// Coverage: (byte_offset, branch_id) → point_id. Empty when coverage is disabled.
+    coverage_lookup: &'a HashMap<(usize, u32), u32>,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
     var_types: HashMap<String, PlutoType>,
@@ -89,6 +91,28 @@ impl<'a> LowerContext<'a> {
         } else {
             val
         }
+    }
+
+    /// Emit a coverage hit for the given byte offset and branch_id, if coverage is enabled.
+    /// branch_id 0 = primary (statement/function entry), 1+ = branch variants.
+    fn emit_coverage_hit(&mut self, byte_offset: usize, branch_id: u32) {
+        if let Some(&point_id) = self.coverage_lookup.get(&(byte_offset, branch_id)) {
+            let id_val = self.builder.ins().iconst(types::I64, point_id as i64);
+            self.call_runtime_void("__pluto_coverage_hit", &[id_val]);
+        }
+    }
+
+    /// Lower a statement with coverage instrumentation: emit a coverage hit before lowering.
+    fn lower_stmt_covered(
+        &mut self,
+        stmt: &crate::span::Spanned<Stmt>,
+        terminated: &mut bool,
+    ) -> Result<(), CompileError> {
+        if *terminated {
+            return Ok(());
+        }
+        self.emit_coverage_hit(stmt.span.start, 0);
+        self.lower_stmt(&stmt.node, terminated)
     }
 
     /// Wrap a class pointer as a trait handle by calling __pluto_trait_wrap.
@@ -718,9 +742,11 @@ impl<'a> LowerContext<'a> {
 
             self.builder.switch_to_block(then_bb);
             self.builder.seal_block(then_bb);
+            // Branch coverage: then path taken
+            self.emit_coverage_hit(then_block.span.start, 1);
             let mut then_terminated = false;
             for s in &then_block.node.stmts {
-                self.lower_stmt(&s.node, &mut then_terminated)?;
+                self.lower_stmt_covered(s, &mut then_terminated)?;
             }
             if !then_terminated {
                 self.builder.ins().jump(merge_bb, &[]);
@@ -728,9 +754,11 @@ impl<'a> LowerContext<'a> {
 
             self.builder.switch_to_block(else_bb);
             self.builder.seal_block(else_bb);
+            // Branch coverage: else path taken
+            self.emit_coverage_hit(else_blk.span.start, 1);
             let mut else_terminated = false;
             for s in &else_blk.node.stmts {
-                self.lower_stmt(&s.node, &mut else_terminated)?;
+                self.lower_stmt_covered(s, &mut else_terminated)?;
             }
             if !else_terminated {
                 self.builder.ins().jump(merge_bb, &[]);
@@ -740,17 +768,28 @@ impl<'a> LowerContext<'a> {
                 *terminated = true;
             }
         } else {
-            self.builder.ins().brif(cond_val, then_bb, &[], merge_bb, &[]);
+            // For implicit else (no else block), create a separate block for the
+            // else-path coverage hit before merging.
+            let else_cov_bb = self.builder.create_block();
+            self.builder.ins().brif(cond_val, then_bb, &[], else_cov_bb, &[]);
 
             self.builder.switch_to_block(then_bb);
             self.builder.seal_block(then_bb);
+            // Branch coverage: then path taken (no else)
+            self.emit_coverage_hit(then_block.span.start, 1);
             let mut then_terminated = false;
             for s in &then_block.node.stmts {
-                self.lower_stmt(&s.node, &mut then_terminated)?;
+                self.lower_stmt_covered(s, &mut then_terminated)?;
             }
             if !then_terminated {
                 self.builder.ins().jump(merge_bb, &[]);
             }
+
+            // Implicit else block: coverage hit then jump to merge
+            self.builder.switch_to_block(else_cov_bb);
+            self.builder.seal_block(else_cov_bb);
+            self.emit_coverage_hit(condition.span.start, 2);
+            self.builder.ins().jump(merge_bb, &[]);
         }
 
         if !*terminated {
@@ -777,10 +816,12 @@ impl<'a> LowerContext<'a> {
 
         self.builder.switch_to_block(body_bb);
         self.builder.seal_block(body_bb);
+        // Branch coverage: loop body entered
+        self.emit_coverage_hit(body.span.start, 1);
         self.loop_stack.push((header_bb, exit_bb));
         let mut body_terminated = false;
         for s in &body.node.stmts {
-            self.lower_stmt(&s.node, &mut body_terminated)?;
+            self.lower_stmt_covered(s, &mut body_terminated)?;
         }
         self.loop_stack.pop();
         if !body_terminated {
@@ -858,6 +899,8 @@ impl<'a> LowerContext<'a> {
         // Body
         self.builder.switch_to_block(body_bb);
         self.builder.seal_block(body_bb);
+        // Branch coverage: for-range loop body entered
+        self.emit_coverage_hit(body.span.start, 1);
 
         // Loop variable = counter value directly (ranges iterate ints)
         let prev_var = self.variables.get(&var.node).cloned();
@@ -871,7 +914,7 @@ impl<'a> LowerContext<'a> {
         self.loop_stack.push((increment_bb, exit_bb));
         let mut body_terminated = false;
         for s in &body.node.stmts {
-            self.lower_stmt(&s.node, &mut body_terminated)?;
+            self.lower_stmt_covered(s, &mut body_terminated)?;
         }
         self.loop_stack.pop();
 
@@ -953,6 +996,8 @@ impl<'a> LowerContext<'a> {
         // Body
         self.builder.switch_to_block(body_bb);
         self.builder.seal_block(body_bb);
+        // Branch coverage: for-array loop body entered
+        self.emit_coverage_hit(body.span.start, 1);
 
         // Get element: array_get(handle, counter)
         let counter_for_get = self.builder.use_var(counter_var);
@@ -975,7 +1020,7 @@ impl<'a> LowerContext<'a> {
         self.loop_stack.push((increment_bb, exit_bb));
         let mut body_terminated = false;
         for s in &body.node.stmts {
-            self.lower_stmt(&s.node, &mut body_terminated)?;
+            self.lower_stmt_covered(s, &mut body_terminated)?;
         }
         self.loop_stack.pop();
 
@@ -1062,7 +1107,7 @@ impl<'a> LowerContext<'a> {
         self.loop_stack.push((increment_bb, exit_bb));
         let mut body_terminated = false;
         for s in &body.node.stmts {
-            self.lower_stmt(&s.node, &mut body_terminated)?;
+            self.lower_stmt_covered(s, &mut body_terminated)?;
         }
         self.loop_stack.pop();
 
@@ -1152,7 +1197,7 @@ impl<'a> LowerContext<'a> {
         self.loop_stack.push((increment_bb, exit_bb));
         let mut body_terminated = false;
         for s in &body.node.stmts {
-            self.lower_stmt(&s.node, &mut body_terminated)?;
+            self.lower_stmt_covered(s, &mut body_terminated)?;
         }
         self.loop_stack.pop();
 
@@ -1249,7 +1294,7 @@ impl<'a> LowerContext<'a> {
         self.loop_stack.push((header_bb, exit_bb));
         let mut body_terminated = false;
         for s in &body.node.stmts {
-            self.lower_stmt(&s.node, &mut body_terminated)?;
+            self.lower_stmt_covered(s, &mut body_terminated)?;
         }
         self.loop_stack.pop();
 
@@ -1343,7 +1388,7 @@ impl<'a> LowerContext<'a> {
         self.loop_stack.push((header_bb, exit_bb));
         let mut body_terminated = false;
         for s in &body.node.stmts {
-            self.lower_stmt(&s.node, &mut body_terminated)?;
+            self.lower_stmt_covered(s, &mut body_terminated)?;
         }
         self.loop_stack.pop();
 
@@ -1426,6 +1471,8 @@ impl<'a> LowerContext<'a> {
             // Body block: extract bindings and lower body
             self.builder.switch_to_block(body_blocks[i]);
             self.builder.seal_block(body_blocks[i]);
+            // Branch coverage: match arm taken
+            self.emit_coverage_hit(arm.body.span.start, 1);
 
             let variant_fields = &enum_info.variants.iter()
                 .find(|(n, _)| *n == arm.variant_name.node)
@@ -1461,7 +1508,7 @@ impl<'a> LowerContext<'a> {
 
             let mut arm_terminated = false;
             for s in &arm.body.node.stmts {
-                self.lower_stmt(&s.node, &mut arm_terminated)?;
+                self.lower_stmt_covered(s, &mut arm_terminated)?;
             }
 
             // Restore previous variable bindings
@@ -1672,7 +1719,7 @@ impl<'a> LowerContext<'a> {
         // 4. Lower body
         let mut body_terminated = false;
         for s in &body.node.stmts {
-            self.lower_stmt(&s.node, &mut body_terminated)?;
+            self.lower_stmt_covered(s, &mut body_terminated)?;
         }
 
         // 5. Restore previous variable bindings
@@ -1772,7 +1819,7 @@ impl<'a> LowerContext<'a> {
             self.builder.seal_block(default_bb);
             let mut default_terminated = false;
             for s in &def.node.stmts {
-                self.lower_stmt(&s.node, &mut default_terminated)?;
+                self.lower_stmt_covered(s, &mut default_terminated)?;
             }
             if !default_terminated {
                 self.builder.ins().jump(merge_bb, &[]);
@@ -1832,7 +1879,7 @@ impl<'a> LowerContext<'a> {
 
             let mut arm_terminated = false;
             for s in &arm.body.node.stmts {
-                self.lower_stmt(&s.node, &mut arm_terminated)?;
+                self.lower_stmt_covered(s, &mut arm_terminated)?;
             }
 
             // Restore previous variable bindings
@@ -1897,6 +1944,8 @@ impl<'a> LowerContext<'a> {
                 // Propagate block: early-return none (0), or void return for void functions
                 self.builder.switch_to_block(propagate_bb);
                 self.builder.seal_block(propagate_bb);
+                // Branch coverage: null propagation — value was null
+                self.emit_coverage_hit(inner.span.start, 1);
                 let is_void_return = matches!(&self.expected_return_type, Some(PlutoType::Void) | None);
                 if is_void_return {
                     if let Some(exit_bb) = self.exit_block {
@@ -1916,6 +1965,8 @@ impl<'a> LowerContext<'a> {
                 // Continue block: unwrap the value
                 self.builder.switch_to_block(continue_bb);
                 self.builder.seal_block(continue_bb);
+                // Branch coverage: null propagation — value was non-null
+                self.emit_coverage_hit(inner.span.start, 2);
 
                 // Unbox value types (int, float, bool stored as boxed pointer)
                 if let PlutoType::Nullable(unwrapped) = &inner_type {
@@ -2118,11 +2169,15 @@ impl<'a> LowerContext<'a> {
                 // Propagate block: return default (error stays in TLS for caller)
                 self.builder.switch_to_block(propagate_bb);
                 self.builder.seal_block(propagate_bb);
+                // Branch coverage: error propagation — error occurred
+                self.emit_coverage_hit(inner.span.start, 1);
                 self.emit_default_return();
 
                 // Continue block: no error, use the call result
                 self.builder.switch_to_block(continue_bb);
                 self.builder.seal_block(continue_bb);
+                // Branch coverage: error propagation — success
+                self.emit_coverage_hit(inner.span.start, 2);
                 Ok(val)
             }
             Expr::Catch { expr: inner, handler } => self.lower_catch(inner, handler),
@@ -2641,7 +2696,7 @@ impl<'a> LowerContext<'a> {
 
                 // Lower all statements except the last
                 for stmt in stmts.iter().take(stmts.len().saturating_sub(1)) {
-                    self.lower_stmt(&stmt.node, &mut block_terminated)?;
+                    self.lower_stmt_covered(stmt, &mut block_terminated)?;
                 }
 
                 // Determine result from the last statement
@@ -2650,13 +2705,16 @@ impl<'a> LowerContext<'a> {
                     (None, true)
                 } else if let Some(last) = stmts.last() {
                     match &last.node {
-                        Stmt::Expr(e) => (Some(self.lower_expr(&e.node)?), false),
+                        Stmt::Expr(e) => {
+                            self.emit_coverage_hit(last.span.start, 0);
+                            (Some(self.lower_expr(&e.node)?), false)
+                        }
                         Stmt::Return(_) => {
-                            self.lower_stmt(&last.node, &mut block_terminated)?;
+                            self.lower_stmt_covered(last, &mut block_terminated)?;
                             (None, true)
                         }
                         _ => {
-                            self.lower_stmt(&last.node, &mut block_terminated)?;
+                            self.lower_stmt_covered(last, &mut block_terminated)?;
                             if block_terminated {
                                 (None, true)
                             } else {
@@ -2731,12 +2789,16 @@ impl<'a> LowerContext<'a> {
         // Lower then branch
         self.builder.switch_to_block(then_bb);
         self.builder.seal_block(then_bb);
+        // Branch coverage: if-expr then path
+        self.emit_coverage_hit(then_block.span.start, 1);
         let then_val = self.lower_block_value(&then_block.node)?;
         self.builder.ins().jump(merge_bb, &[then_val]);
 
         // Lower else branch
         self.builder.switch_to_block(else_bb);
         self.builder.seal_block(else_bb);
+        // Branch coverage: if-expr else path
+        self.emit_coverage_hit(else_block.span.start, 1);
         let else_val = self.lower_block_value(&else_block.node)?;
         self.builder.ins().jump(merge_bb, &[else_val]);
 
@@ -2818,6 +2880,8 @@ impl<'a> LowerContext<'a> {
             // === Body block: extract fields and evaluate expression ===
             self.builder.switch_to_block(body_blocks[i]);
             self.builder.seal_block(body_blocks[i]);
+            // Branch coverage: match-expr arm taken
+            self.emit_coverage_hit(arm.value.span.start, 1);
 
             // Save current variable bindings
             let mut prev_vars = Vec::new();
@@ -2903,7 +2967,7 @@ impl<'a> LowerContext<'a> {
         // Lower all statements except the last
         let mut terminated = false;
         for stmt in &block.stmts[..block.stmts.len() - 1] {
-            self.lower_stmt(&stmt.node, &mut terminated)?;
+            self.lower_stmt_covered(stmt, &mut terminated)?;
         }
 
         // Last statement determines the value
@@ -2911,6 +2975,7 @@ impl<'a> LowerContext<'a> {
         match &last.node {
             Stmt::Expr(expr) => {
                 // Last is an expression → return its value
+                self.emit_coverage_hit(last.span.start, 0);
                 self.lower_expr(&expr.node)
             }
             Stmt::If { condition, then_block, else_block: Some(else_block) } => {
@@ -2953,7 +3018,7 @@ impl<'a> LowerContext<'a> {
             }
             _ => {
                 // Last is a statement → lower it, return void (0)
-                self.lower_stmt(&last.node, &mut terminated)?;
+                self.lower_stmt_covered(last, &mut terminated)?;
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
         }
@@ -3672,6 +3737,7 @@ pub fn lower_function(
     fn_contracts: &HashMap<String, FnContracts>,
     singleton_globals: &HashMap<String, DataId>,
     rwlock_globals: &HashMap<String, DataId>,
+    coverage_lookup: &HashMap<(usize, u32), u32>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -3825,6 +3891,7 @@ pub fn lower_function(
         fn_contracts,
         singleton_globals,
         rwlock_globals,
+        coverage_lookup,
         variables,
         var_types,
         next_var,
@@ -3841,6 +3908,25 @@ pub fn lower_function(
     // Initialize GC at start of non-app main
     if is_main {
         ctx.call_runtime_void("__pluto_gc_init", &[]);
+
+        // Initialize coverage if enabled (for plain fn main programs)
+        if !coverage_lookup.is_empty() {
+            let num_points = coverage_lookup.values().max().map_or(0, |&m| m as i64 + 1);
+            let num_val = ctx.builder.ins().iconst(types::I64, num_points);
+
+            // Embed coverage output path as a C string data section
+            let cov_path = ".pluto-coverage/coverage-data.bin\0";
+            let mut cov_data_desc = DataDescription::new();
+            cov_data_desc.define(cov_path.as_bytes().to_vec().into_boxed_slice());
+            let cov_data_id = ctx.module.declare_anonymous_data(false, false)
+                .map_err(|e| CompileError::codegen(format!("declare coverage path data error: {e}")))?;
+            ctx.module.define_data(cov_data_id, &cov_data_desc)
+                .map_err(|e| CompileError::codegen(format!("define coverage path data error: {e}")))?;
+            let cov_gv = ctx.module.declare_data_in_func(cov_data_id, ctx.builder.func);
+            let cov_path_ptr = ctx.builder.ins().global_value(types::I64, cov_gv);
+
+            ctx.call_runtime_void("__pluto_coverage_init", &[num_val, cov_path_ptr]);
+        }
     }
 
     // Emit requires checks at function entry
@@ -3879,7 +3965,7 @@ pub fn lower_function(
             break;
         }
         let stmt_terminates = matches!(stmt.node, Stmt::Return(_));
-        ctx.lower_stmt(&stmt.node, &mut terminated)?;
+        ctx.lower_stmt_covered(stmt, &mut terminated)?;
         if stmt_terminates {
             terminated = true;
         }
@@ -4148,6 +4234,7 @@ pub fn lower_generator_next(
     fn_contracts: &HashMap<String, FnContracts>,
     singleton_globals: &HashMap<String, DataId>,
     rwlock_globals: &HashMap<String, DataId>,
+    coverage_lookup: &HashMap<(usize, u32), u32>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -4270,6 +4357,7 @@ pub fn lower_generator_next(
         fn_contracts,
         singleton_globals,
         rwlock_globals,
+        coverage_lookup,
         variables,
         var_types,
         next_var: next_var_id,
@@ -4448,7 +4536,7 @@ fn lower_generator_block(
             }
             _ => {
                 // For all other statements, delegate to the normal lower_stmt
-                ctx.lower_stmt(&stmt.node, terminated)?;
+                ctx.lower_stmt_covered(stmt, terminated)?;
             }
         }
     }

@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pluto Coverage Report</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; }
+
+/* Header */
+.header { background: #161b22; border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; align-items: center; gap: 16px; }
+.header h1 { font-size: 20px; font-weight: 600; color: #e6edf3; }
+.header .badge { background: #238636; color: #fff; padding: 4px 12px; border-radius: 16px; font-size: 14px; font-weight: 600; }
+.header .badge.warn { background: #d29922; }
+.header .badge.low { background: #da3633; }
+
+/* Summary bar */
+.summary { display: flex; gap: 32px; padding: 16px 24px; background: #161b22; border-bottom: 1px solid #30363d; }
+.summary .metric { display: flex; flex-direction: column; gap: 4px; }
+.summary .metric .label { font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+.summary .metric .value { font-size: 24px; font-weight: 700; }
+.summary .metric .detail { font-size: 12px; color: #8b949e; }
+
+/* Navigation */
+.nav { display: flex; gap: 0; background: #161b22; border-bottom: 1px solid #30363d; }
+.nav button { background: none; border: none; color: #8b949e; padding: 12px 24px; cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent; }
+.nav button:hover { color: #e6edf3; }
+.nav button.active { color: #e6edf3; border-bottom-color: #f78166; }
+
+/* Content */
+.content { padding: 24px; max-width: 1400px; margin: 0 auto; }
+
+/* Treemap */
+#treemap { width: 100%; height: 400px; border-radius: 8px; overflow: hidden; border: 1px solid #30363d; }
+.treemap-cell { cursor: pointer; transition: opacity 0.15s; }
+.treemap-cell:hover { opacity: 0.85; }
+.treemap-label { fill: #fff; font-size: 12px; font-weight: 600; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
+.treemap-pct { fill: rgba(255,255,255,0.8); font-size: 10px; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
+
+/* File list */
+.file-list { margin-top: 24px; }
+.file-row { display: flex; align-items: center; padding: 10px 16px; border: 1px solid #30363d; border-radius: 6px; margin-bottom: 8px; cursor: pointer; transition: background 0.15s; }
+.file-row:hover { background: #161b22; }
+.file-row .name { flex: 1; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 14px; color: #58a6ff; }
+.file-row .bar { width: 200px; height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; margin: 0 16px; }
+.file-row .bar .fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+.file-row .pct { width: 60px; text-align: right; font-weight: 600; font-size: 14px; }
+.file-row .stats { width: 120px; text-align: right; font-size: 12px; color: #8b949e; }
+
+/* Source view */
+.source-view { display: none; }
+.source-view.active { display: block; }
+.source-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.source-header .back-btn { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.source-header .back-btn:hover { background: #30363d; }
+.source-header .filepath { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 16px; color: #e6edf3; }
+.source-table { width: 100%; border-collapse: collapse; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 13px; line-height: 1.5; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }
+.source-table tr { border-bottom: 1px solid #21262d; }
+.source-table .line-no { width: 50px; text-align: right; padding: 0 12px; color: #484f58; user-select: none; background: #0d1117; }
+.source-table .hit-count { width: 60px; text-align: right; padding: 0 8px; color: #8b949e; font-size: 11px; background: #0d1117; }
+.source-table .code { padding: 0 16px; white-space: pre; }
+.source-table tr.covered { background: rgba(35, 134, 54, 0.15); }
+.source-table tr.covered .code { border-left: 3px solid #238636; }
+.source-table tr.uncovered { background: rgba(218, 54, 51, 0.15); }
+.source-table tr.uncovered .code { border-left: 3px solid #da3633; }
+.source-table tr.neutral .code { border-left: 3px solid transparent; }
+
+/* Functions table */
+.func-table { width: 100%; border-collapse: collapse; margin-top: 24px; }
+.func-table th { text-align: left; padding: 8px 16px; font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #30363d; cursor: pointer; }
+.func-table th:hover { color: #e6edf3; }
+.func-table td { padding: 8px 16px; border-bottom: 1px solid #21262d; font-size: 14px; }
+.func-table .fn-name { font-family: 'SFMono-Regular', Consolas, monospace; color: #d2a8ff; }
+.func-table .fn-file { color: #58a6ff; cursor: pointer; }
+.func-table .fn-file:hover { text-decoration: underline; }
+
+/* Utility */
+.hidden { display: none; }
+.green { color: #3fb950; }
+.yellow { color: #d29922; }
+.red { color: #f85149; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Pluto Coverage Report</h1>
+  <span class="badge" id="total-badge">--%</span>
+</div>
+<div class="summary" id="summary-bar"></div>
+<div class="nav">
+  <button class="active" onclick="showTab('overview')">Overview</button>
+  <button onclick="showTab('functions')">Functions</button>
+</div>
+<div class="content">
+  <div id="tab-overview">
+    <svg id="treemap"></svg>
+    <div class="file-list" id="file-list"></div>
+  </div>
+  <div id="tab-functions" class="hidden">
+    <table class="func-table" id="func-table">
+      <thead><tr>
+        <th onclick="sortFuncs('name')">Function</th>
+        <th onclick="sortFuncs('file')">File</th>
+        <th onclick="sortFuncs('line')">Line</th>
+        <th onclick="sortFuncs('hits')">Hits</th>
+      </tr></thead>
+      <tbody id="func-tbody"></tbody>
+    </table>
+  </div>
+  <div class="source-view" id="source-view">
+    <div class="source-header">
+      <button class="back-btn" onclick="hideSource()">&larr; Back</button>
+      <span class="filepath" id="source-filepath"></span>
+    </div>
+    <table class="source-table" id="source-table"></table>
+  </div>
+</div>
+
+<script>
+// Coverage data injected by plutoc
+const DATA = /*COVERAGE_DATA*/null;
+
+if (!DATA) { document.body.innerHTML = '<p style="padding:40px">No coverage data found.</p>'; }
+
+// ── Helpers ──
+function pctColor(pct) { return pct >= 80 ? '#3fb950' : pct >= 50 ? '#d29922' : '#f85149'; }
+function pctClass(pct) { return pct >= 80 ? 'green' : pct >= 50 ? 'yellow' : 'red'; }
+function fmtPct(n) { return n.toFixed(1) + '%'; }
+
+// ── Summary ──
+function renderSummary() {
+  const s = DATA.summary;
+  const bar = document.getElementById('summary-bar');
+  const badge = document.getElementById('total-badge');
+  badge.textContent = fmtPct(s.line_percent);
+  badge.className = 'badge' + (s.line_percent >= 80 ? '' : s.line_percent >= 50 ? ' warn' : ' low');
+  bar.innerHTML = [
+    { label: 'Lines', val: fmtPct(s.line_percent), detail: s.covered_lines + '/' + s.total_lines },
+    { label: 'Functions', val: fmtPct(s.function_percent), detail: s.covered_functions + '/' + s.total_functions },
+    { label: 'Branches', val: fmtPct(s.branch_percent), detail: s.covered_branches + '/' + s.total_branches },
+  ].map(m => `<div class="metric"><span class="label">${m.label}</span><span class="value ${pctClass(parseFloat(m.val))}">${m.val}</span><span class="detail">${m.detail}</span></div>`).join('');
+}
+
+// ── Treemap ──
+function renderTreemap() {
+  const svg = document.getElementById('treemap');
+  const W = svg.clientWidth || 1200, H = 400;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('width', W);
+  svg.setAttribute('height', H);
+
+  const files = DATA.files.filter(f => f.lines.total > 0);
+  if (files.length === 0) return;
+  const total = files.reduce((s,f) => s + f.lines.total, 0);
+
+  // Simple squarified treemap layout
+  let x = 0;
+  files.sort((a,b) => b.lines.total - a.lines.total);
+  const rects = files.map(f => {
+    const w = Math.max(2, (f.lines.total / total) * W);
+    const r = { x, y: 0, w, h: H, file: f };
+    x += w;
+    return r;
+  });
+
+  svg.innerHTML = rects.map(r => {
+    const pct = r.file.lines.percent;
+    const c = pctColor(pct);
+    const name = r.file.path.split('/').pop();
+    const showLabel = r.w > 40;
+    return `<g class="treemap-cell" onclick="showSource('${r.file.path}')">
+      <rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="${c}" rx="2"/>
+      ${showLabel ? `<text class="treemap-label" x="${r.x + r.w/2}" y="${r.h/2 - 6}" text-anchor="middle">${name}</text>
+      <text class="treemap-pct" x="${r.x + r.w/2}" y="${r.h/2 + 10}" text-anchor="middle">${fmtPct(pct)}</text>` : ''}
+    </g>`;
+  }).join('');
+}
+
+// ── File list ──
+function renderFileList() {
+  const list = document.getElementById('file-list');
+  list.innerHTML = DATA.files.map(f => {
+    const pct = f.lines.percent;
+    const c = pctColor(pct);
+    return `<div class="file-row" onclick="showSource('${f.path}')">
+      <span class="name">${f.path}</span>
+      <div class="bar"><div class="fill" style="width:${pct}%;background:${c}"></div></div>
+      <span class="pct" style="color:${c}">${fmtPct(pct)}</span>
+      <span class="stats">${f.lines.covered}/${f.lines.total} lines</span>
+    </div>`;
+  }).join('');
+}
+
+// ── Source view ──
+function showSource(path) {
+  const f = DATA.files.find(x => x.path === path);
+  if (!f) return;
+  const src = DATA.sources && DATA.sources[path];
+  if (!src) { alert('Source not available for ' + path); return; }
+
+  document.getElementById('tab-overview').classList.add('hidden');
+  document.getElementById('tab-functions').classList.add('hidden');
+  document.getElementById('source-view').classList.add('active');
+  document.getElementById('source-filepath').textContent = path;
+
+  const lineHits = {};
+  f.line_details.forEach(d => { lineHits[d.line] = d.hit_count; });
+
+  const lines = src.split('\n');
+  const table = document.getElementById('source-table');
+  table.innerHTML = lines.map((line, i) => {
+    const lineNo = i + 1;
+    const hits = lineHits[lineNo];
+    const cls = hits === undefined ? 'neutral' : hits > 0 ? 'covered' : 'uncovered';
+    const hitStr = hits === undefined ? '' : hits.toString();
+    const escaped = line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return `<tr class="${cls}"><td class="line-no">${lineNo}</td><td class="hit-count">${hitStr}</td><td class="code">${escaped}</td></tr>`;
+  }).join('');
+}
+
+function hideSource() {
+  document.getElementById('source-view').classList.remove('active');
+  document.getElementById('tab-overview').classList.remove('hidden');
+}
+
+// ── Functions table ──
+let funcSortKey = 'name', funcSortAsc = true;
+function renderFuncTable() {
+  const tbody = document.getElementById('func-tbody');
+  const funcs = [];
+  DATA.files.forEach(f => {
+    f.function_details.forEach(fn => {
+      funcs.push({ name: fn.name, file: f.path, line: fn.line, hits: fn.hit_count });
+    });
+  });
+  funcs.sort((a,b) => {
+    let cmp = 0;
+    if (funcSortKey === 'name') cmp = a.name.localeCompare(b.name);
+    else if (funcSortKey === 'file') cmp = a.file.localeCompare(b.file);
+    else if (funcSortKey === 'line') cmp = a.line - b.line;
+    else if (funcSortKey === 'hits') cmp = a.hits - b.hits;
+    return funcSortAsc ? cmp : -cmp;
+  });
+  tbody.innerHTML = funcs.map(fn => {
+    const hitCls = fn.hits > 0 ? 'green' : 'red';
+    return `<tr>
+      <td class="fn-name">${fn.name}</td>
+      <td class="fn-file" onclick="showSource('${fn.file}')">${fn.file}:${fn.line}</td>
+      <td>${fn.line}</td>
+      <td class="${hitCls}">${fn.hits}</td>
+    </tr>`;
+  }).join('');
+}
+function sortFuncs(key) {
+  if (funcSortKey === key) funcSortAsc = !funcSortAsc;
+  else { funcSortKey = key; funcSortAsc = true; }
+  renderFuncTable();
+}
+
+// ── Tabs ──
+function showTab(tab) {
+  document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('source-view').classList.remove('active');
+  if (tab === 'overview') {
+    document.getElementById('tab-overview').classList.remove('hidden');
+    document.getElementById('tab-functions').classList.add('hidden');
+    document.querySelectorAll('.nav button')[0].classList.add('active');
+  } else {
+    document.getElementById('tab-overview').classList.add('hidden');
+    document.getElementById('tab-functions').classList.remove('hidden');
+    document.querySelectorAll('.nav button')[1].classList.add('active');
+  }
+}
+
+// ── Init ──
+if (DATA) {
+  renderSummary();
+  renderTreemap();
+  renderFileList();
+  renderFuncTable();
+  window.addEventListener('resize', renderTreemap);
+}
+</script>
+</body>
+</html>

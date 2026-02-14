@@ -5,3 +5,4 @@ tree-sitter-pluto/
 node_modules/
 data/
 book/book/
+.pluto-coverage/
