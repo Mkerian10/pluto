@@ -620,7 +620,7 @@ fn if_expr_as_method_object() {
 fn if_expr_in_string_interpolation() {
     let stdout = compile_and_run_stdout(r#"
         fn main() {
-            let msg = "result: {if true { 42 } else { 99 }}"
+            let msg = f"result: {if true { 42 } else { 99 }}"
             print(msg)
         }
     "#);
