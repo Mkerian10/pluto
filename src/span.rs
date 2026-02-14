@@ -1,5 +1,8 @@
 use serde::{Serialize, Deserialize};
 
+/// File ID for compiler-generated (synthetic) code that has no source file.
+pub const SYNTHETIC_FILE_ID: u32 = u32::MAX;
+
 /// Byte-offset span in source code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
@@ -19,6 +22,16 @@ impl Span {
 
     pub fn dummy() -> Self {
         Self { start: 0, end: 0, file_id: 0 }
+    }
+
+    /// Create a span for compiler-generated code (reflection, etc.).
+    pub fn synthetic() -> Self {
+        Self { start: 0, end: 0, file_id: SYNTHETIC_FILE_ID }
+    }
+
+    /// Whether this span represents compiler-generated code.
+    pub fn is_synthetic(&self) -> bool {
+        self.file_id == SYNTHETIC_FILE_ID
     }
 }
 
@@ -244,6 +257,29 @@ mod tests {
 
         assert_eq!(spanned.node, complex);
         assert_eq!(spanned.span, span);
+    }
+
+    // ===== Synthetic span tests =====
+
+    #[test]
+    fn test_span_synthetic() {
+        let span = Span::synthetic();
+        assert_eq!(span.start, 0);
+        assert_eq!(span.end, 0);
+        assert_eq!(span.file_id, super::SYNTHETIC_FILE_ID);
+        assert!(span.is_synthetic());
+    }
+
+    #[test]
+    fn test_span_is_synthetic_false() {
+        let span = Span::new(10, 20);
+        assert!(!span.is_synthetic());
+    }
+
+    #[test]
+    fn test_span_dummy_not_synthetic() {
+        let span = Span::dummy();
+        assert!(!span.is_synthetic());
     }
 
     // ===== Edge cases =====

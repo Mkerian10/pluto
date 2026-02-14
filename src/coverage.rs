@@ -15,6 +15,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
+use crate::modules::SourceMap;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
@@ -98,13 +99,13 @@ impl CoverageMap {
         self.points.len() as u32
     }
 
-    /// Build a lookup table: (byte_offset, branch_id) → point_id.
+    /// Build a lookup table: (file_id, byte_offset, branch_id) → point_id.
     /// Used by codegen to quickly find the point ID for a given statement span.
     /// branch_id 0 = primary (statement/function entry), 1+ = branch variants.
-    pub fn build_span_lookup(&self) -> HashMap<(usize, u32), u32> {
+    pub fn build_span_lookup(&self) -> HashMap<(u32, usize, u32), u32> {
         let mut lookup = HashMap::new();
         for point in &self.points {
-            lookup.insert((point.byte_offset, point.branch_id), point.id);
+            lookup.insert((point.file_id, point.byte_offset, point.branch_id), point.id);
         }
         lookup
     }
@@ -185,48 +186,66 @@ impl LineIndex {
 // ── AST scanner ─────────────────────────────────────────────────────────────
 
 /// Scans a Program AST and produces a CoverageMap with one point per statement
-/// and one per function entry.
+/// and one per function entry. Supports multiple files via SourceMap.
 pub fn build_coverage_map(
     program: &Program,
-    source: &str,
-    source_file: &str,
+    source_map: &SourceMap,
 ) -> CoverageMap {
-    let line_index = LineIndex::new(source);
+    // Build per-file LineIndex and source_len maps
+    let mut line_indexes: HashMap<u32, LineIndex> = HashMap::new();
+    let mut source_lens: HashMap<u32, usize> = HashMap::new();
+    let mut files: Vec<CoverageFile> = Vec::new();
+
+    for (file_id, (path, source)) in source_map.files.iter().enumerate() {
+        let file_id = file_id as u32;
+        line_indexes.insert(file_id, LineIndex::new(source));
+        source_lens.insert(file_id, source.len());
+        files.push(CoverageFile {
+            id: file_id,
+            path: path.display().to_string(),
+        });
+    }
+
     let mut scanner = CoverageScanner {
         points: Vec::new(),
-        line_index: &line_index,
+        line_indexes: &line_indexes,
+        source_lens: &source_lens,
         current_function: String::new(),
-        file_id: 0,
+        current_file_id: 0,
     };
 
-    let file = CoverageFile {
-        id: 0,
-        path: source_file.to_string(),
-    };
-
-    // Scan top-level functions
+    // Scan top-level functions from ALL files
     for func in &program.functions {
+        scanner.current_file_id = func.span.file_id;
+        if !scanner.source_lens.contains_key(&scanner.current_file_id) { continue; }
         scanner.scan_function(&func.node);
     }
 
-    // Scan class methods
+    // Scan class methods from ALL files
     for class in &program.classes {
+        scanner.current_file_id = class.span.file_id;
+        if !scanner.source_lens.contains_key(&scanner.current_file_id) { continue; }
         for method in &class.node.methods {
             let mangled = format!("{}.{}", class.node.name.node, method.node.name.node);
             scanner.scan_function_with_name(&method.node, &mangled);
         }
     }
 
-    // Scan app methods
+    // Scan app methods from ALL files
     if let Some(app) = &program.app {
-        for method in &app.node.methods {
-            let mangled = format!("{}.{}", app.node.name.node, method.node.name.node);
-            scanner.scan_function_with_name(&method.node, &mangled);
+        scanner.current_file_id = app.span.file_id;
+        if scanner.source_lens.contains_key(&scanner.current_file_id) {
+            for method in &app.node.methods {
+                let mangled = format!("{}.{}", app.node.name.node, method.node.name.node);
+                scanner.scan_function_with_name(&method.node, &mangled);
+            }
         }
     }
 
-    // Scan stage methods
+    // Scan stage methods from ALL files
     for stage in &program.stages {
+        scanner.current_file_id = stage.span.file_id;
+        if !scanner.source_lens.contains_key(&scanner.current_file_id) { continue; }
         for method in &stage.node.methods {
             let mangled = format!("{}.{}", stage.node.name.node, method.node.name.node);
             scanner.scan_function_with_name(&method.node, &mangled);
@@ -235,18 +254,23 @@ pub fn build_coverage_map(
 
     CoverageMap {
         points: scanner.points,
-        files: vec![file],
+        files,
     }
 }
 
 struct CoverageScanner<'a> {
     points: Vec<CoveragePoint>,
-    line_index: &'a LineIndex,
+    line_indexes: &'a HashMap<u32, LineIndex>,
+    source_lens: &'a HashMap<u32, usize>,
     current_function: String,
-    file_id: u32,
+    current_file_id: u32,
 }
 
 impl<'a> CoverageScanner<'a> {
+    fn source_len(&self) -> usize {
+        self.source_lens.get(&self.current_file_id).copied().unwrap_or(0)
+    }
+
     fn scan_function(&mut self, func: &Function) {
         self.scan_function_with_name(func, &func.name.node);
     }
@@ -254,18 +278,17 @@ impl<'a> CoverageScanner<'a> {
     fn scan_function_with_name(&mut self, func: &Function, name: &str) {
         self.current_function = name.to_string();
 
-        // Skip functions with synthetic spans (monomorphized, closure-lifted, etc.)
-        // that have offsets >= 10_000_000 (indicating they're not original source)
+        // Skip monomorphized copies whose spans have been offset beyond the source
         if !func.body.node.stmts.is_empty() {
             let first_span = func.body.node.stmts[0].span;
-            if first_span.start >= 10_000_000 {
+            if first_span.start >= self.source_len() {
                 return;
             }
         }
 
         // Function entry point
         let func_span = func.name.span;
-        if func_span.start < 10_000_000 {
+        if func_span.start < self.source_len() {
             self.add_point(func_span, CoverageKind::FunctionEntry);
         }
 
@@ -280,8 +303,8 @@ impl<'a> CoverageScanner<'a> {
     }
 
     fn scan_stmt(&mut self, stmt: &Spanned<Stmt>) {
-        // Skip synthetic/offset spans
-        if stmt.span.start >= 10_000_000 {
+        // Skip monomorphized/offset spans beyond the source
+        if stmt.span.start >= self.source_len() {
             return;
         }
 
@@ -292,26 +315,26 @@ impl<'a> CoverageScanner<'a> {
         match &stmt.node {
             Stmt::If { condition, then_block, else_block } => {
                 // Branch coverage: then path (branch_id 1, keyed by then_block span)
-                if then_block.span.start < 10_000_000 {
+                if then_block.span.start < self.source_len() {
                     self.add_point_with_branch(then_block.span, CoverageKind::BranchThen, 1);
                 }
                 self.scan_block(&then_block.node);
                 if let Some(eb) = else_block {
                     // Branch coverage: else path (branch_id 1, keyed by else_block span)
-                    if eb.span.start < 10_000_000 {
+                    if eb.span.start < self.source_len() {
                         self.add_point_with_branch(eb.span, CoverageKind::BranchElse, 1);
                     }
                     self.scan_block(&eb.node);
                 } else {
                     // Implicit else: keyed by condition span with branch_id 2
-                    if condition.span.start < 10_000_000 {
+                    if condition.span.start < self.source_len() {
                         self.add_point_with_branch(condition.span, CoverageKind::BranchElse, 2);
                     }
                 }
             }
             Stmt::While { body, .. } | Stmt::For { body, .. } => {
                 // Branch coverage: loop body entry (branch_id 1, keyed by body span)
-                if body.span.start < 10_000_000 {
+                if body.span.start < self.source_len() {
                     self.add_point_with_branch(body.span, CoverageKind::LoopEntry, 1);
                 }
                 self.scan_block(&body.node);
@@ -319,7 +342,7 @@ impl<'a> CoverageScanner<'a> {
             Stmt::Match { arms, .. } => {
                 for (i, arm) in arms.iter().enumerate() {
                     // Branch coverage: match arm (branch_id 1, keyed by arm body span)
-                    if arm.body.span.start < 10_000_000 {
+                    if arm.body.span.start < self.source_len() {
                         self.add_point_with_branch(
                             arm.body.span,
                             CoverageKind::MatchArm { index: i as u32 },
@@ -363,11 +386,15 @@ impl<'a> CoverageScanner<'a> {
     }
 
     fn add_point_with_branch(&mut self, span: Span, kind: CoverageKind, branch_id: u32) {
-        let (line, column) = self.line_index.line_col(span.start);
-        let (end_line, end_column) = self.line_index.line_col(span.end);
+        let line_index = match self.line_indexes.get(&self.current_file_id) {
+            Some(li) => li,
+            None => return, // Unknown file, skip
+        };
+        let (line, column) = line_index.line_col(span.start);
+        let (end_line, end_column) = line_index.line_col(span.end);
         self.points.push(CoveragePoint {
             id: self.points.len() as u32,
-            file_id: self.file_id,
+            file_id: self.current_file_id,
             byte_offset: span.start,
             line,
             column,
@@ -423,7 +450,7 @@ impl<'a> CoverageScanner<'a> {
     fn scan_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::NullPropagate { expr: inner } => {
-                if inner.span.start < 10_000_000 {
+                if inner.span.start < self.source_len() {
                     // branch_id 1: null path, branch_id 2: value path
                     self.add_point_with_branch(inner.span, CoverageKind::NullPropNull, 1);
                     self.add_point_with_branch(inner.span, CoverageKind::NullPropValue, 2);
@@ -431,7 +458,7 @@ impl<'a> CoverageScanner<'a> {
                 self.scan_expr(&inner.node);
             }
             Expr::Propagate { expr: inner } => {
-                if inner.span.start < 10_000_000 {
+                if inner.span.start < self.source_len() {
                     // branch_id 1: error path, branch_id 2: success path
                     self.add_point_with_branch(inner.span, CoverageKind::ErrorPropError, 1);
                     self.add_point_with_branch(inner.span, CoverageKind::ErrorPropSuccess, 2);
@@ -441,10 +468,10 @@ impl<'a> CoverageScanner<'a> {
             // If-expression: add branch points for then/else paths
             Expr::If { condition, then_block, else_block } => {
                 self.scan_expr(&condition.node);
-                if then_block.span.start < 10_000_000 {
+                if then_block.span.start < self.source_len() {
                     self.add_point_with_branch(then_block.span, CoverageKind::BranchThen, 1);
                 }
-                if else_block.span.start < 10_000_000 {
+                if else_block.span.start < self.source_len() {
                     self.add_point_with_branch(else_block.span, CoverageKind::BranchElse, 1);
                 }
                 for s in &then_block.node.stmts {
@@ -458,7 +485,7 @@ impl<'a> CoverageScanner<'a> {
             Expr::Match { expr: scrutinee, arms } => {
                 self.scan_expr(&scrutinee.node);
                 for (i, arm) in arms.iter().enumerate() {
-                    if arm.value.span.start < 10_000_000 {
+                    if arm.value.span.start < self.source_len() {
                         self.add_point_with_branch(
                             arm.value.span,
                             CoverageKind::MatchArm { index: i as u32 },
@@ -1094,8 +1121,8 @@ mod tests {
             files: vec![CoverageFile { id: 0, path: "test.pluto".to_string() }],
         };
         let lookup = map.build_span_lookup();
-        assert_eq!(lookup.get(&(3, 0)), Some(&0));
-        assert_eq!(lookup.get(&(20, 0)), Some(&1));
+        assert_eq!(lookup.get(&(0, 3, 0)), Some(&0));
+        assert_eq!(lookup.get(&(0, 20, 0)), Some(&1));
     }
 
     #[test]

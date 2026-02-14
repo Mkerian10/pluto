@@ -225,7 +225,7 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
     };
 
 
-    let (mut program, _source_map) = modules::flatten_modules(graph)?;
+    let (mut program, source_map) = modules::flatten_modules(graph)?;
 
 
     let result = run_frontend(&mut program, false)?;
@@ -234,8 +234,7 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
     }
 
     let cov_map = if coverage {
-        let source_file = entry_file.display().to_string();
-        Some(coverage::build_coverage_map(&program, &source, &source_file))
+        Some(coverage::build_coverage_map(&program, &source_map))
     } else {
         None
     };
@@ -277,7 +276,6 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
 
 
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
-
 
     let result = run_frontend(&mut program, false)?;
     let derived = derived::DerivedInfo::build(&result.env, &program);
@@ -383,7 +381,7 @@ fn compile_file_for_tests_impl(
     let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
 
 
-    let (mut program, _source_map) = modules::flatten_modules(graph)?;
+    let (mut program, source_map) = modules::flatten_modules(graph)?;
 
     if program.test_info.is_empty() {
         return Err(CompileError::codegen(format!(
@@ -441,8 +439,7 @@ fn compile_file_for_tests_impl(
     }
 
     let cov_map = if coverage {
-        let source_file = entry_file.display().to_string();
-        Some(coverage::build_coverage_map(&program, &source, &source_file))
+        Some(coverage::build_coverage_map(&program, &source_map))
     } else {
         None
     };

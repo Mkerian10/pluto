@@ -7,7 +7,11 @@ use crate::manifest::{DependencyScope, PackageGraph};
 use crate::parser::ast::*;
 use crate::parser::Parser;
 use crate::span::{Span, Spanned};
-use crate::visit::{walk_expr_mut, walk_stmt_mut, VisitMut};
+use crate::visit::{
+    walk_app_mut, walk_block_mut, walk_class_mut, walk_enum_mut, walk_error_mut, walk_expr_mut,
+    walk_extern_fn_mut, walk_function_mut, walk_program_mut, walk_stage_mut, walk_stmt_mut,
+    walk_system_mut, walk_trait_mut, walk_type_expr_mut, VisitMut,
+};
 
 /// Maps file_id -> (path, source_text).
 #[derive(Default)]
@@ -45,6 +49,101 @@ pub struct ModuleGraph {
     pub source_map: SourceMap,
 }
 
+/// Visitor that stamps all spans in an AST with a specific file_id.
+/// Applied after parsing to attribute every span to its source file.
+struct FileIdSetter {
+    file_id: u32,
+}
+
+impl VisitMut for FileIdSetter {
+    fn visit_function_mut(&mut self, func: &mut Spanned<Function>) {
+        func.span.file_id = self.file_id;
+        func.node.name.span.file_id = self.file_id;
+        walk_function_mut(self, func);
+    }
+
+    fn visit_class_mut(&mut self, class: &mut Spanned<ClassDecl>) {
+        class.span.file_id = self.file_id;
+        class.node.name.span.file_id = self.file_id;
+        for field in &mut class.node.fields {
+            field.name.span.file_id = self.file_id;
+        }
+        walk_class_mut(self, class);
+    }
+
+    fn visit_trait_mut(&mut self, trait_decl: &mut Spanned<TraitDecl>) {
+        trait_decl.span.file_id = self.file_id;
+        trait_decl.node.name.span.file_id = self.file_id;
+        walk_trait_mut(self, trait_decl);
+    }
+
+    fn visit_enum_mut(&mut self, enum_decl: &mut Spanned<EnumDecl>) {
+        enum_decl.span.file_id = self.file_id;
+        enum_decl.node.name.span.file_id = self.file_id;
+        walk_enum_mut(self, enum_decl);
+    }
+
+    fn visit_error_mut(&mut self, error_decl: &mut Spanned<ErrorDecl>) {
+        error_decl.span.file_id = self.file_id;
+        error_decl.node.name.span.file_id = self.file_id;
+        walk_error_mut(self, error_decl);
+    }
+
+    fn visit_app_mut(&mut self, app: &mut Spanned<AppDecl>) {
+        app.span.file_id = self.file_id;
+        app.node.name.span.file_id = self.file_id;
+        walk_app_mut(self, app);
+    }
+
+    fn visit_stage_mut(&mut self, stage: &mut Spanned<StageDecl>) {
+        stage.span.file_id = self.file_id;
+        stage.node.name.span.file_id = self.file_id;
+        walk_stage_mut(self, stage);
+    }
+
+    fn visit_system_mut(&mut self, system: &mut Spanned<SystemDecl>) {
+        system.span.file_id = self.file_id;
+        system.node.name.span.file_id = self.file_id;
+        walk_system_mut(self, system);
+    }
+
+    fn visit_extern_fn_mut(&mut self, extern_fn: &mut Spanned<ExternFnDecl>) {
+        extern_fn.span.file_id = self.file_id;
+        extern_fn.node.name.span.file_id = self.file_id;
+        walk_extern_fn_mut(self, extern_fn);
+    }
+
+    fn visit_import_mut(&mut self, import: &mut Spanned<ImportDecl>) {
+        import.span.file_id = self.file_id;
+    }
+
+    fn visit_block_mut(&mut self, block: &mut Spanned<Block>) {
+        block.span.file_id = self.file_id;
+        walk_block_mut(self, block);
+    }
+
+    fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
+        stmt.span.file_id = self.file_id;
+        walk_stmt_mut(self, stmt);
+    }
+
+    fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+        expr.span.file_id = self.file_id;
+        walk_expr_mut(self, expr);
+    }
+
+    fn visit_type_expr_mut(&mut self, te: &mut Spanned<TypeExpr>) {
+        te.span.file_id = self.file_id;
+        walk_type_expr_mut(self, te);
+    }
+}
+
+/// Stamp all spans in a Program with the given file_id.
+fn set_program_file_id(program: &mut Program, file_id: u32) {
+    let mut setter = FileIdSetter { file_id };
+    walk_program_mut(&mut setter, program);
+}
+
 /// Load and parse a single .pluto file, assigning spans with the given file_id.
 fn load_and_parse(path: &Path, source_map: &mut SourceMap) -> Result<(Program, u32), CompileError> {
     let source = std::fs::read_to_string(path).map_err(|e| {
@@ -53,7 +152,8 @@ fn load_and_parse(path: &Path, source_map: &mut SourceMap) -> Result<(Program, u
     let file_id = source_map.add_file(path.to_path_buf(), source.clone());
     let tokens = lexer::lex(&source)?;
     let mut parser = Parser::new_with_path(&tokens, &source, path.display().to_string());
-    let program = parser.parse_program()?;
+    let mut program = parser.parse_program()?;
+    set_program_file_id(&mut program, file_id);
     Ok((program, file_id))
 }
 

@@ -40,8 +40,8 @@ struct LowerContext<'a> {
     singleton_globals: &'a HashMap<String, DataId>,
     /// Module-level globals holding rwlock pointers for synchronized singletons.
     rwlock_globals: &'a HashMap<String, DataId>,
-    /// Coverage: (byte_offset, branch_id) → point_id. Empty when coverage is disabled.
-    coverage_lookup: &'a HashMap<(usize, u32), u32>,
+    /// Coverage: (file_id, byte_offset, branch_id) → point_id. Empty when coverage is disabled.
+    coverage_lookup: &'a HashMap<(u32, usize, u32), u32>,
     // Per-function mutable state
     variables: HashMap<String, Variable>,
     var_types: HashMap<String, PlutoType>,
@@ -93,10 +93,10 @@ impl<'a> LowerContext<'a> {
         }
     }
 
-    /// Emit a coverage hit for the given byte offset and branch_id, if coverage is enabled.
+    /// Emit a coverage hit for the given file_id, byte offset and branch_id, if coverage is enabled.
     /// branch_id 0 = primary (statement/function entry), 1+ = branch variants.
-    fn emit_coverage_hit(&mut self, byte_offset: usize, branch_id: u32) {
-        if let Some(&point_id) = self.coverage_lookup.get(&(byte_offset, branch_id)) {
+    fn emit_coverage_hit(&mut self, file_id: u32, byte_offset: usize, branch_id: u32) {
+        if let Some(&point_id) = self.coverage_lookup.get(&(file_id, byte_offset, branch_id)) {
             let id_val = self.builder.ins().iconst(types::I64, point_id as i64);
             self.call_runtime_void("__pluto_coverage_hit", &[id_val]);
         }
@@ -111,7 +111,7 @@ impl<'a> LowerContext<'a> {
         if *terminated {
             return Ok(());
         }
-        self.emit_coverage_hit(stmt.span.start, 0);
+        self.emit_coverage_hit(stmt.span.file_id, stmt.span.start, 0);
         self.lower_stmt(&stmt.node, terminated)
     }
 
@@ -743,7 +743,7 @@ impl<'a> LowerContext<'a> {
             self.builder.switch_to_block(then_bb);
             self.builder.seal_block(then_bb);
             // Branch coverage: then path taken
-            self.emit_coverage_hit(then_block.span.start, 1);
+            self.emit_coverage_hit(then_block.span.file_id, then_block.span.start, 1);
             let mut then_terminated = false;
             for s in &then_block.node.stmts {
                 self.lower_stmt_covered(s, &mut then_terminated)?;
@@ -755,7 +755,7 @@ impl<'a> LowerContext<'a> {
             self.builder.switch_to_block(else_bb);
             self.builder.seal_block(else_bb);
             // Branch coverage: else path taken
-            self.emit_coverage_hit(else_blk.span.start, 1);
+            self.emit_coverage_hit(else_blk.span.file_id, else_blk.span.start, 1);
             let mut else_terminated = false;
             for s in &else_blk.node.stmts {
                 self.lower_stmt_covered(s, &mut else_terminated)?;
@@ -776,7 +776,7 @@ impl<'a> LowerContext<'a> {
             self.builder.switch_to_block(then_bb);
             self.builder.seal_block(then_bb);
             // Branch coverage: then path taken (no else)
-            self.emit_coverage_hit(then_block.span.start, 1);
+            self.emit_coverage_hit(then_block.span.file_id, then_block.span.start, 1);
             let mut then_terminated = false;
             for s in &then_block.node.stmts {
                 self.lower_stmt_covered(s, &mut then_terminated)?;
@@ -788,7 +788,7 @@ impl<'a> LowerContext<'a> {
             // Implicit else block: coverage hit then jump to merge
             self.builder.switch_to_block(else_cov_bb);
             self.builder.seal_block(else_cov_bb);
-            self.emit_coverage_hit(condition.span.start, 2);
+            self.emit_coverage_hit(condition.span.file_id, condition.span.start, 2);
             self.builder.ins().jump(merge_bb, &[]);
         }
 
@@ -817,7 +817,7 @@ impl<'a> LowerContext<'a> {
         self.builder.switch_to_block(body_bb);
         self.builder.seal_block(body_bb);
         // Branch coverage: loop body entered
-        self.emit_coverage_hit(body.span.start, 1);
+        self.emit_coverage_hit(body.span.file_id, body.span.start, 1);
         self.loop_stack.push((header_bb, exit_bb));
         let mut body_terminated = false;
         for s in &body.node.stmts {
@@ -900,7 +900,7 @@ impl<'a> LowerContext<'a> {
         self.builder.switch_to_block(body_bb);
         self.builder.seal_block(body_bb);
         // Branch coverage: for-range loop body entered
-        self.emit_coverage_hit(body.span.start, 1);
+        self.emit_coverage_hit(body.span.file_id, body.span.start, 1);
 
         // Loop variable = counter value directly (ranges iterate ints)
         let prev_var = self.variables.get(&var.node).cloned();
@@ -997,7 +997,7 @@ impl<'a> LowerContext<'a> {
         self.builder.switch_to_block(body_bb);
         self.builder.seal_block(body_bb);
         // Branch coverage: for-array loop body entered
-        self.emit_coverage_hit(body.span.start, 1);
+        self.emit_coverage_hit(body.span.file_id, body.span.start, 1);
 
         // Get element: array_get(handle, counter)
         let counter_for_get = self.builder.use_var(counter_var);
@@ -1472,7 +1472,7 @@ impl<'a> LowerContext<'a> {
             self.builder.switch_to_block(body_blocks[i]);
             self.builder.seal_block(body_blocks[i]);
             // Branch coverage: match arm taken
-            self.emit_coverage_hit(arm.body.span.start, 1);
+            self.emit_coverage_hit(arm.body.span.file_id, arm.body.span.start, 1);
 
             let variant_fields = &enum_info.variants.iter()
                 .find(|(n, _)| *n == arm.variant_name.node)
@@ -1945,7 +1945,7 @@ impl<'a> LowerContext<'a> {
                 self.builder.switch_to_block(propagate_bb);
                 self.builder.seal_block(propagate_bb);
                 // Branch coverage: null propagation — value was null
-                self.emit_coverage_hit(inner.span.start, 1);
+                self.emit_coverage_hit(inner.span.file_id, inner.span.start, 1);
                 let is_void_return = matches!(&self.expected_return_type, Some(PlutoType::Void) | None);
                 if is_void_return {
                     if let Some(exit_bb) = self.exit_block {
@@ -1966,7 +1966,7 @@ impl<'a> LowerContext<'a> {
                 self.builder.switch_to_block(continue_bb);
                 self.builder.seal_block(continue_bb);
                 // Branch coverage: null propagation — value was non-null
-                self.emit_coverage_hit(inner.span.start, 2);
+                self.emit_coverage_hit(inner.span.file_id, inner.span.start, 2);
 
                 // Unbox value types (int, float, bool stored as boxed pointer)
                 if let PlutoType::Nullable(unwrapped) = &inner_type {
@@ -2170,14 +2170,14 @@ impl<'a> LowerContext<'a> {
                 self.builder.switch_to_block(propagate_bb);
                 self.builder.seal_block(propagate_bb);
                 // Branch coverage: error propagation — error occurred
-                self.emit_coverage_hit(inner.span.start, 1);
+                self.emit_coverage_hit(inner.span.file_id, inner.span.start, 1);
                 self.emit_default_return();
 
                 // Continue block: no error, use the call result
                 self.builder.switch_to_block(continue_bb);
                 self.builder.seal_block(continue_bb);
                 // Branch coverage: error propagation — success
-                self.emit_coverage_hit(inner.span.start, 2);
+                self.emit_coverage_hit(inner.span.file_id, inner.span.start, 2);
                 Ok(val)
             }
             Expr::Catch { expr: inner, handler } => self.lower_catch(inner, handler),
@@ -2706,7 +2706,7 @@ impl<'a> LowerContext<'a> {
                 } else if let Some(last) = stmts.last() {
                     match &last.node {
                         Stmt::Expr(e) => {
-                            self.emit_coverage_hit(last.span.start, 0);
+                            self.emit_coverage_hit(last.span.file_id, last.span.start, 0);
                             (Some(self.lower_expr(&e.node)?), false)
                         }
                         Stmt::Return(_) => {
@@ -2790,7 +2790,7 @@ impl<'a> LowerContext<'a> {
         self.builder.switch_to_block(then_bb);
         self.builder.seal_block(then_bb);
         // Branch coverage: if-expr then path
-        self.emit_coverage_hit(then_block.span.start, 1);
+        self.emit_coverage_hit(then_block.span.file_id, then_block.span.start, 1);
         let then_val = self.lower_block_value(&then_block.node)?;
         self.builder.ins().jump(merge_bb, &[then_val]);
 
@@ -2798,7 +2798,7 @@ impl<'a> LowerContext<'a> {
         self.builder.switch_to_block(else_bb);
         self.builder.seal_block(else_bb);
         // Branch coverage: if-expr else path
-        self.emit_coverage_hit(else_block.span.start, 1);
+        self.emit_coverage_hit(else_block.span.file_id, else_block.span.start, 1);
         let else_val = self.lower_block_value(&else_block.node)?;
         self.builder.ins().jump(merge_bb, &[else_val]);
 
@@ -2881,7 +2881,7 @@ impl<'a> LowerContext<'a> {
             self.builder.switch_to_block(body_blocks[i]);
             self.builder.seal_block(body_blocks[i]);
             // Branch coverage: match-expr arm taken
-            self.emit_coverage_hit(arm.value.span.start, 1);
+            self.emit_coverage_hit(arm.value.span.file_id, arm.value.span.start, 1);
 
             // Save current variable bindings
             let mut prev_vars = Vec::new();
@@ -2975,7 +2975,7 @@ impl<'a> LowerContext<'a> {
         match &last.node {
             Stmt::Expr(expr) => {
                 // Last is an expression → return its value
-                self.emit_coverage_hit(last.span.start, 0);
+                self.emit_coverage_hit(last.span.file_id, last.span.start, 0);
                 self.lower_expr(&expr.node)
             }
             Stmt::If { condition, then_block, else_block: Some(else_block) } => {
@@ -3737,7 +3737,7 @@ pub fn lower_function(
     fn_contracts: &HashMap<String, FnContracts>,
     singleton_globals: &HashMap<String, DataId>,
     rwlock_globals: &HashMap<String, DataId>,
-    coverage_lookup: &HashMap<(usize, u32), u32>,
+    coverage_lookup: &HashMap<(u32, usize, u32), u32>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -4234,7 +4234,7 @@ pub fn lower_generator_next(
     fn_contracts: &HashMap<String, FnContracts>,
     singleton_globals: &HashMap<String, DataId>,
     rwlock_globals: &HashMap<String, DataId>,
-    coverage_lookup: &HashMap<(usize, u32), u32>,
+    coverage_lookup: &HashMap<(u32, usize, u32), u32>,
 ) -> Result<(), CompileError> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);

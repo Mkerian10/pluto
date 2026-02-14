@@ -1,14 +1,22 @@
 mod common;
 
 use plutoc::coverage::*;
+use plutoc::modules::SourceMap;
+use std::path::PathBuf;
 
 // ── Coverage map scanning tests ─────────────────────────────────────────────
 
+fn make_source_map(source: &str) -> SourceMap {
+    let mut sm = SourceMap::new();
+    sm.add_file(PathBuf::from("test.pluto"), source.to_string());
+    sm
+}
+
 fn build_map(source: &str) -> CoverageMap {
+    let sm = make_source_map(source);
     build_coverage_map(
         &plutoc::parse_source(source).unwrap(),
-        source,
-        "test.pluto",
+        &sm,
     )
 }
 
@@ -148,10 +156,10 @@ fn main() {
 #[test]
 fn coverage_map_line_numbers_correct() {
     let source = "fn main() {\n    let x = 1\n    let y = 2\n}\n";
+    let sm = make_source_map(source);
     let map = build_coverage_map(
         &plutoc::parse_source(source).unwrap(),
-        source,
-        "test.pluto",
+        &sm,
     );
     // Find the statement for `let x = 1` (line 2)
     let stmts: Vec<_> = map.points.iter().filter(|p| p.kind == CoverageKind::Statement).collect();
@@ -169,7 +177,7 @@ fn span_lookup_matches_points() {
     let map = build_map("fn main() {\n    let x = 1\n}\n");
     let lookup = map.build_span_lookup();
     for point in &map.points {
-        assert_eq!(lookup.get(&(point.byte_offset, point.branch_id)), Some(&point.id));
+        assert_eq!(lookup.get(&(point.file_id, point.byte_offset, point.branch_id)), Some(&point.id));
     }
 }
 
@@ -1280,4 +1288,294 @@ fn coverage_html_missing_source_still_works() {
     // Should still produce valid HTML even without source
     assert!(html.contains("<!DOCTYPE html>"), "should be valid HTML");
     assert!(!html.contains("/*COVERAGE_DATA*/null"), "placeholder should be replaced");
+}
+
+// ── Phase 5: file_id + source_len filtering edge cases ──────────────────────
+
+/// Helper: parse source and manually set file_id on specific functions.
+/// Functions with file_id=1 won't have a SourceMap entry, so they'll be excluded.
+fn build_map_with_foreign_functions(source: &str, foreign_fn_indices: &[usize]) -> CoverageMap {
+    let mut program = plutoc::parse_source(source).unwrap();
+    for &idx in foreign_fn_indices {
+        if idx < program.functions.len() {
+            program.functions[idx].span.file_id = 1; // imported module (no SourceMap entry)
+        }
+    }
+    let sm = make_source_map(source); // Only file_id=0 has a SourceMap entry
+    build_coverage_map(&program, &sm)
+}
+
+#[test]
+fn coverage_excludes_functions_with_foreign_file_id() {
+    let source = r#"
+fn helper() int {
+    return 42
+}
+fn main() {
+    let x = helper()
+    print(x)
+}
+"#;
+    // Mark helper() as foreign (file_id=1)
+    let map = build_map_with_foreign_functions(source, &[0]);
+
+    // Only main should appear in coverage, not helper
+    let entries: Vec<_> = map.points.iter()
+        .filter(|p| p.kind == CoverageKind::FunctionEntry)
+        .collect();
+    assert_eq!(entries.len(), 1, "only one function entry (main), got {}", entries.len());
+    assert_eq!(entries[0].function_name, "main");
+
+    // No coverage points from helper's body
+    for point in &map.points {
+        assert_ne!(point.function_name, "helper",
+            "no coverage points should come from foreign function");
+    }
+}
+
+#[test]
+fn coverage_excludes_synthetic_file_id() {
+    use plutoc::span::SYNTHETIC_FILE_ID;
+
+    let source = r#"
+fn real_fn() int {
+    return 1
+}
+fn main() {
+    print(real_fn())
+}
+"#;
+    let mut program = plutoc::parse_source(source).unwrap();
+    // Mark real_fn as synthetic (reflection-generated, no SourceMap entry)
+    program.functions[0].span.file_id = SYNTHETIC_FILE_ID;
+
+    let sm = make_source_map(source);
+    let map = build_coverage_map(&program, &sm);
+
+    let entries: Vec<_> = map.points.iter()
+        .filter(|p| p.kind == CoverageKind::FunctionEntry)
+        .collect();
+    assert_eq!(entries.len(), 1, "only main should have entry point");
+    assert_eq!(entries[0].function_name, "main");
+}
+
+#[test]
+fn coverage_excludes_monomorphized_function_spans() {
+    // Simulate a monomorphized copy: function with body stmts beyond source length
+    let source = "fn main() {\n    let x = 1\n}\n";
+    let mut program = plutoc::parse_source(source).unwrap();
+
+    // Add a "monomorphized copy" — clone main and offset its spans
+    let mut mono_copy = program.functions[0].clone();
+    mono_copy.node.name.node = "identity__int".to_string();
+    let offset = source.len() + 10_000_000; // way beyond source
+    mono_copy.node.name.span.start = offset;
+    mono_copy.node.name.span.end = offset + 10;
+    for stmt in &mut mono_copy.node.body.node.stmts {
+        stmt.span.start = offset;
+        stmt.span.end = offset + 10;
+    }
+    program.functions.push(mono_copy);
+
+    let sm = make_source_map(source);
+    let map = build_coverage_map(&program, &sm);
+
+    // Only main should appear — the monomorphized copy should be skipped
+    let entries: Vec<_> = map.points.iter()
+        .filter(|p| p.kind == CoverageKind::FunctionEntry)
+        .collect();
+    assert_eq!(entries.len(), 1, "only original function, not mono copy");
+    assert_eq!(entries[0].function_name, "main");
+}
+
+#[test]
+fn coverage_excludes_class_methods_with_foreign_file_id() {
+    let source = r#"
+class Local {
+    value: int
+
+    fn get(self) int {
+        return self.value
+    }
+}
+fn main() {
+    let c = Local { value: 42 }
+    print(c.get())
+}
+"#;
+    let mut program = plutoc::parse_source(source).unwrap();
+    // Mark the class as foreign
+    assert!(!program.classes.is_empty(), "should have a class");
+    program.classes[0].span.file_id = 2; // No SourceMap entry for file_id=2
+
+    let sm = make_source_map(source);
+    let map = build_coverage_map(&program, &sm);
+
+    // Class methods should not appear in coverage
+    let entries: Vec<_> = map.points.iter()
+        .filter(|p| p.kind == CoverageKind::FunctionEntry)
+        .collect();
+    assert_eq!(entries.len(), 1, "only main, not class methods");
+    assert_eq!(entries[0].function_name, "main");
+
+    for point in &map.points {
+        assert!(!point.function_name.contains("Local."),
+            "no coverage points from foreign class methods, found: {}", point.function_name);
+    }
+}
+
+#[test]
+fn coverage_mixed_file_ids_only_entry_file() {
+    let source = r#"
+fn local_a() int {
+    return 1
+}
+fn local_b() int {
+    return 2
+}
+fn main() {
+    print(local_a())
+    print(local_b())
+}
+"#;
+    let mut program = plutoc::parse_source(source).unwrap();
+    // Mark local_b as foreign (file_id=1, no SourceMap entry), keep local_a and main as entry (file_id=0)
+    program.functions[1].span.file_id = 1;
+
+    let sm = make_source_map(source);
+    let map = build_coverage_map(&program, &sm);
+
+    let entries: Vec<_> = map.points.iter()
+        .filter(|p| p.kind == CoverageKind::FunctionEntry)
+        .collect();
+    let names: Vec<_> = entries.iter().map(|e| e.function_name.as_str()).collect();
+    assert!(names.contains(&"local_a"), "local_a should be included");
+    assert!(names.contains(&"main"), "main should be included");
+    assert!(!names.contains(&"local_b"), "local_b (foreign) should be excluded");
+}
+
+#[test]
+fn coverage_empty_function_body_no_crash() {
+    // An empty function body should not panic in scan_function_with_name
+    // (the first-stmt check guards against empty stmts vec)
+    let source = "fn empty() {\n}\nfn main() {\n}\n";
+    let map = build_map(source);
+
+    // Both functions have entry points but no statement points
+    let entries: Vec<_> = map.points.iter()
+        .filter(|p| p.kind == CoverageKind::FunctionEntry)
+        .collect();
+    assert_eq!(entries.len(), 2, "both empty and main should have entries");
+}
+
+#[test]
+fn coverage_generics_no_duplicate_points() {
+    // End-to-end: generics produce monomorphized copies with offset spans.
+    // Coverage should only report the original source lines.
+    let dir = tempfile::tempdir().unwrap();
+    let source_path = dir.path().join("main.pluto");
+    let bin_path = dir.path().join("test_bin");
+
+    std::fs::write(&source_path, r#"
+fn identity<T>(x: T) T {
+    return x
+}
+fn main() {
+    let a = identity(42)
+    let b = identity("hello")
+    print(a)
+    print(b)
+}
+"#).unwrap();
+
+    let map = plutoc::compile_file_with_coverage(
+        &source_path, &bin_path, None,
+    ).unwrap();
+
+    // The generic function `identity` should appear once as a function entry,
+    // NOT once per monomorphized copy (identity__int, identity__string)
+    let identity_entries: Vec<_> = map.points.iter()
+        .filter(|p| p.kind == CoverageKind::FunctionEntry && p.function_name == "identity")
+        .collect();
+    // identity may or may not appear (monomorphize replaces the template),
+    // but there should be no duplicate coverage points on the same line
+    let mut line_function_pairs: Vec<(u32, &str)> = map.points.iter()
+        .filter(|p| p.kind == CoverageKind::FunctionEntry)
+        .map(|p| (p.line, p.function_name.as_str()))
+        .collect();
+    line_function_pairs.sort();
+    line_function_pairs.dedup();
+    assert_eq!(
+        line_function_pairs.len(),
+        map.points.iter().filter(|p| p.kind == CoverageKind::FunctionEntry).count(),
+        "no duplicate function entry points on the same line: {:?}",
+        line_function_pairs,
+    );
+
+    // All coverage point lines should be within the source file's line range
+    let source = std::fs::read_to_string(&source_path).unwrap();
+    let max_line = source.lines().count() as u32;
+    for point in &map.points {
+        assert!(point.line <= max_line + 1,
+            "coverage point line {} exceeds source lines {} (function: {}, kind: {:?})",
+            point.line, max_line, point.function_name, point.kind);
+    }
+}
+
+#[test]
+fn coverage_source_len_boundary_exact() {
+    // Test that a span at exactly source.len() is excluded (it's an invalid offset)
+    let source = "fn main() {\n    let x = 1\n}\n";
+    let mut program = plutoc::parse_source(source).unwrap();
+
+    // Add a function with first stmt at exactly source.len()
+    let mut boundary_fn = program.functions[0].clone();
+    boundary_fn.node.name.node = "boundary".to_string();
+    let boundary = source.len();
+    boundary_fn.node.name.span.start = boundary;
+    boundary_fn.node.name.span.end = boundary + 5;
+    for stmt in &mut boundary_fn.node.body.node.stmts {
+        stmt.span.start = boundary;
+        stmt.span.end = boundary + 5;
+    }
+    program.functions.push(boundary_fn);
+
+    let sm = make_source_map(source);
+    let map = build_coverage_map(&program, &sm);
+
+    // boundary fn should be excluded (first stmt at source.len() >= source_len)
+    for point in &map.points {
+        assert_ne!(point.function_name, "boundary",
+            "function with spans at source_len boundary should be excluded");
+    }
+}
+
+#[test]
+fn coverage_branch_spans_beyond_source_excluded() {
+    // If a branch span (if/else/loop body) is beyond source_len, it should not add branch points
+    let source = "fn main() {\n    let x = 1\n    if true {\n        print(x)\n    }\n}\n";
+    let mut program = plutoc::parse_source(source).unwrap();
+
+    // Clone main and create a "monomorphized" version with offset branch spans
+    let mut mono = program.functions[0].clone();
+    mono.node.name.node = "mono_main".to_string();
+    let offset = source.len() + 1000;
+    mono.node.name.span.start = offset;
+    mono.node.name.span.end = offset + 10;
+    for stmt in &mut mono.node.body.node.stmts {
+        stmt.span.start = offset;
+        stmt.span.end = offset + 10;
+    }
+    mono.node.body.span.start = offset;
+    mono.node.body.span.end = offset + 50;
+    program.functions.push(mono);
+
+    let sm = make_source_map(source);
+    let map = build_coverage_map(&program, &sm);
+
+    // No points from mono_main should appear
+    for point in &map.points {
+        assert_ne!(point.function_name, "mono_main",
+            "monomorphized function should have no coverage points");
+    }
 }
