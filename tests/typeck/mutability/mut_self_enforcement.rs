@@ -73,7 +73,7 @@ fn constructor_mutation() { compile_should_fail_with(r#"class C{x:int} fn new()C
 
 // Mutation of immutable local
 #[test]
-#[ignore] // Compiler bug: doesn't enforce immutability
+#[ignore] // #168: compiler doesn't enforce immutability on local variables
 fn immutable_local_mut() { compile_should_fail_with(r#"fn main(){let x=1 x=2}"#, ""); }
 
 // Mutation through immutable reference

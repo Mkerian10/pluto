@@ -41,5 +41,5 @@ fn fallible_builtins_in_if() { compile_should_fail_with(r#"fn main(){if true{let
 #[test]
 fn recv_after_close_no_handler() { compile_should_fail_with(r#"fn main(){let (tx,rx)=chan<int>(1) tx.close() rx.recv()}"#, "call to fallible method"); }
 #[test]
-#[ignore] // Compiler bug: codegen duplicate definition of main with select
+#[ignore] // #167: select expressions don't enforce error handling for fallible operations
 fn select_no_default_no_handler() { compile_should_fail_with(r#"fn main(){let (tx,rx)=chan<int>(1) select{val=rx.recv(){print(val)}}}"#, "must be handled"); }
