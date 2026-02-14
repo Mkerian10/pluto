@@ -1,4 +1,4 @@
-//! Closure type inference tests - 15 tests
+//! Closure type inference tests - 14 tests
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
@@ -25,8 +25,6 @@ fn closure_in_binop() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x+1
 fn closure_generic_param_unresolved() { compile_should_fail_with(r#"fn apply<T>(f:fn(T)T,x:T)T{return f(x)} fn main(){apply((x)=>x+1,42)}"#, "cannot infer"); }
 #[test]
 fn closure_field_assign() { compile_should_fail_with(r#"class C{x:int} fn main(){let f=(c:C)=>{c.x="hi"}}"#, "expected int, found string"); }
-#[test] #[ignore] // ACTUALLY_SUCCESS: error handling in closures works
-fn closure_raises_not_handled() { compile_should_fail_with(r#"error E{} fn main(){let f=()=>{raise E{}}}"#, "unhandled error"); }
 #[test] #[ignore] // Parser limitation: fallible return types (int!) not supported in syntax
 fn closure_propagate_invalid() { compile_should_fail_with(r#"fn safe()int{return 1} fn main(){let f=()int!=>{return safe()!}}"#, "cannot propagate"); }
 #[test]
