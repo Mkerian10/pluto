@@ -355,7 +355,7 @@ fn test_string_very_long_1mb() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // LIMITATION: Null byte escape sequence (\0) not supported in string literals
 fn test_string_with_null_byte() {
     let src = r#"
         fn main() {
@@ -590,7 +590,7 @@ fn test_class_nested_5_deep() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Compiler warnings in output causing test to fail
 fn test_class_with_bracket_deps() {
     let src = r#"
         class Config {
@@ -615,7 +615,7 @@ fn test_class_with_bracket_deps() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Compiler warnings in output causing test to fail
 fn test_class_with_methods() {
     let src = r#"
         class Counter {

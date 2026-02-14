@@ -742,7 +742,7 @@ fn main() int {
 }
 
 #[test]
-#[ignore]
+#[ignore] // LIMITATION: Nested closures (closure returning closure) not fully supported - capture handling issues
 fn test_closure_nested_captures() {
     let source = r#"
 fn main() int {
