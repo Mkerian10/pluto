@@ -50,5 +50,5 @@ fn binop_none_literal() { compile_should_fail_with(r#"fn main(){let x=none+1}"#,
 
 // Map value wrapping
 #[test]
-#[ignore] // #156: string literals don't work in compact syntax
+#[ignore] // Syntax error: string literals don't work in compact syntax
 fn map_nullable_value_to_non_nullable() { compile_should_fail_with(r#"fn main(){let m:Map<string,int>=Map<string,int>{} m[\"a\"]=none}"#, "expected int, found void?"); }
