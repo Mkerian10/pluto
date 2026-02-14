@@ -17,17 +17,17 @@ fn assign_field_type_mismatch() { compile_should_fail_with(r#"class C{x:int} fn 
 
 // Assign to immutable variable
 #[test]
-#[ignore] // Compiler bug: allows assignment to immutable variables
+#[ignore] // #177: compiler allows assignment to immutable variables
 fn assign_immutable() { compile_should_fail_with(r#"fn main(){let x=1 x=2}"#, ""); }
 
 // Assign to function parameter
 #[test]
-#[ignore] // Compiler bug: allows assignment to function parameters
+#[ignore] // #177: compiler allows assignment to function parameters
 fn assign_param() { compile_should_fail_with(r#"fn f(x:int){x=2} fn main(){}"#, ""); }
 
 // Assign to for loop variable
 #[test]
-#[ignore] // Compiler bug: allows assignment to for loop variables
+#[ignore] // #177: compiler allows assignment to for loop variables
 fn assign_for_var() { compile_should_fail_with(r#"fn main(){for i in 0..10{i=5}}"#, ""); }
 
 // Assign to literal
@@ -84,7 +84,7 @@ fn compound_assign_undefined() { compile_should_fail_with(r#"fn main(){x+=1}"#, 
 
 // Array element assign out of bounds (runtime check, not typeck)
 #[test]
-#[ignore] // Compiler limitation: array bounds checking not implemented at compile time
+#[ignore] // #177: array bounds checking is runtime, not compile-time
 fn array_assign_bounds() { compile_should_fail_with(r#"fn main(){let arr=[1,2,3]arr[10]=5}"#, ""); }
 
 // Assign to string index (strings are immutable)
