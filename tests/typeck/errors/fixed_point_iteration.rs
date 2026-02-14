@@ -7,15 +7,15 @@ use common::compile_should_fail_with;
 #[test]
 fn recursive_call_no_handler() { compile_should_fail_with(r#"error E{} fn fac(n:int)int{if n==0{return 1}if n==5{raise E{}}return n*fac(n-1)} fn main(){}"#, "call to fallible"); }
 #[test]
-#[ignore] // Compiler bug: codegen duplicate definition with compact syntax
+#[ignore] // #158: codegen duplicate definition with compact syntax
 fn recursive_fallible_no_propagate() { compile_should_fail_with(r#"error E{} fn fac(n:int)int{if n==0{return 1}return n*fac(n-1)} fn main(){}"#, "call to fallible"); }
 #[test]
-#[ignore] // Compiler bug: codegen duplicate definition with compact syntax
+#[ignore] // #158: codegen duplicate definition with compact syntax
 fn recursive_with_propagate() { compile_should_fail_with(r#"error E{} fn fac(n:int)int{if n==0{return 1}return n*fac(n-1)!} fn main(){fac(5)}"#, "call to fallible"); }
 #[test]
 fn mutual_recursion_no_handler() { compile_should_fail_with(r#"error E{} fn even(n:int)bool{if n==0{return true}if n==10{raise E{}}return odd(n-1)} fn odd(n:int)bool{if n==0{return false}return even(n-1)} fn main(){}"#, "call to fallible"); }
 #[test]
-#[ignore] // Compiler bug: codegen duplicate definition with compact syntax
+#[ignore] // #158: codegen duplicate definition with compact syntax
 fn mutual_recursion_fallible() { compile_should_fail_with(r#"error E{} fn even(n:int)bool{if n==0{return true}return odd(n-1)} fn odd(n:int)bool{if n==0{return false}return even(n-1)} fn main(){even(5)}"#, "call to fallible"); }
 
 // Indirect recursion through multiple functions
@@ -56,7 +56,7 @@ fn five_way_mutual_recursion() { compile_should_fail_with(r#"error E{} fn a(n:in
 #[test]
 fn recursive_method() { compile_should_fail_with(r#"error E{} class C{x:int fn fac(self,n:int)int{if n==0{return 1}if n==5{raise E{}}return n*self.fac(n-1)}} fn main(){}"#, "call to fallible method"); }
 #[test]
-#[ignore] // Compiler bug: codegen duplicate definition with compact syntax
+#[ignore] // #158: codegen duplicate definition with compact syntax
 fn recursive_method_fallible() { compile_should_fail_with(r#"error E{} class C{x:int fn fac(self,n:int)int{if n==0{return 1}return n*self.fac(n-1)}} fn main(){let c=C{x:1}c.fac(5)}"#, "call to fallible"); }
 
 // Tail recursion edge case

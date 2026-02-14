@@ -7,7 +7,7 @@ use common::compile_should_fail_with;
 #[test]
 fn too_many_args() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn main(){id<int,string>(42)}"#, "expects 1 type arguments, got 2"); }
 #[test]
-#[ignore] // Syntax error: string literals don't work in compact syntax
+#[ignore] // #156: string literals don't work in compact syntax
 fn too_few_args() { compile_should_fail_with(r#"fn pair<T,U>(x:T,y:U)T{return x} fn main(){pair<int>(1,\"hi\")}"#, "expects 2 type arguments, got 1"); }
 #[test]
 fn args_on_non_generic() { compile_should_fail_with(r#"fn f(x:int)int{return x} fn main(){f<int>(42)}"#, "not generic"); }
@@ -29,17 +29,17 @@ fn two_params_second_mismatch() { compile_should_fail_with(r#"fn pair<T,U>(x:T,y
 #[test]
 fn class_too_many_args() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b=Box<int,string>{value:42}}"#, "expects 1 type arguments, got 2"); }
 #[test]
-#[ignore] // Syntax error: string literals don't work in compact syntax
+#[ignore] // #156: string literals don't work in compact syntax
 fn class_too_few_args() { compile_should_fail_with(r#"class Pair<T,U>{first:T second:U} fn main(){let p=Pair<int>{first:1 second:\"hi\"}}"#, "expects 2 type arguments, got 1"); }
 #[test]
-#[ignore] // Syntax error: string literals don't work in compact syntax
+#[ignore] // #156: string literals don't work in compact syntax
 fn class_arg_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b=Box<int>{value:\"hi\"}}"#, "expected int, found string"); }
 
 // Explicit args on enums
 #[test]
 fn enum_too_many_args() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} fn main(){let x=Opt<int,string>.Some{v:42}}"#, "expects 1 type arguments, got 2"); }
 #[test]
-#[ignore] // Syntax error: string literals don't work in compact syntax
+#[ignore] // #156: string literals don't work in compact syntax
 fn enum_arg_mismatch() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} fn main(){let x=Opt<int>.Some{v:\"hi\"}}"#, "expected int, found string"); }
 
 // Explicit args on builtins
@@ -52,7 +52,7 @@ fn abs_with_type_args() { compile_should_fail_with(r#"fn main(){abs<int>(-5)}"#,
 #[test]
 fn explicit_conflicts_inferred() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn main(){let x:int=id<string>(42)}"#, "type mismatch"); }
 #[test]
-#[ignore] // Syntax error: string literals don't work in compact syntax
+#[ignore] // #156: string literals don't work in compact syntax
 fn partial_inference_conflict() { compile_should_fail_with(r#"fn pair<T,U>(x:T,y:U)T{return x} fn main(){pair<int>(\"hi\",42)}"#, "expects 2 type arguments, got 1"); }
 
 // Explicit args on methods
@@ -68,7 +68,7 @@ fn method_explicit_arg_mismatch() { compile_should_fail_with(r#"class C{x:int fn
 #[ignore] // Compiler bug: type checker doesn't enforce explicit type arg constraints on function arguments
 fn nested_explicit_outer() { compile_should_fail_with(r#"class Box<T>{value:T} fn wrap<U>(x:U)Box<U>{return Box<U>{value:x}} fn main(){wrap<int>(\"hi\")}"#, "type mismatch"); }
 #[test]
-#[ignore] // Syntax error: string literals don't work in compact syntax
+#[ignore] // #156: string literals don't work in compact syntax
 fn nested_explicit_inner() { compile_should_fail_with(r#"class Box<T>{value:T} fn make()Box<int>{return Box<string>{value:\"hi\"}} fn main(){}"#, "return type mismatch"); }
 
 // Explicit args with bounds
