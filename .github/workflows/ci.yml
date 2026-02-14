@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build workspace
+        run: cargo build --workspace --verbose
+
+  test-unit:
+    name: Unit Tests
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      - name: Run unit tests
+        run: cargo nextest run --lib
+
+  test-full:
+    name: Full Tests
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      - name: Test workspace members
+        run: cargo test --workspace --exclude plutoc
+
+      - name: Run integration tests
+        run: cargo nextest run --test '*'
+
+      - name: Run stdlib tests
+        run: cargo test --test stdlib_tests
+
+  macos:
+    name: macOS
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      - name: Build workspace
+        run: cargo build --workspace
+
+      - name: Run unit tests
+        run: cargo nextest run --lib
+
+      - name: Run integration tests
+        run: cargo nextest run --test '*'
+
+      - name: Run stdlib tests
+        run: cargo test --test stdlib_tests

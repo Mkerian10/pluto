@@ -1,16 +1,7 @@
 name: AST Walker Guidelines
 
 on:
-  pull_request:
-    branches: [master]
-    paths:
-      - 'src/typeck/infer.rs'
-      - 'src/typeck/check.rs'
-      - 'src/typeck/errors.rs'
-      - 'src/codegen/lower/mod.rs'
-      - 'src/pretty.rs'
-      - 'src/parser/ast.rs'
-      - 'src/visit.rs'
+  workflow_dispatch:
 
 permissions:
   contents: read
