@@ -3,77 +3,65 @@
 mod common;
 use common::compile_should_fail_with;
 
-// Variable used before initialization
+// Variable used before initialization - correctly detected
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn var_before_init() { compile_should_fail_with(r#"fn main(){let y=x let x=1}"#, "undefined"); }
+fn var_before_init() { compile_should_fail_with(r#"fn main(){let y=x let x=1}"#, "undefined variable 'x'"); }
 
-// Class field init order
+// Class field init order - correctly detected
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn field_init_order() { compile_should_fail_with(r#"class C{x:int y:int} fn main(){let c=C{y:c.x,x:1}}"#, ""); }
+fn field_init_order() { compile_should_fail_with(r#"class C{x:int y:int} fn main(){let c=C{y:c.x,x:1}}"#, "undefined variable 'c'"); }
 
-// Static init order (if supported)
+// Static init order - Pluto doesn't have static keyword
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn static_init_order() { compile_should_fail_with(r#"static x:int=y static y:int=1 fn main(){}"#, ""); }
+fn static_init_order() { compile_should_fail_with(r#"static x:int=y static y:int=1 fn main(){}"#, "Syntax error: expected 'fn'"); }
 
-// Global const init order
+// Global const init order - Pluto doesn't have const keyword
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn const_init_order() { compile_should_fail_with(r#"const X:int=Y const Y:int=1 fn main(){}"#, ""); }
+fn const_init_order() { compile_should_fail_with(r#"const X:int=Y const Y:int=1 fn main(){}"#, "Syntax error: expected 'fn'"); }
 
-// DI init order violation
+// DI init order violation - correctly detected
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn di_init_order() { compile_should_fail_with(r#"class A[b:B]{} class B[a:A]{} fn main(){}"#, "circular"); }
+fn di_init_order() { compile_should_fail_with(r#"class A[b:B]{} class B[a:A]{} fn main(){}"#, "circular dependency detected"); }
 
-// Init in wrong scope
+// Init in wrong scope - correctly detected
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn init_wrong_scope() { compile_should_fail_with(r#"fn main(){if true{let x=1}let y=x}"#, "undefined"); }
+fn init_wrong_scope() { compile_should_fail_with(r#"fn main(){if true{let x=1}let y=x}"#, "undefined variable 'x'"); }
 
-// Forward init in loop
+// Forward init in loop - correctly detected
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn loop_init_forward() { compile_should_fail_with(r#"fn main(){for i in 0..j{let j=10}}"#, "undefined"); }
+fn loop_init_forward() { compile_should_fail_with(r#"fn main(){for i in 0..j{let j=10}}"#, "undefined variable 'j'"); }
 
-// Match binding init order
+// Match binding init order - correctly detected (parser rejects invalid match syntax)
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn match_binding_order() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match E.A{x:y}{E.A{x}{let y=x}}}"#, ""); }
+fn match_binding_order() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match E.A{x:y}{E.A{x}{let y=x}}}"#, "Syntax error"); }
 
-// Closure capture before init
+// Closure capture before init - correctly detected
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn closure_capture_before_init() { compile_should_fail_with(r#"fn main(){let f=()=>x let x=1}"#, "undefined"); }
+fn closure_capture_before_init() { compile_should_fail_with(r#"fn main(){let f=()=>x let x=1}"#, "undefined variable 'x'"); }
 
-// Method call before class init
+// Method call before class init - syntax error (free function with self parameter not allowed)
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn method_before_class_init() { compile_should_fail_with(r#"class C{} fn foo(self){} fn main(){foo()}"#, ""); }
+fn method_before_class_init() { compile_should_fail_with(r#"class C{} fn foo(self){} fn main(){foo()}"#, "Syntax error: expected identifier, found self"); }
 
-// Trait impl before trait decl
+// Trait impl before trait decl - syntax error (standalone impl not supported)
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn impl_before_trait() { compile_should_fail_with(r#"class C{} impl T{fn foo(self){}} trait T{fn foo(self)} fn main(){}"#, ""); }
+fn impl_before_trait() { compile_should_fail_with(r#"class C{} impl T{fn foo(self){}} trait T{fn foo(self)} fn main(){}"#, "Syntax error: expected 'fn'"); }
 
-// Enum variant before enum
+// Enum variant before enum - forward reference allowed
 #[test]
-#[ignore] // PR #46 - outdated assertions
+#[ignore] // #175: forward references allowed for enums
 fn variant_before_enum() { compile_should_fail_with(r#"fn f(){let e=E.A} enum E{A B} fn main(){}"#, ""); }
 
-// Error raise before error decl
+// Error raise before error decl - syntax error in compact function notation
 #[test]
-#[ignore] // PR #46 - outdated assertions
-fn raise_before_error() { compile_should_fail_with(r#"fn f()!{raise E{}} error E{} fn main(){}"#, ""); }
+fn raise_before_error() { compile_should_fail_with(r#"fn f()!{raise E{}} error E{} fn main(){}"#, "Syntax error: expected identifier, found !"); }
 
-// Generic instantiation before decl
+// Generic instantiation before decl - forward reference allowed
 #[test]
-#[ignore] // PR #46 - outdated assertions
+#[ignore] // #175: forward references allowed for generic classes
 fn generic_before_decl() { compile_should_fail_with(r#"fn f(){let b=Box<int>{value:1}} class Box<T>{value:T} fn main(){}"#, ""); }
 
-// Bracket dep before class decl
+// Bracket dep before class decl - forward reference allowed
 #[test]
-#[ignore] // PR #46 - outdated assertions
+#[ignore] // #175: forward references allowed for bracket deps
 fn bracket_dep_before_decl() { compile_should_fail_with(r#"class A[b:B]{} class B{} fn main(){}"#, ""); }

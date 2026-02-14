@@ -645,6 +645,27 @@ path = "tests/typeck/type_system/collection_type_errors.rs"
 name = "typeck_pattern_matching_exhaustiveness"
 path = "tests/typeck/type_system/pattern_matching_exhaustiveness.rs"
 
+# Typeck edge case tests - declarations category
+[[test]]
+name = "typeck_circular_dependencies"
+path = "tests/typeck/declarations/circular_dependencies.rs"
+
+[[test]]
+name = "typeck_duplicate_declarations"
+path = "tests/typeck/declarations/duplicate_declarations.rs"
+
+[[test]]
+name = "typeck_initialization_order"
+path = "tests/typeck/declarations/initialization_order.rs"
+
+[[test]]
+name = "typeck_name_collision"
+path = "tests/typeck/declarations/name_collision.rs"
+
+[[test]]
+name = "typeck_visibility_errors"
+path = "tests/typeck/declarations/visibility_errors.rs"
+
 [[test]]
 name = "match_expression_errors"
 path = "tests/integration/match_expression_errors.rs"
