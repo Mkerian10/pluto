@@ -1,4 +1,4 @@
-//! Lifetime and scope lifetime errors - 20 tests
+//! Lifetime and scope lifetime errors - 16 tests
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
@@ -36,21 +36,6 @@ fn conditional_init() { compile_should_fail_with(r#"fn main(){let x:int if true{
 #[test]
 fn var_escapes_scope() { compile_should_fail_with(r#"fn main(){let x if true{let y=1 x=y}}"#, ""); }
 
-// Temporary lifetime
-#[test]
-#[ignore] // ACTUALLY_SUCCESS: compiler improved
-fn temporary_lifetime() { compile_should_fail_with(r#"class C{x:int} fn f()C{return C{x:1}} fn main(){let x=f().x}"#, ""); }
-
-// Closure captures temporary
-#[test]
-#[ignore] // ACTUALLY_SUCCESS: compiler improved
-fn closure_captures_temp() { compile_should_fail_with(r#"fn f()int{return 1} fn main(){let g=()=>f()}"#, ""); }
-
-// Reference to moved value (if supported)
-#[test]
-#[ignore] // ACTUALLY_SUCCESS: compiler improved
-fn ref_after_move() { compile_should_fail_with(r#"class C{x:int} fn main(){let c=C{x:1} let d=c let e=c}"#, ""); }
-
 // Use in wrong scope level
 #[test]
 #[ignore] // Syntax error in test code
@@ -59,11 +44,6 @@ fn wrong_scope_level() { compile_should_fail_with(r#"fn main(){{let x=1}let y=x}
 // Variable lifetime in while
 #[test]
 fn while_lifetime() { compile_should_fail_with(r#"fn main(){while true{let x=1}let y=x}"#, "undefined"); }
-
-// Break carries value (not supported)
-#[test]
-#[ignore] // ACTUALLY_SUCCESS: compiler improved
-fn break_with_value() { compile_should_fail_with(r#"fn main(){while true{let x=1 break x}}"#, ""); }
 
 // Lifetime across function boundary
 #[test]

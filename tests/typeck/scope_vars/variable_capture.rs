@@ -1,4 +1,4 @@
-//! Variable capture in closures - 15 tests
+//! Variable capture in closures - 12 tests
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
@@ -11,11 +11,6 @@ fn capture_undefined() { compile_should_fail_with(r#"fn main(){let f=()=>x}"#, "
 #[test]
 fn capture_wrong_scope() { compile_should_fail_with(r#"fn main(){let f if true{let x=1 f=()=>x}let y=f()}"#, ""); }
 
-// Capture after mutation
-#[test]
-#[ignore] // ACTUALLY_SUCCESS: compiler improved
-fn capture_after_mut() { compile_should_fail_with(r#"fn main(){let x=1 let f=()=>x x=2}"#, ""); }
-
 // Capture loop variable
 #[test]
 fn capture_loop_var() { compile_should_fail_with(r#"fn main(){let f for i in 0..10{f=()=>i}}"#, ""); }
@@ -23,11 +18,6 @@ fn capture_loop_var() { compile_should_fail_with(r#"fn main(){let f for i in 0..
 // Capture match binding
 #[test]
 fn capture_match_binding() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){let f match E.A{x:1}{E.A{x}{f=()=>x}}}"#, ""); }
-
-// Capture temporary value
-#[test]
-#[ignore] // ACTUALLY_SUCCESS: compiler improved
-fn capture_temporary() { compile_should_fail_with(r#"class C{x:int} fn f()C{return C{x:1}} fn main(){let g=()=>f().x}"#, ""); }
 
 // Multi-level capture
 #[test]
@@ -56,11 +46,6 @@ fn capture_type_error() { compile_should_fail_with(r#"fn main(){let x=1 let f=(y
 // Capture in spawn
 #[test]
 fn capture_in_spawn() { compile_should_fail_with(r#"fn task()int{return x} fn main(){let x=1 spawn task()}"#, ""); }
-
-// Capture moved value
-#[test]
-#[ignore] // ACTUALLY_SUCCESS: compiler improved
-fn capture_moved() { compile_should_fail_with(r#"class C{x:int} fn main(){let c=C{x:1} let d=c let f=()=>c.x}"#, ""); }
 
 // Capture with shadowing
 #[test]

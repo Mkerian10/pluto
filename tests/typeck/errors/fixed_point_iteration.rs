@@ -1,4 +1,4 @@
-//! Fixed-point iteration tests - 20 tests
+//! Fixed-point iteration tests - 19 tests
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
@@ -41,11 +41,6 @@ fn recursive_in_for() { compile_should_fail_with(r#"error E{} fn f(n:int)int{for
 fn self_call_multiple_sites() { compile_should_fail_with(r#"error E{} fn f(n:int)int{if n==0{return 1}if n==1{if n==10{raise E{}}return f(0)}return f(n-1)+f(n-2)} fn main(){}"#, "call to fallible"); }
 #[test]
 fn recursion_chain_convergence() { compile_should_fail_with(r#"error E{} fn a(n:int)int{if n==0{return 1}return b(n)} fn b(n:int)int{if n==5{raise E{}}return a(n-1)} fn main(){}"#, "call to fallible"); }
-
-// Recursion with closures (captures make propagation complex)
-#[test]
-#[ignore] // ACTUALLY_SUCCESS: compiler improved, this case now works
-fn recursive_lambda_capture() { compile_should_fail_with(r#"error E{} fn main(){let f=(n:int)int=>{if n==0{return 1}if n==5{raise E{}}return 1}}"#, "unhandled error"); }
 
 // Recursion with error union accumulation
 #[test]
