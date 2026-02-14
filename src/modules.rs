@@ -460,7 +460,7 @@ fn prefix_name(module_name: &str, name: &str) -> String {
 
 /// Validate that imported modules don't contain app or extern_rust declarations.
 fn validate_imported_modules(imports: &[(String, Program, ImportOrigin)]) -> Result<(), CompileError> {
-    for (module_name, module_prog, origin) in imports {
+    for (module_name, module_prog, _origin) in imports {
         if module_prog.app.is_some() {
             return Err(CompileError::codegen(format!(
                 "app declarations are not allowed in imported modules (found in '{}')",

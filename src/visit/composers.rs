@@ -28,7 +28,7 @@
 
 use crate::parser::ast::*;
 use crate::span::Spanned;
-use crate::visit::{walk_block, walk_expr, walk_function, walk_stmt, Visitor};
+use crate::visit::{walk_expr, walk_stmt, Visitor};
 use std::collections::HashSet;
 
 // ============================================================================

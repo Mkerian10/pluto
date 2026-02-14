@@ -160,7 +160,7 @@ pub(crate) fn resolve_trait_signatures(program: &Program, env: &mut TypeEnv) -> 
         let mut methods = Vec::new();
         for m in &t.methods {
             // Trait methods can be instance methods (with self) or static methods (without self)
-            let has_self = !m.params.is_empty() && m.params[0].name.node == "self";
+            let _has_self = !m.params.is_empty() && m.params[0].name.node == "self";
 
             let mut param_types = Vec::new();
             for p in &m.params {
