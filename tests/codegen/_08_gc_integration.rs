@@ -392,7 +392,7 @@ fn test_closure_captures_survive_gc() {
 // ============================================================================
 
 #[test]
-#[ignore]
+#[ignore] // DUPLICATE: Already covered by integration tests in tests/integration/strings.rs
 fn test_string_tag_allocation() {
     // Verify string allocations work (tag is implicit via runtime)
     let src = r#"
