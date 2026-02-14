@@ -130,9 +130,23 @@ pub enum Token {
             }
 
             let cleaned = hex_part.replace('_', "");
-            i64::from_str_radix(&cleaned, 16).ok()
+            // Parse as i128 first, then validate range
+            // Accept i64::MIN..=i64::MAX, plus (i64::MAX + 1) for the i64::MIN literal special case
+            match i128::from_str_radix(&cleaned, 16) {
+                Ok(val) if val >= i64::MIN as i128 && val <= i64::MAX as i128 + 1 => Some(val as i64),
+                _ => None,
+            }
         } else {
-            s.replace('_', "").parse::<i64>().ok()
+            // Parse as i128 first, then validate range
+            // Accept i64::MIN..=i64::MAX, plus (i64::MAX + 1) for the i64::MIN literal special case
+            // When -9223372036854775808 is parsed, the lexer sees:
+            //   - Minus token
+            //   - 9223372036854775808 (which is i64::MAX + 1)
+            // We accept i64::MAX + 1 here, and it wraps to i64::MIN when cast to i64
+            match s.replace('_', "").parse::<i128>() {
+                Ok(val) if val >= i64::MIN as i128 && val <= i64::MAX as i128 + 1 => Some(val as i64),
+                _ => None,
+            }
         }
     })]
     IntLit(i64),

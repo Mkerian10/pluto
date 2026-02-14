@@ -177,8 +177,44 @@ pub fn lex(source: &str) -> Result<Vec<Spanned<Token>>, CompileError> {
                 tokens.push(Spanned::new(tok, Span::new(span.start, span.end)));
             }
             Err(()) => {
+                let slice = &source[span.start..span.end];
+
+                // Check if this looks like an integer literal that's out of range
+                let is_number = slice.chars().all(|c| c.is_ascii_digit() || c == '_');
+                let is_hex = slice.starts_with("0x") || slice.starts_with("0X");
+
+                if is_number || is_hex {
+                    // Try parsing as i128 to see if it's just out of range
+                    let cleaned = if is_hex {
+                        slice[2..].replace('_', "")
+                    } else {
+                        slice.replace('_', "")
+                    };
+
+                    let parse_result = if is_hex {
+                        i128::from_str_radix(&cleaned, 16)
+                    } else {
+                        cleaned.parse::<i128>()
+                    };
+
+                    if let Ok(val) = parse_result {
+                        return Err(CompileError::syntax(
+                            format!(
+                                "integer literal out of range: {} (must be between {} and {})",
+                                val, i64::MIN, i64::MAX
+                            ),
+                            Span::new(span.start, span.end),
+                        ));
+                    } else {
+                        return Err(CompileError::syntax(
+                            format!("integer literal too large to represent: {}", slice),
+                            Span::new(span.start, span.end),
+                        ));
+                    }
+                }
+
                 return Err(CompileError::syntax(
-                    format!("unexpected character '{}'", &source[span.start..span.end]),
+                    format!("unexpected character '{}'", slice),
                     Span::new(span.start, span.end),
                 ));
             }

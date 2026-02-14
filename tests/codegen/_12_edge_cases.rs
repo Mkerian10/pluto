@@ -10,7 +10,6 @@ use super::common::{compile_and_run_stdout, compile_and_run_output};
 // ============================================================================
 
 #[test]
-#[ignore] // LIMITATION: i64::MIN literal (-9223372036854775808) causes lexer overflow
 fn test_i64_min_literal() {
     let source = r#"
 fn main() {
@@ -33,7 +32,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // LIMITATION: i64::MIN literal (-9223372036854775808) causes lexer overflow
 fn test_i64_min_addition() {
     let source = r#"
 fn main() {
@@ -60,7 +58,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // LIMITATION: i64::MIN literal (-9223372036854775808) causes lexer overflow
 fn test_i64_min_subtraction() {
     let source = r#"
 fn main() {
