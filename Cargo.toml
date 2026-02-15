@@ -691,6 +691,10 @@ path = "tests/integration/coverage.rs"
 name = "ai_native_e2e"
 path = "tests/integration/ai_native_e2e.rs"
 
+[[test]]
+name = "toolchain"
+path = "tests/integration/toolchain.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false
