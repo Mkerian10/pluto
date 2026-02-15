@@ -28,7 +28,7 @@ fn run_with_stdlib(source: &str) -> String {
     let stdlib_dst = dir.path().join("stdlib");
     copy_dir_recursive(&stdlib_src, &stdlib_dst);
 
-    plutoc::compile_file_with_stdlib(&source_file, &bin_path, Some(&stdlib_dst))
+    pluto::compile_file_with_stdlib(&source_file, &bin_path, Some(&stdlib_dst))
         .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
 
     let output = Command::new(&bin_path).output().unwrap();

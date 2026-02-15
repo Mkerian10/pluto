@@ -1,17 +1,17 @@
 #[allow(dead_code)]
 mod common;
 
-use plutoc::binary::{deserialize_program, is_binary_format, serialize_program};
-use plutoc::derived::DerivedInfo;
-use plutoc::parser::ast::Program;
-use plutoc::pretty::pretty_print;
-use plutoc::sync::sync_pt_to_pluto;
+use pluto::binary::{deserialize_program, is_binary_format, serialize_program};
+use pluto::derived::DerivedInfo;
+use pluto::parser::ast::Program;
+use pluto::pretty::pretty_print;
+use pluto::sync::sync_pt_to_pluto;
 use std::path::Path;
 use uuid::Uuid;
 
 /// Parse source, serialize to a temp .pluto binary, return (path, program).
 fn emit_ast(source: &str) -> (tempfile::TempDir, Program) {
-    let program = plutoc::parse_for_editing(source).unwrap();
+    let program = pluto::parse_for_editing(source).unwrap();
     let derived = DerivedInfo::default();
     let bytes = serialize_program(&program, source, &derived).unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -318,7 +318,7 @@ fn main() {
     // (checking that xref::resolve_cross_refs ran)
     let might_fail = synced.functions.iter().find(|f| f.node.name.node == "might_fail").unwrap();
     let has_raise = might_fail.node.body.node.stmts.iter().any(|stmt| {
-        matches!(&stmt.node, plutoc::parser::ast::Stmt::Raise { .. })
+        matches!(&stmt.node, pluto::parser::ast::Stmt::Raise { .. })
     });
     assert!(has_raise);
 }

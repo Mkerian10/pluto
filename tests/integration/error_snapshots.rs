@@ -22,7 +22,7 @@ fn type_mismatch_error() {
         }
     "#;
 
-    let err = plutoc::compile_to_object(source).unwrap_err();
+    let err = pluto::compile_to_object(source).unwrap_err();
     assert_snapshot!(format_error(&err.to_string()));
 }
 
@@ -34,7 +34,7 @@ fn undefined_variable_error() {
         }
     "#;
 
-    let err = plutoc::compile_to_object(source).unwrap_err();
+    let err = pluto::compile_to_object(source).unwrap_err();
     assert_snapshot!(format_error(&err.to_string()));
 }
 
@@ -46,7 +46,7 @@ fn invalid_binary_op_error() {
         }
     "#;
 
-    let err = plutoc::compile_to_object(source).unwrap_err();
+    let err = pluto::compile_to_object(source).unwrap_err();
     assert_snapshot!(format_error(&err.to_string()));
 }
 
@@ -66,7 +66,7 @@ fn trait_conformance_error() {
         }
     "#;
 
-    let err = plutoc::compile_to_object(source).unwrap_err();
+    let err = pluto::compile_to_object(source).unwrap_err();
     assert_snapshot!(format_error(&err.to_string()));
 }
 
@@ -86,6 +86,6 @@ fn generic_bounds_error() {
         }
     "#;
 
-    let err = plutoc::compile_to_object(source).unwrap_err();
+    let err = pluto::compile_to_object(source).unwrap_err();
     assert_snapshot!(format_error(&err.to_string()));
 }

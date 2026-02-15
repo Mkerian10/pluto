@@ -30,7 +30,7 @@ fn main() {
     .unwrap();
 
     // Run analyze
-    let status = std::process::Command::new(env!("CARGO_BIN_EXE_plutoc"))
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
         .arg("analyze")
         .arg(&pt_file)
         .arg("--stdlib")
@@ -43,10 +43,10 @@ fn main() {
 
     // Verify the .pluto file is valid binary format
     let data = std::fs::read(&pluto_file).unwrap();
-    assert!(plutoc::binary::is_binary_format(&data), ".pluto is not valid binary");
+    assert!(pluto::binary::is_binary_format(&data), ".pluto is not valid binary");
 
     // Verify we can deserialize it and it has derived data
-    let (_program, _source, derived) = plutoc::binary::deserialize_program(&data).unwrap();
+    let (_program, _source, derived) = pluto::binary::deserialize_program(&data).unwrap();
     assert!(!derived.source_hash.is_empty(), "source_hash not computed");
 }
 
@@ -71,7 +71,7 @@ fn main() {}
     .unwrap();
 
     // Run analyze
-    let status = std::process::Command::new(env!("CARGO_BIN_EXE_plutoc"))
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
         .arg("analyze")
         .arg(&pt_file)
         .arg("--stdlib")
@@ -84,7 +84,7 @@ fn main() {}
     // Load and check derived data
     let pluto_file = temp.path().join("funcs.pluto");
     let data = std::fs::read(&pluto_file).unwrap();
-    let (program, _source, derived) = plutoc::binary::deserialize_program(&data).unwrap();
+    let (program, _source, derived) = pluto::binary::deserialize_program(&data).unwrap();
 
     // Find the add function's UUID
     let add_fn = program
@@ -132,7 +132,7 @@ fn main() {}
     )
     .unwrap();
 
-    let status = std::process::Command::new(env!("CARGO_BIN_EXE_plutoc"))
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
         .arg("analyze")
         .arg(&pt_file)
         .arg("--stdlib")
@@ -144,7 +144,7 @@ fn main() {}
 
     let pluto_file = temp.path().join("sigs.pluto");
     let data = std::fs::read(&pluto_file).unwrap();
-    let (program, _source, derived) = plutoc::binary::deserialize_program(&data).unwrap();
+    let (program, _source, derived) = pluto::binary::deserialize_program(&data).unwrap();
 
     let multiply_fn = program
         .functions
@@ -184,7 +184,7 @@ fn main() {}
     .unwrap();
 
     // First analyze
-    std::process::Command::new(env!("CARGO_BIN_EXE_plutoc"))
+    std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
         .arg("analyze")
         .arg(&pt_file)
         .arg("--stdlib")
@@ -194,7 +194,7 @@ fn main() {}
 
     let pluto_file = temp.path().join("stale.pluto");
     let data1 = std::fs::read(&pluto_file).unwrap();
-    let (_prog1, source1, derived1) = plutoc::binary::deserialize_program(&data1).unwrap();
+    let (_prog1, source1, derived1) = pluto::binary::deserialize_program(&data1).unwrap();
 
     let hash1 = derived1.source_hash.clone();
     assert!(!hash1.is_empty(), "hash should be set");
@@ -216,7 +216,7 @@ fn main() {}
     .unwrap();
 
     // Re-analyze
-    std::process::Command::new(env!("CARGO_BIN_EXE_plutoc"))
+    std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
         .arg("analyze")
         .arg(&pt_file)
         .arg("--stdlib")
@@ -225,7 +225,7 @@ fn main() {}
         .unwrap();
 
     let data2 = std::fs::read(&pluto_file).unwrap();
-    let (_prog2, source2, derived2) = plutoc::binary::deserialize_program(&data2).unwrap();
+    let (_prog2, source2, derived2) = pluto::binary::deserialize_program(&data2).unwrap();
 
     let hash2 = derived2.source_hash.clone();
 
@@ -258,7 +258,7 @@ fn main() {}
 
     std::fs::write(&pt_file, source_text).unwrap();
 
-    std::process::Command::new(env!("CARGO_BIN_EXE_plutoc"))
+    std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
         .arg("analyze")
         .arg(&pt_file)
         .arg("--stdlib")
@@ -268,7 +268,7 @@ fn main() {}
 
     let pluto_file = temp.path().join("preserve.pluto");
     let data = std::fs::read(&pluto_file).unwrap();
-    let (program, source, _derived) = plutoc::binary::deserialize_program(&data).unwrap();
+    let (program, source, _derived) = pluto::binary::deserialize_program(&data).unwrap();
 
     // Source should be exactly what we wrote (modulo leading/trailing whitespace)
     assert!(source.contains("original_name"));
@@ -296,7 +296,7 @@ fn broken(x: int  // Missing closing paren and brace
     )
     .unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_plutoc"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
         .arg("analyze")
         .arg(&pt_file)
         .arg("--stdlib")
@@ -331,7 +331,7 @@ fn main() {}
     )
     .unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_plutoc"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
         .arg("analyze")
         .arg(&pt_file)
         .arg("--stdlib")
@@ -386,7 +386,7 @@ fn main() {
     .unwrap();
 
     // Run analyze on entry file
-    let status = std::process::Command::new(env!("CARGO_BIN_EXE_plutoc"))
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
         .arg("analyze")
         .arg(&main_file)
         .arg("--stdlib")
@@ -401,7 +401,7 @@ fn main() {
     assert!(pluto_file.exists(), ".pluto file should be created");
 
     let data = std::fs::read(&pluto_file).unwrap();
-    let (program, _source, derived) = plutoc::binary::deserialize_program(&data).unwrap();
+    let (program, _source, derived) = pluto::binary::deserialize_program(&data).unwrap();
 
     // Verify both local and imported functions are in the flattened AST
     let has_main = program.functions.iter().any(|f| f.node.name.node == "main");

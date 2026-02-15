@@ -1,5 +1,5 @@
-use plutoc::parser::ast::{Expr, Function, Stmt};
-use plutoc::span::Span;
+use pluto::parser::ast::{Expr, Function, Stmt};
+use pluto::span::Span;
 use uuid::Uuid;
 
 /// A call site where a function is invoked.

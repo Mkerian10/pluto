@@ -36,7 +36,7 @@ fn run_project_with_stdlib(files: &[(&str, &str)]) -> String {
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    plutoc::compile_file_with_stdlib(&entry, &bin_path, Some(&stdlib_dst))
+    pluto::compile_file_with_stdlib(&entry, &bin_path, Some(&stdlib_dst))
         .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
 
     let run_output = Command::new(&bin_path).output().unwrap();

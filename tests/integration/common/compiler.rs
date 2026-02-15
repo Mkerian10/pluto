@@ -3,10 +3,10 @@
 //! Provides programmatic access to each compiler stage (lex, parse, typecheck, codegen)
 //! for testing and property-based testing.
 
-use plutoc::diagnostics::{CompileError, CompileWarning};
-use plutoc::lexer::lex;
-use plutoc::parser::ast::Program;
-use plutoc::typeck::{env::TypeEnv, type_check};
+use pluto::diagnostics::{CompileError, CompileWarning};
+use pluto::lexer::lex;
+use pluto::parser::ast::Program;
+use pluto::typeck::{env::TypeEnv, type_check};
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
@@ -59,7 +59,7 @@ impl TestCompiler {
     /// Run lex + parse stages.
     pub fn parse(&self) -> Result<Program, CompileError> {
         let tokens = lex(&self.source)?;
-        let mut parser = plutoc::parser::Parser::new(&tokens, &self.source);
+        let mut parser = pluto::parser::Parser::new(&tokens, &self.source);
         parser.parse_program()
     }
 
@@ -67,7 +67,7 @@ impl TestCompiler {
     /// Returns TypeEnv and any warnings produced.
     pub fn typecheck(&self) -> Result<(TypeEnv, Vec<CompileWarning>), CompileError> {
         let tokens = lex(&self.source)?;
-        let mut parser = plutoc::parser::Parser::new(&tokens, &self.source);
+        let mut parser = pluto::parser::Parser::new(&tokens, &self.source);
         let program = parser.parse_program()?;
 
         // Note: This is a simplified typecheck that skips the full frontend pipeline.
@@ -77,7 +77,7 @@ impl TestCompiler {
 
     /// Run full compilation pipeline to produce object code.
     pub fn codegen(&self) -> Result<Vec<u8>, CompileError> {
-        plutoc::compile_to_object(&self.source)
+        pluto::compile_to_object(&self.source)
     }
 
     /// Compile to an executable binary.
@@ -87,7 +87,7 @@ impl TestCompiler {
             .map_err(|e| CompileError::codegen(format!("failed to create temp dir: {e}")))?;
         let bin_path = dir.path().join("test_bin");
 
-        plutoc::compile(&self.source, &bin_path)?;
+        pluto::compile(&self.source, &bin_path)?;
 
         Ok(CompiledTestBinary {
             _dir: dir,
@@ -107,7 +107,7 @@ impl TestCompiler {
             .map_err(|e| CompileError::codegen(format!("failed to create temp dir: {e}")))?;
         let bin_path = dir.path().join("test_bin");
 
-        plutoc::compile_test(&self.source, &bin_path)?;
+        pluto::compile_test(&self.source, &bin_path)?;
 
         Ok(CompiledTestBinary {
             _dir: dir,

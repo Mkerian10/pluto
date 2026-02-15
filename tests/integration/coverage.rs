@@ -1,7 +1,7 @@
 mod common;
 
-use plutoc::coverage::*;
-use plutoc::modules::SourceMap;
+use pluto::coverage::*;
+use pluto::modules::SourceMap;
 use std::path::PathBuf;
 
 // ── Coverage map scanning tests ─────────────────────────────────────────────
@@ -15,7 +15,7 @@ fn make_source_map(source: &str) -> SourceMap {
 fn build_map(source: &str) -> CoverageMap {
     let sm = make_source_map(source);
     build_coverage_map(
-        &plutoc::parse_source(source).unwrap(),
+        &pluto::parse_source(source).unwrap(),
         &sm,
     )
 }
@@ -158,7 +158,7 @@ fn coverage_map_line_numbers_correct() {
     let source = "fn main() {\n    let x = 1\n    let y = 2\n}\n";
     let sm = make_source_map(source);
     let map = build_coverage_map(
-        &plutoc::parse_source(source).unwrap(),
+        &pluto::parse_source(source).unwrap(),
         &sm,
     );
     // Find the statement for `let x = 1` (line 2)
@@ -376,7 +376,7 @@ fn coverage_compilation_produces_map() {
 
     std::fs::write(&source_path, "fn main() {\n    let x = 1\n    print(x)\n}\n").unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path,
         &bin_path,
         None,
@@ -403,7 +403,7 @@ fn main() {
 }
 "#).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path,
         &bin_path,
         None,
@@ -453,7 +453,7 @@ fn main() {
 }
 "#).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path,
         &bin_path,
         None,
@@ -498,7 +498,7 @@ fn main() {
 }
 "#).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path,
         &bin_path,
         None,
@@ -660,7 +660,7 @@ fn main() {
 }
 "#).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path, &bin_path, None,
     ).unwrap();
 
@@ -702,7 +702,7 @@ fn main() {
 }
 "#).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path, &bin_path, None,
     ).unwrap();
 
@@ -740,7 +740,7 @@ fn main() {
 }
 "#).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path, &bin_path, None,
     ).unwrap();
 
@@ -777,7 +777,7 @@ fn main() {
 }
 "#).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path, &bin_path, None,
     ).unwrap();
 
@@ -808,7 +808,7 @@ fn coverage_match_arm_hit() {
         "enum Color {\n    Red\n    Green\n    Blue\n}\n\nfn main() {\n    let c = Color.Green\n    match c {\n        Color.Red {\n            print(1)\n        }\n        Color.Green {\n            print(2)\n        }\n        Color.Blue {\n            print(3)\n        }\n    }\n}\n"
     ).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path, &bin_path, None,
     ).unwrap();
 
@@ -852,7 +852,7 @@ fn main() {
 }
 "#).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path, &bin_path, None,
     ).unwrap();
 
@@ -874,7 +874,7 @@ fn main() {
 
 #[test]
 fn coverage_lcov_basic_format() {
-    use plutoc::coverage::*;
+    use pluto::coverage::*;
 
     let map = CoverageMap {
         points: vec![
@@ -920,7 +920,7 @@ fn coverage_lcov_basic_format() {
 
 #[test]
 fn coverage_lcov_with_branches() {
-    use plutoc::coverage::*;
+    use pluto::coverage::*;
 
     let map = CoverageMap {
         points: vec![
@@ -959,7 +959,7 @@ fn coverage_lcov_with_branches() {
 
 #[test]
 fn coverage_json_basic_format() {
-    use plutoc::coverage::*;
+    use pluto::coverage::*;
 
     let map = CoverageMap {
         points: vec![
@@ -996,7 +996,7 @@ fn coverage_json_basic_format() {
 
 #[test]
 fn coverage_json_serializes() {
-    use plutoc::coverage::*;
+    use pluto::coverage::*;
 
     let map = CoverageMap {
         points: vec![
@@ -1044,7 +1044,7 @@ fn main() {
 }
 "#).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path, &bin_path, None,
     ).unwrap();
 
@@ -1056,7 +1056,7 @@ fn main() {
     let cov_dir = dir.path().join(".pluto-coverage");
     let data = CoverageData::read_binary(&cov_dir.join("coverage-data.bin")).unwrap();
 
-    let lcov = plutoc::coverage::generate_lcov(&map, &data);
+    let lcov = pluto::coverage::generate_lcov(&map, &data);
 
     // Verify key LCOV sections
     assert!(lcov.contains("SF:"), "LCOV should have source file");
@@ -1085,7 +1085,7 @@ fn main() {
 }
 "#).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path, &bin_path, None,
     ).unwrap();
 
@@ -1097,7 +1097,7 @@ fn main() {
     let cov_dir = dir.path().join(".pluto-coverage");
     let data = CoverageData::read_binary(&cov_dir.join("coverage-data.bin")).unwrap();
 
-    let report = plutoc::coverage::generate_json_report(&map, &data);
+    let report = pluto::coverage::generate_json_report(&map, &data);
 
     // Should have partial coverage
     assert!(report.summary.covered_functions < report.summary.total_functions,
@@ -1114,7 +1114,7 @@ fn main() {
 
 #[test]
 fn coverage_html_contains_template_structure() {
-    use plutoc::coverage::*;
+    use pluto::coverage::*;
 
     let dir = tempfile::tempdir().unwrap();
     // Write a dummy source file so generate_html_report can read it
@@ -1154,7 +1154,7 @@ fn coverage_html_contains_template_structure() {
 
 #[test]
 fn coverage_html_embeds_coverage_data() {
-    use plutoc::coverage::*;
+    use pluto::coverage::*;
 
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("test.pluto"), "fn main() {\n    let x = 1\n}\n").unwrap();
@@ -1195,7 +1195,7 @@ fn coverage_html_embeds_coverage_data() {
 
 #[test]
 fn coverage_html_embeds_source_code() {
-    use plutoc::coverage::*;
+    use pluto::coverage::*;
 
     let dir = tempfile::tempdir().unwrap();
     let source_content = "fn hello() {\n    print(\"world\")\n}\n";
@@ -1236,7 +1236,7 @@ fn main() {
 }
 "#).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path, &bin_path, None,
     ).unwrap();
 
@@ -1248,7 +1248,7 @@ fn main() {
     let cov_dir = dir.path().join(".pluto-coverage");
     let data = CoverageData::read_binary(&cov_dir.join("coverage-data.bin")).unwrap();
 
-    let html = plutoc::coverage::generate_html_report(&map, &data, dir.path());
+    let html = pluto::coverage::generate_html_report(&map, &data, dir.path());
 
     // Verify it's a complete, valid HTML page with embedded data
     assert!(html.contains("<!DOCTYPE html>"), "should be valid HTML");
@@ -1266,7 +1266,7 @@ fn main() {
 
 #[test]
 fn coverage_html_missing_source_still_works() {
-    use plutoc::coverage::*;
+    use pluto::coverage::*;
 
     let dir = tempfile::tempdir().unwrap();
     // Don't create the source file — the report should still generate
@@ -1295,7 +1295,7 @@ fn coverage_html_missing_source_still_works() {
 /// Helper: parse source and manually set file_id on specific functions.
 /// Functions with file_id=1 won't have a SourceMap entry, so they'll be excluded.
 fn build_map_with_foreign_functions(source: &str, foreign_fn_indices: &[usize]) -> CoverageMap {
-    let mut program = plutoc::parse_source(source).unwrap();
+    let mut program = pluto::parse_source(source).unwrap();
     for &idx in foreign_fn_indices {
         if idx < program.functions.len() {
             program.functions[idx].span.file_id = 1; // imported module (no SourceMap entry)
@@ -1335,7 +1335,7 @@ fn main() {
 
 #[test]
 fn coverage_excludes_synthetic_file_id() {
-    use plutoc::span::SYNTHETIC_FILE_ID;
+    use pluto::span::SYNTHETIC_FILE_ID;
 
     let source = r#"
 fn real_fn() int {
@@ -1345,7 +1345,7 @@ fn main() {
     print(real_fn())
 }
 "#;
-    let mut program = plutoc::parse_source(source).unwrap();
+    let mut program = pluto::parse_source(source).unwrap();
     // Mark real_fn as synthetic (reflection-generated, no SourceMap entry)
     program.functions[0].span.file_id = SYNTHETIC_FILE_ID;
 
@@ -1363,7 +1363,7 @@ fn main() {
 fn coverage_excludes_monomorphized_function_spans() {
     // Simulate a monomorphized copy: function with body stmts beyond source length
     let source = "fn main() {\n    let x = 1\n}\n";
-    let mut program = plutoc::parse_source(source).unwrap();
+    let mut program = pluto::parse_source(source).unwrap();
 
     // Add a "monomorphized copy" — clone main and offset its spans
     let mut mono_copy = program.functions[0].clone();
@@ -1403,7 +1403,7 @@ fn main() {
     print(c.get())
 }
 "#;
-    let mut program = plutoc::parse_source(source).unwrap();
+    let mut program = pluto::parse_source(source).unwrap();
     // Mark the class as foreign
     assert!(!program.classes.is_empty(), "should have a class");
     program.classes[0].span.file_id = 2; // No SourceMap entry for file_id=2
@@ -1438,7 +1438,7 @@ fn main() {
     print(local_b())
 }
 "#;
-    let mut program = plutoc::parse_source(source).unwrap();
+    let mut program = pluto::parse_source(source).unwrap();
     // Mark local_b as foreign (file_id=1, no SourceMap entry), keep local_a and main as entry (file_id=0)
     program.functions[1].span.file_id = 1;
 
@@ -1488,7 +1488,7 @@ fn main() {
 }
 "#).unwrap();
 
-    let map = plutoc::compile_file_with_coverage(
+    let map = pluto::compile_file_with_coverage(
         &source_path, &bin_path, None,
     ).unwrap();
 
@@ -1526,7 +1526,7 @@ fn main() {
 fn coverage_source_len_boundary_exact() {
     // Test that a span at exactly source.len() is excluded (it's an invalid offset)
     let source = "fn main() {\n    let x = 1\n}\n";
-    let mut program = plutoc::parse_source(source).unwrap();
+    let mut program = pluto::parse_source(source).unwrap();
 
     // Add a function with first stmt at exactly source.len()
     let mut boundary_fn = program.functions[0].clone();
@@ -1554,7 +1554,7 @@ fn coverage_source_len_boundary_exact() {
 fn coverage_branch_spans_beyond_source_excluded() {
     // If a branch span (if/else/loop body) is beyond source_len, it should not add branch points
     let source = "fn main() {\n    let x = 1\n    if true {\n        print(x)\n    }\n}\n";
-    let mut program = plutoc::parse_source(source).unwrap();
+    let mut program = pluto::parse_source(source).unwrap();
 
     // Clone main and create a "monomorphized" version with offset branch spans
     let mut mono = program.functions[0].clone();

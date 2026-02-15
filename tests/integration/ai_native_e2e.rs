@@ -18,7 +18,7 @@ mod common;
 
 /// Helper to run plutoc commands in tests.
 fn run_plutoc(args: &[&str], temp_dir: &TempDir) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_plutoc"))
+    Command::new(env!("CARGO_BIN_EXE_pluto"))
         .args(args)
         .arg("--stdlib")
         .arg("stdlib")
@@ -70,11 +70,11 @@ fn main() {
     // Step 3: Verify the .pluto file is valid binary format with derived data
     let data = fs::read(&pluto_file).unwrap();
     assert!(
-        plutoc::binary::is_binary_format(&data),
+        pluto::binary::is_binary_format(&data),
         ".pluto is not valid binary"
     );
 
-    let (program1, source1, derived1) = plutoc::binary::deserialize_program(&data).unwrap();
+    let (program1, source1, derived1) = pluto::binary::deserialize_program(&data).unwrap();
 
     // Should have 3 user functions (add, multiply, main) plus prelude functions
     // Prelude adds TypeInfo trait methods and reflection helpers
@@ -183,7 +183,7 @@ fn main() {
 
     // Step 8: Verify UUIDs preserved and new function added
     let data2 = fs::read(&pluto_file).unwrap();
-    let (program2, source2, derived2) = plutoc::binary::deserialize_program(&data2).unwrap();
+    let (program2, source2, derived2) = pluto::binary::deserialize_program(&data2).unwrap();
 
     // Should now have 4 user functions: add, multiply, subtract, main (plus prelude)
     let user_funcs2: Vec<_> = program2
@@ -249,7 +249,7 @@ fn main() {
 
     // Step 11: Verify derived data is fresh after analyze
     let data3 = fs::read(&pluto_file).unwrap();
-    let (program3, source3, derived3) = plutoc::binary::deserialize_program(&data3).unwrap();
+    let (program3, source3, derived3) = pluto::binary::deserialize_program(&data3).unwrap();
 
     assert!(!derived3.source_hash.is_empty(), "source_hash should be set");
     assert!(
@@ -323,7 +323,7 @@ fn main() {
 
     // Get original UUID
     let data1 = fs::read(&pluto_file).unwrap();
-    let (program1, _, _) = plutoc::binary::deserialize_program(&data1).unwrap();
+    let (program1, _, _) = pluto::binary::deserialize_program(&data1).unwrap();
     let original_uuid = program1
         .functions
         .iter()
@@ -353,7 +353,7 @@ fn main() {
 
     // Verify UUID preserved
     let data2 = fs::read(&pluto_file).unwrap();
-    let (program2, _, _) = plutoc::binary::deserialize_program(&data2).unwrap();
+    let (program2, _, _) = pluto::binary::deserialize_program(&data2).unwrap();
 
     let renamed_fn = program2
         .functions
@@ -420,7 +420,7 @@ fn main() {
 
     // Verify flattened AST includes both main and math.add
     let data = fs::read(temp.path().join("main.pluto")).unwrap();
-    let (program, _, _) = plutoc::binary::deserialize_program(&data).unwrap();
+    let (program, _, _) = pluto::binary::deserialize_program(&data).unwrap();
 
     let has_main = program.functions.iter().any(|f| f.node.name.node == "main");
     let has_math_add = program
@@ -483,7 +483,7 @@ fn main() {}
     assert!(output.status.success());
 
     let data1 = fs::read(&pluto_file).unwrap();
-    let (_, source1, derived1) = plutoc::binary::deserialize_program(&data1).unwrap();
+    let (_, source1, derived1) = pluto::binary::deserialize_program(&data1).unwrap();
 
     let hash1 = derived1.source_hash.clone();
     assert!(!hash1.is_empty(), "hash should be set");
@@ -506,7 +506,7 @@ fn main() {}
     assert!(output.status.success());
 
     let data2 = fs::read(&pluto_file).unwrap();
-    let (_, source2, derived2) = plutoc::binary::deserialize_program(&data2).unwrap();
+    let (_, source2, derived2) = pluto::binary::deserialize_program(&data2).unwrap();
 
     // Old derived data should be stale against new source
     assert!(
@@ -525,7 +525,7 @@ fn main() {}
     assert!(output.status.success());
 
     let data3 = fs::read(&pluto_file).unwrap();
-    let (_, source3, derived3) = plutoc::binary::deserialize_program(&data3).unwrap();
+    let (_, source3, derived3) = pluto::binary::deserialize_program(&data3).unwrap();
 
     let hash3 = derived3.source_hash.clone();
     assert!(!hash3.is_empty(), "hash should be set after analyze");

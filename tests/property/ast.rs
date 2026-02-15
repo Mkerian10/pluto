@@ -4,7 +4,7 @@
 //! a wide variety of generated programs.
 
 use proptest::prelude::*;
-use plutoc::lexer::lex;
+use pluto::lexer::lex;
 
 // Simple program generators - start with basic constructs
 fn arb_simple_program() -> impl Strategy<Value = String> {
@@ -78,7 +78,7 @@ proptest! {
     #[test]
     fn lex_parse_no_panic(source in arb_simple_program()) {
         if let Ok(tokens) = lex(&source) {
-            let mut parser = plutoc::parser::Parser::new(&tokens, &source);
+            let mut parser = pluto::parser::Parser::new(&tokens, &source);
             let _ = parser.parse_program();
             // Just verify it doesn't panic - result can be Ok or Err
         }
@@ -139,8 +139,8 @@ proptest! {
     #[test]
     fn parser_deterministic(source in arb_simple_program()) {
         if let Ok(tokens) = lex(&source) {
-            let mut parser1 = plutoc::parser::Parser::new(&tokens, &source);
-            let mut parser2 = plutoc::parser::Parser::new(&tokens, &source);
+            let mut parser1 = pluto::parser::Parser::new(&tokens, &source);
+            let mut parser2 = pluto::parser::Parser::new(&tokens, &source);
 
             let result1 = parser1.parse_program();
             let result2 = parser2.parse_program();

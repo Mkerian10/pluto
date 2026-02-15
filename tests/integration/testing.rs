@@ -373,7 +373,7 @@ test "another test in file b" {
 
     // Compile file_a in test mode - this should auto-include file_b as a sibling
     // If test IDs are not unique, this will fail with duplicate symbol errors
-    plutoc::compile_file_for_tests(&entry, &bin_path, None, false)
+    pluto::compile_file_for_tests(&entry, &bin_path, None, false)
         .unwrap_or_else(|e| panic!("Test compilation failed: {e}"));
 
     // Run the test binary and verify all tests execute

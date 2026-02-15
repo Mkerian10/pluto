@@ -18,7 +18,7 @@ fn run_project(files: &[(&str, &str)]) -> String {
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    plutoc::compile_file(&entry, &bin_path)
+    pluto::compile_file(&entry, &bin_path)
         .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
 
     let run_output = Command::new(&bin_path).output().unwrap();
@@ -42,7 +42,7 @@ fn compile_project_should_fail(files: &[(&str, &str)]) {
     let bin_path = dir.path().join("test_bin");
 
     assert!(
-        plutoc::compile_file(&entry, &bin_path).is_err(),
+        pluto::compile_file(&entry, &bin_path).is_err(),
         "Compilation should have failed"
     );
 }
@@ -840,7 +840,7 @@ fn run_project_with_stdlib(files: &[(&str, &str)]) -> String {
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    plutoc::compile_file_with_stdlib(&entry, &bin_path, Some(&stdlib_dst))
+    pluto::compile_file_with_stdlib(&entry, &bin_path, Some(&stdlib_dst))
         .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
 
     let run_output = Command::new(&bin_path).output().unwrap();
@@ -1037,14 +1037,14 @@ fn test_sibling_file_error_attribution() {
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    let result = plutoc::compile_file(&entry, &bin_path);
+    let result = pluto::compile_file(&entry, &bin_path);
     assert!(result.is_err(), "Compilation should fail due to sibling file error");
 
     let err = result.unwrap_err();
 
     // The error should be a SiblingFile error
     match &err {
-        plutoc::diagnostics::CompileError::SiblingFile { path, source } => {
+        pluto::diagnostics::CompileError::SiblingFile { path, source } => {
             // Verify the path points to bad.pluto, not main.pluto
             assert!(
                 path.ends_with("bad.pluto"),
@@ -1054,7 +1054,7 @@ fn test_sibling_file_error_attribution() {
 
             // Verify the underlying error is a syntax error
             match **source {
-                plutoc::diagnostics::CompileError::Syntax { .. } => {},
+                pluto::diagnostics::CompileError::Syntax { .. } => {},
                 _ => panic!("Expected Syntax error, got: {:?}", source),
             }
         }

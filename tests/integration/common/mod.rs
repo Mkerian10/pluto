@@ -10,7 +10,7 @@ pub use compiler::{CompiledTestBinary, TestCompiler, TestOutput};
 /// Returns a Command for the plutoc binary. Use for CLI smoke tests only —
 /// most tests should use the library-call helpers below instead.
 pub fn plutoc() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_plutoc"))
+    Command::new(env!("CARGO_BIN_EXE_pluto"))
 }
 
 /// A compiled Pluto binary in a temporary directory.
@@ -25,7 +25,7 @@ impl CompiledBinary {
     pub fn compile(source: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let bin_path = dir.path().join("test_bin");
-        plutoc::compile(source, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+        pluto::compile(source, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
         Self { _dir: dir, path: bin_path }
     }
 
@@ -33,12 +33,12 @@ impl CompiledBinary {
     pub fn compile_test(source: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let bin_path = dir.path().join("test_bin");
-        plutoc::compile_test(source, &bin_path).unwrap_or_else(|e| panic!("Test compilation failed: {e}"));
+        pluto::compile_test(source, &bin_path).unwrap_or_else(|e| panic!("Test compilation failed: {e}"));
         Self { _dir: dir, path: bin_path }
     }
 }
 
-/// Compile source via plutoc::compile() (library call, no subprocess) and run the binary.
+/// Compile source via pluto::compile() (library call, no subprocess) and run the binary.
 /// Returns the process exit code.
 pub fn compile_and_run(source: &str) -> i32 {
     let bin = CompiledBinary::compile(source);
@@ -46,7 +46,7 @@ pub fn compile_and_run(source: &str) -> i32 {
     output.status.code().unwrap_or(-1)
 }
 
-/// Compile source via plutoc::compile() (library call) and capture stdout.
+/// Compile source via pluto::compile() (library call) and capture stdout.
 pub fn compile_and_run_stdout(source: &str) -> String {
     let bin = CompiledBinary::compile(source);
     let output = Command::new(&bin.path).output().unwrap();
@@ -57,7 +57,7 @@ pub fn compile_and_run_stdout(source: &str) -> String {
 /// Assert compilation fails with a specific error message substring.
 /// Uses compile_to_object() — no file I/O or linking needed for failure tests.
 pub fn compile_should_fail_with(source: &str, expected_msg: &str) {
-    match plutoc::compile_to_object(source) {
+    match pluto::compile_to_object(source) {
         Ok(_) => panic!("Compilation should have failed"),
         Err(e) => {
             let msg = e.to_string();
@@ -75,7 +75,7 @@ pub fn compile_should_fail_with(source: &str, expected_msg: &str) {
 /// Uses compile_to_object() — no file I/O or linking needed for failure tests.
 pub fn compile_should_fail(source: &str) {
     assert!(
-        plutoc::compile_to_object(source).is_err(),
+        pluto::compile_to_object(source).is_err(),
         "Compilation should have failed"
     );
 }
@@ -153,7 +153,7 @@ pub fn compile_and_run_stdout_timeout(source: &str, timeout_secs: u64) -> String
 
 /// Assert compilation fails in test mode with a specific error message substring.
 pub fn compile_test_should_fail_with(source: &str, expected_msg: &str) {
-    match plutoc::compile_to_object_test_mode(source) {
+    match pluto::compile_to_object_test_mode(source) {
         Ok(_) => panic!("Compilation should have failed"),
         Err(e) => {
             let msg = e.to_string();
@@ -208,7 +208,7 @@ pub fn compile_batch_stdout(tests: &[(&str, &str)]) -> HashMap<String, String> {
     let bin_path = dir.path().join("test_bin");
 
     // Try batch compilation
-    match plutoc::compile_file(&entry, &bin_path) {
+    match pluto::compile_file(&entry, &bin_path) {
         Ok(()) => {
             let output = Command::new(&bin_path).output().unwrap();
             assert!(
