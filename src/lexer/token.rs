@@ -76,8 +76,8 @@ pub enum Token {
     Invariant,
     #[token("requires")]
     Requires,
-    #[token("ensures")]
-    Ensures,
+    #[token("assert")]
+    Assert,
     #[token("select")]
     Select,
     #[token("default")]
@@ -274,7 +274,7 @@ pub fn is_keyword(s: &str) -> bool {
         | "class" | "trait" | "app" | "inject" | "error" | "raise" | "catch" | "spawn"
         | "enum" | "impl" | "self" | "pub" | "for" | "in" | "break" | "continue"
         | "match" | "import" | "as" | "extern" | "uses" | "ambient" | "tests" | "test"
-        | "invariant" | "requires" | "ensures" | "select" | "default"
+        | "invariant" | "requires" | "assert" | "select" | "default"
         | "scope" | "scoped" | "transient" | "none" | "system" | "stage" | "override"
         | "yield" | "stream")
 }
@@ -317,7 +317,7 @@ impl std::fmt::Display for Token {
             Token::Test => write!(f, "test"),
             Token::Invariant => write!(f, "invariant"),
             Token::Requires => write!(f, "requires"),
-            Token::Ensures => write!(f, "ensures"),
+            Token::Assert => write!(f, "assert"),
             Token::Select => write!(f, "select"),
             Token::Default => write!(f, "default"),
             Token::Scope => write!(f, "scope"),
@@ -395,7 +395,7 @@ mod tests {
             "class", "trait", "app", "inject", "error", "raise", "catch", "spawn",
             "enum", "impl", "self", "pub", "for", "in", "break", "continue",
             "match", "import", "as", "extern", "uses", "ambient", "tests", "test",
-            "invariant", "requires", "ensures", "select", "default",
+            "invariant", "requires", "assert", "select", "default",
             "scope", "scoped", "transient", "none", "system", "stage", "override",
             "yield", "stream",
         ];
@@ -505,7 +505,7 @@ mod tests {
     fn test_display_contracts() {
         assert_eq!(Token::Invariant.to_string(), "invariant");
         assert_eq!(Token::Requires.to_string(), "requires");
-        assert_eq!(Token::Ensures.to_string(), "ensures");
+        assert_eq!(Token::Assert.to_string(), "assert");
     }
 
     #[test]

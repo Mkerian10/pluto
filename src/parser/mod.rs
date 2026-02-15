@@ -911,9 +911,9 @@ impl<'a> Parser<'a> {
         let rparen = self.expect(&Token::RParen)?;
         let rparen_end = rparen.span.end;
 
-        // Optional return type — anything that's NOT a newline, `{`, `}`, `requires`, `ensures`, `fn`, `override`, `pub`
+        // Optional return type — anything that's NOT a newline, `{`, `}`, `requires`, `fn`, `override`, `pub`
         let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node,
-            Token::Newline | Token::LBrace | Token::RBrace | Token::Requires | Token::Ensures | Token::Fn | Token::Override | Token::Pub
+            Token::Newline | Token::LBrace | Token::RBrace | Token::Requires | Token::Fn | Token::Override | Token::Pub
         ) {
             Some(self.parse_type()?)
         } else {
@@ -1099,7 +1099,7 @@ impl<'a> Parser<'a> {
         self.expect(&Token::RParen)?;
 
         // Check for return type - use peek_raw() to detect newline boundary
-        let return_type = if let Some(next_raw) = self.peek_raw() && matches!(next_raw.node, Token::Newline | Token::RBrace | Token::Requires | Token::Ensures) {
+        let return_type = if let Some(next_raw) = self.peek_raw() && matches!(next_raw.node, Token::Newline | Token::RBrace | Token::Requires) {
             // Newline, closing brace, or contract - no return type
             None
         } else if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace) {
@@ -1112,7 +1112,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // Parse optional requires/ensures contracts
+        // Parse optional requires contracts
         let contracts = self.parse_contracts()?;
 
         // If next token is '{', parse a body (default implementation)
@@ -1251,7 +1251,7 @@ impl<'a> Parser<'a> {
         }
         self.expect(&Token::RParen)?;
 
-        let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires | Token::Ensures) {
+        let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires) {
             Some(self.parse_type()?)
         } else {
             None
@@ -1320,7 +1320,7 @@ impl<'a> Parser<'a> {
         Ok(args)
     }
 
-    /// Parse optional requires/ensures clauses before a function body.
+    /// Parse optional requires clauses before a function body.
     fn parse_contracts(&mut self) -> Result<Vec<Spanned<ContractClause>>, CompileError> {
         let mut contracts = Vec::new();
         while let Some(tok) = self.peek() {
@@ -1334,18 +1334,6 @@ impl<'a> Parser<'a> {
                     contracts.push(Spanned::new(
                         ContractClause { kind: ContractKind::Requires, expr },
                         Span::new(req_start, req_end),
-                    ));
-                    self.consume_statement_end();
-                }
-                Token::Ensures => {
-                    self.skip_newlines();
-                    let ens_tok = self.advance().expect("token should exist after peek");
-                    let ens_start = ens_tok.span.start;
-                    let expr = self.parse_expr(0)?;
-                    let ens_end = expr.span.end;
-                    contracts.push(Spanned::new(
-                        ContractClause { kind: ContractKind::Ensures, expr },
-                        Span::new(ens_start, ens_end),
                     ));
                     self.consume_statement_end();
                 }
@@ -1370,7 +1358,7 @@ impl<'a> Parser<'a> {
         self.expect(&Token::RParen)?;
 
         // Return type: if next non-newline token is not '{' or a contract keyword, it's a return type
-        let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires | Token::Ensures) {
+        let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires) {
             Some(self.parse_type()?)
         } else {
             None
@@ -1498,6 +1486,7 @@ impl<'a> Parser<'a> {
             Token::Select => self.parse_select_stmt(),
             Token::Scope => self.parse_scope_stmt(),
             Token::Raise => self.parse_raise_stmt(),
+            Token::Assert => self.parse_assert_stmt(),
             Token::Break => {
                 let span = self.advance().expect("token should exist after peek").span;
                 self.consume_statement_end();
@@ -2380,6 +2369,15 @@ impl<'a> Parser<'a> {
             return false;
         }
         matches!(self.tokens[i].node, Token::Eq)
+    }
+
+    fn parse_assert_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let assert_tok = self.expect(&Token::Assert)?;
+        let start = assert_tok.span.start;
+        let expr = self.parse_expr(0)?;
+        let end = expr.span.end;
+        self.consume_statement_end();
+        Ok(Spanned::new(Stmt::Assert { expr }, Span::new(start, end)))
     }
 
     fn parse_raise_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
@@ -4587,14 +4585,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_ensures_on_function() {
-        let prog = parse("fn foo(x: int) int\nensures result > 0\n{\n    return x + 1\n}");
-        let f = &prog.functions[0].node;
-        assert_eq!(f.contracts.len(), 1);
-        assert!(matches!(f.contracts[0].node.kind, ContractKind::Ensures));
-    }
-
-    #[test]
     fn parse_multiple_invariants() {
         let prog = parse("class Foo {\n    x: int\n    y: int\n    invariant self.x > 0\n    invariant self.y > 0\n}");
         let c = &prog.classes[0].node;
@@ -4602,23 +4592,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_requires_ensures_together() {
-        let prog = parse("fn foo(x: int) int\nrequires x > 0\nensures result > 0\n{\n    return x\n}");
-        let f = &prog.functions[0].node;
-        assert_eq!(f.contracts.len(), 2);
-        let has_requires = f.contracts.iter().any(|c| matches!(c.node.kind, ContractKind::Requires));
-        let has_ensures = f.contracts.iter().any(|c| matches!(c.node.kind, ContractKind::Ensures));
-        assert!(has_requires && has_ensures);
-    }
-
-    #[test]
     fn parse_trait_method_with_contracts() {
-        let prog = parse("trait Counter {\n    fn inc(self) int\n    ensures result > 0\n}");
+        let prog = parse("trait Counter {\n    fn inc(self) int\n    requires true\n}");
         let t = &prog.traits[0].node;
         assert_eq!(t.methods.len(), 1);
         let method = &t.methods[0];
         assert_eq!(method.contracts.len(), 1);
-        assert!(matches!(method.contracts[0].node.kind, ContractKind::Ensures));
+        assert!(matches!(method.contracts[0].node.kind, ContractKind::Requires));
     }
 
     // Type casting & operators parser tests

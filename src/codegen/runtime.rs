@@ -179,7 +179,7 @@ impl RuntimeRegistry {
         // Contracts
         reg.declare(module, "__pluto_invariant_violation", &[types::I64, types::I64], &[])?;
         reg.declare(module, "__pluto_requires_violation", &[types::I64, types::I64], &[])?;
-        reg.declare(module, "__pluto_ensures_violation", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_assert_failure", &[types::I64], &[])?;
 
         // Test framework
         reg.declare(module, "__pluto_expect_equal_int", &[types::I64, types::I64, types::I64], &[])?;
