@@ -346,3 +346,72 @@ fn main() {}
     assert!(stderr.contains("msg.pt"));
     assert!(stderr.contains("msg.pluto"));
 }
+
+#[test]
+fn test_analyze_multi_file_modules() {
+    // Test: analyze handles multi-file projects with imports
+    //
+    // Verifies that module resolution works correctly.
+
+    let temp = TempDir::new().unwrap();
+
+    // Create a math module (must be .pluto extension for module system)
+    let math_file = temp.path().join("math.pluto");
+    std::fs::write(
+        &math_file,
+        r#"pub fn add(x: int, y: int) int {
+    return x + y
+}
+
+pub fn multiply(x: int, y: int) int {
+    return x * y
+}
+"#,
+    )
+    .unwrap();
+
+    // Create entry file that imports math
+    let main_file = temp.path().join("main.pt");
+    std::fs::write(
+        &main_file,
+        r#"
+import math
+
+fn main() {
+    let sum = math.add(10, 20)
+    let product = math.multiply(sum, 2)
+}
+"#,
+    )
+    .unwrap();
+
+    // Run analyze on entry file
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_plutoc"))
+        .arg("analyze")
+        .arg(&main_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .status()
+        .unwrap();
+
+    assert!(status.success(), "analyze should succeed on multi-file project");
+
+    // Load and check derived data
+    let pluto_file = temp.path().join("main.pluto");
+    assert!(pluto_file.exists(), ".pluto file should be created");
+
+    let data = std::fs::read(&pluto_file).unwrap();
+    let (program, _source, derived) = plutoc::binary::deserialize_program(&data).unwrap();
+
+    // Verify both local and imported functions are in the flattened AST
+    let has_main = program.functions.iter().any(|f| f.node.name.node == "main");
+    let has_math_add = program.functions.iter().any(|f| f.node.name.node == "math.add");
+    let has_math_multiply = program.functions.iter().any(|f| f.node.name.node == "math.multiply");
+
+    assert!(has_main, "main function should be in AST");
+    assert!(has_math_add, "math.add function should be in flattened AST");
+    assert!(has_math_multiply, "math.multiply function should be in flattened AST");
+
+    // Verify derived data includes all functions
+    assert_eq!(derived.fn_signatures.len(), 3, "should have signatures for all 3 functions");
+}

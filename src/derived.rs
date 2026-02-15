@@ -257,7 +257,7 @@ fn compute_test_dependency_hashes(program: &Program) -> BTreeMap<String, String>
 }
 
 impl DerivedInfo {
-    /// Compute SHA-256 hash of source text for staleness detection.
+    /// Compute hash of source text for staleness detection.
     pub fn compute_source_hash(source: &str) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};

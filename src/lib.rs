@@ -310,27 +310,30 @@ pub fn analyze_and_update(
 
     // Determine if it's a binary .pluto or text .pt file
     let (mut program, source) = if binary::is_binary_format(&data) {
-        // Binary .pluto file - deserialize it
+        // Binary .pluto file - deserialize it (already flattened)
         let (program, source, _old_derived) = binary::deserialize_program(&data)
             .map_err(|e| CompileError::codegen(format!("failed to deserialize .pluto: {e}")))?;
         (program, source)
     } else {
-        // Text file - parse it
-        let source = String::from_utf8(data)
-            .map_err(|e| CompileError::codegen(format!("invalid UTF-8 in source file: {e}")))?;
-        let program = parse_for_editing(&source)?;
+        // Text file - resolve and flatten modules
+        let source = std::fs::read_to_string(&file_path)
+            .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
+        let effective_stdlib = resolve_stdlib(stdlib_root);
+        let entry_dir = file_path.parent().unwrap_or(Path::new("."));
+        let pkg_graph = manifest::find_and_resolve(entry_dir)?;
+
+        // Resolve module graph (discover imports, parse all files)
+        // Use no_siblings variant to avoid parsing the .pluto output file as a sibling
+        let graph = modules::resolve_modules_no_siblings(&file_path, effective_stdlib.as_deref(), &pkg_graph)?;
+
+        // Flatten modules into single program
+        let (program, _source_map) = modules::flatten_modules(graph)?;
+
+        // TODO: Store merged source from source_map instead of just entry file
         (program, source)
     };
 
     // Run full analysis pipeline
-    let _effective_stdlib = resolve_stdlib(stdlib_root);
-    let entry_dir = file_path.parent().unwrap_or(Path::new("."));
-    let _pkg_graph = manifest::find_and_resolve(entry_dir)?;
-
-    // Note: For multi-file modules, we should resolve imports here
-    // For now, single-file analysis only
-    // TODO: Support multi-file projects by resolving module graph
-
     let result = run_frontend(&mut program, false)?;
     let derived = derived::DerivedInfo::build(&result.env, &program, &source);
 
