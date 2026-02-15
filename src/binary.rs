@@ -493,14 +493,12 @@ fn main() {
 
     #[test]
     fn test_v3_with_fresh_metadata() {
-        use crate::derived::create_fresh_meta;
-
         let source = "fn main() {}";
         let program = parse(source);
         let mut derived = empty_derived();
 
         // Write v3 with fresh metadata
-        derived.meta = Some(create_fresh_meta(source));
+        derived.source_hash = DerivedInfo::compute_source_hash(source);
         let v3_bytes = serialize_program(&program, source, &derived).unwrap();
 
         // Check that version is 3
@@ -511,11 +509,11 @@ fn main() {
         // Read v3
         let (_prog, src, deriv) = deserialize_program(&v3_bytes).unwrap();
         assert_eq!(src, source);
-        assert!(deriv.meta.is_some());
+        assert!(!deriv.source_hash.is_empty());
 
-        // Check freshness
-        assert!(deriv.is_fresh(source));
-        assert!(!deriv.is_fresh("fn main() { let x = 1 }"));
+        // Check freshness (not stale)
+        assert!(!deriv.is_stale(source));
+        assert!(deriv.is_stale("fn main() { let x = 1 }"));
     }
 
     #[test]
@@ -524,14 +522,14 @@ fn main() {
         let program = parse(source);
         let mut derived = empty_derived();
 
-        // Simulate v2 file by explicitly setting meta = None
-        derived.meta = None;
+        // Simulate v2 file by explicitly setting source_hash = "" (stale)
+        derived.source_hash = String::new();
         let v2_style_bytes = serialize_program(&program, source, &derived).unwrap();
 
         // Even though we write v3, reading should handle missing metadata gracefully
         let (_, _, deriv_v2) = deserialize_program(&v2_style_bytes).unwrap();
 
         // v2-style data should be recognized as stale
-        assert!(!deriv_v2.is_fresh(source));
+        assert!(deriv_v2.is_stale(source));
     }
 }
