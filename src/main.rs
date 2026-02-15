@@ -184,9 +184,9 @@ fn should_delegate() -> bool {
     }
 
     // Check if running version != active version and target binary exists
-    match (plutoc::toolchain::running_version(), plutoc::toolchain::active_version()) {
+    match (pluto::toolchain::running_version(), pluto::toolchain::active_version()) {
         (running, Ok(active)) if running != active.as_str() => {
-            plutoc::toolchain::active_version_binary().is_ok()
+            pluto::toolchain::active_version_binary().is_ok()
         }
         _ => false,
     }
@@ -197,7 +197,7 @@ fn should_delegate() -> bool {
 fn delegate_to_active_version() -> ! {
     use exec::Command as ExecCommand;
 
-    let binary = match plutoc::toolchain::active_version_binary() {
+    let binary = match pluto::toolchain::active_version_binary() {
         Ok(b) => b,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -632,19 +632,19 @@ fn main() {
             }
         },
         Commands::Install { version } => {
-            if let Err(e) = plutoc::toolchain::install_version(&version) {
+            if let Err(e) = pluto::toolchain::install_version(&version) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
         }
         Commands::Use { version } => {
-            if let Err(e) = plutoc::toolchain::use_version(&version) {
+            if let Err(e) = pluto::toolchain::use_version(&version) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
         }
         Commands::Versions => {
-            match (plutoc::toolchain::installed_versions(), plutoc::toolchain::active_version()) {
+            match (pluto::toolchain::installed_versions(), pluto::toolchain::active_version()) {
                 (Ok(versions), active) => {
                     if versions.is_empty() {
                         println!("No versions installed. Use `pluto install <version>` to get started.");
