@@ -256,6 +256,9 @@ pub enum Stmt {
     Yield {
         value: Spanned<Expr>,
     },
+    Assert {
+        expr: Spanned<Expr>,
+    },
     Break,
     Continue,
     Expr(Spanned<Expr>),
@@ -452,7 +455,6 @@ pub struct ContractClause {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ContractKind {
     Requires,
-    Ensures,
     Invariant,
 }
 

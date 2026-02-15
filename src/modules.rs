@@ -1371,7 +1371,7 @@ fn resolve_qualified_access_in_program(program: &mut Program, module_names: &Has
     }
 
     for func in &mut program.functions {
-        // Resolve in function contracts (requires/ensures)
+        // Resolve in function contracts (requires)
         for contract in &mut func.node.contracts {
             resolve_qualified_access_in_expr(&mut contract.node.expr.node, contract.node.expr.span, module_names, &enum_name_map);
         }
@@ -1383,7 +1383,7 @@ fn resolve_qualified_access_in_program(program: &mut Program, module_names: &Has
             resolve_qualified_access_in_expr(&mut invariant.node.expr.node, invariant.node.expr.span, module_names, &enum_name_map);
         }
         for method in &mut class.node.methods {
-            // Resolve in method contracts (requires/ensures)
+            // Resolve in method contracts (requires)
             for contract in &mut method.node.contracts {
                 resolve_qualified_access_in_expr(&mut contract.node.expr.node, contract.node.expr.span, module_names, &enum_name_map);
             }
@@ -1496,6 +1496,9 @@ fn resolve_qualified_access_in_stmt(stmt: &mut Stmt, module_names: &HashSet<Stri
         }
         Stmt::Yield { value, .. } => {
             resolve_qualified_access_in_expr(&mut value.node, value.span, module_names, enum_name_map);
+        }
+        Stmt::Assert { expr } => {
+            resolve_qualified_access_in_expr(&mut expr.node, expr.span, module_names, enum_name_map);
         }
         Stmt::Break | Stmt::Continue => {}
     }
