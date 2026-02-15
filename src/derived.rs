@@ -257,14 +257,13 @@ fn compute_test_dependency_hashes(program: &Program) -> BTreeMap<String, String>
 }
 
 impl DerivedInfo {
-    /// Compute hash of source text for staleness detection.
+    /// Compute hash of source text for staleness detection using SHA-256.
     pub fn compute_source_hash(source: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use sha2::{Digest, Sha256};
 
-        let mut hasher = DefaultHasher::new();
-        source.hash(&mut hasher);
-        format!("{:x}", hasher.finish())
+        let mut hasher = Sha256::new();
+        hasher.update(source.as_bytes());
+        format!("{:x}", hasher.finalize())
     }
 
     /// Check if this derived data is stale compared to the given source.
@@ -610,5 +609,41 @@ mod tests {
         assert!(d.error_infos.is_empty());
         assert!(d.di_order.is_empty());
         assert!(d.trait_implementors.is_empty());
+    }
+
+    #[test]
+    fn test_staleness_tracking() {
+        let source = "fn main() {}";
+        let hash = DerivedInfo::compute_source_hash(source);
+
+        let mut derived = DerivedInfo::default();
+        derived.source_hash = hash;
+
+        // Same source → not stale
+        assert!(!derived.is_stale(source));
+
+        // Modified source → stale
+        assert!(derived.is_stale("fn main() { let x = 1 }"));
+
+        // No hash (empty string) → stale
+        let derived_no_hash = DerivedInfo::default();
+        assert!(derived_no_hash.is_stale(source));
+    }
+
+    #[test]
+    fn test_source_hash_deterministic() {
+        let source = "fn add(a: int, b: int) int { a + b }";
+        let hash1 = DerivedInfo::compute_source_hash(source);
+        let hash2 = DerivedInfo::compute_source_hash(source);
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_source_hash_different_for_different_source() {
+        let source1 = "fn main() {}";
+        let source2 = "fn main() { let x = 1 }";
+        let hash1 = DerivedInfo::compute_source_hash(source1);
+        let hash2 = DerivedInfo::compute_source_hash(source2);
+        assert_ne!(hash1, hash2);
     }
 }

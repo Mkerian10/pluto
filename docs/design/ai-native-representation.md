@@ -1,10 +1,12 @@
 # AI-Native Representation
 
-> **Status:** Partial implementation + RFC
+> **Status:** Active implementation
 >
-> **Implemented today:** PLTO binary container, `emit-ast`, `generate-pt`, `sync`, and Rust SDK/module APIs.
+> **Implemented today:** PLTO v3 binary container with freshness tracking, `emit-ast`, `generate-pt`, `sync`, Rust SDK/module APIs.
 >
-> **Still in design:** Canonical `.pluto` workflow with compiler-written derived layer and planned `plutoc analyze` command.
+> **In progress:** `plutoc analyze` command (separate implementation).
+>
+> **Still in design:** `plutoc init`, signature-only libraries, cross-project UUIDs, incremental analysis.
 
 ## Motivation
 
@@ -123,6 +125,33 @@ The derived layer enables the bidirectional AI/compiler loop:
 3. AI reads the enriched `.pluto` for context (types, error sets, dependency info) when planning the next edit
 
 **Normal `plutoc compile` / `plutoc build` is non-mutating.** It reads `.pluto` files and produces binaries but does not modify the `.pluto` files. Only planned `plutoc analyze` would write back derived data. This avoids surprising file changes during builds.
+
+### Canonical AST Contract
+
+The `.pluto` binary format stores the **authored AST shape** — the program as written by the developer or AI agent, with cross-references resolved.
+
+**Pipeline for canonical AST:**
+1. Lex source → tokens
+2. Parse tokens → raw AST
+3. Resolve cross-references → canonical AST with UUIDs
+
+**Canonical AST includes:**
+- All user-defined declarations (functions, classes, enums, traits, errors, app)
+- AST bodies (statements, expressions) in source form
+- Cross-reference target_id/enum_id/variant_id fields populated
+- Explicit type annotations from source
+
+**Canonical AST excludes:**
+- Monomorphized generics (e.g., `Box__int`, `identity__string`)
+- Lifted closures (top-level `__closure_N` functions)
+- Desugared spawn expressions (spawn wrapper closures)
+- Injected prelude items (TypeInfo trait, reflection types)
+
+**Functions:**
+- `plutoc::parse_for_editing(source)` — produces canonical AST
+- `xref::resolve_cross_refs(program)` — populates UUID cross-references
+
+**Invariant:** Derived data UUIDs must correspond to canonical AST UUIDs.
 
 ## Stable UUIDs
 
@@ -329,6 +358,56 @@ Migration examples:
 - Adding a new field to declarations → default value in migration
 - Changing how error sets are represented → transform in migration
 - Adding a new declaration type → no migration needed (additive)
+
+## PLTO v3 Binary Format Specification
+
+### Container Structure
+
+Same 20-byte header + 3 sections as v2:
+
+```
+[4B magic "PLTO"]
+[4B schema version u32 LE]  ← now writes 3
+[4B source offset u32 LE]
+[4B AST offset u32 LE]
+[4B derived offset u32 LE]
+[Source section: 4B length u32 LE + UTF-8 bytes]
+[AST section: 4B length u32 LE + bincode bytes]
+[Derived section: 4B length u32 LE + bincode bytes]
+```
+
+### v3 Changes (from v2)
+
+**DerivedInfo now includes DerivedMeta:**
+```rust
+pub struct DerivedInfo {
+    // ... existing 9 fields ...
+
+    #[serde(default)]
+    pub meta: Option<DerivedMeta>,
+}
+
+pub struct DerivedMeta {
+    pub source_hash: String,       // SHA256(source_bytes) hex-encoded
+    pub compiler_version: String,  // e.g., "0.1.0"
+}
+```
+
+**Freshness semantics:**
+- `meta = Some(DerivedMeta { hash, version })` → check freshness
+- `meta = None` → treat as stale (legacy v2 files)
+
+### Backward Compatibility
+
+- **v3 reader** supports v2 files (synthesizes `meta: None`)
+- **v2 reader** rejects v3 files (unsupported version error)
+- **Migration**: Run `plutoc analyze .` to upgrade all files to v3 (when available)
+
+### Commands
+
+- `plutoc emit-ast <file.pt> -o <file.pluto>` — writes v3 with fresh derived data
+- `plutoc sync <file.pt> <file.pluto>` — writes v3 with stale derived data (meta = None)
+- `plutoc analyze <file.pluto>` — updates derived data to fresh v3 (in progress, separate implementation)
 
 ## Alternatives Considered
 
