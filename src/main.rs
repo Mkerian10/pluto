@@ -104,6 +104,18 @@ enum Commands {
         #[command(subcommand)]
         command: CoverageCommands,
     },
+    /// Install a compiler version
+    Install {
+        /// Version to install (e.g., "0.2.0" or "v0.2.0")
+        version: String,
+    },
+    /// Set the active compiler version
+    Use {
+        /// Version to activate (must be installed)
+        version: String,
+    },
+    /// List installed compiler versions
+    Versions,
 }
 
 #[derive(Subcommand)]
@@ -159,7 +171,62 @@ fn error_filename(err: &plutoc::diagnostics::CompileError) -> Option<String> {
     }
 }
 
+/// Determines if we should delegate to the active version.
+/// Returns false for toolchain management commands (install, use, versions).
+fn should_delegate() -> bool {
+    // Check args[1] to bypass delegation for toolchain commands
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "install" | "use" | "versions" => return false,
+            _ => {}
+        }
+    }
+
+    // Check if running version != active version and target binary exists
+    match (plutoc::toolchain::running_version(), plutoc::toolchain::active_version()) {
+        (running, Ok(active)) if running != active.as_str() => {
+            plutoc::toolchain::active_version_binary().is_ok()
+        }
+        _ => false,
+    }
+}
+
+/// Delegate to the active version's binary using exec() on Unix.
+#[cfg(unix)]
+fn delegate_to_active_version() -> ! {
+    use exec::Command as ExecCommand;
+
+    let binary = match plutoc::toolchain::active_version_binary() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let args: Vec<String> = std::env::args().collect();
+    let err = ExecCommand::new(&binary).args(&args[1..]).exec();
+
+    // exec() only returns on error
+    eprintln!("Failed to exec {}: {}", binary.display(), err);
+    std::process::exit(1);
+}
+
+/// Delegation not supported on non-Unix platforms.
+#[cfg(not(unix))]
+fn delegate_to_active_version() -> ! {
+    eprintln!("Warning: toolchain delegation not supported on this platform");
+    std::process::exit(1);
+}
+
 fn main() {
+    // Auto-delegate to active version if needed (bypass for toolchain commands)
+    if should_delegate() {
+        delegate_to_active_version();
+        // Never returns (exec replaces process)
+    }
+
     let cli = Cli::parse();
 
     let stdlib = cli.stdlib.as_deref();
@@ -564,5 +631,40 @@ fn main() {
                 }
             }
         },
+        Commands::Install { version } => {
+            if let Err(e) = plutoc::toolchain::install_version(&version) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Use { version } => {
+            if let Err(e) = plutoc::toolchain::use_version(&version) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Versions => {
+            match (plutoc::toolchain::installed_versions(), plutoc::toolchain::active_version()) {
+                (Ok(versions), active) => {
+                    if versions.is_empty() {
+                        println!("No versions installed. Use `pluto install <version>` to get started.");
+                        return;
+                    }
+
+                    let active_ver = active.ok();
+                    for v in versions {
+                        if Some(&v) == active_ver.as_ref() {
+                            println!("* {} (active)", v);
+                        } else {
+                            println!("  {}", v);
+                        }
+                    }
+                }
+                (Err(e), _) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 }

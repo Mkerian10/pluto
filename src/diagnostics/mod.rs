@@ -25,6 +25,15 @@ pub enum CompileError {
         path: PathBuf,
         source: Box<CompileError>
     },
+
+    #[error("Toolchain error: {0}")]
+    Toolchain(String),
+
+    #[error("Network error: {0}")]
+    Network(String),
+
+    #[error("Version not found: {0}")]
+    VersionNotFound(String),
 }
 
 impl CompileError {
@@ -50,6 +59,18 @@ impl CompileError {
 
     pub fn sibling_file(path: PathBuf, source: CompileError) -> Self {
         Self::SiblingFile { path, source: Box::new(source) }
+    }
+
+    pub fn toolchain(msg: impl Into<String>) -> Self {
+        Self::Toolchain(msg.into())
+    }
+
+    pub fn network(msg: impl Into<String>) -> Self {
+        Self::Network(msg.into())
+    }
+
+    pub fn version_not_found(msg: impl Into<String>) -> Self {
+        Self::VersionNotFound(msg.into())
     }
 }
 
@@ -97,7 +118,11 @@ pub fn render_error(source: &str, _filename: &str, err: &CompileError) {
                 .eprint(Source::from(source))
                 .unwrap();
         }
-        CompileError::Codegen { msg } | CompileError::Link { msg } => {
+        CompileError::Codegen { msg }
+        | CompileError::Link { msg }
+        | CompileError::Toolchain(msg)
+        | CompileError::Network(msg)
+        | CompileError::VersionNotFound(msg) => {
             eprintln!("error: {msg}");
         }
         CompileError::Manifest { msg, path } => {
