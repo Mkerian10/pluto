@@ -439,7 +439,6 @@ fn test_closure_abi_compliance() {
 }
 
 #[test]
-#[ignore] // Compiler warnings in output causing test to fail
 fn test_method_call_abi_compliance() {
     // Verify method calls (self parameter) follow correct ABI
     let src = r#"
