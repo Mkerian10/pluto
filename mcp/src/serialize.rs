@@ -207,6 +207,23 @@ pub struct XrefSiteInfo {
 }
 
 #[derive(Serialize)]
+pub struct CrossModuleXrefSiteInfo {
+    pub module_path: String,
+    pub function_name: String,
+    pub function_uuid: Option<String>,
+    pub span: SpanInfo,
+}
+
+#[derive(Serialize)]
+pub struct UnifiedXrefInfo {
+    pub module_path: String,
+    pub usage_kind: String, // "call", "construct", "enum_variant", "raise"
+    pub function_name: String,
+    pub function_uuid: Option<String>,
+    pub span: SpanInfo,
+}
+
+#[derive(Serialize)]
 pub struct ErrorsResult {
     pub function_name: String,
     pub is_fallible: bool,
@@ -220,6 +237,33 @@ pub struct DisambiguationEntry {
     pub kind: String,
 }
 
+#[derive(Serialize)]
+pub struct CallGraphResult {
+    pub root_uuid: String,
+    pub root_name: String,
+    pub direction: String,
+    pub max_depth: usize,
+    pub nodes: Vec<CallGraphNode>,
+}
+
+#[derive(Serialize)]
+pub struct CallGraphNode {
+    pub uuid: String,
+    pub name: String,
+    pub module_path: String,
+    pub depth: usize,
+    pub children: Vec<CallGraphChild>,
+}
+
+#[derive(Serialize)]
+pub struct CallGraphChild {
+    pub uuid: String,
+    pub name: String,
+    pub module_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_cycle: Option<bool>,
+}
+
 // --- Project-level output structs ---
 
 #[derive(Serialize)]
@@ -230,6 +274,22 @@ pub struct ProjectSummary {
     pub files_failed: usize,
     pub modules: Vec<ModuleBrief>,
     pub errors: Vec<LoadError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dependency_graph: Option<DependencyGraphInfo>,
+}
+
+#[derive(Serialize)]
+pub struct DependencyGraphInfo {
+    pub module_count: usize,
+    pub has_circular_imports: bool,
+    pub modules: Vec<ModuleDependencyInfo>,
+}
+
+#[derive(Serialize)]
+pub struct ModuleDependencyInfo {
+    pub path: String,
+    pub name: String,
+    pub imports: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -870,4 +930,20 @@ pub fn app_detail(app: &AppDecl, module: &plutoc_sdk::Module) -> AppDetail {
         di_order,
         source: pretty_print_app(app),
     }
+}
+
+// --- File watching outputs ---
+
+#[derive(Serialize)]
+pub struct ModuleStatusEntry {
+    pub path: String,
+    pub is_stale: bool,
+    pub loaded_at: String,
+}
+
+#[derive(Serialize)]
+pub struct ReloadResult {
+    pub path: String,
+    pub reloaded: bool,
+    pub message: String,
 }

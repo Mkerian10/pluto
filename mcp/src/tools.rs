@@ -18,7 +18,7 @@ pub struct ListDeclarationsInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct InspectInput {
+pub struct GetDeclarationInput {
     #[schemars(description = "Path of the loaded module")]
     pub path: String,
     #[schemars(description = "UUID of the declaration to inspect")]
@@ -28,19 +28,37 @@ pub struct InspectInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct XrefsInput {
-    #[schemars(description = "Path of the loaded module")]
-    pub path: String,
-    #[schemars(description = "UUID of the declaration to query cross-references for")]
+pub struct CallersOfInput {
+    #[schemars(description = "UUID of the function to find callers of (searches all loaded modules)")]
     pub uuid: String,
-    #[schemars(
-        description = "Kind of cross-reference: callers, constructors, enum_usages, raise_sites"
-    )]
-    pub kind: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ErrorsInput {
+pub struct ConstructorsOfInput {
+    #[schemars(description = "UUID of the class to find constructors of (searches all loaded modules)")]
+    pub uuid: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct EnumUsagesOfInput {
+    #[schemars(description = "UUID of the enum to find usages of (searches all loaded modules)")]
+    pub uuid: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RaiseSitesOfInput {
+    #[schemars(description = "UUID of the error to find raise sites of (searches all loaded modules)")]
+    pub uuid: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct UsagesOfInput {
+    #[schemars(description = "UUID of the declaration to find all usages of (searches all loaded modules)")]
+    pub uuid: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ErrorSetInput {
     #[schemars(description = "Path of the loaded module")]
     pub path: String,
     #[schemars(description = "UUID of the function to query error info for")]
@@ -48,7 +66,17 @@ pub struct ErrorsInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct SourceInput {
+pub struct CallGraphInput {
+    #[schemars(description = "UUID of the function to build call graph from")]
+    pub uuid: String,
+    #[schemars(description = "Maximum depth to traverse (default: 5, max: 20)")]
+    pub max_depth: Option<usize>,
+    #[schemars(description = "Direction: 'callers' (who calls this) or 'callees' (who this calls). Default: 'callees'")]
+    pub direction: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetSourceInput {
     #[schemars(description = "Path of the loaded module")]
     pub path: String,
     #[schemars(description = "Start byte offset (defaults to 0)")]
@@ -191,3 +219,14 @@ pub struct StdlibDocsInput {
     #[schemars(description = "Optional module name (e.g. 'strings', 'fs', 'math'). If omitted, lists all available stdlib modules")]
     pub module: Option<String>,
 }
+
+// --- File watching tool inputs ---
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReloadModuleInput {
+    #[schemars(description = "Path of the module to reload from disk")]
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ModuleStatusInput {}
