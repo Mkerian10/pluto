@@ -1535,6 +1535,120 @@ impl PlutoMcp {
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
+
+    // --- Tool 24: sync_pt ---
+    #[tool(description = "Sync human edits from a .pt text file back to a .pluto binary file, preserving UUIDs where declarations match by name.")]
+    async fn sync_pt(
+        &self,
+        Parameters(input): Parameters<SyncPtInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let pt_path = Path::new(&input.pt_path);
+        if !pt_path.exists() {
+            return Err(mcp_err(format!(
+                ".pt file not found: {}",
+                input.pt_path
+            )));
+        }
+
+        // Determine .pluto path: use provided or default to same name with .pluto extension
+        let pluto_path = match input.pluto_path {
+            Some(p) => PathBuf::from(p),
+            None => {
+                let mut path = pt_path.to_path_buf();
+                path.set_extension("pluto");
+                path
+            }
+        };
+
+        // Run sync operation
+        let result = plutoc::sync::sync_pt_to_pluto(&pt_path, &pluto_path).map_err(|e| {
+            mcp_internal(format!("Sync failed: {e}"))
+        })?;
+
+        // Convert to serializable format
+        let result_info = serialize::SyncResultInfo {
+            added: result.added,
+            removed: result.removed,
+            modified: result.modified,
+            unchanged: result.unchanged,
+        };
+
+        let json = serde_json::to_string_pretty(&result_info)
+            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    // --- Tool 25: pretty_print ---
+    #[tool(description = "Pretty-print a loaded module or specific declaration as Pluto source text. Optionally include UUID hints.")]
+    async fn pretty_print(
+        &self,
+        Parameters(input): Parameters<PrettyPrintInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let modules = self.modules.read().await;
+
+        let metadata = modules
+            .get(&input.path)
+            .ok_or_else(|| mcp_err(format!("Module not loaded: {}", input.path)))?;
+
+        let module = &metadata.module;
+        let include_uuid_hints = input.include_uuid_hints.unwrap_or(false);
+
+        // If a specific UUID is requested, find and print just that declaration
+        if let Some(uuid_str) = input.uuid {
+            let target_uuid = uuid::Uuid::parse_str(&uuid_str)
+                .map_err(|_| mcp_err(format!("Invalid UUID: {uuid_str}")))?;
+
+            // Search for the declaration with this UUID
+            let program = module.program();
+
+            // Check functions
+            if let Some(func) = program.functions.iter().find(|f| f.node.id == target_uuid) {
+                let text = plutoc::pretty::pretty_print_function(&func.node, include_uuid_hints);
+                return Ok(CallToolResult::success(vec![Content::text(text)]));
+            }
+
+            // Check classes
+            if let Some(class) = program.classes.iter().find(|c| c.node.id == target_uuid) {
+                let text = plutoc::pretty::pretty_print_class(&class.node, include_uuid_hints);
+                return Ok(CallToolResult::success(vec![Content::text(text)]));
+            }
+
+            // Check enums
+            if let Some(enum_) = program.enums.iter().find(|e| e.node.id == target_uuid) {
+                let text = plutoc::pretty::pretty_print_enum(&enum_.node, include_uuid_hints);
+                return Ok(CallToolResult::success(vec![Content::text(text)]));
+            }
+
+            // Check traits
+            if let Some(trait_) = program.traits.iter().find(|t| t.node.id == target_uuid) {
+                let text = plutoc::pretty::pretty_print_trait(&trait_.node, include_uuid_hints);
+                return Ok(CallToolResult::success(vec![Content::text(text)]));
+            }
+
+            // Check errors
+            if let Some(error) = program.errors.iter().find(|e| e.node.id == target_uuid) {
+                let text = plutoc::pretty::pretty_print_error(&error.node, include_uuid_hints);
+                return Ok(CallToolResult::success(vec![Content::text(text)]));
+            }
+
+            // Check app
+            if let Some(app) = &program.app {
+                if app.node.id == target_uuid {
+                    let text = plutoc::pretty::pretty_print_app(&app.node, include_uuid_hints);
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+            }
+
+            return Err(mcp_err(format!(
+                "Declaration with UUID {uuid_str} not found in module {}",
+                input.path
+            )));
+        }
+
+        // No specific UUID — print entire module
+        let text = plutoc::pretty::pretty_print(module.program(), include_uuid_hints);
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
 }
 
 /// Recursively discover .pluto files in a directory, skipping hidden dirs and .git.

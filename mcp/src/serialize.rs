@@ -941,6 +941,16 @@ pub struct ModuleStatusEntry {
     pub loaded_at: String,
 }
 
+// --- Format tool outputs ---
+
+#[derive(Serialize)]
+pub struct SyncResultInfo {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub modified: Vec<String>,
+    pub unchanged: usize,
+}
+
 #[derive(Serialize)]
 pub struct ReloadResult {
     pub path: String,

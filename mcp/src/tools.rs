@@ -230,3 +230,23 @@ pub struct ReloadModuleInput {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ModuleStatusInput {}
+
+// --- Format tool inputs ---
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SyncPtInput {
+    #[schemars(description = "Path to the .pt text file to sync from")]
+    pub pt_path: String,
+    #[schemars(description = "Path to the .pluto binary file to sync to (defaults to same name with .pluto extension)")]
+    pub pluto_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PrettyPrintInput {
+    #[schemars(description = "Path of the loaded module")]
+    pub path: String,
+    #[schemars(description = "UUID of a specific declaration to pretty-print (if omitted, prints entire module)")]
+    pub uuid: Option<String>,
+    #[schemars(description = "Include UUID hints in output (default: false)")]
+    pub include_uuid_hints: Option<bool>,
+}
