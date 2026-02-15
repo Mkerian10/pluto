@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
-use crate::visit::{walk_block_mut, walk_expr_mut, walk_stmt_mut, VisitMut};
+use crate::visit::{walk_expr_mut, walk_stmt_mut, VisitMut};
 
 /// Desugar ambient DI (`uses` on classes, `ambient` in app).
 ///

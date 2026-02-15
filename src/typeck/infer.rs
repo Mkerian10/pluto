@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use crate::span::{Span, Spanned};
+use crate::span::Spanned;
 use super::env::{mangle_method, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::{resolve_type, unify, ensure_generic_func_instantiated, ensure_generic_class_instantiated, ensure_generic_enum_instantiated, validate_type_bounds};
@@ -2410,7 +2410,7 @@ fn infer_block_type(
     block: &crate::parser::ast::Block,
     env: &mut TypeEnv
 ) -> Result<PlutoType, CompileError> {
-    use crate::parser::ast::{Block, Stmt};
+    use crate::parser::ast::Stmt;
 
     if block.stmts.is_empty() {
         return Ok(PlutoType::Void);
