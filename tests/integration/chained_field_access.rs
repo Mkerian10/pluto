@@ -17,7 +17,7 @@ fn run_project(files: Vec<(&str, &str)>) -> String {
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    plutoc::compile_file(&entry, &bin_path)
+    pluto::compile_file(&entry, &bin_path)
         .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
 
     let run_output = Command::new(&bin_path).output().unwrap();

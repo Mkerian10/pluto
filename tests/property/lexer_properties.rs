@@ -11,7 +11,7 @@
 // 5. Shrinking (finding minimal failing cases)
 
 use proptest::prelude::*;
-use plutoc::lexer::{lex, token::Token};
+use pluto::lexer::{lex, token::Token};
 
 // =============================================================================
 // SECTION 1: BASIC PROPERTIES - Safety & Determinism

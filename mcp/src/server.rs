@@ -14,9 +14,9 @@ use rmcp::{
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use plutoc_sdk::Module;
-use plutoc_sdk::decl::DeclKind;
-use plutoc_sdk::editor::DanglingRefKind;
+use pluto_sdk::Module;
+use pluto_sdk::decl::DeclKind;
+use pluto_sdk::editor::DanglingRefKind;
 
 use crate::serialize;
 use crate::tools::*;
@@ -933,7 +933,7 @@ impl PlutoMcp {
         // Read source for line:col enrichment
         let source_text = std::fs::read_to_string(&canonical).ok();
 
-        let result = plutoc::analyze_file_with_warnings(
+        let result = pluto::analyze_file_with_warnings(
             entry_path,
             stdlib_path.as_deref(),
         );
@@ -989,7 +989,7 @@ impl PlutoMcp {
         // Read source for line:col enrichment
         let source_text = std::fs::read_to_string(&canonical).ok();
 
-        let result = plutoc::compile_file_with_stdlib(
+        let result = pluto::compile_file_with_stdlib(
             entry_path,
             &output_path,
             stdlib_path.as_deref(),
@@ -1046,7 +1046,7 @@ impl PlutoMcp {
             .map_err(|e| mcp_internal(format!("Failed to create temp dir: {e}")))?;
         let binary_path = tmp_dir.path().join(format!("pluto_{}", uuid::Uuid::new_v4()));
 
-        let compile_result = plutoc::compile_file_with_stdlib(
+        let compile_result = pluto::compile_file_with_stdlib(
             entry_path,
             &binary_path,
             stdlib_path.as_deref(),
@@ -1114,7 +1114,7 @@ impl PlutoMcp {
             .map_err(|e| mcp_internal(format!("Failed to create temp dir: {e}")))?;
         let binary_path = tmp_dir.path().join(format!("pluto_test_{}", uuid::Uuid::new_v4()));
 
-        let compile_result = plutoc::compile_file_for_tests(
+        let compile_result = pluto::compile_file_for_tests(
             entry_path,
             &binary_path,
             stdlib_path.as_deref(),
@@ -1561,7 +1561,7 @@ impl PlutoMcp {
         };
 
         // Run sync operation
-        let result = plutoc::sync::sync_pt_to_pluto(&pt_path, &pluto_path).map_err(|e| {
+        let result = pluto::sync::sync_pt_to_pluto(&pt_path, &pluto_path).map_err(|e| {
             mcp_internal(format!("Sync failed: {e}"))
         })?;
 
@@ -1603,38 +1603,38 @@ impl PlutoMcp {
 
             // Check functions
             if let Some(func) = program.functions.iter().find(|f| f.node.id == target_uuid) {
-                let text = plutoc::pretty::pretty_print_function(&func.node, include_uuid_hints);
+                let text = pluto::pretty::pretty_print_function(&func.node, include_uuid_hints);
                 return Ok(CallToolResult::success(vec![Content::text(text)]));
             }
 
             // Check classes
             if let Some(class) = program.classes.iter().find(|c| c.node.id == target_uuid) {
-                let text = plutoc::pretty::pretty_print_class(&class.node, include_uuid_hints);
+                let text = pluto::pretty::pretty_print_class(&class.node, include_uuid_hints);
                 return Ok(CallToolResult::success(vec![Content::text(text)]));
             }
 
             // Check enums
             if let Some(enum_) = program.enums.iter().find(|e| e.node.id == target_uuid) {
-                let text = plutoc::pretty::pretty_print_enum(&enum_.node, include_uuid_hints);
+                let text = pluto::pretty::pretty_print_enum(&enum_.node, include_uuid_hints);
                 return Ok(CallToolResult::success(vec![Content::text(text)]));
             }
 
             // Check traits
             if let Some(trait_) = program.traits.iter().find(|t| t.node.id == target_uuid) {
-                let text = plutoc::pretty::pretty_print_trait(&trait_.node, include_uuid_hints);
+                let text = pluto::pretty::pretty_print_trait(&trait_.node, include_uuid_hints);
                 return Ok(CallToolResult::success(vec![Content::text(text)]));
             }
 
             // Check errors
             if let Some(error) = program.errors.iter().find(|e| e.node.id == target_uuid) {
-                let text = plutoc::pretty::pretty_print_error(&error.node, include_uuid_hints);
+                let text = pluto::pretty::pretty_print_error(&error.node, include_uuid_hints);
                 return Ok(CallToolResult::success(vec![Content::text(text)]));
             }
 
             // Check app
             if let Some(app) = &program.app {
                 if app.node.id == target_uuid {
-                    let text = plutoc::pretty::pretty_print_app(&app.node, include_uuid_hints);
+                    let text = pluto::pretty::pretty_print_app(&app.node, include_uuid_hints);
                     return Ok(CallToolResult::success(vec![Content::text(text)]));
                 }
             }
@@ -1646,7 +1646,7 @@ impl PlutoMcp {
         }
 
         // No specific UUID — print entire module
-        let text = plutoc::pretty::pretty_print(module.program(), include_uuid_hints);
+        let text = pluto::pretty::pretty_print(module.program(), include_uuid_hints);
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 }
@@ -1973,7 +1973,7 @@ impl PlutoMcp {
 
     fn inspect_decl(
         &self,
-        decl: &plutoc_sdk::DeclRef<'_>,
+        decl: &pluto_sdk::DeclRef<'_>,
         module: &Module,
     ) -> Result<String, McpError> {
         let json = match decl.kind() {

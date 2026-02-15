@@ -29,5 +29,5 @@ jobs:
 
       - name: Display build info
         run: |
-          ls -lh target/debug/plutoc
+          ls -lh target/debug/pluto
           echo "✅ Compiler built successfully on ${{ matrix.os }}"

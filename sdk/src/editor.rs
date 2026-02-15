@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use uuid::Uuid;
 
-use plutoc::parser::ast::*;
-use plutoc::span::{Span, Spanned};
+use pluto::parser::ast::*;
+use pluto::span::{Span, Spanned};
 
 use crate::error::SdkError;
 use crate::index::ModuleIndex;
@@ -240,23 +240,23 @@ impl ModuleEditor {
         let deleted_source = match kind {
             DeclKindSimple::Function => {
                 let removed = self.program.functions.remove(idx);
-                plutoc::pretty::pretty_print_function(&removed.node, false)
+                pluto::pretty::pretty_print_function(&removed.node, false)
             }
             DeclKindSimple::Class => {
                 let removed = self.program.classes.remove(idx);
-                plutoc::pretty::pretty_print_class(&removed.node, false)
+                pluto::pretty::pretty_print_class(&removed.node, false)
             }
             DeclKindSimple::Enum => {
                 let removed = self.program.enums.remove(idx);
-                plutoc::pretty::pretty_print_enum(&removed.node, false)
+                pluto::pretty::pretty_print_enum(&removed.node, false)
             }
             DeclKindSimple::Trait => {
                 let removed = self.program.traits.remove(idx);
-                plutoc::pretty::pretty_print_trait(&removed.node, false)
+                pluto::pretty::pretty_print_trait(&removed.node, false)
             }
             DeclKindSimple::Error => {
                 let removed = self.program.errors.remove(idx);
-                plutoc::pretty::pretty_print_error(&removed.node, false)
+                pluto::pretty::pretty_print_error(&removed.node, false)
             }
             DeclKindSimple::App => {
                 return Err(SdkError::Edit("delete is not supported for app declarations".to_string()));
@@ -346,10 +346,10 @@ impl ModuleEditor {
     /// and return a new `Module`.
     pub fn commit(mut self) -> Module {
         // Pretty-print produces fresh source
-        let source = plutoc::pretty::pretty_print(&self.program, false);
+        let source = pluto::pretty::pretty_print(&self.program, false);
 
         // Re-resolve cross-references
-        plutoc::xref::resolve_cross_refs(&mut self.program);
+        pluto::xref::resolve_cross_refs(&mut self.program);
 
         // Rebuild index
         let index = ModuleIndex::build(&self.program);
@@ -452,9 +452,9 @@ fn collect_enum_names(program: &Program) -> HashSet<String> {
 
 /// Parse source as a program with enum context from the current state.
 fn parse_single_program(source: &str, context: &Program) -> Result<Program, SdkError> {
-    let tokens = plutoc::lexer::lex(source)?;
+    let tokens = pluto::lexer::lex(source)?;
     let enum_names = collect_enum_names(context);
-    let mut parser = plutoc::parser::Parser::new_with_enum_context(&tokens, source, enum_names);
+    let mut parser = pluto::parser::Parser::new_with_enum_context(&tokens, source, enum_names);
     let program = parser.parse_program()?;
     Ok(program)
 }
@@ -462,9 +462,9 @@ fn parse_single_program(source: &str, context: &Program) -> Result<Program, SdkE
 /// Parse a method snippet by wrapping it in a temporary class.
 fn parse_method_snippet(source: &str, context: &Program) -> Result<Spanned<Function>, SdkError> {
     let wrapped = format!("class __Tmp {{\n{}\n}}", source);
-    let tokens = plutoc::lexer::lex(&wrapped)?;
+    let tokens = pluto::lexer::lex(&wrapped)?;
     let enum_names = collect_enum_names(context);
-    let mut parser = plutoc::parser::Parser::new_with_enum_context(&tokens, &wrapped, enum_names);
+    let mut parser = pluto::parser::Parser::new_with_enum_context(&tokens, &wrapped, enum_names);
     let mut program = parser.parse_program()?;
 
     if program.classes.is_empty() {
@@ -485,8 +485,8 @@ fn parse_method_snippet(source: &str, context: &Program) -> Result<Spanned<Funct
 /// Parse a type expression by wrapping it in a dummy function parameter.
 fn parse_type_expr(ty: &str) -> Result<TypeExpr, SdkError> {
     let dummy = format!("fn __tmp(x: {}) {{}}", ty);
-    let tokens = plutoc::lexer::lex(&dummy)?;
-    let mut parser = plutoc::parser::Parser::new(&tokens, &dummy);
+    let tokens = pluto::lexer::lex(&dummy)?;
+    let mut parser = pluto::parser::Parser::new(&tokens, &dummy);
     let mut program = parser.parse_program()?;
 
     if program.functions.is_empty() || program.functions[0].node.params.is_empty() {

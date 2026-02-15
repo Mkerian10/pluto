@@ -1,5 +1,5 @@
-use plutoc::parser::ast::*;
-use plutoc::span::Span;
+use pluto::parser::ast::*;
+use pluto::span::Span;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

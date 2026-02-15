@@ -1,12 +1,12 @@
 use std::path::Path;
 use uuid::Uuid;
 
-use plutoc::derived::{
+use pluto::derived::{
     DerivedInfo, ErrorRef, ResolvedClassInfo, ResolvedEnumInfo, ResolvedErrorInfo,
     ResolvedSignature, ResolvedTraitInfo,
 };
-use plutoc::parser::ast::Program;
-use plutoc::span::Span;
+use pluto::parser::ast::Program;
+use pluto::span::Span;
 
 use crate::decl::{DeclKind, DeclRef};
 use crate::editor::ModuleEditor;
@@ -26,7 +26,7 @@ pub struct Module {
 impl Module {
     /// Load from PLTO binary bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SdkError> {
-        let (program, source, derived) = plutoc::binary::deserialize_program(bytes)?;
+        let (program, source, derived) = pluto::binary::deserialize_program(bytes)?;
         let index = ModuleIndex::build(&program);
         Ok(Self { program, source, index, derived })
     }
@@ -44,7 +44,7 @@ impl Module {
 
     /// Analyze a .pluto source file with an explicit stdlib root path.
     pub fn from_source_file_with_stdlib(path: impl AsRef<Path>, stdlib_root: Option<&Path>) -> Result<Self, SdkError> {
-        let (program, source, derived) = plutoc::analyze_file(path.as_ref(), stdlib_root)?;
+        let (program, source, derived) = pluto::analyze_file(path.as_ref(), stdlib_root)?;
         let index = ModuleIndex::build(&program);
         Ok(Self { program, source, index, derived })
     }
@@ -53,7 +53,7 @@ impl Module {
     /// Parses without transforms (no monomorphize/closure-lift/spawn-desugar).
     /// Does NOT inject prelude (avoids serializing Option<T> etc. into committed source).
     pub fn from_source(source: &str) -> Result<Self, SdkError> {
-        let program = plutoc::parse_for_editing(source)?;
+        let program = pluto::parse_for_editing(source)?;
         let index = ModuleIndex::build(&program);
         Ok(Self { program, source: source.to_string(), index, derived: DerivedInfo::default() })
     }
@@ -339,7 +339,7 @@ impl Module {
     }
 
     /// Find a function (top-level, class method, or app method) by mangled name.
-    fn find_function_by_name(&self, name: &str) -> Option<&plutoc::parser::ast::Function> {
+    fn find_function_by_name(&self, name: &str) -> Option<&pluto::parser::ast::Function> {
         // Top-level functions
         for f in &self.program.functions {
             if f.node.name.node == *name {
@@ -370,7 +370,7 @@ impl Module {
 
 // --- AST search helpers for finding nodes at a specific span ---
 
-use plutoc::parser::ast::*;
+use pluto::parser::ast::*;
 
 fn find_expr_at_span<'a>(program: &'a Program, target: Span) -> Option<&'a Expr> {
     for f in &program.functions {

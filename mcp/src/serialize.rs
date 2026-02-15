@@ -1,11 +1,11 @@
 use serde::Serialize;
 
-use plutoc::parser::ast::{
+use pluto::parser::ast::{
     AppDecl, ClassDecl, EnumDecl, ErrorDecl, Field, Function, Param, TraitDecl,
     TypeExpr,
 };
-use plutoc::span::Span;
-use plutoc_sdk::decl::{DeclKind, DeclRef};
+use pluto::span::Span;
+use pluto_sdk::decl::{DeclKind, DeclRef};
 
 // --- JSON-serializable output structs ---
 
@@ -423,7 +423,7 @@ pub struct DanglingRefInfo {
     pub span: SpanInfo,
 }
 
-pub fn compile_error_to_diagnostic(err: &plutoc::diagnostics::CompileError, source: Option<&str>) -> DiagnosticInfo {
+pub fn compile_error_to_diagnostic(err: &pluto::diagnostics::CompileError, source: Option<&str>) -> DiagnosticInfo {
     let make_span = |span: Span| -> SpanInfo {
         match source {
             Some(src) => span_to_info_with_source(span, src),
@@ -431,42 +431,42 @@ pub fn compile_error_to_diagnostic(err: &plutoc::diagnostics::CompileError, sour
         }
     };
     match err {
-        plutoc::diagnostics::CompileError::Syntax { msg, span } => DiagnosticInfo {
+        pluto::diagnostics::CompileError::Syntax { msg, span } => DiagnosticInfo {
             severity: "error".to_string(),
             kind: "syntax".to_string(),
             message: msg.clone(),
             span: Some(make_span(*span)),
             path: None,
         },
-        plutoc::diagnostics::CompileError::Type { msg, span } => DiagnosticInfo {
+        pluto::diagnostics::CompileError::Type { msg, span } => DiagnosticInfo {
             severity: "error".to_string(),
             kind: "type".to_string(),
             message: msg.clone(),
             span: Some(make_span(*span)),
             path: None,
         },
-        plutoc::diagnostics::CompileError::Codegen { msg } => DiagnosticInfo {
+        pluto::diagnostics::CompileError::Codegen { msg } => DiagnosticInfo {
             severity: "error".to_string(),
             kind: "codegen".to_string(),
             message: msg.clone(),
             span: None,
             path: None,
         },
-        plutoc::diagnostics::CompileError::Link { msg } => DiagnosticInfo {
+        pluto::diagnostics::CompileError::Link { msg } => DiagnosticInfo {
             severity: "error".to_string(),
             kind: "link".to_string(),
             message: msg.clone(),
             span: None,
             path: None,
         },
-        plutoc::diagnostics::CompileError::Manifest { msg, path } => DiagnosticInfo {
+        pluto::diagnostics::CompileError::Manifest { msg, path } => DiagnosticInfo {
             severity: "error".to_string(),
             kind: "manifest".to_string(),
             message: msg.clone(),
             span: None,
             path: Some(path.display().to_string()),
         },
-        plutoc::diagnostics::CompileError::SiblingFile { path, source } => {
+        pluto::diagnostics::CompileError::SiblingFile { path, source } => {
             // Recursively convert the inner error
             let mut inner = compile_error_to_diagnostic(source, None);
             inner.path = Some(path.display().to_string());
@@ -475,7 +475,7 @@ pub fn compile_error_to_diagnostic(err: &plutoc::diagnostics::CompileError, sour
     }
 }
 
-pub fn compile_warning_to_diagnostic(w: &plutoc::diagnostics::CompileWarning, source: Option<&str>) -> DiagnosticInfo {
+pub fn compile_warning_to_diagnostic(w: &pluto::diagnostics::CompileWarning, source: Option<&str>) -> DiagnosticInfo {
     let span = match source {
         Some(src) => span_to_info_with_source(w.span, src),
         None => span_to_info(w.span),
@@ -604,9 +604,9 @@ pub fn span_to_info_with_source(span: Span, source: &str) -> SpanInfo {
 // --- Pretty-print helpers ---
 
 fn pretty_print_function(func: &Function) -> String {
-    let program = plutoc::parser::ast::Program {
+    let program = pluto::parser::ast::Program {
         imports: vec![],
-        functions: vec![plutoc::span::Spanned::new(func.clone(), plutoc::span::Span::dummy())],
+        functions: vec![pluto::span::Spanned::new(func.clone(), pluto::span::Span::dummy())],
         extern_fns: vec![],
         classes: vec![],
         traits: vec![],
@@ -619,15 +619,15 @@ fn pretty_print_function(func: &Function) -> String {
         tests: None,
         fallible_extern_fns: vec![],
     };
-    plutoc::pretty::pretty_print(&program, false)
+    pluto::pretty::pretty_print(&program, false)
 }
 
 fn pretty_print_class(cls: &ClassDecl) -> String {
-    let program = plutoc::parser::ast::Program {
+    let program = pluto::parser::ast::Program {
         imports: vec![],
         functions: vec![],
         extern_fns: vec![],
-        classes: vec![plutoc::span::Spanned::new(cls.clone(), plutoc::span::Span::dummy())],
+        classes: vec![pluto::span::Spanned::new(cls.clone(), pluto::span::Span::dummy())],
         traits: vec![],
         enums: vec![],
         app: None,
@@ -638,17 +638,17 @@ fn pretty_print_class(cls: &ClassDecl) -> String {
         tests: None,
         fallible_extern_fns: vec![],
     };
-    plutoc::pretty::pretty_print(&program, false)
+    pluto::pretty::pretty_print(&program, false)
 }
 
 fn pretty_print_enum(en: &EnumDecl) -> String {
-    let program = plutoc::parser::ast::Program {
+    let program = pluto::parser::ast::Program {
         imports: vec![],
         functions: vec![],
         extern_fns: vec![],
         classes: vec![],
         traits: vec![],
-        enums: vec![plutoc::span::Spanned::new(en.clone(), plutoc::span::Span::dummy())],
+        enums: vec![pluto::span::Spanned::new(en.clone(), pluto::span::Span::dummy())],
         app: None,
         stages: vec![],
         system: None,
@@ -657,16 +657,16 @@ fn pretty_print_enum(en: &EnumDecl) -> String {
         tests: None,
         fallible_extern_fns: vec![],
     };
-    plutoc::pretty::pretty_print(&program, false)
+    pluto::pretty::pretty_print(&program, false)
 }
 
 fn pretty_print_trait(tr: &TraitDecl) -> String {
-    let program = plutoc::parser::ast::Program {
+    let program = pluto::parser::ast::Program {
         imports: vec![],
         functions: vec![],
         extern_fns: vec![],
         classes: vec![],
-        traits: vec![plutoc::span::Spanned::new(tr.clone(), plutoc::span::Span::dummy())],
+        traits: vec![pluto::span::Spanned::new(tr.clone(), pluto::span::Span::dummy())],
         enums: vec![],
         app: None,
         stages: vec![],
@@ -676,11 +676,11 @@ fn pretty_print_trait(tr: &TraitDecl) -> String {
         tests: None,
         fallible_extern_fns: vec![],
     };
-    plutoc::pretty::pretty_print(&program, false)
+    pluto::pretty::pretty_print(&program, false)
 }
 
 fn pretty_print_error_decl(err: &ErrorDecl) -> String {
-    let program = plutoc::parser::ast::Program {
+    let program = pluto::parser::ast::Program {
         imports: vec![],
         functions: vec![],
         extern_fns: vec![],
@@ -690,23 +690,23 @@ fn pretty_print_error_decl(err: &ErrorDecl) -> String {
         app: None,
         stages: vec![],
         system: None,
-        errors: vec![plutoc::span::Spanned::new(err.clone(), plutoc::span::Span::dummy())],
+        errors: vec![pluto::span::Spanned::new(err.clone(), pluto::span::Span::dummy())],
         test_info: vec![],
         tests: None,
         fallible_extern_fns: vec![],
     };
-    plutoc::pretty::pretty_print(&program, false)
+    pluto::pretty::pretty_print(&program, false)
 }
 
 fn pretty_print_app(app: &AppDecl) -> String {
-    let program = plutoc::parser::ast::Program {
+    let program = pluto::parser::ast::Program {
         imports: vec![],
         functions: vec![],
         extern_fns: vec![],
         classes: vec![],
         traits: vec![],
         enums: vec![],
-        app: Some(plutoc::span::Spanned::new(app.clone(), plutoc::span::Span::dummy())),
+        app: Some(pluto::span::Spanned::new(app.clone(), pluto::span::Span::dummy())),
         stages: vec![],
         system: None,
         errors: vec![],
@@ -714,14 +714,14 @@ fn pretty_print_app(app: &AppDecl) -> String {
         tests: None,
         fallible_extern_fns: vec![],
     };
-    plutoc::pretty::pretty_print(&program, false)
+    pluto::pretty::pretty_print(&program, false)
 }
 
 // --- High-level detail builders ---
 
 pub fn function_detail(
     func: &Function,
-    module: &plutoc_sdk::Module,
+    module: &pluto_sdk::Module,
 ) -> FunctionDetail {
     let id = func.id;
     let error_set = module
@@ -752,7 +752,7 @@ pub fn function_detail(
     }
 }
 
-pub fn class_detail(cls: &ClassDecl, module: &plutoc_sdk::Module) -> ClassDetail {
+pub fn class_detail(cls: &ClassDecl, module: &pluto_sdk::Module) -> ClassDetail {
     let regular_fields: Vec<FieldInfo> = cls
         .fields
         .iter()
@@ -802,7 +802,7 @@ pub fn class_detail(cls: &ClassDecl, module: &plutoc_sdk::Module) -> ClassDetail
     }
 }
 
-pub fn enum_detail(en: &EnumDecl, module: &plutoc_sdk::Module) -> EnumDetail {
+pub fn enum_detail(en: &EnumDecl, module: &pluto_sdk::Module) -> EnumDetail {
     let resolved_variants = module.enum_info_of(en.id).map(|ei| {
         ei.variants
             .iter()
@@ -840,7 +840,7 @@ pub fn enum_detail(en: &EnumDecl, module: &plutoc_sdk::Module) -> EnumDetail {
     }
 }
 
-pub fn trait_detail(tr: &TraitDecl, module: &plutoc_sdk::Module) -> TraitDetail {
+pub fn trait_detail(tr: &TraitDecl, module: &pluto_sdk::Module) -> TraitDetail {
     let resolved = module.trait_info_of(tr.id);
     let resolved_methods = resolved.map(|ti| {
         ti.methods
@@ -881,7 +881,7 @@ pub fn trait_detail(tr: &TraitDecl, module: &plutoc_sdk::Module) -> TraitDetail 
     }
 }
 
-pub fn error_decl_detail(err: &ErrorDecl, module: &plutoc_sdk::Module) -> ErrorDeclDetail {
+pub fn error_decl_detail(err: &ErrorDecl, module: &pluto_sdk::Module) -> ErrorDeclDetail {
     let resolved_fields = module.error_info_of(err.id).map(|ei| {
         ei.fields
             .iter()
@@ -903,7 +903,7 @@ pub fn error_decl_detail(err: &ErrorDecl, module: &plutoc_sdk::Module) -> ErrorD
     }
 }
 
-pub fn app_detail(app: &AppDecl, module: &plutoc_sdk::Module) -> AppDetail {
+pub fn app_detail(app: &AppDecl, module: &pluto_sdk::Module) -> AppDetail {
     let di_order = {
         let order = module.di_order();
         if order.is_empty() {

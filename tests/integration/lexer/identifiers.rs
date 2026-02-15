@@ -7,7 +7,7 @@
 // - Length limits
 
 use super::*;
-use plutoc::lexer::token::is_keyword;
+use pluto::lexer::token::is_keyword;
 
 // ===== Valid Identifiers =====
 

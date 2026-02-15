@@ -57,7 +57,7 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 
 Each `.c` file is compiled to a `.o` file, then linked with `ld -r` into a single relocatable `runtime.o`, which is finally linked with the Cranelift-generated object code. See `docs/design/runtime-architecture.md` for detailed module documentation.
 
-**AI-native representation (planned)** — Future direction where `.pluto` becomes a binary canonical representation (full semantic graph with stable UUIDs per declaration) and `.pt` files provide human-readable text views. AI agents write `.pluto` via an SDK (`plutoc-sdk`), the compiler enriches `.pluto` with derived analysis data on demand (`plutoc analyze`), and `plutoc sync` converts human `.pt` edits back to `.pluto`. See `docs/design/ai-native-representation.md` for the full RFC.
+**AI-native representation (planned)** — Future direction where `.pluto` becomes a binary canonical representation (full semantic graph with stable UUIDs per declaration) and `.pt` files provide human-readable text views. AI agents write `.pluto` via an SDK (`pluto-sdk`), the compiler enriches `.pluto` with derived analysis data on demand (`pluto analyze`), and `pluto sync` converts human `.pt` edits back to `.pluto`. See `docs/design/ai-native-representation.md` for the full RFC.
 
 **No semicolons** — Pluto uses newline-based statement termination. Newlines are lexed as `Token::Newline` and the parser consumes them at statement boundaries while skipping them inside expressions.
 

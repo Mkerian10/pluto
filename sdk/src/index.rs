@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use plutoc::parser::ast::*;
-use plutoc::span::Span;
+use pluto::parser::ast::*;
+use pluto::span::Span;
 
 use crate::decl::DeclKind;
 use crate::xref::{CallSiteInfo, ConstructSiteInfo, EnumUsageSiteInfo, RaiseSiteInfo};

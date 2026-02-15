@@ -28,7 +28,7 @@ fn run_marshal_test(source: &str) -> String {
     copy_dir_recursive(&stdlib_src, &stdlib_dst);
 
     let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file_with_stdlib(&path, &bin_path, Some(&stdlib_dst))
+    pluto::compile_file_with_stdlib(&path, &bin_path, Some(&stdlib_dst))
         .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
 
     let run_output = Command::new(&bin_path).output().unwrap();

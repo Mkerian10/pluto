@@ -15,8 +15,8 @@
 // - spans: Position tracking accuracy
 // - stress: Large inputs, boundary conditions
 
-use plutoc::lexer::{lex, token::Token};
-use plutoc::span::Span;
+use pluto::lexer::{lex, token::Token};
+use pluto::span::Span;
 
 /// Lex source and expect success
 pub fn lex_ok(source: &str) -> Vec<(Token, Span)> {
