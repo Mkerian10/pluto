@@ -400,7 +400,7 @@ fn main() {
                 }
             };
 
-            let text = plutoc::pretty::pretty_print(&program, false);
+            let text = plutoc::pretty::pretty_print(&program, true);
 
             match output {
                 Some(path) => {
