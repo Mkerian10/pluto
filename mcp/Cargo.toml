@@ -3,6 +3,10 @@ name = "pluto-mcp"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "pluto_mcp"
+path = "src/lib.rs"
+
 [[bin]]
 name = "pluto-mcp"
 path = "src/main.rs"
