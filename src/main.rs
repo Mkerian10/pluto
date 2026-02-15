@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "plutoc", version, about = "The Pluto compiler")]
+#[command(name = "pluto", version, about = "The Pluto compiler")]
 struct Cli {
     /// Path to stdlib root directory
     #[arg(long, global = true)]
@@ -16,10 +16,10 @@ struct Cli {
     command: Commands,
 }
 
-fn parse_gc_backend(s: &str) -> Result<plutoc::GcBackend, String> {
+fn parse_gc_backend(s: &str) -> Result<pluto::GcBackend, String> {
     match s {
-        "marksweep" => Ok(plutoc::GcBackend::MarkSweep),
-        "noop" => Ok(plutoc::GcBackend::Noop),
+        "marksweep" => Ok(pluto::GcBackend::MarkSweep),
+        "noop" => Ok(pluto::GcBackend::Noop),
         other => Err(format!("unknown GC backend '{}'; expected 'marksweep' or 'noop'", other)),
     }
 }
@@ -162,9 +162,9 @@ enum WatchCommands {
 
 /// Get the appropriate filename to display in error messages.
 /// For sibling file errors, returns the sibling file path instead of the entry file.
-fn error_filename(err: &plutoc::diagnostics::CompileError) -> Option<String> {
+fn error_filename(err: &pluto::diagnostics::CompileError) -> Option<String> {
     match err {
-        plutoc::diagnostics::CompileError::SiblingFile { path, .. } => {
+        pluto::diagnostics::CompileError::SiblingFile { path, .. } => {
             Some(path.display().to_string())
         }
         _ => None,
@@ -241,10 +241,10 @@ fn main() {
     match cli.command {
         Commands::Compile { file, output } => {
             // Check if this is a system file (contains a `system` declaration)
-            match plutoc::detect_system_file(&file) {
+            match pluto::detect_system_file(&file) {
                 Ok(Some(_program)) => {
                     // System file: compile each member app to its own binary
-                    match plutoc::compile_system_file_with_stdlib(&file, &output, stdlib) {
+                    match pluto::compile_system_file_with_stdlib(&file, &output, stdlib) {
                         Ok(members) => {
                             for (name, path) in &members {
                                 eprintln!("  compiled {} \u{2192} {}", name, path.display());
@@ -261,7 +261,7 @@ fn main() {
                 }
                 Ok(None) => {
                     // Regular file: compile to a single binary
-                    if let Err(err) = plutoc::compile_file_with_options(&file, &output, stdlib, gc) {
+                    if let Err(err) = pluto::compile_file_with_options(&file, &output, stdlib, gc) {
                         let filename = error_filename(&err)
                             .unwrap_or_else(|| file.to_string_lossy().to_string());
                         eprintln!("error [{}]: {err}", filename);
@@ -278,9 +278,9 @@ fn main() {
         }
         Commands::Run { file, coverage } => {
             // Reject system files — they produce multiple binaries
-            match plutoc::detect_system_file(&file) {
+            match pluto::detect_system_file(&file) {
                 Ok(Some(_)) => {
-                    eprintln!("error: cannot run a system file directly; use `plutoc compile` to produce individual binaries");
+                    eprintln!("error: cannot run a system file directly; use `pluto compile` to produce individual binaries");
                     std::process::exit(1);
                 }
                 Ok(None) => {}
@@ -295,7 +295,7 @@ fn main() {
             let tmp = std::env::temp_dir().join("pluto_run");
 
             let coverage_map = if coverage {
-                match plutoc::compile_file_with_coverage(&file, &tmp, stdlib) {
+                match pluto::compile_file_with_coverage(&file, &tmp, stdlib) {
                     Ok(map) => Some(map),
                     Err(err) => {
                         let filename = error_filename(&err)
@@ -305,7 +305,7 @@ fn main() {
                     }
                 }
             } else {
-                if let Err(err) = plutoc::compile_file_with_options(&file, &tmp, stdlib, gc) {
+                if let Err(err) = pluto::compile_file_with_options(&file, &tmp, stdlib, gc) {
                     let filename = error_filename(&err)
                         .unwrap_or_else(|| file.to_string_lossy().to_string());
                     eprintln!("error [{}]: {err}", filename);
@@ -336,11 +336,11 @@ fn main() {
             if coverage_map.is_some() {
                 let cov_dir = std::path::Path::new(".pluto-coverage");
                 let data_path = cov_dir.join("coverage-data.bin");
-                match plutoc::coverage::CoverageData::read_binary(&data_path) {
+                match pluto::coverage::CoverageData::read_binary(&data_path) {
                     Ok(data) => {
                         let map = coverage_map.as_ref().unwrap();
-                        let stats = plutoc::coverage::generate_terminal_report(map, &data);
-                        plutoc::coverage::print_terminal_summary(&stats);
+                        let stats = pluto::coverage::generate_terminal_report(map, &data);
+                        pluto::coverage::print_terminal_summary(&stats);
                     }
                     Err(e) => {
                         eprintln!("warning: failed to read coverage data: {e}");
@@ -354,14 +354,14 @@ fn main() {
         }
         Commands::Watch { command } => match command {
             WatchCommands::Run { file, no_clear } => {
-                if let Err(err) = plutoc::watch::watch_run(&file, stdlib, no_clear) {
+                if let Err(err) = pluto::watch::watch_run(&file, stdlib, no_clear) {
                     eprintln!("Watch error: {err}");
                     std::process::exit(1);
                 }
             }
             WatchCommands::Test { file, no_clear, no_cache } => {
                 let use_cache = !no_cache;
-                if let Err(err) = plutoc::watch::watch_test(&file, stdlib, no_clear, use_cache) {
+                if let Err(err) = pluto::watch::watch_test(&file, stdlib, no_clear, use_cache) {
                     eprintln!("Watch test error: {err}");
                     std::process::exit(1);
                 }
@@ -370,7 +370,7 @@ fn main() {
         Commands::Test { file, seed, iterations, no_cache, coverage } => {
             let tmp = std::env::temp_dir().join("pluto_test");
             let use_cache = !no_cache;
-            let coverage_map = match plutoc::compile_file_for_tests_with_coverage(&file, &tmp, stdlib, use_cache, coverage) {
+            let coverage_map = match pluto::compile_file_for_tests_with_coverage(&file, &tmp, stdlib, use_cache, coverage) {
                 Ok(map) => map,
                 Err(err) => {
                     let filename = file.to_string_lossy().to_string();
@@ -408,11 +408,11 @@ fn main() {
             if coverage_map.is_some() {
                 let cov_dir = std::path::Path::new(".pluto-coverage");
                 let data_path = cov_dir.join("coverage-data.bin");
-                match plutoc::coverage::CoverageData::read_binary(&data_path) {
+                match pluto::coverage::CoverageData::read_binary(&data_path) {
                     Ok(data) => {
                         let map = coverage_map.as_ref().unwrap();
-                        let stats = plutoc::coverage::generate_terminal_report(map, &data);
-                        plutoc::coverage::print_terminal_summary(&stats);
+                        let stats = pluto::coverage::generate_terminal_report(map, &data);
+                        pluto::coverage::print_terminal_summary(&stats);
                     }
                     Err(e) => {
                         eprintln!("warning: failed to read coverage data: {e}");
@@ -427,9 +427,9 @@ fn main() {
         Commands::EmitAst { file, output } => {
             let output = output.unwrap_or_else(|| file.with_extension("pluto"));
 
-            match plutoc::parse_file_for_editing(&file, stdlib) {
+            match pluto::parse_file_for_editing(&file, stdlib) {
                 Ok((program, source, derived)) => {
-                    match plutoc::plto_store::write_canonical(&output, &program, &source, derived) {
+                    match pluto::plto_store::write_canonical(&output, &program, &source, derived) {
                         Ok(_) => {
                             println!("Wrote {}", output.display());
                         }
@@ -456,12 +456,12 @@ fn main() {
                 }
             };
 
-            if !plutoc::binary::is_binary_format(&data) {
+            if !pluto::binary::is_binary_format(&data) {
                 eprintln!("error: {} is not a valid .pluto binary file", file.display());
                 std::process::exit(1);
             }
 
-            let (program, _source, _derived) = match plutoc::binary::deserialize_program(&data) {
+            let (program, _source, _derived) = match pluto::binary::deserialize_program(&data) {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("error: failed to deserialize {}: {e}", file.display());
@@ -469,7 +469,7 @@ fn main() {
                 }
             };
 
-            let text = plutoc::pretty::pretty_print(&program, true);
+            let text = pluto::pretty::pretty_print(&program, true);
 
             match output {
                 Some(path) => {
@@ -486,7 +486,7 @@ fn main() {
         Commands::Sync { file, output } => {
             let pluto_path = output.unwrap_or_else(|| file.with_extension("pluto"));
 
-            match plutoc::sync::sync_pt_to_pluto(&file, &pluto_path) {
+            match pluto::sync::sync_pt_to_pluto(&file, &pluto_path) {
                 Ok(result) => {
                     if !result.added.is_empty() {
                         for name in &result.added {
@@ -520,7 +520,7 @@ fn main() {
         }
         Commands::Analyze { file } => {
             // Analyze the file and update with fresh derived data
-            match plutoc::analyze_and_update(&file, stdlib.as_deref()) {
+            match pluto::analyze_and_update(&file, stdlib.as_deref()) {
                 Ok(()) => {
                     let output_path = file.with_extension("pluto");
                     eprintln!("analyzed {} \u{2192} {}", file.display(), output_path.display());
@@ -532,7 +532,7 @@ fn main() {
             }
         }
         Commands::Update { dir } => {
-            if let Err(err) = plutoc::update_git_deps(&dir) {
+            if let Err(err) = pluto::update_git_deps(&dir) {
                 eprintln!("error: {err}");
                 std::process::exit(1);
             }
@@ -544,23 +544,23 @@ fn main() {
 
                 if !map_path.exists() {
                     eprintln!("error: coverage map not found at {}", map_path.display());
-                    eprintln!("hint: run with --coverage flag first, e.g. `plutoc test file.pluto --coverage`");
+                    eprintln!("hint: run with --coverage flag first, e.g. `pluto test file.pluto --coverage`");
                     std::process::exit(1);
                 }
                 if !data_path.exists() {
                     eprintln!("error: coverage data not found at {}", data_path.display());
-                    eprintln!("hint: run with --coverage flag first, e.g. `plutoc test file.pluto --coverage`");
+                    eprintln!("hint: run with --coverage flag first, e.g. `pluto test file.pluto --coverage`");
                     std::process::exit(1);
                 }
 
-                let map = match plutoc::coverage::CoverageMap::read_json(&map_path) {
+                let map = match pluto::coverage::CoverageMap::read_json(&map_path) {
                     Ok(m) => m,
                     Err(e) => {
                         eprintln!("error: failed to read coverage map: {e}");
                         std::process::exit(1);
                     }
                 };
-                let data = match plutoc::coverage::CoverageData::read_binary(&data_path) {
+                let data = match pluto::coverage::CoverageData::read_binary(&data_path) {
                     Ok(d) => d,
                     Err(e) => {
                         eprintln!("error: failed to read coverage data: {e}");
@@ -570,11 +570,11 @@ fn main() {
 
                 match format.as_str() {
                     "terminal" => {
-                        let stats = plutoc::coverage::generate_terminal_report(&map, &data);
-                        plutoc::coverage::print_terminal_summary(&stats);
+                        let stats = pluto::coverage::generate_terminal_report(&map, &data);
+                        pluto::coverage::print_terminal_summary(&stats);
                     }
                     "lcov" => {
-                        let lcov = plutoc::coverage::generate_lcov(&map, &data);
+                        let lcov = pluto::coverage::generate_lcov(&map, &data);
                         match output {
                             Some(path) => {
                                 if let Err(e) = std::fs::write(&path, &lcov) {
@@ -587,7 +587,7 @@ fn main() {
                         }
                     }
                     "json" => {
-                        let report = plutoc::coverage::generate_json_report(&map, &data);
+                        let report = pluto::coverage::generate_json_report(&map, &data);
                         let json = serde_json::to_string_pretty(&report).unwrap();
                         match output {
                             Some(path) => {
@@ -616,7 +616,7 @@ fn main() {
                             })
                             .unwrap_or_else(|| dir.parent().unwrap_or(std::path::Path::new(".")).to_path_buf());
 
-                        let html = plutoc::coverage::generate_html_report(&map, &data, &source_dir);
+                        let html = pluto::coverage::generate_html_report(&map, &data, &source_dir);
                         let out_path = output.unwrap_or_else(|| dir.join("report.html"));
                         if let Err(e) = std::fs::write(&out_path, &html) {
                             eprintln!("error: failed to write {}: {e}", out_path.display());

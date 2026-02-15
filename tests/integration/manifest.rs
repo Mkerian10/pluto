@@ -47,7 +47,7 @@ fn run_manifest_project(
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    plutoc::compile_file(&entry, &bin_path)
+    pluto::compile_file(&entry, &bin_path)
         .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
 
     let output = Command::new(&bin_path).output().unwrap();
@@ -94,7 +94,7 @@ fn compile_manifest_should_fail(
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    match plutoc::compile_file(&entry, &bin_path) {
+    match pluto::compile_file(&entry, &bin_path) {
         Err(e) => e.to_string(),
         Ok(()) => panic!("Compilation should have failed"),
     }
@@ -120,7 +120,7 @@ fn compile_with_raw_toml(
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
 
-    match plutoc::compile_file(&entry, &bin_path) {
+    match pluto::compile_file(&entry, &bin_path) {
         Err(e) => e.to_string(),
         Ok(()) => panic!("Compilation should have failed"),
     }
@@ -219,7 +219,7 @@ fn transitive_package_deps() {
 
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    pluto::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
 
     let output = Command::new(&bin_path).output().unwrap();
     assert!(output.status.success());
@@ -251,7 +251,7 @@ fn no_manifest_backward_compat() {
 
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    pluto::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
     let output = Command::new(&bin_path).output().unwrap();
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
@@ -301,7 +301,7 @@ fn manifest_in_parent_dir() {
 
     let entry = src_dir.join("main.pluto");
     let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    pluto::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
     let output = Command::new(&bin_path).output().unwrap();
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "99\n");
@@ -342,7 +342,7 @@ fn same_dep_imported_in_two_branches() {
 
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    pluto::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
     let output = Command::new(&bin_path).output().unwrap();
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "101\n102\n");
@@ -376,7 +376,7 @@ fn transitive_dep_not_visible_to_root() {
 
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
-    assert!(plutoc::compile_file(&entry, &bin_path).is_err(), "Should fail: libb not in root's deps");
+    assert!(pluto::compile_file(&entry, &bin_path).is_err(), "Should fail: libb not in root's deps");
 }
 
 #[test]
@@ -431,7 +431,7 @@ fn invalid_dep_name_keyword() {
 
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
-    let err = plutoc::compile_file(&entry, &bin_path).unwrap_err().to_string();
+    let err = pluto::compile_file(&entry, &bin_path).unwrap_err().to_string();
     assert!(err.contains("reserved keyword"), "Expected keyword error, got: {}", err);
 }
 
@@ -514,7 +514,7 @@ fn circular_dep_chain() {
 
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
-    let err = plutoc::compile_file(&entry, &bin_path).unwrap_err().to_string();
+    let err = pluto::compile_file(&entry, &bin_path).unwrap_err().to_string();
     assert!(err.contains("circular package dependency"), "Expected circular dep error, got: {}", err);
 }
 
@@ -556,7 +556,7 @@ fn dep_without_manifest_no_parent_inheritance() {
 
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
-    assert!(plutoc::compile_file(&entry, &bin_path).is_err(),
+    assert!(pluto::compile_file(&entry, &bin_path).is_err(),
         "Should fail: liba can't import libb without its own pluto.toml declaring it");
 }
 
@@ -588,7 +588,7 @@ fn exact_duplicate_import_allowed() {
 
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    pluto::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
     let output = Command::new(&bin_path).output().unwrap();
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "10\n11\n");
@@ -630,7 +630,7 @@ fn same_dep_via_different_relative_paths() {
 
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    pluto::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
     let output = Command::new(&bin_path).output().unwrap();
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n42\n");
@@ -657,7 +657,7 @@ fn parent_path_dep() {
 
     let entry = project_dir.join("main.pluto");
     let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    pluto::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
     let output = Command::new(&bin_path).output().unwrap();
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "55\n");
@@ -688,7 +688,7 @@ fn git_file_boundary_manifest_walk() {
     let bin_path = dir.path().join("test_bin");
 
     // Should compile fine (no manifest found, no deps) — backward compat
-    plutoc::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    pluto::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
     let output = Command::new(&bin_path).output().unwrap();
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "99\n");
@@ -711,7 +711,7 @@ fn two_aliases_same_canonical_path() {
 
     let entry = dir.path().join("main.pluto");
     let bin_path = dir.path().join("test_bin");
-    plutoc::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    pluto::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
     let output = Command::new(&bin_path).output().unwrap();
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n7\n");
@@ -792,7 +792,7 @@ fn run_git_dep_project(
 
     // Set PLUTO_CACHE_DIR so tests don't pollute the real cache
     unsafe { std::env::set_var("PLUTO_CACHE_DIR", cache_dir); }
-    let result = plutoc::compile_file(&entry, &bin_path);
+    let result = pluto::compile_file(&entry, &bin_path);
     unsafe { std::env::remove_var("PLUTO_CACHE_DIR"); }
 
     result.unwrap_or_else(|e| panic!("Compilation failed: {e}"));
@@ -823,7 +823,7 @@ fn compile_git_dep_should_fail(
     let bin_path = dir.path().join("test_bin");
 
     unsafe { std::env::set_var("PLUTO_CACHE_DIR", cache_dir); }
-    let result = plutoc::compile_file(&entry, &bin_path);
+    let result = pluto::compile_file(&entry, &bin_path);
     unsafe { std::env::remove_var("PLUTO_CACHE_DIR"); }
 
     match result {
@@ -1037,7 +1037,7 @@ fn git_dep_mixed_with_path() {
     let bin_path = dir.path().join("test_bin");
 
     unsafe { std::env::set_var("PLUTO_CACHE_DIR", cache.path()); }
-    plutoc::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    pluto::compile_file(&entry, &bin_path).unwrap_or_else(|e| panic!("Compilation failed: {e}"));
     unsafe { std::env::remove_var("PLUTO_CACHE_DIR"); }
 
     let output = Command::new(&bin_path).output().unwrap();

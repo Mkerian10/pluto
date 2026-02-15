@@ -11,24 +11,24 @@ pub use error::SdkError;
 pub use module::Module;
 
 // Re-export key plutoc types for convenience
-pub use plutoc::derived::{
+pub use pluto::derived::{
     DerivedInfo, ErrorRef, ResolvedSignature,
     ResolvedClassInfo, ResolvedTraitInfo, ResolvedEnumInfo,
     ResolvedErrorInfo, ResolvedFieldInfo, ResolvedVariantInfo,
 };
-pub use plutoc::parser::ast::Program;
-pub use plutoc::span::{Span, Spanned};
-pub use plutoc::typeck::types::PlutoType;
+pub use pluto::parser::ast::Program;
+pub use pluto::span::{Span, Spanned};
+pub use pluto::typeck::types::PlutoType;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plutoc::binary::serialize_program;
-    use plutoc::derived::DerivedInfo;
-    use plutoc::lexer;
-    use plutoc::parser::Parser;
-    use plutoc::span::{Span as PlutoSpan, Spanned as PlutoSpanned};
-    use plutoc::parser::ast::*;
+    use pluto::binary::serialize_program;
+    use pluto::derived::DerivedInfo;
+    use pluto::lexer;
+    use pluto::parser::Parser;
+    use pluto::span::{Span as PlutoSpan, Spanned as PlutoSpanned};
+    use pluto::parser::ast::*;
     use uuid::Uuid;
 
     fn sp<T>(node: T) -> PlutoSpanned<T> {

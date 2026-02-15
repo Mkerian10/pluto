@@ -26,7 +26,7 @@ jobs:
         run: cargo build --workspace
 
       - name: Test workspace members
-        run: cargo test --workspace --exclude plutoc
+        run: cargo test --workspace --exclude pluto
 
       - name: Run unit tests only
         run: cargo nextest run --lib

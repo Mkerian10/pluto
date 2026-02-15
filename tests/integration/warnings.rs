@@ -2,7 +2,7 @@ mod common;
 
 /// Helper: compile source and return warning messages.
 fn compile_and_get_warnings(source: &str) -> Vec<String> {
-    match plutoc::compile_to_object_with_warnings(source) {
+    match pluto::compile_to_object_with_warnings(source) {
         Ok((_obj, warnings)) => warnings.iter().map(|w| w.msg.clone()).collect(),
         Err(e) => panic!("Compilation failed unexpectedly: {e}"),
     }
@@ -85,7 +85,7 @@ fn variables_in_different_scopes() {
 #[test]
 fn warning_does_not_prevent_compilation() {
     // Compile with unused variable — should still produce valid object bytes
-    let result = plutoc::compile_to_object_with_warnings(
+    let result = pluto::compile_to_object_with_warnings(
         "fn main() {\n    let x = 42\n}",
     );
     assert!(result.is_ok(), "compilation should succeed despite warnings");

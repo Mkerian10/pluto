@@ -18,7 +18,7 @@ fn run_pluto_test_file(name: &str) -> (String, String, i32) {
     let dir = tempfile::tempdir().unwrap();
     let bin_path = dir.path().join("test_bin");
 
-    plutoc::compile_file_for_tests(&test_file, &bin_path, Some(&stdlib_root()), false)
+    pluto::compile_file_for_tests(&test_file, &bin_path, Some(&stdlib_root()), false)
         .unwrap_or_else(|e| panic!("Failed to compile {name}: {e}"));
 
     let output = Command::new(&bin_path).output().unwrap();
@@ -39,7 +39,7 @@ fn run_pluto_file(name: &str) -> (String, String, i32) {
     let bin_path = dir.path().join("run_bin");
     let project_root = Path::new(env!("CARGO_MANIFEST_DIR"));
 
-    plutoc::compile_file_with_stdlib(&test_file, &bin_path, Some(&stdlib_root()))
+    pluto::compile_file_with_stdlib(&test_file, &bin_path, Some(&stdlib_root()))
         .unwrap_or_else(|e| panic!("Failed to compile {name}: {e}"));
 
     let output = Command::new(&bin_path)

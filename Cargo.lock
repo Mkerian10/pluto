@@ -1560,25 +1560,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pluto-mcp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-recursion",
- "plutoc",
- "plutoc-sdk",
- "rmcp",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "plutoc"
+name = "pluto"
 version = "0.1.0"
 dependencies = [
  "arbitrary",
@@ -1609,10 +1591,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "plutoc-sdk"
+name = "pluto-mcp"
 version = "0.1.0"
 dependencies = [
- "plutoc",
+ "anyhow",
+ "async-recursion",
+ "pluto",
+ "pluto-sdk",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "pluto-sdk"
+version = "0.1.0"
+dependencies = [
+ "pluto",
  "tempfile",
  "thiserror 2.0.18",
  "uuid",

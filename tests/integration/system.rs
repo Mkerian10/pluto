@@ -20,7 +20,7 @@ fn compile_system_project(files: &[(&str, &str)]) -> HashMap<String, PathBuf> {
     let entry = dir.path().join("main.pluto");
     let output_dir = dir.path().join("build");
 
-    let members = plutoc::compile_system_file_with_stdlib(&entry, &output_dir, None)
+    let members = pluto::compile_system_file_with_stdlib(&entry, &output_dir, None)
         .unwrap_or_else(|e| panic!("System compilation failed: {e}"));
 
     // Keep the tempdir alive by leaking it (tests are short-lived)
@@ -46,7 +46,7 @@ fn compile_system_should_fail(files: &[(&str, &str)]) {
     let output_dir = dir.path().join("build");
 
     assert!(
-        plutoc::compile_system_file_with_stdlib(&entry, &output_dir, None).is_err(),
+        pluto::compile_system_file_with_stdlib(&entry, &output_dir, None).is_err(),
         "System compilation should have failed"
     );
 }
@@ -67,7 +67,7 @@ fn compile_system_should_fail_with(files: &[(&str, &str)], expected_msg: &str) {
     let entry = dir.path().join("main.pluto");
     let output_dir = dir.path().join("build");
 
-    match plutoc::compile_system_file_with_stdlib(&entry, &output_dir, None) {
+    match pluto::compile_system_file_with_stdlib(&entry, &output_dir, None) {
         Ok(_) => panic!("System compilation should have failed"),
         Err(e) => {
             let msg = e.to_string();
@@ -386,7 +386,7 @@ fn detect_system_file_returns_none_for_regular() {
     let file = dir.path().join("regular.pluto");
     std::fs::write(&file, "fn main() {\n    print(\"hi\")\n}").unwrap();
 
-    let result = plutoc::detect_system_file(&file).unwrap();
+    let result = pluto::detect_system_file(&file).unwrap();
     assert!(result.is_none());
 }
 
@@ -402,7 +402,7 @@ fn detect_system_file_returns_some_for_system() {
     // We also need api.pluto for detection (parser doesn't resolve imports)
     // Actually detect_system_file only parses, doesn't resolve. Just need valid parse.
 
-    let result = plutoc::detect_system_file(&file).unwrap();
+    let result = pluto::detect_system_file(&file).unwrap();
     assert!(result.is_some());
 }
 

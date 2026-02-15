@@ -2,9 +2,9 @@
 ///
 /// These tests verify that the visitor traits and walk functions work correctly.
 /// They don't use the full compilation pipeline, just the parser and visitor infrastructure.
-use plutoc::parser::ast::*;
-use plutoc::span::{Span, Spanned};
-use plutoc::visit::{walk_expr, walk_stmt, Visitor};
+use pluto::parser::ast::*;
+use pluto::span::{Span, Spanned};
+use pluto::visit::{walk_expr, walk_stmt, Visitor};
 
 #[test]
 fn test_visitor_visits_nested_expressions() {
@@ -102,7 +102,7 @@ fn test_visitor_visits_type_exprs() {
     impl Visitor for TypeExprCounter {
         fn visit_type_expr(&mut self, te: &Spanned<TypeExpr>) {
             self.count += 1;
-            plutoc::visit::walk_type_expr(self, te);
+            pluto::visit::walk_type_expr(self, te);
         }
     }
 

@@ -8,7 +8,7 @@
 // a pretty-printer which may not exist yet. Simplified to determinism check.
 
 use proptest::prelude::*;
-use plutoc::parse_for_editing;
+use pluto::parse_for_editing;
 
 // Strategy: Generate simple valid function definitions
 // Pattern: fn test<N>() int { return <N> }

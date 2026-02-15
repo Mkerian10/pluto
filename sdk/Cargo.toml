@@ -1,10 +1,10 @@
 [package]
-name = "plutoc-sdk"
+name = "pluto-sdk"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-plutoc = { path = ".." }
+pluto = { path = ".." }
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "2"
 
