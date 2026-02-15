@@ -590,7 +590,6 @@ fn test_class_nested_5_deep() {
 }
 
 #[test]
-#[ignore] // Compiler warnings in output causing test to fail
 fn test_class_with_bracket_deps() {
     let src = r#"
         class Config {
@@ -615,7 +614,6 @@ fn test_class_with_bracket_deps() {
 }
 
 #[test]
-#[ignore] // Compiler warnings in output causing test to fail
 fn test_class_with_methods() {
     let src = r#"
         class Counter {
