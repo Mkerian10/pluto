@@ -507,7 +507,6 @@ impl PrettyPrinter {
             self.write_indent();
             match contract.node.kind {
                 ContractKind::Requires => self.write("requires "),
-                ContractKind::Ensures => self.write("ensures "),
                 ContractKind::Invariant => self.write("invariant "),
             }
             self.emit_expr(&contract.node.expr.node, 0);
@@ -1030,6 +1029,10 @@ impl PrettyPrinter {
             Stmt::Yield { value } => {
                 self.write("yield ");
                 self.emit_expr(&value.node, 0);
+            }
+            Stmt::Assert { expr } => {
+                self.write("assert ");
+                self.emit_expr(&expr.node, 0);
             }
             Stmt::Break => self.write("break"),
             Stmt::Continue => self.write("continue"),

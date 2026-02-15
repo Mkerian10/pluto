@@ -814,10 +814,25 @@ fn resolve_modules_inner(
                 visited.remove(&canonical);
                 imports.push((binding_name, module_prog, ImportOrigin::Local));
             } else {
-                return Err(CompileError::syntax(
-                    format!("cannot find module '{}': no directory or file found", full_path),
-                    import.node.path[0].span,
-                ));
+                // Check .deps/ directory (vendored dependencies)
+                let deps_dir_path = entry_dir.join(".deps").join(first_segment);
+                if deps_dir_path.is_dir() {
+                    let module_prog = load_directory_module(
+                        &deps_dir_path,
+                        &mut source_map,
+                        &mut visited,
+                        effective_stdlib,
+                        current_deps,
+                        pkg_graph,
+                        ImportOrigin::PackageDep,
+                    )?;
+                    imports.push((binding_name, module_prog, ImportOrigin::PackageDep));
+                } else {
+                    return Err(CompileError::syntax(
+                        format!("cannot find module '{}': no directory or file found", full_path),
+                        import.node.path[0].span,
+                    ));
+                }
             }
         } else if first_segment == "std" {
             // Stdlib import: `import std.io` → resolve remaining path from stdlib_root
@@ -1356,7 +1371,7 @@ fn resolve_qualified_access_in_program(program: &mut Program, module_names: &Has
     }
 
     for func in &mut program.functions {
-        // Resolve in function contracts (requires/ensures)
+        // Resolve in function contracts (requires)
         for contract in &mut func.node.contracts {
             resolve_qualified_access_in_expr(&mut contract.node.expr.node, contract.node.expr.span, module_names, &enum_name_map);
         }
@@ -1368,7 +1383,7 @@ fn resolve_qualified_access_in_program(program: &mut Program, module_names: &Has
             resolve_qualified_access_in_expr(&mut invariant.node.expr.node, invariant.node.expr.span, module_names, &enum_name_map);
         }
         for method in &mut class.node.methods {
-            // Resolve in method contracts (requires/ensures)
+            // Resolve in method contracts (requires)
             for contract in &mut method.node.contracts {
                 resolve_qualified_access_in_expr(&mut contract.node.expr.node, contract.node.expr.span, module_names, &enum_name_map);
             }
@@ -1481,6 +1496,9 @@ fn resolve_qualified_access_in_stmt(stmt: &mut Stmt, module_names: &HashSet<Stri
         }
         Stmt::Yield { value, .. } => {
             resolve_qualified_access_in_expr(&mut value.node, value.span, module_names, enum_name_map);
+        }
+        Stmt::Assert { expr } => {
+            resolve_qualified_access_in_expr(&mut expr.node, expr.span, module_names, enum_name_map);
         }
         Stmt::Break | Stmt::Continue => {}
     }

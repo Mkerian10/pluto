@@ -45,14 +45,13 @@ pub fn validate_contracts(program: &Program) -> Result<(), CompileError> {
 /// Allowed:
 /// - Comparisons, arithmetic, logical, bitwise operators
 /// - Unary Not, Neg, BitNot
-/// - Identifiers (parameter/field names, plus `result` in ensures)
+/// - Identifiers (parameter/field names)
 /// - Field access (self.field, nested)
 /// - Method call `.len()` only (no args)
 /// - Int, float, bool literals
-/// - `old(expr)` in ensures clauses only
 ///
 /// Rejected:
-/// - Function calls (except old() in ensures), string literals, string interpolation
+/// - Function calls, string literals, string interpolation
 /// - Struct/array/map/set/enum literals
 /// - Closures, spawn, cast, index, range
 /// - Catch, propagate
@@ -96,23 +95,12 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
             }
         }
 
-        // Function calls — only old(expr) in ensures clauses
-        Expr::Call { name, args, .. } => {
-            if name.node == "old" && args.len() == 1 {
-                if kind == ContractKind::Ensures {
-                    validate_decidable_fragment(&args[0].node, args[0].span, kind)
-                } else {
-                    Err(CompileError::syntax(
-                        "old() is only allowed in ensures clauses".to_string(),
-                        span,
-                    ))
-                }
-            } else {
-                Err(CompileError::syntax(
-                    format!("function call '{}()' is not allowed in contract expressions", name.node),
-                    span,
-                ))
-            }
+        // Function calls — rejected
+        Expr::Call { name, .. } => {
+            Err(CompileError::syntax(
+                format!("function call '{}()' is not allowed in contract expressions", name.node),
+                span,
+            ))
         }
 
         // None literal — allowed (useful for nullable comparisons in contracts)
@@ -326,43 +314,6 @@ mod tests {
         let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("method call '.foo()' is not allowed"));
-    }
-
-    #[test]
-    fn validate_old_in_ensures() {
-        let expr = Expr::Call {
-            name: spanned("old".to_string()),
-            args: vec![spanned(Expr::Ident("x".to_string()))],
-            type_args: vec![],
-            target_id: None,
-        };
-        assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Ensures).is_ok());
-    }
-
-    #[test]
-    fn reject_old_in_invariant() {
-        let expr = Expr::Call {
-            name: spanned("old".to_string()),
-            args: vec![spanned(Expr::Ident("x".to_string()))],
-            type_args: vec![],
-            target_id: None,
-        };
-        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("old() is only allowed in ensures clauses"));
-    }
-
-    #[test]
-    fn reject_old_in_requires() {
-        let expr = Expr::Call {
-            name: spanned("old".to_string()),
-            args: vec![spanned(Expr::Ident("x".to_string()))],
-            type_args: vec![],
-            target_id: None,
-        };
-        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Requires);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("old() is only allowed in ensures clauses"));
     }
 
     #[test]

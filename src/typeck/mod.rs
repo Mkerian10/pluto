@@ -744,18 +744,8 @@ mod tests {
     }
 
     #[test]
-    fn ensures_type_checks() {
-        check("fn foo() int\nensures result > 0\n{\n    return 1\n}\n\nfn main() {\n}").unwrap();
-    }
-
-    #[test]
-    fn ensures_result_in_scope() {
-        check("fn foo() int\nensures result == 42\n{\n    return 42\n}\n\nfn main() {\n}").unwrap();
-    }
-
-    #[test]
     fn trait_method_contracts_propagate() {
-        check("trait Counter {\n    fn get(self) int\n    ensures result >= 0\n}\n\nclass C impl Counter {\n    fn get(self) int {\n        return 1\n    }\n}\n\nfn main() {\n}").unwrap();
+        check("trait Counter {\n    fn get(self) int\n    requires true\n}\n\nclass C impl Counter {\n    fn get(self) int {\n        return 1\n    }\n}\n\nfn main() {\n}").unwrap();
     }
 
     #[test]

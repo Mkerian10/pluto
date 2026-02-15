@@ -63,20 +63,16 @@ fn declare_global_data<'a>(
     Ok(globals)
 }
 
-/// Extract requires/ensures contracts from a contract list into a FnContracts, if any exist.
+/// Extract requires contracts from a contract list into a FnContracts, if any exist.
 fn extract_fn_contracts(contracts: &[Spanned<ContractClause>]) -> Option<FnContracts> {
     let requires: Vec<(Expr, String)> = contracts.iter()
         .filter(|c| c.node.kind == ContractKind::Requires)
         .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
         .collect();
-    let ensures: Vec<(Expr, String)> = contracts.iter()
-        .filter(|c| c.node.kind == ContractKind::Ensures)
-        .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-        .collect();
-    if requires.is_empty() && ensures.is_empty() {
+    if requires.is_empty() {
         None
     } else {
-        Some(FnContracts { requires, ensures })
+        Some(FnContracts { requires })
     }
 }
 
@@ -315,7 +311,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
         }
     }
     // Propagate trait contracts to implementing class methods
-    // Trait requires are prepended (checked first), trait ensures are appended
+    // Trait requires are prepended (checked first)
     for class in &program.classes {
         let c = &class.node;
         for trait_name_spanned in &c.impl_traits {
@@ -327,21 +323,14 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
                         .filter(|c| c.node.kind == ContractKind::Requires)
                         .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
                         .collect();
-                    let trait_ensures: Vec<(Expr, String)> = contracts.iter()
-                        .filter(|c| c.node.kind == ContractKind::Ensures)
-                        .map(|c| (c.node.expr.node.clone(), format_invariant_expr(&c.node.expr.node)))
-                        .collect();
-                    if !trait_requires.is_empty() || !trait_ensures.is_empty() {
+                    if !trait_requires.is_empty() {
                         let entry = fn_contracts.entry(mangled).or_insert_with(|| FnContracts {
                             requires: Vec::new(),
-                            ensures: Vec::new(),
                         });
                         // Prepend trait requires (checked first)
                         let mut merged_requires = trait_requires;
                         merged_requires.append(&mut entry.requires);
                         entry.requires = merged_requires;
-                        // Append trait ensures
-                        entry.ensures.extend(trait_ensures);
                     }
                 }
             }
@@ -1062,8 +1051,9 @@ pub(super) fn format_invariant_expr(expr: &Expr) -> String {
         Expr::FieldAccess { object, field } => {
             format!("{}.{}", format_invariant_expr(&object.node), field.node)
         }
-        Expr::MethodCall { object, method, .. } => {
-            format!("{}.{}()", format_invariant_expr(&object.node), method.node)
+        Expr::MethodCall { object, method, args } => {
+            let arg_strs: Vec<String> = args.iter().map(|a| format_invariant_expr(&a.node)).collect();
+            format!("{}.{}({})", format_invariant_expr(&object.node), method.node, arg_strs.join(", "))
         }
         Expr::BinOp { op, lhs, rhs } => {
             let op_str = match op {
@@ -1086,10 +1076,15 @@ pub(super) fn format_invariant_expr(expr: &Expr) -> String {
             };
             format!("{}{}", op_str, format_invariant_expr(&operand.node))
         }
-        Expr::Call { name, args, .. } if name.node == "old" && args.len() == 1 => {
-            format!("old({})", format_invariant_expr(&args[0].node))
+        Expr::Call { name, args, .. } => {
+            let arg_strs: Vec<String> = args.iter().map(|a| format_invariant_expr(&a.node)).collect();
+            format!("{}({})", name.node, arg_strs.join(", "))
         }
-        _ => "<contract>".to_string(),
+        Expr::StringLit(s) => format!("\"{}\"", s),
+        Expr::Index { object, index } => {
+            format!("{}[{}]", format_invariant_expr(&object.node), format_invariant_expr(&index.node))
+        }
+        _ => "<expr>".to_string(),
     }
 }
 
@@ -1339,33 +1334,39 @@ mod tests {
 
     #[test]
     fn test_format_invariant_expr_default_fallback() {
-        // Unsupported expressions should return "<contract>"
-        let expr = Expr::StringLit("test".to_string());
-        assert_eq!(format_invariant_expr(&expr), "<contract>");
+        // Unsupported expressions should return "<expr>"
+        let expr = Expr::NoneLit;
+        assert_eq!(format_invariant_expr(&expr), "<expr>");
     }
 
     #[test]
-    fn test_format_invariant_expr_call_not_old() {
-        // Regular function calls (not "old") should fallback
+    fn test_format_invariant_expr_function_call() {
+        // Function calls are formatted with name and args
         let expr = Expr::Call {
             name: sp("foo".to_string()),
             args: vec![sp(Expr::IntLit(1))],
             type_args: vec![],
             target_id: None,
         };
-        assert_eq!(format_invariant_expr(&expr), "<contract>");
+        assert_eq!(format_invariant_expr(&expr), "foo(1)");
     }
 
     #[test]
-    fn test_format_invariant_expr_old_call_wrong_args() {
-        // old() with wrong number of args should fallback
+    fn test_format_invariant_expr_function_call_multiple_args() {
+        // Function calls with multiple arguments
         let expr = Expr::Call {
-            name: sp("old".to_string()),
+            name: sp("bar".to_string()),
             args: vec![sp(Expr::IntLit(1)), sp(Expr::IntLit(2))],
             type_args: vec![],
             target_id: None,
         };
-        assert_eq!(format_invariant_expr(&expr), "<contract>");
+        assert_eq!(format_invariant_expr(&expr), "bar(1, 2)");
+    }
+
+    #[test]
+    fn test_format_invariant_expr_string_lit() {
+        let expr = Expr::StringLit("test".to_string());
+        assert_eq!(format_invariant_expr(&expr), "\"test\"");
     }
 
     // ===== extract_fn_contracts tests =====
@@ -1390,53 +1391,7 @@ mod tests {
         ];
         let result = extract_fn_contracts(&contracts).unwrap();
         assert_eq!(result.requires.len(), 1);
-        assert_eq!(result.ensures.len(), 0);
         assert_eq!(result.requires[0].1, "x > 0");
-    }
-
-    #[test]
-    fn test_extract_fn_contracts_only_ensures() {
-        let contracts = vec![
-            sp(ContractClause {
-                kind: ContractKind::Ensures,
-                expr: sp(Expr::BinOp {
-                    op: BinOp::GtEq,
-                    lhs: Box::new(sp(Expr::Ident("result".to_string()))),
-                    rhs: Box::new(sp(Expr::IntLit(0))),
-                }),
-            }),
-        ];
-        let result = extract_fn_contracts(&contracts).unwrap();
-        assert_eq!(result.requires.len(), 0);
-        assert_eq!(result.ensures.len(), 1);
-        assert_eq!(result.ensures[0].1, "result >= 0");
-    }
-
-    #[test]
-    fn test_extract_fn_contracts_both() {
-        let contracts = vec![
-            sp(ContractClause {
-                kind: ContractKind::Requires,
-                expr: sp(Expr::BinOp {
-                    op: BinOp::Gt,
-                    lhs: Box::new(sp(Expr::Ident("x".to_string()))),
-                    rhs: Box::new(sp(Expr::IntLit(0))),
-                }),
-            }),
-            sp(ContractClause {
-                kind: ContractKind::Ensures,
-                expr: sp(Expr::BinOp {
-                    op: BinOp::GtEq,
-                    lhs: Box::new(sp(Expr::Ident("result".to_string()))),
-                    rhs: Box::new(sp(Expr::IntLit(0))),
-                }),
-            }),
-        ];
-        let result = extract_fn_contracts(&contracts).unwrap();
-        assert_eq!(result.requires.len(), 1);
-        assert_eq!(result.ensures.len(), 1);
-        assert_eq!(result.requires[0].1, "x > 0");
-        assert_eq!(result.ensures[0].1, "result >= 0");
     }
 
     #[test]
@@ -1453,11 +1408,10 @@ mod tests {
         ];
         let result = extract_fn_contracts(&contracts).unwrap();
         assert_eq!(result.requires.len(), 1);
-        assert_eq!(result.ensures.len(), 0);
     }
 
     #[test]
-    fn test_extract_fn_contracts_multiple_each() {
+    fn test_extract_fn_contracts_multiple_requires() {
         let contracts = vec![
             sp(ContractClause {
                 kind: ContractKind::Requires,
@@ -1475,30 +1429,11 @@ mod tests {
                     rhs: Box::new(sp(Expr::IntLit(100))),
                 }),
             }),
-            sp(ContractClause {
-                kind: ContractKind::Ensures,
-                expr: sp(Expr::BinOp {
-                    op: BinOp::GtEq,
-                    lhs: Box::new(sp(Expr::Ident("result".to_string()))),
-                    rhs: Box::new(sp(Expr::IntLit(0))),
-                }),
-            }),
-            sp(ContractClause {
-                kind: ContractKind::Ensures,
-                expr: sp(Expr::BinOp {
-                    op: BinOp::LtEq,
-                    lhs: Box::new(sp(Expr::Ident("result".to_string()))),
-                    rhs: Box::new(sp(Expr::IntLit(100))),
-                }),
-            }),
         ];
         let result = extract_fn_contracts(&contracts).unwrap();
         assert_eq!(result.requires.len(), 2);
-        assert_eq!(result.ensures.len(), 2);
         assert_eq!(result.requires[0].1, "x > 0");
         assert_eq!(result.requires[1].1, "x < 100");
-        assert_eq!(result.ensures[0].1, "result >= 0");
-        assert_eq!(result.ensures[1].1, "result <= 100");
     }
 
     // ===== host_target_triple tests =====

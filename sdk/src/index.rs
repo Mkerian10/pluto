@@ -291,6 +291,9 @@ fn collect_stmt_xrefs(
         Stmt::Yield { value } => {
             collect_expr_xrefs(&value.node, value.span, fn_name, callers, constructors, enum_usages, raise_sites);
         }
+        Stmt::Assert { expr } => {
+            collect_expr_xrefs(&expr.node, expr.span, fn_name, callers, constructors, enum_usages, raise_sites);
+        }
     }
 }
 

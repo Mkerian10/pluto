@@ -678,6 +678,9 @@ fn collect_dangling_in_stmt(stmt: &Stmt, span: Span, target: Uuid, out: &mut Vec
         Stmt::Yield { value } => {
             collect_dangling_in_expr(&value.node, value.span, target, out);
         }
+        Stmt::Assert { expr } => {
+            collect_dangling_in_expr(&expr.node, expr.span, target, out);
+        }
     }
 }
 
@@ -1006,6 +1009,9 @@ fn rename_in_stmt(stmt: &mut Stmt, id: Uuid, kind: DeclKindSimple, old_name: &st
         }
         Stmt::Yield { value } => {
             rename_in_expr(&mut value.node, id, kind, old_name, new_name);
+        }
+        Stmt::Assert { expr } => {
+            rename_in_expr(&mut expr.node, id, kind, old_name, new_name);
         }
     }
 }

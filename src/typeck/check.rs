@@ -313,6 +313,15 @@ fn check_stmt(
         Stmt::Raise { error_name, fields, .. } => {
             check_raise(error_name, fields, span, env)?;
         }
+        Stmt::Assert { expr } => {
+            let ty = infer_expr(&expr.node, expr.span, env)?;
+            if ty != PlutoType::Bool {
+                return Err(CompileError::type_err(
+                    format!("assert expression must be bool, found {ty}"),
+                    expr.span,
+                ));
+            }
+        }
         Stmt::Break => {
             if env.loop_depth == 0 {
                 return Err(CompileError::type_err(

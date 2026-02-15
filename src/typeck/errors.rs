@@ -222,6 +222,9 @@ fn collect_stmt_effects(
                 collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
             }
         }
+        Stmt::Assert { expr } => {
+            collect_expr_effects(&expr.node, direct_errors, edges, current_fn, env);
+        }
         Stmt::Yield { value, .. } => {
             collect_expr_effects(&value.node, direct_errors, edges, current_fn, env);
         }
@@ -594,6 +597,10 @@ fn enforce_stmt(
                 enforce_expr(&seed.node, seed.span, current_fn, env)?;
             }
             enforce_block(&body.node, current_fn, env)?;
+            Ok(())
+        }
+        Stmt::Assert { expr } => {
+            enforce_expr(&expr.node, expr.span, current_fn, env)?;
             Ok(())
         }
         Stmt::Yield { value, .. } => {

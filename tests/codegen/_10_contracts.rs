@@ -1,6 +1,6 @@
 // Category 10: Contracts Tests (20+ tests)
 // Comprehensive test suite for runtime contract checking codegen.
-// Tests validate correct invariant, requires, and ensures enforcement.
+// Tests validate correct invariant, requires, and assert enforcement.
 
 use super::common::{compile_and_run, compile_and_run_output, compile_and_run_stdout};
 
@@ -362,258 +362,188 @@ fn test_requires_on_method() {
 }
 
 // ============================================================================
-// 4. Ensures - Exit Checks (5 tests)
+// 4. Assert Statement (5 tests)
 // ============================================================================
 
 #[test]
-fn test_ensures_checked_on_exit() {
-    // Ensures clause checked before function returns
+fn test_assert_true_succeeds() {
+    // Assert with true condition should not abort
     let src = r#"
-        fn always_positive(x: int) int
-            ensures result > 0
-        {
-            return x * x + 1
-        }
-
         fn main() int {
-            return always_positive(-5)
+            assert 1 > 0
+            return 42
         }
     "#;
-    assert_eq!(compile_and_run(src), 26);
+    assert_eq!(compile_and_run(src), 42);
 }
 
 #[test]
-fn test_ensures_violation_aborts() {
-    // Ensures violation should abort
+fn test_assert_false_aborts() {
+    // Assert with false condition should abort
     let (_, stderr, code) = compile_and_run_output(
         r#"
-        fn always_positive(x: int) int
-            ensures result > 0
-        {
-            return x
-        }
-
         fn main() {
-            print(always_positive(-5))
+            assert 1 < 0
+            print("unreachable")
         }
         "#,
     );
     assert_ne!(code, 0);
-    assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
-    assert!(stderr.contains("always_positive"), "stderr: {stderr}");
-    assert!(stderr.contains("result > 0"), "stderr: {stderr}");
+    assert!(stderr.contains("assertion failed"), "stderr: {stderr}");
+    assert!(stderr.contains("1 < 0"), "stderr: {stderr}");
 }
 
 #[test]
-fn test_ensures_result_in_expression() {
-    // Ensures can reference 'result' in complex expressions
+fn test_assert_with_variables() {
+    // Assert can reference local variables
     let src = r#"
-        fn double(x: int) int
-            ensures result == x * 2
-        {
+        fn main() int {
+            let x = 10
+            let y = 5
+            assert x > y
+            return x - y
+        }
+    "#;
+    assert_eq!(compile_and_run(src), 5);
+}
+
+#[test]
+fn test_assert_with_function_call() {
+    // Assert accepts any boolean expression including function calls
+    let src = r#"
+        fn is_positive(x: int) bool {
+            return x > 0
+        }
+
+        fn main() int {
+            assert is_positive(42)
+            return 1
+        }
+    "#;
+    assert_eq!(compile_and_run(src), 1);
+}
+
+#[test]
+fn test_assert_complex_expression() {
+    // Assert with compound logical expression
+    let src = r#"
+        fn main() int {
+            let x = 50
+            let y = 20
+            assert (x > 0) && (y < 100) && (x + y < 200)
+            return x + y
+        }
+    "#;
+    assert_eq!(compile_and_run(src), 70);
+}
+
+// ============================================================================
+// 5. Assert in Methods and Functions (5 tests)
+// ============================================================================
+
+#[test]
+fn test_assert_in_function() {
+    // Assert inside a regular function
+    let src = r#"
+        fn check_and_double(x: int) int {
+            assert x > 0
             return x * 2
         }
 
         fn main() int {
-            return double(7)
+            return check_and_double(5)
         }
     "#;
-    assert_eq!(compile_and_run(src), 14);
+    assert_eq!(compile_and_run(src), 10);
 }
 
 #[test]
-fn test_ensures_on_void_function() {
-    // Ensures on void function (no result binding)
-    let src = r#"
-        class Counter {
-            count: int
-
-            fn increment(mut self)
-                ensures self.count > 0
-            {
-                self.count = self.count + 1
-            }
-        }
-
-        fn main() int {
-            let mut c = Counter { count: 0 }
-            c.increment()
-            return c.count
-        }
-    "#;
-    assert_eq!(compile_and_run(src), 1);
-}
-
-#[test]
-fn test_ensures_multiple_clauses() {
-    // Multiple ensures clauses
-    let src = r#"
-        fn in_range(x: int) int
-            ensures result >= 0
-            ensures result <= 100
-        {
-            if x < 0 {
-                return 0
-            }
-            if x > 100 {
-                return 100
-            }
-            return x
-        }
-
-        fn main() int {
-            let a = in_range(-10)
-            let b = in_range(50)
-            let c = in_range(200)
-            return a + b + c
-        }
-    "#;
-    assert_eq!(compile_and_run(src), 150); // 0 + 50 + 100
-}
-
-// ============================================================================
-// 5. old() Snapshots (5 tests)
-// ============================================================================
-
-#[test]
-fn test_old_snapshot_single_field() {
-    // old() captures field value at function entry
-    let src = r#"
-        class Counter {
-            count: int
-
-            fn increment(mut self)
-                ensures self.count == old(self.count) + 1
-            {
-                self.count = self.count + 1
-            }
-        }
-
-        fn main() int {
-            let mut c = Counter { count: 0 }
-            c.increment()
-            return c.count
-        }
-    "#;
-    assert_eq!(compile_and_run(src), 1);
-}
-
-#[test]
-fn test_old_snapshot_violation() {
-    // old() snapshot mismatch should abort
+fn test_assert_in_function_failure() {
+    // Assert failure inside a function should abort
     let (_, stderr, code) = compile_and_run_output(
         r#"
-        class Counter {
-            count: int
-
-            fn increment(self)
-                ensures self.count == old(self.count) + 1
-            {
-                // Bug: forgot to increment
-            }
+        fn check_and_double(x: int) int {
+            assert x > 0
+            return x * 2
         }
 
         fn main() {
-            let c = Counter { count: 0 }
-            c.increment()
+            print(check_and_double(-1))
         }
         "#,
     );
     assert_ne!(code, 0);
-    assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
+    assert!(stderr.contains("assertion failed"), "stderr: {stderr}");
+    assert!(stderr.contains("x > 0"), "stderr: {stderr}");
 }
 
 #[test]
-fn test_old_snapshot_multiple_fields() {
-    // old() can snapshot multiple fields
+fn test_assert_in_method() {
+    // Assert inside a class method
     let src = r#"
-        class Pair {
-            x: int
-            y: int
+        class Validator {
+            min_value: int
 
-            fn swap(mut self)
-                ensures self.x == old(self.y)
-                ensures self.y == old(self.x)
-            {
-                let temp = self.x
-                self.x = self.y
-                self.y = temp
-            }
-        }
-
-        fn main() {
-            let mut p = Pair { x: 10, y: 20 }
-            p.swap()
-            print(p.x)
-            print(p.y)
-        }
-    "#;
-    let output = compile_and_run_stdout(src);
-    assert_eq!(output, "20\n10\n");
-}
-
-#[test]
-fn test_old_in_arithmetic_expression() {
-    // old() used in complex arithmetic
-    let src = r#"
-        class Account {
-            balance: int
-
-            fn deposit(mut self, amount: int)
-                ensures self.balance == old(self.balance) + amount
-            {
-                self.balance = self.balance + amount
+            fn validate(self, x: int) int {
+                assert x >= self.min_value
+                return x
             }
         }
 
         fn main() int {
-            let mut a = Account { balance: 100 }
-            a.deposit(50)
-            return a.balance
+            let v = Validator { min_value: 0 }
+            return v.validate(42)
         }
     "#;
-    assert_eq!(compile_and_run(src), 150);
+    assert_eq!(compile_and_run(src), 42);
 }
 
 #[test]
-fn test_old_nested_in_logical_expression() {
-    // old() inside logical operators
+fn test_assert_with_field_access() {
+    // Assert referencing object fields
     let src = r#"
-        class BoundedCounter {
-            value: int
-
-            fn safe_increment(mut self)
-                ensures self.value >= old(self.value) && self.value <= 100
-            {
-                if self.value < 100 {
-                    self.value = self.value + 1
-                }
-            }
+        class Config {
+            max_retries: int
         }
 
         fn main() int {
-            let mut c = BoundedCounter { value: 99 }
-            c.safe_increment()
-            c.safe_increment()
-            return c.value
+            let c = Config { max_retries: 3 }
+            assert c.max_retries > 0
+            return c.max_retries
         }
     "#;
-    assert_eq!(compile_and_run(src), 100);
+    assert_eq!(compile_and_run(src), 3);
+}
+
+#[test]
+fn test_assert_multiple_in_sequence() {
+    // Multiple asserts in sequence
+    let src = r#"
+        fn main() int {
+            let x = 10
+            assert x > 0
+            assert x < 100
+            assert x != 5
+            return x
+        }
+    "#;
+    assert_eq!(compile_and_run(src), 10);
 }
 
 // ============================================================================
-// 6. Combined Contracts (5 tests)
+// 6. Combined Contracts with Assert (5 tests)
 // ============================================================================
 
 #[test]
-fn test_requires_and_ensures_together() {
-    // Function with both requires and ensures
+fn test_requires_with_assert_in_body() {
+    // Requires on entry, assert as additional check inside body
     let src = r#"
         fn safe_divide(a: int, b: int) int
             requires b != 0
-            ensures result * b <= a
         {
-            return a / b
+            let result = a / b
+            assert result * b <= a
+            return result
         }
 
         fn main() int {
@@ -624,8 +554,8 @@ fn test_requires_and_ensures_together() {
 }
 
 #[test]
-fn test_invariant_requires_ensures_together() {
-    // Class with invariant, method with requires and ensures
+fn test_invariant_with_assert_in_method() {
+    // Class with invariant, method uses assert for internal checks
     let src = r#"
         class PositiveCounter {
             value: int
@@ -634,9 +564,10 @@ fn test_invariant_requires_ensures_together() {
 
             fn add(mut self, amount: int) int
                 requires amount > 0
-                ensures result == old(self.value) + amount
             {
+                let old_value = self.value
                 self.value = self.value + amount
+                assert self.value == old_value + amount
                 return self.value
             }
         }
@@ -650,8 +581,8 @@ fn test_invariant_requires_ensures_together() {
 }
 
 #[test]
-fn test_all_contracts_satisfied_complex() {
-    // Complex scenario with all contract types
+fn test_all_contracts_with_assert() {
+    // Invariant + requires + assert in body
     let src = r#"
         class Range {
             lo: int
@@ -660,10 +591,8 @@ fn test_all_contracts_satisfied_complex() {
             invariant self.lo >= 0
             invariant self.hi > self.lo
 
-            fn expand(mut self, amount: int)
-                requires amount > 0
-                ensures self.hi - self.lo == old(self.hi - self.lo) + amount
-            {
+            fn expand(mut self, amount: int) {
+                assert amount > 0
                 self.hi = self.hi + amount
             }
 
@@ -682,14 +611,14 @@ fn test_all_contracts_satisfied_complex() {
 }
 
 #[test]
-fn test_requires_violation_prevents_ensures_check() {
-    // When requires fails, ensures should not be checked
+fn test_requires_violation_before_assert() {
+    // When requires fails, assert in body should not be reached
     let (_, stderr, code) = compile_and_run_output(
         r#"
         fn foo(x: int) int
             requires x > 0
-            ensures result > 0
         {
+            assert x < 100
             return x
         }
 
@@ -700,12 +629,12 @@ fn test_requires_violation_prevents_ensures_check() {
     );
     assert_ne!(code, 0);
     assert!(stderr.contains("requires violation"), "stderr: {stderr}");
-    assert!(!stderr.contains("ensures violation"), "stderr: {stderr}");
+    assert!(!stderr.contains("assertion failed"), "should not reach assert, stderr: {stderr}");
 }
 
 #[test]
-fn test_invariant_violation_before_method_ensures() {
-    // If a method's mut operations violate invariant, abort before ensures
+fn test_invariant_violation_before_assert() {
+    // If invariant is violated at construction, assert in method is not reached
     let (_, stderr, code) = compile_and_run_output(
         r#"
         class BoundedValue {
@@ -714,16 +643,15 @@ fn test_invariant_violation_before_method_ensures() {
             invariant self.value >= 0
             invariant self.value <= 100
 
-            fn set(mut self, v: int)
-                ensures self.value == v
-            {
-                self.value = v
+            fn check(self) int {
+                assert self.value > 50
+                return self.value
             }
         }
 
         fn main() {
-            let mut b = BoundedValue { value: 50 }
-            b.set(200)
+            let b = BoundedValue { value: 200 }
+            print(b.check())
         }
         "#,
     );

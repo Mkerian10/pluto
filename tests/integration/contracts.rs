@@ -172,7 +172,7 @@ fn main() {
     assert!(out.starts_with("20"), "expected output starting with 20, got: {out}");
 }
 
-// ── Requires/ensures parse (not enforced) ────────────────────────────────────
+// ── Requires parse ───────────────────────────────────────────────────────────
 
 #[test]
 fn requires_parses_without_error() {
@@ -191,24 +191,6 @@ fn main() {
 "#,
     );
     assert_eq!(out, "7\n");
-}
-
-#[test]
-fn ensures_parses_without_error() {
-    let out = compile_and_run_stdout(
-        r#"
-fn double(x: int) int
-    ensures x > 0
-{
-    return x * 2
-}
-
-fn main() {
-    print(double(5))
-}
-"#,
-    );
-    assert_eq!(out, "10\n");
 }
 
 #[test]
@@ -748,201 +730,6 @@ fn main() {
     assert_eq!(out, "50\n");
 }
 
-// ── Phase 2: ensures runtime enforcement ──────────────────────────────────
-
-#[test]
-fn ensures_satisfied_runs_ok() {
-    let out = compile_and_run_stdout(
-        r#"
-fn double(x: int) int
-    ensures result > 0
-{
-    return x * 2
-}
-
-fn main() {
-    print(double(5))
-}
-"#,
-    );
-    assert_eq!(out, "10\n");
-}
-
-#[test]
-fn ensures_violated_aborts() {
-    let (_, stderr, code) = compile_and_run_output(
-        r#"
-fn always_positive(x: int) int
-    ensures result > 0
-{
-    return x
-}
-
-fn main() {
-    print(always_positive(-5))
-}
-"#,
-    );
-    assert_ne!(code, 0);
-    assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
-    assert!(stderr.contains("always_positive"), "stderr: {stderr}");
-    assert!(stderr.contains("result > 0"), "stderr: {stderr}");
-}
-
-#[test]
-fn ensures_result_equals_expression() {
-    let out = compile_and_run_stdout(
-        r#"
-fn double(x: int) int
-    ensures result == x * 2
-{
-    return x * 2
-}
-
-fn main() {
-    print(double(7))
-}
-"#,
-    );
-    assert_eq!(out, "14\n");
-}
-
-#[test]
-fn ensures_result_violated() {
-    let (_, stderr, code) = compile_and_run_output(
-        r#"
-fn double(x: int) int
-    ensures result == x * 2
-{
-    return x + 1
-}
-
-fn main() {
-    print(double(5))
-}
-"#,
-    );
-    assert_ne!(code, 0);
-    assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
-}
-
-#[test]
-fn ensures_on_void_function() {
-    let out = compile_and_run_stdout(
-        r#"
-class Counter {
-    count: int
-
-    fn increment(mut self)
-        ensures self.count > 0
-    {
-        self.count = self.count + 1
-    }
-}
-
-fn main() {
-    let mut c = Counter { count: 0 }
-    c.increment()
-    print(c.count)
-}
-"#,
-    );
-    assert_eq!(out, "1\n");
-}
-
-// ── Phase 2: old() ──────────────────────────────────────────────────────
-
-#[test]
-fn ensures_old_satisfied() {
-    let out = compile_and_run_stdout(
-        r#"
-class Counter {
-    count: int
-
-    fn increment(mut self)
-        ensures self.count == old(self.count) + 1
-    {
-        self.count = self.count + 1
-    }
-}
-
-fn main() {
-    let mut c = Counter { count: 0 }
-    c.increment()
-    print(c.count)
-}
-"#,
-    );
-    assert_eq!(out, "1\n");
-}
-
-#[test]
-fn ensures_old_violated() {
-    let (_, stderr, code) = compile_and_run_output(
-        r#"
-class Counter {
-    count: int
-
-    fn increment(self)
-        ensures self.count == old(self.count) + 1
-    {
-        // Bug: forgot to increment!
-    }
-}
-
-fn main() {
-    let c = Counter { count: 0 }
-    c.increment()
-}
-"#,
-    );
-    assert_ne!(code, 0);
-    assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
-}
-
-#[test]
-fn ensures_old_nested_field() {
-    let out = compile_and_run_stdout(
-        r#"
-class Wallet {
-    balance: int
-
-    fn withdraw(mut self, amount: int)
-        requires amount > 0
-        ensures self.balance == old(self.balance) - amount
-    {
-        self.balance = self.balance - amount
-    }
-}
-
-fn main() {
-    let mut w = Wallet { balance: 100 }
-    w.withdraw(30)
-    print(w.balance)
-}
-"#,
-    );
-    assert_eq!(out, "70\n");
-}
-
-#[test]
-fn old_in_requires_rejected() {
-    compile_should_fail_with(
-        r#"
-fn foo(x: int) int
-    requires old(x) > 0
-{
-    return x
-}
-
-fn main() {
-    print(foo(5))
-}
-"#,
-        "old() is only allowed in ensures clauses",
-    );
-}
-
 // ── Phase 2: type checking ──────────────────────────────────────────────
 
 #[test]
@@ -964,24 +751,6 @@ fn main() {
 }
 
 #[test]
-fn ensures_non_bool_rejected() {
-    compile_should_fail_with(
-        r#"
-fn foo(x: int) int
-    ensures result + 1
-{
-    return x
-}
-
-fn main() {
-    print(foo(5))
-}
-"#,
-        "ensures expression must be bool",
-    );
-}
-
-#[test]
 fn result_in_requires_rejected() {
     compile_should_fail_with(
         r#"
@@ -999,37 +768,15 @@ fn main() {
     );
 }
 
-#[test]
-fn result_type_in_ensures() {
-    let out = compile_and_run_stdout(
-        r#"
-fn negate(x: bool) bool
-    ensures result != x
-{
-    if x {
-        return false
-    }
-    return true
-}
-
-fn main() {
-    print(negate(true))
-    print(negate(false))
-}
-"#,
-    );
-    assert_eq!(out, "false\ntrue\n");
-}
-
 // ── Phase 2: edge cases ──────────────────────────────────────────────────
 
 #[test]
-fn requires_and_ensures_together() {
+fn requires_with_multiple_conditions() {
     let out = compile_and_run_stdout(
         r#"
 fn safe_div(a: int, b: int) int
     requires b != 0
-    ensures result * b == a
+    requires a >= 0
 {
     return a / b
 }
@@ -1043,7 +790,7 @@ fn main() {
 }
 
 #[test]
-fn method_with_requires_ensures_and_invariant() {
+fn method_with_requires_and_invariant() {
     let out = compile_and_run_stdout(
         r#"
 class BoundedCounter {
@@ -1053,7 +800,6 @@ class BoundedCounter {
 
     fn add(mut self, n: int)
         requires n > 0
-        ensures self.count == old(self.count) + n
     {
         self.count = self.count + n
     }
@@ -1068,34 +814,6 @@ fn main() {
 "#,
     );
     assert_eq!(out, "8\n");
-}
-
-#[test]
-fn old_and_result_in_same_ensures() {
-    let out = compile_and_run_stdout(
-        r#"
-class Stack {
-    size: int
-
-    fn push(mut self) int
-        ensures result == old(self.size)
-        ensures self.size == old(self.size) + 1
-    {
-        let old_size = self.size
-        self.size = self.size + 1
-        return old_size
-    }
-}
-
-fn main() {
-    let mut s = Stack { size: 0 }
-    let idx = s.push()
-    print(idx)
-    print(s.size)
-}
-"#,
-    );
-    assert_eq!(out, "0\n1\n");
 }
 
 #[test]
@@ -1117,54 +835,6 @@ fn main() {
     assert_ne!(code, 0);
     assert!(stderr.contains("requires violation"), "stderr: {stderr}");
     assert!(stderr.contains("b > 0"), "stderr: {stderr}");
-}
-
-#[test]
-fn ensures_multiple_satisfied() {
-    let out = compile_and_run_stdout(
-        r#"
-fn clamp(x: int) int
-    ensures result >= 0
-    ensures result <= 100
-{
-    if x < 0 {
-        return 0
-    }
-    if x > 100 {
-        return 100
-    }
-    return x
-}
-
-fn main() {
-    print(clamp(-5))
-    print(clamp(50))
-    print(clamp(200))
-}
-"#,
-    );
-    assert_eq!(out, "0\n50\n100\n");
-}
-
-#[test]
-fn ensures_multiple_one_violated() {
-    let (_, stderr, code) = compile_and_run_output(
-        r#"
-fn clamp(x: int) int
-    ensures result >= 0
-    ensures result <= 100
-{
-    return x
-}
-
-fn main() {
-    print(clamp(200))
-}
-"#,
-    );
-    assert_ne!(code, 0);
-    assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
-    assert!(stderr.contains("result <= 100"), "stderr: {stderr}");
 }
 
 // ── Phase 3: Interface Guarantees (Trait Method Contracts) ──────────────────
@@ -1224,60 +894,6 @@ fn main() {
 }
 
 #[test]
-fn trait_ensures_satisfied_on_impl() {
-    let out = compile_and_run_stdout(
-        r#"
-trait Doubler {
-    fn double(self, x: int) int
-        ensures result > 0
-}
-
-class MyDoubler impl Doubler {
-    id: int
-
-    fn double(self, x: int) int {
-        return x * 2
-    }
-}
-
-fn main() {
-    let d = MyDoubler { id: 1 }
-    print(d.double(5))
-}
-"#,
-    );
-    assert_eq!(out, "10\n");
-}
-
-#[test]
-fn trait_ensures_violated_on_impl() {
-    let (_, stderr, code) = compile_and_run_output(
-        r#"
-trait Doubler {
-    fn double(self, x: int) int
-        ensures result > 0
-}
-
-class MyDoubler impl Doubler {
-    id: int
-
-    fn double(self, x: int) int {
-        return x * 2
-    }
-}
-
-fn main() {
-    let d = MyDoubler { id: 1 }
-    print(d.double(-5))
-}
-"#,
-    );
-    assert_ne!(code, 0);
-    assert!(stderr.contains("ensures violation"), "stderr: {stderr}");
-    assert!(stderr.contains("result > 0"), "stderr: {stderr}");
-}
-
-#[test]
 fn liskov_class_cannot_add_requires() {
     compile_should_fail_with(
         r#"
@@ -1330,34 +946,6 @@ fn main() {
 "#,
         "Liskov Substitution Principle",
     );
-}
-
-#[test]
-fn liskov_class_can_add_ensures() {
-    let out = compile_and_run_stdout(
-        r#"
-trait Processor {
-    fn process(self, x: int) int
-        requires x > 0
-}
-
-class MyProcessor impl Processor {
-    id: int
-
-    fn process(self, x: int) int
-        ensures result > 0
-    {
-        return x * 2
-    }
-}
-
-fn main() {
-    let p = MyProcessor { id: 1 }
-    print(p.process(5))
-}
-"#,
-    );
-    assert_eq!(out, "10\n");
 }
 
 #[test]
@@ -1586,6 +1174,167 @@ fn main() {
 "#,
     );
     assert_eq!(out, "2\n");
+}
+
+// ── Phase 4: assert statement ───────────────────────────────────────────────
+
+#[test]
+fn assert_true_runs_ok() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    assert 1 > 0
+    print("ok")
+}
+"#,
+    );
+    assert_eq!(out, "ok\n");
+}
+
+#[test]
+fn assert_false_aborts() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+fn main() {
+    assert 1 < 0
+    print("should not reach")
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("assertion failed"),
+        "stderr should contain 'assertion failed', got: {stderr}"
+    );
+}
+
+#[test]
+fn assert_with_variable() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let x = 5
+    assert x > 0
+    print(x)
+}
+"#,
+    );
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn assert_non_bool_rejected() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    assert 42
+}
+"#,
+        "assert expression must be bool",
+    );
+}
+
+#[test]
+fn assert_with_function_call() {
+    let out = compile_and_run_stdout(
+        r#"
+fn is_positive(x: int) bool {
+    return x > 0
+}
+
+fn main() {
+    assert is_positive(5)
+    print("ok")
+}
+"#,
+    );
+    assert_eq!(out, "ok\n");
+}
+
+#[test]
+fn assert_in_function() {
+    let out = compile_and_run_stdout(
+        r#"
+fn check_positive(x: int) {
+    assert x > 0
+}
+
+fn main() {
+    check_positive(10)
+    print("ok")
+}
+"#,
+    );
+    assert_eq!(out, "ok\n");
+}
+
+#[test]
+fn assert_with_comparison() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let a = 10
+    let b = 5
+    assert a >= b
+    print("ok")
+}
+"#,
+    );
+    assert_eq!(out, "ok\n");
+}
+
+#[test]
+fn assert_complex_expression() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let x = 50
+    let y = 20
+    assert (x > 0) && (y < 100)
+    print("ok")
+}
+"#,
+    );
+    assert_eq!(out, "ok\n");
+}
+
+#[test]
+fn assert_with_field_access() {
+    let out = compile_and_run_stdout(
+        r#"
+class Config {
+    max_retries: int
+}
+
+fn main() {
+    let c = Config { max_retries: 3 }
+    assert c.max_retries > 0
+    print("ok")
+}
+"#,
+    );
+    assert_eq!(out, "ok\n");
+}
+
+#[test]
+fn assert_failure_shows_expression() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+fn main() {
+    let x = -1
+    assert x > 0
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("assertion failed"),
+        "stderr should contain 'assertion failed', got: {stderr}"
+    );
+    assert!(
+        stderr.contains("x > 0"),
+        "stderr should contain the expression 'x > 0', got: {stderr}"
+    );
 }
 
 // ============================================================
