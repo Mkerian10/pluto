@@ -2,10 +2,62 @@ use std::path::Path;
 
 use crate::binary;
 use crate::parser::ast::{
-    EnumVariant, Field, Function, Param, Program, TraitMethod,
+    EnumVariant, Field, Function, Param, Program, TraitMethod, TypeExpr,
 };
 use crate::span::Spanned;
 use crate::xref;
+
+/// Compare two TypeExpr values semantically (ignoring spans).
+fn types_equal(t1: &Spanned<TypeExpr>, t2: &Spanned<TypeExpr>) -> bool {
+    match (&t1.node, &t2.node) {
+        (TypeExpr::Named(n1), TypeExpr::Named(n2)) => n1 == n2,
+        (TypeExpr::Array(a1), TypeExpr::Array(a2)) => types_equal(a1, a2),
+        (
+            TypeExpr::Qualified {
+                module: m1,
+                name: n1,
+            },
+            TypeExpr::Qualified {
+                module: m2,
+                name: n2,
+            },
+        ) => m1 == m2 && n1 == n2,
+        (
+            TypeExpr::Fn {
+                params: p1,
+                return_type: r1,
+            },
+            TypeExpr::Fn {
+                params: p2,
+                return_type: r2,
+            },
+        ) => {
+            p1.len() == p2.len()
+                && p1.iter().zip(p2.iter()).all(|(a, b)| types_equal(a, b))
+                && types_equal(r1, r2)
+        }
+        (
+            TypeExpr::Generic {
+                name: n1,
+                type_args: args1,
+            },
+            TypeExpr::Generic {
+                name: n2,
+                type_args: args2,
+            },
+        ) => {
+            n1 == n2
+                && args1.len() == args2.len()
+                && args1
+                    .iter()
+                    .zip(args2.iter())
+                    .all(|(a, b)| types_equal(a, b))
+        }
+        (TypeExpr::Nullable(t1), TypeExpr::Nullable(t2)) => types_equal(t1, t2),
+        (TypeExpr::Stream(t1), TypeExpr::Stream(t2)) => types_equal(t1, t2),
+        _ => false,
+    }
+}
 
 /// Summary of what changed during a sync operation.
 #[derive(Debug, Clone)]
@@ -123,6 +175,7 @@ fn transplant_program(new: &mut Program, old: &Program) -> SyncResult {
             new_f.node.id = old_f.node.id;
             transplant_params(&mut new_f.node.params, &old_f.node.params);
         },
+        Some(function_similarity),
         &mut added,
         &mut removed,
         &mut modified,
@@ -140,6 +193,7 @@ fn transplant_program(new: &mut Program, old: &Program) -> SyncResult {
             transplant_fields(&mut new_c.node.fields, &old_c.node.fields);
             transplant_methods(&mut new_c.node.methods, &old_c.node.methods);
         },
+        None::<fn(&_, &_) -> f64>,
         &mut added,
         &mut removed,
         &mut modified,
@@ -156,6 +210,7 @@ fn transplant_program(new: &mut Program, old: &Program) -> SyncResult {
             new_e.node.id = old_e.node.id;
             transplant_variants(&mut new_e.node.variants, &old_e.node.variants);
         },
+        None::<fn(&_, &_) -> f64>,
         &mut added,
         &mut removed,
         &mut modified,
@@ -172,6 +227,7 @@ fn transplant_program(new: &mut Program, old: &Program) -> SyncResult {
             new_t.node.id = old_t.node.id;
             transplant_trait_methods(&mut new_t.node.methods, &old_t.node.methods);
         },
+        None::<fn(&_, &_) -> f64>,
         &mut added,
         &mut removed,
         &mut modified,
@@ -188,6 +244,7 @@ fn transplant_program(new: &mut Program, old: &Program) -> SyncResult {
             new_e.node.id = old_e.node.id;
             transplant_fields(&mut new_e.node.fields, &old_e.node.fields);
         },
+        None::<fn(&_, &_) -> f64>,
         &mut added,
         &mut removed,
         &mut modified,
@@ -226,47 +283,138 @@ fn transplant_program(new: &mut Program, old: &Program) -> SyncResult {
     }
 }
 
+/// Compute similarity score between two functions (0.0 = no match, 1.0 = perfect match).
+/// Uses parameter types, return type, and parameter names.
+fn function_similarity(f1: &Spanned<Function>, f2: &Spanned<Function>) -> f64 {
+    let mut score = 0.0;
+    let mut total_weight = 0.0;
+
+    // Parameter count match (weight: 2.0)
+    if f1.node.params.len() == f2.node.params.len() {
+        score += 2.0;
+    }
+    total_weight += 2.0;
+
+    // Parameter types (weight: 4.0)
+    if f1.node.params.len() == f2.node.params.len() {
+        let matching_types = f1.node.params.iter()
+            .zip(f2.node.params.iter())
+            .filter(|(p1, p2)| types_equal(&p1.ty, &p2.ty))
+            .count();
+        score += 4.0 * (matching_types as f64 / f1.node.params.len().max(1) as f64);
+    }
+    total_weight += 4.0;
+
+    // Return type (weight: 2.0)
+    let return_types_match = match (&f1.node.return_type, &f2.node.return_type) {
+        (Some(r1), Some(r2)) => types_equal(r1, r2),
+        (None, None) => true,
+        _ => false,
+    };
+    if return_types_match {
+        score += 2.0;
+    }
+    total_weight += 2.0;
+
+    // Parameter names (weight: 1.0) - lower weight since names can change
+    if f1.node.params.len() == f2.node.params.len() {
+        let matching_names = f1.node.params.iter()
+            .zip(f2.node.params.iter())
+            .filter(|(p1, p2)| p1.name.node == p2.name.node)
+            .count();
+        score += 1.0 * (matching_names as f64 / f1.node.params.len().max(1) as f64);
+    }
+    total_weight += 1.0;
+
+    score / total_weight
+}
+
 /// Generic helper to transplant UUIDs for a list of declarations.
 /// Uses `name_fn` to extract names, `transplant_fn` to copy UUIDs and recurse.
+/// Falls back to similarity matching when name matching fails.
 #[allow(clippy::too_many_arguments)]
 fn transplant_decls<T>(
     new_items: &mut [T],
     old_items: &[T],
     name_fn: impl Fn(&T) -> String,
     transplant_fn: impl Fn(&mut T, &T),
+    similarity_fn: Option<impl Fn(&T, &T) -> f64>,
     added: &mut Vec<String>,
     removed: &mut Vec<String>,
     _modified: &mut Vec<String>,
     unchanged: &mut usize,
     kind: &str,
 ) {
-    // Build a set of new names for removal detection
-    let new_names: std::collections::HashSet<String> =
-        new_items.iter().map(&name_fn).collect();
-    let old_names: std::collections::HashSet<String> =
-        old_items.iter().map(&name_fn).collect();
+    const SIMILARITY_THRESHOLD: f64 = 0.7; // Only match if similarity >= 70%
 
-    // Transplant matching items
-    for new_item in new_items.iter_mut() {
+    // Track which old items have been matched (by index)
+    let mut old_matched = vec![false; old_items.len()];
+    // Track which new items were matched (by index)
+    let mut new_matched = vec![false; new_items.len()];
+
+    // First pass: match by name
+    for (new_idx, new_item) in new_items.iter_mut().enumerate() {
         let name = name_fn(new_item);
-        let mut found = false;
-        for old_item in old_items {
-            if name_fn(old_item) == name {
+        for (old_idx, old_item) in old_items.iter().enumerate() {
+            if !old_matched[old_idx] && name_fn(old_item) == name {
                 transplant_fn(new_item, old_item);
                 *unchanged += 1;
-                found = true;
+                old_matched[old_idx] = true;
+                new_matched[new_idx] = true;
                 break;
             }
         }
-        if !found {
+    }
+
+    // Second pass: similarity matching for unmatched items (if similarity_fn provided)
+    if let Some(sim_fn) = similarity_fn {
+        for (new_idx, new_item) in new_items.iter_mut().enumerate() {
+            if new_matched[new_idx] {
+                continue; // Already matched by name
+            }
+
+            // Find the best matching old item among unmatched ones
+            let mut best_match: Option<(usize, f64)> = None;
+            for (old_idx, old_item) in old_items.iter().enumerate() {
+                if old_matched[old_idx] {
+                    continue; // Already matched
+                }
+
+                let similarity = sim_fn(new_item, old_item);
+                if similarity >= SIMILARITY_THRESHOLD {
+                    if let Some((_, best_score)) = best_match {
+                        if similarity > best_score {
+                            best_match = Some((old_idx, similarity));
+                        }
+                    } else {
+                        best_match = Some((old_idx, similarity));
+                    }
+                }
+            }
+
+            // If we found a good match, transplant the UUID
+            if let Some((old_idx, _score)) = best_match {
+                transplant_fn(new_item, &old_items[old_idx]);
+                old_matched[old_idx] = true;
+                new_matched[new_idx] = true;
+                *unchanged += 1; // UUID preserved (rename detected)
+            }
+        }
+    }
+
+    // Mark unmatched new items as added
+    for (new_idx, new_item) in new_items.iter().enumerate() {
+        if !new_matched[new_idx] {
+            let name = name_fn(new_item);
             added.push(format!("{kind} {name}"));
         }
     }
 
-    // Detect removals
-    for old_name in &old_names {
-        if !new_names.contains(old_name) {
-            removed.push(format!("{kind} {old_name}"));
+    // Detect removals (old items that weren't matched)
+    for (old_idx, old_item) in old_items.iter().enumerate() {
+        if !old_matched[old_idx] {
+            let name = name_fn(old_item);
+            removed.push(format!("{kind} {name}"));
         }
     }
 }

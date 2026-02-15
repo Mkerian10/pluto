@@ -293,15 +293,10 @@ fn main() {
 }
 
 #[test]
-#[ignore] // TODO: sync doesn't detect renames yet - it matches by name, so renames = delete + add
 fn test_uuid_preservation_across_renames() {
     // Test: UUIDs persist when declarations are renamed
     //
-    // LIMITATION: Current sync implementation matches by name,
-    // so renaming is treated as delete + add (new UUID assigned).
-    // This test is ignored until rename detection is implemented.
-    //
-    // Future: Use structural similarity or edit distance to detect renames.
+    // Uses structural similarity matching to detect renames and preserve UUIDs.
 
     let temp = TempDir::new().unwrap();
 
