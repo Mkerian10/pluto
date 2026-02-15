@@ -95,6 +95,59 @@ fn canon(path: &str) -> String {
         .unwrap_or_else(|_| path.to_string())
 }
 
+/// Validate that a path is safe to write to (within project root).
+/// Returns the canonicalized path if valid, or an error if the path escapes the project root.
+async fn validate_write_path(
+    project_root: &Arc<RwLock<Option<String>>>,
+    path: &str,
+) -> Result<PathBuf, McpError> {
+    // Get project root
+    let root_opt = project_root.read().await;
+    let root_str = root_opt.as_ref().ok_or_else(|| {
+        mcp_err("No project root set. Use load_project first to establish a project root.")
+    })?;
+    let root_path = PathBuf::from(root_str);
+    let canonical_root = std::fs::canonicalize(&root_path)
+        .map_err(|e| mcp_internal(format!("Failed to canonicalize project root: {e}")))?;
+
+    // Canonicalize the target path
+    let target = PathBuf::from(path);
+
+    let canonical_target: PathBuf = if target.exists() {
+        std::fs::canonicalize(&target)
+            .map_err(|e| mcp_internal(format!("Failed to canonicalize path: {e}")))?
+    } else {
+        // Validate parent directory exists and is within project root
+        if let Some(parent) = target.parent() {
+            if parent.as_os_str().is_empty() {
+                // Relative path with no parent (e.g., "file.pluto")
+                // Treat as relative to project root
+                canonical_root.join(&target)
+            } else if !parent.exists() {
+                return Err(mcp_err(format!("Parent directory does not exist: {}", parent.display())));
+            } else {
+                let canonical_parent = std::fs::canonicalize(parent)
+                    .map_err(|e| mcp_internal(format!("Failed to canonicalize parent: {e}")))?;
+                canonical_parent.join(target.file_name().unwrap())
+            }
+        } else {
+            // No parent means root-level path
+            return Err(mcp_err("Cannot write to root-level path"));
+        }
+    };
+
+    // Check if the canonical target is within the project root
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err(mcp_err(format!(
+            "Path safety violation: '{}' is outside project root '{}'",
+            path,
+            root_str
+        )));
+    }
+
+    Ok(canonical_target)
+}
+
 #[tool_router]
 impl PlutoMcp {
     pub fn new() -> Self {
@@ -867,7 +920,9 @@ impl PlutoMcp {
         &self,
         Parameters(input): Parameters<CompileInput>,
     ) -> Result<CallToolResult, McpError> {
-        let canonical = canon(&input.path);
+        // Validate path safety
+        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
+        let canonical = validated_path.to_string_lossy().to_string();
         let entry_path = Path::new(&canonical);
         let stdlib_path = input.stdlib.as_ref().map(|s| PathBuf::from(s));
 
@@ -922,7 +977,9 @@ impl PlutoMcp {
         &self,
         Parameters(input): Parameters<RunInput>,
     ) -> Result<CallToolResult, McpError> {
-        let canonical = canon(&input.path);
+        // Validate path safety
+        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
+        let canonical = validated_path.to_string_lossy().to_string();
         let entry_path = Path::new(&canonical);
         let stdlib_path = input.stdlib.as_ref().map(|s| PathBuf::from(s));
         let timeout_ms = input.timeout_ms.unwrap_or(10_000).min(60_000);
@@ -988,7 +1045,9 @@ impl PlutoMcp {
         &self,
         Parameters(input): Parameters<TestInput>,
     ) -> Result<CallToolResult, McpError> {
-        let canonical = canon(&input.path);
+        // Validate path safety
+        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
+        let canonical = validated_path.to_string_lossy().to_string();
         let entry_path = Path::new(&canonical);
         let stdlib_path = input.stdlib.as_ref().map(|s| PathBuf::from(s));
         let timeout_ms = input.timeout_ms.unwrap_or(30_000).min(60_000);
@@ -1055,8 +1114,20 @@ impl PlutoMcp {
         &self,
         Parameters(input): Parameters<AddDeclarationInput>,
     ) -> Result<CallToolResult, McpError> {
-        let canonical = self.resolve_or_create_path(&input.path)?;
+        // Validate path safety first
+        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
 
+        // Create file if needed
+        if !validated_path.exists() {
+            if let Some(parent) = validated_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| mcp_internal(format!("Failed to create directories: {e}")))?;
+            }
+            std::fs::write(&validated_path, "")
+                .map_err(|e| mcp_internal(format!("Failed to create file: {e}")))?;
+        }
+
+        let canonical = validated_path.to_string_lossy().to_string();
         let contents = std::fs::read_to_string(&canonical).unwrap_or_default();
         let module = Module::from_source(&contents)
             .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
@@ -1095,7 +1166,9 @@ impl PlutoMcp {
         &self,
         Parameters(input): Parameters<ReplaceDeclarationInput>,
     ) -> Result<CallToolResult, McpError> {
-        let canonical = canon(&input.path);
+        // Validate path safety
+        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
+        let canonical = validated_path.to_string_lossy().to_string();
 
         let contents = std::fs::read_to_string(&canonical)
             .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
@@ -1131,7 +1204,9 @@ impl PlutoMcp {
         &self,
         Parameters(input): Parameters<DeleteDeclarationInput>,
     ) -> Result<CallToolResult, McpError> {
-        let canonical = canon(&input.path);
+        // Validate path safety
+        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
+        let canonical = validated_path.to_string_lossy().to_string();
 
         let contents = std::fs::read_to_string(&canonical)
             .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
@@ -1174,7 +1249,9 @@ impl PlutoMcp {
         &self,
         Parameters(input): Parameters<RenameDeclarationInput>,
     ) -> Result<CallToolResult, McpError> {
-        let canonical = canon(&input.path);
+        // Validate path safety
+        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
+        let canonical = validated_path.to_string_lossy().to_string();
 
         let contents = std::fs::read_to_string(&canonical)
             .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
@@ -1210,7 +1287,9 @@ impl PlutoMcp {
         &self,
         Parameters(input): Parameters<AddMethodInput>,
     ) -> Result<CallToolResult, McpError> {
-        let canonical = canon(&input.path);
+        // Validate path safety
+        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
+        let canonical = validated_path.to_string_lossy().to_string();
 
         let contents = std::fs::read_to_string(&canonical)
             .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
@@ -1252,7 +1331,9 @@ impl PlutoMcp {
         &self,
         Parameters(input): Parameters<AddFieldInput>,
     ) -> Result<CallToolResult, McpError> {
-        let canonical = canon(&input.path);
+        // Validate path safety
+        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
+        let canonical = validated_path.to_string_lossy().to_string();
 
         let contents = std::fs::read_to_string(&canonical)
             .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
