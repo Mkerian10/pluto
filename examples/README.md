@@ -147,7 +147,7 @@ cargo run -- run examples/contracts/main.pluto
 
 ## errors
 
-Demonstrates Pluto's typed error system: error declarations with multiple error types, `raise` to throw errors, `!` postfix for error propagation, `catch` with wildcard error handling, shorthand catch with default values, and compiler-inferred error-ability (no annotations needed on intermediate functions).
+Demonstrates Pluto's typed error system: error declarations with multiple error types, `raise` to throw errors, `!` postfix for error propagation (at call sites only, never in signatures), `catch` with wildcard error handling, shorthand catch with default values, and compiler-inferred error-ability. Shows that error inference works identically for primitives and custom types — no error annotations are ever written in function signatures.
 
 ```bash
 cargo run -- run examples/errors/main.pluto
