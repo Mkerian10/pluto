@@ -268,149 +268,156 @@ impl PlutoMcp {
     }
 
     // --- Tool 4: callers_of ---
-    #[tool(description = "Find all call sites that invoke a given function. Note: only tracks Expr::Call targets, not method calls via dot syntax.")]
+    #[tool(description = "Find all call sites that invoke a given function across all loaded modules. Searches the entire project to find every location where the function is called.")]
     async fn callers_of(
         &self,
         Parameters(input): Parameters<CallersOfInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
-        let module = self.find_module(&modules, &input.path)?;
 
         let id = input
             .uuid
             .parse::<Uuid>()
             .map_err(|_| mcp_err(format!("Invalid UUID: {}", input.uuid)))?;
 
-        let sites: Vec<serialize::XrefSiteInfo> = module
-            .callers_of(id)
-            .iter()
-            .map(|site| {
+        let mut all_sites = Vec::new();
+
+        // Search all loaded modules for callers
+        for (module_path, module) in modules.iter() {
+            let sites = module.callers_of(id);
+            for site in sites {
                 let func_id = module.find(&site.caller.name.node)
                     .first()
                     .map(|d| d.id().to_string());
-                serialize::XrefSiteInfo {
+                all_sites.push(serialize::CrossModuleXrefSiteInfo {
+                    module_path: module_path.clone(),
                     function_name: site.caller.name.node.clone(),
                     function_uuid: func_id,
                     span: serialize::span_to_info(site.span),
-                }
-            })
-            .collect();
+                });
+            }
+        }
 
-        let json = serde_json::to_string_pretty(&sites)
+        let json = serde_json::to_string_pretty(&all_sites)
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
     // --- Tool 4b: constructors_of ---
-    #[tool(description = "Find all sites where a class is constructed via struct literal.")]
+    #[tool(description = "Find all sites where a class is constructed via struct literal across all loaded modules.")]
     async fn constructors_of(
         &self,
         Parameters(input): Parameters<ConstructorsOfInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
-        let module = self.find_module(&modules, &input.path)?;
 
         let id = input
             .uuid
             .parse::<Uuid>()
             .map_err(|_| mcp_err(format!("Invalid UUID: {}", input.uuid)))?;
 
-        let sites: Vec<serialize::XrefSiteInfo> = module
-            .constructors_of(id)
-            .iter()
-            .map(|site| {
+        let mut all_sites = Vec::new();
+
+        // Search all loaded modules
+        for (module_path, module) in modules.iter() {
+            let sites = module.constructors_of(id);
+            for site in sites {
                 let func_id = module.find(&site.function.name.node)
                     .first()
                     .map(|d| d.id().to_string());
-                serialize::XrefSiteInfo {
+                all_sites.push(serialize::CrossModuleXrefSiteInfo {
+                    module_path: module_path.clone(),
                     function_name: site.function.name.node.clone(),
                     function_uuid: func_id,
                     span: serialize::span_to_info(site.span),
-                }
-            })
-            .collect();
+                });
+            }
+        }
 
-        let json = serde_json::to_string_pretty(&sites)
+        let json = serde_json::to_string_pretty(&all_sites)
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
     // --- Tool 4c: enum_usages_of ---
-    #[tool(description = "Find all usages of an enum variant.")]
+    #[tool(description = "Find all usages of an enum variant across all loaded modules.")]
     async fn enum_usages_of(
         &self,
         Parameters(input): Parameters<EnumUsagesOfInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
-        let module = self.find_module(&modules, &input.path)?;
 
         let id = input
             .uuid
             .parse::<Uuid>()
             .map_err(|_| mcp_err(format!("Invalid UUID: {}", input.uuid)))?;
 
-        let sites: Vec<serialize::XrefSiteInfo> = module
-            .enum_usages_of(id)
-            .iter()
-            .map(|site| {
+        let mut all_sites = Vec::new();
+
+        // Search all loaded modules
+        for (module_path, module) in modules.iter() {
+            let sites = module.enum_usages_of(id);
+            for site in sites {
                 let func_id = module.find(&site.function.name.node)
                     .first()
                     .map(|d| d.id().to_string());
-                serialize::XrefSiteInfo {
+                all_sites.push(serialize::CrossModuleXrefSiteInfo {
+                    module_path: module_path.clone(),
                     function_name: site.function.name.node.clone(),
                     function_uuid: func_id,
                     span: serialize::span_to_info(site.span),
-                }
-            })
-            .collect();
+                });
+            }
+        }
 
-        let json = serde_json::to_string_pretty(&sites)
+        let json = serde_json::to_string_pretty(&all_sites)
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
     // --- Tool 4d: raise_sites_of ---
-    #[tool(description = "Find all sites where a given error is raised.")]
+    #[tool(description = "Find all sites where a given error is raised across all loaded modules.")]
     async fn raise_sites_of(
         &self,
         Parameters(input): Parameters<RaiseSitesOfInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
-        let module = self.find_module(&modules, &input.path)?;
 
         let id = input
             .uuid
             .parse::<Uuid>()
             .map_err(|_| mcp_err(format!("Invalid UUID: {}", input.uuid)))?;
 
-        let sites: Vec<serialize::XrefSiteInfo> = module
-            .raise_sites_of(id)
-            .iter()
-            .map(|site| {
+        let mut all_sites = Vec::new();
+
+        // Search all loaded modules
+        for (module_path, module) in modules.iter() {
+            let sites = module.raise_sites_of(id);
+            for site in sites {
                 let func_id = module.find(&site.function.name.node)
                     .first()
                     .map(|d| d.id().to_string());
-                serialize::XrefSiteInfo {
+                all_sites.push(serialize::CrossModuleXrefSiteInfo {
+                    module_path: module_path.clone(),
                     function_name: site.function.name.node.clone(),
                     function_uuid: func_id,
                     span: serialize::span_to_info(site.span),
-                }
-            })
-            .collect();
+                });
+            }
+        }
 
-        let json = serde_json::to_string_pretty(&sites)
+        let json = serde_json::to_string_pretty(&all_sites)
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
     // --- Tool 4e: usages_of (unified) ---
-    #[tool(description = "Find all usages of a declaration across the module: calls, constructions, enum usages, and raise sites. Returns unified results with usage_kind.")]
+    #[tool(description = "Find all usages of a declaration across all loaded modules: calls, constructions, enum usages, and raise sites. Returns unified results with usage_kind and module_path.")]
     async fn usages_of(
         &self,
         Parameters(input): Parameters<UsagesOfInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
-        let module = self.find_module(&modules, &input.path)?;
 
         let id = input
             .uuid
@@ -419,42 +426,52 @@ impl PlutoMcp {
 
         let mut results: Vec<serialize::UnifiedXrefInfo> = Vec::new();
 
-        // Collect all xref types
-        for site in module.callers_of(id) {
-            let func_id = module.find(&site.caller.name.node).first().map(|d| d.id().to_string());
-            results.push(serialize::UnifiedXrefInfo {
-                usage_kind: "call".to_string(),
-                function_name: site.caller.name.node.clone(),
-                function_uuid: func_id,
-                span: serialize::span_to_info(site.span),
-            });
-        }
-        for site in module.constructors_of(id) {
-            let func_id = module.find(&site.function.name.node).first().map(|d| d.id().to_string());
-            results.push(serialize::UnifiedXrefInfo {
-                usage_kind: "construct".to_string(),
-                function_name: site.function.name.node.clone(),
-                function_uuid: func_id,
-                span: serialize::span_to_info(site.span),
-            });
-        }
-        for site in module.enum_usages_of(id) {
-            let func_id = module.find(&site.function.name.node).first().map(|d| d.id().to_string());
-            results.push(serialize::UnifiedXrefInfo {
-                usage_kind: "enum_variant".to_string(),
-                function_name: site.function.name.node.clone(),
-                function_uuid: func_id,
-                span: serialize::span_to_info(site.span),
-            });
-        }
-        for site in module.raise_sites_of(id) {
-            let func_id = module.find(&site.function.name.node).first().map(|d| d.id().to_string());
-            results.push(serialize::UnifiedXrefInfo {
-                usage_kind: "raise".to_string(),
-                function_name: site.function.name.node.clone(),
-                function_uuid: func_id,
-                span: serialize::span_to_info(site.span),
-            });
+        // Search all loaded modules
+        for (module_path, module) in modules.iter() {
+            // Collect call sites
+            for site in module.callers_of(id) {
+                let func_id = module.find(&site.caller.name.node).first().map(|d| d.id().to_string());
+                results.push(serialize::UnifiedXrefInfo {
+                    module_path: module_path.clone(),
+                    usage_kind: "call".to_string(),
+                    function_name: site.caller.name.node.clone(),
+                    function_uuid: func_id,
+                    span: serialize::span_to_info(site.span),
+                });
+            }
+            // Collect constructor sites
+            for site in module.constructors_of(id) {
+                let func_id = module.find(&site.function.name.node).first().map(|d| d.id().to_string());
+                results.push(serialize::UnifiedXrefInfo {
+                    module_path: module_path.clone(),
+                    usage_kind: "construct".to_string(),
+                    function_name: site.function.name.node.clone(),
+                    function_uuid: func_id,
+                    span: serialize::span_to_info(site.span),
+                });
+            }
+            // Collect enum usages
+            for site in module.enum_usages_of(id) {
+                let func_id = module.find(&site.function.name.node).first().map(|d| d.id().to_string());
+                results.push(serialize::UnifiedXrefInfo {
+                    module_path: module_path.clone(),
+                    usage_kind: "enum_variant".to_string(),
+                    function_name: site.function.name.node.clone(),
+                    function_uuid: func_id,
+                    span: serialize::span_to_info(site.span),
+                });
+            }
+            // Collect raise sites
+            for site in module.raise_sites_of(id) {
+                let func_id = module.find(&site.function.name.node).first().map(|d| d.id().to_string());
+                results.push(serialize::UnifiedXrefInfo {
+                    module_path: module_path.clone(),
+                    usage_kind: "raise".to_string(),
+                    function_name: site.function.name.node.clone(),
+                    function_uuid: func_id,
+                    span: serialize::span_to_info(site.span),
+                });
+            }
         }
 
         let json = serde_json::to_string_pretty(&results)

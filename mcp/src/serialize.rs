@@ -207,7 +207,16 @@ pub struct XrefSiteInfo {
 }
 
 #[derive(Serialize)]
+pub struct CrossModuleXrefSiteInfo {
+    pub module_path: String,
+    pub function_name: String,
+    pub function_uuid: Option<String>,
+    pub span: SpanInfo,
+}
+
+#[derive(Serialize)]
 pub struct UnifiedXrefInfo {
+    pub module_path: String,
     pub usage_kind: String, // "call", "construct", "enum_variant", "raise"
     pub function_name: String,
     pub function_uuid: Option<String>,

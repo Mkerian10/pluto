@@ -29,41 +29,31 @@ pub struct GetDeclarationInput {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CallersOfInput {
-    #[schemars(description = "Path of the loaded module")]
-    pub path: String,
-    #[schemars(description = "UUID of the function to find callers of")]
+    #[schemars(description = "UUID of the function to find callers of (searches all loaded modules)")]
     pub uuid: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ConstructorsOfInput {
-    #[schemars(description = "Path of the loaded module")]
-    pub path: String,
-    #[schemars(description = "UUID of the class to find constructors of")]
+    #[schemars(description = "UUID of the class to find constructors of (searches all loaded modules)")]
     pub uuid: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct EnumUsagesOfInput {
-    #[schemars(description = "Path of the loaded module")]
-    pub path: String,
-    #[schemars(description = "UUID of the enum to find usages of")]
+    #[schemars(description = "UUID of the enum to find usages of (searches all loaded modules)")]
     pub uuid: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RaiseSitesOfInput {
-    #[schemars(description = "Path of the loaded module")]
-    pub path: String,
-    #[schemars(description = "UUID of the error to find raise sites of")]
+    #[schemars(description = "UUID of the error to find raise sites of (searches all loaded modules)")]
     pub uuid: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct UsagesOfInput {
-    #[schemars(description = "Path of the loaded module")]
-    pub path: String,
-    #[schemars(description = "UUID of the declaration to find all usages of")]
+    #[schemars(description = "UUID of the declaration to find all usages of (searches all loaded modules)")]
     pub uuid: String,
 }
 
