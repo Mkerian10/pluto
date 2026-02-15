@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use rmcp::{
     ErrorData as McpError,
@@ -30,6 +30,32 @@ struct DependencyGraph {
     path_to_name: HashMap<String, String>,
     /// Map from canonical file path to list of imported module names
     dependencies: HashMap<String, Vec<String>>,
+}
+
+/// Metadata about a loaded module
+struct ModuleMetadata {
+    module: Module,
+    /// File modification time when loaded
+    loaded_at: SystemTime,
+}
+
+impl ModuleMetadata {
+    fn new(module: Module, mtime: SystemTime) -> Self {
+        Self {
+            module,
+            loaded_at: mtime,
+        }
+    }
+
+    /// Check if the file has been modified since we loaded it
+    fn is_stale(&self, path: &Path) -> bool {
+        if let Ok(metadata) = std::fs::metadata(path) {
+            if let Ok(current_mtime) = metadata.modified() {
+                return current_mtime > self.loaded_at;
+            }
+        }
+        false
+    }
 }
 
 /// Execute a binary with a timeout, capturing stdout/stderr.
@@ -74,7 +100,7 @@ async fn execute_with_timeout(
 
 #[derive(Clone)]
 pub struct PlutoMcp {
-    modules: Arc<RwLock<HashMap<String, Module>>>,
+    modules: Arc<RwLock<HashMap<String, ModuleMetadata>>>,
     project_root: Arc<RwLock<Option<String>>>,
     dep_graph: Arc<RwLock<DependencyGraph>>,
     tool_router: ToolRouter<Self>,
@@ -224,7 +250,12 @@ impl PlutoMcp {
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
 
-        self.modules.write().await.insert(canonical, module);
+        // Capture file mtime when loading
+        let mtime = std::fs::metadata(&canonical)
+            .and_then(|m| m.modified())
+            .unwrap_or_else(|_| SystemTime::now());
+
+        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -236,7 +267,8 @@ impl PlutoMcp {
         Parameters(input): Parameters<ListDeclarationsInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
-        let module = self.find_module(&modules, &input.path)?;
+        let metadata = self.find_module(&modules, &input.path)?;
+        let module = &metadata.module;
 
         let decls: Vec<serialize::DeclSummary> = match input.kind.as_deref() {
             Some("function") => module.functions().iter().map(serialize::decl_to_summary).collect(),
@@ -272,7 +304,8 @@ impl PlutoMcp {
         Parameters(input): Parameters<GetDeclarationInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
-        let module = self.find_module(&modules, &input.path)?;
+        let metadata = self.find_module(&modules, &input.path)?;
+        let module = &metadata.module;
 
         if input.uuid.is_none() && input.name.is_none() {
             return Err(mcp_err("Either 'uuid' or 'name' must be provided"));
@@ -336,7 +369,8 @@ impl PlutoMcp {
         let mut all_sites = Vec::new();
 
         // Search all loaded modules for callers
-        for (module_path, module) in modules.iter() {
+        for (module_path, metadata) in modules.iter() {
+            let module = &metadata.module;
             let sites = module.callers_of(id);
             for site in sites {
                 let func_id = module.find(&site.caller.name.node)
@@ -372,7 +406,8 @@ impl PlutoMcp {
         let mut all_sites = Vec::new();
 
         // Search all loaded modules
-        for (module_path, module) in modules.iter() {
+        for (module_path, metadata) in modules.iter() {
+            let module = &metadata.module;
             let sites = module.constructors_of(id);
             for site in sites {
                 let func_id = module.find(&site.function.name.node)
@@ -408,7 +443,8 @@ impl PlutoMcp {
         let mut all_sites = Vec::new();
 
         // Search all loaded modules
-        for (module_path, module) in modules.iter() {
+        for (module_path, metadata) in modules.iter() {
+            let module = &metadata.module;
             let sites = module.enum_usages_of(id);
             for site in sites {
                 let func_id = module.find(&site.function.name.node)
@@ -444,7 +480,8 @@ impl PlutoMcp {
         let mut all_sites = Vec::new();
 
         // Search all loaded modules
-        for (module_path, module) in modules.iter() {
+        for (module_path, metadata) in modules.iter() {
+            let module = &metadata.module;
             let sites = module.raise_sites_of(id);
             for site in sites {
                 let func_id = module.find(&site.function.name.node)
@@ -480,7 +517,8 @@ impl PlutoMcp {
         let mut results: Vec<serialize::UnifiedXrefInfo> = Vec::new();
 
         // Search all loaded modules
-        for (module_path, module) in modules.iter() {
+        for (module_path, metadata) in modules.iter() {
+            let module = &metadata.module;
             // Collect call sites
             for site in module.callers_of(id) {
                 let func_id = module.find(&site.caller.name.node).first().map(|d| d.id().to_string());
@@ -555,7 +593,8 @@ impl PlutoMcp {
         // Find the root function across all modules
         let mut root_name = None;
         let mut root_module_path = None;
-        for (path, module) in modules.iter() {
+        for (path, metadata) in modules.iter() {
+            let module = &metadata.module;
             if let Some(decl) = module.get(root_id) {
                 root_name = Some(decl.name().to_string());
                 root_module_path = Some(path.clone());
@@ -601,7 +640,8 @@ impl PlutoMcp {
         Parameters(input): Parameters<ErrorSetInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
-        let module = self.find_module(&modules, &input.path)?;
+        let metadata = self.find_module(&modules, &input.path)?;
+        let module = &metadata.module;
 
         let id = input
             .uuid
@@ -637,7 +677,8 @@ impl PlutoMcp {
         Parameters(input): Parameters<GetSourceInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
-        let module = self.find_module(&modules, &input.path)?;
+        let metadata = self.find_module(&modules, &input.path)?;
+        let module = &metadata.module;
 
         let src = module.source();
         let len = src.len();
@@ -693,7 +734,11 @@ impl PlutoMcp {
                         path: canonical.clone(),
                         declarations: decl_count,
                     });
-                    modules.insert(canonical, module);
+                    // Capture file mtime when loading
+                    let mtime = std::fs::metadata(&canonical)
+                        .and_then(|m| m.modified())
+                        .unwrap_or_else(|_| SystemTime::now());
+                    modules.insert(canonical, ModuleMetadata::new(module, mtime));
                 }
                 Err(e) => {
                     load_errors.push(serialize::LoadError {
@@ -714,7 +759,7 @@ impl PlutoMcp {
 
         // Build module name → path mapping
         // For each .pluto file, derive the module name from its path relative to project root
-        for (path, _module) in modules.iter() {
+        for (path, _metadata) in modules.iter() {
             if let Ok(rel_path) = Path::new(path).strip_prefix(&root) {
                 let module_name = derive_module_name(rel_path);
                 dep_graph.name_to_path.insert(module_name.clone(), path.clone());
@@ -723,7 +768,8 @@ impl PlutoMcp {
         }
 
         // Extract imports from each module and populate dependencies
-        for (path, module) in modules.iter() {
+        for (path, metadata) in modules.iter() {
+            let module = &metadata.module;
             let program = module.program();
             let mut imported_names = Vec::new();
 
@@ -793,7 +839,8 @@ impl PlutoMcp {
 
         let mut entries: Vec<serialize::ModuleListEntry> = modules
             .iter()
-            .map(|(path, module)| {
+            .map(|(path, metadata)| {
+                let module = &metadata.module;
                 let funcs = module.functions().len();
                 let classes = module.classes().len();
                 let enums = module.enums().len();
@@ -848,7 +895,8 @@ impl PlutoMcp {
 
         let mut results: Vec<serialize::CrossModuleMatch> = Vec::new();
 
-        for (path, module) in modules.iter() {
+        for (path, metadata) in modules.iter() {
+            let module = &metadata.module;
             let matches = module.find(&input.name);
             for decl in matches {
                 if let Some(filter) = &kind_filter {
@@ -1153,7 +1201,12 @@ impl PlutoMcp {
         std::fs::write(&canonical, module.source())
             .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
 
-        self.modules.write().await.insert(canonical, module);
+        // Capture file mtime after write
+        let mtime = std::fs::metadata(&canonical)
+            .and_then(|m| m.modified())
+            .unwrap_or_else(|_| SystemTime::now());
+
+        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
 
         let json = serde_json::to_string_pretty(&results)
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
@@ -1186,7 +1239,12 @@ impl PlutoMcp {
         std::fs::write(&canonical, module.source())
             .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
 
-        self.modules.write().await.insert(canonical, module);
+        // Capture file mtime after write
+        let mtime = std::fs::metadata(&canonical)
+            .and_then(|m| m.modified())
+            .unwrap_or_else(|_| SystemTime::now());
+
+        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
 
         let result = serialize::ReplaceDeclResult {
             uuid: id.to_string(),
@@ -1224,7 +1282,12 @@ impl PlutoMcp {
         std::fs::write(&canonical, module.source())
             .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
 
-        self.modules.write().await.insert(canonical, module);
+        // Capture file mtime after write
+        let mtime = std::fs::metadata(&canonical)
+            .and_then(|m| m.modified())
+            .unwrap_or_else(|_| SystemTime::now());
+
+        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
 
         let dangling_refs = delete_result.dangling.iter().map(|d| {
             serialize::DanglingRefInfo {
@@ -1269,7 +1332,12 @@ impl PlutoMcp {
         std::fs::write(&canonical, module.source())
             .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
 
-        self.modules.write().await.insert(canonical, module);
+        // Capture file mtime after write
+        let mtime = std::fs::metadata(&canonical)
+            .and_then(|m| m.modified())
+            .unwrap_or_else(|_| SystemTime::now());
+
+        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
 
         let result = serialize::RenameDeclResult {
             old_name: input.old_name,
@@ -1314,7 +1382,12 @@ impl PlutoMcp {
         std::fs::write(&canonical, module.source())
             .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
 
-        self.modules.write().await.insert(canonical, module);
+        // Capture file mtime after write
+        let mtime = std::fs::metadata(&canonical)
+            .and_then(|m| m.modified())
+            .unwrap_or_else(|_| SystemTime::now());
+
+        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
 
         let result = serialize::AddMethodResult {
             uuid: method_id.to_string(),
@@ -1351,7 +1424,12 @@ impl PlutoMcp {
         std::fs::write(&canonical, module.source())
             .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
 
-        self.modules.write().await.insert(canonical, module);
+        // Capture file mtime after write
+        let mtime = std::fs::metadata(&canonical)
+            .and_then(|m| m.modified())
+            .unwrap_or_else(|_| SystemTime::now());
+
+        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
 
         let result = serialize::AddFieldResult { uuid: field_id.to_string() };
         let json = serde_json::to_string_pretty(&result)
@@ -1378,6 +1456,84 @@ impl PlutoMcp {
         let text = crate::docs::get_stdlib_docs(input.module.as_deref())
             .map_err(|e| mcp_err(e))?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    // --- Tool 22: reload_module ---
+    #[tool(description = "Reload a module from disk, discarding the cached version. Useful when files are modified outside the MCP server.")]
+    async fn reload_module(
+        &self,
+        Parameters(input): Parameters<ReloadModuleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let canonical = canon(&input.path);
+
+        // Check if module is loaded
+        {
+            let modules = self.modules.read().await;
+            if !modules.contains_key(&canonical) {
+                return Err(mcp_err(format!("Module not loaded: '{}'", canonical)));
+            }
+        }
+
+        // Reload from disk
+        let first_bytes = std::fs::read(&canonical)
+            .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
+
+        let module = if first_bytes.len() >= 4 && &first_bytes[..4] == b"PLTO" {
+            Module::open(&canonical).map_err(|e| mcp_internal(format!("Failed to load binary: {e}")))?
+        } else {
+            Module::from_source_file(&canonical)
+                .map_err(|e| mcp_internal(format!("Failed to analyze source: {e}")))?
+        };
+
+        // Capture file mtime
+        let mtime = std::fs::metadata(&canonical)
+            .and_then(|m| m.modified())
+            .unwrap_or_else(|_| SystemTime::now());
+
+        // Replace in cache
+        self.modules.write().await.insert(canonical.clone(), ModuleMetadata::new(module, mtime));
+
+        let result = serialize::ReloadResult {
+            path: canonical,
+            reloaded: true,
+            message: "Module reloaded successfully".to_string(),
+        };
+
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    // --- Tool 23: module_status ---
+    #[tool(description = "Show status of all loaded modules, including whether they are stale (modified on disk since load).")]
+    async fn module_status(
+        &self,
+        #[allow(unused_variables)]
+        Parameters(_input): Parameters<ModuleStatusInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let modules = self.modules.read().await;
+
+        let mut entries: Vec<serialize::ModuleStatusEntry> = modules
+            .iter()
+            .map(|(path, metadata)| {
+                let is_stale = metadata.is_stale(Path::new(path));
+                let loaded_at = metadata.loaded_at
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map(|d| format!("{}", d.as_secs()))
+                    .unwrap_or_else(|_| "unknown".to_string());
+                serialize::ModuleStatusEntry {
+                    path: path.clone(),
+                    is_stale,
+                    loaded_at,
+                }
+            })
+            .collect();
+
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let json = serde_json::to_string_pretty(&entries)
+            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 }
 
@@ -1607,9 +1763,9 @@ impl PlutoMcp {
 
     fn find_module<'a>(
         &self,
-        modules: &'a HashMap<String, Module>,
+        modules: &'a HashMap<String, ModuleMetadata>,
         path: &str,
-    ) -> Result<&'a Module, McpError> {
+    ) -> Result<&'a ModuleMetadata, McpError> {
         // Try exact path first, then canonicalized
         if let Some(m) = modules.get(path) {
             return Ok(m);
@@ -1631,7 +1787,7 @@ impl PlutoMcp {
         depth: usize,
         max_depth: usize,
         direction: &str,
-        modules: &HashMap<String, Module>,
+        modules: &HashMap<String, ModuleMetadata>,
         visited: &mut HashSet<String>,
         nodes: &mut Vec<serialize::CallGraphNode>,
     ) {
@@ -1656,7 +1812,8 @@ impl PlutoMcp {
         } else {
             // direction == "callers"
             // Find all functions that call this function
-            for (caller_module_path, module) in modules.iter() {
+            for (caller_module_path, metadata) in modules.iter() {
+                let module = &metadata.module;
                 let sites = module.callers_of(func_id);
                 for site in sites {
                     let caller_name = &site.caller.name.node;

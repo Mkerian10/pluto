@@ -931,3 +931,19 @@ pub fn app_detail(app: &AppDecl, module: &plutoc_sdk::Module) -> AppDetail {
         source: pretty_print_app(app),
     }
 }
+
+// --- File watching outputs ---
+
+#[derive(Serialize)]
+pub struct ModuleStatusEntry {
+    pub path: String,
+    pub is_stale: bool,
+    pub loaded_at: String,
+}
+
+#[derive(Serialize)]
+pub struct ReloadResult {
+    pub path: String,
+    pub reloaded: bool,
+    pub message: String,
+}

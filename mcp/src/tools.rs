@@ -219,3 +219,14 @@ pub struct StdlibDocsInput {
     #[schemars(description = "Optional module name (e.g. 'strings', 'fs', 'math'). If omitted, lists all available stdlib modules")]
     pub module: Option<String>,
 }
+
+// --- File watching tool inputs ---
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReloadModuleInput {
+    #[schemars(description = "Path of the module to reload from disk")]
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ModuleStatusInput {}
