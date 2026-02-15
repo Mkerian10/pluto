@@ -421,20 +421,20 @@ pub struct CodegenStats {
 
 ### Tools to Build
 
-#### 1. `plutoc-metrics` CLI Tool
+#### 1. `pluto-metrics` CLI Tool
 
 ```bash
 # Analyze single compilation
-plutoc-metrics analyze metrics.json
+pluto-metrics analyze metrics.json
 
 # Aggregate multiple runs
-plutoc-metrics aggregate metrics/*.json -o summary.json
+pluto-metrics aggregate metrics/*.json -o summary.json
 
 # Compare two compilations
-plutoc-metrics diff baseline.json current.json
+pluto-metrics diff baseline.json current.json
 
 # Generate report
-plutoc-metrics report summary.json --format html
+pluto-metrics report summary.json --format html
 ```
 
 #### 2. Analysis Capabilities
@@ -454,7 +454,7 @@ plutoc-metrics report summary.json --format html
 ### Implementation
 
 ```rust
-// New binary in src/bin/plutoc-metrics.rs
+// New binary in src/bin/pluto-metrics.rs
 fn main() {
     let args = Args::parse();
 
@@ -469,7 +469,7 @@ fn main() {
 
 ### Deliverables
 
-- `src/bin/plutoc-metrics.rs` — Standalone tool
+- `src/bin/pluto-metrics.rs` — Standalone tool
 - Aggregation and diffing logic
 - Report generation (markdown + HTML)
 - CI integration guide

@@ -94,7 +94,7 @@ You write one line. The compiler generates 10+ lines of serialization, HTTP, err
 When you compile a Pluto program with stages, the compiler generates **one binary per stage**:
 
 ```
-$ plutoc compile-stages my_app.pluto --output-dir ./build
+$ pluto compile-stages my_app.pluto --output-dir ./build
 
 Generated:
   build/api

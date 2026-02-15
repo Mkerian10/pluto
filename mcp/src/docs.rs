@@ -370,7 +370,7 @@ test "string contains" {
     expect("hello world".contains("world")).to_be_true()
 }
 ```
-- Run with `plutoc test <file>`
+- Run with `pluto test <file>`
 - Assertions: `expect(val).to_equal(expected)`, `.to_be_true()`, `.to_be_false()`"#
         .to_string()
 }

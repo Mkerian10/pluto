@@ -13,7 +13,7 @@ fn bench_compile_hello_world(c: &mut Criterion) {
     "#;
 
     c.bench_function("compile_hello_world", |b| {
-        b.iter(|| plutoc::compile_to_object(black_box(source)))
+        b.iter(|| pluto::compile_to_object(black_box(source)))
     });
 }
 
@@ -31,7 +31,7 @@ fn bench_compile_generics(c: &mut Criterion) {
     "#;
 
     c.bench_function("compile_generics", |b| {
-        b.iter(|| plutoc::compile_to_object(black_box(source)))
+        b.iter(|| pluto::compile_to_object(black_box(source)))
     });
 }
 
@@ -46,7 +46,7 @@ fn bench_compile_closures(c: &mut Criterion) {
     "#;
 
     c.bench_function("compile_closures", |b| {
-        b.iter(|| plutoc::compile_to_object(black_box(source)))
+        b.iter(|| pluto::compile_to_object(black_box(source)))
     });
 }
 
@@ -67,7 +67,7 @@ fn bench_compile_errors(c: &mut Criterion) {
     "#;
 
     c.bench_function("compile_errors", |b| {
-        b.iter(|| plutoc::compile_to_object(black_box(source)))
+        b.iter(|| pluto::compile_to_object(black_box(source)))
     });
 }
 
@@ -108,7 +108,7 @@ fn bench_compile_large_program(c: &mut Criterion) {
     "#;
 
     c.bench_function("compile_large_program", |b| {
-        b.iter(|| plutoc::compile_to_object(black_box(source)))
+        b.iter(|| pluto::compile_to_object(black_box(source)))
     });
 }
 

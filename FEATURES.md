@@ -267,7 +267,7 @@ See also: [ROADMAP.md](ROADMAP.md) for high-level goals and milestones
 - **Status:** 🟡 Design
 - **Effort:** M
 - **Impact:** High
-- **Description:** `plutoc fmt` — canonical code formatting (like `go fmt`)
+- **Description:** `pluto fmt` — canonical code formatting (like `go fmt`)
 - **Design:** Should we enforce one style or allow config?
 - **Implementation:** Pretty-printer already exists, needs CLI integration + format-on-save
 
@@ -435,10 +435,10 @@ See also: [ROADMAP.md](ROADMAP.md) for high-level goals and milestones
 - **Status:** 🔴 Blocked
 - **Effort:** XL
 - **Impact:** High (for AI workflows)
-- **Description:** Text files for human editing, `plutoc sync` to reconcile
+- **Description:** Text files for human editing, `pluto sync` to reconcile
 - **Depends On:** Binary format (Feature #40)
 
-#### 42. `plutoc-sdk` for AI Agents
+#### 42. `pluto-sdk` for AI Agents
 - **Status:** 🔴 Blocked
 - **Effort:** XL
 - **Impact:** High (for AI workflows)

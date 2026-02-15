@@ -41,7 +41,7 @@ Areas that need further design work before implementation.
 
 - [ ] **Binary format** — protobuf, FlatBuffers, Cap'n Proto, or custom? Needs benchmarking
 - [ ] **Derived data staleness** — how does the compiler detect stale derived data? Content hash? Version counter?
-- [ ] **Incremental analysis** — can `plutoc analyze` update only affected derived data, or full recompute?
+- [ ] **Incremental analysis** — can `pluto analyze` update only affected derived data, or full recompute?
 - [ ] **Cross-project UUIDs** — UUID namespace management across library boundaries
 - [ ] **SDK language bindings** — Rust crate is primary, but AI agents may need Python/TS bindings (FFI? gRPC?)
 - [ ] **Diff tooling** — custom `git diff` driver for binary `.pluto` files, or rely on `.pt` diffs?
@@ -53,7 +53,7 @@ Areas that need further design work before implementation.
 - [ ] **Standard library** — scope and core modules
 - [ ] **Package manager** — dependency resolution for libraries
 - [ ] **Formatter / linter** — built-in code formatting (like `go fmt`)
-- [ ] **Language server (`plutoc lsp`)** — define scope and ship a real CLI/server implementation (current Zed config assumes this command)
+- [ ] **Language server (`pluto lsp`)** — define scope and ship a real CLI/server implementation (current Zed config assumes this command)
 
 ---
 
@@ -94,4 +94,4 @@ Previously open questions that have been designed and implemented.
 - [x] **Channels** — `chan<T>()` with `Sender<T>`/`Receiver<T>`, blocking/non-blocking send/recv, for-in iteration, error integration
 - [x] **Editor syntax support** — Zed extension + tree-sitter grammar for Pluto syntax highlighting.
 - [x] **Null / optional** — first-class nullable types (`T?`, `none`, `?` operator). `T?` for any type, `none` for absent, `?` for null propagation. Compiler infers nullability transitively.
-- [x] **Testing** — built-in test framework (`test "name" { body }`, `expect().to_equal()` assertions, `plutoc test` runner)
+- [x] **Testing** — built-in test framework (`test "name" { body }`, `expect().to_equal()` assertions, `pluto test` runner)

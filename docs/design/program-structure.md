@@ -355,7 +355,7 @@ test "order processing" {
 ```
 
 - `test "name" { body }` blocks can appear in any file
-- Tests are stripped from normal compilation; executed with `plutoc test <file>`
+- Tests are stripped from normal compilation; executed with `pluto test <file>`
 - Assertions: `expect(x).to_equal(y)`, `expect(b).to_be_true()`, `expect(b).to_be_false()`
 
 Testing with DI (integration tests) is an open design question — see [RFC: Stages](rfc-entry-points.md) for discussion of test-scoped DI overrides.
@@ -374,7 +374,7 @@ Testing with DI (integration tests) is an open design question — see [RFC: Sta
 - [ ] **Script limitations** — Should scripts support more features over time (e.g., imports, stage instantiation)?
 
 ### Libraries & MCP
-- [ ] **Library introspection** — How does an MCP server discover and expose a library's public declarations as tools? Is this built into `plutoc` or a separate tool?
+- [ ] **Library introspection** — How does an MCP server discover and expose a library's public declarations as tools? Is this built into `pluto` or a separate tool?
 - [ ] **Library versioning** — How are library API changes tracked and communicated to consumers (both human and AI)?
 
 ### Projects & Workspaces

@@ -7,11 +7,11 @@
 /// Expected result: Visitor and manual should have identical performance (within 5%).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use plutoc::lexer;
-use plutoc::parser::ast::*;
-use plutoc::parser::Parser;
-use plutoc::span::Spanned;
-use plutoc::visit::{walk_expr, walk_stmt, Visitor};
+use pluto::lexer;
+use pluto::parser::ast::*;
+use pluto::parser::Parser;
+use pluto::span::Spanned;
+use pluto::visit::{walk_expr, walk_stmt, Visitor};
 
 // ==============================================================================
 // Visitor-based expression counter

@@ -5,11 +5,11 @@
 
 ## Summary
 
-Add three iterative development modes to `plutoc`:
+Add three iterative development modes to `pluto`:
 
-1. **`plutoc watch`** — File watcher that recompiles and reruns on save
-2. **`plutoc watch test`** — File watcher that reruns tests on save
-3. **`plutoc repl`** — Interactive expression evaluator
+1. **`pluto watch`** — File watcher that recompiles and reruns on save
+2. **`pluto watch test`** — File watcher that reruns tests on save
+3. **`pluto repl`** — Interactive expression evaluator
 
 These share a common foundation: the Pluto compiler is already fast enough (~170ms for trivial programs, ~250ms for test suites) that recompiling on every change is viable without any incremental compilation infrastructure.
 
@@ -20,7 +20,7 @@ Today, the Pluto edit-compile-test cycle is:
 ```
 1. Edit file in editor
 2. Switch to terminal
-3. Type `plutoc run main.pluto --stdlib stdlib`
+3. Type `pluto run main.pluto --stdlib stdlib`
 4. Read output
 5. Switch back to editor
 6. Repeat
@@ -40,12 +40,12 @@ Using the release binary on warm cache (macOS, Apple Silicon):
 
 | Scenario | Wall-clock time |
 |---|---|
-| `plutoc run` — trivial program | **~170ms** |
-| `plutoc run` — closures + functions | **~300ms** |
-| `plutoc test` — 4 test cases | **~250ms** |
-| `plutoc run` — generics + stdlib | **~500ms** |
+| `pluto run` — trivial program | **~170ms** |
+| `pluto run` — closures + functions | **~300ms** |
+| `pluto test` — 4 test cases | **~250ms** |
+| `pluto run` — generics + stdlib | **~500ms** |
 
-These are end-to-end: lex → parse → typeck → codegen → link → exec. The runtime object (`builtins.c`) is cached per-process, so subsequent compiles within a single `plutoc watch` process skip the `cc builtins.c` step entirely.
+These are end-to-end: lex → parse → typeck → codegen → link → exec. The runtime object (`builtins.c`) is cached per-process, so subsequent compiles within a single `pluto watch` process skip the `cc builtins.c` step entirely.
 
 ### What makes this easy
 
@@ -62,13 +62,13 @@ These are end-to-end: lex → parse → typeck → codegen → link → exec. Th
 
 ---
 
-## Design: `plutoc watch`
+## Design: `pluto watch`
 
 ### Usage
 
 ```bash
-plutoc watch run main.pluto --stdlib stdlib     # Watch + run
-plutoc watch test main.pluto --stdlib stdlib    # Watch + test
+pluto watch run main.pluto --stdlib stdlib     # Watch + run
+pluto watch test main.pluto --stdlib stdlib    # Watch + test
 ```
 
 ### Behavior
@@ -156,13 +156,13 @@ This handles long-running programs (e.g., HTTP servers) gracefully.
 
 ---
 
-## Design: `plutoc repl`
+## Design: `pluto repl`
 
 ### Usage
 
 ```bash
-plutoc repl                       # Start REPL
-plutoc repl --stdlib stdlib       # Start REPL with stdlib
+pluto repl                       # Start REPL
+pluto repl --stdlib stdlib       # Start REPL with stdlib
 ```
 
 ### Architecture: Compile-per-iteration
@@ -258,7 +258,7 @@ pluto> x + 1
 
 ---
 
-## Design: `plutoc watch test` specifics
+## Design: `pluto watch test` specifics
 
 ### Selective test execution
 
@@ -266,10 +266,10 @@ When watching a project with many test files, rerunning all tests on every save 
 
 ```bash
 # Watch a specific test file
-plutoc watch test tests/math_test.pluto --stdlib stdlib
+pluto watch test tests/math_test.pluto --stdlib stdlib
 
 # Watch the whole project (reruns all tests)
-plutoc watch test . --stdlib stdlib
+pluto watch test . --stdlib stdlib
 ```
 
 ### Test output formatting
@@ -355,11 +355,11 @@ The difference is where the source comes from and what triggers the next iterati
 
 ### Phasing
 
-**Phase 1: `plutoc watch run`** — Highest value, simplest implementation. File watcher + recompile on change. ~300 LOC.
+**Phase 1: `pluto watch run`** — Highest value, simplest implementation. File watcher + recompile on change. ~300 LOC.
 
-**Phase 2: `plutoc watch test`** — Same watcher, different compile path. ~100 LOC incremental.
+**Phase 2: `pluto watch test`** — Same watcher, different compile path. ~100 LOC incremental.
 
-**Phase 3: `plutoc repl`** — Session management + input classification. ~350 LOC incremental.
+**Phase 3: `pluto repl`** — Session management + input classification. ~350 LOC incremental.
 
 ---
 

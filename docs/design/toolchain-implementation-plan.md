@@ -47,34 +47,34 @@ The following items from RFC Section 9 are explicitly deferred:
 
 #### `Cargo.toml` (root)
 - `name = "plutoc"` → `name = "pluto"`
-- All `[[test]]` entries remain unchanged (they reference `plutoc` only via `use plutoc::` in source)
+- All `[[test]]` entries remain unchanged (they reference the crate only via `use pluto::` in source)
 
 #### `sdk/Cargo.toml`
-- `name = "plutoc-sdk"` → `name = "pluto-sdk"`
+- `name = "pluto-sdk"` → `name = "pluto-sdk"`
 - `plutoc = { path = ".." }` → `pluto = { path = ".." }`
 
 #### `mcp/Cargo.toml`
-- `plutoc-sdk = { path = "../sdk" }` → `pluto-sdk = { path = "../sdk" }`
+- `pluto-sdk = { path = "../sdk" }` → `pluto-sdk = { path = "../sdk" }`
 - `plutoc = { path = ".." }` → `pluto = { path = ".." }`
 
 #### `src/main.rs`
 - Line 5: `#[command(name = "plutoc", ...)]` → `#[command(name = "pluto", ...)]`
-- All `plutoc::` references in this file (e.g., `plutoc::compile_file_with_options`, `plutoc::diagnostics::CompileError`) → `pluto::`
-- Error message on line 217: `"use \`plutoc compile\`"` → `"use \`pluto compile\`"`
-- Coverage hint messages (lines 481, 486): `"plutoc test file.pluto --coverage"` → `"pluto test file.pluto --coverage"`
+- All `plutoc::` references in this file (e.g., `pluto::compile_file_with_options`, `plutoc::diagnostics::CompileError`) → `pluto::`
+- Error message on line 217: `"use \`pluto compile\`"` → `"use \`pluto compile\`"`
+- Coverage hint messages (lines 481, 486): `"pluto test file.pluto --coverage"` → `"pluto test file.pluto --coverage"`
 
 #### `src/lib.rs`
 - No changes needed (this file doesn't reference its own crate name)
 
 #### `sdk/src/**/*.rs`
-- All `use plutoc::` → `use pluto::` (grep for `plutoc::` in `sdk/src/`)
+- All `use pluto::` → `use pluto::` (grep for `plutoc::` in `sdk/src/`)
 
 #### `mcp/src/**/*.rs`
-- All `use plutoc::` and `use plutoc_sdk::` → `use pluto::` and `use pluto_sdk::`
+- All `use pluto::` and `use pluto_sdk::` → `use pluto::` and `use pluto_sdk::`
 - Binary name in `mcp/Cargo.toml` `[[bin]]` stays `pluto-mcp` for now (Phase 6 merges it)
 
 #### `tests/**/*.rs`
-- All `use plutoc::` → `use pluto::` across all integration and property test files
+- All `use pluto::` → `use pluto::` across all integration and property test files
 - The `common/mod.rs` test helper references `plutoc::` for compilation — update those
 
 #### `.github/workflows/build.yml`
@@ -377,7 +377,7 @@ pub struct InProcessServer {
 
 impl CompilerService for InProcessServer {
     fn check(&self, path: &Path, stdlib: Option<&Path>) -> CheckResult {
-        // Delegates to plutoc::compile_file() or similar
+        // Delegates to pluto::compile_file() or similar
     }
     // ...
 }

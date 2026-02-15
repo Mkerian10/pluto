@@ -44,7 +44,7 @@ Pluto is designed to make building **distributed, geographically-aware backend s
 - [ ] Methods on primitives (`42.to_string()`)
 - [ ] Field binding in match arms
 - [ ] Binary/scientific notation literals
-- [ ] Code formatter (`plutoc fmt`)
+- [ ] Code formatter (`pluto fmt`)
 
 **Success Metrics:**
 - Build a non-trivial distributed app (multi-service)
@@ -94,7 +94,7 @@ Pluto is designed to make building **distributed, geographically-aware backend s
 **Theme:** Tooling, ergonomics, quality of life
 
 **Goals:**
-- [ ] **Code formatter** - `plutoc fmt`
+- [ ] **Code formatter** - `pluto fmt`
 - [ ] **Linter** - Static analysis for common mistakes
 - [ ] **LSP foundations** - Autocomplete, go-to-definition
 - [ ] **Improved error messages** - More context, suggestions
@@ -142,9 +142,9 @@ Pluto is designed to make building **distributed, geographically-aware backend s
 
 **Features:**
 - **Binary `.pluto` format** - Stable UUIDs, semantic graph representation
-- **Human-readable `.pt` views** - Text files for humans, `plutoc sync` reconciles
-- **`plutoc-sdk`** - Python/TS bindings for AI agents
-- **Incremental analysis** - planned `plutoc analyze` command computes derived data on demand
+- **Human-readable `.pt` views** - Text files for humans, `pluto sync` reconciles
+- **`pluto-sdk`** - Python/TS bindings for AI agents
+- **Incremental analysis** - planned `pluto analyze` command computes derived data on demand
 - **Collaborative editing** - Multiple AI agents, same codebase (CRDT-based)
 
 **Impact:** AI agents as first-class contributors to Pluto projects

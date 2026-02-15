@@ -4,9 +4,9 @@
 >
 > **Implemented today:** PLTO v3 binary container with freshness tracking, `emit-ast`, `generate-pt`, `sync`, Rust SDK/module APIs.
 >
-> **In progress:** `plutoc analyze` command (separate implementation).
+> **In progress:** `pluto analyze` command (separate implementation).
 >
-> **Still in design:** `plutoc init`, signature-only libraries, cross-project UUIDs, incremental analysis.
+> **Still in design:** `pluto init`, signature-only libraries, cross-project UUIDs, incremental analysis.
 
 ## Motivation
 
@@ -23,7 +23,7 @@ The system has two file formats:
 | | `.pluto` (canonical) | `.pt` (human-readable) |
 |---|---|---|
 | **Format** | Binary (protobuf/flatbuffers) | Text (Pluto syntax) |
-| **Written by** | AI agents (via SDK), compiler (derived data) | `plutoc generate-pt` (from .pluto) |
+| **Written by** | AI agents (via SDK), compiler (derived data) | `pluto generate-pt` (from .pluto) |
 | **Read by** | Compiler, AI agents, SDK | Humans, code review tools, editors |
 | **Contains** | Full semantic graph (AST + types + errors + call graph) | Source code in Pluto syntax |
 | **Committed to git** | Yes (source of truth) | Yes (derived view for human review) |
@@ -109,7 +109,7 @@ Module {
 
 ### Derived Layer (written by compiler)
 
-The derived layer is intended to be computed by a planned `plutoc analyze` command. It is stored in the `.pluto` file but is always recomputable from the authored layer. If the derived data becomes stale (e.g., after an SDK write that didn't re-analyze), the compiler detects staleness and recomputes.
+The derived layer is intended to be computed by a planned `pluto analyze` command. It is stored in the `.pluto` file but is always recomputable from the authored layer. If the derived data becomes stale (e.g., after an SDK write that didn't re-analyze), the compiler detects staleness and recomputes.
 
 Contents:
 - **Resolved types** — fully resolved type information for every expression
@@ -121,10 +121,10 @@ Contents:
 
 The derived layer enables the bidirectional AI/compiler loop:
 1. AI writes authored content via SDK
-2. AI (or CI) runs planned `plutoc analyze` — compiler reads authored content, runs full analysis, writes derived layer back
+2. AI (or CI) runs planned `pluto analyze` — compiler reads authored content, runs full analysis, writes derived layer back
 3. AI reads the enriched `.pluto` for context (types, error sets, dependency info) when planning the next edit
 
-**Normal `plutoc compile` / `plutoc build` is non-mutating.** It reads `.pluto` files and produces binaries but does not modify the `.pluto` files. Only planned `plutoc analyze` would write back derived data. This avoids surprising file changes during builds.
+**Normal `pluto compile` / `pluto build` is non-mutating.** It reads `.pluto` files and produces binaries but does not modify the `.pluto` files. Only planned `pluto analyze` would write back derived data. This avoids surprising file changes during builds.
 
 ### Canonical AST Contract
 
@@ -148,7 +148,7 @@ The `.pluto` binary format stores the **authored AST shape** — the program as 
 - Injected prelude items (TypeInfo trait, reflection types)
 
 **Functions:**
-- `plutoc::parse_for_editing(source)` — produces canonical AST
+- `pluto::parse_for_editing(source)` — produces canonical AST
 - `xref::resolve_cross_refs(program)` — populates UUID cross-references
 
 **Invariant:** Derived data UUIDs must correspond to canonical AST UUIDs.
@@ -200,8 +200,8 @@ When function A calls function B, the call site in A's AST stores B's UUID (not 
 ### Generation
 
 ```bash
-plutoc generate-pt            # regenerate all .pt files from .pluto
-plutoc generate-pt math/      # regenerate .pt for a specific module
+pluto generate-pt            # regenerate all .pt files from .pluto
+pluto generate-pt math/      # regenerate .pt for a specific module
 ```
 
 The generator is a deterministic pretty-printer. Same `.pluto` input always produces the same `.pt` output (modulo formatting version).
@@ -209,8 +209,8 @@ The generator is a deterministic pretty-printer. Same `.pluto` input always prod
 ### Sync (.pt → .pluto)
 
 ```bash
-plutoc sync                   # sync .pt changes back to .pluto
-plutoc sync math/vectors.pt   # sync a specific file
+pluto sync                   # sync .pt changes back to .pluto
+pluto sync math/vectors.pt   # sync a specific file
 ```
 
 The sync tool:
@@ -221,16 +221,16 @@ The sync tool:
 5. Assigns new UUIDs to genuinely new declarations
 6. Removes declarations that were deleted from `.pt`
 7. Writes the updated `.pluto` file
-8. Marks derived data as stale (requires planned `plutoc analyze` to refresh)
+8. Marks derived data as stale (requires planned `pluto analyze` to refresh)
 
 ### Conflict Resolution
 
 `.pluto` always wins. If both `.pluto` and `.pt` have been modified:
-- Running `plutoc generate-pt` overwrites `.pt` with the current `.pluto` state
-- Running `plutoc sync` after `generate-pt` is a no-op
+- Running `pluto generate-pt` overwrites `.pt` with the current `.pluto` state
+- Running `pluto sync` after `generate-pt` is a no-op
 - CI should enforce that `.pt` matches `.pluto` (fail if out of sync)
 
-## SDK (plutoc-sdk)
+## SDK (pluto-sdk)
 
 The SDK is a Rust crate that provides programmatic read/write access to `.pluto` files. It is the primary interface for AI agents.
 
@@ -246,7 +246,7 @@ The SDK is a Rust crate that provides programmatic read/write access to `.pluto`
 The SDK (`sdk/src/`) provides both read and write access. The read API loads modules from binary PLTO or source text. The write API (`ModuleEditor`) enables text-in/AST-out editing:
 
 ```rust
-use plutoc_sdk::{Module, ModuleEditor, DeclKind};
+use pluto_sdk::{Module, ModuleEditor, DeclKind};
 
 // Read a module from binary (.pluto) or source text
 let module = Module::from_bytes(&bytes)?;      // from PLTO binary
@@ -295,8 +295,8 @@ let module = editor.commit();
 3. AI constructs new function via SDK
    - SDK assigns UUID, validates types
 4. AI writes updated .pluto via SDK
-5. AI (or CI) runs planned `plutoc analyze` to refresh derived data
-6. AI runs `plutoc generate-pt` to update the human-readable view
+5. AI (or CI) runs planned `pluto analyze` to refresh derived data
+6. AI runs `pluto generate-pt` to update the human-readable view
 7. Both .pluto and .pt are committed to git
 ```
 
@@ -306,20 +306,20 @@ let module = editor.commit();
 
 | Command | Reads | Writes | Purpose |
 |---|---|---|---|
-| `plutoc compile` | `.pluto` | binary | Compile to executable. Non-mutating. |
-| `plutoc analyze` (planned) | `.pluto` | `.pluto` (derived layer) | Enrich with type info, errors, call graph. |
-| `plutoc generate-pt` | `.pluto` | `.pt` | Generate human-readable view. |
-| `plutoc sync` | `.pt` + `.pluto` | `.pluto` | Sync human edits back to canonical form. |
-| `plutoc run` | `.pluto` | binary (temp) | Compile and run. Non-mutating. |
-| `plutoc test` | `.pluto` | binary (temp) | Compile and run tests. Non-mutating. |
-| `plutoc migrate` | `.pluto` (old) | `.pluto` (new) | Upgrade schema version. |
+| `pluto compile` | `.pluto` | binary | Compile to executable. Non-mutating. |
+| `pluto analyze` (planned) | `.pluto` | `.pluto` (derived layer) | Enrich with type info, errors, call graph. |
+| `pluto generate-pt` | `.pluto` | `.pt` | Generate human-readable view. |
+| `pluto sync` | `.pt` + `.pluto` | `.pluto` | Sync human edits back to canonical form. |
+| `pluto run` | `.pluto` | binary (temp) | Compile and run. Non-mutating. |
+| `pluto test` | `.pluto` | binary (temp) | Compile and run tests. Non-mutating. |
+| `pluto migrate` | `.pluto` (old) | `.pluto` (new) | Upgrade schema version. |
 
 ### Backward Compatibility
 
 During the transition period, the compiler supports both input formats:
 - If a `.pluto` binary file exists, use it
 - If only a `.pt` text file exists, parse it (current behavior)
-- `plutoc init` can convert an existing text-based project to the `.pluto` + `.pt` format
+- `pluto init` can convert an existing text-based project to the `.pluto` + `.pt` format
 
 ## Libraries and Dependencies
 
@@ -352,7 +352,7 @@ Every `.pluto` file contains a schema version number. When the format evolves:
 2. If the version is older than current, it runs the appropriate migration chain (v1→v2→v3...)
 3. Migrations are deterministic and lossless — no information is lost
 4. After migration, the file is rewritten at the new version
-5. `plutoc migrate` can batch-migrate an entire project
+5. `pluto migrate` can batch-migrate an entire project
 
 Migration examples:
 - Adding a new field to declarations → default value in migration
@@ -401,13 +401,13 @@ pub struct DerivedMeta {
 
 - **v3 reader** supports v2 files (synthesizes `meta: None`)
 - **v2 reader** rejects v3 files (unsupported version error)
-- **Migration**: Run `plutoc analyze .` to upgrade all files to v3 (when available)
+- **Migration**: Run `pluto analyze .` to upgrade all files to v3 (when available)
 
 ### Commands
 
-- `plutoc emit-ast <file.pt> -o <file.pluto>` — writes v3 with fresh derived data
-- `plutoc sync <file.pt> <file.pluto>` — writes v3 with stale derived data (meta = None)
-- `plutoc analyze <file.pluto>` — updates derived data to fresh v3 (in progress, separate implementation)
+- `pluto emit-ast <file.pt> -o <file.pluto>` — writes v3 with fresh derived data
+- `pluto sync <file.pt> <file.pluto>` — writes v3 with stale derived data (meta = None)
+- `pluto analyze <file.pluto>` — updates derived data to fresh v3 (in progress, separate implementation)
 
 ## Alternatives Considered
 
@@ -439,7 +439,7 @@ Store only the authored AST in `.pluto`. Derived data lives in a separate cache.
 
 - [ ] **Exact binary format.** Protobuf, FlatBuffers, Cap'n Proto, or custom? Needs benchmarking for read/write performance and format stability.
 - [ ] **Derived data staleness detection.** How does the compiler know derived data is stale? Hash of authored layer? Timestamp? Version counter?
-- [ ] **Incremental analysis.** When one declaration changes, can planned `plutoc analyze` update only the affected derived data, or must it recompute everything?
+- [ ] **Incremental analysis.** When one declaration changes, can planned `pluto analyze` update only the affected derived data, or must it recompute everything?
 - [ ] **Cross-project UUIDs.** How do UUIDs work across library boundaries? Does a library's UUID namespace conflict with the consumer's?
 - [ ] **SDK language bindings.** The SDK is a Rust crate, but AI agents might run in Python or TypeScript. FFI bindings? gRPC service?
 - [ ] **Diff tooling.** Custom `git diff` driver for `.pluto` binary files? Or rely entirely on `.pt` diffs for review?
