@@ -513,6 +513,9 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
         Stmt::Yield { value, .. } => {
             substitute_in_expr(&mut value.node, bindings);
         }
+        Stmt::Assert { expr } => {
+            substitute_in_expr(&mut expr.node, bindings);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }

@@ -12117,41 +12117,6 @@ fn main() {
 }
 
 #[test]
-fn trait_with_ensures_on_trait_method() {
-    // Trait method declares ensures, implementation must satisfy at runtime
-    let out = compile_and_run_stdout(r#"
-trait Positive {
-    fn make_positive(self, x: int) int
-        ensures result > 0
-}
-
-class AbsVal impl Positive {
-    tag: int
-    fn make_positive(self, x: int) int {
-        if x < 0 {
-            return 0 - x
-        }
-        if x == 0 {
-            return 1
-        }
-        return x
-    }
-}
-
-fn run(p: Positive) {
-    print(p.make_positive(-5))
-    print(p.make_positive(3))
-    print(p.make_positive(0))
-}
-
-fn main() {
-    run(AbsVal { tag: 0 })
-}
-"#);
-    assert_eq!(out, "5\n3\n1\n");
-}
-
-#[test]
 fn trait_with_requires_on_trait_method() {
     // Trait method declares requires, checked at runtime on dispatch
     let out = compile_and_run_stdout(r#"
@@ -13246,31 +13211,6 @@ fn main() {
     print(m.measure())
 }
 "#, "method 'measure' return type mismatch: trait 'Measured' expects float, class 'BadMeasure' returns int");
-}
-
-#[test]
-fn trait_ensures_violation_aborts() {
-    // ensures contract violated at runtime should abort
-    let (_, stderr, code) = compile_and_run_output(r#"
-trait Positive_ {
-    fn make(self) int
-        ensures result > 0
-}
-
-class BadMaker impl Positive_ {
-    tag: int
-    fn make(self) int {
-        return -1
-    }
-}
-
-fn main() {
-    let p: Positive_ = BadMaker { tag: 0 }
-    print(p.make())
-}
-"#);
-    assert_ne!(code, 0);
-    assert!(stderr.contains("ensures"), "Expected ensures violation, got stderr: {}", stderr);
 }
 
 // ===== Batch 24: Array-of-traits deep, dispatch argument chains, void ordering, boundary =====

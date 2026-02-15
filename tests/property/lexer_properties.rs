@@ -294,7 +294,7 @@ fn is_pluto_keyword(s: &str) -> bool {
         "class" | "trait" | "app" | "error" | "raise" | "catch" | "spawn" | "enum" |
         "impl" | "self" | "pub" | "for" | "in" | "break" | "continue" | "match" |
         "import" | "as" | "extern" | "uses" | "ambient" | "test" | "invariant" |
-        "requires" | "ensures" | "select" | "default" | "scope" | "scoped" |
+        "requires" | "assert" | "select" | "default" | "scope" | "scoped" |
         "transient" | "none" | "system" | "stage" | "override" | "yield" | "stream"
     )
 }

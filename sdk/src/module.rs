@@ -570,6 +570,9 @@ fn find_expr_in_stmt<'a>(stmt: &'a Stmt, target: Span) -> Option<&'a Expr> {
         Stmt::Yield { value } => {
             find_expr_recursive(&value.node, value.span, target)
         }
+        Stmt::Assert { expr } => {
+            find_expr_recursive(&expr.node, expr.span, target)
+        }
     }
 }
 
