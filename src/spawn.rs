@@ -3,6 +3,9 @@ use crate::parser::ast::*;
 use crate::span::Spanned;
 use crate::visit::{walk_expr_mut, VisitMut};
 
+#[cfg(test)]
+use crate::span::Span;
+
 /// Desugar `spawn func(args)` into `spawn (=> { return func(args) })`.
 ///
 /// After this pass, `Expr::Spawn { call }` contains a `Expr::Closure` instead of
