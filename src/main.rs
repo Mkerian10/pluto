@@ -89,6 +89,11 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Analyze a .pluto file and update it with fresh derived data (types, error sets, call graph)
+    Analyze {
+        /// .pluto or .pt file to analyze
+        file: PathBuf,
+    },
     /// Watch files and automatically recompile/rerun on changes
     Watch {
         #[command(subcommand)]
@@ -442,6 +447,19 @@ fn main() {
                         result.removed.len(),
                         result.unchanged,
                     );
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::Analyze { file } => {
+            // Analyze the file and update with fresh derived data
+            match plutoc::analyze_and_update(&file, stdlib.as_deref()) {
+                Ok(()) => {
+                    let output_path = file.with_extension("pluto");
+                    eprintln!("analyzed {} \u{2192} {}", file.display(), output_path.display());
                 }
                 Err(e) => {
                     eprintln!("error: {e}");

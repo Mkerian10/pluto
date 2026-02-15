@@ -180,6 +180,10 @@ name = "sync"
 path = "tests/integration/sync.rs"
 
 [[test]]
+name = "analyze"
+path = "tests/integration/analyze.rs"
+
+[[test]]
 name = "scope_blocks"
 path = "tests/integration/scope_blocks.rs"
 
