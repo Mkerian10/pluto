@@ -814,10 +814,25 @@ fn resolve_modules_inner(
                 visited.remove(&canonical);
                 imports.push((binding_name, module_prog, ImportOrigin::Local));
             } else {
-                return Err(CompileError::syntax(
-                    format!("cannot find module '{}': no directory or file found", full_path),
-                    import.node.path[0].span,
-                ));
+                // Check .deps/ directory (vendored dependencies)
+                let deps_dir_path = entry_dir.join(".deps").join(first_segment);
+                if deps_dir_path.is_dir() {
+                    let module_prog = load_directory_module(
+                        &deps_dir_path,
+                        &mut source_map,
+                        &mut visited,
+                        effective_stdlib,
+                        current_deps,
+                        pkg_graph,
+                        ImportOrigin::PackageDep,
+                    )?;
+                    imports.push((binding_name, module_prog, ImportOrigin::PackageDep));
+                } else {
+                    return Err(CompileError::syntax(
+                        format!("cannot find module '{}': no directory or file found", full_path),
+                        import.node.path[0].span,
+                    ));
+                }
             }
         } else if first_segment == "std" {
             // Stdlib import: `import std.io` → resolve remaining path from stdlib_root
