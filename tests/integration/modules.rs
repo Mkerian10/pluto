@@ -1089,3 +1089,47 @@ fn if_expr_with_qualified_enum() {
     let stdout = run_project(&files);
     assert_eq!(stdout.trim(), "red");
 }
+
+// ============================================================
+// .deps/ Directory Resolution Tests
+// ============================================================
+
+#[test]
+fn deps_directory_simple() {
+    let files = vec![
+        ("main.pluto", "import mylib\n\nfn main() {\n    print(mylib.greet())\n}"),
+        (".deps/mylib/lib.pluto", "pub fn greet() string {\n    return \"hello from deps\"\n}"),
+    ];
+    let stdout = run_project(&files);
+    assert_eq!(stdout.trim(), "hello from deps");
+}
+
+#[test]
+fn deps_local_shadows_deps() {
+    let files = vec![
+        ("main.pluto", "import foo\n\nfn main() {\n    print(foo.source())\n}"),
+        ("foo.pluto", "pub fn source() string {\n    return \"local\"\n}"),
+        (".deps/foo/lib.pluto", "pub fn source() string {\n    return \"deps\"\n}"),
+    ];
+    let stdout = run_project(&files);
+    assert_eq!(stdout.trim(), "local");  // Local takes precedence
+}
+
+#[test]
+fn deps_not_found() {
+    let files = vec![
+        ("main.pluto", "import nonexistent\n\nfn main() {}"),
+    ];
+    compile_project_should_fail(&files);
+}
+
+#[test]
+fn deps_transitive() {
+    let files = vec![
+        ("main.pluto", "import mylib\n\nfn main() {\n    print(mylib.combined())\n}"),
+        (".deps/mylib/main.pluto", "import util\n\npub fn combined() int {\n    return util.value()\n}"),
+        (".deps/mylib/util.pluto", "pub fn value() int {\n    return 42\n}"),
+    ];
+    let stdout = run_project(&files);
+    assert_eq!(stdout.trim(), "42");
+}
