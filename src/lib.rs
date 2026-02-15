@@ -278,9 +278,78 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
     let (mut program, _source_map) = modules::flatten_modules(graph)?;
 
     let result = run_frontend(&mut program, false)?;
-    let derived = derived::DerivedInfo::build(&result.env, &program);
+    let derived = derived::DerivedInfo::build(&result.env, &program, &source);
 
     Ok((program, source, derived, result.warnings))
+}
+
+/// Analyze an existing .pluto file and update it with fresh derived data.
+///
+/// This function:
+/// 1. Reads a .pluto binary file
+/// 2. Runs full type analysis on the AST
+/// 3. Builds fresh DerivedInfo
+/// 4. Writes the updated .pluto file with new derived data
+///
+/// The AST and source text are preserved unchanged.
+///
+/// If the input is a .pt text file, it will be parsed first.
+pub fn analyze_and_update(
+    file_path: &Path,
+    stdlib_root: Option<&Path>,
+) -> Result<(), CompileError> {
+    // Canonicalize path
+    let file_path = file_path.canonicalize().map_err(|e| {
+        CompileError::codegen(format!("could not resolve path '{}': {e}", file_path.display()))
+    })?;
+
+    // Read the file
+    let data = std::fs::read(&file_path).map_err(|e| {
+        CompileError::codegen(format!("failed to read {}: {e}", file_path.display()))
+    })?;
+
+    // Determine if it's a binary .pluto or text .pt file
+    let (mut program, source) = if binary::is_binary_format(&data) {
+        // Binary .pluto file - deserialize it (already flattened)
+        let (program, source, _old_derived) = binary::deserialize_program(&data)
+            .map_err(|e| CompileError::codegen(format!("failed to deserialize .pluto: {e}")))?;
+        (program, source)
+    } else {
+        // Text file - resolve and flatten modules
+        let source = std::fs::read_to_string(&file_path)
+            .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
+        let effective_stdlib = resolve_stdlib(stdlib_root);
+        let entry_dir = file_path.parent().unwrap_or(Path::new("."));
+        let pkg_graph = manifest::find_and_resolve(entry_dir)?;
+
+        // Resolve module graph (discover imports, parse all files)
+        // Use no_siblings variant to avoid parsing the .pluto output file as a sibling
+        let graph = modules::resolve_modules_no_siblings(&file_path, effective_stdlib.as_deref(), &pkg_graph)?;
+
+        // Flatten modules into single program
+        let (program, _source_map) = modules::flatten_modules(graph)?;
+
+        // TODO: Store merged source from source_map instead of just entry file
+        (program, source)
+    };
+
+    // Run full analysis pipeline
+    let result = run_frontend(&mut program, false)?;
+    let derived = derived::DerivedInfo::build(&result.env, &program, &source);
+
+    // Serialize with fresh derived data
+    let bytes = binary::serialize_program(&program, &source, &derived)
+        .map_err(|e| CompileError::codegen(format!("failed to serialize .pluto: {e}")))?;
+
+    // Determine output path - always write .pluto
+    let output_path = file_path.with_extension("pluto");
+
+    // Write updated file
+    std::fs::write(&output_path, &bytes).map_err(|e| {
+        CompileError::codegen(format!("failed to write {}: {e}", output_path.display()))
+    })?;
+
+    Ok(())
 }
 
 /// Filter tests based on cache - keeps only tests with changed dependencies.
@@ -406,7 +475,7 @@ fn compile_file_for_tests_impl(
     }
 
     // Build derived info to get test dependency hashes
-    let derived_info = derived::DerivedInfo::build(&result.env, &program);
+    let derived_info = derived::DerivedInfo::build(&result.env, &program, &source);
 
     // Load cache and filter tests if caching is enabled
     let original_test_count = program.test_info.len();

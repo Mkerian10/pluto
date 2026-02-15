@@ -240,23 +240,23 @@ impl ModuleEditor {
         let deleted_source = match kind {
             DeclKindSimple::Function => {
                 let removed = self.program.functions.remove(idx);
-                plutoc::pretty::pretty_print_function(&removed.node)
+                plutoc::pretty::pretty_print_function(&removed.node, false)
             }
             DeclKindSimple::Class => {
                 let removed = self.program.classes.remove(idx);
-                plutoc::pretty::pretty_print_class(&removed.node)
+                plutoc::pretty::pretty_print_class(&removed.node, false)
             }
             DeclKindSimple::Enum => {
                 let removed = self.program.enums.remove(idx);
-                plutoc::pretty::pretty_print_enum(&removed.node)
+                plutoc::pretty::pretty_print_enum(&removed.node, false)
             }
             DeclKindSimple::Trait => {
                 let removed = self.program.traits.remove(idx);
-                plutoc::pretty::pretty_print_trait(&removed.node)
+                plutoc::pretty::pretty_print_trait(&removed.node, false)
             }
             DeclKindSimple::Error => {
                 let removed = self.program.errors.remove(idx);
-                plutoc::pretty::pretty_print_error(&removed.node)
+                plutoc::pretty::pretty_print_error(&removed.node, false)
             }
             DeclKindSimple::App => {
                 return Err(SdkError::Edit("delete is not supported for app declarations".to_string()));
@@ -346,7 +346,7 @@ impl ModuleEditor {
     /// and return a new `Module`.
     pub fn commit(mut self) -> Module {
         // Pretty-print produces fresh source
-        let source = plutoc::pretty::pretty_print(&self.program);
+        let source = plutoc::pretty::pretty_print(&self.program, false);
 
         // Re-resolve cross-references
         plutoc::xref::resolve_cross_refs(&mut self.program);

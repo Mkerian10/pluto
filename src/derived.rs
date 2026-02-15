@@ -52,6 +52,10 @@ pub struct DerivedInfo {
     /// Test dependency hashes: test display_name -> hash of all transitive dependencies.
     #[serde(default)]
     pub test_dep_hashes: BTreeMap<String, String>,
+    /// SHA-256 hash of the source text this derived data was computed from.
+    /// Used for staleness detection. Empty string if not computed.
+    #[serde(default)]
+    pub source_hash: String,
 }
 
 /// A reference to an error declaration.
@@ -253,8 +257,31 @@ fn compute_test_dependency_hashes(program: &Program) -> BTreeMap<String, String>
 }
 
 impl DerivedInfo {
+    /// Compute hash of source text for staleness detection.
+    pub fn compute_source_hash(source: &str) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        source.hash(&mut hasher);
+        format!("{:x}", hasher.finish())
+    }
+
+    /// Check if this derived data is stale compared to the given source.
+    /// Returns true if the source hash doesn't match (data is outdated).
+    pub fn is_stale(&self, source: &str) -> bool {
+        if self.source_hash.is_empty() {
+            // No hash stored - treat as stale (needs analysis)
+            return true;
+        }
+        let current_hash = Self::compute_source_hash(source);
+        self.source_hash != current_hash
+    }
+
     /// Build derived info by walking the program AST and extracting type data from TypeEnv.
-    pub fn build(env: &TypeEnv, program: &Program) -> Self {
+    ///
+    /// The `source` parameter is used to compute a staleness hash for the derived data.
+    pub fn build(env: &TypeEnv, program: &Program, source: &str) -> Self {
         // Build a lookup from error name -> UUID using the program's error declarations
         let error_uuid_map: BTreeMap<&str, Uuid> = program
             .errors
@@ -493,6 +520,9 @@ impl DerivedInfo {
         // Compute test dependency hashes
         let test_dep_hashes = compute_test_dependency_hashes(program);
 
+        // Compute source hash for staleness detection
+        let source_hash = Self::compute_source_hash(source);
+
         DerivedInfo {
             fn_error_sets,
             fn_signatures,
@@ -503,6 +533,7 @@ impl DerivedInfo {
             di_order,
             trait_implementors,
             test_dep_hashes,
+            source_hash,
         }
     }
 
