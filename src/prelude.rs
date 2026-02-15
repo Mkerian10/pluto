@@ -60,6 +60,12 @@ pub fn prelude_enum_names() -> &'static HashSet<String> {
 pub fn inject_prelude(program: &mut Program) -> Result<(), CompileError> {
     let data = get_prelude();
 
+    // Check if prelude is already injected (idempotency check)
+    // If the first enum is a prelude enum, assume prelude is already there
+    if !program.enums.is_empty() && data.enum_names.contains(&program.enums[0].node.name.node) {
+        return Ok(());
+    }
+
     // Check for conflicts with prelude enums
     for prelude_name in &data.enum_names {
         // Check enums

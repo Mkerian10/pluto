@@ -683,6 +683,10 @@ path = "tests/integration/if_expression_errors.rs"
 name = "coverage"
 path = "tests/integration/coverage.rs"
 
+[[test]]
+name = "ai_native_e2e"
+path = "tests/integration/ai_native_e2e.rs"
+
 [[bench]]
 name = "compile_time"
 harness = false
