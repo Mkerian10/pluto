@@ -46,6 +46,13 @@ fn test_use_nonexistent_version() {
 /// Test that `pluto install` with non-existent version fails gracefully
 #[test]
 fn test_install_nonexistent_version() {
+    // Clean up version if it exists from previous test runs
+    let version_dir = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+        .join(".pluto")
+        .join("versions")
+        .join("999.999.999");
+    let _ = std::fs::remove_dir_all(&version_dir);
+
     let output = Command::new("./target/debug/pluto")
         .args(["install", "999.999.999"])
         .output()
