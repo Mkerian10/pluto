@@ -1,5 +1,8 @@
 // Error Handling Example
 // Demonstrates Pluto's typed error system with compiler-inferred error-ability
+//
+// KEY CONCEPT: Never write ! in function signatures
+// The compiler automatically infers which functions can error
 
 error NetworkError {
     message: string
@@ -12,6 +15,12 @@ error ValidationError {
 
 error DatabaseError {
     code: int
+}
+
+// Custom type for demonstration
+class UserConfig {
+    id: int
+    name: string
 }
 
 // Function that may raise an error
@@ -52,7 +61,24 @@ fn process_user(id: int) string {
     return f"Processing: {name}"
 }
 
+// Error inference works identically for custom types
+// NOTE: No ! in the signature - error-ability is inferred
+fn create_user_config(id: int) UserConfig {
+    let name = fetch_user(id)!  // Propagate errors
+    return UserConfig { id: id, name: name }
+}
+// Compiler infers: create_user_config() can error
+
+fn safe_create_config(id: int) UserConfig {
+    let config = create_user_config(id) catch err {
+        UserConfig { id: -1, name: "error" }
+    }
+    return config
+}
+
 fn main() {
+    print("=== Basic error handling ===")
+
     // Success case
     print(safe_fetch(42))
 
@@ -64,10 +90,19 @@ fn main() {
     print(fetch_with_default(-5))
     print(fetch_with_default(100))
 
+    print("\n=== Custom types with error inference ===")
+
+    // Error inference works the same for custom types
+    let config1 = safe_create_config(42)
+    print(f"Config: id={config1.id}, name={config1.name}")
+
+    let config2 = safe_create_config(-1)
+    print(f"Config: id={config2.id}, name={config2.name}")
+
     // Propagation chain - errors flow through call stack
     // Uncommenting these would require ! at call site in main:
     // let result = process_user(-1)!
     // print(result)
 
-    print("Error handling complete")
+    print("\nError handling complete")
 }
