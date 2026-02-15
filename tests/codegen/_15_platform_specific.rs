@@ -438,7 +438,6 @@ fn test_cross_platform_string_operations() {
 }
 
 #[test]
-#[ignore] // Compiler warnings in output causing test to fail
 fn test_cross_platform_class_methods() {
     // Test class method calls (validates method calling convention)
     let src = r#"
