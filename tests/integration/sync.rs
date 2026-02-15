@@ -88,7 +88,7 @@ fn round_trip_identity() {
     // Generate .pt from the binary
     let data = std::fs::read(&pluto_path).unwrap();
     let (program, _source, _derived) = deserialize_program(&data).unwrap();
-    let pt_text = pretty_print(&program);
+    let pt_text = pretty_print(&program, false);
 
     // Sync back
     let synced = sync_and_load(&pt_text, &pluto_path);
@@ -210,7 +210,7 @@ fn main() {
     // Generate .pt and sync back
     let data = std::fs::read(&pluto_path).unwrap();
     let (program, _source, _derived) = deserialize_program(&data).unwrap();
-    let pt_text = pretty_print(&program);
+    let pt_text = pretty_print(&program, false);
     let synced = sync_and_load(&pt_text, &pluto_path);
 
     let synced_class = &synced.classes[0].node;
@@ -252,7 +252,7 @@ fn main() {
     // Round-trip
     let data = std::fs::read(&pluto_path).unwrap();
     let (program, _source, _derived) = deserialize_program(&data).unwrap();
-    let pt_text = pretty_print(&program);
+    let pt_text = pretty_print(&program, false);
     let synced = sync_and_load(&pt_text, &pluto_path);
 
     let synced_enum = &synced.enums[0].node;
@@ -307,7 +307,7 @@ fn main() {
     // Generate .pt and sync back
     let data = std::fs::read(&pluto_path).unwrap();
     let (program, _source, _derived) = deserialize_program(&data).unwrap();
-    let pt_text = pretty_print(&program);
+    let pt_text = pretty_print(&program, false);
     let synced = sync_and_load(&pt_text, &pluto_path);
 
     // Cross-references should be resolved: the error should have an ID
@@ -352,7 +352,7 @@ fn main() {
     // Round-trip
     let data = std::fs::read(&pluto_path).unwrap();
     let (program, _source, _derived) = deserialize_program(&data).unwrap();
-    let pt_text = pretty_print(&program);
+    let pt_text = pretty_print(&program, false);
     let synced = sync_and_load(&pt_text, &pluto_path);
 
     assert_eq!(trait_uuid(&synced, "Greeter"), orig_trait_id);
@@ -386,7 +386,7 @@ fn main() {
     // Round-trip
     let data = std::fs::read(&pluto_path).unwrap();
     let (program, _source, _derived) = deserialize_program(&data).unwrap();
-    let pt_text = pretty_print(&program);
+    let pt_text = pretty_print(&program, false);
     let synced = sync_and_load(&pt_text, &pluto_path);
 
     assert_eq!(error_uuid(&synced, "NotFound"), orig_nf_id);

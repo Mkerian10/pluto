@@ -619,7 +619,7 @@ fn pretty_print_function(func: &Function) -> String {
         tests: None,
         fallible_extern_fns: vec![],
     };
-    plutoc::pretty::pretty_print(&program)
+    plutoc::pretty::pretty_print(&program, false)
 }
 
 fn pretty_print_class(cls: &ClassDecl) -> String {
@@ -638,7 +638,7 @@ fn pretty_print_class(cls: &ClassDecl) -> String {
         tests: None,
         fallible_extern_fns: vec![],
     };
-    plutoc::pretty::pretty_print(&program)
+    plutoc::pretty::pretty_print(&program, false)
 }
 
 fn pretty_print_enum(en: &EnumDecl) -> String {
@@ -657,7 +657,7 @@ fn pretty_print_enum(en: &EnumDecl) -> String {
         tests: None,
         fallible_extern_fns: vec![],
     };
-    plutoc::pretty::pretty_print(&program)
+    plutoc::pretty::pretty_print(&program, false)
 }
 
 fn pretty_print_trait(tr: &TraitDecl) -> String {
@@ -676,7 +676,7 @@ fn pretty_print_trait(tr: &TraitDecl) -> String {
         tests: None,
         fallible_extern_fns: vec![],
     };
-    plutoc::pretty::pretty_print(&program)
+    plutoc::pretty::pretty_print(&program, false)
 }
 
 fn pretty_print_error_decl(err: &ErrorDecl) -> String {
@@ -695,7 +695,7 @@ fn pretty_print_error_decl(err: &ErrorDecl) -> String {
         tests: None,
         fallible_extern_fns: vec![],
     };
-    plutoc::pretty::pretty_print(&program)
+    plutoc::pretty::pretty_print(&program, false)
 }
 
 fn pretty_print_app(app: &AppDecl) -> String {
@@ -714,7 +714,7 @@ fn pretty_print_app(app: &AppDecl) -> String {
         tests: None,
         fallible_extern_fns: vec![],
     };
-    plutoc::pretty::pretty_print(&program)
+    plutoc::pretty::pretty_print(&program, false)
 }
 
 // --- High-level detail builders ---

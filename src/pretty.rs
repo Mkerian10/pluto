@@ -1,56 +1,59 @@
 use crate::parser::ast::*;
 
 /// Pretty-print a `Program` AST back into valid Pluto source text.
-pub fn pretty_print(program: &Program) -> String {
-    let mut pp = PrettyPrinter::new();
+///
+/// If `include_uuid_hints` is true, emits `// @uuid: <uuid>` comments before each
+/// top-level declaration for stable identification across text ↔ binary conversions.
+pub fn pretty_print(program: &Program, include_uuid_hints: bool) -> String {
+    let mut pp = PrettyPrinter::new(include_uuid_hints);
     pp.emit_program(program);
     pp.buf
 }
 
 /// Pretty-print a single function declaration.
-pub fn pretty_print_function(func: &Function) -> String {
-    let mut pp = PrettyPrinter::new();
-    pp.emit_function(func);
+pub fn pretty_print_function(func: &Function, include_uuid_hints: bool) -> String {
+    let mut pp = PrettyPrinter::new(include_uuid_hints);
+    pp.emit_function_with_hint(func);
     pp.newline();
     pp.buf
 }
 
 /// Pretty-print a single class declaration.
-pub fn pretty_print_class(cls: &ClassDecl) -> String {
-    let mut pp = PrettyPrinter::new();
-    pp.emit_class_decl(cls);
+pub fn pretty_print_class(cls: &ClassDecl, include_uuid_hints: bool) -> String {
+    let mut pp = PrettyPrinter::new(include_uuid_hints);
+    pp.emit_class_decl_with_hint(cls);
     pp.newline();
     pp.buf
 }
 
 /// Pretty-print a single enum declaration.
-pub fn pretty_print_enum(en: &EnumDecl) -> String {
-    let mut pp = PrettyPrinter::new();
-    pp.emit_enum_decl(en);
+pub fn pretty_print_enum(en: &EnumDecl, include_uuid_hints: bool) -> String {
+    let mut pp = PrettyPrinter::new(include_uuid_hints);
+    pp.emit_enum_decl_with_hint(en);
     pp.newline();
     pp.buf
 }
 
 /// Pretty-print a single trait declaration.
-pub fn pretty_print_trait(tr: &TraitDecl) -> String {
-    let mut pp = PrettyPrinter::new();
-    pp.emit_trait_decl(tr);
+pub fn pretty_print_trait(tr: &TraitDecl, include_uuid_hints: bool) -> String {
+    let mut pp = PrettyPrinter::new(include_uuid_hints);
+    pp.emit_trait_decl_with_hint(tr);
     pp.newline();
     pp.buf
 }
 
 /// Pretty-print a single error declaration.
-pub fn pretty_print_error(err: &ErrorDecl) -> String {
-    let mut pp = PrettyPrinter::new();
-    pp.emit_error_decl(err);
+pub fn pretty_print_error(err: &ErrorDecl, include_uuid_hints: bool) -> String {
+    let mut pp = PrettyPrinter::new(include_uuid_hints);
+    pp.emit_error_decl_with_hint(err);
     pp.newline();
     pp.buf
 }
 
 /// Pretty-print a single app declaration.
-pub fn pretty_print_app(app: &AppDecl) -> String {
-    let mut pp = PrettyPrinter::new();
-    pp.emit_app_decl(app);
+pub fn pretty_print_app(app: &AppDecl, include_uuid_hints: bool) -> String {
+    let mut pp = PrettyPrinter::new(include_uuid_hints);
+    pp.emit_app_decl_with_hint(app);
     pp.newline();
     pp.buf
 }
@@ -58,13 +61,15 @@ pub fn pretty_print_app(app: &AppDecl) -> String {
 struct PrettyPrinter {
     buf: String,
     indent: usize,
+    include_uuid_hints: bool,
 }
 
 impl PrettyPrinter {
-    fn new() -> Self {
+    fn new(include_uuid_hints: bool) -> Self {
         Self {
             buf: String::new(),
             indent: 0,
+            include_uuid_hints,
         }
     }
 
@@ -88,6 +93,15 @@ impl PrettyPrinter {
 
     fn dedent(&mut self) {
         self.indent -= 1;
+    }
+
+    /// Emit a UUID hint comment if include_uuid_hints is enabled.
+    /// Format: `// @uuid: <uuid>`
+    fn emit_uuid_hint(&mut self, uuid: &uuid::Uuid) {
+        if self.include_uuid_hints {
+            self.write_indent();
+            self.write(&format!("// @uuid: {}\n", uuid));
+        }
     }
 
     // ── Program ──────────────────────────────────────────────────────
@@ -123,28 +137,28 @@ impl PrettyPrinter {
         // 4. Errors
         for err in &program.errors {
             sep!(self, has_output);
-            self.emit_error_decl(&err.node);
+            self.emit_error_decl_with_hint(&err.node);
             self.newline();
         }
 
         // 5. Traits
         for tr in &program.traits {
             sep!(self, has_output);
-            self.emit_trait_decl(&tr.node);
+            self.emit_trait_decl_with_hint(&tr.node);
             self.newline();
         }
 
         // 6. Enums
         for en in &program.enums {
             sep!(self, has_output);
-            self.emit_enum_decl(&en.node);
+            self.emit_enum_decl_with_hint(&en.node);
             self.newline();
         }
 
         // 7. Classes
         for cls in &program.classes {
             sep!(self, has_output);
-            self.emit_class_decl(&cls.node);
+            self.emit_class_decl_with_hint(&cls.node);
             self.newline();
         }
 
@@ -160,21 +174,21 @@ impl PrettyPrinter {
                 continue;
             }
             sep!(self, has_output);
-            self.emit_function(&func.node);
+            self.emit_function_with_hint(&func.node);
             self.newline();
         }
 
         // 9. App
         if let Some(app) = &program.app {
             sep!(self, has_output);
-            self.emit_app_decl(&app.node);
+            self.emit_app_decl_with_hint(&app.node);
             self.newline();
         }
 
         // 9b. Stages
         for stage in &program.stages {
             sep!(self, has_output);
-            self.emit_stage_decl(&stage.node);
+            self.emit_stage_decl_with_hint(&stage.node);
             self.newline();
         }
 
@@ -261,6 +275,11 @@ impl PrettyPrinter {
         self.write("}");
     }
 
+    fn emit_error_decl_with_hint(&mut self, err: &ErrorDecl) {
+        self.emit_uuid_hint(&err.id);
+        self.emit_error_decl(err);
+    }
+
     // ── Trait ────────────────────────────────────────────────────────
 
     fn emit_trait_decl(&mut self, tr: &TraitDecl) {
@@ -281,6 +300,11 @@ impl PrettyPrinter {
         }
         self.dedent();
         self.write("}");
+    }
+
+    fn emit_trait_decl_with_hint(&mut self, tr: &TraitDecl) {
+        self.emit_uuid_hint(&tr.id);
+        self.emit_trait_decl(tr);
     }
 
     fn emit_trait_method(&mut self, method: &TraitMethod) {
@@ -335,6 +359,11 @@ impl PrettyPrinter {
         }
         self.dedent();
         self.write("}");
+    }
+
+    fn emit_enum_decl_with_hint(&mut self, en: &EnumDecl) {
+        self.emit_uuid_hint(&en.id);
+        self.emit_enum_decl(en);
     }
 
     // ── Class ────────────────────────────────────────────────────────
@@ -435,12 +464,22 @@ impl PrettyPrinter {
         self.write("}");
     }
 
+    fn emit_class_decl_with_hint(&mut self, cls: &ClassDecl) {
+        self.emit_uuid_hint(&cls.id);
+        self.emit_class_decl(cls);
+    }
+
     // ── Function ─────────────────────────────────────────────────────
 
     fn emit_function(&mut self, func: &Function) {
         self.emit_function_header(func);
         self.write(" ");
         self.emit_block(&func.body.node);
+    }
+
+    fn emit_function_with_hint(&mut self, func: &Function) {
+        self.emit_uuid_hint(&func.id);
+        self.emit_function(func);
     }
 
     fn emit_function_header(&mut self, func: &Function) {
@@ -540,6 +579,11 @@ impl PrettyPrinter {
         self.write("}");
     }
 
+    fn emit_app_decl_with_hint(&mut self, app: &AppDecl) {
+        self.emit_uuid_hint(&app.id);
+        self.emit_app_decl(app);
+    }
+
     fn emit_stage_decl(&mut self, stage: &StageDecl) {
         self.write("stage ");
         self.write(&stage.name.node);
@@ -637,6 +681,11 @@ impl PrettyPrinter {
 
         self.dedent();
         self.write("}");
+    }
+
+    fn emit_stage_decl_with_hint(&mut self, stage: &StageDecl) {
+        self.emit_uuid_hint(&stage.id);
+        self.emit_stage_decl(stage);
     }
 
     // ── Test ─────────────────────────────────────────────────────────
@@ -1468,7 +1517,7 @@ mod tests {
 
     fn pp(source: &str) -> String {
         let program = parse(source);
-        pretty_print(&program)
+        pretty_print(&program, false)
     }
 
     fn assert_roundtrip_stable(source: &str) {

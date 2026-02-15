@@ -346,7 +346,7 @@ impl ModuleEditor {
     /// and return a new `Module`.
     pub fn commit(mut self) -> Module {
         // Pretty-print produces fresh source
-        let source = plutoc::pretty::pretty_print(&self.program);
+        let source = plutoc::pretty::pretty_print(&self.program, false);
 
         // Re-resolve cross-references
         plutoc::xref::resolve_cross_refs(&mut self.program);
