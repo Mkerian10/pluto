@@ -207,6 +207,14 @@ pub struct XrefSiteInfo {
 }
 
 #[derive(Serialize)]
+pub struct UnifiedXrefInfo {
+    pub usage_kind: String, // "call", "construct", "enum_variant", "raise"
+    pub function_name: String,
+    pub function_uuid: Option<String>,
+    pub span: SpanInfo,
+}
+
+#[derive(Serialize)]
 pub struct ErrorsResult {
     pub function_name: String,
     pub is_fallible: bool,
@@ -230,6 +238,22 @@ pub struct ProjectSummary {
     pub files_failed: usize,
     pub modules: Vec<ModuleBrief>,
     pub errors: Vec<LoadError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dependency_graph: Option<DependencyGraphInfo>,
+}
+
+#[derive(Serialize)]
+pub struct DependencyGraphInfo {
+    pub module_count: usize,
+    pub has_circular_imports: bool,
+    pub modules: Vec<ModuleDependencyInfo>,
+}
+
+#[derive(Serialize)]
+pub struct ModuleDependencyInfo {
+    pub path: String,
+    pub name: String,
+    pub imports: Vec<String>,
 }
 
 #[derive(Serialize)]

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,6 +20,17 @@ use plutoc_sdk::editor::DanglingRefKind;
 
 use crate::serialize;
 use crate::tools::*;
+
+/// Dependency graph tracking module imports.
+#[derive(Clone, Debug, Default)]
+struct DependencyGraph {
+    /// Map from module name (e.g., "std.strings") to canonical file path
+    name_to_path: HashMap<String, String>,
+    /// Map from canonical file path to module name
+    path_to_name: HashMap<String, String>,
+    /// Map from canonical file path to list of imported module names
+    dependencies: HashMap<String, Vec<String>>,
+}
 
 /// Execute a binary with a timeout, capturing stdout/stderr.
 /// Returns (stdout, stderr, exit_code, timed_out).
@@ -65,6 +76,7 @@ async fn execute_with_timeout(
 pub struct PlutoMcp {
     modules: Arc<RwLock<HashMap<String, Module>>>,
     project_root: Arc<RwLock<Option<String>>>,
+    dep_graph: Arc<RwLock<DependencyGraph>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -89,6 +101,7 @@ impl PlutoMcp {
         Self {
             modules: Arc::new(RwLock::new(HashMap::new())),
             project_root: Arc::new(RwLock::new(None)),
+            dep_graph: Arc::new(RwLock::new(DependencyGraph::default())),
             tool_router: Self::tool_router(),
         }
     }
@@ -199,11 +212,11 @@ impl PlutoMcp {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    // --- Tool 3: inspect ---
+    // --- Tool 3: get_declaration ---
     #[tool(description = "Deep inspection of a single declaration by UUID or name. Returns params, types, error sets, methods, fields, and pretty-printed source text. If name lookup is ambiguous, returns a disambiguation list.")]
-    async fn inspect(
+    async fn get_declaration(
         &self,
-        Parameters(input): Parameters<InspectInput>,
+        Parameters(input): Parameters<GetDeclarationInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
         let module = self.find_module(&modules, &input.path)?;
@@ -254,11 +267,11 @@ impl PlutoMcp {
         }
     }
 
-    // --- Tool 4: xrefs ---
-    #[tool(description = "Cross-reference queries: who calls, constructs, uses, or raises a given declaration. Kind must be one of: callers, constructors, enum_usages, raise_sites. Note: callers_of only tracks Expr::Call targets, not method calls via dot syntax.")]
-    async fn xrefs(
+    // --- Tool 4: callers_of ---
+    #[tool(description = "Find all call sites that invoke a given function. Note: only tracks Expr::Call targets, not method calls via dot syntax.")]
+    async fn callers_of(
         &self,
-        Parameters(input): Parameters<XrefsInput>,
+        Parameters(input): Parameters<CallersOfInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
         let module = self.find_module(&modules, &input.path)?;
@@ -268,80 +281,192 @@ impl PlutoMcp {
             .parse::<Uuid>()
             .map_err(|_| mcp_err(format!("Invalid UUID: {}", input.uuid)))?;
 
-        let sites: Vec<serialize::XrefSiteInfo> = match input.kind.as_str() {
-            "callers" => module
-                .callers_of(id)
-                .iter()
-                .map(|site| {
-                    let func_id = module.find(&site.caller.name.node)
-                        .first()
-                        .map(|d| d.id().to_string());
-                    serialize::XrefSiteInfo {
-                        function_name: site.caller.name.node.clone(),
-                        function_uuid: func_id,
-                        span: serialize::span_to_info(site.span),
-                    }
-                })
-                .collect(),
-            "constructors" => module
-                .constructors_of(id)
-                .iter()
-                .map(|site| {
-                    let func_id = module.find(&site.function.name.node)
-                        .first()
-                        .map(|d| d.id().to_string());
-                    serialize::XrefSiteInfo {
-                        function_name: site.function.name.node.clone(),
-                        function_uuid: func_id,
-                        span: serialize::span_to_info(site.span),
-                    }
-                })
-                .collect(),
-            "enum_usages" => module
-                .enum_usages_of(id)
-                .iter()
-                .map(|site| {
-                    let func_id = module.find(&site.function.name.node)
-                        .first()
-                        .map(|d| d.id().to_string());
-                    serialize::XrefSiteInfo {
-                        function_name: site.function.name.node.clone(),
-                        function_uuid: func_id,
-                        span: serialize::span_to_info(site.span),
-                    }
-                })
-                .collect(),
-            "raise_sites" => module
-                .raise_sites_of(id)
-                .iter()
-                .map(|site| {
-                    let func_id = module.find(&site.function.name.node)
-                        .first()
-                        .map(|d| d.id().to_string());
-                    serialize::XrefSiteInfo {
-                        function_name: site.function.name.node.clone(),
-                        function_uuid: func_id,
-                        span: serialize::span_to_info(site.span),
-                    }
-                })
-                .collect(),
-            other => {
-                return Err(mcp_err(format!(
-                    "Unknown xref kind '{other}'. Valid: callers, constructors, enum_usages, raise_sites"
-                )));
-            }
-        };
+        let sites: Vec<serialize::XrefSiteInfo> = module
+            .callers_of(id)
+            .iter()
+            .map(|site| {
+                let func_id = module.find(&site.caller.name.node)
+                    .first()
+                    .map(|d| d.id().to_string());
+                serialize::XrefSiteInfo {
+                    function_name: site.caller.name.node.clone(),
+                    function_uuid: func_id,
+                    span: serialize::span_to_info(site.span),
+                }
+            })
+            .collect();
 
         let json = serde_json::to_string_pretty(&sites)
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    // --- Tool 5: errors ---
-    #[tool(description = "Get error handling info for a function: whether it is fallible and its error set.")]
-    async fn errors(
+    // --- Tool 4b: constructors_of ---
+    #[tool(description = "Find all sites where a class is constructed via struct literal.")]
+    async fn constructors_of(
         &self,
-        Parameters(input): Parameters<ErrorsInput>,
+        Parameters(input): Parameters<ConstructorsOfInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let modules = self.modules.read().await;
+        let module = self.find_module(&modules, &input.path)?;
+
+        let id = input
+            .uuid
+            .parse::<Uuid>()
+            .map_err(|_| mcp_err(format!("Invalid UUID: {}", input.uuid)))?;
+
+        let sites: Vec<serialize::XrefSiteInfo> = module
+            .constructors_of(id)
+            .iter()
+            .map(|site| {
+                let func_id = module.find(&site.function.name.node)
+                    .first()
+                    .map(|d| d.id().to_string());
+                serialize::XrefSiteInfo {
+                    function_name: site.function.name.node.clone(),
+                    function_uuid: func_id,
+                    span: serialize::span_to_info(site.span),
+                }
+            })
+            .collect();
+
+        let json = serde_json::to_string_pretty(&sites)
+            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    // --- Tool 4c: enum_usages_of ---
+    #[tool(description = "Find all usages of an enum variant.")]
+    async fn enum_usages_of(
+        &self,
+        Parameters(input): Parameters<EnumUsagesOfInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let modules = self.modules.read().await;
+        let module = self.find_module(&modules, &input.path)?;
+
+        let id = input
+            .uuid
+            .parse::<Uuid>()
+            .map_err(|_| mcp_err(format!("Invalid UUID: {}", input.uuid)))?;
+
+        let sites: Vec<serialize::XrefSiteInfo> = module
+            .enum_usages_of(id)
+            .iter()
+            .map(|site| {
+                let func_id = module.find(&site.function.name.node)
+                    .first()
+                    .map(|d| d.id().to_string());
+                serialize::XrefSiteInfo {
+                    function_name: site.function.name.node.clone(),
+                    function_uuid: func_id,
+                    span: serialize::span_to_info(site.span),
+                }
+            })
+            .collect();
+
+        let json = serde_json::to_string_pretty(&sites)
+            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    // --- Tool 4d: raise_sites_of ---
+    #[tool(description = "Find all sites where a given error is raised.")]
+    async fn raise_sites_of(
+        &self,
+        Parameters(input): Parameters<RaiseSitesOfInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let modules = self.modules.read().await;
+        let module = self.find_module(&modules, &input.path)?;
+
+        let id = input
+            .uuid
+            .parse::<Uuid>()
+            .map_err(|_| mcp_err(format!("Invalid UUID: {}", input.uuid)))?;
+
+        let sites: Vec<serialize::XrefSiteInfo> = module
+            .raise_sites_of(id)
+            .iter()
+            .map(|site| {
+                let func_id = module.find(&site.function.name.node)
+                    .first()
+                    .map(|d| d.id().to_string());
+                serialize::XrefSiteInfo {
+                    function_name: site.function.name.node.clone(),
+                    function_uuid: func_id,
+                    span: serialize::span_to_info(site.span),
+                }
+            })
+            .collect();
+
+        let json = serde_json::to_string_pretty(&sites)
+            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    // --- Tool 4e: usages_of (unified) ---
+    #[tool(description = "Find all usages of a declaration across the module: calls, constructions, enum usages, and raise sites. Returns unified results with usage_kind.")]
+    async fn usages_of(
+        &self,
+        Parameters(input): Parameters<UsagesOfInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let modules = self.modules.read().await;
+        let module = self.find_module(&modules, &input.path)?;
+
+        let id = input
+            .uuid
+            .parse::<Uuid>()
+            .map_err(|_| mcp_err(format!("Invalid UUID: {}", input.uuid)))?;
+
+        let mut results: Vec<serialize::UnifiedXrefInfo> = Vec::new();
+
+        // Collect all xref types
+        for site in module.callers_of(id) {
+            let func_id = module.find(&site.caller.name.node).first().map(|d| d.id().to_string());
+            results.push(serialize::UnifiedXrefInfo {
+                usage_kind: "call".to_string(),
+                function_name: site.caller.name.node.clone(),
+                function_uuid: func_id,
+                span: serialize::span_to_info(site.span),
+            });
+        }
+        for site in module.constructors_of(id) {
+            let func_id = module.find(&site.function.name.node).first().map(|d| d.id().to_string());
+            results.push(serialize::UnifiedXrefInfo {
+                usage_kind: "construct".to_string(),
+                function_name: site.function.name.node.clone(),
+                function_uuid: func_id,
+                span: serialize::span_to_info(site.span),
+            });
+        }
+        for site in module.enum_usages_of(id) {
+            let func_id = module.find(&site.function.name.node).first().map(|d| d.id().to_string());
+            results.push(serialize::UnifiedXrefInfo {
+                usage_kind: "enum_variant".to_string(),
+                function_name: site.function.name.node.clone(),
+                function_uuid: func_id,
+                span: serialize::span_to_info(site.span),
+            });
+        }
+        for site in module.raise_sites_of(id) {
+            let func_id = module.find(&site.function.name.node).first().map(|d| d.id().to_string());
+            results.push(serialize::UnifiedXrefInfo {
+                usage_kind: "raise".to_string(),
+                function_name: site.function.name.node.clone(),
+                function_uuid: func_id,
+                span: serialize::span_to_info(site.span),
+            });
+        }
+
+        let json = serde_json::to_string_pretty(&results)
+            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    // --- Tool 5: error_set ---
+    #[tool(description = "Get error handling info for a function: whether it is fallible and its error set.")]
+    async fn error_set(
+        &self,
+        Parameters(input): Parameters<ErrorSetInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
         let module = self.find_module(&modules, &input.path)?;
@@ -373,11 +498,11 @@ impl PlutoMcp {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    // --- Tool 6: source ---
+    // --- Tool 6: get_source ---
     #[tool(description = "Get source text from a loaded module, optionally at a specific byte range. If no range specified, returns the entire source.")]
-    async fn source(
+    async fn get_source(
         &self,
-        Parameters(input): Parameters<SourceInput>,
+        Parameters(input): Parameters<GetSourceInput>,
     ) -> Result<CallToolResult, McpError> {
         let modules = self.modules.read().await;
         let module = self.find_module(&modules, &input.path)?;
@@ -449,6 +574,67 @@ impl PlutoMcp {
 
         *self.project_root.write().await = Some(root.clone());
 
+        // Build dependency graph from loaded modules
+        let mut dep_graph = self.dep_graph.write().await;
+        dep_graph.name_to_path.clear();
+        dep_graph.path_to_name.clear();
+        dep_graph.dependencies.clear();
+
+        // Build module name → path mapping
+        // For each .pluto file, derive the module name from its path relative to project root
+        for (path, _module) in modules.iter() {
+            if let Ok(rel_path) = Path::new(path).strip_prefix(&root) {
+                let module_name = derive_module_name(rel_path);
+                dep_graph.name_to_path.insert(module_name.clone(), path.clone());
+                dep_graph.path_to_name.insert(path.clone(), module_name);
+            }
+        }
+
+        // Extract imports from each module and populate dependencies
+        for (path, module) in modules.iter() {
+            let program = module.program();
+            let mut imported_names = Vec::new();
+
+            for import in &program.imports {
+                let import_path = &import.node.path;
+                let module_name = import_path.iter()
+                    .map(|s| s.node.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                imported_names.push(module_name);
+            }
+
+            if !imported_names.is_empty() {
+                dep_graph.dependencies.insert(path.clone(), imported_names);
+            }
+        }
+
+        // Detect circular imports (but don't fail - just report in output)
+        let has_circular = detect_circular_imports(&dep_graph).is_err();
+
+        // Build dependency graph info for output
+        let mut dep_info_modules = Vec::new();
+        for (path, deps) in &dep_graph.dependencies {
+            if let Some(name) = dep_graph.path_to_name.get(path) {
+                dep_info_modules.push(serialize::ModuleDependencyInfo {
+                    path: path.clone(),
+                    name: name.clone(),
+                    imports: deps.clone(),
+                });
+            }
+        }
+        dep_info_modules.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let dependency_graph = if !dep_info_modules.is_empty() {
+            Some(serialize::DependencyGraphInfo {
+                module_count: dep_graph.path_to_name.len(),
+                has_circular_imports: has_circular,
+                modules: dep_info_modules,
+            })
+        } else {
+            None
+        };
+
         let result = serialize::ProjectSummary {
             project_root: root,
             files_found: files.len(),
@@ -456,6 +642,7 @@ impl PlutoMcp {
             files_failed: load_errors.len(),
             modules: modules_loaded,
             errors: load_errors,
+            dependency_graph,
         };
 
         let json = serde_json::to_string_pretty(&result)
@@ -1088,6 +1275,116 @@ fn walk_dir(
         walk_dir(&subdir, files, seen_dirs)?;
     }
     Ok(())
+}
+
+// --- Dependency graph helpers ---
+
+/// Derive a module name from a file path relative to the project root.
+/// Examples:
+///   - `main.pluto` → `main`
+///   - `auth/user.pluto` → `auth` (directory module)
+///   - `std/strings.pluto` → `std.strings`
+fn derive_module_name(rel_path: &Path) -> String {
+    let components: Vec<_> = rel_path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(os_str) => os_str.to_str(),
+            _ => None,
+        })
+        .collect();
+
+    if components.is_empty() {
+        return "main".to_string();
+    }
+
+    // If the path is just a .pluto file (e.g., `main.pluto`), use the stem
+    if components.len() == 1 {
+        if let Some(stem) = Path::new(components[0]).file_stem().and_then(|s| s.to_str()) {
+            return stem.to_string();
+        }
+    }
+
+    // For directory modules (e.g., `auth/user.pluto`), use the directory name
+    if components.len() >= 2 {
+        // Check if all components except the last are directories
+        // Join all components except the file name with `.`
+        let dir_parts: Vec<_> = components[..components.len() - 1].iter().copied().collect();
+        let file_stem = Path::new(components.last().unwrap())
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("main");
+
+        // If the file stem matches the parent directory name, it's a directory module
+        if let Some(&last_dir) = dir_parts.last() {
+            if file_stem == last_dir {
+                return dir_parts.join(".");
+            }
+        }
+
+        // Otherwise, it's a nested single-file module
+        let mut parts = dir_parts;
+        parts.push(file_stem);
+        return parts.join(".");
+    }
+
+    "main".to_string()
+}
+
+/// Detect circular imports using DFS.
+/// Returns Ok(()) if no cycles, Err(message) if a cycle is found.
+fn detect_circular_imports(graph: &DependencyGraph) -> Result<(), String> {
+    let mut visited = HashSet::new();
+    let mut rec_stack = HashSet::new();
+
+    for path in graph.dependencies.keys() {
+        if !visited.contains(path) {
+            if let Some(cycle_path) = has_cycle_dfs(path, graph, &mut visited, &mut rec_stack, &mut vec![]) {
+                return Err(format!("Circular import: {}", cycle_path.join(" → ")));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// DFS helper for cycle detection. Returns Some(cycle_path) if a cycle is found.
+fn has_cycle_dfs<'a>(
+    node: &'a str,
+    graph: &'a DependencyGraph,
+    visited: &mut HashSet<String>,
+    rec_stack: &mut HashSet<String>,
+    path: &mut Vec<String>,
+) -> Option<Vec<String>> {
+    visited.insert(node.to_string());
+    rec_stack.insert(node.to_string());
+    path.push(
+        graph.path_to_name.get(node)
+            .unwrap_or(&node.to_string())
+            .clone()
+    );
+
+    if let Some(deps) = graph.dependencies.get(node) {
+        for dep_name in deps {
+            // Resolve dep_name to a path
+            if let Some(dep_path) = graph.name_to_path.get(dep_name) {
+                if rec_stack.contains(dep_path) {
+                    // Cycle detected
+                    path.push(dep_name.clone());
+                    return Some(path.clone());
+                }
+
+                if !visited.contains(dep_path) {
+                    if let Some(cycle) = has_cycle_dfs(dep_path, graph, visited, rec_stack, path) {
+                        return Some(cycle);
+                    }
+                }
+            }
+        }
+    }
+
+    path.pop();
+    rec_stack.remove(node);
+    None
 }
 
 // --- Write tool helpers ---

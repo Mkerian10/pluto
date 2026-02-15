@@ -18,7 +18,7 @@ pub struct ListDeclarationsInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct InspectInput {
+pub struct GetDeclarationInput {
     #[schemars(description = "Path of the loaded module")]
     pub path: String,
     #[schemars(description = "UUID of the declaration to inspect")]
@@ -28,19 +28,47 @@ pub struct InspectInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct XrefsInput {
+pub struct CallersOfInput {
     #[schemars(description = "Path of the loaded module")]
     pub path: String,
-    #[schemars(description = "UUID of the declaration to query cross-references for")]
+    #[schemars(description = "UUID of the function to find callers of")]
     pub uuid: String,
-    #[schemars(
-        description = "Kind of cross-reference: callers, constructors, enum_usages, raise_sites"
-    )]
-    pub kind: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ErrorsInput {
+pub struct ConstructorsOfInput {
+    #[schemars(description = "Path of the loaded module")]
+    pub path: String,
+    #[schemars(description = "UUID of the class to find constructors of")]
+    pub uuid: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct EnumUsagesOfInput {
+    #[schemars(description = "Path of the loaded module")]
+    pub path: String,
+    #[schemars(description = "UUID of the enum to find usages of")]
+    pub uuid: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RaiseSitesOfInput {
+    #[schemars(description = "Path of the loaded module")]
+    pub path: String,
+    #[schemars(description = "UUID of the error to find raise sites of")]
+    pub uuid: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct UsagesOfInput {
+    #[schemars(description = "Path of the loaded module")]
+    pub path: String,
+    #[schemars(description = "UUID of the declaration to find all usages of")]
+    pub uuid: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ErrorSetInput {
     #[schemars(description = "Path of the loaded module")]
     pub path: String,
     #[schemars(description = "UUID of the function to query error info for")]
@@ -48,7 +76,7 @@ pub struct ErrorsInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct SourceInput {
+pub struct GetSourceInput {
     #[schemars(description = "Path of the loaded module")]
     pub path: String,
     #[schemars(description = "Start byte offset (defaults to 0)")]
