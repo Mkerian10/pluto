@@ -456,7 +456,7 @@ A file that **uses** a stage (e.g., `http_server MyApi`) is an entry point file 
 ### Runtime and Compilation
 
 - [ ] **How does the compiler discover the lifecycle chain?** — The compiler needs to see the full inheritance chain to generate `main()`. This requires the stage definitions to be available at compile time (always true for Pluto's whole-program model).
-- [ ] **Multiple entry points per project** — Can a project directory contain multiple entry point files? If so, does `plutoc build` produce multiple binaries?
+- [ ] **Multiple entry points per project** — Can a project directory contain multiple entry point files? If so, does `pluto build` produce multiple binaries?
 - [ ] **Template method dispatch** — Is the lifecycle chain resolved statically (monomorphized) or dynamically (vtable)? Static is simpler and aligns with Pluto's whole-program model.
 
 ### Ecosystem

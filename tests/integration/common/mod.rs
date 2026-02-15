@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 mod compiler;
 pub use compiler::{CompiledTestBinary, TestCompiler, TestOutput};
 
-/// Returns a Command for the plutoc binary. Use for CLI smoke tests only —
+/// Returns a Command for the pluto binary. Use for CLI smoke tests only —
 /// most tests should use the library-call helpers below instead.
-pub fn plutoc() -> Command {
+pub fn pluto() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pluto"))
 }
 

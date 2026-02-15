@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run, compile_batch_stdout, compile_should_fail_with, plutoc};
+use common::{compile_and_run, compile_batch_stdout, compile_should_fail_with, pluto};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -369,7 +369,7 @@ fn extern_fn_duplicate_name_rejected() {
 }
 
 // ============================================================
-// CLI smoke tests — exercise the actual plutoc binary subprocess
+// CLI smoke tests — exercise the actual pluto binary subprocess
 // ============================================================
 
 #[test]
@@ -378,7 +378,7 @@ fn cli_compile_and_run() {
     let src = dir.path().join("test.pluto");
     let bin = dir.path().join("test_bin");
     std::fs::write(&src, "fn main() {\n    print(42)\n}").unwrap();
-    let output = plutoc().arg("compile").arg(&src).arg("-o").arg(&bin).output().unwrap();
+    let output = pluto().arg("compile").arg(&src).arg("-o").arg(&bin).output().unwrap();
     assert!(output.status.success(), "CLI compile failed: {}", String::from_utf8_lossy(&output.stderr));
     let run_output = std::process::Command::new(&bin).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&run_output.stdout), "42\n");
@@ -390,7 +390,7 @@ fn cli_compile_error_formatting() {
     let src = dir.path().join("test.pluto");
     let bin = dir.path().join("test_bin");
     std::fs::write(&src, "fn main() {\n    let x: int = \"hello\"\n}").unwrap();
-    let output = plutoc().arg("compile").arg(&src).arg("-o").arg(&bin).output().unwrap();
+    let output = pluto().arg("compile").arg(&src).arg("-o").arg(&bin).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("error"), "Expected CLI error format, got: {}", stderr);
@@ -401,7 +401,7 @@ fn cli_run_subcommand() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("test.pluto");
     std::fs::write(&src, "fn main() {\n    print(99)\n}").unwrap();
-    let output = plutoc().arg("run").arg(&src).output().unwrap();
+    let output = pluto().arg("run").arg(&src).output().unwrap();
     assert!(output.status.success(), "CLI run failed: {}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "99\n");
 }

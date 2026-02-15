@@ -34,7 +34,7 @@ echo ""
 # --- Build Pluto compiler ---
 echo "Building Pluto compiler (release)..."
 cargo build --release --manifest-path "$PROJECT_DIR/Cargo.toml" 2>&1 | tail -1
-PLUTOC="$PROJECT_DIR/target/release/plutoc"
+PLUTO="$PROJECT_DIR/target/release/pluto"
 echo ""
 
 # --- Compile C benchmarks ---
@@ -57,7 +57,7 @@ for bench in "${BENCHMARKS[@]}"; do
     bench_dir="$TMP_DIR/${bench}_dir"
     mkdir -p "$bench_dir"
     cp "$src" "$bench_dir/"
-    if "$PLUTOC" compile "$bench_dir/${bench}.pluto" -o "$bin" 2>/dev/null; then
+    if "$PLUTO" compile "$bench_dir/${bench}.pluto" -o "$bin" 2>/dev/null; then
         out=$("$bin" 2>&1) || true
         store pluto "$bench" "$(extract_ms "$out")"
     else

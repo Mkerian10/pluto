@@ -45,7 +45,7 @@ Pluto can do better than all of these because:
 
 1. **Copy-on-spawn eliminates data races by construction.** We don't need a race detector — races can't happen.
 2. **All concurrency goes through known primitives.** `spawn`, `task.get()`, channel ops, and (future) DI singleton access are the only concurrency points. No raw locks, no atomics, no `unsafe`.
-3. **The compiler controls both sides.** `plutoc test` compiles the test binary — we can link against a completely different runtime without the user doing anything.
+3. **The compiler controls both sides.** `pluto test` compiles the test binary — we can link against a completely different runtime without the user doing anything.
 
 ### Why Now
 
@@ -61,9 +61,9 @@ This RFC is written before Phase 3 (structured concurrency) for three reasons:
 
 ### Core Idea: Dual Runtime
 
-When `plutoc test` compiles a test file, it links against a **test scheduler runtime** instead of the pthread runtime. The same Pluto source code compiles to different behavior:
+When `pluto test` compiles a test file, it links against a **test scheduler runtime** instead of the pthread runtime. The same Pluto source code compiles to different behavior:
 
-| | `plutoc compile` / `plutoc run` | `plutoc test` |
+| | `pluto compile` / `pluto run` | `pluto test` |
 |---|---|---|
 | `spawn` | `pthread_create` | Create cooperative fiber, register with scheduler |
 | `task.get()` | `pthread_cond_wait` | Yield to scheduler, resume when task completes |
@@ -156,7 +156,7 @@ At each yield point, the scheduler picks a random fiber from the ready set. Run 
 ```
 // On failure, the test runner prints:
 // FAILED: "stress test" (seed: 0xDEADBEEF, iteration: 847)
-// Rerun with: plutoc test file.pluto --seed 0xDEADBEEF --test "stress test"
+// Rerun with: pluto test file.pluto --seed 0xDEADBEEF --test "stress test"
 ```
 
 #### Exhaustive
@@ -231,7 +231,7 @@ Today's test framework:
 
 ### What Changes
 
-**Runtime substitution.** When `plutoc test` compiles, it links against test versions of the concurrency runtime functions:
+**Runtime substitution.** When `pluto test` compiles, it links against test versions of the concurrency runtime functions:
 
 ```c
 // Production runtime (builtins.c)
@@ -342,10 +342,10 @@ The single-threaded test runtime simplifies this: TLS is just a global variable,
 1. Create `runtime/builtins_test.c` with test versions of `__pluto_task_spawn` and `__pluto_task_get`
 2. `__pluto_test_task_spawn` stores the closure, creates a fiber context, and immediately runs it to completion (no actual scheduling yet — just sequential execution)
 3. `__pluto_test_task_get` returns the stored result (already computed)
-4. Modify `plutoc test` compilation to link against `builtins_test.o`
+4. Modify `pluto test` compilation to link against `builtins_test.o`
 5. All existing concurrency tests should pass unchanged (sequential scheduling produces the same results as "lucky" thread scheduling)
 
-**Deliverable:** `plutoc test` works with `spawn` — tasks execute deterministically in creation order.
+**Deliverable:** `pluto test` works with `spawn` — tasks execute deterministically in creation order.
 
 **Why this matters:** Establishes the infrastructure (dual runtime, test-specific linking) that all subsequent phases build on. If the MVP works, the hard part (compiler plumbing) is done.
 
@@ -410,9 +410,9 @@ Annotations are parsed as part of the test declaration. Invalid annotations are 
 ### Running Tests
 
 ```bash
-plutoc test file.pluto                    # Run all tests (default strategies)
-plutoc test file.pluto --seed 0xDEADBEEF  # Override seed for @random tests
-plutoc test file.pluto --test "name"      # Run a single test
+pluto test file.pluto                    # Run all tests (default strategies)
+pluto test file.pluto --seed 0xDEADBEEF  # Override seed for @random tests
+pluto test file.pluto --test "name"      # Run a single test
 ```
 
 ### Output

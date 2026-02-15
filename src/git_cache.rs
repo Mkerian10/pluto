@@ -55,7 +55,7 @@ pub fn ensure_cached(
 }
 
 /// Fetch latest from remote and reset to the requested ref.
-/// Used by `plutoc update`.
+/// Used by `pluto update`.
 pub fn fetch_and_update(
     url: &str,
     git_ref: &GitRef,

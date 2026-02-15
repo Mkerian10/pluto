@@ -5,12 +5,12 @@ schema_version = 1
 authors = ["Matthew Kerian"]
 description = "Pluto language support for Zed"
 
-[language_servers.plutoc]
-name = "plutoc"
+[language_servers.pluto]
+name = "pluto"
 languages = ["Pluto"]
 
-[language_servers.plutoc.binary]
-path = "plutoc"
+[language_servers.pluto.binary]
+path = "pluto"
 arguments = ["lsp"]
 
 [grammars.pluto]

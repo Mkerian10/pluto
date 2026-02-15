@@ -42,7 +42,7 @@ app OrderSystem[svc: OrderService] {
 Save this as `main.pluto` and run it:
 
 ```
-$ plutoc run main.pluto
+$ pluto run main.pluto
 Order ORD-1 processed for 100
 ```
 

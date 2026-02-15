@@ -63,7 +63,7 @@ git clone https://github.com/Mkerian10/pluto.git && cd pluto
 cargo build --release
 
 echo 'fn main() { print("hello, pluto") }' > hello.pluto
-./target/release/plutoc run hello.pluto
+./target/release/pluto run hello.pluto
 ```
 
 ## A Real Program
@@ -224,10 +224,10 @@ for order in rx {
 ## Compiler
 
 ```bash
-plutoc compile main.pluto -o myapp    # Native binary
-plutoc run main.pluto                 # Compile + execute
-plutoc test tests.pluto               # Run test blocks
-plutoc run app.pluto --stdlib stdlib   # With standard library
+pluto compile main.pluto -o myapp    # Native binary
+pluto run main.pluto                 # Compile + execute
+pluto test tests.pluto               # Run test blocks
+pluto run app.pluto --stdlib stdlib   # With standard library
 ```
 
 **Pipeline:** Lex &rarr; Parse &rarr; Module Resolve &rarr; Flatten &rarr; Prelude/Stage/Ambient/Spawn transforms &rarr; Contract + Marshal validation &rarr; Type Check &rarr; Reflection + Monomorphize &rarr; Trait/Serializable checks &rarr; Closure Lift + Xref &rarr; Codegen (Cranelift) &rarr; Link
@@ -243,8 +243,8 @@ Pluto exposes its compiler as a structured API. AI agents interact with declarat
 - **SDK** for programmatic read/write at the semantic level
 
 ```bash
-plutoc emit-ast main.pluto -o main.pluto    # Source → binary AST
-plutoc generate-pt main.pluto               # Binary AST → readable source
+pluto emit-ast main.pluto -o main.pluto    # Source → binary AST
+pluto generate-pt main.pluto               # Binary AST → readable source
 ```
 
 ## Project Status

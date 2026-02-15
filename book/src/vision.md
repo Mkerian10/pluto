@@ -15,10 +15,10 @@ This chapter covers what is implemented today and where the design is headed.
 Pluto source files can be compiled to a binary AST format that preserves the full semantic graph:
 
 ```
-$ plutoc emit-ast main.pt -o main.pluto       # text -> binary AST
-$ plutoc generate-pt main.pluto                # binary AST -> text (stdout)
-$ plutoc generate-pt main.pluto -o main.pt     # binary AST -> text file
-$ plutoc sync main.pt --output main.pluto      # merge text edits back, preserving UUIDs
+$ pluto emit-ast main.pt -o main.pluto       # text -> binary AST
+$ pluto generate-pt main.pluto                # binary AST -> text (stdout)
+$ pluto generate-pt main.pluto -o main.pt     # binary AST -> text file
+$ pluto sync main.pt --output main.pluto      # merge text edits back, preserving UUIDs
 ```
 
 The binary format (`.pluto`) contains the complete parsed AST, the original source text, and derived analysis data. The text format (`.pt`) is standard Pluto syntax that humans read and edit.
@@ -40,14 +40,14 @@ The compiler resolves and stores cross-references by UUID:
 
 These are not heuristics or text search. They are exact, compiler-resolved references that survive across renames.
 
-### The SDK (`plutoc-sdk`)
+### The SDK (`pluto-sdk`)
 
 The SDK is a Rust crate for reading and writing Pluto programs as structured data. It is what AI agents (and any tooling) use to interact with Pluto code without parsing text.
 
 **Loading a module:**
 
 ```rust
-use plutoc_sdk::Module;
+use pluto_sdk::Module;
 
 // From binary format
 let module = Module::from_bytes(&bytes)?;
@@ -169,7 +169,7 @@ When these four pillars are complete, you'll write a Pluto program that defines 
 
 Today, `.pt` text files are the source of truth and `.pluto` binary files are derived. The plan is to invert this: `.pluto` binary becomes canonical, `.pt` text files become generated views for human review.
 
-In this model, a git repository contains `.pluto` binaries (committed, source of truth) and `.pt` text files (generated, for review and code search). The `plutoc sync` command already exists to merge human `.pt` edits back into `.pluto` files, preserving UUIDs where declarations match by name.
+In this model, a git repository contains `.pluto` binaries (committed, source of truth) and `.pt` text files (generated, for review and code search). The `pluto sync` command already exists to merge human `.pt` edits back into `.pluto` files, preserving UUIDs where declarations match by name.
 
 ### Derived Data
 
@@ -231,7 +231,7 @@ This is your entire backend. Four stages, defined in one program.
 
 ### The Compiler Sees Everything
 
-When you run `plutoc compile main.pluto`, the compiler:
+When you run `pluto compile main.pluto`, the compiler:
 
 1. **Parses and type-checks** all four stages together
 2. **Infers error sets** — sees that `verify_user` can raise `InvalidToken`, `check_stock` can raise `OutOfStock`, `create_order` can raise `DatabaseError`

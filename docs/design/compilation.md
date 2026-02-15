@@ -44,8 +44,8 @@ Libraries work within this model — they are source code (or pre-compiled IR) t
 The compilation model is designed to evolve toward an AI-native representation where:
 
 - **`.pluto` files become binary** — a canonical semantic graph with stable UUIDs per declaration, authored content (AST), and compiler-derived analysis (types, errors, call graphs)
-- **`plutoc analyze`** enriches `.pluto` files with derived data on demand (separate from compilation, which is non-mutating)
-- **`plutoc-sdk`** (Rust crate) provides programmatic read/write access for AI agents
+- **`pluto analyze`** enriches `.pluto` files with derived data on demand (separate from compilation, which is non-mutating)
+- **`pluto-sdk`** (Rust crate) provides programmatic read/write access for AI agents
 - **Incremental compilation** becomes more precise — stable UUIDs enable exact change tracking at the declaration level rather than file-level heuristics
 
 This preserves the whole-program compilation model while making the compiler's analysis persistent and accessible to AI tooling.

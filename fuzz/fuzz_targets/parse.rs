@@ -1,8 +1,8 @@
 #![no_main]
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use plutoc::lexer::Token;
-use plutoc::span::{Span, Spanned};
+use pluto::lexer::Token;
+use pluto::span::{Span, Spanned};
 
 /// Minimal fuzzing-friendly token representation
 #[derive(Arbitrary, Debug)]
@@ -89,6 +89,6 @@ fuzz_target!(|input: FuzzTokens| {
     let source = "x ".repeat(tokens.len());
 
     // Feed to parser - should never panic
-    let mut parser = plutoc::parser::Parser::new(&tokens, &source);
+    let mut parser = pluto::parser::Parser::new(&tokens, &source);
     let _ = parser.parse_program();
 });
