@@ -148,7 +148,7 @@ Steps:
 
 Steps:
 1. Define snapshot format (serialized schema/storage/enum declarations)
-2. Implement `plutoc snapshot` command
+2. Implement `pluto snapshot` command
 3. Implement structural diff (snapshot vs current source)
 4. Match `from` clauses to diff entries
 5. Generate migration plans (SQL DDL for Table storage)

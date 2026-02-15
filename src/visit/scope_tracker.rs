@@ -9,8 +9,8 @@
 /// ## Basic usage
 ///
 /// ```rust
-/// use plutoc::visit::scope_tracker::ScopeTracker;
-/// use plutoc::typeck::types::PlutoType;
+/// use pluto::visit::scope_tracker::ScopeTracker;
+/// use pluto::typeck::types::PlutoType;
 ///
 /// let mut tracker = ScopeTracker::<PlutoType>::new();
 ///
@@ -35,7 +35,7 @@
 /// ## With depth tracking
 ///
 /// ```rust
-/// use plutoc::visit::scope_tracker::ScopeTracker;
+/// use pluto::visit::scope_tracker::ScopeTracker;
 ///
 /// let mut tracker = ScopeTracker::<i32>::new();
 /// tracker.push_scope();

@@ -32,7 +32,7 @@ echo ""
 # Build compiler in release mode
 echo "Building compiler (release)..."
 cargo build --release --manifest-path "$PROJECT_DIR/Cargo.toml" 2>&1 | tail -1
-PLUTOC="$PROJECT_DIR/target/release/plutoc"
+PLUTO="$PROJECT_DIR/target/release/pluto"
 echo ""
 
 BENCHMARKS=(
@@ -92,7 +92,7 @@ for bench in "${BENCHMARKS[@]}"; do
     fi
 
     # Compile
-    if ! "$PLUTOC" compile "$bench_dir/${bench}.pluto" -o "$bin" "${COMPILE_FLAGS[@]}" 2>/dev/null; then
+    if ! "$PLUTO" compile "$bench_dir/${bench}.pluto" -o "$bin" "${COMPILE_FLAGS[@]}" 2>/dev/null; then
         echo "FAIL  $bench (compilation error)"
         FAIL=$((FAIL + 1))
         continue

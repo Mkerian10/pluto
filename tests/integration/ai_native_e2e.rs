@@ -16,15 +16,15 @@ use tempfile::TempDir;
 
 mod common;
 
-/// Helper to run plutoc commands in tests.
-fn run_plutoc(args: &[&str], temp_dir: &TempDir) -> std::process::Output {
+/// Helper to run pluto commands in tests.
+fn run_pluto(args: &[&str], temp_dir: &TempDir) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_pluto"))
         .args(args)
         .arg("--stdlib")
         .arg("stdlib")
         .current_dir(temp_dir.path())
         .output()
-        .expect("failed to run plutoc")
+        .expect("failed to run pluto")
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn main() {
 
     // Step 2: emit-ast — parse .pt and create .pluto with fresh derived data
     let pluto_file = temp.path().join("math.pluto");
-    let output = run_plutoc(&["emit-ast", "math.pt", "-o", "math.pluto"], &temp);
+    let output = run_pluto(&["emit-ast", "math.pt", "-o", "math.pluto"], &temp);
     assert!(
         output.status.success(),
         "emit-ast failed: {}",
@@ -118,7 +118,7 @@ fn main() {
     assert_eq!(add_sig.param_types.len(), 2, "add should have 2 params");
 
     // Step 4: analyze — update derived data (should be no-op since already fresh)
-    let output = run_plutoc(&["analyze", "math.pluto"], &temp);
+    let output = run_pluto(&["analyze", "math.pluto"], &temp);
     assert!(
         output.status.success(),
         "analyze failed: {}",
@@ -127,7 +127,7 @@ fn main() {
 
     // Step 5: generate-pt — create human-readable .pt from .pluto
     let generated_pt = temp.path().join("math_generated.pt");
-    let output = run_plutoc(
+    let output = run_pluto(
         &["generate-pt", "math.pluto", "-o", "math_generated.pt"],
         &temp,
     );
@@ -174,7 +174,7 @@ fn main() {
     fs::write(&initial_pt, edited_source).unwrap();
 
     // Step 7: sync — sync .pt edits back to .pluto, preserving UUIDs
-    let output = run_plutoc(&["sync", "math.pt", "-o", "math.pluto"], &temp);
+    let output = run_pluto(&["sync", "math.pt", "-o", "math.pluto"], &temp);
     assert!(
         output.status.success(),
         "sync failed: {}",
@@ -240,7 +240,7 @@ fn main() {
     );
 
     // Step 10: analyze — refresh derived data after sync
-    let output = run_plutoc(&["analyze", "math.pluto"], &temp);
+    let output = run_pluto(&["analyze", "math.pluto"], &temp);
     assert!(
         output.status.success(),
         "analyze failed after sync: {}",
@@ -283,7 +283,7 @@ fn main() {
 
     // Step 12: Final round-trip — generate-pt again and verify source matches
     let final_pt = temp.path().join("math_final.pt");
-    let output = run_plutoc(&["generate-pt", "math.pluto", "-o", "math_final.pt"], &temp);
+    let output = run_pluto(&["generate-pt", "math.pluto", "-o", "math_final.pt"], &temp);
     assert!(output.status.success(), "final generate-pt failed");
 
     let final_source = fs::read_to_string(&final_pt).unwrap();
@@ -318,7 +318,7 @@ fn main() {
 
     // emit-ast to create .pluto
     let pluto_file = temp.path().join("test.pluto");
-    let output = run_plutoc(&["emit-ast", "test.pt", "-o", "test.pluto"], &temp);
+    let output = run_pluto(&["emit-ast", "test.pt", "-o", "test.pluto"], &temp);
     assert!(output.status.success());
 
     // Get original UUID
@@ -348,7 +348,7 @@ fn main() {
     .unwrap();
 
     // Sync the rename
-    let output = run_plutoc(&["sync", "test.pt", "-o", "test.pluto"], &temp);
+    let output = run_pluto(&["sync", "test.pt", "-o", "test.pluto"], &temp);
     assert!(output.status.success(), "sync failed on rename");
 
     // Verify UUID preserved
@@ -411,7 +411,7 @@ fn main() {
     .unwrap();
 
     // emit-ast on entry file (should resolve module)
-    let output = run_plutoc(&["emit-ast", "main.pt", "-o", "main.pluto"], &temp);
+    let output = run_pluto(&["emit-ast", "main.pt", "-o", "main.pluto"], &temp);
     assert!(
         output.status.success(),
         "emit-ast failed with modules: {}",
@@ -432,7 +432,7 @@ fn main() {
     assert!(has_math_add, "should have flattened math.add function");
 
     // analyze should work with multi-file
-    let output = run_plutoc(&["analyze", "main.pluto"], &temp);
+    let output = run_pluto(&["analyze", "main.pluto"], &temp);
     assert!(
         output.status.success(),
         "analyze failed with modules: {}",
@@ -440,7 +440,7 @@ fn main() {
     );
 
     // generate-pt should produce valid output
-    let output = run_plutoc(&["generate-pt", "main.pluto", "-o", "main_gen.pt"], &temp);
+    let output = run_pluto(&["generate-pt", "main.pluto", "-o", "main_gen.pt"], &temp);
     assert!(output.status.success(), "generate-pt failed with modules");
 
     let generated = fs::read_to_string(temp.path().join("main_gen.pt")).unwrap();
@@ -479,7 +479,7 @@ fn main() {}
 
     // emit-ast with fresh derived data
     let pluto_file = temp.path().join("test.pluto");
-    let output = run_plutoc(&["emit-ast", "test.pt", "-o", "test.pluto"], &temp);
+    let output = run_pluto(&["emit-ast", "test.pt", "-o", "test.pluto"], &temp);
     assert!(output.status.success());
 
     let data1 = fs::read(&pluto_file).unwrap();
@@ -502,7 +502,7 @@ fn main() {}
     .unwrap();
 
     // Sync (marks derived data stale)
-    let output = run_plutoc(&["sync", "test.pt", "-o", "test.pluto"], &temp);
+    let output = run_pluto(&["sync", "test.pt", "-o", "test.pluto"], &temp);
     assert!(output.status.success());
 
     let data2 = fs::read(&pluto_file).unwrap();
@@ -521,7 +521,7 @@ fn main() {}
     );
 
     // Re-analyze
-    let output = run_plutoc(&["analyze", "test.pluto"], &temp);
+    let output = run_pluto(&["analyze", "test.pluto"], &temp);
     assert!(output.status.success());
 
     let data3 = fs::read(&pluto_file).unwrap();

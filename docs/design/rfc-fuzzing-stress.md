@@ -37,7 +37,7 @@ While unit and integration tests validate known scenarios, they cannot exhaustiv
 // fuzz/fuzz_targets/lex.rs
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use plutoc::lexer::lex;
+use pluto::lexer::lex;
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(s) = std::str::from_utf8(data) {
@@ -69,7 +69,7 @@ fuzz_target!(|data: &[u8]| {
 ```rust
 // fuzz/fuzz_targets/parse.rs
 use arbitrary::{Arbitrary, Unstructured};
-use plutoc::lexer::Token;
+use pluto::lexer::Token;
 
 #[derive(Debug)]
 struct FuzzTokenStream {
@@ -114,7 +114,7 @@ impl<'a> Arbitrary<'a> for FuzzTokenStream {
 }
 
 fuzz_target!(|ts: FuzzTokenStream| {
-    let _ = plutoc::parser::parse_program(&ts.tokens); // No panic
+    let _ = pluto::parser::parse_program(&ts.tokens); // No panic
 });
 ```
 
@@ -172,7 +172,7 @@ impl FuzzProgram {
 
 fuzz_target!(|prog: FuzzProgram| {
     let source = prog.to_source();
-    let _ = plutoc::compile(&source); // No panic
+    let _ = pluto::compile(&source); // No panic
 });
 ```
 
@@ -302,7 +302,7 @@ fn allocate_loop(id: int) {
 cargo build --release
 for test in tests/stress/*.pluto; do
     valgrind --leak-check=full --error-exitcode=1 \
-        ./target/release/plutoc run "$test"
+        ./target/release/pluto run "$test"
 done
 ```
 
@@ -386,7 +386,7 @@ fn long_running() {
 #!/bin/bash
 RUSTFLAGS="-Z sanitizer=thread" cargo build --release
 for test in tests/stress/concurrency_*.pluto; do
-    ./target/release/plutoc run "$test"
+    ./target/release/pluto run "$test"
 done
 ```
 

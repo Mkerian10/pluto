@@ -34,12 +34,12 @@ test "factorial recursive" {
 ## Running Tests
 
 ```
-$ plutoc test main.pluto
+$ pluto test main.pluto
 ```
 
 The compiler compiles the file in test mode, which generates a test runner as the entry point. Each test block runs in sequence, and the runner reports pass/fail for each.
 
-Under normal compilation (`plutoc compile` or `plutoc run`), test blocks are stripped entirely. They contribute zero overhead to the production binary.
+Under normal compilation (`pluto compile` or `pluto run`), test blocks are stripped entirely. They contribute zero overhead to the production binary.
 
 ## Assertions
 
@@ -102,11 +102,11 @@ The `catch` expression handles the error inline, exactly as it does in productio
 
 ## Tests in Modules
 
-Tests defined in imported modules are private. They are not exported, not visible to the importing file, and not run when the importing file is tested. Only tests in the file passed to `plutoc test` are executed.
+Tests defined in imported modules are private. They are not exported, not visible to the importing file, and not run when the importing file is tested. Only tests in the file passed to `pluto test` are executed.
 
 This means each module can have its own test suite, run independently:
 
 ```
-$ plutoc test lib.pluto       # runs tests in lib.pluto
-$ plutoc test main.pluto      # runs tests in main.pluto (not lib.pluto's tests)
+$ pluto test lib.pluto       # runs tests in lib.pluto
+$ pluto test main.pluto      # runs tests in main.pluto (not lib.pluto's tests)
 ```

@@ -88,7 +88,7 @@ fuzz/
 // fuzz/fuzz_targets/lex.rs
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use plutoc::lexer::lex;
+use pluto::lexer::lex;
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(s) = std::str::from_utf8(data) {
@@ -225,7 +225,7 @@ benches/
 ```rust
 // benches/compile_time.rs
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use plutoc::compile;
+use pluto::compile;
 
 fn bench_compile_hello_world(c: &mut Criterion) {
     let source = r#"

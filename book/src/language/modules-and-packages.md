@@ -147,7 +147,7 @@ pinned = { git = "https://github.com/user/lib.git", rev = "abc123f" }
 latest = { git = "https://github.com/user/lib.git", branch = "dev" }
 ```
 
-Specify at most one of `rev`, `tag`, or `branch`. Repos are cached in `~/.pluto/cache/git/`. Run `plutoc update` to re-fetch.
+Specify at most one of `rev`, `tag`, or `branch`. Repos are cached in `~/.pluto/cache/git/`. Run `pluto update` to re-fetch.
 
 ### A Complete Example
 
@@ -243,4 +243,4 @@ Transitive dependencies are **not** visible unless explicitly declared. If you d
 | Stdlib import | `import std.strings` |
 | Path dependency | `mathlib = { path = "deps/mathlib" }` |
 | Git dependency | `mylib = { git = "url", tag = "v1.0" }` |
-| Update git deps | `plutoc update` |
+| Update git deps | `pluto update` |

@@ -53,7 +53,7 @@ Claude Code connected to `pluto-mcp` can:
                                     ┌────────────┴────────────┐
                                     │                         │
                               ┌─────▼─────┐            ┌──────▼──────┐
-                              │ plutoc-sdk │            │   plutoc    │
+                              │ pluto-sdk │            │    pluto    │
                               │ (read/write│            │ (compiler)  │
                               │  .pluto)   │            │             │
                               └─────┬──────┘            └──────┬──────┘
@@ -63,7 +63,7 @@ Claude Code connected to `pluto-mcp` can:
                               │    [UUIDs] [AST] [Source] [Derived]   │
                               └───────────────────────────────────────┘
                                                  │
-                                          plutoc generate-pt
+                                          pluto generate-pt
                                                  │
                                           ┌──────▼──────┐
                                           │  .pt files   │
@@ -76,8 +76,8 @@ Claude Code connected to `pluto-mcp` can:
 | Layer | Crate | Role |
 |---|---|---|
 | **pluto-mcp** | `mcp/` | MCP server binary. Translates MCP tool calls into SDK/compiler operations. Manages project state. |
-| **plutoc-sdk** | `sdk/` | Rust library for reading and writing `.pluto` files. UUID-aware, transactional writes. |
-| **plutoc** | `.` (root) | The compiler. Lex, parse, type-check, codegen, link. Also provides `analyze_file()` for enriching with derived data. |
+| **pluto-sdk** | `sdk/` | Rust library for reading and writing `.pluto` files. UUID-aware, transactional writes. |
+| **pluto** | `.` (root) | The compiler. Lex, parse, type-check, codegen, link. Also provides `analyze_file()` for enriching with derived data. |
 
 ## MCP Server (`pluto-mcp`)
 
@@ -563,7 +563,7 @@ Parameters:
 Returns: { source: string }
 ```
 
-## SDK Write API (`plutoc-sdk`)
+## SDK Write API (`pluto-sdk`)
 
 > **Status:** Implemented. See `sdk/src/editor.rs`.
 
@@ -579,7 +579,7 @@ The MCP server's write tools delegate to the SDK's `ModuleEditor` API.
 ### API
 
 ```rust
-use plutoc_sdk::{Module, ModuleEditor};
+use pluto_sdk::{Module, ModuleEditor};
 
 // Create an edit-friendly module from source text
 let module = Module::from_source(source)?;
@@ -646,10 +646,10 @@ assert!(module.source().contains("cross_product"));
 The compiler gets new subcommands that mirror the MCP tools:
 
 ```bash
-plutoc analyze <file>                # Run front-end + refresh derived data in .pluto
-plutoc generate-pt [<file>]          # Generate .pt from .pluto (all files if omitted)
-plutoc sync <file.pt>                # Sync .pt edits back to .pluto
-plutoc emit-ast <file> -o <out>      # Serialize parsed AST to .plto binary (already exists)
+pluto analyze <file>                # Run front-end + refresh derived data in .pluto
+pluto generate-pt [<file>]          # Generate .pt from .pluto (all files if omitted)
+pluto sync <file.pt>                # Sync .pt edits back to .pluto
+pluto emit-ast <file> -o <out>      # Serialize parsed AST to .plto binary (already exists)
 ```
 
 These are thin wrappers around the same SDK functions the MCP server uses. `analyze` calls `analyze_file()` + `serialize_program()`. `generate-pt` calls `pretty_print()`. `sync` parses `.pt`, diffs against `.pluto`, and writes updated `.pluto`.
@@ -884,7 +884,7 @@ Implemented in `sdk/src/editor.rs` with 27 tests. See "SDK Write API" section ab
 
 ### Resolved
 
-- [x] **Source vs. binary input.** Binary `.pluto` (PLTO) is the canonical format from day one. Text `.pluto` files are supported as a fallback during migration (Phase 1 auto-detects format). A `plutoc migrate` command converts text `.pluto` → binary `.pluto`.
+- [x] **Source vs. binary input.** Binary `.pluto` (PLTO) is the canonical format from day one. Text `.pluto` files are supported as a fallback during migration (Phase 1 auto-detects format). A `pluto migrate` command converts text `.pluto` → binary `.pluto`.
 - [x] **Primary consumer.** Claude Code via MCP. SDK is the implementation layer, not a separate product surface.
 - [x] **Project scope.** Project-aware — the MCP server understands the full project, resolves imports, supports cross-module queries.
 

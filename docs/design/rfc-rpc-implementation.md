@@ -189,7 +189,7 @@ This RFC outlines a phased approach to implementing RPC code generation in Pluto
 
 ### Tasks
 1. **Multi-service compilation**
-   - `plutoc compile system.pluto` produces bin/stage_A, bin/stage_B, etc.
+   - `pluto compile system.pluto` produces bin/stage_A, bin/stage_B, etc.
    - Each binary is self-contained and stateless (except DI)
 
 2. **Testing harness**

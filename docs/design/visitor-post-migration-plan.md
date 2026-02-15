@@ -902,8 +902,8 @@ Add benchmarks comparing visitor-based passes to manual walker equivalents.
 // benches/visitor_overhead.rs
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use plutoc::parser::parse;
-use plutoc::visit::{Visitor, walk_expr};
+use pluto::parser::parse;
+use pluto::visit::{Visitor, walk_expr};
 
 fn bench_visitor_vs_manual(c: &mut Criterion) {
     let source = include_str!("../examples/large_program.pluto"); // 1000+ lines

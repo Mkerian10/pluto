@@ -958,9 +958,9 @@ pub fn walk_type_expr_mut<V: VisitMut>(v: &mut V, te: &mut Spanned<TypeExpr>) {
 
 #[cfg(test)]
 mod tests {
-    use plutoc::visit::{Visitor, walk_expr};
-    use plutoc::parser::*;
-    use plutoc::span::{Span, Spanned};
+    use pluto::visit::{Visitor, walk_expr};
+    use pluto::parser::*;
+    use pluto::span::{Span, Spanned};
 
     #[test]
     fn test_visitor_visits_all_expr_types() {

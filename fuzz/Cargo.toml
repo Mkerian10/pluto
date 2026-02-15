@@ -1,5 +1,5 @@
 [package]
-name = "plutoc-fuzz"
+name = "pluto-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -11,7 +11,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1.3", features = ["derive"] }
 
-[dependencies.plutoc]
+[dependencies.pluto]
 path = ".."
 
 [[bin]]

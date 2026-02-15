@@ -10,7 +10,7 @@ pub use editor::{ModuleEditor, DeleteResult, DanglingRef};
 pub use error::SdkError;
 pub use module::Module;
 
-// Re-export key plutoc types for convenience
+// Re-export key pluto types for convenience
 pub use pluto::derived::{
     DerivedInfo, ErrorRef, ResolvedSignature,
     ResolvedClassInfo, ResolvedTraitInfo, ResolvedEnumInfo,

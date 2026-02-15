@@ -1,4 +1,4 @@
-//! Integration tests for `plutoc analyze` command.
+//! Integration tests for `pluto analyze` command.
 
 use tempfile::TempDir;
 
@@ -6,7 +6,7 @@ mod common;
 
 #[test]
 fn test_analyze_pt_file_creates_pluto() {
-    // Test: plutoc analyze creates .pluto file from .pt source
+    // Test: pluto analyze creates .pluto file from .pt source
     //
     // Verifies that analyzing a .pt text file produces a .pluto binary
     // with fresh derived data.

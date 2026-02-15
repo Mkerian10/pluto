@@ -15,7 +15,7 @@ cd pluto
 cargo build --release
 ```
 
-The compiler binary will be at `target/release/plutoc`.
+The compiler binary will be at `target/release/pluto`.
 
 ## Optional: Install to PATH
 
@@ -26,5 +26,5 @@ cargo install --path .
 Then verify installation:
 
 ```bash
-plutoc --help
+pluto --help
 ```

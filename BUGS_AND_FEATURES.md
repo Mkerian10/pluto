@@ -55,7 +55,7 @@
 - **Impact:** Previously blocked multi-file test layout in one directory
 - **File:** `feedback/bugs/test-runner-duplicate-ids-multiple-files.md`
 - **Fix:** Test function names include a file-path hash prefix via `Parser::new_with_path()` + `test_id_prefix()` (`src/parser/mod.rs`).
-- **Validation:** Two sibling files with `test` blocks run successfully in one `plutoc test` invocation.
+- **Validation:** Two sibling files with `test` blocks run successfully in one `pluto test` invocation.
 
 #### 4. ✅ Trait Method Without `self` Parameter Causes Compiler Panic
 - **Status:** ✅ **FIXED** in PR #43 (2026-02-11)
