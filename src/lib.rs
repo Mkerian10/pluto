@@ -27,6 +27,7 @@ pub mod stages;
 pub mod cache;
 pub mod watch;
 pub mod coverage;
+pub mod toolchain;
 
 use diagnostics::{CompileError, CompileWarning};
 use std::path::{Path, PathBuf};

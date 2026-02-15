@@ -472,6 +472,27 @@ pub fn compile_error_to_diagnostic(err: &pluto::diagnostics::CompileError, sourc
             inner.path = Some(path.display().to_string());
             inner
         },
+        pluto::diagnostics::CompileError::Toolchain(msg) => DiagnosticInfo {
+            severity: "error".to_string(),
+            kind: "toolchain".to_string(),
+            message: msg.clone(),
+            span: None,
+            path: None,
+        },
+        pluto::diagnostics::CompileError::Network(msg) => DiagnosticInfo {
+            severity: "error".to_string(),
+            kind: "network".to_string(),
+            message: msg.clone(),
+            span: None,
+            path: None,
+        },
+        pluto::diagnostics::CompileError::VersionNotFound(msg) => DiagnosticInfo {
+            severity: "error".to_string(),
+            kind: "version_not_found".to_string(),
+            message: msg.clone(),
+            span: None,
+            path: None,
+        },
     }
 }
 
