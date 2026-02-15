@@ -22,6 +22,8 @@ error NotFoundError { id: string }
 
 The compiler infers which functions can produce errors by analyzing the entire call graph (enabled by whole-program compilation). Programmers do **not** annotate functions with error information.
 
+**IMPORTANT:** Never write `!` in function signatures. Error-ability is purely inferred by the compiler.
+
 ```
 fn foo() int {
     return 42
@@ -29,15 +31,58 @@ fn foo() int {
 }
 
 fn bar() int {
-    let x = baz()   // baz() can error
+    let x = baz()!  // baz() can error, propagate it
     return x + 1
-    // Compiler infers: bar() can error (because baz can)
+    // Compiler infers: bar() can error (because it propagates from baz)
 }
 ```
 
 At the call site:
 - If a function **cannot error**, the caller uses it directly — no handling required.
 - If a function **can error**, the caller **must** handle the error via `!` or `catch`.
+
+### Why No Annotations?
+
+In languages like Rust, you write `Result<T, E>` in function signatures. In Pluto, this is **completely automatic**:
+
+```
+// ❌ WRONG - This is a syntax error
+fn create_config() Config! {
+    return Config { port: 8080 }
+}
+
+// ✅ CORRECT - No annotation needed
+fn create_config() Config {
+    let port = read_port()!  // Propagate errors from read_port
+    return Config { port: port }
+}
+// Compiler infers: create_config() can error
+```
+
+This works identically for all types — primitives, custom classes, enums, etc. The `!` operator is only used at **call sites** for propagation, never in signatures for declaration.
+
+### Error Inference with Custom Types
+
+Error inference works the same way regardless of return type:
+
+```
+class Database {
+    conn: string
+}
+
+fn connect() Database {
+    let addr = resolve_address()!  // Propagate error
+    return Database { conn: addr }
+}
+// Compiler infers: connect() can error
+
+fn main() {
+    // Must handle the error
+    let db = connect() catch err {
+        Database { conn: "localhost" }
+    }
+}
+```
 
 ## Error Propagation with `!`
 
