@@ -7,7 +7,7 @@ let x = 42
 let mut counter = 0
 ```
 
-Variables are immutable by default. Use `mut` to allow reassignment.
+Variables use `let` for bindings and `let mut` for bindings where you need to mutate object state (field assignment, `mut self` method calls). Variable reassignment (`x = new_value`) does not require `mut`. See [Mutability](mutability.md) for details.
 
 ## If / Else
 

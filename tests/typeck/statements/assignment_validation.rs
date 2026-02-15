@@ -1,7 +1,7 @@
 //! Assignment validation - 25 tests
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run, compile_should_fail_with};
 
 // Assign to undefined variable
 #[test]
@@ -15,20 +15,23 @@ fn assign_type_mismatch() { compile_should_fail_with(r#"fn main(){let x=1 x="hi"
 #[test]
 fn assign_field_type_mismatch() { compile_should_fail_with(r#"class C{x:int} fn main(){let mut c=C{x:1}c.x="hi"}"#, "expected int, found string"); }
 
-// Assign to immutable variable
+// Variable reassignment (allowed by spec - does not require let mut)
 #[test]
-#[ignore] // #177: compiler allows assignment to immutable variables
-fn assign_immutable() { compile_should_fail_with(r#"fn main(){let x=1 x=2}"#, ""); }
+fn variable_reassignment() {
+    assert_eq!(compile_and_run(r#"fn main(){let x=1 x=2 print(x)}"#), 0);
+}
 
-// Assign to function parameter
+// Function parameter reassignment (allowed by spec - params are implicitly mutable)
 #[test]
-#[ignore] // #177: compiler allows assignment to function parameters
-fn assign_param() { compile_should_fail_with(r#"fn f(x:int){x=2} fn main(){}"#, ""); }
+fn param_reassignment() {
+    assert_eq!(compile_and_run(r#"fn f(x:int){x=2 print(x)} fn main(){f(1)}"#), 0);
+}
 
-// Assign to for loop variable
+// For-loop variable reassignment (allowed by spec - loop vars are implicitly mutable)
 #[test]
-#[ignore] // #177: compiler allows assignment to for loop variables
-fn assign_for_var() { compile_should_fail_with(r#"fn main(){for i in 0..10{i=5}}"#, ""); }
+fn for_var_reassignment() {
+    assert_eq!(compile_and_run(r#"fn main(){for i in 0..3{i=5 print(i)}}"#), 0);
+}
 
 // Assign to literal
 #[test]
@@ -84,7 +87,7 @@ fn compound_assign_undefined() { compile_should_fail_with(r#"fn main(){x+=1}"#, 
 
 // Array element assign out of bounds (runtime check, not typeck)
 #[test]
-#[ignore] // #177: array bounds checking is runtime, not compile-time
+#[ignore] // Compiler limitation: array bounds checking is runtime, not compile-time
 fn array_assign_bounds() { compile_should_fail_with(r#"fn main(){let arr=[1,2,3]arr[10]=5}"#, ""); }
 
 // Assign to string index (strings are immutable)
