@@ -360,7 +360,7 @@ fn main() {
         Commands::EmitAst { file, output } => {
             let output = output.unwrap_or_else(|| file.with_extension("pluto"));
 
-            match plutoc::analyze_file(&file, stdlib) {
+            match plutoc::parse_file_for_editing(&file, stdlib) {
                 Ok((program, source, derived)) => {
                     match plutoc::plto_store::write_canonical(&output, &program, &source, derived) {
                         Ok(_) => {

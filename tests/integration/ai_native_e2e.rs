@@ -28,16 +28,8 @@ fn run_plutoc(args: &[&str], temp_dir: &TempDir) -> std::process::Output {
 }
 
 #[test]
-#[ignore] // TODO: emit-ast saves transformed AST; analyze expects canonical AST
 fn test_ai_native_workflow_complete_roundtrip() {
     // Test: Full AI-native workflow from .pt → .pluto → edit → sync → analyze
-    //
-    // LIMITATION: Current implementation saves the fully-transformed AST
-    // (after monomorphization, closure lifting, etc.) to .pluto files.
-    // The RFC expects .pluto to contain the canonical (pre-transform) AST.
-    //
-    // This test is ignored until emit-ast is fixed to use parse_for_editing
-    // instead of the full analyze pipeline.
     //
     // Verifies that the complete bidirectional loop works:
     // - Initial .pt source is parsed and emitted as .pluto
@@ -390,7 +382,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // TODO: same issue as test_ai_native_workflow_complete_roundtrip
 fn test_cross_module_workflow() {
     // Test: AI-native workflow with multi-file modules
     //
