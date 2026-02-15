@@ -45,6 +45,20 @@ struct FrontendResult {
 
 /// Run the shared frontend pipeline: prelude → ambient → spawn → [strip tests] →
 /// contracts → typeck → monomorphize → trait conformance → closures → xref.
+/// Run the frontend for editing/analysis: prelude → stages → ambient → type check.
+/// Stops BEFORE transformations (spawn desugar, monomorphize, closure lift, reflection).
+/// This preserves the canonical (pre-transformation) AST for emit-ast and analyze.
+fn run_frontend_for_editing(program: &mut Program) -> Result<FrontendResult, CompileError> {
+    prelude::inject_prelude(program)?;
+    stages::flatten_stage_hierarchy(program)?;
+    ambient::desugar_ambient(program)?;
+    contracts::validate_contracts(program)?;
+    let (env, warnings) = typeck::type_check(program)?;
+    Ok(FrontendResult { env, warnings })
+}
+
+/// Run the full frontend pipeline for compilation: editing pipeline + transformations.
+/// This mutates the AST with spawn desugaring, monomorphization, closure lifting, etc.
 fn run_frontend(program: &mut Program, test_mode: bool) -> Result<FrontendResult, CompileError> {
     prelude::inject_prelude(program)?;
     stages::flatten_stage_hierarchy(program)?;
@@ -258,6 +272,29 @@ use parser::ast::Program;
 /// Analyze a source file: run the full front-end pipeline (parse → modules → desugar →
 /// typeck → monomorphize → closures → xref) but stop before codegen.
 /// Returns the fully resolved Program, the entry file's source text, and derived analysis data.
+/// Parse a .pt file for editing/analysis without AST transformations.
+/// Returns the canonical (pre-transformation) AST + type-checked derived data.
+/// Use this for emit-ast and analyze commands.
+pub fn parse_file_for_editing(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String, derived::DerivedInfo), CompileError> {
+    let entry_file = entry_file.canonicalize().map_err(|e|
+        CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
+    let source = std::fs::read_to_string(&entry_file)
+        .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
+    let effective_stdlib = resolve_stdlib(stdlib_root);
+
+    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
+    let pkg_graph = manifest::find_and_resolve(entry_dir)?;
+    let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
+
+    let (mut program, _source_map) = modules::flatten_modules(graph)?;
+
+    // Type check without transformations (preserves canonical AST)
+    let result = run_frontend_for_editing(&mut program)?;
+    let derived = derived::DerivedInfo::build(&result.env, &program, &source);
+
+    Ok((program, source, derived))
+}
+
 pub fn analyze_file(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String, derived::DerivedInfo), CompileError> {
     let (program, source, derived, _warnings) = analyze_file_with_warnings(entry_file, stdlib_root)?;
     Ok((program, source, derived))
@@ -334,8 +371,8 @@ pub fn analyze_and_update(
         (program, source)
     };
 
-    // Run full analysis pipeline
-    let result = run_frontend(&mut program, false)?;
+    // Run analysis pipeline without transformations (preserves canonical AST)
+    let result = run_frontend_for_editing(&mut program)?;
     let derived = derived::DerivedInfo::build(&result.env, &program, &source);
 
     // Serialize with fresh derived data
