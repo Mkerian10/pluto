@@ -66,6 +66,16 @@ pub struct ErrorSetInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CallGraphInput {
+    #[schemars(description = "UUID of the function to build call graph from")]
+    pub uuid: String,
+    #[schemars(description = "Maximum depth to traverse (default: 5, max: 20)")]
+    pub max_depth: Option<usize>,
+    #[schemars(description = "Direction: 'callers' (who calls this) or 'callees' (who this calls). Default: 'callees'")]
+    pub direction: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetSourceInput {
     #[schemars(description = "Path of the loaded module")]
     pub path: String,

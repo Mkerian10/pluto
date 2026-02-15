@@ -237,6 +237,33 @@ pub struct DisambiguationEntry {
     pub kind: String,
 }
 
+#[derive(Serialize)]
+pub struct CallGraphResult {
+    pub root_uuid: String,
+    pub root_name: String,
+    pub direction: String,
+    pub max_depth: usize,
+    pub nodes: Vec<CallGraphNode>,
+}
+
+#[derive(Serialize)]
+pub struct CallGraphNode {
+    pub uuid: String,
+    pub name: String,
+    pub module_path: String,
+    pub depth: usize,
+    pub children: Vec<CallGraphChild>,
+}
+
+#[derive(Serialize)]
+pub struct CallGraphChild {
+    pub uuid: String,
+    pub name: String,
+    pub module_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_cycle: Option<bool>,
+}
+
 // --- Project-level output structs ---
 
 #[derive(Serialize)]
