@@ -362,15 +362,12 @@ fn main() {
 
             match plutoc::analyze_file(&file, stdlib) {
                 Ok((program, source, derived)) => {
-                    match plutoc::binary::serialize_program(&program, &source, &derived) {
-                        Ok(bytes) => {
-                            if let Err(e) = std::fs::write(&output, &bytes) {
-                                eprintln!("error: failed to write {}: {e}", output.display());
-                                std::process::exit(1);
-                            }
+                    match plutoc::plto_store::write_canonical(&output, &program, &source, derived) {
+                        Ok(_) => {
+                            println!("Wrote {}", output.display());
                         }
                         Err(e) => {
-                            eprintln!("error: serialization failed: {e}");
+                            eprintln!("error: failed to write {}: {e}", output.display());
                             std::process::exit(1);
                         }
                     }

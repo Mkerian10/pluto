@@ -94,11 +94,12 @@ pub fn sync_pt_to_pluto(pt_path: &Path, pluto_path: &Path) -> Result<SyncResult,
     // 4. Resolve cross-references on the updated program
     xref::resolve_cross_refs(&mut new_program);
 
-    // 5. Serialize to .pluto binary with empty derived data
-    let derived = crate::derived::DerivedInfo::default();
-    let bytes =
-        binary::serialize_program(&new_program, &pt_source, &derived).map_err(SyncError::Serialize)?;
-    std::fs::write(pluto_path, &bytes).map_err(SyncError::WritePluto)?;
+    // 5. Write to .pluto binary with stale derived data (meta = None)
+    crate::plto_store::write_canonical_stale(pluto_path, &new_program, &pt_source)
+        .map_err(|e| match e {
+            crate::plto_store::StoreError::Binary(b) => SyncError::Serialize(b),
+            crate::plto_store::StoreError::Io(io) => SyncError::WritePluto(io),
+        })?;
 
     Ok(result)
 }

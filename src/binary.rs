@@ -1,4 +1,4 @@
-//! Binary container format for serialized Pluto ASTs (v2).
+//! Binary container format for serialized Pluto ASTs (v3).
 //!
 //! Container layout (20-byte header + three length-prefixed sections):
 //!
@@ -16,7 +16,7 @@ use crate::parser::ast::Program;
 const MAGIC: &[u8; 4] = b"PLTO";
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;
@@ -86,11 +86,14 @@ pub fn serialize_program(
 
 /// Deserialize a binary container back into a `Program`, its source text, and derived analysis data.
 pub fn deserialize_program(data: &[u8]) -> Result<(Program, String, DerivedInfo), BinaryError> {
-    validate_header(data)?;
+    let _version = validate_header(data)?;
 
     let source = read_source_section(data)?;
     let program = read_ast_section(data)?;
     let derived = read_derived_section(data)?;
+
+    // Note: v2 files don't have metadata (meta = None), which is handled
+    // automatically by serde's #[serde(default)] attribute
 
     Ok((program, source, derived))
 }
@@ -102,13 +105,13 @@ pub fn is_binary_format(data: &[u8]) -> bool {
 
 /// Read only the source text from a binary container, without deserializing the AST.
 pub fn read_source_only(data: &[u8]) -> Result<String, BinaryError> {
-    validate_header(data)?;
+    let _version = validate_header(data)?;
     read_source_section(data)
 }
 
 // --- internal helpers ---
 
-fn validate_header(data: &[u8]) -> Result<(), BinaryError> {
+fn validate_header(data: &[u8]) -> Result<u32, BinaryError> {
     if data.len() < HEADER_SIZE {
         return Err(BinaryError::Truncated {
             expected: HEADER_SIZE,
@@ -119,10 +122,13 @@ fn validate_header(data: &[u8]) -> Result<(), BinaryError> {
         return Err(BinaryError::InvalidMagic);
     }
     let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
-    if version != SCHEMA_VERSION {
+
+    // Accept v2 and v3
+    if version != 2 && version != 3 {
         return Err(BinaryError::UnsupportedVersion(version));
     }
-    Ok(())
+
+    Ok(version)
 }
 
 fn read_source_section(data: &[u8]) -> Result<String, BinaryError> {
@@ -483,5 +489,47 @@ fn main() {
         // Deterministic: re-serialize yields identical bytes
         let bytes2 = serialize_program(&program2, &source2, &derived2).unwrap();
         assert_eq!(bytes, bytes2);
+    }
+
+    #[test]
+    fn test_v3_with_fresh_metadata() {
+        let source = "fn main() {}";
+        let program = parse(source);
+        let mut derived = empty_derived();
+
+        // Write v3 with fresh metadata
+        derived.source_hash = DerivedInfo::compute_source_hash(source);
+        let v3_bytes = serialize_program(&program, source, &derived).unwrap();
+
+        // Check that version is 3
+        assert_eq!(&v3_bytes[..4], b"PLTO");
+        let version = u32::from_le_bytes([v3_bytes[4], v3_bytes[5], v3_bytes[6], v3_bytes[7]]);
+        assert_eq!(version, 3);
+
+        // Read v3
+        let (_prog, src, deriv) = deserialize_program(&v3_bytes).unwrap();
+        assert_eq!(src, source);
+        assert!(!deriv.source_hash.is_empty());
+
+        // Check freshness (not stale)
+        assert!(!deriv.is_stale(source));
+        assert!(deriv.is_stale("fn main() { let x = 1 }"));
+    }
+
+    #[test]
+    fn test_v2_compatibility() {
+        let source = "fn main() {}";
+        let program = parse(source);
+        let mut derived = empty_derived();
+
+        // Simulate v2 file by explicitly setting source_hash = "" (stale)
+        derived.source_hash = String::new();
+        let v2_style_bytes = serialize_program(&program, source, &derived).unwrap();
+
+        // Even though we write v3, reading should handle missing metadata gracefully
+        let (_, _, deriv_v2) = deserialize_program(&v2_style_bytes).unwrap();
+
+        // v2-style data should be recognized as stale
+        assert!(deriv_v2.is_stale(source));
     }
 }

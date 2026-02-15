@@ -22,6 +22,7 @@ pub mod derived;
 pub mod pretty;
 pub mod xref;
 pub mod sync;
+pub mod plto_store;
 pub mod stages;
 pub mod cache;
 pub mod watch;
