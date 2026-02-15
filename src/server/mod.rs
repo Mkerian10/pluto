@@ -11,6 +11,9 @@
 //! - Future: Language server protocol, web API, etc.
 
 pub mod types;
+pub mod in_process;
+
+pub use in_process::InProcessServer;
 
 use std::path::Path;
 use types::*;

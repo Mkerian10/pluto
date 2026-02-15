@@ -24,7 +24,7 @@ pub struct LoadOptions {
 #[derive(Debug, Clone, Default)]
 pub struct CompileOptions {
     pub stdlib: Option<PathBuf>,
-    pub gc: bool,
+    pub gc: crate::GcBackend,
     pub coverage: bool,
 }
 
