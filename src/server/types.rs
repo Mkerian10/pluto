@@ -389,32 +389,6 @@ pub struct ErrorSetInfo {
     pub errors: Vec<String>,
 }
 
-// ========== Editing Types ==========
-
-/// Result of an edit operation (add, replace, rename).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EditResult {
-    pub uuid: Uuid,
-    pub name: String,
-    pub kind: DeclKind,
-}
-
-/// Result of a delete operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeleteResult {
-    pub name: String,
-    pub deleted_source: String,
-    pub dangling_references: Vec<XrefSite>,
-}
-
-/// Result of a sync operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncResult {
-    pub pluto_path: PathBuf,
-    pub preserved_uuids: usize,
-    pub new_declarations: usize,
-}
-
 // ========== Utility Types ==========
 
 /// Byte range for source access.

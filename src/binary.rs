@@ -98,9 +98,14 @@ pub fn deserialize_program(data: &[u8]) -> Result<(Program, String, DerivedInfo)
     Ok((program, source, derived))
 }
 
-/// Check whether a byte slice starts with the Pluto binary magic number.
+/// Check whether a byte slice looks like a valid Pluto binary container.
+/// Checks magic bytes, minimum header size, and schema version.
 pub fn is_binary_format(data: &[u8]) -> bool {
-    data.len() >= 4 && &data[..4] == MAGIC
+    if data.len() < HEADER_SIZE || &data[..4] != MAGIC {
+        return false;
+    }
+    let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
+    version == 2 || version == 3
 }
 
 /// Read only the source text from a binary container, without deserializing the AST.

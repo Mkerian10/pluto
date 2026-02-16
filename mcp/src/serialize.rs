@@ -376,53 +376,6 @@ pub struct TestResult {
     pub timed_out: bool,
 }
 
-// --- Write tool result structs ---
-
-#[derive(Serialize)]
-pub struct AddDeclResult {
-    pub uuid: String,
-    pub name: String,
-    pub kind: String,
-}
-
-#[derive(Serialize)]
-pub struct ReplaceDeclResult {
-    pub uuid: String,
-    pub name: String,
-    pub kind: String,
-}
-
-#[derive(Serialize)]
-pub struct DeleteDeclResult {
-    pub deleted_source: String,
-    pub dangling_refs: Vec<DanglingRefInfo>,
-}
-
-#[derive(Serialize)]
-pub struct RenameDeclResult {
-    pub old_name: String,
-    pub new_name: String,
-    pub uuid: String,
-}
-
-#[derive(Serialize)]
-pub struct AddMethodResult {
-    pub uuid: String,
-    pub name: String,
-}
-
-#[derive(Serialize)]
-pub struct AddFieldResult {
-    pub uuid: String,
-}
-
-#[derive(Serialize)]
-pub struct DanglingRefInfo {
-    pub kind: String,
-    pub name: String,
-    pub span: SpanInfo,
-}
-
 pub fn compile_error_to_diagnostic(err: &pluto::diagnostics::CompileError, source: Option<&str>) -> DiagnosticInfo {
     let make_span = |span: Span| -> SpanInfo {
         match source {
@@ -963,14 +916,6 @@ pub struct ModuleStatusEntry {
 }
 
 // --- Format tool outputs ---
-
-#[derive(Serialize)]
-pub struct SyncResultInfo {
-    pub added: Vec<String>,
-    pub removed: Vec<String>,
-    pub modified: Vec<String>,
-    pub unchanged: usize,
-}
 
 #[derive(Serialize)]
 pub struct ReloadResult {

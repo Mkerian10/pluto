@@ -4,7 +4,7 @@ use crate::span::Spanned;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
-const PRELUDE_SOURCE: &str = include_str!("../stdlib/prelude.pluto");
+const PRELUDE_SOURCE: &str = include_str!("../stdlib/prelude.pt");
 
 /// Cached prelude data: parsed AST enums, classes, traits + sets of their names.
 /// Parsed once on first access, shared by all callers.

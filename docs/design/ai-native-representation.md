@@ -7,6 +7,8 @@
 > **In progress:** `pluto analyze` command (separate implementation).
 >
 > **Still in design:** `pluto init`, signature-only libraries, cross-project UUIDs, incremental analysis.
+>
+> **Shelved:** MCP editing tools (add/replace/delete/rename declaration, add method/field, sync_pt) have been removed. The MCP server is read-only pending compiler maturity and UUID stability across sessions. All editing is done via the SDK or text files.
 
 ## Motivation
 

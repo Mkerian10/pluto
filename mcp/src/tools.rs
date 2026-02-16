@@ -146,66 +146,6 @@ pub struct TestInput {
     pub cwd: Option<String>,
 }
 
-// --- Write tool inputs ---
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct AddDeclarationInput {
-    #[schemars(description = "Path to the .pluto source file. Created if it doesn't exist.")]
-    pub path: String,
-    #[schemars(description = "Pluto source code for the declaration to add (e.g. a function, class, enum, etc.)")]
-    pub source: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ReplaceDeclarationInput {
-    #[schemars(description = "Path of the .pluto source file")]
-    pub path: String,
-    #[schemars(description = "Name of the declaration to replace")]
-    pub name: String,
-    #[schemars(description = "Pluto source code for the replacement (must be the same kind)")]
-    pub source: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct DeleteDeclarationInput {
-    #[schemars(description = "Path of the .pluto source file")]
-    pub path: String,
-    #[schemars(description = "Name of the declaration to delete")]
-    pub name: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct RenameDeclarationInput {
-    #[schemars(description = "Path of the .pluto source file")]
-    pub path: String,
-    #[schemars(description = "Current name of the declaration")]
-    pub old_name: String,
-    #[schemars(description = "New name for the declaration")]
-    pub new_name: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct AddMethodInput {
-    #[schemars(description = "Path of the .pluto source file")]
-    pub path: String,
-    #[schemars(description = "Name of the class to add the method to")]
-    pub class_name: String,
-    #[schemars(description = "Pluto source code for the method (must include self param)")]
-    pub source: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct AddFieldInput {
-    #[schemars(description = "Path of the .pluto source file")]
-    pub path: String,
-    #[schemars(description = "Name of the class to add the field to")]
-    pub class_name: String,
-    #[schemars(description = "Name of the new field")]
-    pub field_name: String,
-    #[schemars(description = "Type of the new field (e.g. 'int', 'string', '[float]')")]
-    pub field_type: String,
-}
-
 // --- Docs tool inputs ---
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -232,14 +172,6 @@ pub struct ReloadModuleInput {
 pub struct ModuleStatusInput {}
 
 // --- Format tool inputs ---
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct SyncPtInput {
-    #[schemars(description = "Path to the .pt text file to sync from")]
-    pub pt_path: String,
-    #[schemars(description = "Path to the .pluto binary file to sync to (defaults to same name with .pluto extension)")]
-    pub pluto_path: Option<String>,
-}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct PrettyPrintInput {

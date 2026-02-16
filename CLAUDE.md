@@ -12,8 +12,8 @@ cargo test --tests                 # Run all integration tests only
 cargo test --lib <test_name>       # Run a single unit test
 cargo test --test errors           # Run one integration test file
 cargo test --test errors <name>    # Run a single test in a file
-cargo run -- compile <file.pluto> -o <output>  # Compile a .pluto file
-cargo run -- run <file.pluto>      # Compile and immediately run
+cargo run -- compile <file.pt> -o <output>  # Compile a .pt source file
+cargo run -- run <file.pt>      # Compile and immediately run
 ```
 
 ## Compiler Pipeline
@@ -45,6 +45,8 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 
 **Modules** — `import math` with `pub` visibility. Flatten-before-typeck design: imported items get prefixed names (e.g., `math.add`). Supports directory modules, single-file modules, and hierarchical imports.
 
+**Dual file formats** — The compiler accepts both `.pt` (human-readable text source) and `.pluto` (binary AST with UUIDs). All entry points auto-detect format via magic bytes. Module resolution tries `.pluto` first, falls back to `.pt`. Stdlib and examples use `.pt`. When both `name.pluto` and `name.pt` exist, `.pluto` is preferred.
+
 **String interpolation** — `"hello {name}"` with arbitrary expressions inside `{}`.
 
 **Codegen target** — Hardcoded to `aarch64-apple-darwin` in `src/codegen/mod.rs`. Needs platform detection in the future.
@@ -59,7 +61,7 @@ Each `.c` file is compiled to a `.o` file, then linked with `ld -r` into a singl
 
 **AI-native representation (planned)** — Future direction where `.pluto` becomes a binary canonical representation (full semantic graph with stable UUIDs per declaration) and `.pt` files provide human-readable text views. AI agents write `.pluto` via an SDK (`pluto-sdk`), the compiler enriches `.pluto` with derived analysis data on demand (`pluto analyze`), and `pluto sync` converts human `.pt` edits back to `.pluto`. See `docs/design/ai-native-representation.md` for the full RFC.
 
-**CompilerService** — Protocol-agnostic trait in `src/server/mod.rs` with 28 methods covering module management, declaration inspection, cross-references, compilation/execution, editing, and documentation. `InProcessServer` in `src/server/in_process.rs` caches `(Program, String, DerivedInfo)` per module and delegates to compiler primitives. Both CLI (`src/main.rs` compile command) and MCP (`mcp/src/server.rs` — docs, stdlib_docs, check, compile, run, test) route through it. Editing operations (add/replace/delete/rename declarations) are stubs pending future work. See `src/server/types.rs` for all result types.
+**CompilerService** — Protocol-agnostic trait in `src/server/mod.rs` covering module management, declaration inspection, cross-references, compilation/execution, analysis, and documentation. MCP is read-only — all editing operations have been removed. `InProcessServer` in `src/server/in_process.rs` caches `(Program, String, DerivedInfo)` per module and delegates to compiler primitives. Both CLI (`src/main.rs` compile command) and MCP (`mcp/src/server.rs` — docs, stdlib_docs, check, compile, run, test) route through it. See `src/server/types.rs` for all result types.
 
 **No semicolons** — Pluto uses newline-based statement termination. Newlines are lexed as `Token::Newline` and the parser consumes them at statement boundaries while skipping them inside expressions.
 
@@ -175,7 +177,7 @@ git branch -d <feature-name>
 
 **Rebase onto master before merging** — Always resolve conflicts on your feature branch, never on master. Rebase your branch onto the latest master, fix any conflicts there, and verify tests pass. Then do a fast-forward merge to master. This keeps master's history clean and ensures conflicts are never resolved in a half-broken state on master.
 
-**Write examples for new features** — When adding a new user-facing feature (new stdlib module, new language construct, etc.), write an example in `examples/<name>/main.pluto` and add it to `examples/README.md` before rebasing and merging. Examples should be self-contained and demonstrate the feature's key capabilities. For stdlib features, include `--stdlib stdlib` in the run instructions.
+**Write examples for new features** — When adding a new user-facing feature (new stdlib module, new language construct, etc.), write an example in `examples/<name>/main.pt` and add it to `examples/README.md` before rebasing and merging. Examples should be self-contained and demonstrate the feature's key capabilities. For stdlib features, include `--stdlib stdlib` in the run instructions.
 
 **Merge checklist** — Before merging to `master`, verify ALL of the following:
 1. `cargo test` passes on your branch (all unit, integration, and module tests)

@@ -7,7 +7,7 @@ fn examples_dir() -> PathBuf {
 
 #[test]
 fn load_binary_ast_example_from_source() {
-    let path = examples_dir().join("binary-ast").join("main.pluto");
+    let path = examples_dir().join("binary-ast").join("main.pt");
     let module = Module::from_source_file(&path).unwrap();
 
     // Check source was loaded
@@ -59,7 +59,7 @@ fn load_binary_ast_example_from_source() {
 
 #[test]
 fn binary_round_trip() {
-    let path = examples_dir().join("binary-ast").join("main.pluto");
+    let path = examples_dir().join("binary-ast").join("main.pt");
     let module = Module::from_source_file(&path).unwrap();
 
     // Serialize to binary and reload

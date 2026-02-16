@@ -5,7 +5,7 @@
 Comprehensive demonstration of string manipulation: basic operations (`len`), case conversion (`to_upper`, `to_lower`), trimming (`trim`, `trim_start`, `trim_end`), substring operations, character access (`char_at`, `byte_at`), string searching (`contains`, `starts_with`, `ends_with`, `index_of`, `last_index_of`, `count`), string replacement, splitting, repetition, concatenation, empty/whitespace checking, and number parsing with nullable types.
 
 ```bash
-cargo run -- run examples/strings/main.pluto --stdlib stdlib
+cargo run -- run examples/strings/main.pt --stdlib stdlib
 ```
 
 ## paths
@@ -13,7 +13,7 @@ cargo run -- run examples/strings/main.pluto --stdlib stdlib
 Demonstrates the `std.path` module for path manipulation: `join` (path joining with separator handling), `basename` (extract filename), `dirname` (extract directory), `ext` (file extension), `is_absolute`, `has_trailing_slash`, `normalize` (resolve . and ..), and `split_ext` (filename/extension split).
 
 ```bash
-cargo run -- run examples/paths/main.pluto --stdlib stdlib
+cargo run -- run examples/paths/main.pt --stdlib stdlib
 ```
 
 ## env_example
@@ -21,7 +21,7 @@ cargo run -- run examples/paths/main.pluto --stdlib stdlib
 Demonstrates the `std.env` module for environment variable access: `get` (retrieve variable or empty string), `get_or` (with default fallback), `set` (set variable), `exists` (check if set), `remove` (delete variable), and `list_names` (enumerate all variables).
 
 ```bash
-cargo run -- run examples/env_example/main.pluto --stdlib stdlib
+cargo run -- run examples/env_example/main.pt --stdlib stdlib
 ```
 
 ## logging
@@ -29,7 +29,7 @@ cargo run -- run examples/env_example/main.pluto --stdlib stdlib
 Demonstrates structured logging with `std.log`: setting log levels (`DEBUG`, `INFO`, `WARN`, `ERROR`), logging messages at different levels, and controlling which messages are displayed based on the current log level.
 
 ```bash
-cargo run -- run examples/logging/main.pluto --stdlib stdlib
+cargo run -- run examples/logging/main.pt --stdlib stdlib
 ```
 
 ## modules
@@ -37,7 +37,7 @@ cargo run -- run examples/logging/main.pluto --stdlib stdlib
 Demonstrates the module system: `import` for importing modules, `pub` visibility for exported items, module organization with separate files, and accessing public functions and classes from imported modules.
 
 ```bash
-cargo run -- run examples/modules/main.pluto
+cargo run -- run examples/modules/main.pt
 ```
 
 ## channels
@@ -45,7 +45,7 @@ cargo run -- run examples/modules/main.pluto
 Demonstrates channels for inter-task communication: `let (tx, rx) = chan<T>(capacity)`, blocking `send`/`recv`, non-blocking `try_send`/`try_recv`, `close()`, `for-in` iteration on receivers, and error handling with `catch`.
 
 ```bash
-cargo run -- run examples/channels/main.pluto
+cargo run -- run examples/channels/main.pt
 ```
 
 ## select
@@ -53,7 +53,7 @@ cargo run -- run examples/channels/main.pluto
 Demonstrates `select` for channel multiplexing: waiting on multiple channels simultaneously, fan-in patterns with two producers, non-blocking select with `default`, and error handling when all channels close.
 
 ```bash
-cargo run -- run examples/select/main.pluto
+cargo run -- run examples/select/main.pt
 ```
 
 ## concurrency
@@ -61,7 +61,7 @@ cargo run -- run examples/select/main.pluto
 Demonstrates `spawn` for concurrent execution: spawning functions on separate threads, collecting results with `.get()`, error handling with `catch`, and void tasks.
 
 ```bash
-cargo run -- run examples/concurrency/main.pluto
+cargo run -- run examples/concurrency/main.pt
 ```
 
 ## rust_ffi
@@ -69,7 +69,7 @@ cargo run -- run examples/concurrency/main.pluto
 Demonstrates calling plain Rust functions from Pluto via `extern rust`. A normal Rust crate with `pub fn` functions is imported with zero boilerplate — supported types (`i64`, `f64`, `bool`) are bridged automatically.
 
 ```bash
-cargo run -- run examples/rust_ffi/main.pluto
+cargo run -- run examples/rust_ffi/main.pt
 ```
 
 ## testing
@@ -77,7 +77,7 @@ cargo run -- run examples/rust_ffi/main.pluto
 Demonstrates Pluto's built-in test framework with `test` blocks, `expect()` assertions, and multiple assertion methods (`to_equal`, `to_be_true`, `to_be_false`).
 
 ```bash
-cargo run -- test examples/testing/main.pluto
+cargo run -- test examples/testing/main.pt
 ```
 
 ## json
@@ -85,7 +85,7 @@ cargo run -- test examples/testing/main.pluto
 Demonstrates the `std.json` module: parsing JSON strings, accessing nested values, building JSON programmatically, and round-tripping through stringify/parse.
 
 ```bash
-cargo run -- run examples/json/main.pluto --stdlib stdlib
+cargo run -- run examples/json/main.pt --stdlib stdlib
 ```
 
 ## blog
@@ -94,7 +94,7 @@ A static blog generator that reads markdown-ish `.txt` posts from `posts/`, conv
 
 ```bash
 cd examples/blog
-cargo run --manifest-path ../../Cargo.toml -- run main.pluto --stdlib ../../stdlib
+cargo run --manifest-path ../../Cargo.toml -- run main.pt --stdlib ../../stdlib
 ```
 
 ## bytes
@@ -102,7 +102,7 @@ cargo run --manifest-path ../../Cargo.toml -- run main.pluto --stdlib ../../stdl
 Demonstrates the `byte` and `bytes` types: hex literals (`0xFF`), explicit casting (`as byte`/`as int`), truncation semantics, packed byte buffers (`bytes_new`, `push`, indexing), string conversion (`to_bytes`/`to_string`), iteration, and unsigned ordering.
 
 ```bash
-cargo run -- run examples/bytes/main.pluto
+cargo run -- run examples/bytes/main.pt
 ```
 
 ## packages
@@ -110,7 +110,7 @@ cargo run -- run examples/bytes/main.pluto
 Demonstrates local path dependencies via `pluto.toml`. A project declares a `mathlib` dependency pointing to a local directory, then imports and uses functions and classes from it.
 
 ```bash
-cargo run -- run examples/packages/main.pluto
+cargo run -- run examples/packages/main.pt
 ```
 
 ## pattern_matching
@@ -118,7 +118,7 @@ cargo run -- run examples/packages/main.pluto
 Demonstrates enum pattern matching: unit variants (no data), data-carrying variants with field destructuring, mixed variants (unit and data), exhaustiveness checking, and nested pattern matching within match arms.
 
 ```bash
-cargo run -- run examples/pattern_matching/main.pluto
+cargo run -- run examples/pattern_matching/main.pt
 ```
 
 ## if_expressions
@@ -126,7 +126,7 @@ cargo run -- run examples/pattern_matching/main.pluto
 Demonstrates if-as-expression: using `if` as an expression that returns a value, basic if-expressions in variable assignments, nested if-expressions for multi-way branches, if-expressions as function arguments, and if-expressions in conditions. All if-expressions require an else clause and all branches must return compatible types (with nullable coercion support).
 
 ```bash
-cargo run -- run examples/if_expressions.pluto
+cargo run -- run examples/if_expressions.pt
 ```
 
 ## git-packages
@@ -134,7 +134,7 @@ cargo run -- run examples/if_expressions.pluto
 Demonstrates git-based dependencies via `pluto.toml`. A project declares a `strutils` dependency pointing to a git repository, then imports and uses string utility functions from it.
 
 ```bash
-cargo run -- run examples/git-packages/main.pluto
+cargo run -- run examples/git-packages/main.pt
 ```
 
 ## contracts
@@ -142,7 +142,7 @@ cargo run -- run examples/git-packages/main.pluto
 Demonstrates Pluto's contract system: `requires` (preconditions), `ensures` (postconditions), `old()` for capturing values at function entry, the `result` keyword in postconditions, and class `invariant` declarations.
 
 ```bash
-cargo run -- run examples/contracts/main.pluto
+cargo run -- run examples/contracts/main.pt
 ```
 
 ## errors
@@ -150,7 +150,7 @@ cargo run -- run examples/contracts/main.pluto
 Demonstrates Pluto's typed error system: error declarations with multiple error types, `raise` to throw errors, `!` postfix for error propagation (at call sites only, never in signatures), `catch` with wildcard error handling, shorthand catch with default values, and compiler-inferred error-ability. Shows that error inference works identically for primitives and custom types — no error annotations are ever written in function signatures.
 
 ```bash
-cargo run -- run examples/errors/main.pluto
+cargo run -- run examples/errors/main.pt
 ```
 
 ## binary-ast
@@ -159,10 +159,10 @@ Demonstrates the binary AST commands: `emit-ast` serializes a Pluto source file 
 
 ```bash
 # Serialize source to binary AST
-cargo run -- emit-ast examples/binary-ast/main.pluto -o /tmp/main.pluto
+cargo run -- emit-ast examples/binary-ast/main.pt -o /tmp/main.pt
 
 # Read binary AST back to text
-cargo run -- generate-pt /tmp/main.pluto
+cargo run -- generate-pt /tmp/main.pt
 ```
 
 ## collections-lib
@@ -170,7 +170,7 @@ cargo run -- generate-pt /tmp/main.pluto
 Demonstrates the `std.collections` functional collections library: `map`, `filter`, `fold`, `reduce`, `any`, `all`, `count`, `flat_map`, `for_each`, `reverse`, `take`, `drop`, `zip` (with `Pair`), `enumerate`, `flatten`, `sum`, and `sum_float`. Shows function composition by chaining filter, map, and fold.
 
 ```bash
-cargo run -- run examples/collections-lib/main.pluto --stdlib stdlib
+cargo run -- run examples/collections-lib/main.pt --stdlib stdlib
 ```
 
 ## stdin
@@ -178,7 +178,7 @@ cargo run -- run examples/collections-lib/main.pluto --stdlib stdlib
 Demonstrates interactive I/O with `std.io`: reading input with `io.read_line()`, parsing strings to numbers with `.to_int()` and `.to_float()` (both return nullable types — use `?` to propagate none on invalid input), and string interpolation for output.
 
 ```bash
-echo -e "Alice\n21\n72" | cargo run -- run examples/stdin/main.pluto --stdlib stdlib
+echo -e "Alice\n21\n72" | cargo run -- run examples/stdin/main.pt --stdlib stdlib
 ```
 
 ## time
@@ -186,7 +186,7 @@ echo -e "Alice\n21\n72" | cargo run -- run examples/stdin/main.pluto --stdlib st
 Demonstrates the `std.time` module: wall-clock time (`now`, `now_ns`), monotonic clocks (`monotonic`, `monotonic_ns`), sleeping (`sleep`), and measuring elapsed time (`elapsed`).
 
 ```bash
-cargo run -- run examples/time/main.pluto --stdlib stdlib
+cargo run -- run examples/time/main.pt --stdlib stdlib
 ```
 
 ## random
@@ -194,7 +194,7 @@ cargo run -- run examples/time/main.pluto --stdlib stdlib
 Demonstrates the `std.random` module: random integers (`next`, `between`), random floats (`decimal`, `decimal_between`), coin flips (`coin`), and seeded determinism (`seed`).
 
 ```bash
-cargo run -- run examples/random/main.pluto --stdlib stdlib
+cargo run -- run examples/random/main.pt --stdlib stdlib
 ```
 
 ## nullable
@@ -202,7 +202,7 @@ cargo run -- run examples/random/main.pluto --stdlib stdlib
 Demonstrates first-class nullable types: `T?` syntax for nullable types, `none` literal for absent values, `?` postfix operator for null propagation (early-return none), implicit `T` to `T?` coercion, nullable classes, and `to_int()`/`to_float()` string parsing returning nullable types.
 
 ```bash
-cargo run -- run examples/nullable/main.pluto
+cargo run -- run examples/nullable/main.pt
 ```
 
 ## scope-blocks
@@ -210,7 +210,7 @@ cargo run -- run examples/nullable/main.pluto
 Demonstrates scoped dependency injection with `scope()` blocks: creating per-request scoped class instances from seed values, auto-wiring dependency chains (`Handler` -> `UserService` -> `RequestCtx`), mixing scoped and singleton deps, and binding multiple services from a single seed.
 
 ```bash
-cargo run -- run examples/scope-blocks/main.pluto
+cargo run -- run examples/scope-blocks/main.pt
 ```
 
 ## system
@@ -218,7 +218,7 @@ cargo run -- run examples/scope-blocks/main.pluto
 Demonstrates the `system` declaration for multi-app distributed systems. A system file composes multiple app modules (each with their own `app` declaration and DI graph) into named deployment members. The compiler produces one binary per member.
 
 ```bash
-cargo run -- compile examples/system/main.pluto -o /tmp/system_build
+cargo run -- compile examples/system/main.pt -o /tmp/system_build
 /tmp/system_build/api_server
 /tmp/system_build/background
 ```
@@ -228,7 +228,7 @@ cargo run -- compile examples/system/main.pluto -o /tmp/system_build
 Demonstrates advanced generics: generic classes implementing traits (`class Box<T: Printable> impl Printable`), type bounds on generic parameters (`<T: Trait1 + Trait2>`), explicit type arguments on function calls (`make_pair<string, int>(...)`), and dependency injection on generic classes (`class Repository<T>[db: Database]`).
 
 ```bash
-cargo run -- run examples/generics/main.pluto
+cargo run -- run examples/generics/main.pt
 ```
 
 ## stages
@@ -236,7 +236,7 @@ cargo run -- run examples/generics/main.pluto
 Demonstrates the `stage` language construct — a deployable unit for distributed systems. A stage is like `app` but designed as a future RPC boundary. Shows DI with bracket deps (`stage Api[users: UserService]`), `pub` methods (marking future RPC endpoints), private helper methods, and a `main` entry point.
 
 ```bash
-cargo run -- run examples/stages/main.pluto
+cargo run -- run examples/stages/main.pt
 ```
 
 ## generators
@@ -244,7 +244,7 @@ cargo run -- run examples/stages/main.pluto
 Demonstrates generators with `stream T` return types and `yield`: lazy integer ranges, infinite Fibonacci sequence with early `break`, and composing multiple generators.
 
 ```bash
-cargo run -- run examples/generators/main.pluto
+cargo run -- run examples/generators/main.pt
 ```
 
 ## http-api
@@ -252,7 +252,7 @@ cargo run -- run examples/generators/main.pluto
 A simple JSON API server using `std.http` and `std.json`. Demonstrates listening for HTTP requests, routing by path, parsing JSON request bodies, and returning JSON responses.
 
 ```bash
-cargo run -- run examples/http-api/main.pluto --stdlib stdlib
+cargo run -- run examples/http-api/main.pt --stdlib stdlib
 # Then in another terminal:
 # curl http://localhost:8080/hello
 # curl -X POST -d '{"name":"Alice"}' http://localhost:8080/echo
@@ -263,7 +263,7 @@ cargo run -- run examples/http-api/main.pluto --stdlib stdlib
 Demonstrates the `std.uuid` module for generating RFC 4122 v4 UUIDs: generating random UUIDs (`generate()`), checking UUID structure and uniqueness, and using UUIDs as identifiers.
 
 ```bash
-cargo run -- run examples/uuid/main.pluto --stdlib stdlib
+cargo run -- run examples/uuid/main.pt --stdlib stdlib
 ```
 
 ## base64
@@ -271,7 +271,7 @@ cargo run -- run examples/uuid/main.pluto --stdlib stdlib
 Demonstrates the `std.base64` module for encoding and decoding Base64: basic encoding (`encode`), decoding (`decode`), URL-safe variants (`encode_url_safe`, `decode_url_safe`), and roundtrip encoding/decoding.
 
 ```bash
-cargo run -- run examples/base64/main.pluto --stdlib stdlib
+cargo run -- run examples/base64/main.pt --stdlib stdlib
 ```
 
 ## regex
@@ -279,7 +279,7 @@ cargo run -- run examples/base64/main.pluto --stdlib stdlib
 Demonstrates the `std.regex` module for pattern matching: literal matching (`matches`), finding patterns (`find`, `find_all`), text replacement (`replace`, `replace_all`), splitting text by pattern (`split`), wildcards (`.`), quantifiers (`*`, `+`, `?`), anchors (`^`, `$`), and character shortcuts (`\d`, `\w`, `\s`).
 
 ```bash
-cargo run -- run examples/regex/main.pluto --stdlib stdlib
+cargo run -- run examples/regex/main.pt --stdlib stdlib
 ```
 
 ## reflection_demo
@@ -287,5 +287,5 @@ cargo run -- run examples/regex/main.pluto --stdlib stdlib
 Demonstrates Phase 1 compile-time reflection with the `TypeInfo` trait: `TypeInfo::type_name<T>()` returns type names as strings, `TypeInfo::kind<T>()` provides detailed metadata (field names, types, offsets for classes; variant information for enums). Reflection intrinsics are generated at compile time with zero runtime overhead.
 
 ```bash
-cargo run -- run examples/reflection_demo.pluto
+cargo run -- run examples/reflection_demo.pt
 ```
