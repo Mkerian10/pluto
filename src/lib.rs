@@ -29,6 +29,7 @@ pub mod watch;
 pub mod coverage;
 pub mod toolchain;
 pub mod server;
+pub mod docs;
 
 use diagnostics::{CompileError, CompileWarning};
 use std::path::{Path, PathBuf};

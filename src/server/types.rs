@@ -146,6 +146,9 @@ impl Diagnostic {
             CompileError::SiblingFile { source, .. } => {
                 return Self::from_compile_error(source, None);
             }
+            CompileError::Toolchain(msg) => (msg.clone(), None),
+            CompileError::Network(msg) => (msg.clone(), None),
+            CompileError::VersionNotFound(msg) => (msg.clone(), None),
         };
 
         Self {
