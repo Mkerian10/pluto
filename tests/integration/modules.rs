@@ -1024,12 +1024,11 @@ fn test_sibling_file_error_attribution() {
     )
     .unwrap();
 
-    // Sibling file with syntax error (empty braces in string)
+    // Sibling file with syntax error (missing closing brace)
     std::fs::write(
         dir.path().join("bad.pluto"),
         r#"pub fn get_json() string {
-    return "{}"
-}
+    return "hello"
 "#,
     )
     .unwrap();
@@ -1132,4 +1131,50 @@ fn deps_transitive() {
     ];
     let stdout = run_project(&files);
     assert_eq!(stdout.trim(), "42");
+}
+#[test]
+fn standalone_compilation_skips_siblings() {
+    use std::process::Command;
+    use tempfile::tempdir;
+
+    // Create temp directory with two files:
+    // 1. app.pluto - has an app declaration
+    // 2. main.pluto - has a regular main function
+    // Without --standalone, this would fail (can't have both app and main)
+    // With --standalone, main.pluto compiles in isolation
+
+    let dir = tempdir().unwrap();
+
+    let app_file = dir.path().join("app.pluto");
+    std::fs::write(&app_file, "app TestApp {\n    fn main(self) {\n        print(\"from app\")\n    }\n}").unwrap();
+
+    let main_file = dir.path().join("main.pluto");
+    std::fs::write(&main_file, "fn main() {\n    print(\"from main\")\n}").unwrap();
+
+    let bin_path = dir.path().join("test_bin");
+
+    // Should fail without standalone (sibling merging enabled)
+    let result = pluto::compile_file_with_options(
+        &main_file,
+        &bin_path,
+        None,
+        pluto::GcBackend::MarkSweep,
+        false, // standalone = false
+    );
+    assert!(result.is_err(), "Should fail without standalone due to app+main conflict");
+
+    // Should succeed with standalone (sibling merging disabled)
+    let result = pluto::compile_file_with_options(
+        &main_file,
+        &bin_path,
+        None,
+        pluto::GcBackend::MarkSweep,
+        true, // standalone = true
+    );
+    assert!(result.is_ok(), "Should succeed with standalone flag");
+
+    // Verify the binary runs and produces correct output
+    let output = Command::new(&bin_path).output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "from main");
 }

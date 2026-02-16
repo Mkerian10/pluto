@@ -49,6 +49,14 @@ impl Module {
         Ok(Self { program, source, index, derived })
     }
 
+    /// Load and analyze a source file without merging sibling files (standalone mode).
+    /// Only loads the single specified file and its imports, not other files in the same directory.
+    pub fn from_source_file_standalone(path: impl AsRef<Path>, stdlib_root: Option<&Path>) -> Result<Self, SdkError> {
+        let (program, source, derived) = pluto::analyze_file_standalone(path.as_ref(), stdlib_root)?;
+        let index = ModuleIndex::build(&program);
+        Ok(Self { program, source, index, derived })
+    }
+
     /// Create an edit-friendly Module from source text.
     /// Parses without transforms (no monomorphize/closure-lift/spawn-desugar).
     /// Does NOT inject prelude (avoids serializing Option<T> etc. into committed source).

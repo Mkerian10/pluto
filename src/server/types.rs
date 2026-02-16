@@ -26,6 +26,8 @@ pub struct CompileOptions {
     pub stdlib: Option<PathBuf>,
     pub gc: crate::GcBackend,
     pub coverage: bool,
+    /// Compile file in isolation without merging sibling .pluto files
+    pub standalone: bool,
 }
 
 /// Options for running programs.

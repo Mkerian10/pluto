@@ -1096,7 +1096,12 @@ impl CompilerService for InProcessServer {
     // ===== Compilation & Execution =====
 
     fn check(&self, path: &Path, opts: &CompileOptions) -> CheckResult {
-        match crate::analyze_file_with_warnings(path, opts.stdlib.as_deref()) {
+        let result = if opts.standalone {
+            crate::analyze_file_with_warnings_impl(path, opts.stdlib.as_deref(), true)
+        } else {
+            crate::analyze_file_with_warnings(path, opts.stdlib.as_deref())
+        };
+        match result {
             Ok((_program, _source, _derived, warnings)) => CheckResult {
                 success: true,
                 path: path.to_path_buf(),
@@ -1116,7 +1121,7 @@ impl CompilerService for InProcessServer {
     }
 
     fn compile(&self, path: &Path, output: &Path, opts: &CompileOptions) -> CompileResult {
-        match crate::compile_file_with_options(path, output, opts.stdlib.as_deref(), opts.gc) {
+        match crate::compile_file_with_options(path, output, opts.stdlib.as_deref(), opts.gc, opts.standalone) {
             Ok(()) => CompileResult {
                 success: true,
                 path: path.to_path_buf(),
@@ -1146,6 +1151,7 @@ impl CompilerService for InProcessServer {
             &output,
             opts.stdlib.as_deref(),
             crate::GcBackend::MarkSweep,
+            false,
         ) {
             Ok(()) => {
                 let mut cmd = Command::new(&output);
