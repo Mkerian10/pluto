@@ -230,21 +230,31 @@ pub fn compile_file_with_coverage(entry_file: &Path, output_path: &Path, stdlib_
 fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, skip_siblings: bool, gc: GcBackend, coverage: bool) -> Result<Option<coverage::CoverageMap>, CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
-    let source = std::fs::read_to_string(&entry_file)
+
+    // Read raw bytes for format auto-detection
+    let data = std::fs::read(&entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
-    let effective_stdlib = resolve_stdlib(stdlib_root);
 
-    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
-    let pkg_graph = manifest::find_and_resolve(entry_dir)?;
-    let graph = if skip_siblings {
-        modules::resolve_modules_no_siblings(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?
+    let (mut program, source, source_map) = if binary::is_binary_format(&data) {
+        // Binary file: deserialize (already flattened, skip module resolution)
+        let (program, source, _derived) = binary::deserialize_program(&data)
+            .map_err(|e| CompileError::codegen(format!("failed to deserialize: {e}")))?;
+        (program, source, modules::SourceMap::new())
     } else {
-        modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?
+        // Text file: parse and resolve modules
+        let source = String::from_utf8(data).map_err(|e|
+            CompileError::codegen(format!("entry file is not valid UTF-8: {e}")))?;
+        let effective_stdlib = resolve_stdlib(stdlib_root);
+        let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
+        let pkg_graph = manifest::find_and_resolve(entry_dir)?;
+        let graph = if skip_siblings {
+            modules::resolve_modules_no_siblings(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?
+        } else {
+            modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?
+        };
+        let (program, source_map) = modules::flatten_modules(graph)?;
+        (program, source, source_map)
     };
-
-
-    let (mut program, source_map) = modules::flatten_modules(graph)?;
-
 
     let result = run_frontend(&mut program, false)?;
     for w in &result.warnings {
@@ -281,8 +291,19 @@ use parser::ast::Program;
 pub fn parse_file_for_editing(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String, derived::DerivedInfo), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
-    let source = std::fs::read_to_string(&entry_file)
+
+    let data = std::fs::read(&entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
+
+    if binary::is_binary_format(&data) {
+        // Binary file: deserialize directly (already has derived data)
+        let (program, source, derived) = binary::deserialize_program(&data)
+            .map_err(|e| CompileError::codegen(format!("failed to deserialize: {e}")))?;
+        return Ok((program, source, derived));
+    }
+
+    let source = String::from_utf8(data).map_err(|e|
+        CompileError::codegen(format!("entry file is not valid UTF-8: {e}")))?;
     let effective_stdlib = resolve_stdlib(stdlib_root);
 
     let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
@@ -317,8 +338,19 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
 pub fn analyze_file_with_warnings_impl(entry_file: &Path, stdlib_root: Option<&Path>, standalone: bool) -> Result<(Program, String, derived::DerivedInfo, Vec<CompileWarning>), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
-    let source = std::fs::read_to_string(&entry_file)
+
+    let data = std::fs::read(&entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
+
+    if binary::is_binary_format(&data) {
+        // Binary file: deserialize (already analyzed, no warnings to report)
+        let (program, source, derived) = binary::deserialize_program(&data)
+            .map_err(|e| CompileError::codegen(format!("failed to deserialize: {e}")))?;
+        return Ok((program, source, derived, Vec::new()));
+    }
+
+    let source = String::from_utf8(data).map_err(|e|
+        CompileError::codegen(format!("entry file is not valid UTF-8: {e}")))?;
     let effective_stdlib = resolve_stdlib(stdlib_root);
 
     let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
@@ -329,14 +361,12 @@ pub fn analyze_file_with_warnings_impl(entry_file: &Path, stdlib_root: Option<&P
         modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?
     };
 
-
     let (mut program, source_map) = modules::flatten_modules(graph)?;
 
     let result = run_frontend(&mut program, false)?;
     let derived = derived::DerivedInfo::build(&result.env, &program, &source);
 
     // Filter warnings to only include those from the entry file
-    // Find the entry file's ID in the source map
     let entry_file_id = source_map.files.iter()
         .position(|(path, _)| path == &entry_file)
         .map(|pos| pos as u32);
@@ -346,8 +376,6 @@ pub fn analyze_file_with_warnings_impl(entry_file: &Path, stdlib_root: Option<&P
             .filter(|w| w.span.file_id == file_id)
             .collect()
     } else {
-        // Fallback: if we can't find the entry file in source map, return all warnings
-        // This shouldn't happen but is safer than returning no warnings
         result.warnings
     };
 
@@ -387,8 +415,8 @@ pub fn analyze_and_update(
         (program, source)
     } else {
         // Text file - resolve and flatten modules
-        let source = std::fs::read_to_string(&file_path)
-            .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
+        let source = String::from_utf8(data).map_err(|e|
+            CompileError::codegen(format!("file is not valid UTF-8: {e}")))?;
         let effective_stdlib = resolve_stdlib(stdlib_root);
         let entry_dir = file_path.parent().unwrap_or(Path::new("."));
         let pkg_graph = manifest::find_and_resolve(entry_dir)?;
@@ -512,17 +540,25 @@ fn compile_file_for_tests_impl(
 ) -> Result<Option<coverage::CoverageMap>, CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
-    let source = std::fs::read_to_string(&entry_file)
+
+    let data = std::fs::read(&entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read entry file: {e}")))?;
-    let effective_stdlib = resolve_stdlib(stdlib_root);
 
-    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
-    let pkg_graph = manifest::find_and_resolve(entry_dir)?;
-    // Use resolve_modules_no_siblings to compile test files in isolation and prevent test ID collisions
-    let graph = modules::resolve_modules_no_siblings(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
-
-
-    let (mut program, source_map) = modules::flatten_modules(graph)?;
+    let (mut program, source, source_map) = if binary::is_binary_format(&data) {
+        let (program, source, _derived) = binary::deserialize_program(&data)
+            .map_err(|e| CompileError::codegen(format!("failed to deserialize: {e}")))?;
+        (program, source, modules::SourceMap::new())
+    } else {
+        let source = String::from_utf8(data).map_err(|e|
+            CompileError::codegen(format!("entry file is not valid UTF-8: {e}")))?;
+        let effective_stdlib = resolve_stdlib(stdlib_root);
+        let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
+        let pkg_graph = manifest::find_and_resolve(entry_dir)?;
+        // Use resolve_modules_no_siblings to compile test files in isolation and prevent test ID collisions
+        let graph = modules::resolve_modules_no_siblings(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
+        let (program, source_map) = modules::flatten_modules(graph)?;
+        (program, source, source_map)
+    };
 
     if program.test_info.is_empty() {
         return Err(CompileError::codegen(format!(
@@ -935,8 +971,20 @@ fn link(obj_path: &Path, output_path: &Path) -> Result<(), CompileError> {
 /// Quick-parse a file to check if it contains a system declaration.
 /// Returns the parsed program if it does, None if it doesn't.
 pub fn detect_system_file(entry_file: &Path) -> Result<Option<parser::ast::Program>, CompileError> {
-    let source = std::fs::read_to_string(entry_file)
+    let data = std::fs::read(entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read file: {e}")))?;
+
+    if binary::is_binary_format(&data) {
+        let (program, _source, _derived) = binary::deserialize_program(&data)
+            .map_err(|e| CompileError::codegen(format!("failed to deserialize: {e}")))?;
+        if program.system.is_some() {
+            return Ok(Some(program));
+        }
+        return Ok(None);
+    }
+
+    let source = String::from_utf8(data).map_err(|e|
+        CompileError::codegen(format!("file is not valid UTF-8: {e}")))?;
     let tokens = lexer::lex(&source)?;
     let mut parser = parser::Parser::new(&tokens, &source);
     let program = parser.parse_program()?;

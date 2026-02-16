@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::binary;
 use crate::diagnostics::CompileError;
 use crate::lexer;
 use crate::manifest::{DependencyScope, PackageGraph};
@@ -148,19 +149,33 @@ fn set_program_file_id(program: &mut Program, file_id: u32) {
     walk_program_mut(&mut setter, program);
 }
 
-/// Load and parse a single .pluto file, assigning spans with the given file_id.
-fn load_and_parse(path: &Path, source_map: &mut SourceMap) -> Result<(Program, u32), CompileError> {
-    let source = std::fs::read_to_string(path).map_err(|e| {
+/// Load a file in either binary (PLTO) or text format, auto-detecting based on content.
+/// Binary files are deserialized directly; text files go through lex+parse.
+fn load_file_auto(path: &Path, source_map: &mut SourceMap) -> Result<(Program, u32), CompileError> {
+    let data = std::fs::read(path).map_err(|e| {
         CompileError::codegen(format!("could not read '{}': {e}", path.display()))
     })?;
-    // Canonicalize path before adding to source_map to ensure consistent path comparisons
+
     let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let file_id = source_map.add_file(canonical_path, source.clone());
-    let tokens = lexer::lex(&source)?;
-    let mut parser = Parser::new_with_path(&tokens, &source, path.display().to_string());
-    let mut program = parser.parse_program()?;
-    set_program_file_id(&mut program, file_id);
-    Ok((program, file_id))
+
+    if binary::is_binary_format(&data) {
+        let (program, source, _derived) = binary::deserialize_program(&data)
+            .map_err(|e| CompileError::codegen(format!(
+                "could not deserialize '{}': {e}", path.display()
+            )))?;
+        let file_id = source_map.add_file(canonical_path, source);
+        Ok((program, file_id))
+    } else {
+        let source = String::from_utf8(data).map_err(|e| {
+            CompileError::codegen(format!("'{}' is not valid UTF-8: {e}", path.display()))
+        })?;
+        let file_id = source_map.add_file(canonical_path, source.clone());
+        let tokens = lexer::lex(&source)?;
+        let mut parser = Parser::new_with_path(&tokens, &source, path.display().to_string());
+        let mut program = parser.parse_program()?;
+        set_program_file_id(&mut program, file_id);
+        Ok((program, file_id))
+    }
 }
 
 /// Load all .pluto files in a directory and merge into one Program.
@@ -212,7 +227,7 @@ fn load_directory_module(
         pluto_files.sort();
 
         for file_path in pluto_files {
-            let (program, _file_id) = load_and_parse(&file_path, source_map)?;
+            let (program, _file_id) = load_file_auto(&file_path, source_map)?;
             merged.functions.extend(program.functions);
             merged.extern_fns.extend(program.extern_fns);
             merged.classes.extend(program.classes);
@@ -300,7 +315,7 @@ fn resolve_module_path(
             )));
         }
         visited.insert(canonical.clone());
-        let (mut module_prog, _) = load_and_parse(&file_path, source_map)?;
+        let (mut module_prog, _) = load_file_auto(&file_path, source_map)?;
         resolve_module_imports(&mut module_prog, &current_dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
         visited.remove(&canonical);
         Ok(module_prog)
@@ -391,7 +406,7 @@ fn resolve_module_imports(
                     )));
                 }
                 visited.insert(canonical.clone());
-                let (mut module_prog, _) = load_and_parse(&file_path_candidate, source_map)?;
+                let (mut module_prog, _) = load_file_auto(&file_path_candidate, source_map)?;
                 resolve_module_imports(&mut module_prog, module_dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
                 visited.remove(&canonical);
                 let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
@@ -683,7 +698,7 @@ fn resolve_modules_inner(
     visited.insert(entry_file.clone());
 
     // First, parse the entry file to discover imports
-    let (entry_prog, _entry_file_id) = load_and_parse(&entry_file, &mut source_map)?;
+    let (entry_prog, _entry_file_id) = load_file_auto(&entry_file, &mut source_map)?;
 
     // Collect import binding names to know which sibling .pluto files are imported modules
     let import_first_segments: HashSet<String> = entry_prog.imports.iter()
@@ -726,7 +741,7 @@ fn resolve_modules_inner(
             if dep_names.contains(&stem.to_string()) {
                 continue;
             }
-            let (program, _file_id) = load_and_parse(file_path, &mut source_map)
+            let (program, _file_id) = load_file_auto(file_path, &mut source_map)
                 .map_err(|err| CompileError::sibling_file(file_path.clone(), err))?;
             // Merge sibling's imports into root (they might also have imports)
             root.imports.extend(program.imports);
@@ -814,7 +829,7 @@ fn resolve_modules_inner(
                     )));
                 }
                 visited.insert(canonical.clone());
-                let (mut module_prog, _) = load_and_parse(&file_path_candidate, &mut source_map)?;
+                let (mut module_prog, _) = load_file_auto(&file_path_candidate, &mut source_map)?;
                 // Recursively resolve sub-imports
                 resolve_module_imports(&mut module_prog, entry_dir, &mut source_map, &mut visited, effective_stdlib, current_deps, pkg_graph, ImportOrigin::Local)?;
                 visited.remove(&canonical);
