@@ -238,6 +238,9 @@ fn main() {
         }
     };
 
+    // Create compiler service (for commands that use it)
+    let server = pluto::server::InProcessServer::new();
+
     match cli.command {
         Commands::Compile { file, output } => {
             // Check if this is a system file (contains a `system` declaration)
@@ -260,11 +263,22 @@ fn main() {
                     }
                 }
                 Ok(None) => {
-                    // Regular file: compile to a single binary
-                    if let Err(err) = pluto::compile_file_with_options(&file, &output, stdlib, gc) {
-                        let filename = error_filename(&err)
-                            .unwrap_or_else(|| file.to_string_lossy().to_string());
-                        eprintln!("error [{}]: {err}", filename);
+                    // Regular file: compile to a single binary using compiler service
+                    use pluto::server::CompilerService;
+                    let result = server.compile(
+                        &file,
+                        &output,
+                        &pluto::server::types::CompileOptions {
+                            stdlib: stdlib.map(|p| p.to_path_buf()),
+                            gc,
+                            coverage: false,
+                        },
+                    );
+
+                    if !result.success {
+                        for err in &result.errors {
+                            eprintln!("error [{}]: {}", file.display(), err.message);
+                        }
                         std::process::exit(1);
                     }
                 }

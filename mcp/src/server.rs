@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use rmcp::{
     ErrorData as McpError,
@@ -14,6 +14,9 @@ use rmcp::{
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use pluto::server::CompilerService;
+use pluto::server::InProcessServer;
+use pluto::server::types as service_types;
 use pluto_sdk::Module;
 use pluto_sdk::decl::DeclKind;
 use pluto_sdk::editor::DanglingRefKind;
@@ -58,48 +61,10 @@ impl ModuleMetadata {
     }
 }
 
-/// Execute a binary with a timeout, capturing stdout/stderr.
-/// Returns (stdout, stderr, exit_code, timed_out).
-async fn execute_with_timeout(
-    binary: &Path,
-    timeout: Duration,
-    cwd: Option<&Path>,
-) -> Result<(String, String, Option<i32>, bool), McpError> {
-    let mut cmd = tokio::process::Command::new(binary);
-    cmd.stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    }
-    let mut child = cmd.spawn()
-        .map_err(|e| mcp_internal(format!("Failed to execute binary: {e}")))?;
-
-    match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(Ok(status)) => {
-            // Process finished within timeout — read captured output
-            let mut stdout_str = String::new();
-            let mut stderr_str = String::new();
-            if let Some(mut out) = child.stdout.take() {
-                use tokio::io::AsyncReadExt;
-                let _ = out.read_to_string(&mut stdout_str).await;
-            }
-            if let Some(mut err) = child.stderr.take() {
-                use tokio::io::AsyncReadExt;
-                let _ = err.read_to_string(&mut stderr_str).await;
-            }
-            Ok((stdout_str, stderr_str, status.code(), false))
-        }
-        Ok(Err(e)) => Err(mcp_internal(format!("Failed to wait for process: {e}"))),
-        Err(_) => {
-            // Timeout — kill the process
-            let _ = child.kill().await;
-            Ok((String::new(), String::new(), None, true))
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct PlutoMcp {
+    service: Arc<RwLock<InProcessServer>>,
     modules: Arc<RwLock<HashMap<String, ModuleMetadata>>>,
     project_root: Arc<RwLock<Option<String>>>,
     dep_graph: Arc<RwLock<DependencyGraph>>,
@@ -178,6 +143,7 @@ async fn validate_write_path(
 impl PlutoMcp {
     pub fn new() -> Self {
         Self {
+            service: Arc::new(RwLock::new(InProcessServer::new())),
             modules: Arc::new(RwLock::new(HashMap::new())),
             project_root: Arc::new(RwLock::new(None)),
             dep_graph: Arc::new(RwLock::new(DependencyGraph::default())),
@@ -927,37 +893,15 @@ impl PlutoMcp {
         Parameters(input): Parameters<CheckInput>,
     ) -> Result<CallToolResult, McpError> {
         let canonical = canon(&input.path);
-        let entry_path = Path::new(&canonical);
-        let stdlib_path = input.stdlib.as_ref().map(|s| PathBuf::from(s));
-
-        // Read source for line:col enrichment
-        let source_text = std::fs::read_to_string(&canonical).ok();
-
-        let result = pluto::analyze_file_with_warnings(
-            entry_path,
-            stdlib_path.as_deref(),
-        );
-
-        let check_result = match result {
-            Ok((_program, _source, _derived, warnings)) => {
-                serialize::CheckResult {
-                    success: true,
-                    path: canonical,
-                    errors: vec![],
-                    warnings: warnings.iter().map(|w| serialize::compile_warning_to_diagnostic(w, source_text.as_deref())).collect(),
-                }
-            }
-            Err(err) => {
-                serialize::CheckResult {
-                    success: false,
-                    path: canonical,
-                    errors: vec![serialize::compile_error_to_diagnostic(&err, source_text.as_deref())],
-                    warnings: vec![],
-                }
-            }
+        let opts = service_types::CompileOptions {
+            stdlib: input.stdlib.map(PathBuf::from),
+            ..Default::default()
         };
 
-        let json = serde_json::to_string_pretty(&check_result)
+        let service = self.service.read().await;
+        let result = service.check(Path::new(&canonical), &opts);
+
+        let json = serde_json::to_string_pretty(&result)
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -971,8 +915,6 @@ impl PlutoMcp {
         // Validate path safety
         let validated_path = validate_write_path(&self.project_root, &input.path).await?;
         let canonical = validated_path.to_string_lossy().to_string();
-        let entry_path = Path::new(&canonical);
-        let stdlib_path = input.stdlib.as_ref().map(|s| PathBuf::from(s));
 
         let output_path = match &input.output {
             Some(p) => PathBuf::from(p),
@@ -986,35 +928,15 @@ impl PlutoMcp {
             }
         };
 
-        // Read source for line:col enrichment
-        let source_text = std::fs::read_to_string(&canonical).ok();
-
-        let result = pluto::compile_file_with_stdlib(
-            entry_path,
-            &output_path,
-            stdlib_path.as_deref(),
-        );
-
-        let compile_result = match result {
-            Ok(()) => {
-                serialize::CompileResult {
-                    success: true,
-                    path: canonical,
-                    output: Some(output_path.display().to_string()),
-                    errors: vec![],
-                }
-            }
-            Err(err) => {
-                serialize::CompileResult {
-                    success: false,
-                    path: canonical,
-                    output: None,
-                    errors: vec![serialize::compile_error_to_diagnostic(&err, source_text.as_deref())],
-                }
-            }
+        let opts = service_types::CompileOptions {
+            stdlib: input.stdlib.map(PathBuf::from),
+            ..Default::default()
         };
 
-        let json = serde_json::to_string_pretty(&compile_result)
+        let service = self.service.read().await;
+        let result = service.compile(Path::new(&canonical), &output_path, &opts);
+
+        let json = serde_json::to_string_pretty(&result)
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -1028,63 +950,20 @@ impl PlutoMcp {
         // Validate path safety
         let validated_path = validate_write_path(&self.project_root, &input.path).await?;
         let canonical = validated_path.to_string_lossy().to_string();
-        let entry_path = Path::new(&canonical);
-        let stdlib_path = input.stdlib.as_ref().map(|s| PathBuf::from(s));
-        let timeout_ms = input.timeout_ms.unwrap_or(10_000).min(60_000);
-        let timeout = Duration::from_millis(timeout_ms);
 
-        // Determine working directory: explicit cwd > source file's parent
-        let cwd = input.cwd.as_ref()
-            .map(|c| PathBuf::from(c))
-            .or_else(|| entry_path.parent().map(|p| p.to_path_buf()));
-
-        // Read source for line:col enrichment
-        let source_text = std::fs::read_to_string(&canonical).ok();
-
-        // Compile to temp binary
-        let tmp_dir = tempfile::tempdir()
-            .map_err(|e| mcp_internal(format!("Failed to create temp dir: {e}")))?;
-        let binary_path = tmp_dir.path().join(format!("pluto_{}", uuid::Uuid::new_v4()));
-
-        let compile_result = pluto::compile_file_with_stdlib(
-            entry_path,
-            &binary_path,
-            stdlib_path.as_deref(),
-        );
-
-        if let Err(err) = compile_result {
-            let run_result = serialize::RunResult {
-                success: false,
-                path: canonical,
-                compilation_errors: vec![serialize::compile_error_to_diagnostic(&err, source_text.as_deref())],
-                stdout: None,
-                stderr: None,
-                exit_code: None,
-                timed_out: false,
-            };
-            let json = serde_json::to_string_pretty(&run_result)
-                .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
-            return Ok(CallToolResult::success(vec![Content::text(json)]));
-        }
-
-        // Execute
-        let (stdout, stderr, exit_code, timed_out) =
-            execute_with_timeout(&binary_path, timeout, cwd.as_deref()).await?;
-
-        let run_result = serialize::RunResult {
-            success: !timed_out && exit_code == Some(0),
-            path: canonical,
-            compilation_errors: vec![],
-            stdout: Some(stdout),
-            stderr: Some(stderr),
-            exit_code,
-            timed_out,
+        let opts = service_types::RunOptions {
+            stdlib: input.stdlib.map(PathBuf::from),
+            timeout_ms: Some(input.timeout_ms.unwrap_or(10_000).min(60_000)),
+            cwd: input.cwd.map(PathBuf::from)
+                .or_else(|| Path::new(&canonical).parent().map(|p| p.to_path_buf())),
         };
 
-        let json = serde_json::to_string_pretty(&run_result)
+        let service = self.service.read().await;
+        let result = service.run(Path::new(&canonical), &opts);
+
+        let json = serde_json::to_string_pretty(&result)
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
-        // tmp_dir dropped here, cleans up binary
     }
 
     // --- Tool 13: test ---
@@ -1096,64 +975,20 @@ impl PlutoMcp {
         // Validate path safety
         let validated_path = validate_write_path(&self.project_root, &input.path).await?;
         let canonical = validated_path.to_string_lossy().to_string();
-        let entry_path = Path::new(&canonical);
-        let stdlib_path = input.stdlib.as_ref().map(|s| PathBuf::from(s));
-        let timeout_ms = input.timeout_ms.unwrap_or(30_000).min(60_000);
-        let timeout = Duration::from_millis(timeout_ms);
 
-        // Determine working directory: explicit cwd > source file's parent
-        let cwd = input.cwd.as_ref()
-            .map(|c| PathBuf::from(c))
-            .or_else(|| entry_path.parent().map(|p| p.to_path_buf()));
-
-        // Read source for line:col enrichment
-        let source_text = std::fs::read_to_string(&canonical).ok();
-
-        // Compile in test mode to temp binary
-        let tmp_dir = tempfile::tempdir()
-            .map_err(|e| mcp_internal(format!("Failed to create temp dir: {e}")))?;
-        let binary_path = tmp_dir.path().join(format!("pluto_test_{}", uuid::Uuid::new_v4()));
-
-        let compile_result = pluto::compile_file_for_tests(
-            entry_path,
-            &binary_path,
-            stdlib_path.as_deref(),
-            false,
-        );
-
-        if let Err(err) = compile_result {
-            let test_result = serialize::TestResult {
-                success: false,
-                path: canonical,
-                compilation_errors: vec![serialize::compile_error_to_diagnostic(&err, source_text.as_deref())],
-                stdout: None,
-                stderr: None,
-                exit_code: None,
-                timed_out: false,
-            };
-            let json = serde_json::to_string_pretty(&test_result)
-                .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
-            return Ok(CallToolResult::success(vec![Content::text(json)]));
-        }
-
-        // Execute test runner
-        let (stdout, stderr, exit_code, timed_out) =
-            execute_with_timeout(&binary_path, timeout, cwd.as_deref()).await?;
-
-        let test_result = serialize::TestResult {
-            success: !timed_out && exit_code == Some(0),
-            path: canonical,
-            compilation_errors: vec![],
-            stdout: Some(stdout),
-            stderr: Some(stderr),
-            exit_code,
-            timed_out,
+        let opts = service_types::TestOptions {
+            stdlib: input.stdlib.map(PathBuf::from),
+            timeout_ms: Some(input.timeout_ms.unwrap_or(30_000).min(60_000)),
+            cwd: input.cwd.map(PathBuf::from)
+                .or_else(|| Path::new(&canonical).parent().map(|p| p.to_path_buf())),
         };
 
-        let json = serde_json::to_string_pretty(&test_result)
+        let service = self.service.read().await;
+        let result = service.test(Path::new(&canonical), &opts);
+
+        let json = serde_json::to_string_pretty(&result)
             .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
-        // tmp_dir dropped here, cleans up binary
     }
 
     // --- Tool 14: add_declaration ---
@@ -1443,7 +1278,9 @@ impl PlutoMcp {
         &self,
         Parameters(input): Parameters<DocsInput>,
     ) -> Result<CallToolResult, McpError> {
-        let text = crate::docs::get_docs(input.topic.as_deref());
+        let service = self.service.read().await;
+        let text = service.language_docs(input.topic.as_deref())
+            .map_err(|e| mcp_internal(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -1453,8 +1290,9 @@ impl PlutoMcp {
         &self,
         Parameters(input): Parameters<StdlibDocsInput>,
     ) -> Result<CallToolResult, McpError> {
-        let text = crate::docs::get_stdlib_docs(input.module.as_deref())
-            .map_err(|e| mcp_err(e))?;
+        let service = self.service.read().await;
+        let text = service.stdlib_docs(input.module.as_deref())
+            .map_err(|e| mcp_internal(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
