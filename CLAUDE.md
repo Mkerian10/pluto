@@ -18,26 +18,38 @@ cargo run -- run <file.pt>      # Compile and immediately run
 
 ## Compiler Pipeline
 
-Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and `compile()` (single-source-string). Eight stages:
+Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and `compile()` (single-source-string). The full pipeline has 17 stages, orchestrated by `run_frontend()`:
 
 1. **Lex** (`src/lexer/`) — logos-based tokenizer, produces `Vec<Spanned<Token>>`
 2. **Parse** (`src/parser/`) — recursive descent + Pratt parsing for expressions, produces `Program` AST
 3. **Module resolve** (`src/modules.rs`) — discovers imported modules, parses them, validates visibility
 4. **Module flatten** (`src/modules.rs`) — merges imported items into the main program with prefixed names (e.g., `math.add`)
-5. **Closure lift** (`src/closures.rs`) — transforms `Expr::Closure` into top-level functions + `Expr::ClosureCreate`
-6. **Type check** (`src/typeck/`) — multi-pass: registers declarations (traits, enums, app, errors, classes, functions), checks bodies, infers error sets, enforces error handling. Returns `TypeEnv`
-7. **Codegen** (`src/codegen/`) — lowers AST to Cranelift IR, produces object bytes
-8. **Link** (`src/lib.rs::link()`) — compiles `runtime/builtins.c` with `cc`, links both `.o` files into final binary
+5. **Prelude inject** (`src/prelude.rs`) — prepends prelude classes, traits, enums into the program
+6. **Stage flatten** (`src/stages.rs`) — flattens `stage` declaration hierarchy
+7. **Ambient desugar** (`src/ambient.rs`) — desugars `uses` clauses into hidden injected fields
+8. **Spawn desugar** (`src/spawn.rs`) — transforms `spawn func(args)` into `Expr::Spawn { call: Closure { ... } }`
+9. **Contract validation** (`src/contracts.rs`) — validates decidable fragment for invariants/requires/ensures
+10. **Marshal phase A** (`src/marshal.rs`) — generates marshaler stubs before typeck
+11. **Type check** (`src/typeck/`) — multi-pass: registers declarations (traits, enums, app, errors, classes, functions), checks bodies, infers error sets, enforces error handling. Returns `TypeEnv`
+12. **Reflection generation** (`src/reflection.rs`) — generates `TypeInfo` intrinsic implementations
+13. **Monomorphize** (`src/monomorphize.rs`) — generates concrete copies of generic functions/classes/enums
+14. **Marshal phase B** (`src/marshal.rs`) — generates marshalers for monomorphized types
+15. **Trait conformance** (`src/typeck/`) — validates all trait implementations post-monomorphize
+16. **Serializable validation** (`src/typeck/serializable.rs`) — validates types marked serializable
+17. **Closure lift** (`src/closures.rs`) — transforms `Expr::Closure` into top-level functions + `Expr::ClosureCreate`
+18. **Cross-reference resolution** (`src/xref.rs`) — resolves stable UUIDs for declarations
+19. **Codegen** (`src/codegen/`) — lowers AST to Cranelift IR, produces object bytes
+20. **Link** (`src/lib.rs::link()`) — compiles runtime C files with `cc`, links into final binary
 
 ## Key Architecture Notes
 
 **Spanned types** — All AST nodes are wrapped in `Spanned<T>` (defined in `src/span.rs`), carrying a `Span { start, end }` byte offset. Access the inner value with `.node` and source location with `.span`.
 
-**Type system** — `PlutoType` enum in `src/typeck/types.rs`: `Int` (I64), `Float` (F64), `Bool` (I8), `String` (heap-allocated), `Void`, `Class(name)`, `Array(element_type)`, `Trait(name)`, `Enum(name)`, `Fn(params, return_type)`, `Error`. Nominal typing by default, structural for traits (via vtables).
+**Type system** — `PlutoType` enum in `src/typeck/types.rs`: `Int` (I64), `Float` (F64), `Bool` (I8), `Byte`, `Bytes`, `String` (heap-allocated), `Void`, `Class(name)`, `Array(element_type)`, `Trait(name)`, `Enum(name)`, `Fn(params, return_type)`, `Map(key, value)`, `Set(element)`, `Range`, `Error`, `TypeParam(name)`, `Task(inner)`, `Sender(inner)`, `Receiver(inner)`, `Stream(inner)`, `GenericInstance(kind, name, args)`, `Nullable(inner)`. Nominal typing by default, structural for traits (via vtables).
 
 **Enums** — Unit variants (`Color::Red`) and data-carrying variants (`Shape::Circle { radius: float }`). `match` with exhaustiveness checking.
 
-**Closures** — Arrow syntax `(x: int) => x + 1`. Capture by value. Represented as heap-allocated `[fn_ptr, captures...]`. Lifted to top-level functions by `src/closures.rs` before typeck.
+**Closures** — Arrow syntax `(x: int) => x + 1`. Capture by value. Represented as heap-allocated `[fn_ptr, captures...]`. Lifted to top-level functions by `src/closures.rs` after monomorphization (stage 17).
 
 **Error handling** — `error` declarations, `raise` to throw, `!` postfix to propagate, `catch` (shorthand or wildcard) to handle. Compiler infers error-ability via fixed-point analysis and enforces handling at call sites.
 
@@ -49,19 +61,24 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 
 **String interpolation** — `"hello {name}"` with arbitrary expressions inside `{}`.
 
-**Codegen target** — Hardcoded to `aarch64-apple-darwin` in `src/codegen/mod.rs`. Needs platform detection in the future.
+**Codegen target** — Auto-detected via `host_target_triple()` in `src/codegen/mod.rs` and `src/toolchain.rs`. Supports aarch64/x86_64 on macOS/Linux.
 
-**Linking with C runtime** — The compiler embeds three C modules via `include_str!()` and compiles them separately with `cc` at link time:
-- `runtime/gc.c` (834 lines) — Garbage collector (mark & sweep, STW coordination)
-- `runtime/threading.c` (2056 lines) — Concurrency primitives (tasks, channels, select, fibers)
-- `runtime/builtins.c` (1786 lines) — Core runtime (strings, arrays, I/O, maps, sets, math, errors)
-- `runtime/builtins.h` (126 lines) — Shared declarations and GC tags
+**Linking with C runtime** — The compiler embeds C runtime modules via `include_str!()` and compiles them with `cc` at link time. Core files linked into every binary:
+- `runtime/builtins.c` — Core runtime (strings, arrays, I/O, maps, sets, math, errors)
+- `runtime/threading.c` — Concurrency primitives (tasks, channels, select)
+- `runtime/gc/marksweep.c` or `runtime/gc/noop.c` — GC backend (selectable)
+- `runtime/builtins.h` — Shared declarations and GC tags
+- `runtime/coverage.c` — Coverage instrumentation (when enabled)
 
-Each `.c` file is compiled to a `.o` file, then linked with `ld -r` into a single relocatable `runtime.o`, which is finally linked with the Cranelift-generated object code. See `docs/design/runtime-architecture.md` for detailed module documentation.
+Additional split-out runtime files exist but are compiled into `builtins.c` or linked separately: `arrays.c`, `bytes.c`, `collections.c`, `core.c`, `errors.c`, `fs.c`, `http.c`, `io.c`, `math.c`, `net.c`, `strings.c`, `test.c`, `time.c`.
+
+Each `.c` file is compiled to a `.o` file, then linked with `ld -r` into a single relocatable `runtime.o`, which is finally linked with the Cranelift-generated object code.
 
 **AI-native representation (planned)** — Future direction where `.pluto` becomes a binary canonical representation (full semantic graph with stable UUIDs per declaration) and `.pt` files provide human-readable text views. AI agents write `.pluto` via an SDK (`pluto-sdk`), the compiler enriches `.pluto` with derived analysis data on demand (`pluto analyze`), and `pluto sync` converts human `.pt` edits back to `.pluto`. See `docs/design/ai-native-representation.md` for the full RFC.
 
 **CompilerService** — Protocol-agnostic trait in `src/server/mod.rs` covering module management, declaration inspection, cross-references, compilation/execution, analysis, and documentation. MCP is read-only — all editing operations have been removed. `InProcessServer` in `src/server/in_process.rs` caches `(Program, String, DerivedInfo)` per module and delegates to compiler primitives. Both CLI (`src/main.rs` compile command) and MCP (`mcp/src/server.rs` — docs, stdlib_docs, check, compile, run, test) route through it. See `src/server/types.rs` for all result types.
+
+**Stdlib modules** — 19 modules in `stdlib/`: `std.base64`, `std.collections`, `std.env`, `std.fs`, `std.http`, `std.io`, `std.json`, `std.log`, `std.math`, `std.net`, `std.path`, `std.random`, `std.regex`, `std.rpc`, `std.socket`, `std.strings`, `std.time`, `std.uuid`, `std.wire`. Plus `stdlib/prelude.pluto` (auto-imported into every program).
 
 **No semicolons** — Pluto uses newline-based statement termination. Newlines are lexed as `Token::Newline` and the parser consumes them at statement boundaries while skipping them inside expressions.
 
@@ -101,7 +118,7 @@ See `docs/design/visitor-phase4-assessment.md` for the full analysis of which wa
 - `compile_should_fail(source)` — asserts compilation produces an error
 - `compile_should_fail_with(source, msg)` — asserts compilation fails with specific message
 
-Test files: `basics`, `operators`, `control_flow`, `strings`, `arrays`, `classes`, `traits`, `enums`, `closures`, `di`, `errors`.
+Test files (68 files): `ai_native_e2e`, `analyze`, `arrays`, `arrow_functions`, `basics`, `bytes`, `chained_field_access`, `channels`, `classes`, `closures`, `concurrency`, `contracts`, `control_flow`, `control_flow_extended`, `coverage`, `deterministic`, `di`, `di_lifecycle`, `edge_cases`, `enums`, `error_messages`, `error_recovery`, `error_snapshots`, `errors`, `expression_complexity`, `fs`, `fstrings`, `gc`, `generators`, `generics`, `generics_syntax`, `http_tests`, `if_expression_errors`, `io`, `json_tests`, `lexer_tests`, `literal_parsing`, `manifest`, `maps`, `marshaling`, `match_expression_errors`, `modules`, `mutability`, `nullable`, `numeric`, `operators`, `precedence`, `precedence_extended`, `prelude`, `rpc`, `scope_blocks`, `sets`, `stages`, `statement_boundaries`, `stdlib_tests`, `strings`, `struct_literals`, `sync`, `system`, `testing`, `toolchain`, `traits`, `type_syntax`, `uuid_base64`, `visit`, `warnings`, `wire`.
 
 **Module tests** — `tests/integration/modules.rs`. Multi-file test helpers:
 - `run_project(files) -> String` — writes multiple files to temp dir, compiles entry, returns stdout
