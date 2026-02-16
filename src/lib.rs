@@ -217,8 +217,8 @@ pub fn compile_file_with_stdlib(entry_file: &Path, output_path: &Path, stdlib_ro
 }
 
 /// Compile with an explicit stdlib root path and GC backend.
-pub fn compile_file_with_options(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, gc: GcBackend) -> Result<(), CompileError> {
-    compile_file_impl(entry_file, output_path, stdlib_root, false, gc, false).map(|_| ())
+pub fn compile_file_with_options(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, gc: GcBackend, standalone: bool) -> Result<(), CompileError> {
+    compile_file_impl(entry_file, output_path, stdlib_root, standalone, gc, false).map(|_| ())
 }
 
 /// Compile with coverage instrumentation. Returns the coverage map.

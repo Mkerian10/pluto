@@ -33,6 +33,9 @@ enum Commands {
         /// Output binary path
         #[arg(short, long, default_value = "a.out")]
         output: PathBuf,
+        /// Compile file in isolation without merging sibling .pluto files
+        #[arg(long)]
+        standalone: bool,
     },
     /// Compile and run a .pluto source file
     Run {
@@ -242,7 +245,7 @@ fn main() {
     let server = pluto::server::InProcessServer::new();
 
     match cli.command {
-        Commands::Compile { file, output } => {
+        Commands::Compile { file, output, standalone } => {
             // Check if this is a system file (contains a `system` declaration)
             match pluto::detect_system_file(&file) {
                 Ok(Some(_program)) => {
@@ -272,6 +275,7 @@ fn main() {
                             stdlib: stdlib.map(|p| p.to_path_buf()),
                             gc,
                             coverage: false,
+                            standalone,
                         },
                     );
 
@@ -319,7 +323,7 @@ fn main() {
                     }
                 }
             } else {
-                if let Err(err) = pluto::compile_file_with_options(&file, &tmp, stdlib, gc) {
+                if let Err(err) = pluto::compile_file_with_options(&file, &tmp, stdlib, gc, false) {
                     let filename = error_filename(&err)
                         .unwrap_or_else(|| file.to_string_lossy().to_string());
                     eprintln!("error [{}]: {err}", filename);
