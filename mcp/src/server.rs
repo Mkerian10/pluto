@@ -1039,9 +1039,20 @@ impl PlutoMcp {
         }
 
         let canonical = validated_path.to_string_lossy().to_string();
-        let contents = std::fs::read_to_string(&canonical).unwrap_or_default();
-        let module = Module::from_source(&contents)
-            .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
+
+        // Get cached module to preserve UUIDs of existing declarations
+        // Remove from cache temporarily to get ownership for editing
+        let module = {
+            let mut modules = self.modules.write().await;
+            if let Some(metadata) = modules.remove(&canonical) {
+                metadata.module
+            } else {
+                // Not in cache - read from disk (new file or not yet loaded)
+                let contents = std::fs::read_to_string(&canonical).unwrap_or_default();
+                Module::from_source(&contents)
+                    .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?
+            }
+        };
 
         let mut editor = module.edit();
         let ids = editor.add_many_from_source(&input.source)
@@ -1086,10 +1097,15 @@ impl PlutoMcp {
         let validated_path = validate_write_path(&self.project_root, &input.path).await?;
         let canonical = validated_path.to_string_lossy().to_string();
 
-        let contents = std::fs::read_to_string(&canonical)
-            .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
-        let module = Module::from_source(&contents)
-            .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
+        // Get cached module to preserve UUIDs
+        // Remove from cache temporarily to get ownership for editing
+        let module = {
+            let mut modules = self.modules.write().await;
+            modules
+                .remove(&canonical)
+                .ok_or_else(|| mcp_err(format!("Module not loaded: '{}'. Use load_module first.", canonical)))?
+                .module
+        };
 
         let (id, kind) = find_decl_by_name(&module, &input.name)?;
 
@@ -1129,10 +1145,15 @@ impl PlutoMcp {
         let validated_path = validate_write_path(&self.project_root, &input.path).await?;
         let canonical = validated_path.to_string_lossy().to_string();
 
-        let contents = std::fs::read_to_string(&canonical)
-            .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
-        let module = Module::from_source(&contents)
-            .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
+        // Get cached module to preserve UUIDs
+        // Remove from cache temporarily to get ownership for editing
+        let module = {
+            let mut modules = self.modules.write().await;
+            modules
+                .remove(&canonical)
+                .ok_or_else(|| mcp_err(format!("Module not loaded: '{}'. Use load_module first.", canonical)))?
+                .module
+        };
 
         let (id, _kind) = find_decl_by_name(&module, &input.name)?;
 
@@ -1179,10 +1200,15 @@ impl PlutoMcp {
         let validated_path = validate_write_path(&self.project_root, &input.path).await?;
         let canonical = validated_path.to_string_lossy().to_string();
 
-        let contents = std::fs::read_to_string(&canonical)
-            .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
-        let module = Module::from_source(&contents)
-            .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
+        // Get cached module to preserve UUIDs
+        // Remove from cache temporarily to get ownership for editing
+        let module = {
+            let mut modules = self.modules.write().await;
+            modules
+                .remove(&canonical)
+                .ok_or_else(|| mcp_err(format!("Module not loaded: '{}'. Use load_module first.", canonical)))?
+                .module
+        };
 
         let (id, _kind) = find_decl_by_name(&module, &input.old_name)?;
 
@@ -1222,10 +1248,15 @@ impl PlutoMcp {
         let validated_path = validate_write_path(&self.project_root, &input.path).await?;
         let canonical = validated_path.to_string_lossy().to_string();
 
-        let contents = std::fs::read_to_string(&canonical)
-            .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
-        let module = Module::from_source(&contents)
-            .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
+        // Get cached module to preserve UUIDs
+        // Remove from cache temporarily to get ownership for editing
+        let module = {
+            let mut modules = self.modules.write().await;
+            modules
+                .remove(&canonical)
+                .ok_or_else(|| mcp_err(format!("Module not loaded: '{}'. Use load_module first.", canonical)))?
+                .module
+        };
 
         let class_id = find_class_by_name(&module, &input.class_name)?;
 
@@ -1271,10 +1302,15 @@ impl PlutoMcp {
         let validated_path = validate_write_path(&self.project_root, &input.path).await?;
         let canonical = validated_path.to_string_lossy().to_string();
 
-        let contents = std::fs::read_to_string(&canonical)
-            .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
-        let module = Module::from_source(&contents)
-            .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
+        // Get cached module to preserve UUIDs
+        // Remove from cache temporarily to get ownership for editing
+        let module = {
+            let mut modules = self.modules.write().await;
+            modules
+                .remove(&canonical)
+                .ok_or_else(|| mcp_err(format!("Module not loaded: '{}'. Use load_module first.", canonical)))?
+                .module
+        };
 
         let class_id = find_class_by_name(&module, &input.class_name)?;
 
