@@ -115,15 +115,14 @@ Pluto is transparent about its maturity. The following features are implemented 
 - Modules, packages, and visibility (`pub`)
 - Generics (monomorphized)
 - Test framework (`test "name" { ... }` with expect assertions)
-- Standard library: collections, json, math, strings, fs, http, net, time, random
+- Standard library: base64, collections, env, fs, http, io, json, log, math, net, path, random, regex, rpc, socket, strings, time, uuid, wire
 
 The following features are designed but not yet implemented:
 
-- App stages and lifecycle hooks
-- `mut self` tracking for inferred synchronization
+- Stages as deployment units and cross-stage RPC generation
+- Inferred synchronization from mutability analysis
 - Copy-on-spawn semantics
 - Distributed replication and the system layer
-- AI-native binary format (`.pluto` as canonical binary AST with stable UUIDs)
 
 The language is real, compiles to real binaries, and runs real programs. The unimplemented features represent the roadmap, not the reality.
 

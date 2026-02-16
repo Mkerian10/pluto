@@ -73,7 +73,6 @@ Functions and methods can declare `requires` (preconditions) and `ensures` (post
 ```
 fn safe_divide(a: int, b: int) int
     requires b != 0
-    ensures result * b == a
 {
     return a / b
 }
@@ -83,17 +82,18 @@ fn safe_divide(a: int, b: int) int
 
 ```
 requires violation in safe_divide: b != 0
-ensures violation in safe_divide: result * b == a
 ```
 
-### `result` and `old()`
+Contracts use the same decidable fragment as invariants -- comparisons, arithmetic, logical operators, `.len()`, field access, and literals.
 
-Two special names are available in `ensures` clauses:
+### Combining Invariants and Preconditions
 
-- **`result`** refers to the function's return value. Its type matches the function's return type.
-- **`old(expr)`** captures the value of `expr` at function entry, before the body executes.
+Invariants and requires compose naturally. On a method call, the execution order is:
 
-Together, they let you express relationships between the pre-state and post-state of a method:
+1. Evaluate `requires` clauses (abort if any fail)
+2. Execute the method body
+3. Evaluate `ensures` clauses (abort if any fail)
+4. Check class invariants (abort if any fail)
 
 ```
 class Wallet {
@@ -103,7 +103,6 @@ class Wallet {
 
     fn deposit(mut self, amount: int)
         requires amount > 0
-        ensures self.balance == old(self.balance) + amount
     {
         self.balance = self.balance + amount
     }
@@ -111,49 +110,16 @@ class Wallet {
     fn withdraw(mut self, amount: int)
         requires amount > 0
         requires self.balance >= amount
-        ensures self.balance == old(self.balance) - amount
     {
         self.balance = self.balance - amount
     }
 }
 ```
 
-This class has three layers of protection:
+This class has two layers of protection:
 
 1. The **invariant** guarantees the balance is never negative -- not after construction, not after any method call.
 2. The **requires** on `withdraw` guarantees callers never request more than the balance.
-3. The **ensures** on both methods guarantee the implementation actually does what it claims.
-
-If someone writes a `withdraw` that forgets to subtract the amount, the ensures clause catches it. If someone calls `withdraw` with a negative amount, the requires clause catches it. If a bug somehow drives the balance below zero, the invariant catches it.
-
-`old()` is only valid in `ensures` clauses. Using it in `requires` is a compile error. `result` is only valid in `ensures` and is unavailable for void functions.
-
-### Combining All Three
-
-Invariants, requires, and ensures compose naturally. On a method call, the execution order is:
-
-1. Evaluate `requires` clauses (abort if any fail)
-2. Snapshot `old()` values
-3. Execute the method body
-4. Evaluate `ensures` clauses, with `result` and `old()` available (abort if any fail)
-5. Check class invariants (abort if any fail)
-
-```
-class Stack {
-    size: int
-
-    invariant self.size >= 0
-
-    fn push(mut self) int
-        ensures result == old(self.size)
-        ensures self.size == old(self.size) + 1
-    {
-        let old_size = self.size
-        self.size = self.size + 1
-        return old_size
-    }
-}
-```
 
 ## Interface Guarantees
 
@@ -242,7 +208,7 @@ The contract system has a roadmap beyond what ships today.
 |---------|-------|--------|---|------|------|
 | Class invariants | Yes, runtime-enforced | Yes, runtime-enforced | Yes, via `invariant` blocks | No | No |
 | Preconditions | `requires`, runtime-enforced | `require`, runtime-enforced | `in` contracts | No (`debug_assert!` only) | No (`assert` disabled by default) |
-| Postconditions | `ensures` with `result` and `old()` | `ensure` with `Result` and `old` | `out` contracts | No | No |
+| Postconditions | `ensures`, runtime-enforced | `ensure` with `Result` and `old` | `out` contracts | No | No |
 | Decidable fragment | Yes, compiler-enforced | No restriction | No restriction | N/A | N/A |
 | Liskov enforcement | Compile-time (no requires on impl) | Runtime | No | N/A | N/A |
 | Active in production | Always | Configurable | Configurable | `debug_assert!` stripped | Disabled by default |

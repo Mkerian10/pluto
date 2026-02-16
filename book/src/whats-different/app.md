@@ -134,23 +134,23 @@ Overrides can shorten a lifecycle (singleton to scoped) but not lengthen it (sco
 
 ## Project Kinds
 
-Not every Pluto program needs an `app`. The compiler auto-detects four project kinds:
+> **Status: Partially implemented.** Today, the compiler supports `app` programs (with DI) and plain programs with a `fn main()`. The script and system kinds described below are designed but not yet implemented.
 
-| Kind | Contains | Entry Point | DI? |
-|------|----------|-------------|-----|
-| **Library** | Declarations only | None | No |
-| **Script** | Declarations + top-level statements | Auto-generated `main()` | No |
-| **App** | Declarations + a stage instance | Defined by the stage | Yes |
-| **System** | Stage composition | Orchestration entry | Yes |
+Not every Pluto program needs an `app`. The compiler supports several project kinds:
 
-A **script** is the simplest form -- top-level statements execute in order, the compiler wraps them in a synthetic `main()`. No DI, no ceremony:
+| Kind | Contains | Entry Point | DI? | Status |
+|------|----------|-------------|-----|--------|
+| **Plain program** | Declarations + `fn main()` | `fn main()` | No | Implemented |
+| **App** | Declarations + `app` | `app.main(self)` | Yes | Implemented |
+| **Library** | Declarations only | None | No | Implemented |
+| **Script** | Declarations + top-level statements | Auto-generated `main()` | No | Designed |
+| **System** | Stage composition | Orchestration entry | Yes | Designed |
 
-```
-let x = 42
-print("the answer is {x}")
-```
+A **plain program** has a `fn main()` function as its entry point. No DI, no ceremony.
 
 A **library** is declarations only -- functions, classes, traits, enums. Libraries are imported by other programs and cannot have entry points.
+
+A **script** (future) would support top-level statements that execute in order, with the compiler wrapping them in a synthetic `main()`.
 
 A **system** (future) composes multiple stages into a distributed application. See the stages section below.
 

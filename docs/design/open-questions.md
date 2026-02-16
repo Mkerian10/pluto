@@ -18,7 +18,6 @@ Areas that need further design work before implementation.
 ## Dependency Injection
 
 - [ ] **Provider registration** — how are DI bindings configured per environment?
-- [ ] **Lifecycle** — singleton vs per-request vs per-process
 - [ ] **Module ↔ app relationship** — can a module contain an app? how do apps compose?
 
 ## Concurrency
@@ -32,7 +31,7 @@ Areas that need further design work before implementation.
 - [ ] **Contract inheritance on generics** — how do invariants interact with generics? Does `Box<T>` inherit T's invariants?
 - [ ] **Quantifiers** — should a future version support bounded quantifiers (`forall item in self.items: item.price > 0`)?
 - [ ] **Contract testing mode** — `@test` mode that inserts runtime assertions for all contracts (for debugging)?
-- [ ] **`old()` deep copy semantics** — what values can `old()` capture? Deep clone for heap types?
+- [ ] **`old()` semantics** — if `old()` is introduced for contracts, what values can it capture? Deep clone for heap types? (Currently no `old()` exists)
 - [ ] **Protocol composition** — can protocols be composed or extended?
 - [ ] **`@assume` scope** — should `@assume` apply to a single call, a block, or an entire function?
 - [ ] **Gradual adoption** — should contracts be opt-in per module, or always enforced?
@@ -50,8 +49,7 @@ Areas that need further design work before implementation.
 
 ## Tooling
 
-- [ ] **Standard library** — scope and core modules
-- [ ] **Package manager** — dependency resolution for libraries
+- [ ] **Package registry** — central registry for publishing packages (git deps and path deps already work via `pluto.toml`)
 - [ ] **Formatter / linter** — built-in code formatting (like `go fmt`)
 - [ ] **Language server (`pluto lsp`)** — define scope and ship a real CLI/server implementation (current Zed config assumes this command)
 
@@ -95,3 +93,6 @@ Previously open questions that have been designed and implemented.
 - [x] **Editor syntax support** — Zed extension + tree-sitter grammar for Pluto syntax highlighting.
 - [x] **Null / optional** — first-class nullable types (`T?`, `none`, `?` operator). `T?` for any type, `none` for absent, `?` for null propagation. Compiler infers nullability transitively.
 - [x] **Testing** — built-in test framework (`test "name" { body }`, `expect().to_equal()` assertions, `pluto test` runner)
+- [x] **DI lifecycle** — singleton/scoped/transient lifecycle scopes with captive dependency detection at compile time
+- [x] **Standard library (extended)** — 19 modules: base64, collections, env, fs, http, io, json, log, math, net, path, random, regex, rpc, socket, strings, time, uuid, wire
+- [x] **Package manager** — `pluto.toml` manifest with path and git dependencies, transitive resolution, scope isolation

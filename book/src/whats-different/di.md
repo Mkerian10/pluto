@@ -174,56 +174,34 @@ class Database[config: DatabaseConfig] {
 
 No `@Value("${database.host}")`. No `config.get("database.host")`. No `process.env.DATABASE_HOST`. A typed field on a class, validated by invariants, injected by the compiler.
 
-## Secret\<T\> for Sensitive Values
+## Environment Variables
 
-`Secret<T>` is a built-in generic that wraps a value and prevents accidental leakage at compile time:
+Environment variable access uses the `std.env` stdlib module:
 
 ```
+import std.env
+
+fn main() {
+    let host = env.get("DATABASE_HOST") catch "localhost"
+    let port = env.get("DATABASE_PORT") catch "5432"
+    print("Connecting to {host}:{port}")
+}
+```
+
+For DI-based applications, wrap environment access in a config class to keep it centralized and testable:
+
+```
+import std.env
+
 class DatabaseConfig {
     host: string
     port: int
-    password: Secret<string>
+
+    invariant self.port > 0
+    invariant self.port < 65536
+    invariant self.host.len() > 0
 }
 ```
-
-The compiler enforces protection:
-
-```
-let pw = self.config.password
-print(pw)           // COMPILE ERROR: cannot print Secret<string>
-"{pw}"              // COMPILE ERROR: cannot interpolate Secret<string>
-
-pw.expose()         // string -- explicit unwrap, auditable
-authenticate(pw)    // OK: pass to functions accepting Secret<string>
-```
-
-Every place secrets are unwrapped is visible by searching for `.expose()`. This is a compiler guarantee, not a convention.
-
-## Env as a DI Singleton
-
-There is no `System.getenv()` in Pluto. Environment variable access is a dependency, injected like everything else:
-
-```
-class DatabaseConfig[env: Env] {
-    fn host(self) string {
-        return self.env.get("DATABASE_HOST") catch "localhost"
-    }
-
-    fn port(self) int {
-        return self.env.get("DATABASE_PORT").to_int() catch 5432
-    }
-
-    fn password(self) Secret<string> {
-        return self.env.secret("DATABASE_PASSWORD")!
-    }
-}
-```
-
-`Env` is a singleton provided by the runtime. Why DI instead of a global function:
-
-- **Testable.** Inject a mock `Env`. No `setenv()` hacks, no global state pollution between tests.
-- **Visible.** The compiler knows which classes use env vars -- `Env` is in the dependency graph. You can trace every env var dependency by checking who injects `Env`.
-- **No scatter.** You cannot have 47 files each calling `getenv("DATABASE_URL")` independently. Env access is concentrated in config classes.
 
 ## Lifecycle Scopes
 
@@ -259,6 +237,8 @@ The compiler infers lifecycle when you do not declare one. The rule: **a class's
 A singleton class explicitly depending on a scoped class is a compile error -- the compiler catches captive dependency bugs that Spring silently allows and .NET only catches at runtime.
 
 ## Scope Blocks
+
+> **Status: Designed.** Scope block syntax is parsed but runtime behavior is not yet fully implemented.
 
 Scoped instances are created inside `scope` blocks:
 
@@ -309,8 +289,7 @@ Overrides can only shorten: singleton to scoped, singleton to transient, or scop
 | Scope handling | `@Scope("request")`, runtime | Manual per-request setup | `@Injectable({ scope: Scope.REQUEST })` | `scoped class`, compile-time |
 | Captive deps | Silent bug | Not applicable | Silent bug | Compile error |
 | Config | `@Value`, properties files | `os.Getenv`, viper | `@Inject(CONFIG)`, dotenv | Class with invariants |
-| Secrets | Hope you don't log them | Hope you don't log them | Hope you don't log them | `Secret<T>`, compile-enforced |
-| Env access | `System.getenv()` anywhere | `os.Getenv()` anywhere | `process.env` anywhere | `Env` DI singleton |
+| Env access | `System.getenv()` anywhere | `os.Getenv()` anywhere | `process.env` anywhere | `std.env` module |
 | Ambient/cross-cutting | `@Autowired` everywhere | Pass through every call | `@Inject` everywhere | `uses Logger`, bare access |
 
 ## What This Means in Practice
