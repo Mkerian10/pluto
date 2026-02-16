@@ -1111,11 +1111,10 @@ impl CompilerService for InProcessServer {
     // ===== Compilation & Execution =====
 
     fn check(&self, path: &Path, opts: &CompileOptions) -> CheckResult {
-        let result = if opts.standalone {
-            crate::analyze_file_with_warnings_impl(path, opts.stdlib.as_deref(), true)
-        } else {
-            crate::analyze_file_with_warnings(path, opts.stdlib.as_deref())
-        };
+        // Always use standalone mode for check to only analyze the requested file.
+        // This prevents diagnostics from imported modules being attributed to this file.
+        let result = crate::analyze_file_with_warnings_impl(path, opts.stdlib.as_deref(), true);
+
         match result {
             Ok((_program, _source, _derived, warnings)) => CheckResult {
                 success: true,
