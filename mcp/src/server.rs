@@ -688,7 +688,20 @@ impl PlutoMcp {
 
         for file in &files {
             let canonical = canon(&file.to_string_lossy());
-            match Module::from_source_file_with_stdlib(&canonical, stdlib_path.as_deref()) {
+            // Read file contents
+            let source = match std::fs::read_to_string(&canonical) {
+                Ok(s) => s,
+                Err(e) => {
+                    load_errors.push(serialize::LoadError {
+                        path: canonical,
+                        error: format!("Failed to read file: {}", e),
+                    });
+                    continue;
+                }
+            };
+
+            // Parse without following imports (each file loaded independently)
+            match Module::from_source(&source) {
                 Ok(module) => {
                     let decl_count = module.local_functions().len()
                         + module.local_classes().len()
