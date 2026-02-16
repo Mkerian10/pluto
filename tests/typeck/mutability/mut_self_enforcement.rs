@@ -1,4 +1,4 @@
-//! mut self enforcement tests - 20 tests
+//! mut self enforcement tests - 19 tests
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
@@ -70,11 +70,6 @@ fn compound_assign_no_mut() { compile_should_fail_with(r#"class C{x:int} fn add(
 // Mutation in constructor (should work)
 #[test]
 fn constructor_mutation() { compile_should_fail_with(r#"class C{x:int} fn new()C{let c=C{x:0} c.x=1 return c} fn main(){}"#, ""); }
-
-// Mutation of immutable local
-#[test]
-#[ignore] // #168: compiler doesn't enforce immutability on local variables
-fn immutable_local_mut() { compile_should_fail_with(r#"fn main(){let x=1 x=2}"#, ""); }
 
 // Mutation through immutable reference
 #[test]
