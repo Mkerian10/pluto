@@ -168,7 +168,8 @@ impl PlutoMcp {
         let module = if first_bytes.len() >= 4 && &first_bytes[..4] == b"PLTO" {
             Module::open(&canonical).map_err(|e| mcp_internal(format!("Failed to load binary: {e}")))?
         } else {
-            Module::from_source_file_with_stdlib(&canonical, stdlib_path.as_deref())
+            // Load in standalone mode to exclude sibling files
+            Module::from_source_file_standalone(&canonical, stdlib_path.as_deref())
                 .map_err(|e| mcp_internal(format!("Failed to analyze source: {e}")))?
         };
 

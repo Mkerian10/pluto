@@ -303,8 +303,18 @@ pub fn analyze_file(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Pr
     Ok((program, source, derived))
 }
 
+/// Like `analyze_file`, but skips sibling file merging (standalone mode).
+pub fn analyze_file_standalone(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String, derived::DerivedInfo), CompileError> {
+    let (program, source, derived, _warnings) = analyze_file_with_warnings_impl(entry_file, stdlib_root, true)?;
+    Ok((program, source, derived))
+}
+
 /// Like `analyze_file`, but also returns compiler warnings.
 pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String, derived::DerivedInfo, Vec<CompileWarning>), CompileError> {
+    analyze_file_with_warnings_impl(entry_file, stdlib_root, false)
+}
+
+fn analyze_file_with_warnings_impl(entry_file: &Path, stdlib_root: Option<&Path>, standalone: bool) -> Result<(Program, String, derived::DerivedInfo, Vec<CompileWarning>), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)
@@ -313,7 +323,11 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
 
     let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
     let pkg_graph = manifest::find_and_resolve(entry_dir)?;
-    let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
+    let graph = if standalone {
+        modules::resolve_modules_no_siblings(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?
+    } else {
+        modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?
+    };
 
 
     let (mut program, source_map) = modules::flatten_modules(graph)?;
