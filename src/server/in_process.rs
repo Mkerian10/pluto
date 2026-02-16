@@ -75,57 +75,72 @@ impl InProcessServer {
         }
     }
 
-    /// Build DeclSummary entries from a Program.
+    /// Helper to check if a declaration name is imported (contains module prefix).
+    fn is_imported(name: &str) -> bool {
+        name.contains('.')
+    }
+
+    /// Build DeclSummary entries from a Program, filtering out imported declarations.
     fn collect_decl_summaries(program: &Program, filter: Option<DeclKind>) -> Vec<DeclSummary> {
         let mut results = Vec::new();
 
         if filter.is_none() || filter == Some(DeclKind::Function) {
             for f in &program.functions {
-                results.push(DeclSummary {
-                    uuid: f.node.id,
-                    name: f.node.name.node.clone(),
-                    kind: DeclKind::Function,
-                });
+                if !Self::is_imported(&f.node.name.node) {
+                    results.push(DeclSummary {
+                        uuid: f.node.id,
+                        name: f.node.name.node.clone(),
+                        kind: DeclKind::Function,
+                    });
+                }
             }
         }
 
         if filter.is_none() || filter == Some(DeclKind::Class) {
             for c in &program.classes {
-                results.push(DeclSummary {
-                    uuid: c.node.id,
-                    name: c.node.name.node.clone(),
-                    kind: DeclKind::Class,
-                });
+                if !Self::is_imported(&c.node.name.node) {
+                    results.push(DeclSummary {
+                        uuid: c.node.id,
+                        name: c.node.name.node.clone(),
+                        kind: DeclKind::Class,
+                    });
+                }
             }
         }
 
         if filter.is_none() || filter == Some(DeclKind::Enum) {
             for e in &program.enums {
-                results.push(DeclSummary {
-                    uuid: e.node.id,
-                    name: e.node.name.node.clone(),
-                    kind: DeclKind::Enum,
-                });
+                if !Self::is_imported(&e.node.name.node) {
+                    results.push(DeclSummary {
+                        uuid: e.node.id,
+                        name: e.node.name.node.clone(),
+                        kind: DeclKind::Enum,
+                    });
+                }
             }
         }
 
         if filter.is_none() || filter == Some(DeclKind::Trait) {
             for t in &program.traits {
-                results.push(DeclSummary {
-                    uuid: t.node.id,
-                    name: t.node.name.node.clone(),
-                    kind: DeclKind::Trait,
-                });
+                if !Self::is_imported(&t.node.name.node) {
+                    results.push(DeclSummary {
+                        uuid: t.node.id,
+                        name: t.node.name.node.clone(),
+                        kind: DeclKind::Trait,
+                    });
+                }
             }
         }
 
         if filter.is_none() || filter == Some(DeclKind::Error) {
             for e in &program.errors {
-                results.push(DeclSummary {
-                    uuid: e.node.id,
-                    name: e.node.name.node.clone(),
-                    kind: DeclKind::Error,
-                });
+                if !Self::is_imported(&e.node.name.node) {
+                    results.push(DeclSummary {
+                        uuid: e.node.id,
+                        name: e.node.name.node.clone(),
+                        kind: DeclKind::Error,
+                    });
+                }
             }
         }
 
