@@ -1134,8 +1134,8 @@ impl PlutoMcp {
     }
 }
 
-/// Recursively discover .pluto files in a directory, skipping hidden dirs and .git.
-/// Deduplicates by directory: if multiple .pluto files exist in the same subdirectory
+/// Recursively discover .pluto and .pt files in a directory, skipping hidden dirs and .git.
+/// Deduplicates by directory: if multiple source files exist in the same subdirectory
 /// (a module directory), only the first is included (the compiler auto-merges siblings).
 fn discover_pluto_files(root: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
     let mut files = Vec::new();
@@ -1165,15 +1165,21 @@ fn walk_dir(
 
         if path.is_dir() {
             subdirs.push(path);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("pluto") {
+        } else if path.extension().and_then(|e| e.to_str()).is_some_and(|ext| ext == "pluto" || ext == "pt") {
             pluto_files.push(path);
         }
     }
 
-    // Add all .pluto files from this directory
+    // Add source files from this directory, deduplicating by stem (.pluto preferred over .pt)
     if !pluto_files.is_empty() {
-        pluto_files.sort();
-        files.extend(pluto_files);
+        pluto_files.sort(); // .pluto sorts before .pt alphabetically
+        let mut seen_stems = std::collections::HashSet::new();
+        for path in pluto_files {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            if seen_stems.insert(stem) {
+                files.push(path);
+            }
+        }
     }
 
     for subdir in subdirs {
@@ -1185,8 +1191,9 @@ fn walk_dir(
 // --- Dependency graph helpers ---
 
 /// Derive a module name from a file path relative to the project root.
+/// Handles both `.pluto` (binary) and `.pt` (text) extensions.
 /// Examples:
-///   - `main.pluto` → `main`
+///   - `main.pluto` or `main.pt` → `main`
 ///   - `auth/user.pluto` → `auth` (directory module)
 ///   - `std/strings.pluto` → `std.strings`
 fn derive_module_name(rel_path: &Path) -> String {
@@ -1202,7 +1209,7 @@ fn derive_module_name(rel_path: &Path) -> String {
         return "main".to_string();
     }
 
-    // If the path is just a .pluto file (e.g., `main.pluto`), use the stem
+    // If the path is just a single file (e.g., `main.pluto` or `main.pt`), use the stem
     if components.len() == 1 {
         if let Some(stem) = Path::new(components[0]).file_stem().and_then(|s| s.to_str()) {
             return stem.to_string();

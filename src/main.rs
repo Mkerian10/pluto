@@ -26,18 +26,18 @@ fn parse_gc_backend(s: &str) -> Result<pluto::GcBackend, String> {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Compile a .pluto source file to a native binary
+    /// Compile a .pluto/.pt source file to a native binary
     Compile {
         /// Source file path
         file: PathBuf,
         /// Output binary path
         #[arg(short, long, default_value = "a.out")]
         output: PathBuf,
-        /// Compile file in isolation without merging sibling .pluto files
+        /// Compile file in isolation without merging sibling source files
         #[arg(long)]
         standalone: bool,
     },
-    /// Compile and run a .pluto source file
+    /// Compile and run a .pluto/.pt source file
     Run {
         /// Source file path
         file: PathBuf,
@@ -45,7 +45,7 @@ enum Commands {
         #[arg(long)]
         coverage: bool,
     },
-    /// Run tests in a .pluto source file
+    /// Run tests in a .pluto/.pt source file
     Test {
         /// Source file path
         file: PathBuf,

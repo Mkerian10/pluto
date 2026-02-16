@@ -178,6 +178,54 @@ fn load_file_auto(path: &Path, source_map: &mut SourceMap) -> Result<(Program, u
     }
 }
 
+/// Check if a file has a recognized Pluto source extension (.pluto or .pt).
+fn is_pluto_source(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "pluto" || ext == "pt")
+}
+
+/// Resolve a module file by name: tries `<name>.pluto` first, then `<name>.pt`.
+/// Returns `Some(path)` if found, `None` if neither exists.
+fn resolve_module_file(dir: &Path, name: &str) -> Option<PathBuf> {
+    let pluto_path = dir.join(format!("{}.pluto", name));
+    if pluto_path.is_file() {
+        return Some(pluto_path);
+    }
+    let pt_path = dir.join(format!("{}.pt", name));
+    if pt_path.is_file() {
+        return Some(pt_path);
+    }
+    None
+}
+
+/// Collect source files (.pluto and .pt) in a directory, deduplicating by stem.
+/// When both `name.pluto` and `name.pt` exist, prefer `name.pluto` (binary).
+fn collect_source_files(dir: &Path) -> Result<Vec<PathBuf>, CompileError> {
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        CompileError::codegen(format!("could not read directory '{}': {e}", dir.display()))
+    })?;
+
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| is_pluto_source(p))
+        .collect();
+    files.sort();
+
+    // Deduplicate: if both name.pluto and name.pt exist, keep only name.pluto
+    let mut seen_stems = HashSet::new();
+    let mut deduped = Vec::new();
+    for path in files {
+        let stem = path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        if seen_stems.insert(stem) {
+            deduped.push(path);
+        }
+    }
+    Ok(deduped)
+}
+
 /// Load all .pluto files in a directory and merge into one Program.
 /// If `mod.pluto` exists, only that file is loaded; otherwise all .pluto files are auto-merged.
 /// Sub-imports within loaded files are recursively resolved and flattened into the result.
@@ -215,18 +263,9 @@ fn load_directory_module(
             fallible_extern_fns: Vec::new(),
         };
 
-        let entries = std::fs::read_dir(dir).map_err(|e| {
-            CompileError::codegen(format!("could not read directory '{}': {e}", dir.display()))
-        })?;
+        let source_files = collect_source_files(dir)?;
 
-        let mut pluto_files: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|ext| ext == "pluto"))
-            .collect();
-        pluto_files.sort();
-
-        for file_path in pluto_files {
+        for file_path in source_files {
             let (program, _file_id) = load_file_auto(&file_path, source_map)?;
             merged.functions.extend(program.functions);
             merged.extern_fns.extend(program.extern_fns);
@@ -303,10 +342,9 @@ fn resolve_module_path(
 
     // Resolve final segment
     let final_seg = &segments[segments.len() - 1];
-    let file_path = current_dir.join(format!("{}.pluto", final_seg.node));
     let dir_path = current_dir.join(&final_seg.node);
 
-    if file_path.is_file() {
+    if let Some(file_path) = resolve_module_file(&current_dir, &final_seg.node) {
         let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
         if visited.contains(&canonical) {
             return Err(CompileError::codegen(format!(
@@ -375,8 +413,8 @@ fn resolve_module_imports(
             // Single-segment import
             let is_dep = current_deps.contains_key(first_segment);
             let dir_path = module_dir.join(first_segment);
-            let file_path_candidate = module_dir.join(format!("{}.pluto", first_segment));
-            let is_local = dir_path.is_dir() || file_path_candidate.is_file();
+            let file_path_candidate = resolve_module_file(module_dir, first_segment);
+            let is_local = dir_path.is_dir() || file_path_candidate.is_some();
 
             if is_dep && is_local {
                 return Err(CompileError::syntax(
@@ -397,16 +435,16 @@ fn resolve_module_imports(
                 let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
                 let module_prog = load_directory_module(&dir_path, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
                 resolved_imports.push((binding_name, module_prog, origin));
-            } else if file_path_candidate.is_file() {
-                let canonical = file_path_candidate.canonicalize().unwrap_or_else(|_| file_path_candidate.clone());
+            } else if let Some(file_path) = file_path_candidate {
+                let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
                 if visited.contains(&canonical) {
                     return Err(CompileError::codegen(format!(
                         "circular import detected: '{}'",
-                        file_path_candidate.display()
+                        file_path.display()
                     )));
                 }
                 visited.insert(canonical.clone());
-                let (mut module_prog, _) = load_file_auto(&file_path_candidate, source_map)?;
+                let (mut module_prog, _) = load_file_auto(&file_path, source_map)?;
                 resolve_module_imports(&mut module_prog, module_dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
                 visited.remove(&canonical);
                 let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
@@ -715,19 +753,11 @@ fn resolve_modules_inner(
     // Load sibling .pluto files (excluding the entry file and imported single-file modules)
     // Skip this step when compiling system members in isolation
     if !skip_siblings {
-        let entries = std::fs::read_dir(entry_dir).map_err(|e| {
-            CompileError::codegen(format!("could not read directory '{}': {e}", entry_dir.display()))
-        })?;
-
-        let mut sibling_files: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| {
-                p.extension().is_some_and(|ext| ext == "pluto")
-                    && p.canonicalize().unwrap_or(p.clone()) != entry_file
-            })
+        // Collect sibling source files (.pluto and .pt), deduplicated by stem
+        let all_siblings = collect_source_files(entry_dir)?;
+        let sibling_files: Vec<PathBuf> = all_siblings.into_iter()
+            .filter(|p| p.canonicalize().unwrap_or(p.clone()) != entry_file)
             .collect();
-        sibling_files.sort();
 
         for file_path in &sibling_files {
             let stem = file_path.file_stem()
@@ -799,8 +829,8 @@ fn resolve_modules_inner(
             // Single-segment import (e.g., `import math`) — resolve from entry_dir
             let is_dep = current_deps.contains_key(first_segment);
             let dir_path = entry_dir.join(first_segment);
-            let file_path_candidate = entry_dir.join(format!("{}.pluto", first_segment));
-            let is_local = dir_path.is_dir() || file_path_candidate.is_file();
+            let file_path_candidate = resolve_module_file(entry_dir, first_segment);
+            let is_local = dir_path.is_dir() || file_path_candidate.is_some();
 
             if is_dep && is_local {
                 return Err(CompileError::syntax(
@@ -820,16 +850,16 @@ fn resolve_modules_inner(
             } else if dir_path.is_dir() {
                 let module_prog = load_directory_module(&dir_path, &mut source_map, &mut visited, effective_stdlib, current_deps, pkg_graph, ImportOrigin::Local)?;
                 imports.push((binding_name, module_prog, ImportOrigin::Local));
-            } else if file_path_candidate.is_file() {
-                let canonical = file_path_candidate.canonicalize().unwrap_or_else(|_| file_path_candidate.clone());
+            } else if let Some(file_path) = file_path_candidate {
+                let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
                 if visited.contains(&canonical) {
                     return Err(CompileError::codegen(format!(
                         "circular import detected: '{}'",
-                        file_path_candidate.display()
+                        file_path.display()
                     )));
                 }
                 visited.insert(canonical.clone());
-                let (mut module_prog, _) = load_file_auto(&file_path_candidate, &mut source_map)?;
+                let (mut module_prog, _) = load_file_auto(&file_path, &mut source_map)?;
                 // Recursively resolve sub-imports
                 resolve_module_imports(&mut module_prog, entry_dir, &mut source_map, &mut visited, effective_stdlib, current_deps, pkg_graph, ImportOrigin::Local)?;
                 visited.remove(&canonical);
