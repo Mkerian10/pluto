@@ -197,6 +197,23 @@ impl Module {
         }).collect()
     }
 
+    /// Get all functions that the given function calls (callees).
+    pub fn callees_of(&self, id: Uuid) -> Vec<CallSite<'_>> {
+        let Some(infos) = self.index.callees.get(&id) else {
+            return vec![];
+        };
+        infos.iter().filter_map(|info| {
+            let caller = self.find_function_by_name(&info.fn_name)?;
+            let call_expr = find_expr_at_span(&self.program, info.span)?;
+            Some(CallSite {
+                caller,
+                call_expr,
+                target_id: info.target_id,
+                span: info.span,
+            })
+        }).collect()
+    }
+
     /// Get all struct literal sites that construct the given class UUID.
     pub fn constructors_of(&self, id: Uuid) -> Vec<ConstructSite<'_>> {
         let Some(infos) = self.index.constructors.get(&id) else {

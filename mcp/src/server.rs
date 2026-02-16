@@ -1777,10 +1777,41 @@ impl PlutoMcp {
 
         if direction == "callees" {
             // Find all functions this function calls
-            // We need to examine the function body to find Call expressions
-            // For now, we'll use a simplified approach: find all callers_of in reverse
-            // This is a limitation - proper callees would require AST traversal
-            // For now, return empty children for callees direction
+            for (callee_module_path, metadata) in modules.iter() {
+                let module = &metadata.module;
+                let sites = module.callees_of(func_id);
+                for site in sites {
+                    // Resolve the callee (target_id) to get its name
+                    if let Some(callee_decl) = module.get(site.target_id) {
+                        let callee_name = callee_decl.name();
+                        let callee_id = site.target_id;
+                        let child_key = format!("{}_{}_{}", callee_id, callee_module_path, depth + 1);
+                        let is_cycle = visited.contains(&child_key);
+
+                        children.push(serialize::CallGraphChild {
+                            uuid: callee_id.to_string(),
+                            name: callee_name.to_string(),
+                            module_path: callee_module_path.clone(),
+                            is_cycle: if is_cycle { Some(true) } else { None },
+                        });
+
+                        // Recurse if not a cycle
+                        if !is_cycle {
+                            Box::pin(self.build_call_graph_recursive(
+                                callee_id,
+                                &callee_name,
+                                callee_module_path,
+                                depth + 1,
+                                max_depth,
+                                direction,
+                                modules,
+                                visited,
+                                nodes,
+                            )).await;
+                        }
+                    }
+                }
+            }
         } else {
             // direction == "callers"
             // Find all functions that call this function
