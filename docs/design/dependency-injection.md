@@ -177,7 +177,7 @@ scope(RequestCtx { user_id: "42", trace_id: "abc" }) |svc: UserService| {
 - **Closure escape analysis:** Closures that capture scope bindings are tracked; they cannot escape the scope block via return or assignment to outer variables
 - **App-level overrides:** The app can shorten a class's lifecycle (e.g., `scoped ConnectionPool`) but cannot lengthen it
 
-For the full design, see the [DI Lifecycle RFC](rfc-di-lifecycle.md).
+For the full design, see the [DI Lifecycle RFC](archive/rfc-di-lifecycle.md).
 
 ## Implementation Details
 
@@ -488,7 +488,7 @@ The language provides DI. The runtime provides `Env`. The orchestration layer op
 ## Open Questions
 
 - [ ] `Env` API surface — what methods should `Env` have? `.get(key) string?`, `.secret(key) Secret<string>?`, `.require(key) string` (raises if missing)?
-- [x] ~~Lifecycle management~~ — resolved: singleton/scoped/transient with scope blocks and lifecycle inference. See [DI Lifecycle RFC](rfc-di-lifecycle.md).
+- [x] ~~Lifecycle management~~ — resolved: singleton/scoped/transient with scope blocks and lifecycle inference. See [DI Lifecycle RFC](archive/rfc-di-lifecycle.md).
 - [ ] Scoped overrides — `with` blocks for providing alternative implementations in tests
 - [ ] Should `Env` be a trait so the runtime can provide different implementations? Or a concrete class that the runtime populates?
 - [ ] Convention for config class naming — should there be a pattern (e.g., `XxxConfig` suffix) or is it freeform?

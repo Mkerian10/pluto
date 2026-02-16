@@ -3,7 +3,7 @@
 **Last Updated:** 2026-02-11
 **Vision:** A domain-specific language for distributed backend systems with geographic awareness
 
-See also: [FEATURES.md](FEATURES.md) for detailed feature tracking | [BUGS_AND_FEATURES.md](BUGS_AND_FEATURES.md) for bugs
+See also: [GitHub Issues](https://github.com/plutolang/pluto/issues) for feature tracking and bugs
 
 ---
 
@@ -262,7 +262,7 @@ Pluto is designed to make building **distributed, geographically-aware backend s
 
 **How to influence the roadmap:**
 1. Open an issue on GitHub
-2. Propose features in [FEATURES.md](FEATURES.md)
+2. Propose features via GitHub issues
 3. Share use cases that aren't well-served
 4. Contribute PRs for features you need
 

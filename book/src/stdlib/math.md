@@ -1,6 +1,6 @@
 # std.math
 
-Integer and float math utilities. For built-in float operations (`sqrt`, `sin`, `cos`, `floor`, etc.), see the [builtins chapter](../language/builtins.md).
+Integer and float math utilities. Built-in float operations (`sqrt`, `sin`, `cos`, `floor`, etc.) are available without importing this module.
 
 ```
 import std.math
