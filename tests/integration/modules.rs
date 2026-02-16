@@ -1024,12 +1024,11 @@ fn test_sibling_file_error_attribution() {
     )
     .unwrap();
 
-    // Sibling file with syntax error (empty braces in string)
+    // Sibling file with syntax error (missing closing brace)
     std::fs::write(
         dir.path().join("bad.pluto"),
         r#"pub fn get_json() string {
-    return "{}"
-}
+    return "hello"
 "#,
     )
     .unwrap();
