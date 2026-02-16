@@ -85,6 +85,22 @@ fn canon(path: &str) -> String {
         .unwrap_or_else(|_| path.to_string())
 }
 
+/// Ensure a canonicalized path is within the project root (if one is set).
+/// Returns an MCP error if the path escapes the project boundary.
+fn ensure_within_project(canonical: &str, project_root: &Option<String>) -> Result<(), McpError> {
+    if let Some(root) = project_root {
+        let root_canonical = canon(root);
+        if !canonical.starts_with(&root_canonical) {
+            return Err(McpError::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("path '{}' is outside the project root '{}'", canonical, root_canonical),
+                None::<serde_json::Value>,
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[tool_router]
 impl PlutoMcp {
     pub fn new() -> Self {
@@ -886,6 +902,7 @@ impl PlutoMcp {
         Parameters(input): Parameters<CompileInput>,
     ) -> Result<CallToolResult, McpError> {
         let canonical = canon(&input.path);
+        ensure_within_project(&canonical, &*self.project_root.read().await)?;
 
         let output_path = match &input.output {
             Some(p) => PathBuf::from(p),
@@ -920,6 +937,7 @@ impl PlutoMcp {
         Parameters(input): Parameters<RunInput>,
     ) -> Result<CallToolResult, McpError> {
         let canonical = canon(&input.path);
+        ensure_within_project(&canonical, &*self.project_root.read().await)?;
 
         let opts = service_types::RunOptions {
             stdlib: input.stdlib.map(PathBuf::from),
@@ -943,6 +961,7 @@ impl PlutoMcp {
         Parameters(input): Parameters<TestInput>,
     ) -> Result<CallToolResult, McpError> {
         let canonical = canon(&input.path);
+        ensure_within_project(&canonical, &*self.project_root.read().await)?;
 
         let opts = service_types::TestOptions {
             stdlib: input.stdlib.map(PathBuf::from),

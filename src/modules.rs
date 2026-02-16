@@ -159,11 +159,12 @@ fn load_file_auto(path: &Path, source_map: &mut SourceMap) -> Result<(Program, u
     let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
     if binary::is_binary_format(&data) {
-        let (program, source, _derived) = binary::deserialize_program(&data)
+        let (mut program, source, _derived) = binary::deserialize_program(&data)
             .map_err(|e| CompileError::codegen(format!(
                 "could not deserialize '{}': {e}", path.display()
             )))?;
         let file_id = source_map.add_file(canonical_path, source);
+        set_program_file_id(&mut program, file_id);
         Ok((program, file_id))
     } else {
         let source = String::from_utf8(data).map_err(|e| {
