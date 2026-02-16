@@ -111,18 +111,11 @@ pub fn b_func() {
 }
 
 #[tokio::test]
-async fn test_path_safety_validation() {
-    // Test: Path safety validation for write tools (Task #5)
+async fn test_path_canonicalization() {
+    // Test: Path canonicalization for compile/run/test tools
     //
-    // This test verifies the validate_write_path function which protects
-    // against directory traversal attacks. It should:
-    // - Require a project_root to be set via load_project
-    // - Canonicalize target paths
-    // - Reject paths outside the project root
-    // - Handle both existing and non-existing files
-    //
-    // Paths like "../../../etc/passwd" should be rejected.
-    // Paths like "subdir/../../../etc/passwd" should also be rejected.
+    // This test verifies that file paths are properly canonicalized
+    // before being passed to the compiler.
 
     let temp_dir = TempDir::new().unwrap();
     let root = temp_dir.path();
@@ -133,7 +126,7 @@ async fn test_path_safety_validation() {
     let _mcp = PlutoMcp::new();
 
     // Structural test: verify server instantiation
-    // Full test would verify write tools reject unsafe paths
+    // Full test would verify paths are canonicalized correctly
 }
 
 #[tokio::test]

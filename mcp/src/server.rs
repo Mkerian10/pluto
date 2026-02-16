@@ -19,7 +19,6 @@ use pluto::server::InProcessServer;
 use pluto::server::types as service_types;
 use pluto_sdk::Module;
 use pluto_sdk::decl::DeclKind;
-use pluto_sdk::editor::DanglingRefKind;
 
 use crate::serialize;
 use crate::tools::*;
@@ -84,59 +83,6 @@ fn canon(path: &str) -> String {
     std::fs::canonicalize(path)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| path.to_string())
-}
-
-/// Validate that a path is safe to write to (within project root).
-/// Returns the canonicalized path if valid, or an error if the path escapes the project root.
-async fn validate_write_path(
-    project_root: &Arc<RwLock<Option<String>>>,
-    path: &str,
-) -> Result<PathBuf, McpError> {
-    // Get project root
-    let root_opt = project_root.read().await;
-    let root_str = root_opt.as_ref().ok_or_else(|| {
-        mcp_err("No project root set. Use load_project first to establish a project root.")
-    })?;
-    let root_path = PathBuf::from(root_str);
-    let canonical_root = std::fs::canonicalize(&root_path)
-        .map_err(|e| mcp_internal(format!("Failed to canonicalize project root: {e}")))?;
-
-    // Canonicalize the target path
-    let target = PathBuf::from(path);
-
-    let canonical_target: PathBuf = if target.exists() {
-        std::fs::canonicalize(&target)
-            .map_err(|e| mcp_internal(format!("Failed to canonicalize path: {e}")))?
-    } else {
-        // Validate parent directory exists and is within project root
-        if let Some(parent) = target.parent() {
-            if parent.as_os_str().is_empty() {
-                // Relative path with no parent (e.g., "file.pluto")
-                // Treat as relative to project root
-                canonical_root.join(&target)
-            } else if !parent.exists() {
-                return Err(mcp_err(format!("Parent directory does not exist: {}", parent.display())));
-            } else {
-                let canonical_parent = std::fs::canonicalize(parent)
-                    .map_err(|e| mcp_internal(format!("Failed to canonicalize parent: {e}")))?;
-                canonical_parent.join(target.file_name().unwrap())
-            }
-        } else {
-            // No parent means root-level path
-            return Err(mcp_err("Cannot write to root-level path"));
-        }
-    };
-
-    // Check if the canonical target is within the project root
-    if !canonical_target.starts_with(&canonical_root) {
-        return Err(mcp_err(format!(
-            "Path safety violation: '{}' is outside project root '{}'",
-            path,
-            root_str
-        )));
-    }
-
-    Ok(canonical_target)
 }
 
 #[tool_router]
@@ -934,14 +880,12 @@ impl PlutoMcp {
     }
 
     // --- Tool 11: compile ---
-    #[tool(description = "Compile a .pluto source file to a native binary. Returns the output path on success or structured error diagnostics (with line:col) on failure.")]
+    #[tool(description = "Compile a .pluto or .pt source file to a native binary. Returns the output path on success or structured error diagnostics (with line:col) on failure.")]
     async fn compile(
         &self,
         Parameters(input): Parameters<CompileInput>,
     ) -> Result<CallToolResult, McpError> {
-        // Validate path safety
-        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
-        let canonical = validated_path.to_string_lossy().to_string();
+        let canonical = canon(&input.path);
 
         let output_path = match &input.output {
             Some(p) => PathBuf::from(p),
@@ -970,14 +914,12 @@ impl PlutoMcp {
     }
 
     // --- Tool 12: run ---
-    #[tool(description = "Compile and execute a .pluto source file, capturing stdout/stderr. Default timeout: 10s, max: 60s. Returns compilation errors or execution results (stdout, stderr, exit code, timed_out).")]
+    #[tool(description = "Compile and execute a .pluto or .pt source file, capturing stdout/stderr. Default timeout: 10s, max: 60s. Returns compilation errors or execution results (stdout, stderr, exit code, timed_out).")]
     async fn run(
         &self,
         Parameters(input): Parameters<RunInput>,
     ) -> Result<CallToolResult, McpError> {
-        // Validate path safety
-        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
-        let canonical = validated_path.to_string_lossy().to_string();
+        let canonical = canon(&input.path);
 
         let opts = service_types::RunOptions {
             stdlib: input.stdlib.map(PathBuf::from),
@@ -995,14 +937,12 @@ impl PlutoMcp {
     }
 
     // --- Tool 13: test ---
-    #[tool(description = "Compile a .pluto source file in test mode and execute the test runner, capturing stdout/stderr. Default timeout: 30s, max: 60s. Returns compilation errors or test execution results.")]
+    #[tool(description = "Compile a .pluto or .pt source file in test mode and execute the test runner, capturing stdout/stderr. Default timeout: 30s, max: 60s. Returns compilation errors or test execution results.")]
     async fn test(
         &self,
         Parameters(input): Parameters<TestInput>,
     ) -> Result<CallToolResult, McpError> {
-        // Validate path safety
-        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
-        let canonical = validated_path.to_string_lossy().to_string();
+        let canonical = canon(&input.path);
 
         let opts = service_types::TestOptions {
             stdlib: input.stdlib.map(PathBuf::from),
@@ -1019,288 +959,7 @@ impl PlutoMcp {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    // --- Tool 14: add_declaration ---
-    #[tool(description = "Add a new top-level declaration to a .pluto source file. The file is created if it doesn't exist. Returns the UUID, name, and kind of the added declaration. Supports multiple declarations in a single source string — all will be added and their details returned as an array.")]
-    async fn add_declaration(
-        &self,
-        Parameters(input): Parameters<AddDeclarationInput>,
-    ) -> Result<CallToolResult, McpError> {
-        // Validate path safety first
-        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
-
-        // Create file if needed
-        if !validated_path.exists() {
-            if let Some(parent) = validated_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| mcp_internal(format!("Failed to create directories: {e}")))?;
-            }
-            std::fs::write(&validated_path, "")
-                .map_err(|e| mcp_internal(format!("Failed to create file: {e}")))?;
-        }
-
-        let canonical = validated_path.to_string_lossy().to_string();
-        let contents = std::fs::read_to_string(&canonical).unwrap_or_default();
-        let module = Module::from_source(&contents)
-            .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
-
-        let mut editor = module.edit();
-        let ids = editor.add_many_from_source(&input.source)
-            .map_err(|e| mcp_err(format!("Failed to add declaration: {e}")))?;
-
-        let module = editor.commit();
-
-        // Collect results for all added declarations
-        let mut results: Vec<serialize::AddDeclResult> = Vec::new();
-        for id in &ids {
-            if let Some(decl) = module.get(*id) {
-                results.push(serialize::AddDeclResult {
-                    uuid: id.to_string(),
-                    name: decl.name().to_string(),
-                    kind: serialize::decl_kind_to_string(decl.kind()).to_string(),
-                });
-            }
-        }
-
-        std::fs::write(&canonical, module.source())
-            .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
-
-        // Capture file mtime after write
-        let mtime = std::fs::metadata(&canonical)
-            .and_then(|m| m.modified())
-            .unwrap_or_else(|_| SystemTime::now());
-
-        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
-
-        let json = serde_json::to_string_pretty(&results)
-            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    // --- Tool 15: replace_declaration ---
-    #[tool(description = "Replace a top-level declaration in a .pluto source file with new source code. The replacement must be the same kind (function→function, class→class, etc.). Identifies the target by name.")]
-    async fn replace_declaration(
-        &self,
-        Parameters(input): Parameters<ReplaceDeclarationInput>,
-    ) -> Result<CallToolResult, McpError> {
-        // Validate path safety
-        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
-        let canonical = validated_path.to_string_lossy().to_string();
-
-        let contents = std::fs::read_to_string(&canonical)
-            .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
-        let module = Module::from_source(&contents)
-            .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
-
-        let (id, kind) = find_decl_by_name(&module, &input.name)?;
-
-        let mut editor = module.edit();
-        editor.replace_from_source(id, &input.source)
-            .map_err(|e| mcp_err(format!("Failed to replace declaration: {e}")))?;
-
-        let module = editor.commit();
-
-        std::fs::write(&canonical, module.source())
-            .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
-
-        // Capture file mtime after write
-        let mtime = std::fs::metadata(&canonical)
-            .and_then(|m| m.modified())
-            .unwrap_or_else(|_| SystemTime::now());
-
-        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
-
-        let result = serialize::ReplaceDeclResult {
-            uuid: id.to_string(),
-            name: input.name,
-            kind: kind.to_string(),
-        };
-        let json = serde_json::to_string_pretty(&result)
-            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    // --- Tool 16: delete_declaration ---
-    #[tool(description = "Delete a top-level declaration from a .pluto source file. Returns the deleted source text and any dangling references found.")]
-    async fn delete_declaration(
-        &self,
-        Parameters(input): Parameters<DeleteDeclarationInput>,
-    ) -> Result<CallToolResult, McpError> {
-        // Validate path safety
-        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
-        let canonical = validated_path.to_string_lossy().to_string();
-
-        let contents = std::fs::read_to_string(&canonical)
-            .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
-        let module = Module::from_source(&contents)
-            .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
-
-        let (id, _kind) = find_decl_by_name(&module, &input.name)?;
-
-        let mut editor = module.edit();
-        let delete_result = editor.delete(id)
-            .map_err(|e| mcp_err(format!("Failed to delete declaration: {e}")))?;
-
-        let module = editor.commit();
-
-        std::fs::write(&canonical, module.source())
-            .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
-
-        // Capture file mtime after write
-        let mtime = std::fs::metadata(&canonical)
-            .and_then(|m| m.modified())
-            .unwrap_or_else(|_| SystemTime::now());
-
-        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
-
-        let dangling_refs = delete_result.dangling.iter().map(|d| {
-            serialize::DanglingRefInfo {
-                kind: dangling_ref_kind_str(d.kind),
-                name: d.name.clone(),
-                span: serialize::span_to_info(d.span),
-            }
-        }).collect();
-
-        let result = serialize::DeleteDeclResult {
-            deleted_source: delete_result.source,
-            dangling_refs,
-        };
-        let json = serde_json::to_string_pretty(&result)
-            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    // --- Tool 17: rename_declaration ---
-    #[tool(description = "Rename a top-level declaration and update all references within the file. Returns the old name, new name, and UUID.")]
-    async fn rename_declaration(
-        &self,
-        Parameters(input): Parameters<RenameDeclarationInput>,
-    ) -> Result<CallToolResult, McpError> {
-        // Validate path safety
-        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
-        let canonical = validated_path.to_string_lossy().to_string();
-
-        let contents = std::fs::read_to_string(&canonical)
-            .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
-        let module = Module::from_source(&contents)
-            .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
-
-        let (id, _kind) = find_decl_by_name(&module, &input.old_name)?;
-
-        let mut editor = module.edit();
-        editor.rename(id, &input.new_name)
-            .map_err(|e| mcp_err(format!("Failed to rename declaration: {e}")))?;
-
-        let module = editor.commit();
-
-        std::fs::write(&canonical, module.source())
-            .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
-
-        // Capture file mtime after write
-        let mtime = std::fs::metadata(&canonical)
-            .and_then(|m| m.modified())
-            .unwrap_or_else(|_| SystemTime::now());
-
-        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
-
-        let result = serialize::RenameDeclResult {
-            old_name: input.old_name,
-            new_name: input.new_name,
-            uuid: id.to_string(),
-        };
-        let json = serde_json::to_string_pretty(&result)
-            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    // --- Tool 18: add_method ---
-    #[tool(description = "Add a method to a class in a .pluto source file. The method source must include a self parameter. Returns the UUID and name of the added method.")]
-    async fn add_method(
-        &self,
-        Parameters(input): Parameters<AddMethodInput>,
-    ) -> Result<CallToolResult, McpError> {
-        // Validate path safety
-        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
-        let canonical = validated_path.to_string_lossy().to_string();
-
-        let contents = std::fs::read_to_string(&canonical)
-            .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
-        let module = Module::from_source(&contents)
-            .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
-
-        let class_id = find_class_by_name(&module, &input.class_name)?;
-
-        let mut editor = module.edit();
-        let method_id = editor.add_method_from_source(class_id, &input.source)
-            .map_err(|e| mcp_err(format!("Failed to add method: {e}")))?;
-
-        // Get method name from the editor's in-progress program before commit
-        let method_name = editor.program().classes.iter()
-            .flat_map(|c| c.node.methods.iter())
-            .find(|m| m.node.id == method_id)
-            .map(|m| m.node.name.node.clone())
-            .unwrap_or_default();
-
-        let module = editor.commit();
-
-        std::fs::write(&canonical, module.source())
-            .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
-
-        // Capture file mtime after write
-        let mtime = std::fs::metadata(&canonical)
-            .and_then(|m| m.modified())
-            .unwrap_or_else(|_| SystemTime::now());
-
-        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
-
-        let result = serialize::AddMethodResult {
-            uuid: method_id.to_string(),
-            name: method_name,
-        };
-        let json = serde_json::to_string_pretty(&result)
-            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    // --- Tool 19: add_field ---
-    #[tool(description = "Add a field to a class in a .pluto source file. Returns the UUID of the added field.")]
-    async fn add_field(
-        &self,
-        Parameters(input): Parameters<AddFieldInput>,
-    ) -> Result<CallToolResult, McpError> {
-        // Validate path safety
-        let validated_path = validate_write_path(&self.project_root, &input.path).await?;
-        let canonical = validated_path.to_string_lossy().to_string();
-
-        let contents = std::fs::read_to_string(&canonical)
-            .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
-        let module = Module::from_source(&contents)
-            .map_err(|e| mcp_internal(format!("Failed to parse file: {e}")))?;
-
-        let class_id = find_class_by_name(&module, &input.class_name)?;
-
-        let mut editor = module.edit();
-        let field_id = editor.add_field(class_id, &input.field_name, &input.field_type)
-            .map_err(|e| mcp_err(format!("Failed to add field: {e}")))?;
-
-        let module = editor.commit();
-
-        std::fs::write(&canonical, module.source())
-            .map_err(|e| mcp_internal(format!("Failed to write file: {e}")))?;
-
-        // Capture file mtime after write
-        let mtime = std::fs::metadata(&canonical)
-            .and_then(|m| m.modified())
-            .unwrap_or_else(|_| SystemTime::now());
-
-        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
-
-        let result = serialize::AddFieldResult { uuid: field_id.to_string() };
-        let json = serde_json::to_string_pretty(&result)
-            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    // --- Tool 20: docs ---
+    // --- Tool 14: docs ---
     #[tool(description = "Get Pluto language reference documentation. Optionally filter by topic: types, operators, statements, declarations, strings, errors, closures, generics, modules, contracts, concurrency, gotchas. Returns markdown-formatted reference text.")]
     async fn docs(
         &self,
@@ -1402,49 +1061,7 @@ impl PlutoMcp {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    // --- Tool 24: sync_pt ---
-    #[tool(description = "Sync human edits from a .pt text file back to a .pluto binary file, preserving UUIDs where declarations match by name.")]
-    async fn sync_pt(
-        &self,
-        Parameters(input): Parameters<SyncPtInput>,
-    ) -> Result<CallToolResult, McpError> {
-        let pt_path = Path::new(&input.pt_path);
-        if !pt_path.exists() {
-            return Err(mcp_err(format!(
-                ".pt file not found: {}",
-                input.pt_path
-            )));
-        }
-
-        // Determine .pluto path: use provided or default to same name with .pluto extension
-        let pluto_path = match input.pluto_path {
-            Some(p) => PathBuf::from(p),
-            None => {
-                let mut path = pt_path.to_path_buf();
-                path.set_extension("pluto");
-                path
-            }
-        };
-
-        // Run sync operation
-        let result = pluto::sync::sync_pt_to_pluto(&pt_path, &pluto_path).map_err(|e| {
-            mcp_internal(format!("Sync failed: {e}"))
-        })?;
-
-        // Convert to serializable format
-        let result_info = serialize::SyncResultInfo {
-            added: result.added,
-            removed: result.removed,
-            modified: result.modified,
-            unchanged: result.unchanged,
-        };
-
-        let json = serde_json::to_string_pretty(&result_info)
-            .map_err(|e| mcp_internal(format!("JSON serialization failed: {e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    // --- Tool 25: pretty_print ---
+    // --- Tool 15: pretty_print ---
     #[tool(description = "Pretty-print a loaded module or specific declaration as Pluto source text. Optionally include UUID hints.")]
     async fn pretty_print(
         &self,
@@ -1675,64 +1292,8 @@ fn has_cycle_dfs<'a>(
     None
 }
 
-// --- Write tool helpers ---
-
-/// Find a top-level declaration by name, returning its UUID and kind string.
-fn find_decl_by_name(module: &Module, name: &str) -> Result<(Uuid, &'static str), McpError> {
-    let matches = module.find(name);
-    // Filter to top-level declarations only
-    let top_level: Vec<_> = matches.iter()
-        .filter(|d| matches!(d.kind(),
-            DeclKind::Function | DeclKind::Class | DeclKind::Enum |
-            DeclKind::Trait | DeclKind::Error | DeclKind::App))
-        .collect();
-    match top_level.len() {
-        0 => Err(mcp_err(format!("No top-level declaration named '{name}' found"))),
-        1 => Ok((top_level[0].id(), serialize::decl_kind_to_string(top_level[0].kind()))),
-        _ => Err(mcp_err(format!("Ambiguous name '{name}' ({} top-level matches)", top_level.len()))),
-    }
-}
-
-/// Find a class by name, returning its UUID.
-fn find_class_by_name(module: &Module, name: &str) -> Result<Uuid, McpError> {
-    let matches = module.find(name);
-    for d in &matches {
-        if d.kind() == DeclKind::Class {
-            return Ok(d.id());
-        }
-    }
-    Err(mcp_err(format!("No class named '{name}' found")))
-}
-
-/// Convert DanglingRefKind to a string label.
-fn dangling_ref_kind_str(kind: DanglingRefKind) -> String {
-    match kind {
-        DanglingRefKind::Call => "call".to_string(),
-        DanglingRefKind::StructLit => "struct_lit".to_string(),
-        DanglingRefKind::EnumUsage => "enum_usage".to_string(),
-        DanglingRefKind::Raise => "raise".to_string(),
-        DanglingRefKind::MatchArm => "match_arm".to_string(),
-        DanglingRefKind::TypeRef => "type_ref".to_string(),
-    }
-}
-
 // --- Helper methods ---
 impl PlutoMcp {
-    /// Resolve a path, creating the file if it doesn't exist.
-    fn resolve_or_create_path(&self, path: &str) -> Result<String, McpError> {
-        let p = Path::new(path);
-        if !p.exists() {
-            // Create parent directories if needed
-            if let Some(parent) = p.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| mcp_internal(format!("Failed to create directories: {e}")))?;
-            }
-            std::fs::write(p, "")
-                .map_err(|e| mcp_internal(format!("Failed to create file: {e}")))?;
-        }
-        Ok(canon(path))
-    }
-
     fn find_module<'a>(
         &self,
         modules: &'a HashMap<String, ModuleMetadata>,
@@ -1918,7 +1479,7 @@ impl ServerHandler for PlutoMcp {
                 website_url: None,
             },
             instructions: Some(
-                "Pluto language MCP server. Load a .pluto source file with load_module, or scan a project directory with load_project. Then query declarations, types, error sets, and cross-references. Use add_declaration, replace_declaration, delete_declaration, rename_declaration, add_method, and add_field to edit source files. Use check to type-check, compile to build, run to execute, and test to run tests. Use docs to get language reference documentation and stdlib_docs to explore available stdlib modules and functions.".to_string()
+                "Pluto language MCP server (read-only). Load a .pluto or .pt source file with load_module, or scan a project directory with load_project. Then query declarations, types, error sets, and cross-references. Use check to type-check, compile to build, run to execute, and test to run tests. Use docs to get language reference documentation and stdlib_docs to explore available stdlib modules and functions.".to_string()
             ),
         }
     }

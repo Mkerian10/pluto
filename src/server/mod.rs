@@ -32,9 +32,8 @@ use uuid::Uuid;
 /// 3. **Cross-References & Analysis** (7 methods) - Finding usages, call graphs, etc.
 /// 4. **Source Access** (2 methods) - Reading source code
 /// 5. **Compilation & Execution** (4 methods) - Building and running programs
-/// 6. **Editing Operations** (6 methods) - Modifying source files
-/// 7. **Format & Sync** (2 methods) - Pretty-printing and syncing
-/// 8. **Documentation** (2 methods) - Language and stdlib docs
+/// 6. **Analysis** (1 method) - Enriching binaries with derived data
+/// 7. **Documentation** (2 methods) - Language and stdlib docs
 ///
 /// ## Implementations
 ///
@@ -148,46 +147,7 @@ pub trait CompilerService {
     /// Default timeout: 30s, max: 60s. Returns compilation errors or test execution results.
     fn test(&self, path: &Path, opts: &TestOptions) -> TestResult;
 
-    // ========== Editing Operations (6 methods) ==========
-
-    /// Add a new top-level declaration to a .pluto source file.
-    ///
-    /// The file is created if it doesn't exist. Returns the UUID, name, and kind of the added declaration.
-    /// Supports multiple declarations in a single source string — all will be added.
-    fn add_declaration(&mut self, path: &Path, source: &str) -> Result<EditResult, ServiceError>;
-
-    /// Replace a top-level declaration in a .pluto source file with new source code.
-    ///
-    /// The replacement must be the same kind (function→function, class→class, etc.).
-    /// Identifies the target by name.
-    fn replace_declaration(&mut self, path: &Path, name: &str, source: &str) -> Result<EditResult, ServiceError>;
-
-    /// Delete a top-level declaration from a .pluto source file.
-    ///
-    /// Returns the deleted source text and any dangling references found.
-    fn delete_declaration(&mut self, path: &Path, name: &str) -> Result<DeleteResult, ServiceError>;
-
-    /// Rename a top-level declaration and update all references within the file.
-    ///
-    /// Returns the old name, new name, and UUID.
-    fn rename_declaration(&mut self, path: &Path, old_name: &str, new_name: &str) -> Result<EditResult, ServiceError>;
-
-    /// Add a method to a class in a .pluto source file.
-    ///
-    /// The method source must include a self parameter. Returns the UUID and name of the added method.
-    fn add_method(&mut self, path: &Path, class_name: &str, source: &str) -> Result<EditResult, ServiceError>;
-
-    /// Add a field to a class in a .pluto source file.
-    ///
-    /// Returns the UUID of the added field.
-    fn add_field(&mut self, path: &Path, class_name: &str, field_name: &str, field_type: &str) -> Result<EditResult, ServiceError>;
-
-    // ========== Format & Sync (2 methods) ==========
-
-    /// Sync human edits from a .pt text file back to a .pluto binary file.
-    ///
-    /// Preserves UUIDs where declarations match by name.
-    fn sync_pt(&mut self, pt_path: &Path, pluto_path: &Path) -> Result<SyncResult, ServiceError>;
+    // ========== Analysis (1 method) ==========
 
     /// Analyze a file and update its PLTO binary with derived analysis data.
     ///
