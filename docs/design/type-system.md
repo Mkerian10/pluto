@@ -184,10 +184,12 @@ let x = identity(42)        // inferred as identity<int>
 ```
 
 Key properties:
-- Function type arguments are always inferred (no explicit type args on calls)
+- Function type arguments can be inferred or explicit: `identity(42)` or `identity<int>(42)`
 - Monomorphized names use `__` mangling: `Box__int`, `identity__string`
 - Generic classes, functions, and enums are supported
-- Current restrictions: no generic trait impls, no DI on generic classes, no type bounds
+- Type bounds: `<T: Trait>`, `<T: Trait1 + Trait2>` — validated at all instantiation sites
+- Generic classes can implement traits: `class Box<T> impl Printable`
+- DI on generic classes: `class Repo<T>[db: Database]` — fully supported
 
 ## Maps and Sets
 
@@ -256,7 +258,9 @@ Key properties:
 
 ## Secret<T>
 
-`Secret<T>` is a built-in generic class that wraps a value and prevents accidental leakage. The compiler enforces the protection — this is a guarantee, not a convention.
+> **Status: Designed, not yet implemented.**
+
+`Secret<T>` is a planned built-in generic class that wraps a value and prevents accidental leakage. The compiler will enforce the protection — this is a guarantee, not a convention.
 
 ```
 let password: Secret<string> = get_password()

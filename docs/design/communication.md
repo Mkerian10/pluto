@@ -60,42 +60,34 @@ Channels are for when synchronous call/response is not the right model:
 Channels are **directional** — separate send and receive ends:
 
 ```
-let (tx, rx) = chan<Order>()
+let ch = chan<Order>()
 
-// Buffered channel
-let (tx, rx) = chan<Order>(buffer: 100)
+// ch.sender and ch.receiver are separate typed handles
 ```
 
 ### Sending and Receiving
 
-Channel operations are **fallible** and must be handled:
+Channel operations use method syntax:
 
 ```
-// Send — can fail (full, disconnected, network error)
-tx <- msg ! "sending order"
-tx <- msg catch err { log(err) }
+// Send — can fail (disconnected)
+ch.sender.send(msg)!
 
-// Receive — can fail (empty, disconnected, timeout)
-let val = <-rx ! "waiting for response"
-let val = <-rx catch err {
-    // handle error
-    default_value
-}
+// Receive — can fail (empty, disconnected)
+let val = ch.receiver.recv()!
+
+// Non-blocking variants
+let sent = ch.sender.try_send(msg)   // returns bool
+let val = ch.receiver.try_recv()      // returns T?
 ```
 
-### Explicit Blocking
+### Iteration
 
-Blocking is opt-in, not the default:
+Receivers support for-in iteration:
 
 ```
-// Block until operation succeeds
-tx.wait() <- msg
-let val = <-rx.wait()
-
-// Bounded wait
-let val = <-rx.timeout(5.seconds) catch {
-    TimeoutError => retry(),
-    Disconnected => shutdown(),
+for msg in ch.receiver {
+    process(msg)
 }
 ```
 
