@@ -316,12 +316,28 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
     let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
 
 
-    let (mut program, _source_map) = modules::flatten_modules(graph)?;
+    let (mut program, source_map) = modules::flatten_modules(graph)?;
 
     let result = run_frontend(&mut program, false)?;
     let derived = derived::DerivedInfo::build(&result.env, &program, &source);
 
-    Ok((program, source, derived, result.warnings))
+    // Filter warnings to only include those from the entry file
+    // Find the entry file's ID in the source map
+    let entry_file_id = source_map.files.iter()
+        .position(|(path, _)| path == &entry_file)
+        .map(|pos| pos as u32);
+
+    let filtered_warnings: Vec<CompileWarning> = if let Some(file_id) = entry_file_id {
+        result.warnings.into_iter()
+            .filter(|w| w.span.file_id == file_id)
+            .collect()
+    } else {
+        // Fallback: if we can't find the entry file in source map, return all warnings
+        // This shouldn't happen but is safer than returning no warnings
+        result.warnings
+    };
+
+    Ok((program, source, derived, filtered_warnings))
 }
 
 /// Analyze an existing .pluto file and update it with fresh derived data.

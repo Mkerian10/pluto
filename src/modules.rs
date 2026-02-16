@@ -124,6 +124,10 @@ impl VisitMut for FileIdSetter {
 
     fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
         stmt.span.file_id = self.file_id;
+        // Set file_id on variable names in Let statements
+        if let Stmt::Let { name, .. } = &mut stmt.node {
+            name.span.file_id = self.file_id;
+        }
         walk_stmt_mut(self, stmt);
     }
 
@@ -149,7 +153,9 @@ fn load_and_parse(path: &Path, source_map: &mut SourceMap) -> Result<(Program, u
     let source = std::fs::read_to_string(path).map_err(|e| {
         CompileError::codegen(format!("could not read '{}': {e}", path.display()))
     })?;
-    let file_id = source_map.add_file(path.to_path_buf(), source.clone());
+    // Canonicalize path before adding to source_map to ensure consistent path comparisons
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let file_id = source_map.add_file(canonical_path, source.clone());
     let tokens = lexer::lex(&source)?;
     let mut parser = Parser::new_with_path(&tokens, &source, path.display().to_string());
     let mut program = parser.parse_program()?;
