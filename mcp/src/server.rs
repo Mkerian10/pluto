@@ -172,12 +172,12 @@ impl PlutoMcp {
                 .map_err(|e| mcp_internal(format!("Failed to analyze source: {e}")))?
         };
 
-        // Build summary
-        let funcs = module.functions();
-        let classes = module.classes();
-        let enums = module.enums();
-        let traits = module.traits();
-        let errors = module.errors();
+        // Build summary (only local declarations, not imports)
+        let funcs = module.local_functions();
+        let classes = module.local_classes();
+        let enums = module.local_enums();
+        let traits = module.local_traits();
+        let errors = module.local_errors();
         let app = module.app();
 
         let mut declarations = Vec::new();
@@ -237,19 +237,19 @@ impl PlutoMcp {
         let module = &metadata.module;
 
         let decls: Vec<serialize::DeclSummary> = match input.kind.as_deref() {
-            Some("function") => module.functions().iter().map(serialize::decl_to_summary).collect(),
-            Some("class") => module.classes().iter().map(serialize::decl_to_summary).collect(),
-            Some("enum") => module.enums().iter().map(serialize::decl_to_summary).collect(),
-            Some("trait") => module.traits().iter().map(serialize::decl_to_summary).collect(),
-            Some("error") => module.errors().iter().map(serialize::decl_to_summary).collect(),
+            Some("function") => module.local_functions().iter().map(serialize::decl_to_summary).collect(),
+            Some("class") => module.local_classes().iter().map(serialize::decl_to_summary).collect(),
+            Some("enum") => module.local_enums().iter().map(serialize::decl_to_summary).collect(),
+            Some("trait") => module.local_traits().iter().map(serialize::decl_to_summary).collect(),
+            Some("error") => module.local_errors().iter().map(serialize::decl_to_summary).collect(),
             Some("app") => module.app().iter().map(serialize::decl_to_summary).collect(),
             None => {
                 let mut all = Vec::new();
-                for d in module.functions() { all.push(serialize::decl_to_summary(&d)); }
-                for d in module.classes() { all.push(serialize::decl_to_summary(&d)); }
-                for d in module.enums() { all.push(serialize::decl_to_summary(&d)); }
-                for d in module.traits() { all.push(serialize::decl_to_summary(&d)); }
-                for d in module.errors() { all.push(serialize::decl_to_summary(&d)); }
+                for d in module.local_functions() { all.push(serialize::decl_to_summary(&d)); }
+                for d in module.local_classes() { all.push(serialize::decl_to_summary(&d)); }
+                for d in module.local_enums() { all.push(serialize::decl_to_summary(&d)); }
+                for d in module.local_traits() { all.push(serialize::decl_to_summary(&d)); }
+                for d in module.local_errors() { all.push(serialize::decl_to_summary(&d)); }
                 if let Some(a) = module.app() { all.push(serialize::decl_to_summary(&a)); }
                 all
             }
@@ -690,11 +690,11 @@ impl PlutoMcp {
             let canonical = canon(&file.to_string_lossy());
             match Module::from_source_file_with_stdlib(&canonical, stdlib_path.as_deref()) {
                 Ok(module) => {
-                    let decl_count = module.functions().len()
-                        + module.classes().len()
-                        + module.enums().len()
-                        + module.traits().len()
-                        + module.errors().len()
+                    let decl_count = module.local_functions().len()
+                        + module.local_classes().len()
+                        + module.local_enums().len()
+                        + module.local_traits().len()
+                        + module.local_errors().len()
                         + if module.app().is_some() { 1 } else { 0 };
                     modules_loaded.push(serialize::ModuleBrief {
                         path: canonical.clone(),
@@ -807,11 +807,11 @@ impl PlutoMcp {
             .iter()
             .map(|(path, metadata)| {
                 let module = &metadata.module;
-                let funcs = module.functions().len();
-                let classes = module.classes().len();
-                let enums = module.enums().len();
-                let traits = module.traits().len();
-                let errors = module.errors().len();
+                let funcs = module.local_functions().len();
+                let classes = module.local_classes().len();
+                let enums = module.local_enums().len();
+                let traits = module.local_traits().len();
+                let errors = module.local_errors().len();
                 let app = if module.app().is_some() { 1 } else { 0 };
                 serialize::ModuleListEntry {
                     path: path.clone(),
@@ -865,6 +865,10 @@ impl PlutoMcp {
             let module = &metadata.module;
             let matches = module.find(&input.name);
             for decl in matches {
+                // Skip imported declarations (those with '.' in name)
+                if decl.name().contains('.') {
+                    continue;
+                }
                 if let Some(filter) = &kind_filter {
                     if decl.kind() != *filter {
                         continue;
