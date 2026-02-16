@@ -90,8 +90,22 @@ impl Module {
 
     // --- Listing methods ---
 
+    /// Returns true if a declaration name indicates it came from an import.
+    /// Imported declarations have names like "module.name" or "std.strings.split".
+    fn is_imported(name: &str) -> bool {
+        name.contains('.')
+    }
+
     pub fn functions(&self) -> Vec<DeclRef<'_>> {
         self.program.functions.iter()
+            .map(|f| DeclRef::function(&f.node))
+            .collect()
+    }
+
+    /// Returns only functions defined in this source file (excludes imports).
+    pub fn local_functions(&self) -> Vec<DeclRef<'_>> {
+        self.program.functions.iter()
+            .filter(|f| !Self::is_imported(&f.node.name.node))
             .map(|f| DeclRef::function(&f.node))
             .collect()
     }
@@ -102,8 +116,24 @@ impl Module {
             .collect()
     }
 
+    /// Returns only classes defined in this source file (excludes imports).
+    pub fn local_classes(&self) -> Vec<DeclRef<'_>> {
+        self.program.classes.iter()
+            .filter(|c| !Self::is_imported(&c.node.name.node))
+            .map(|c| DeclRef::class(&c.node))
+            .collect()
+    }
+
     pub fn enums(&self) -> Vec<DeclRef<'_>> {
         self.program.enums.iter()
+            .map(|e| DeclRef::enum_decl(&e.node))
+            .collect()
+    }
+
+    /// Returns only enums defined in this source file (excludes imports).
+    pub fn local_enums(&self) -> Vec<DeclRef<'_>> {
+        self.program.enums.iter()
+            .filter(|e| !Self::is_imported(&e.node.name.node))
             .map(|e| DeclRef::enum_decl(&e.node))
             .collect()
     }
@@ -114,8 +144,24 @@ impl Module {
             .collect()
     }
 
+    /// Returns only traits defined in this source file (excludes imports).
+    pub fn local_traits(&self) -> Vec<DeclRef<'_>> {
+        self.program.traits.iter()
+            .filter(|t| !Self::is_imported(&t.node.name.node))
+            .map(|t| DeclRef::trait_decl(&t.node))
+            .collect()
+    }
+
     pub fn errors(&self) -> Vec<DeclRef<'_>> {
         self.program.errors.iter()
+            .map(|e| DeclRef::error_decl(&e.node))
+            .collect()
+    }
+
+    /// Returns only errors defined in this source file (excludes imports).
+    pub fn local_errors(&self) -> Vec<DeclRef<'_>> {
+        self.program.errors.iter()
+            .filter(|e| !Self::is_imported(&e.node.name.node))
             .map(|e| DeclRef::error_decl(&e.node))
             .collect()
     }
