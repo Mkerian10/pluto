@@ -1,5 +1,7 @@
 # Runtime Architecture
 
+> This document describes the C runtime implementation. For the high-level runtime vision (process lifecycle, crash recovery, geographic scheduling), see [Runtime](runtime.md).
+
 ## Overview
 
 The Pluto runtime is written in C and split into three modules for modularity, testability, and maintainability. The total runtime is ~4700 lines of C code.
@@ -290,7 +292,7 @@ Potential improvements (not yet implemented):
 
 ## See Also
 
-- `docs/design/concurrency.md` — Concurrency model deep dive
+- `docs/design/channels.md` — Channel design
 - `docs/design/memory-model.md` — Memory layout and GC details
 - `docs/design/contracts.md` — Runtime contract enforcement
 - `CLAUDE.md` — Build and test commands

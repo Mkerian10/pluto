@@ -1,8 +1,10 @@
 # Runtime
 
+> For the detailed C runtime implementation (module structure, GC internals, threading API, build process), see [Runtime Architecture](runtime-architecture.md).
+
 ## Current Implementation
 
-The current compiler links a small C runtime (`runtime/builtins.c`) that provides printing, allocation, string/array/map/set operations, error handling, and garbage collection. For the concrete ABI and data layouts, see `docs/design/compiler-runtime-abi.md`.
+The current compiler links a C runtime split across several modules (`gc.c`, `threading.c`, `builtins.c`) that provides printing, allocation, string/array/map/set operations, error handling, garbage collection, and concurrency primitives. For the concrete ABI and data layouts, see [Compiler Runtime ABI](compiler-runtime-abi.md). For module structure and C APIs, see [Runtime Architecture](runtime-architecture.md).
 
 ### Garbage Collection
 

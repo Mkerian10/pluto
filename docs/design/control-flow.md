@@ -53,7 +53,7 @@ loop { ... }   // infinite, break to exit
 
 ## Resolved
 
-- [x] Process spawning — `spawn func(args)` returns `Task<T>`, `.get()` blocks for result (see [Concurrency](../design/concurrency.md))
+- [x] Process spawning — `spawn func(args)` returns `Task<T>`, `.get()` blocks for result
 - [x] Range syntax — `0..n` (exclusive) and `0..=n` (inclusive) for integer iteration in `for` loops
 - [x] `loop` keyword — rejected; use `while true` instead
 - [x] Closures / lambdas — arrow syntax `(x: int) => x + 1`, capture by value (see [Type System](type-system.md))

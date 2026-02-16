@@ -1,13 +1,12 @@
-# RFC: Pluto Wire Format (Phase 1 RPC)
+# RFC: Pluto Wire Format
 
 > **Status:** Design — Ready for implementation
-> **Priority:** CRITICAL — Foundation for RPC
-> **Effort:** 1 week (Phase 1 of RFC-RPC-Implementation)
+> **Priority:** High — Foundation for serialization and distributed systems
 > **Date:** February 2026
 
 ## Executive Summary
 
-Pluto needs a binary serialization format for all types to support RPC and distributed systems. This RFC specifies a simple, self-describing binary format that is:
+Pluto needs a binary serialization format for all types to support schema encoding, distributed systems, and future RPC. This RFC specifies a simple, self-describing binary format that is:
 
 - **Type-safe:** All types encode their descriptor
 - **Version-aware:** Can evolve without breaking compatibility
@@ -211,7 +210,7 @@ Current version: `0x01`
 
 ---
 
-## Impl Strategy (Phase 1)
+## Implementation Strategy
 
 ### New `std.wire` Module
 
@@ -273,7 +272,7 @@ At deserialize:
 
 ---
 
-## Testing Strategy (Phase 1)
+## Testing Strategy
 
 **Unit tests** in `tests/integration/wire.rs`:
 
@@ -337,6 +336,5 @@ test "roundtrip_class" {
 
 ## References
 
-- RFC-RPC-Implementation (Phase 1 context)
-- communication.md (overall RPC design)
+- `docs/design/communication.md` — Overall communication model (future)
 - Similar formats: Protocol Buffers, Thrift, MessagePack (reference, not copying)

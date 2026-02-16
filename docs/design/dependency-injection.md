@@ -256,7 +256,7 @@ This class:
 - **Manages its own sync lifecycle** (`start_sync` runs forever, refreshing periodically)
 - **Gets its external dependency injected** (`DiscoveryClient` — could be Consul, DNS, a mock)
 - **Is fully testable** — inject a mock `DiscoveryClient`, call `refresh()`, assert the map contents
-- **Is automatically thread-safe** — the compiler sees concurrent access and adds synchronization (see [Concurrency v2 RFC](rfc-concurrency-v2.md))
+- **Is automatically thread-safe** — the compiler sees concurrent access and adds synchronization
 
 The consuming code doesn't know or care about any of this:
 
