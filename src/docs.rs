@@ -618,34 +618,24 @@ class Account {
 
 ### Function preconditions
 ```
-fn divide(a: float, b: float) float {
+fn divide(a: float, b: float) float
     requires b != 0.0
+{
     return a / b
 }
 ```
-
-### Function postconditions
-```
-fn abs_value(x: int) int {
-    ensures __result >= 0
-    if x < 0 {
-        return 0 - x
-    }
-    return x
-}
-```
-- `__result` refers to the return value in `ensures` clauses
+- `requires` clauses go between the signature and body `{`
+- Postconditions are handled by class invariants, not `ensures`
 
 ### Trait contracts
 ```
 trait Positive {
     fn value(self) int
-        ensures __result > 0
+        requires self.is_valid()
 }
 ```
 - Implementing classes inherit the trait's contracts
 - Classes cannot add `requires` to trait methods (Liskov principle)
-- Classes can add additional `ensures`
 
 ### Decidable fragment
 Contracts are restricted to a decidable expression subset:

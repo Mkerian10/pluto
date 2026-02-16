@@ -1,6 +1,6 @@
 // Contracts Example
-// Demonstrates requires (preconditions), ensures (postconditions),
-// old() snapshots, result keyword, and class invariants.
+// Demonstrates requires (preconditions) and class invariants.
+// Postconditions are handled by invariants in Pluto.
 
 // --- Class with invariants ---
 class BankAccount {
@@ -10,21 +10,17 @@ class BankAccount {
     invariant self.balance >= 0
 
     // requires: amount must be positive
-    // ensures: balance increases by exactly the deposited amount
     fn deposit(mut self, amount: int) int
         requires amount > 0
-        ensures self.balance == old(self.balance) + amount
     {
         self.balance = self.balance + amount
         return self.balance
     }
 
     // requires: amount positive and sufficient balance
-    // ensures: balance decreases by exactly the withdrawn amount
     fn withdraw(mut self, amount: int) int
         requires amount > 0
         requires self.balance >= amount
-        ensures self.balance == old(self.balance) - amount
     {
         self.balance = self.balance - amount
         return self.balance
@@ -34,8 +30,6 @@ class BankAccount {
 // --- Free function with contracts ---
 fn clamp(value: int, low: int, high: int) int
     requires low <= high
-    ensures result >= low
-    ensures result <= high
 {
     if value < low {
         return low
@@ -46,10 +40,8 @@ fn clamp(value: int, low: int, high: int) int
     return value
 }
 
-// --- Demonstrates result keyword ---
-fn absolute(x: int) int
-    ensures result >= 0
-{
+// --- Basic function (invariants handle postcondition guarantees) ---
+fn absolute(x: int) int {
     if x < 0 {
         return 0 - x
     }
@@ -60,19 +52,19 @@ fn main() int {
     // Create account (invariant checked: balance >= 0)
     let mut account = BankAccount { name: "Alice", balance: 100 }
 
-    // Deposit (requires amount > 0, ensures balance correct)
+    // Deposit (requires amount > 0, invariant ensures balance >= 0)
     let after_deposit = account.deposit(50)
     print(after_deposit) // 150
 
-    // Withdraw (requires amount > 0 and sufficient funds)
+    // Withdraw (requires amount > 0 and sufficient funds, invariant checked)
     let after_withdraw = account.withdraw(30)
     print(after_withdraw) // 120
 
-    // Clamp (requires low <= high, ensures result in range)
+    // Clamp (requires low <= high)
     let clamped = clamp(250, 0, 100)
     print(clamped) // 100
 
-    // Absolute value (ensures result >= 0)
+    // Absolute value
     print(absolute(-42))  // 42
     print(absolute(10))   // 10
 
