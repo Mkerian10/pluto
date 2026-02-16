@@ -1519,8 +1519,7 @@ impl PlutoMcp {
 /// (a module directory), only the first is included (the compiler auto-merges siblings).
 fn discover_pluto_files(root: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
     let mut files = Vec::new();
-    let mut seen_dirs = std::collections::HashSet::new();
-    walk_dir(root, &mut files, &mut seen_dirs)?;
+    walk_dir(root, &mut files)?;
     files.sort();
     Ok(files)
 }
@@ -1528,7 +1527,6 @@ fn discover_pluto_files(root: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
 fn walk_dir(
     dir: &Path,
     files: &mut Vec<PathBuf>,
-    seen_dirs: &mut std::collections::HashSet<PathBuf>,
 ) -> Result<(), std::io::Error> {
     let entries = std::fs::read_dir(dir)?;
     let mut subdirs = Vec::new();
@@ -1552,20 +1550,14 @@ fn walk_dir(
         }
     }
 
-    // For .pluto files in this directory: if the parent is already tracked
-    // as a module directory (by a sibling), skip duplicates
+    // Add all .pluto files from this directory
     if !pluto_files.is_empty() {
-        let parent = dir.to_path_buf();
-        if seen_dirs.insert(parent) {
-            // First time seeing this dir — take the first .pluto file
-            pluto_files.sort();
-            files.push(pluto_files[0].clone());
-        }
-        // else: already loaded a file from this dir, skip all
+        pluto_files.sort();
+        files.extend(pluto_files);
     }
 
     for subdir in subdirs {
-        walk_dir(&subdir, files, seen_dirs)?;
+        walk_dir(&subdir, files)?;
     }
     Ok(())
 }
