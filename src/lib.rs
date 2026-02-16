@@ -314,7 +314,7 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
     analyze_file_with_warnings_impl(entry_file, stdlib_root, false)
 }
 
-fn analyze_file_with_warnings_impl(entry_file: &Path, stdlib_root: Option<&Path>, standalone: bool) -> Result<(Program, String, derived::DerivedInfo, Vec<CompileWarning>), CompileError> {
+pub fn analyze_file_with_warnings_impl(entry_file: &Path, stdlib_root: Option<&Path>, standalone: bool) -> Result<(Program, String, derived::DerivedInfo, Vec<CompileWarning>), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
     let source = std::fs::read_to_string(&entry_file)

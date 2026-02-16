@@ -921,6 +921,7 @@ impl PlutoMcp {
         let canonical = canon(&input.path);
         let opts = service_types::CompileOptions {
             stdlib: input.stdlib.map(PathBuf::from),
+            standalone: true, // Check only the specified file, not siblings
             ..Default::default()
         };
 
@@ -956,6 +957,7 @@ impl PlutoMcp {
 
         let opts = service_types::CompileOptions {
             stdlib: input.stdlib.map(PathBuf::from),
+            standalone: true, // Compile only the specified file, not siblings
             ..Default::default()
         };
 
