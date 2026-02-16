@@ -368,24 +368,40 @@ test "another test in file b" {
 "#,
     ).unwrap();
 
-    let entry = dir.path().join("file_a.pluto");
-    let bin_path = dir.path().join("test_bin");
+    let entry_a = dir.path().join("file_a.pluto");
+    let entry_b = dir.path().join("file_b.pluto");
+    let bin_path_a = dir.path().join("test_bin_a");
+    let bin_path_b = dir.path().join("test_bin_b");
 
-    // Compile file_a in test mode - this should auto-include file_b as a sibling
-    // If test IDs are not unique, this will fail with duplicate symbol errors
-    pluto::compile_file_for_tests(&entry, &bin_path, None, false)
-        .unwrap_or_else(|e| panic!("Test compilation failed: {e}"));
+    // Compile file_a in test mode - siblings should NOT be auto-merged to prevent test ID collisions
+    pluto::compile_file_for_tests(&entry_a, &bin_path_a, None, false)
+        .unwrap_or_else(|e| panic!("Test compilation of file_a failed: {e}"));
 
-    // Run the test binary and verify all tests execute
-    let output = Command::new(&bin_path).output().unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Compile file_b separately
+    pluto::compile_file_for_tests(&entry_b, &bin_path_b, None, false)
+        .unwrap_or_else(|e| panic!("Test compilation of file_b failed: {e}"));
 
-    // All 4 tests should run successfully
-    assert!(output.status.success(), "Tests should pass. stderr: {}", stderr);
-    assert!(stdout.contains("test in file a ... ok"), "stdout: {}", stdout);
-    assert!(stdout.contains("another test in file a ... ok"), "stdout: {}", stdout);
-    assert!(stdout.contains("test in file b ... ok"), "stdout: {}", stdout);
-    assert!(stdout.contains("another test in file b ... ok"), "stdout: {}", stdout);
-    assert!(stdout.contains("4 tests passed"), "stdout: {}", stdout);
+    // Run file_a tests - should only see file_a's 2 tests
+    let output_a = Command::new(&bin_path_a).output().unwrap();
+    let stdout_a = String::from_utf8_lossy(&output_a.stdout);
+    let stderr_a = String::from_utf8_lossy(&output_a.stderr);
+
+    assert!(output_a.status.success(), "file_a tests should pass. stderr: {}", stderr_a);
+    assert!(stdout_a.contains("test in file a ... ok"), "stdout: {}", stdout_a);
+    assert!(stdout_a.contains("another test in file a ... ok"), "stdout: {}", stdout_a);
+    assert!(stdout_a.contains("2 tests passed"), "stdout: {}", stdout_a);
+    // Should NOT contain file_b tests
+    assert!(!stdout_a.contains("test in file b"), "file_a should not include file_b tests");
+
+    // Run file_b tests - should only see file_b's 2 tests
+    let output_b = Command::new(&bin_path_b).output().unwrap();
+    let stdout_b = String::from_utf8_lossy(&output_b.stdout);
+    let stderr_b = String::from_utf8_lossy(&output_b.stderr);
+
+    assert!(output_b.status.success(), "file_b tests should pass. stderr: {}", stderr_b);
+    assert!(stdout_b.contains("test in file b ... ok"), "stdout: {}", stdout_b);
+    assert!(stdout_b.contains("another test in file b ... ok"), "stdout: {}", stdout_b);
+    assert!(stdout_b.contains("2 tests passed"), "stdout: {}", stdout_b);
+    // Should NOT contain file_a tests
+    assert!(!stdout_b.contains("test in file a"), "file_b should not include file_a tests");
 }

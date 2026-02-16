@@ -504,7 +504,8 @@ fn compile_file_for_tests_impl(
 
     let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
     let pkg_graph = manifest::find_and_resolve(entry_dir)?;
-    let graph = modules::resolve_modules(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
+    // Use resolve_modules_no_siblings to compile test files in isolation and prevent test ID collisions
+    let graph = modules::resolve_modules_no_siblings(&entry_file, effective_stdlib.as_deref(), &pkg_graph)?;
 
 
     let (mut program, source_map) = modules::flatten_modules(graph)?;
