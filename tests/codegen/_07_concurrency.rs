@@ -154,13 +154,13 @@ fn test_spawn_hundred_tasks_concurrent() {
 
         fn main() {
             let tasks = [Task<int>; 100]
-            let i = 0
+            let mut i = 0
             while i < 100 {
                 tasks[i] = spawn identity(i)
                 i = i + 1
             }
-            let sum = 0
-            let j = 0
+            let mut sum = 0
+            let mut j = 0
             while j < 100 {
                 sum = sum + tasks[j].get()
                 j = j + 1
@@ -214,8 +214,8 @@ fn test_get_on_completed_task() {
 fn test_get_blocking_on_running_task() {
     let src = r#"
         fn slow() int {
-            let sum = 0
-            let i = 0
+            let mut sum = 0
+            let mut i = 0
             while i < 1000000 {
                 sum = sum + 1
                 i = i + 1
@@ -363,7 +363,7 @@ fn test_channel_recv_on_empty_channel() {
 fn test_channel_iteration() {
     let src = r#"
         fn producer(tx: Sender<int>) {
-            let i = 1
+            let mut i = 1
             while i <= 5 {
                 tx.send(i)!
                 i = i + 1
@@ -374,7 +374,7 @@ fn test_channel_iteration() {
         fn main() {
             let (tx, rx) = chan<int>(2)
             spawn producer(tx).detach()
-            let sum = 0
+            let mut sum = 0
             for val in rx {
                 sum = sum + val
             }
@@ -524,8 +524,8 @@ fn test_spawn_with_class_capture() {
 fn test_spawn_with_array_capture() {
     let src = r#"
         fn sum_array(arr: [int]) int {
-            let total = 0
-            let i = 0
+            let mut total = 0
+            let mut i = 0
             while i < arr.len() {
                 total = total + arr[i]
                 i = i + 1
@@ -584,13 +584,13 @@ fn test_channel_large_capacity() {
     let src = r#"
         fn main() {
             let (tx, rx) = chan<int>(1000)
-            let i = 0
+            let mut i = 0
             while i < 100 {
                 tx.send(i)!
                 i = i + 1
             }
-            let sum = 0
-            let j = 0
+            let mut sum = 0
+            let mut j = 0
             while j < 100 {
                 sum = sum + rx.recv()!
                 j = j + 1

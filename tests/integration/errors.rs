@@ -453,3 +453,11 @@ fn if_expr_error_type_unification() {
     );
     assert_eq!(out.trim(), "10");
 }
+
+#[test]
+fn assign_to_immutable_variable() {
+    compile_should_fail_with(
+        "fn main() {\n    let x = 1\n    x = 2\n}",
+        "cannot assign to immutable variable",
+    );
+}

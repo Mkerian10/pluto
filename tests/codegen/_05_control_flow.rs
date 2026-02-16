@@ -128,7 +128,7 @@ fn test_if_in_loop() {
     // If statement inside a loop
     let src = r#"
         fn main() {
-            let i = 0
+            let mut i = 0
             while i < 5 {
                 if i == 3 {
                     print(i)
@@ -197,7 +197,7 @@ fn test_while_true_with_break() {
     // Infinite loop with break
     let src = r#"
         fn main() int {
-            let i = 0
+            let mut i = 0
             while true {
                 i = i + 1
                 if i == 5 {
@@ -215,7 +215,7 @@ fn test_while_with_condition() {
     // While loop with condition
     let src = r#"
         fn main() int {
-            let i = 0
+            let mut i = 0
             while i < 10 {
                 i = i + 1
             }
@@ -230,7 +230,7 @@ fn test_while_zero_iterations() {
     // While loop that never executes
     let src = r#"
         fn main() int {
-            let i = 0
+            let mut i = 0
             while i > 10 {
                 i = i + 1
             }
@@ -245,7 +245,7 @@ fn test_for_loop_range() {
     // For loop over range
     let src = r#"
         fn main() int {
-            let sum = 0
+            let mut sum = 0
             for i in 0..5 {
                 sum = sum + i
             }
@@ -261,7 +261,7 @@ fn test_for_loop_inclusive_range() {
     // For loop over inclusive range
     let src = r#"
         fn main() int {
-            let sum = 0
+            let mut sum = 0
             for i in 0..=5 {
                 sum = sum + i
             }
@@ -277,7 +277,7 @@ fn test_nested_loops_2_levels() {
     // Nested loops (2 levels)
     let src = r#"
         fn main() int {
-            let sum = 0
+            let mut sum = 0
             for i in 0..3 {
                 for j in 0..3 {
                     sum = sum + 1
@@ -295,7 +295,7 @@ fn test_nested_loops_3_levels() {
     // Nested loops (3 levels)
     let src = r#"
         fn main() int {
-            let sum = 0
+            let mut sum = 0
             for i in 0..2 {
                 for j in 0..2 {
                     for k in 0..2 {
@@ -315,7 +315,7 @@ fn test_nested_loops_5_levels() {
     // Deeply nested loops (5 levels)
     let src = r#"
         fn main() int {
-            let sum = 0
+            let mut sum = 0
             for a in 0..2 {
                 for b in 0..2 {
                     for c in 0..2 {
@@ -339,7 +339,7 @@ fn test_loop_with_continue() {
     // Loop with continue statement
     let src = r#"
         fn main() int {
-            let sum = 0
+            let mut sum = 0
             for i in 0..10 {
                 if i % 2 == 0 {
                     continue
@@ -358,7 +358,7 @@ fn test_loop_with_break() {
     // Loop with break statement
     let src = r#"
         fn main() int {
-            let sum = 0
+            let mut sum = 0
             for i in 0..100 {
                 if i == 5 {
                     break
@@ -377,7 +377,7 @@ fn test_early_loop_exit() {
     // Early exit from nested loop
     let src = r#"
         fn main() int {
-            let found = 0
+            let mut found = 0
             for i in 0..10 {
                 for j in 0..10 {
                     if i == 3 && j == 7 {
@@ -419,7 +419,7 @@ fn test_loop_with_10000_iterations() {
     // Large loop (10,000 iterations)
     let src = r#"
         fn main() {
-            let i = 0
+            let mut i = 0
             while i < 10000 {
                 i = i + 1
             }
@@ -434,8 +434,8 @@ fn test_while_with_multiple_conditions() {
     // While loop with complex condition
     let src = r#"
         fn main() int {
-            let i = 0
-            let j = 10
+            let mut i = 0
+            let mut j = 10
             while i < 5 && j > 5 {
                 i = i + 1
                 j = j - 1
@@ -451,7 +451,7 @@ fn test_for_loop_empty_range() {
     // For loop over empty range
     let src = r#"
         fn main() int {
-            let sum = 0
+            let mut sum = 0
             for i in 5..5 {
                 sum = sum + i
             }
@@ -667,7 +667,7 @@ fn test_match_enum_in_loop() {
 
         fn main() int {
             let states: [State] = [State.Active, State.Inactive, State.Active]
-            let active_count = 0
+            let mut active_count = 0
 
             for i in 0..3 {
                 match states[i] {
@@ -930,7 +930,7 @@ fn test_loop_with_multiple_breaks() {
     // Loop with multiple break conditions
     let src = r#"
         fn main() int {
-            let i = 0
+            let mut i = 0
             while true {
                 i = i + 1
                 if i == 5 {
@@ -954,7 +954,7 @@ fn test_continue_skip_logic() {
     // Continue skipping subsequent logic
     let src = r#"
         fn main() int {
-            let sum = 0
+            let mut sum = 0
             for i in 0..10 {
                 if i == 5 {
                     continue
@@ -1011,7 +1011,7 @@ fn test_nested_match_and_loops() {
 
         fn main() int {
             let o = Outer.A
-            let result = 0
+            let mut result = 0
 
             match o {
                 Outer.A {
