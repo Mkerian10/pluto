@@ -681,7 +681,6 @@ impl PlutoMcp {
             .map_err(|e| mcp_internal(format!("Failed to scan directory: {e}")))?;
 
         let stdlib_path = input.stdlib.as_ref().map(|s| PathBuf::from(s));
-        let mut modules_loaded = Vec::new();
         let mut load_errors = Vec::new();
 
         let mut modules = self.modules.write().await;
@@ -703,16 +702,6 @@ impl PlutoMcp {
             // Parse without following imports (each file loaded independently)
             match Module::from_source(&source) {
                 Ok(module) => {
-                    let decl_count = module.local_functions().len()
-                        + module.local_classes().len()
-                        + module.local_enums().len()
-                        + module.local_traits().len()
-                        + module.local_errors().len()
-                        + if module.app().is_some() { 1 } else { 0 };
-                    modules_loaded.push(serialize::ModuleBrief {
-                        path: canonical.clone(),
-                        declarations: decl_count,
-                    });
                     // Capture file mtime when loading
                     let mtime = std::fs::metadata(&canonical)
                         .and_then(|m| m.modified())
@@ -727,6 +716,25 @@ impl PlutoMcp {
                 }
             }
         }
+
+        // Build modules_loaded from the deduplicated modules HashMap
+        let mut modules_loaded: Vec<serialize::ModuleBrief> = modules
+            .iter()
+            .map(|(path, metadata)| {
+                let module = &metadata.module;
+                let decl_count = module.local_functions().len()
+                    + module.local_classes().len()
+                    + module.local_enums().len()
+                    + module.local_traits().len()
+                    + module.local_errors().len()
+                    + if module.app().is_some() { 1 } else { 0 };
+                serialize::ModuleBrief {
+                    path: path.clone(),
+                    declarations: decl_count,
+                }
+            })
+            .collect();
+        modules_loaded.sort_by(|a, b| a.path.cmp(&b.path));
 
         *self.project_root.write().await = Some(root.clone());
 
