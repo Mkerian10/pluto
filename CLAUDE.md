@@ -12,8 +12,8 @@ cargo test --tests                 # Run all integration tests only
 cargo test --lib <test_name>       # Run a single unit test
 cargo test --test errors           # Run one integration test file
 cargo test --test errors <name>    # Run a single test in a file
-cargo run -- compile <file.pluto> -o <output>  # Compile a .pluto file
-cargo run -- run <file.pluto>      # Compile and immediately run
+cargo run -- compile <file.pt> -o <output>  # Compile a .pt source file
+cargo run -- run <file.pt>      # Compile and immediately run
 ```
 
 ## Compiler Pipeline
@@ -44,6 +44,8 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 **App + DI** — `app` declaration with `fn main(self)`. Classes use bracket deps `class Foo[dep: Type]` for injection. Compile-time topological sort wires singletons. Codegen synthesizes `main()` that allocates and connects all dependencies.
 
 **Modules** — `import math` with `pub` visibility. Flatten-before-typeck design: imported items get prefixed names (e.g., `math.add`). Supports directory modules, single-file modules, and hierarchical imports.
+
+**Dual file formats** — The compiler accepts both `.pt` (human-readable text source) and `.pluto` (binary AST with UUIDs). All entry points auto-detect format via magic bytes. Module resolution tries `.pluto` first, falls back to `.pt`. Stdlib and examples use `.pt`. When both `name.pluto` and `name.pt` exist, `.pluto` is preferred.
 
 **String interpolation** — `"hello {name}"` with arbitrary expressions inside `{}`.
 
@@ -175,7 +177,7 @@ git branch -d <feature-name>
 
 **Rebase onto master before merging** — Always resolve conflicts on your feature branch, never on master. Rebase your branch onto the latest master, fix any conflicts there, and verify tests pass. Then do a fast-forward merge to master. This keeps master's history clean and ensures conflicts are never resolved in a half-broken state on master.
 
-**Write examples for new features** — When adding a new user-facing feature (new stdlib module, new language construct, etc.), write an example in `examples/<name>/main.pluto` and add it to `examples/README.md` before rebasing and merging. Examples should be self-contained and demonstrate the feature's key capabilities. For stdlib features, include `--stdlib stdlib` in the run instructions.
+**Write examples for new features** — When adding a new user-facing feature (new stdlib module, new language construct, etc.), write an example in `examples/<name>/main.pt` and add it to `examples/README.md` before rebasing and merging. Examples should be self-contained and demonstrate the feature's key capabilities. For stdlib features, include `--stdlib stdlib` in the run instructions.
 
 **Merge checklist** — Before merging to `master`, verify ALL of the following:
 1. `cargo test` passes on your branch (all unit, integration, and module tests)
