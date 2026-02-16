@@ -45,7 +45,7 @@ class Counter {
 }
 ```
 
-> **Note:** `mut self` is parsed and type-checked, but enforcement is not yet implemented. Both `self` and `mut self` currently allow mutation.
+The compiler enforces mutability: only `mut self` methods can assign to `self.field`, and callers must hold a mutable reference to call `mut self` methods on an object.
 
 ### Composition and Chaining
 

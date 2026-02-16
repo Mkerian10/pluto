@@ -52,22 +52,9 @@ fn main() {
 
 The compiler infers that `fetch` is fallible and therefore `t.get()` is fallible. You handle it with `!` (propagate) or `catch` (handle locally), exactly like any other fallible call. No special error handling model for concurrent code.
 
-### Sleep and Timeouts
+### Waiting
 
-`sleep(ms)` pauses the current thread. Combined with `.get_timeout(ms)`, you can bound how long to wait:
-
-```
-fn slow_work() int {
-    sleep(5000)
-    return 42
-}
-
-fn main() {
-    let t = spawn slow_work()
-    let result = t.get_timeout(1000) catch -1
-    print(result)
-}
-```
+`.get()` blocks until the spawned function completes. There is no timeout variant -- if you need bounded waiting, use channels with `recv_timeout` instead.
 
 ## Channels
 
@@ -230,7 +217,7 @@ Use channels when data flows in one direction. Use DI singletons when multiple t
 When you `spawn func(args)`, every argument will be **deep-copied** into the spawned task. The task gets its own independent world:
 
 ```
-let mut data = [1, 2, 3]
+let data = [1, 2, 3]
 let task = spawn process(data)   // data is deep-copied
 data.push(4)                     // caller's copy, unaffected
 let result = task.get()!         // task worked on its own copy

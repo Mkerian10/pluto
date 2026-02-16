@@ -106,7 +106,7 @@ fn main() {
 }
 ```
 
-Type arguments are always inferred from usage -- you do not specify them at the call site.
+Type arguments are usually inferred from usage. You can also specify them explicitly: `identity<int>(42)`.
 
 ### Multiple Type Parameters
 
@@ -179,9 +179,50 @@ fn main() {
 
 `Box<int>` and `Box<string>` become completely separate types at compile time. No type erasure, no boxing, no vtable overhead. Generic code is as fast as hand-written specialized code, at the cost of binary size when many instantiations exist.
 
-### Current Restrictions
+### Type Bounds
 
-- **No type bounds.** Cannot constrain `T` to types implementing a trait. Planned.
-- **No explicit type arguments on function calls.** The compiler always infers.
-- **Generic classes cannot implement traits** (yet).
-- **No generic DI.** Classes with bracket deps cannot have type parameters.
+You can constrain type parameters to types that implement one or more traits:
+
+```
+fn print_area<T: HasArea>(shape: T) {
+    print(shape.area())
+}
+
+fn process<T: Readable + Writable>(item: T) {
+    let data = item.read()
+    item.write(data)
+}
+```
+
+The compiler validates bounds at every instantiation site.
+
+### Explicit Type Arguments
+
+Type arguments are usually inferred, but you can specify them explicitly:
+
+```
+let x = identity<int>(42)
+```
+
+### Generic Classes with Traits
+
+Generic classes can implement traits. The compiler validates method signatures after monomorphization:
+
+```
+class Box<T> impl Printable {
+    value: T
+    fn to_string(self) string { return "Box" }
+}
+```
+
+### Generic DI
+
+Classes with bracket deps can have type parameters:
+
+```
+class Repository<T>[db: Database] {
+    fn find(self, id: int) T {
+        return self.db.query("SELECT * WHERE id = {id}")!
+    }
+}
+```
