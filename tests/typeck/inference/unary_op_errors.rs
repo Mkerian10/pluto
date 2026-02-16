@@ -4,8 +4,7 @@ mod common;
 use common::compile_should_fail_with;
 
 #[test]
-#[ignore] // #156: string literals don't work in compact syntax
-fn negate_string() { compile_should_fail_with(r#"fn main(){let x=-\"hi\"}"#, "type mismatch"); }
+fn negate_array_string() { compile_should_fail_with(r#"fn main(){let x=-[true]}"#, "cannot negate type [bool]"); }
 #[test]
 fn negate_bool() { compile_should_fail_with(r#"fn main(){let x=-true}"#, "cannot negate type bool"); }
 #[test]
@@ -13,8 +12,7 @@ fn negate_array() { compile_should_fail_with(r#"fn main(){let x=-[1,2,3]}"#, "ca
 #[test]
 fn not_int() { compile_should_fail_with(r#"fn main(){let x=!42}"#, "cannot apply '!' to type int"); }
 #[test]
-#[ignore] // #156: string literals don't work in compact syntax
-fn not_string() { compile_should_fail_with(r#"fn main(){let x=!\"hi\"}"#, "type mismatch"); }
+fn not_float() { compile_should_fail_with(r#"fn main(){let x=!3.14}"#, "cannot apply '!' to type float"); }
 #[test]
 fn not_array() { compile_should_fail_with(r#"fn main(){let x=![1,2,3]}"#, "cannot apply '!' to type [int]"); }
 #[test]

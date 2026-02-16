@@ -5,8 +5,7 @@ use common::compile_should_fail_with;
 
 // Arrays with nullable elements
 #[test]
-#[ignore] // #156: string literals don't work in compact syntax
-fn array_nullable_element_mismatch() { compile_should_fail_with(r#"fn main(){let a:[int?]=[42,\"hi\"]}"#, "type mismatch"); }
+fn array_nullable_element_mismatch() { compile_should_fail_with(r#"fn main(){let a:[int?]=[42,true]}"#, "expected int?, found bool"); }
 // This test already passes - correctly rejects none in non-nullable array
 #[test]
 fn array_nullable_vs_non_nullable() { compile_should_fail_with(r#"fn main(){let a:[int]=[42,none]}"#, "type mismatch"); }
@@ -19,11 +18,9 @@ fn array_index_nullable() { compile_should_fail_with(r#"fn main(){let a:[int?]=[
 #[test]
 fn map_nullable_key() { compile_should_fail_with(r#"fn main(){let m=Map<int?,string>{} m[42]=\"hi\"}"#, ""); }
 #[test]
-#[ignore] // #156: string literals don't work in compact syntax
-fn map_nullable_value_access() { compile_should_fail_with(r#"fn main(){let m=Map<string,int?>{} m[\"a\"]=42 let x:int=m[\"a\"]}"#, "type mismatch"); }
+fn map_nullable_value_access() { compile_should_fail_with(r#"fn main(){let m=Map<int,int?>{} m[1]=42 let x:int=m[1]}"#, "type mismatch"); }
 #[test]
-#[ignore] // #156: string literals don't work in compact syntax
-fn map_none_value() { compile_should_fail_with(r#"fn main(){let m=Map<string,int?>{} m[\"a\"]=none let x:int=m[\"a\"]}"#, "type mismatch"); }
+fn map_none_value() { compile_should_fail_with(r#"fn main(){let m=Map<int,int?>{} m[1]=none let x:int=m[1]}"#, "type mismatch"); }
 
 // Sets with nullable elements
 // This test already passes - compiles successfully (nullable sets work)
@@ -53,8 +50,7 @@ fn generic_unwrap_nullable() { compile_should_fail_with(r#"class Box<T>{value:T 
 #[test]
 fn nullable_array_index() { compile_should_fail_with(r#"fn main(){let a:[int]?=[1,2,3] let x=a[0]}"#, "index on non-indexable type [int]?"); }
 #[test]
-#[ignore] // #156: string literals don't work in compact syntax
-fn nullable_map_access() { compile_should_fail_with(r#"fn main(){let m:Map<string,int>?=Map<string,int>{} m[\"a\"]=1}"#, "type mismatch"); }
+fn nullable_map_access() { compile_should_fail_with(r#"fn main(){let m:Map<int,int>?=Map<int,int>{} m[1]=1}"#, "index on non-indexable type Map<int, int>?"); }
 
 // Container methods with nullable
 #[test]

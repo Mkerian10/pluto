@@ -50,8 +50,8 @@ fn propagate_none() { compile_should_fail_with(r#"fn f(){return none?} fn main()
 
 // None in map
 #[test]
-#[ignore] // #156: string literals don't work in compact syntax (escape sequence parser error)
-fn map_value_none_no_type() { compile_should_fail_with(r#"fn main(){let m=Map<string,int>{} m[\"a\"]=none}"#, "type mismatch"); }
+#[ignore] // #172: none inference too permissive - compiles when should fail
+fn map_value_none_no_type() { compile_should_fail_with(r#"fn main(){let m=Map<int,int>{} m[1]=none}"#, "type mismatch"); }
 
 // None in ternary-like
 // This test already passes - correctly accepts none in else branch
