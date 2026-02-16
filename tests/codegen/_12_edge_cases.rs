@@ -585,7 +585,7 @@ fn main() {
 fn test_float_positive_zero() {
     let source = r#"
 fn main() {
-    let mut x = 0.0
+    let x = 0.0
     print(x)
 }
 "#;
@@ -650,7 +650,7 @@ fn main() {
 fn test_float_nan() {
     let source = r#"
 fn main() {
-    let mut x = 0.0 / 0.0
+    let x = 0.0 / 0.0
     print(x)
 }
 "#;
@@ -662,7 +662,7 @@ fn main() {
 fn test_float_nan_inequality() {
     let source = r#"
 fn main() {
-    let mut x = 0.0 / 0.0
+    let x = 0.0 / 0.0
     if x == x {
         print("equal")
     } else {

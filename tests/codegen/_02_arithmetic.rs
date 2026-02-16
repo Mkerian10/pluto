@@ -13,7 +13,7 @@ use super::common::compile_and_run_stdout;
 fn test_int_add_zero() {
     let source = r#"
 fn main() {
-    let mut result = 0 + 0
+    let result = 0 + 0
     print(result)
 }
 "#;
@@ -73,7 +73,7 @@ fn main() {
 fn test_int_sub_zero() {
     let source = r#"
 fn main() {
-    let mut result = 0 - 0
+    let result = 0 - 0
     print(result)
 }
 "#;
@@ -109,7 +109,7 @@ fn main() {
 fn test_int_mul_zero() {
     let source = r#"
 fn main() {
-    let mut result = 0 * 999999
+    let result = 0 * 999999
     print(result)
 }
 "#;
@@ -316,7 +316,7 @@ fn main() {
 fn test_float_sub_zero() {
     let source = r#"
 fn main() {
-    let mut result = 0.0 - 0.0
+    let result = 0.0 - 0.0
     print(result)
 }
 "#;
@@ -349,7 +349,7 @@ fn main() {
 fn test_float_mul_zero() {
     let source = r#"
 fn main() {
-    let mut result = 0.0 * 999.999
+    let result = 0.0 * 999.999
     print(result)
 }
 "#;
@@ -418,7 +418,7 @@ fn main() {
 fn test_float_div_zero_by_zero_nan() {
     let source = r#"
 fn main() {
-    let mut result = 0.0 / 0.0
+    let result = 0.0 / 0.0
     print(result)
 }
 "#;
@@ -429,7 +429,7 @@ fn main() {
 fn test_float_precision_point_one_plus_point_two() {
     let source = r#"
 fn main() {
-    let mut result = 0.1 + 0.2
+    let result = 0.1 + 0.2
     print(result)
 }
 "#;
@@ -443,7 +443,7 @@ fn main() {
 fn test_float_very_small() {
     let source = r#"
 fn main() {
-    let mut result = 0.0001 + 0.0002
+    let result = 0.0001 + 0.0002
     print(result)
 }
 "#;
@@ -753,7 +753,7 @@ fn main() {
 fn test_float_negative_zero_equality() {
     let source = r#"
 fn main() {
-    let mut result = 0.0 == -0.0
+    let result = 0.0 == -0.0
     if result {
         print(1)
     } else {

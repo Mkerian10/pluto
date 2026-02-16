@@ -11,7 +11,7 @@ use super::common::{compile_and_run, compile_and_run_stdout};
 fn test_int_zero() {
     let src = r#"
         fn main() int {
-            let mut x = 0
+            let x = 0
             return x
         }
     "#;
@@ -75,7 +75,7 @@ fn test_int_min_representation() {
 fn test_float_zero() {
     let src = r#"
         fn main() {
-            let mut x = 0.0
+            let x = 0.0
             print(x)
         }
     "#;
@@ -275,7 +275,7 @@ fn test_void_return() {
 fn test_string_empty() {
     let src = r#"
         fn main() {
-            let mut s = ""
+            let s = ""
             print(s)
         }
     "#;
@@ -286,7 +286,7 @@ fn test_string_empty() {
 fn test_string_ascii() {
     let src = r#"
         fn main() {
-            let mut s = "Hello, World!"
+            let s = "Hello, World!"
             print(s)
         }
     "#;
@@ -297,7 +297,7 @@ fn test_string_ascii() {
 fn test_string_unicode_emoji() {
     let src = r#"
         fn main() {
-            let mut s = "Hello 👋 World 🌍"
+            let s = "Hello 👋 World 🌍"
             print(s)
         }
     "#;
@@ -308,7 +308,7 @@ fn test_string_unicode_emoji() {
 fn test_string_unicode_cjk() {
     let src = r#"
         fn main() {
-            let mut s = "你好世界"
+            let s = "你好世界"
             print(s)
         }
     "#;
@@ -320,8 +320,8 @@ fn test_string_long_10kb() {
     // Create a string with ~10,000 characters
     let src = r#"
         fn main() {
-            let mut s = "a"
-            let mut i = 0
+            let s = "a"
+            let i = 0
             while i < 10000 {
                 s = s + "x"
                 i = i + 1
@@ -340,8 +340,8 @@ fn test_string_very_long_1mb() {
     let src = r#"
         fn main() {
             let chunk = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  // 64 bytes
-            let mut s = ""
-            let mut i = 0
+            let s = ""
+            let i = 0
             while i < 16384 {  // 16384 * 64 = 1MB
                 s = s + chunk
                 i = i + 1
@@ -359,7 +359,7 @@ fn test_string_very_long_1mb() {
 fn test_string_with_null_byte() {
     let src = r#"
         fn main() {
-            let mut s = "hello\0world"
+            let s = "hello\0world"
             print(s.len())
         }
     "#;
@@ -759,7 +759,7 @@ fn test_array_int_1000_elements() {
     let src = r#"
         fn main() {
             let arr: [int] = []
-            let mut i = 0
+            let i = 0
             while i < 1000 {
                 arr.push(i)
                 i = i + 1
