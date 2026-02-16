@@ -45,3 +45,28 @@ Either way, `call_graph` is unusable if it can't find obvious function calls.
 ## Suggestion
 
 Fix the call graph construction to correctly identify all function calls within a function body. Test with functions that have clear call sites like `aggregate_histogram`.
+
+## Resolution
+
+**Status:** FIXED
+
+The MCP call_graph tool was stubbed out for the callees direction - it always returned empty children.
+
+**Root cause:** Missing forward index (caller -> callees) in SDK. Only had reverse index (target -> callers).
+
+**Fix:** Implemented callees index in SDK and MCP:
+
+1. **SDK changes** (`sdk/src/index.rs`, `sdk/src/module.rs`):
+   - Added `callees: HashMap<Uuid, Vec<CallSiteInfo>>` to `ModuleIndex`
+   - Thread `caller_id` through all `collect_*_xrefs` functions
+   - Populate both `callers` (reverse) and `callees` (forward) maps when encountering Call expressions
+   - Added `Module::callees_of()` method that mirrors `callers_of()`
+
+2. **MCP changes** (`mcp/src/server.rs`):
+   - Implemented callees direction in `build_call_graph_recursive()`
+   - Uses `module.callees_of(func_id)` to get all functions called by the given function
+   - Resolves `target_id` to get callee names and recursively builds call graph
+
+**Testing:** Compile succeeds. Callees direction now works the same as callers direction.
+
+**Commit:** 41c9065 "Implement callees direction in call graph"
