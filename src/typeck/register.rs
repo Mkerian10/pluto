@@ -59,6 +59,15 @@ fn check_function_contracts(
 pub(crate) fn register_trait_names(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     for trait_decl in &program.traits {
         let t = &trait_decl.node;
+
+        // Check for duplicate trait declarations
+        if env.traits.contains_key(&t.name.node) {
+            return Err(CompileError::type_err(
+                format!("trait '{}' is already declared", t.name.node),
+                t.name.span,
+            ));
+        }
+
         let mut default_methods = Vec::new();
         let mut mut_self_methods = HashSet::new();
         let mut static_methods = HashSet::new();
@@ -148,7 +157,46 @@ pub(crate) fn resolve_trait_signatures(program: &Program, env: &mut TypeEnv) -> 
 pub(crate) fn register_enum_names(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     for enum_decl in &program.enums {
         let e = &enum_decl.node;
+
+        // Check for duplicate enum declarations
+        if env.enums.contains_key(&e.name.node) || env.generic_enums.contains_key(&e.name.node) {
+            return Err(CompileError::type_err(
+                format!("enum '{}' is already declared", e.name.node),
+                e.name.span,
+            ));
+        }
+
+        // Check for cross-kind collision with traits
+        if env.traits.contains_key(&e.name.node) {
+            return Err(CompileError::type_err(
+                format!("enum '{}' is already declared as a trait", e.name.node),
+                e.name.span,
+            ));
+        }
+
+        // Check for duplicate variant names within this enum
+        let mut seen_variants = HashSet::new();
+        for v in &e.variants {
+            if !seen_variants.insert(&v.name.node) {
+                return Err(CompileError::type_err(
+                    format!("variant '{}' is already declared in enum '{}'", v.name.node, e.name.node),
+                    v.name.span,
+                ));
+            }
+        }
+
         if !e.type_params.is_empty() {
+            // Check for duplicate type parameters
+            let mut seen_tparams = HashSet::new();
+            for tp in &e.type_params {
+                if !seen_tparams.insert(&tp.node) {
+                    return Err(CompileError::type_err(
+                        format!("type parameter '{}' is already declared in enum '{}'", tp.node, e.name.node),
+                        tp.span,
+                    ));
+                }
+            }
+
             // Generic enum — register in generic_enums with TypeParam types
             // (These still need immediate resolution because TypeParam can be used)
             let tp_names: std::collections::HashSet<String> = e.type_params.iter().map(|tp| tp.node.clone()).collect();
@@ -293,6 +341,29 @@ pub(crate) fn register_stage_placeholders(program: &Program, env: &mut TypeEnv) 
 pub(crate) fn register_errors(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     for error_decl in &program.errors {
         let e = &error_decl.node;
+
+        // Check for duplicate error declarations
+        if env.errors.contains_key(&e.name.node) {
+            return Err(CompileError::type_err(
+                format!("error '{}' is already declared", e.name.node),
+                e.name.span,
+            ));
+        }
+
+        // Check for cross-kind collisions with traits and enums
+        if env.traits.contains_key(&e.name.node) {
+            return Err(CompileError::type_err(
+                format!("error '{}' is already declared as a trait", e.name.node),
+                e.name.span,
+            ));
+        }
+        if env.enums.contains_key(&e.name.node) || env.generic_enums.contains_key(&e.name.node) {
+            return Err(CompileError::type_err(
+                format!("error '{}' is already declared as an enum", e.name.node),
+                e.name.span,
+            ));
+        }
+
         let mut fields = Vec::new();
         for f in &e.fields {
             let ty = resolve_type(&f.ty, env)?;
@@ -304,8 +375,50 @@ pub(crate) fn register_errors(program: &Program, env: &mut TypeEnv) -> Result<()
 }
 
 pub(crate) fn register_class_names(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    // Build set of import binding names for collision checks
+    let import_names: HashSet<&str> = program.imports.iter()
+        .map(|i| i.node.binding_name())
+        .collect();
+
     for class in &program.classes {
         let c = &class.node;
+
+        // Check for duplicate class declarations
+        if env.classes.contains_key(&c.name.node) {
+            return Err(CompileError::type_err(
+                format!("class '{}' is already declared", c.name.node),
+                c.name.span,
+            ));
+        }
+
+        // Check for cross-kind collisions with traits, enums, errors
+        if env.traits.contains_key(&c.name.node) {
+            return Err(CompileError::type_err(
+                format!("class '{}' is already declared as a trait", c.name.node),
+                c.name.span,
+            ));
+        }
+        if env.enums.contains_key(&c.name.node) || env.generic_enums.contains_key(&c.name.node) {
+            return Err(CompileError::type_err(
+                format!("class '{}' is already declared as an enum", c.name.node),
+                c.name.span,
+            ));
+        }
+        if env.errors.contains_key(&c.name.node) {
+            return Err(CompileError::type_err(
+                format!("class '{}' is already declared as an error", c.name.node),
+                c.name.span,
+            ));
+        }
+
+        // Check for collision with import names
+        if import_names.contains(c.name.node.as_str()) {
+            return Err(CompileError::type_err(
+                format!("class '{}' is already declared as an imported module name", c.name.node),
+                c.name.span,
+            ));
+        }
+
         if !c.type_params.is_empty() {
             // Generic class — skip concrete registration (handled in resolve_class_fields)
             continue;
@@ -328,6 +441,26 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
         let c = &class.node;
         if !c.type_params.is_empty() {
             // Generic class — register in generic_classes
+
+            // Check for duplicate generic class declarations
+            if env.generic_classes.contains_key(&c.name.node) {
+                return Err(CompileError::type_err(
+                    format!("class '{}' is already declared", c.name.node),
+                    c.name.span,
+                ));
+            }
+
+            // Check for duplicate type parameters
+            let mut seen_tparams = HashSet::new();
+            for tp in &c.type_params {
+                if !seen_tparams.insert(&tp.node) {
+                    return Err(CompileError::type_err(
+                        format!("type parameter '{}' is already declared in class '{}'", tp.node, c.name.node),
+                        tp.span,
+                    ));
+                }
+            }
+
             // Validate trait names for generic classes
             for trait_name in &c.impl_traits {
                 if !env.traits.contains_key(&trait_name.node) {
@@ -533,7 +666,45 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
             ));
         }
 
+        // Check for duplicate function declarations
+        if env.functions.contains_key(&f.name.node) || env.generic_functions.contains_key(&f.name.node) {
+            return Err(CompileError::type_err(
+                format!("function '{}' is already declared", f.name.node),
+                f.name.span,
+            ));
+        }
+
+        // Check for cross-kind collision with classes
+        if env.classes.contains_key(&f.name.node) || env.generic_classes.contains_key(&f.name.node) {
+            return Err(CompileError::type_err(
+                format!("function '{}' is already declared as a class", f.name.node),
+                f.name.span,
+            ));
+        }
+
+        // Check for duplicate parameters
+        let mut seen_params: HashSet<&str> = HashSet::new();
+        for p in &f.params {
+            if !seen_params.insert(&p.name.node) {
+                return Err(CompileError::type_err(
+                    format!("parameter '{}' is already declared in function '{}'", p.name.node, f.name.node),
+                    p.name.span,
+                ));
+            }
+        }
+
         if !f.type_params.is_empty() {
+            // Check for duplicate type parameters
+            let mut seen_tparams: HashSet<&str> = HashSet::new();
+            for tp in &f.type_params {
+                if !seen_tparams.insert(&tp.node) {
+                    return Err(CompileError::type_err(
+                        format!("type parameter '{}' is already declared in function '{}'", tp.node, f.name.node),
+                        tp.span,
+                    ));
+                }
+            }
+
             // Generic function — register in generic_functions with TypeParam types
             let tp_names: std::collections::HashSet<String> = f.type_params.iter().map(|tp| tp.node.clone()).collect();
             let mut param_types = Vec::new();
