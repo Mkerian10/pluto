@@ -222,6 +222,13 @@ fn check_stmt(
                     target.span,
                 ));
             }
+            // Check if variable is immutable (declared without mut)
+            if env.is_immutable(&target.node) {
+                return Err(CompileError::type_err(
+                    format!("cannot assign to immutable variable '{}'", target.node),
+                    target.span,
+                ));
+            }
             let val_type = infer_expr(&value.node, value.span, env)?;
             if !types_compatible(&val_type, &var_type, env) {
                 return Err(CompileError::type_err(

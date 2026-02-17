@@ -54,7 +54,7 @@ fn for_loop_basic() {
 #[test]
 fn for_loop_sum() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = [10, 20, 30]\n    let total = 0\n    for x in a {\n        total = total + x\n    }\n    print(total)\n}",
+        "fn main() {\n    let a = [10, 20, 30]\n    let mut total = 0\n    for x in a {\n        total = total + x\n    }\n    print(total)\n}",
     );
     assert_eq!(out, "60\n");
 }
@@ -141,7 +141,7 @@ fn for_loop_method_call_on_element() {
 #[test]
 fn for_loop_push_during_iteration() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = [1, 2, 3]\n    let count = 0\n    for x in a {\n        count = count + 1\n        a.push(x * 10)\n    }\n    print(count)\n    print(a.len())\n}",
+        "fn main() {\n    let a = [1, 2, 3]\n    let mut count = 0\n    for x in a {\n        count = count + 1\n        a.push(x * 10)\n    }\n    print(count)\n    print(a.len())\n}",
     );
     assert_eq!(out, "3\n6\n");
 }
@@ -259,7 +259,7 @@ fn range_expression_endpoints() {
 #[test]
 fn range_sum() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let total = 0\n    for i in 1..=10 {\n        total = total + i\n    }\n    print(total)\n}",
+        "fn main() {\n    let mut total = 0\n    for i in 1..=10 {\n        total = total + i\n    }\n    print(total)\n}",
     );
     assert_eq!(out, "55\n");
 }

@@ -83,7 +83,7 @@ fn main() {
     for i in 0..10 {
         tx10.send(i)!
     }
-    let sum = 0
+    let mut sum = 0
     for i in 0..10 {
         sum = sum + rx10.recv()!
     }
@@ -511,7 +511,7 @@ fn main() {
     spawn send_val(tx, 10).detach()
     spawn send_val(tx, 20).detach()
     spawn send_val(tx, 30).detach()
-    let sum = 0
+    let mut sum = 0
     for i in 0..3 {
         sum = sum + rx.recv()!
     }
@@ -605,7 +605,7 @@ fn main() {
     let (tx, rx) = chan<int>(10)
     spawn producer(tx).detach()
     tx.close()
-    let sum = 0
+    let mut sum = 0
     for val in rx {
         sum = sum + val
     }
@@ -628,7 +628,7 @@ fn main() {
     spawn worker(tx, 10).detach()
     spawn worker(tx, 20).detach()
     tx.close()
-    let sum = 0
+    let mut sum = 0
     for val in rx {
         sum = sum + val
     }
@@ -868,8 +868,8 @@ fn producer(tx: Sender<int>, start: int) {
 }
 
 fn do_select(rx1: Receiver<int>, rx2: Receiver<int>) int {
-    let sum = 0
-    let count = 0
+    let mut sum = 0
+    let mut count = 0
     while count < 4 {
         select {
             v1 = rx1.recv() {
@@ -911,7 +911,7 @@ fn main() {
     let (tx2, rx2) = chan<int>(1)
     tx1.send(1)!
     tx2.send(2)!
-    let result = 0
+    let mut result = 0
     select {
         v1 = rx1.recv() {
             result = v1

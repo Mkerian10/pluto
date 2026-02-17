@@ -108,7 +108,7 @@ fn error_multiple_catches_in_sequence() {
 #[test]
 fn error_in_while_loop() {
     let out = compile_and_run_stdout(
-        "error OutOfRange {}\n\nfn check(x: int) int {\n    if x > 5 {\n        raise OutOfRange {}\n    }\n    return x\n}\n\nfn main() {\n    let i = 0\n    let sum = 0\n    while i < 10 {\n        let val = check(i) catch 0\n        sum = sum + val\n        i = i + 1\n    }\n    print(sum)\n}",
+        "error OutOfRange {}\n\nfn check(x: int) int {\n    if x > 5 {\n        raise OutOfRange {}\n    }\n    return x\n}\n\nfn main() {\n    let i = 0\n    let mut sum = 0\n    while i < 10 {\n        let val = check(i) catch 0\n        sum = sum + val\n        i = i + 1\n    }\n    print(sum)\n}",
     );
     assert_eq!(out, "15\n");
 }
@@ -452,4 +452,12 @@ fn if_expr_error_type_unification() {
         "error MyError {\n    val: int\n}\n\nfn foo() int {\n    if false {\n        raise MyError { val: 1 }\n    }\n    return 10\n}\n\nfn bar() int {\n    if false {\n        raise MyError { val: 2 }\n    }\n    return 20\n}\n\nfn main() {\n    let x = if true { foo()! } else { bar()! }\n    print(x)\n}",
     );
     assert_eq!(out.trim(), "10");
+}
+
+#[test]
+fn assign_to_immutable_variable() {
+    compile_should_fail_with(
+        "fn main() {\n    let x = 1\n    x = 2\n}",
+        "cannot assign to immutable variable",
+    );
 }

@@ -76,7 +76,7 @@ fn array_as_return_value() {
 #[test]
 fn array_in_while_loop() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = [0, 0, 0]\n    let i = 0\n    while i < 3 {\n        a[i] = i * 10\n        i = i + 1\n    }\n    print(a[0])\n    print(a[1])\n    print(a[2])\n}",
+        "fn main() {\n    let mut a = [0, 0, 0]\n    let mut i = 0\n    while i < 3 {\n        a[i] = i * 10\n        i = i + 1\n    }\n    print(a[0])\n    print(a[1])\n    print(a[2])\n}",
     );
     assert_eq!(out, "0\n10\n20\n");
 }
