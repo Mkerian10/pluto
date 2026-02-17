@@ -411,6 +411,14 @@ pub(crate) fn register_class_names(program: &Program, env: &mut TypeEnv) -> Resu
             ));
         }
 
+        // Check for collision with builtin names
+        if env.builtins.contains(&c.name.node) {
+            return Err(CompileError::type_err(
+                format!("class '{}' cannot shadow builtin '{}'", c.name.node, c.name.node),
+                c.name.span,
+            ));
+        }
+
         // Check for collision with import names
         if import_names.contains(c.name.node.as_str()) {
             return Err(CompileError::type_err(
@@ -700,6 +708,13 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
                 if !seen_tparams.insert(&tp.node) {
                     return Err(CompileError::type_err(
                         format!("type parameter '{}' is already declared in function '{}'", tp.node, f.name.node),
+                        tp.span,
+                    ));
+                }
+                // Check that type parameter doesn't shadow a class name
+                if env.classes.contains_key(&tp.node) || env.generic_classes.contains_key(&tp.node) {
+                    return Err(CompileError::type_err(
+                        format!("type parameter '{}' in function '{}' shadows class '{}'", tp.node, f.name.node, tp.node),
                         tp.span,
                     ));
                 }
