@@ -136,7 +136,7 @@ fn print_int_expression() {
 
 #[test]
 fn print_float() {
-    assert_eq!(batch()["print_float"], "3.140000\n");
+    assert_eq!(batch()["print_float"], "3.14\n");
 }
 
 #[test]
@@ -221,12 +221,12 @@ fn underscore_int_literal_small() {
 
 #[test]
 fn underscore_float_literal() {
-    assert_eq!(batch()["underscore_float_literal"], "1000.500000\n");
+    assert_eq!(batch()["underscore_float_literal"], "1000.5\n");
 }
 
 #[test]
 fn underscore_float_both_sides() {
-    assert_eq!(batch()["underscore_float_both_sides"], "1000.000500\n");
+    assert_eq!(batch()["underscore_float_both_sides"], "1000.0005\n");
 }
 
 #[test]

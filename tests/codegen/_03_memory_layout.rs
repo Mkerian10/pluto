@@ -34,7 +34,7 @@ fn test_single_field_float() {
             print(s.value)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "3.140000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "3.14");
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn test_two_fields_float_float() {
             print(t.x + t.y)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "3.300000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "3.3");
 }
 
 // ============================================================================
@@ -657,7 +657,7 @@ fn test_float_alignment() {
             print(x.a + x.b)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "4.000000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "4");
 }
 
 #[test]

@@ -42,7 +42,7 @@ fn test_nullable_float_boxed_to_heap() {
             print(y)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "3.141590");
+    assert_eq!(compile_and_run_stdout(src).trim(), "3.14159");
 }
 
 #[test]
@@ -471,7 +471,7 @@ fn test_nullable_to_float_valid() {
             return none
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "2.500000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "2.5");
 }
 
 #[test]

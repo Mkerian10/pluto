@@ -109,7 +109,7 @@ fn string_interp_float() {
     let out = compile_and_run_stdout(
         "fn main() {\n    let pi = 3.14\n    print(f\"pi is {pi}\")\n}",
     );
-    assert_eq!(out, "pi is 3.140000\n");
+    assert_eq!(out, "pi is 3.14\n");
 }
 
 #[test]
@@ -608,7 +608,7 @@ fn string_to_float_basic() {
     return none
 }"#,
     );
-    assert_eq!(out, "3.140000\n");
+    assert_eq!(out, "3.14\n");
 }
 
 #[test]
@@ -620,7 +620,7 @@ fn string_to_float_integer_string() {
     return none
 }"#,
     );
-    assert_eq!(out, "42.000000\n");
+    assert_eq!(out, "42\n");
 }
 
 #[test]
@@ -632,7 +632,7 @@ fn string_to_float_negative() {
     return none
 }"#,
     );
-    assert_eq!(out, "-2.500000\n");
+    assert_eq!(out, "-2.5\n");
 }
 
 #[test]
@@ -661,7 +661,7 @@ fn string_to_float_whitespace() {
     return none
 }"#,
     );
-    assert_eq!(out, "1.500000\n");
+    assert_eq!(out, "1.5\n");
 }
 
 #[test]
@@ -673,7 +673,7 @@ fn string_to_float_scientific() {
     return none
 }"#,
     );
-    assert_eq!(out, "150.000000\n");
+    assert_eq!(out, "150\n");
 }
 
 #[test]
@@ -686,7 +686,7 @@ fn string_to_float_bare_call_allowed() {
     return none
 }"#,
     );
-    assert_eq!(out, "3.140000\n");
+    assert_eq!(out, "3.14\n");
 }
 
 #[test]
@@ -722,7 +722,7 @@ fn main() {
     print("done")
 }"#,
     );
-    assert_eq!(out, "got 3.140000\ndone\n");
+    assert_eq!(out, "got 3.14\ndone\n");
 }
 
 // ── String Slice Tests ──────────────────────────────────────────────────────

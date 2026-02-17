@@ -6,7 +6,7 @@ use common::{compile_and_run_stdout, compile_should_fail_with};
 #[test]
 fn cast_int_to_float() {
     let out = compile_and_run_stdout("fn main() {\n    let x = 42 as float\n    print(x)\n}");
-    assert_eq!(out, "42.000000\n");
+    assert_eq!(out, "42\n");
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn math_abs_int() {
 #[test]
 fn math_abs_float() {
     let out = compile_and_run_stdout("fn main() {\n    print(abs(-2.5))\n    print(abs(3.7))\n}");
-    assert_eq!(out, "2.500000\n3.700000\n");
+    assert_eq!(out, "2.5\n3.7\n");
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn math_min_int() {
 #[test]
 fn math_min_float() {
     let out = compile_and_run_stdout("fn main() {\n    print(min(3.5, 7.2))\n}");
-    assert_eq!(out, "3.500000\n");
+    assert_eq!(out, "3.5\n");
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn math_max_int() {
 #[test]
 fn math_max_float() {
     let out = compile_and_run_stdout("fn main() {\n    print(max(1.5, 2.5))\n}");
-    assert_eq!(out, "2.500000\n");
+    assert_eq!(out, "2.5\n");
 }
 
 #[test]
@@ -125,49 +125,49 @@ fn math_pow_int() {
 #[test]
 fn math_pow_float() {
     let out = compile_and_run_stdout("fn main() {\n    print(pow(2.0, 3.0))\n}");
-    assert_eq!(out, "8.000000\n");
+    assert_eq!(out, "8\n");
 }
 
 #[test]
 fn math_sqrt() {
     let out = compile_and_run_stdout("fn main() {\n    print(sqrt(4.0))\n    print(sqrt(9.0))\n}");
-    assert_eq!(out, "2.000000\n3.000000\n");
+    assert_eq!(out, "2\n3\n");
 }
 
 #[test]
 fn math_floor() {
     let out = compile_and_run_stdout("fn main() {\n    print(floor(3.7))\n    print(floor(3.0))\n    print(floor(-1.5))\n}");
-    assert_eq!(out, "3.000000\n3.000000\n-2.000000\n");
+    assert_eq!(out, "3\n3\n-2\n");
 }
 
 #[test]
 fn math_ceil() {
     let out = compile_and_run_stdout("fn main() {\n    print(ceil(3.2))\n    print(ceil(3.0))\n    print(ceil(-1.5))\n}");
-    assert_eq!(out, "4.000000\n3.000000\n-1.000000\n");
+    assert_eq!(out, "4\n3\n-1\n");
 }
 
 #[test]
 fn math_round() {
     let out = compile_and_run_stdout("fn main() {\n    print(round(3.4))\n    print(round(3.5))\n    print(round(-1.6))\n}");
-    assert_eq!(out, "3.000000\n4.000000\n-2.000000\n");
+    assert_eq!(out, "3\n4\n-2\n");
 }
 
 #[test]
 fn math_sin_cos() {
     let out = compile_and_run_stdout("fn main() {\n    print(sin(0.0))\n    print(cos(0.0))\n}");
-    assert_eq!(out, "0.000000\n1.000000\n");
+    assert_eq!(out, "0\n1\n");
 }
 
 #[test]
 fn math_tan() {
     let out = compile_and_run_stdout("fn main() {\n    print(tan(0.0))\n}");
-    assert_eq!(out, "0.000000\n");
+    assert_eq!(out, "0\n");
 }
 
 #[test]
 fn math_log() {
     let out = compile_and_run_stdout("fn main() {\n    print(log(1.0))\n}");
-    assert_eq!(out, "0.000000\n");
+    assert_eq!(out, "0\n");
 }
 
 // ── Arity checks ──────────────────────────────────────────────────────────────
@@ -239,7 +239,7 @@ fn pow_int_without_error_handling_rejected() {
 #[test]
 fn pow_float_no_error_handling_needed() {
     let out = compile_and_run_stdout("fn main() {\n    print(pow(2.0, -1.0))\n}");
-    assert_eq!(out, "0.500000\n");
+    assert_eq!(out, "0.5\n");
 }
 
 #[test]

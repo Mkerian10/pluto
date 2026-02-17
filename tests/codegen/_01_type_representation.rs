@@ -79,7 +79,7 @@ fn test_float_zero() {
             print(x)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "0.000000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "0");
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn test_float_positive() {
             print(3.14159)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "3.141590");
+    assert_eq!(compile_and_run_stdout(src).trim(), "3.14159");
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn test_float_negative() {
             print(-2.71828)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "-2.718280");
+    assert_eq!(compile_and_run_stdout(src).trim(), "-2.71828");
 }
 
 #[test]
@@ -448,7 +448,7 @@ fn test_class_one_field_float() {
             print(t.value)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "98.600000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "98.6");
 }
 
 #[test]
@@ -814,7 +814,7 @@ fn test_array_float() {
             print(arr[1])
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "2.200000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "2.2");
 }
 
 #[test]
