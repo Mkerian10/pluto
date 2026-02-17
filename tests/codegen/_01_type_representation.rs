@@ -320,7 +320,7 @@ fn test_string_long_10kb() {
     // Create a string with ~10,000 characters
     let src = r#"
         fn main() {
-            let s = "a"
+            let mut s = "a"
             let mut i = 0
             while i < 10000 {
                 s = s + "x"
@@ -340,7 +340,7 @@ fn test_string_very_long_1mb() {
     let src = r#"
         fn main() {
             let chunk = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  // 64 bytes
-            let s = ""
+            let mut s = ""
             let mut i = 0
             while i < 16384 {  // 16384 * 64 = 1MB
                 s = s + chunk
