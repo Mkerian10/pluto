@@ -30,7 +30,7 @@ jobs:
         run: cargo nextest run --lib --profile ci
 
       - name: Run integration tests
-        run: cargo nextest run --tests --profile ci -E 'not test(gc_stress)'
+        run: cargo nextest run --tests --profile ci
 
       - name: Test workspace members
         run: cargo nextest run --workspace --exclude pluto --profile ci
