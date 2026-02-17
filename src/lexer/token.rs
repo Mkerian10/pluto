@@ -151,7 +151,7 @@ pub enum Token {
     })]
     IntLit(i64),
 
-    #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<f64>().ok())]
+    #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9][0-9_]*)?|[0-9][0-9_]*[eE][+-]?[0-9][0-9_]*", priority = 3, callback = |lex| lex.slice().replace('_', "").parse::<f64>().ok())]
     FloatLit(f64),
 
     #[regex(r#"f"([^"\\]|\\.)*""#, |lex| {
@@ -705,6 +705,85 @@ mod tests {
     fn test_float_with_underscores() {
         let mut lex = Token::lexer("1_000.5_5");
         assert_eq!(lex.next(), Some(Ok(Token::FloatLit(1000.55))));
+    }
+
+    // ===== Scientific notation tests =====
+
+    #[test]
+    fn test_scientific_notation_integer_base() {
+        let mut lex = Token::lexer("1e6");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(1e6))));
+    }
+
+    #[test]
+    fn test_scientific_notation_uppercase_e() {
+        let mut lex = Token::lexer("1E6");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(1E6))));
+    }
+
+    #[test]
+    fn test_scientific_notation_negative_exponent() {
+        let mut lex = Token::lexer("1e-3");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(1e-3))));
+    }
+
+    #[test]
+    fn test_scientific_notation_positive_exponent() {
+        let mut lex = Token::lexer("1e+6");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(1e+6))));
+    }
+
+    #[test]
+    fn test_scientific_notation_float_base() {
+        let mut lex = Token::lexer("2.5e3");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(2.5e3))));
+    }
+
+    #[test]
+    fn test_scientific_notation_float_base_negative_exp() {
+        let mut lex = Token::lexer("2.5e-3");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(2.5e-3))));
+    }
+
+    #[test]
+    fn test_scientific_notation_float_base_positive_exp() {
+        let mut lex = Token::lexer("2.5e+3");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(2.5e+3))));
+    }
+
+    #[test]
+    fn test_scientific_notation_with_underscores() {
+        let mut lex = Token::lexer("1_000e6");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(1000e6))));
+    }
+
+    #[test]
+    fn test_scientific_notation_exponent_with_underscores() {
+        let mut lex = Token::lexer("1e1_0");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(1e10))));
+    }
+
+    #[test]
+    fn test_scientific_notation_infinity() {
+        // 1e999 overflows f64 to infinity — we accept it
+        let mut lex = Token::lexer("1e999");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(f64::INFINITY))));
+    }
+
+    #[test]
+    fn test_e_without_digits_is_not_scientific() {
+        let mut lex = Token::lexer("1e");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(1))));
+        assert_eq!(lex.next(), Some(Ok(Token::Ident))); // 'e' as identifier
+    }
+
+    #[test]
+    fn test_e_minus_without_digits_is_not_scientific() {
+        // "1e-" — logos backtracks: IntLit(1), then Ident(e), then Minus
+        let mut lex = Token::lexer("1e-");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(1))));
+        assert_eq!(lex.next(), Some(Ok(Token::Ident)));
+        assert_eq!(lex.next(), Some(Ok(Token::Minus)));
     }
 
     // ===== String escape sequence tests =====
