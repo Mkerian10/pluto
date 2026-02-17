@@ -25,15 +25,15 @@ pub fn encode_url_safe(s: string) string {
 
 fn encode_with_alphabet(s: string, alpha: string) string {
     let input_len = __pluto_string_len(s)
-    let result = ""
-    let i = 0
+    let mut result = ""
+    let mut i = 0
 
     while i < input_len {
         let b1 = __pluto_string_byte_at(s, i)
-        let b2 = 0
-        let b3 = 0
-        let has_b2 = 0
-        let has_b3 = 0
+        let mut b2 = 0
+        let mut b3 = 0
+        let mut has_b2 = 0
+        let mut has_b3 = 0
 
         if i + 1 < input_len {
             b2 = __pluto_string_byte_at(s, i + 1)
@@ -85,14 +85,14 @@ pub fn decode_url_safe(s: string) string {
 
 fn decode_with_alphabet(s: string, alpha: string) string {
     let input_len = __pluto_string_len(s)
-    let result = ""
-    let i = 0
+    let mut result = ""
+    let mut i = 0
 
     while i < input_len {
         let c1_char = __pluto_string_byte_at(s, i)
-        let c2_char = 0
-        let c3_char = 0
-        let c4_char = 0
+        let mut c2_char = 0
+        let mut c3_char = 0
+        let mut c4_char = 0
 
         if i + 1 < input_len {
             c2_char = __pluto_string_byte_at(s, i + 1)
@@ -106,8 +106,8 @@ fn decode_with_alphabet(s: string, alpha: string) string {
 
         let c1 = char_index_in(alpha, c1_char)
         let c2 = char_index_in(alpha, c2_char)
-        let c3 = char_index_in(alpha, c3_char)
-        let c4 = char_index_in(alpha, c4_char)
+        let mut c3 = char_index_in(alpha, c3_char)
+        let mut c4 = char_index_in(alpha, c4_char)
 
         // Handle padding
         if c3_char == 61 {
@@ -151,7 +151,7 @@ fn char_code_at(s: string, idx: int) int {
 // Find index of a character (by byte value) in a string, or -1 if not found
 fn char_index_in(s: string, ch: int) int {
     let len = __pluto_string_len(s)
-    let i = 0
+    let mut i = 0
     while i < len {
         if __pluto_string_byte_at(s, i) == ch {
             return i

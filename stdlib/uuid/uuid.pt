@@ -41,7 +41,7 @@ pub fn generate() string {
 }
 
 fn format_uuid_bytes(bytes: [int]) string {
-    let result = ""
+    let mut result = ""
 
     // First 4 bytes (8 hex chars)
     result = result + byte_to_hex(bytes[0]) + byte_to_hex(bytes[1]) + byte_to_hex(bytes[2]) + byte_to_hex(bytes[3])

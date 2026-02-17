@@ -12,7 +12,7 @@ test "next produces different values" {
 }
 
 test "between in range" {
-    let i = 0
+    let mut i = 0
     while i < 100 {
         let v = random.between(1, 10)
         expect(v >= 1).to_be_true()
@@ -22,7 +22,7 @@ test "between in range" {
 }
 
 test "between equal bounds" {
-    let i = 0
+    let mut i = 0
     while i < 10 {
         expect(random.between(5, 5)).to_equal(5)
         i = i + 1
@@ -30,7 +30,7 @@ test "between equal bounds" {
 }
 
 test "between negative range" {
-    let i = 0
+    let mut i = 0
     while i < 100 {
         let v = random.between(-10, -5)
         expect(v >= -10).to_be_true()
@@ -40,7 +40,7 @@ test "between negative range" {
 }
 
 test "between small range" {
-    let i = 0
+    let mut i = 0
     while i < 100 {
         let v = random.between(0, 1)
         expect(v >= 0).to_be_true()
@@ -50,7 +50,7 @@ test "between small range" {
 }
 
 test "decimal in 0 to 1" {
-    let i = 0
+    let mut i = 0
     while i < 100 {
         let v = random.decimal()
         expect(v >= 0.0).to_be_true()
@@ -60,7 +60,7 @@ test "decimal in 0 to 1" {
 }
 
 test "decimal_between in range" {
-    let i = 0
+    let mut i = 0
     while i < 100 {
         let v = random.decimal_between(5.0, 10.0)
         expect(v >= 5.0).to_be_true()
@@ -70,7 +70,7 @@ test "decimal_between in range" {
 }
 
 test "decimal_between negative range" {
-    let i = 0
+    let mut i = 0
     while i < 100 {
         let v = random.decimal_between(-1.0, 1.0)
         expect(v >= -1.0).to_be_true()
@@ -80,9 +80,9 @@ test "decimal_between negative range" {
 }
 
 test "coin returns both values" {
-    let saw_true = false
-    let saw_false = false
-    let i = 0
+    let mut saw_true = false
+    let mut saw_false = false
+    let mut i = 0
     while i < 100 {
         if random.coin() {
             saw_true = true

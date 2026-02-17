@@ -23,8 +23,8 @@ pub fn pow(base: int, exp: int) int {
     if exp < 0 {
         return 0
     }
-    let result = 1
-    let i = 0
+    let mut result = 1
+    let mut i = 0
     while i < exp {
         result = result * base
         i = i + 1
@@ -75,8 +75,8 @@ pub fn clamp_float(x: float, lo: float, hi: float) float {
 }
 
 pub fn gcd(a: int, b: int) int {
-    let x = a
-    let y = b
+    let mut x = a
+    let mut y = b
     if x < 0 {
         x = 0 - x
     }
@@ -99,11 +99,11 @@ pub fn lcm(a: int, b: int) int {
         return 0
     }
     let g = gcd(a, b)
-    let aa = a
+    let mut aa = a
     if aa < 0 {
         aa = 0 - aa
     }
-    let bb = b
+    let mut bb = b
     if bb < 0 {
         bb = 0 - bb
     }
@@ -111,8 +111,8 @@ pub fn lcm(a: int, b: int) int {
 }
 
 pub fn factorial(n: int) int {
-    let result = 1
-    let i = 2
+    let mut result = 1
+    let mut i = 2
     while i <= n {
         result = result * i
         i = i + 1

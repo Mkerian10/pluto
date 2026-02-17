@@ -78,7 +78,7 @@ pub fn normalize(p: string) string {
 
     // Split by separator and process components
     let parts = p.split("/")
-    let result = ""
+    let mut result = ""
     let is_abs = p.starts_with("/")
 
     for i in 0..parts.len() {
