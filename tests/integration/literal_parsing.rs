@@ -24,7 +24,6 @@ fn integer_large_value() {
 }
 
 #[test]
-#[ignore] // Feature not implemented: scientific notation in lexer
 fn float_scientific_notation_positive_exp() {
     // 1e10 = 10000000000.0
     let stdout = compile_and_run_stdout(r#"
@@ -37,7 +36,6 @@ fn float_scientific_notation_positive_exp() {
 }
 
 #[test]
-#[ignore] // Feature not implemented: scientific notation in lexer
 fn float_scientific_notation_negative_exp() {
     // 2.5e-3 = 0.0025
     let stdout = compile_and_run_stdout(r#"
@@ -47,6 +45,44 @@ fn float_scientific_notation_negative_exp() {
         }
     "#);
     assert_eq!(stdout.trim(), "pass");
+}
+
+#[test]
+fn float_scientific_notation_uppercase() {
+    // 1E10 should work with uppercase E
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let x = 1E10
+            print(x)
+        }
+    "#);
+    assert!(stdout.trim().starts_with("10000000000"));
+}
+
+#[test]
+fn float_scientific_notation_is_float_type() {
+    // 1e6 should be float type, usable in float arithmetic
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let x = 1e6
+            let y = 2.0
+            let z = x + y
+            print("pass")
+        }
+    "#);
+    assert_eq!(stdout.trim(), "pass");
+}
+
+#[test]
+fn float_scientific_notation_negative_exp_value() {
+    // 1e-3 = 0.001
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let x = 1e-3
+            print(x)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "0.001000");
 }
 
 #[test]

@@ -121,6 +121,19 @@ pub(crate) fn check_block_stmt(
     check_stmt(stmt, span, env, return_type)
 }
 
+/// Returns true if a type contains the `Nullable(Void)` sentinel anywhere,
+/// meaning it originated from an unresolved `none` literal.
+fn contains_unresolved_none(ty: &PlutoType) -> bool {
+    match ty {
+        PlutoType::Nullable(inner) => **inner == PlutoType::Void || contains_unresolved_none(inner),
+        PlutoType::Array(inner) => contains_unresolved_none(inner),
+        PlutoType::Map(k, v) => contains_unresolved_none(k) || contains_unresolved_none(v),
+        PlutoType::Set(inner) => contains_unresolved_none(inner),
+        PlutoType::Task(inner) => contains_unresolved_none(inner),
+        _ => false,
+    }
+}
+
 fn check_stmt(
     stmt: &Stmt,
     span: crate::span::Span,
@@ -159,6 +172,14 @@ fn check_stmt(
                         name.span,
                     ));
                 }
+            }
+            // Reject bare `none` without a type annotation (Nullable(Void) is the sentinel
+            // for unresolved none literals — it can appear directly or nested in containers)
+            if ty.is_none() && contains_unresolved_none(&val_type) {
+                return Err(CompileError::type_err(
+                    "cannot infer type of `none`; add a type annotation (e.g. `let x: int? = none`)".to_string(),
+                    value.span,
+                ));
             }
             if let Some(declared_ty) = ty {
                 let expected = resolve_type(declared_ty, env)?;

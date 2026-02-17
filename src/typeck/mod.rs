@@ -662,11 +662,9 @@ mod tests {
 
     #[test]
     fn none_requires_context() {
-        // Note: Currently none infers as Nullable(Void) which is allowed without explicit annotation
-        // This test documents current behavior - may change in future to require context
         let result = check("fn main() { let x = none }");
-        // For now, this is allowed and infers as void?
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot infer type of `none`"));
     }
 
     #[test]
