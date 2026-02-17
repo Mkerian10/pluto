@@ -51,13 +51,12 @@ fn empty_body_non_void() { compile_should_fail_with(r#"fn f()int{}"#, "missing r
 
 // Return after unreachable
 #[test]
-#[ignore] // #181: unreachable code detection not implemented
+#[ignore] // #163: unreachable code detection not implemented
 fn return_after_return() { compile_should_fail_with(r#"fn f()int{return 1 return 2}"#, "unreachable"); }
 
 // Void function doesn't need return
 #[test]
-#[ignore] // #181: test expects success but uses compile_should_fail_with
-fn void_no_return_ok() { compile_should_fail_with(r#"fn f(){let x=1}"#, ""); }
+fn void_no_return_ok() { compile_and_run("fn f(){let x=1}\nfn main(){f()}"); }
 
 // Break doesn't count as return
 #[test]
@@ -73,8 +72,7 @@ fn raise_not_return() { compile_and_run(r#"error E{} fn f()int{raise E{}} fn mai
 
 // Method missing return
 #[test]
-#[ignore] // Syntax error: methods must be inside class body
-fn method_missing_return() { compile_should_fail_with(r#"class C{x:int} fn foo(self)int{let y=self.x}"#, "missing return"); }
+fn method_missing_return() { compile_should_fail_with("class C{\n  x: int\n  fn foo(self) int {\n    let y = self.x\n  }\n}", "missing return"); }
 
 // If-else both raise — all paths terminate, no missing return
 #[test]
