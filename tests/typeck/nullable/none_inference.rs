@@ -5,8 +5,7 @@ use common::compile_should_fail_with;
 
 // None without context
 #[test]
-#[ignore] // #172: none inference too permissive - compiles when should fail
-fn none_no_context() { compile_should_fail_with(r#"fn main(){let x=none}"#, "cannot infer"); }
+fn none_no_context() { compile_should_fail_with(r#"fn main(){let x=none}"#, "cannot infer type of `none`"); }
 #[test]
 fn none_in_return_no_sig() { compile_should_fail_with(r#"fn f(){return none} fn main(){}"#, "return type mismatch: expected void, found void?"); }
 
@@ -19,17 +18,16 @@ fn none_in_match_arms() { compile_should_fail_with(r#"enum E{A B} fn main(){let 
 
 // None in arrays
 #[test]
-#[ignore] // #172: none inference too permissive - compiles when should fail
-fn array_of_only_none() { compile_should_fail_with(r#"fn main(){let a=[none,none,none]}"#, "cannot infer"); }
+fn array_of_only_none() { compile_should_fail_with(r#"fn main(){let a=[none,none,none]}"#, "cannot infer type of `none`"); }
 // This test already passes - array correctly infers as [int?]
 #[test]
-fn array_mixed_none_and_value() { compile_should_fail_with(r#"fn main(){let a=[42,none] let b:[int]=a}"#, "type mismatch"); }
+fn array_mixed_none_and_value() { compile_should_fail_with("fn main(){\n  let a=[42,none]\n  let b:[int]=a\n}", "type mismatch"); }
 
 // None in function args
 #[test]
 fn generic_fn_none_arg() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn main(){id(none)}"#, "void? is not allowed"); }
 #[test]
-#[ignore] // #172: none inference too permissive - compiles when should fail
+#[ignore] // Not a bug: f(none) where f(x:int?) correctly coerces none to int?
 fn overload_none_ambiguous() { compile_should_fail_with(r#"fn f(x:int?){} fn main(){f(none)}"#, ""); }
 
 // None in binary ops
@@ -45,12 +43,12 @@ fn struct_field_none_no_type() { compile_should_fail_with(r#"class C<T>{x:T} fn 
 
 // None propagation
 #[test]
-#[ignore] // #172: none inference too permissive - compiles when should fail
+#[ignore] // Not a bug: none? in void fn unwraps Nullable(Void) to Void, return void is fine
 fn propagate_none() { compile_should_fail_with(r#"fn f(){return none?} fn main(){}"#, "cannot infer"); }
 
 // None in map
 #[test]
-#[ignore] // #172: none inference too permissive - compiles when should fail
+#[ignore] // Parser error: single-line syntax fails to parse `{}` followed by `m[1]`
 fn map_value_none_no_type() { compile_should_fail_with(r#"fn main(){let m=Map<int,int>{} m[1]=none}"#, "type mismatch"); }
 
 // None in ternary-like
