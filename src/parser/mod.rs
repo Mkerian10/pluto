@@ -1197,7 +1197,12 @@ impl<'a> Parser<'a> {
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
                 fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false });
-                self.consume_statement_end()?;
+                // Allow comma-separated fields: x: int, y: int
+                if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Comma) {
+                    self.advance(); // consume comma
+                } else {
+                    self.consume_statement_end()?;
+                }
             }
             self.skip_newlines();
         }

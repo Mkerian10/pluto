@@ -140,7 +140,6 @@ fn field_access_on_task() {
 // ============================================================================
 
 #[test]
-#[ignore] // #166: parser fails on comma-separated class fields
 fn unknown_field_on_class() {
     compile_should_fail_with(
         r#"
@@ -156,7 +155,6 @@ fn unknown_field_on_class() {
 }
 
 #[test]
-#[ignore] // #166: parser fails on comma-separated class fields
 fn typo_in_field_name() {
     compile_should_fail_with(
         r#"
@@ -172,7 +170,6 @@ fn typo_in_field_name() {
 }
 
 #[test]
-#[ignore] // #166: parser fails on comma-separated class fields
 fn case_mismatch_field() {
     compile_should_fail_with(
         r#"
@@ -192,7 +189,6 @@ fn case_mismatch_field() {
 // ============================================================================
 
 #[test]
-#[ignore] // #166: parser fails on comma-separated class fields
 fn field_access_on_nullable_class() {
     compile_should_fail_with(
         r#"
@@ -382,7 +378,6 @@ fn field_access_on_method_result_non_class() {
 // ============================================================================
 
 #[test]
-#[ignore] // #166: parser fails on comma-separated class fields
 fn assign_to_unknown_field() {
     compile_should_fail_with(
         r#"
@@ -398,7 +393,6 @@ fn assign_to_unknown_field() {
 }
 
 #[test]
-#[ignore] // #166: parser fails on comma-separated class fields
 fn assign_wrong_type_to_field() {
     compile_should_fail_with(
         r#"
@@ -454,7 +448,6 @@ fn access_bracket_dep_as_regular_field() {
 // ============================================================================
 
 #[test]
-#[ignore] // #166: parser fails on comma-separated class fields
 fn field_access_with_module_prefix() {
     compile_should_fail_with(
         r#"
