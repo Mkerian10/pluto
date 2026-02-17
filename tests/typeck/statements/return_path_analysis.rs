@@ -7,8 +7,7 @@ use common::compile_should_fail_with;
 #[test]
 fn missing_return_int() { compile_should_fail_with(r#"fn f()int{let x=1}"#, "missing return"); }
 #[test]
-#[ignore] // #156: string literals don't work in compact syntax
-fn missing_return_string() { compile_should_fail_with(r#"fn f()string{let x=\"hi\"}"#, "missing return"); }
+fn missing_return_bool() { compile_should_fail_with(r#"fn f()bool{let x=true}"#, "missing return"); }
 #[test]
 fn missing_return_class() { compile_should_fail_with(r#"class C{x:int} fn f()C{let c=C{x:1}}"#, "missing return"); }
 
@@ -94,8 +93,7 @@ fn nested_match_missing_return() { compile_should_fail_with(r#"enum E{A B} fn f(
 
 // Return type mismatch is separate error
 #[test]
-#[ignore] // #156: string literals don't work in compact syntax
-fn return_type_mismatch() { compile_should_fail_with(r#"fn f()int{return \"hi\"}"#, "type mismatch"); }
+fn return_type_mismatch() { compile_should_fail_with(r#"fn f()int{return true}"#, "type mismatch"); }
 
 // Implicit return from expression (not supported in Pluto)
 #[test]
