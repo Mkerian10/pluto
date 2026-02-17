@@ -84,7 +84,7 @@ fn closure_returning_closure() {
 #[test]
 fn closure_capture_loop_variable() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let mut sum = 0\n    for i in 0..5 {\n        let captured = i\n        let f = () => captured\n        sum = sum + f()\n    }\n    print(sum)\n}",
+        "fn main() {\n    let sum = 0\n    for i in 0..5 {\n        let captured = i\n        let f = () => captured\n        sum = sum + f()\n    }\n    print(sum)\n}",
     );
     assert_eq!(out, "10\n");
 }

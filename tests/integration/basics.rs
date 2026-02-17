@@ -38,7 +38,7 @@ fn batch() -> &'static HashMap<String, String> {
             ),
             (
                 "print_in_loop",
-                "fn main() {\n    let mut i = 0\n    while i < 3 {\n        print(i)\n        i = i + 1\n    }\n}",
+                "fn main() {\n    let i = 0\n    while i < 3 {\n        print(i)\n        i = i + 1\n    }\n}",
             ),
             (
                 "void_return",
@@ -62,7 +62,7 @@ fn batch() -> &'static HashMap<String, String> {
             ),
             (
                 "variable_reassignment",
-                "fn main() {\n    let mut x = 1\n    print(x)\n    x = 2\n    print(x)\n    x = x + 10\n    print(x)\n}",
+                "fn main() {\n    let x = 1\n    print(x)\n    x = 2\n    print(x)\n    x = x + 10\n    print(x)\n}",
             ),
             (
                 "extern_fn_call_print_int",
@@ -78,7 +78,7 @@ fn batch() -> &'static HashMap<String, String> {
             ),
             (
                 "time_ns_elapsed",
-                "fn main() {\n    let start = time_ns()\n    let mut i = 0\n    while i < 1000000 {\n        i = i + 1\n    }\n    let elapsed = time_ns() - start\n    if elapsed > 0 {\n        print(\"ok\")\n    }\n}",
+                "fn main() {\n    let start = time_ns()\n    let i = 0\n    while i < 1000000 {\n        i = i + 1\n    }\n    let elapsed = time_ns() - start\n    if elapsed > 0 {\n        print(\"ok\")\n    }\n}",
             ),
             (
                 "underscore_int_literal",
@@ -347,7 +347,7 @@ fn arg_type_mismatch_rejected() {
 #[test]
 fn assign_type_mismatch_rejected() {
     compile_should_fail_with(
-        "fn main() {\n    let mut x = 42\n    x = true\n}",
+        "fn main() {\n    let x = 42\n    x = true\n}",
         "type mismatch in assignment: expected int, found bool",
     );
 }

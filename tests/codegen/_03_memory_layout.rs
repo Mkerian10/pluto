@@ -792,7 +792,7 @@ fn test_alignment_bool_fields() {
 
         fn main() {
             let x = BoolStruct { a: true, b: false, c: true }
-            let mut count = 0
+            let count = 0
             if x.a { count = count + 1 }
             if x.b { count = count + 1 }
             if x.c { count = count + 1 }
@@ -949,7 +949,7 @@ fn test_field_access_sequential_pattern() {
 
         fn main() int {
             let s = Sequential { f1: 1, f2: 2, f3: 3, f4: 4, f5: 5 }
-            let mut sum = 0
+            let sum = 0
             sum = sum + s.f1
             sum = sum + s.f2
             sum = sum + s.f3
@@ -976,7 +976,7 @@ fn test_field_access_random_pattern() {
 
         fn main() int {
             let r = Random { f1: 10, f2: 20, f3: 30, f4: 40, f5: 50, f6: 60, f7: 70 }
-            let mut sum = 0
+            let sum = 0
             sum = sum + r.f7
             sum = sum + r.f2
             sum = sum + r.f5

@@ -289,7 +289,7 @@ fn main() int {
     buf.push(1 as byte)
     buf.push(2 as byte)
     buf.push(3 as byte)
-    let mut sum = 0
+    let sum = 0
     for b in buf {
         sum = sum + (b as int)
     }
@@ -421,7 +421,7 @@ fn main() int {
 fn bytes_as_function_param() {
     let out = compile_and_run_stdout(r#"
 fn sum_bytes(buf: bytes) int {
-    let mut total = 0
+    let total = 0
     for b in buf {
         total = total + (b as int)
     }
@@ -555,7 +555,7 @@ fn bytes_grow_beyond_initial_capacity() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let buf = bytes_new()
-    let mut i = 0
+    let i = 0
     while i < 100 {
         buf.push((i as byte))
         i = i + 1

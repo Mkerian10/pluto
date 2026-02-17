@@ -5032,7 +5032,7 @@ tests[scheduler: Exhaustive] {
     test "channel comm" {
         let (tx, rx) = chan<int>(1)
         let t = spawn sender(tx)
-        let mut sum = 0
+        let sum = 0
         sum = sum + rx.recv()!
         sum = sum + rx.recv()!
         sum = sum + rx.recv()!
@@ -5135,7 +5135,7 @@ tests[scheduler: Exhaustive] {
     test "producer consumer buffered" {
         let (tx, rx) = chan<int>(5)
         let t = spawn produce(tx)
-        let mut total = 0
+        let total = 0
         total = total + rx.recv()!
         total = total + rx.recv()!
         total = total + rx.recv()!
@@ -5166,7 +5166,7 @@ tests[scheduler: Exhaustive] {
         let (tx, rx) = chan<int>(4)
         let t1 = spawn produce_pair(tx, 1, 2)
         let t2 = spawn produce_pair(tx, 10, 20)
-        let mut sum = 0
+        let sum = 0
         sum = sum + rx.recv()!
         sum = sum + rx.recv()!
         sum = sum + rx.recv()!
@@ -5466,7 +5466,7 @@ tests[scheduler: Exhaustive] {
         let t2 = spawn push_val(tx, 2)
         let t3 = spawn push_val(tx, 3)
         let t4 = spawn push_val(tx, 4)
-        let mut sum = 0
+        let sum = 0
         sum = sum + rx.recv()!
         sum = sum + rx.recv()!
         sum = sum + rx.recv()!

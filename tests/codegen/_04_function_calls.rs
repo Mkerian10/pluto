@@ -991,8 +991,8 @@ fn main() int {
 fn test_array_parameter_multiple_elements() {
     let source = r#"
 fn sum_array(arr: [int]) int {
-    let mut total = 0
-    let mut i = 0
+    let total = 0
+    let i = 0
     while i < arr.len() {
         total = total + arr[i]
         i = i + 1
@@ -1171,8 +1171,8 @@ fn main() int {
 fn test_variadic_simulation_with_array() {
     let source = r#"
 fn sum_all(values: [int]) int {
-    let mut total = 0
-    let mut i = 0
+    let total = 0
+    let i = 0
     while i < values.len() {
         total = total + values[i]
         i = i + 1

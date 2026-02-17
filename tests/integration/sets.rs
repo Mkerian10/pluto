@@ -111,7 +111,7 @@ fn set_iterate() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let s = Set<int> { 1, 2, 3 }
-    let mut total = 0
+    let total = 0
     for x in s.to_array() {
         total = total + x
     }

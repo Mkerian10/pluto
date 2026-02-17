@@ -345,7 +345,7 @@ fn string_for_loop_accumulate() {
 #[test]
 fn string_for_loop_count() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let mut count = 0\n    for c in \"hello world\" {\n        count = count + 1\n    }\n    print(count)\n}",
+        "fn main() {\n    let count = 0\n    for c in \"hello world\" {\n        count = count + 1\n    }\n    print(count)\n}",
     );
     assert_eq!(out, "11\n");
 }
@@ -353,7 +353,7 @@ fn string_for_loop_count() {
 #[test]
 fn string_for_loop_empty() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let mut count = 0\n    for c in \"\" {\n        count = count + 1\n    }\n    print(count)\n}",
+        "fn main() {\n    let count = 0\n    for c in \"\" {\n        count = count + 1\n    }\n    print(count)\n}",
     );
     assert_eq!(out, "0\n");
 }

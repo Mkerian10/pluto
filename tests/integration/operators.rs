@@ -268,7 +268,7 @@ fn percent_equals() {
 #[test]
 fn compound_assign_in_loop() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let mut sum = 0\n    for i in 1..=10 {\n        sum += i\n    }\n    print(sum)\n}",
+        "fn main() {\n    let sum = 0\n    for i in 1..=10 {\n        sum += i\n    }\n    print(sum)\n}",
     );
     assert_eq!(out, "55\n");
 }

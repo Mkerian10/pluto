@@ -378,7 +378,7 @@ fn main() {
     items.push(A { x: 1 })
     items.push(B { y: 2 })
     items.push(A { x: 3 })
-    let mut total = 0
+    let total = 0
     for item in items {
         total = total + item.value()
     }
@@ -1440,7 +1440,7 @@ class C impl Counter {
 }
 
 fn sum_n(c: Counter, n: int) int {
-    let mut total = 0
+    let total = 0
     let i = 0
     while i < n {
         total = total + c.count()
@@ -1547,7 +1547,7 @@ trait Summer {
     fn limit(self) int
 
     fn sum(self) int {
-        let mut total = 0
+        let total = 0
         let i = 1
         while i <= self.limit() {
             total = total + i
@@ -2981,7 +2981,7 @@ class RangeSummer impl Summer {
     multiplier: int
 
     fn sum_range(self, start: int, end: int) int {
-        let mut total = 0
+        let total = 0
         for i in start..end {
             total = total + i * self.multiplier
         }
@@ -3051,7 +3051,7 @@ class SumCollector impl Collector {
             arr.push(i + self.base)
             i = i + 1
         }
-        let mut total = 0
+        let total = 0
         let j = 0
         while j < arr.len() {
             total = total + arr[j]
@@ -3380,7 +3380,7 @@ class Limit impl Bounded {
 }
 
 fn sum_to(b: Bounded) {
-    let mut total = 0
+    let total = 0
     for i in 0..b.upper() {
         total = total + i
     }
@@ -4327,7 +4327,7 @@ class X impl Valued {
 }
 
 fn accumulate(v: Valued) {
-    let mut sum = 0
+    let sum = 0
     sum = sum + v.val()
     sum = sum + v.val()
     sum = sum + v.val()
@@ -4593,7 +4593,7 @@ class X impl Valued {
 
 fn main() {
     let v: Valued = X { n: 10 }
-    let mut result = 0
+    let result = 0
     if true {
         result = v.val()
     } else {
@@ -4764,7 +4764,7 @@ class X impl Valued {
 }
 
 fn sum_dispatches(v: Valued, count: int) {
-    let mut total = 0
+    let total = 0
     let i = 0
     while i < count {
         total = total + v.val()
@@ -4910,7 +4910,7 @@ class H impl Id { val: int  fn id(self) int { return 80 } }
 fn show(i: Id) { print(i.id()) }
 
 fn main() {
-    let mut total = 0
+    let total = 0
     let a: Id = A { val: 0 }
     let b: Id = B { val: 0 }
     let c: Id = C { val: 0 }
@@ -6926,7 +6926,7 @@ class X impl Valued {
 }
 
 fn sum_n_times(v: Valued, n: int) {
-    let mut total = 0
+    let total = 0
     for i in 0..n {
         total = total + v.val()
     }
@@ -7403,7 +7403,7 @@ class Const impl Provider {
 }
 
 fn find_threshold(p: Provider) {
-    let mut sum = 0
+    let sum = 0
     while true {
         sum = sum + p.provide()
         if sum >= 20 {
@@ -7462,7 +7462,7 @@ class BigCalc impl Calculator {
     b: int
 
     fn calc(self) int {
-        let mut result = 0
+        let result = 0
         result = self.a * 1000 + self.b * 100
         result = result + (self.a + self.b) * 10
         result = result + self.a - self.b
@@ -9491,7 +9491,7 @@ trait Computer {
 class Heavy impl Computer {
     n: int
     fn compute(self) int {
-        let mut sum = 0
+        let sum = 0
         let i = 0
         while i < self.n {
             sum = sum + i
@@ -9835,7 +9835,7 @@ trait Consumer {
 class Summer impl Consumer {
     tag: int
     fn consume(self, rx: Receiver<int>) int {
-        let mut total = 0
+        let total = 0
         for v in rx {
             total = total + v
         }
@@ -10202,7 +10202,7 @@ class RangeFilter impl Filter {
 }
 
 fn count_accepted(f: Filter, arr: [int]) int {
-    let mut count = 0
+    let count = 0
     let i = 0
     while i < arr.len() {
         if f.accepts(arr[i]) {
@@ -10543,7 +10543,7 @@ trait Aggregator {
 class SumAggregator impl Aggregator {
     tag: int
     fn aggregate(self, vals: [int]) int {
-        let mut total = 0
+        let total = 0
         let i = 0
         while i < vals.len() {
             total = total + vals[i]
@@ -10628,7 +10628,7 @@ class PositiveChecker impl Predicate {
 }
 
 fn count_matching(p: Predicate, vals: [int]) int {
-    let mut count = 0
+    let count = 0
     let i = 0
     while i < vals.len() {
         if p.check(vals[i]) {
@@ -11953,7 +11953,7 @@ class LinearScorer impl Scorer_ {
 }
 
 fn total_score(s: Scorer_, rounds: int) int {
-    let mut total = 0
+    let total = 0
     for i in 1..rounds + 1 {
         total = total + s.score(i)
     }
@@ -11994,7 +11994,7 @@ fn main() {
     add_item(items, A_ { n: 1 })
     add_item(items, B_ { n: 2 })
     add_item(items, A_ { n: 3 })
-    let mut total = 0
+    let total = 0
     let i = 0
     while i < items.len() {
         total = total + items[i].val()
@@ -12518,7 +12518,7 @@ trait Summer_ {
 class NaiveSummer impl Summer_ {
     tag: int
     fn sum_to(self, n: int) int {
-        let mut total = 0
+        let total = 0
         for i in 1..n + 1 {
             total = total + i
         }
@@ -13242,7 +13242,7 @@ fn main() {
     add_item(items, A { x: 1 })
     add_item(items, B { x: 2 })
     add_item(items, A { x: 3 })
-    let mut total = 0
+    let total = 0
     let i = 0
     while i < items.len() {
         total = total + items[i].val()
@@ -13508,7 +13508,7 @@ class Grid impl MatrixSum {
     rows: int
     cols: int
     fn sum(self) int {
-        let mut total = 0
+        let total = 0
         for r in 0..self.rows {
             for c in 0..self.cols {
                 total = total + 1
@@ -13631,7 +13631,7 @@ class Fixed impl Limiter {
 }
 
 fn count_to(l: Limiter) {
-    let mut sum = 0
+    let sum = 0
     for i in 0..l.limit() {
         sum = sum + i
     }
@@ -13784,7 +13784,7 @@ fn main() {
     add_item(items, One { tag: 0 })
     add_item(items, Two { tag: 0 })
     add_item(items, Three { tag: 0 })
-    let mut sum = 0
+    let sum = 0
     let i = 0
     while i < items.len() {
         sum = sum + items[i].num()
@@ -13904,7 +13904,7 @@ trait Aggregator_ {
 class Summer_ impl Aggregator_ {
     tag: int
     fn total(self, items: [int]) int {
-        let mut sum = 0
+        let sum = 0
         for v in items {
             sum = sum + v
         }
@@ -14662,7 +14662,7 @@ fn main() {
     add_valued(items, Pos { n: 10 })
     add_valued(items, Neg { n: 5 })
     add_valued(items, Pos { n: 3 })
-    let mut sum = 0
+    let sum = 0
     let i = 0
     while i < items.len() {
         let val = items[i].val()
@@ -14688,7 +14688,7 @@ trait RangeProcessor {
 class Counter impl RangeProcessor {
     tag: int
     fn count_in_range(self, start: int, end: int) int {
-        let mut count = 0
+        let count = 0
         for i in start..end {
             count = count + 1
         }
@@ -14809,7 +14809,7 @@ class AlwaysTrue impl Checker {
 }
 
 fn run(c: Checker) {
-    let mut result = 0
+    let result = 0
     if c.check() {
         result = 1
     } else {
