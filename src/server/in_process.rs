@@ -725,8 +725,27 @@ impl CompilerService for InProcessServer {
         visit_dirs(root, &mut pluto_files).map_err(ServiceError::Io)?;
 
         for file in pluto_files {
-            match self.load_module(&file, opts) {
-                Ok(_) => loaded.push(file),
+            let canon = Self::canon(&file);
+
+            match crate::analyze_file_standalone(&canon, opts.stdlib.as_deref()) {
+                Ok((program, source, derived)) => {
+                    let name = file
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    let cached = CachedModule {
+                        program,
+                        source,
+                        derived,
+                        loaded_at: SystemTime::now(),
+                        name,
+                    };
+
+                    self.modules.insert(canon, cached);
+                    loaded.push(file);
+                }
                 Err(e) => failed.push((file, e.to_string())),
             }
         }
