@@ -363,7 +363,7 @@ fn test_channel_recv_on_empty_channel() {
 fn test_channel_iteration() {
     let src = r#"
         fn producer(tx: Sender<int>) {
-            let i = 1
+            let mut i = 1
             while i <= 5 {
                 tx.send(i)!
                 i = i + 1
@@ -590,7 +590,7 @@ fn test_channel_large_capacity() {
                 i = i + 1
             }
             let mut sum = 0
-            let j = 0
+            let mut j = 0
             while j < 100 {
                 sum = sum + rx.recv()!
                 j = j + 1
