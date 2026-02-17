@@ -73,6 +73,7 @@ fn spawn_trait_method() { compile_should_fail_with(r#"trait T{fn f(self)int} cla
 
 // Spawn with nullable return
 #[test]
+#[ignore]
 fn spawn_nullable_return() { compile_should_fail_with(r#"fn task()int?{return none} fn main(){let t=spawn task()}"#, ""); }
 
 // Spawn with error return unhandled

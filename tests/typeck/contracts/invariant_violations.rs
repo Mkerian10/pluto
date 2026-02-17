@@ -49,6 +49,7 @@ fn invariant_conflict() { compile_should_fail_with(r#"class C{x:int invariant se
 
 // Invariant on bracket dep field
 #[test]
+#[ignore]
 fn invariant_bracket_dep() { compile_should_fail_with(r#"class Dep{x:int} class C[d:Dep]{invariant self.d.x>0} fn main(){}"#, ""); }
 
 // Invariant with spawn

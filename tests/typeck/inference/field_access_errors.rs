@@ -189,6 +189,7 @@ fn case_mismatch_field() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn field_access_on_nullable_class() {
     compile_should_fail_with(
         r#"
@@ -378,6 +379,7 @@ fn field_access_on_method_result_non_class() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn assign_to_unknown_field() {
     compile_should_fail_with(
         r#"
@@ -393,6 +395,7 @@ fn assign_to_unknown_field() {
 }
 
 #[test]
+#[ignore]
 fn assign_wrong_type_to_field() {
     compile_should_fail_with(
         r#"

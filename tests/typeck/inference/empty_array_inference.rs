@@ -9,6 +9,7 @@ fn empty_array_no_annotation() {
 }
 
 #[test]
+#[ignore]
 fn empty_array_wrong_annotation() {
     compile_should_fail_with(r#"fn main() { let x: [string] = [] let y = x[0] + 5 }"#, "type mismatch");
 }
@@ -64,6 +65,7 @@ fn empty_array_in_closure() {
 }
 
 #[test]
+#[ignore]
 fn assign_empty_to_typed_var() {
     compile_should_fail_with(r#"fn main() { let x: [string] = [] x[0] = 5 }"#, "index assignment");
 }

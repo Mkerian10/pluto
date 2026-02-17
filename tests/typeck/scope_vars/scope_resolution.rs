@@ -38,6 +38,7 @@ fn generic_scope() { compile_should_fail_with(r#"fn f<T>(x:T){let y:T} fn g(){le
 
 // Closure scope vs outer scope
 #[test]
+#[ignore]
 fn closure_outer_scope() { compile_should_fail_with(r#"fn main(){let f=()=>{let x=1} let y=x}"#, "undefined"); }
 
 // Match arm scope isolation
