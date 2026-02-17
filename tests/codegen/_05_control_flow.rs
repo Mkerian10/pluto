@@ -377,7 +377,7 @@ fn test_early_loop_exit() {
     // Early exit from nested loop
     let src = r#"
         fn main() int {
-            let found = 0
+            let mut found = 0
             for i in 0..10 {
                 for j in 0..10 {
                     if i == 3 && j == 7 {
@@ -435,7 +435,7 @@ fn test_while_with_multiple_conditions() {
     let src = r#"
         fn main() int {
             let mut i = 0
-            let j = 10
+            let mut j = 10
             while i < 5 && j > 5 {
                 i = i + 1
                 j = j - 1
@@ -667,7 +667,7 @@ fn test_match_enum_in_loop() {
 
         fn main() int {
             let states: [State] = [State.Active, State.Inactive, State.Active]
-            let active_count = 0
+            let mut active_count = 0
 
             for i in 0..3 {
                 match states[i] {
