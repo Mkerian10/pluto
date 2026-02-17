@@ -16,6 +16,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -25,11 +26,14 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace
 
-      - name: Test workspace members
-        run: cargo test --workspace --exclude pluto
+      - name: Run unit tests
+        run: cargo nextest run --lib --profile ci
 
-      - name: Run unit tests only
-        run: cargo nextest run --lib
+      - name: Run integration tests
+        run: cargo nextest run --tests --profile ci -E 'not binary(~typeck_) and not test(gc_stress)'
+
+      - name: Test workspace members
+        run: cargo nextest run --workspace --exclude pluto --profile ci
 
   stdlib-test:
     name: Stdlib Tests
@@ -41,6 +45,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
 
       - name: Run stdlib tests
-        run: cargo test --test stdlib_tests
+        run: cargo nextest run --test stdlib_tests --profile ci

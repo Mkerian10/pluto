@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
+use common::{compile_and_run, compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // BASIC CONSTRUCTION & MATCHING
@@ -281,7 +281,7 @@ fn enum_in_for_loop() {
 #[test]
 fn enum_in_while_loop() {
     let out = compile_and_run_stdout(
-        "enum Color {\n    Red\n    Blue\n    Green\n}\n\nfn main() {\n    let colors = [Color.Red, Color.Blue, Color.Green]\n    let i = 0\n    while i < 3 {\n        match colors[i] {\n            Color.Red { print(1) }\n            Color.Blue { print(2) }\n            Color.Green { print(3) }\n        }\n        i = i + 1\n    }\n}",
+        "enum Color {\n    Red\n    Blue\n    Green\n}\n\nfn main() {\n    let colors = [Color.Red, Color.Blue, Color.Green]\n    let mut i = 0\n    while i < 3 {\n        match colors[i] {\n            Color.Red { print(1) }\n            Color.Blue { print(2) }\n            Color.Green { print(3) }\n        }\n        i = i + 1\n    }\n}",
     );
     assert_eq!(out, "1\n2\n3\n");
 }
@@ -547,7 +547,7 @@ fn enum_inequality_different_variants() {
 fn enum_state_machine_pattern() {
     // Classic state machine: enum + loop + match
     let out = compile_and_run_stdout(
-        "enum State {\n    Start\n    Running { count: int }\n    Done\n}\n\nfn next(s: State) State {\n    match s {\n        State.Start { return State.Running { count: 3 } }\n        State.Running { count } {\n            if count > 1 {\n                return State.Running { count: count - 1 }\n            }\n            return State.Done\n        }\n        State.Done { return State.Done }\n    }\n}\n\nfn is_done(s: State) bool {\n    match s {\n        State.Done { return true }\n        State.Start { return false }\n        State.Running { count } { return false }\n    }\n}\n\nfn main() {\n    let s = State.Start\n    let steps = 0\n    while is_done(s) == false {\n        s = next(s)\n        steps = steps + 1\n    }\n    print(steps)\n}",
+        "enum State {\n    Start\n    Running { count: int }\n    Done\n}\n\nfn next(s: State) State {\n    match s {\n        State.Start { return State.Running { count: 3 } }\n        State.Running { count } {\n            if count > 1 {\n                return State.Running { count: count - 1 }\n            }\n            return State.Done\n        }\n        State.Done { return State.Done }\n    }\n}\n\nfn is_done(s: State) bool {\n    match s {\n        State.Done { return true }\n        State.Start { return false }\n        State.Running { count } { return false }\n    }\n}\n\nfn main() {\n    let mut s = State.Start\n    let mut steps = 0\n    while is_done(s) == false {\n        s = next(s)\n        steps = steps + 1\n    }\n    print(steps)\n}",
     );
     assert_eq!(out, "4\n");
 }
@@ -574,7 +574,7 @@ fn enum_multiple_matches_in_function() {
 fn enum_reassign_variable() {
     // Reassign an enum variable to a different variant
     let out = compile_and_run_stdout(
-        "enum Color {\n    Red\n    Blue\n    Green\n}\n\nfn main() {\n    let c = Color.Red\n    match c {\n        Color.Red { print(1) }\n        Color.Blue { print(2) }\n        Color.Green { print(3) }\n    }\n    c = Color.Green\n    match c {\n        Color.Red { print(1) }\n        Color.Blue { print(2) }\n        Color.Green { print(3) }\n    }\n}",
+        "enum Color {\n    Red\n    Blue\n    Green\n}\n\nfn main() {\n    let mut c = Color.Red\n    match c {\n        Color.Red { print(1) }\n        Color.Blue { print(2) }\n        Color.Green { print(3) }\n    }\n    c = Color.Green\n    match c {\n        Color.Red { print(1) }\n        Color.Blue { print(2) }\n        Color.Green { print(3) }\n    }\n}",
     );
     assert_eq!(out, "1\n3\n");
 }
@@ -814,11 +814,10 @@ fn fail_enum_print_directly() {
 }
 
 #[test]
-fn fail_enum_string_interpolation() {
-    // Enums cannot be interpolated in strings
-    compile_should_fail_with(
+fn enum_string_interpolation() {
+    // Enums can be interpolated in strings
+    compile_and_run(
         "enum Color {\n    Red\n    Blue\n}\n\nfn main() {\n    let c = Color.Red\n    let s = \"color: {c}\"\n}",
-        "cannot interpolate",
     );
 }
 

@@ -162,16 +162,13 @@ fn float_with_underscores() {
 }
 
 #[test]
-fn float_scientific_notation_not_supported() {
-    // "1e10" or "1.5e-3" - not in current lexer regex
+fn float_scientific_notation_supported() {
+    // Scientific notation is now supported (#230)
     let src = "1e10";
     let result = lex(src);
-    // Will lex as IntLit(1) + Ident("e10") or similar
-    if result.is_ok() {
-        let tokens = result.unwrap();
-        // Bug: scientific notation not supported
-        assert!(tokens.len() >= 2, "Bug: scientific notation not supported");
-    }
+    let tokens = result.unwrap();
+    // Should lex as a single FloatLit token
+    assert_eq!(tokens.len(), 1, "1e10 should lex as a single token");
 }
 
 #[test]

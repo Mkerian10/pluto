@@ -12,7 +12,7 @@ fn if_else() {
 #[test]
 fn while_loop() {
     let code = compile_and_run(
-        "fn main() {\n    let x = 0\n    while x < 10 {\n        x = x + 1\n    }\n}",
+        "fn main() {\n    let mut x = 0\n    while x < 10 {\n        x = x + 1\n    }\n}",
     );
     assert_eq!(code, 0);
 }
@@ -125,7 +125,7 @@ fn for_loop_early_return() {
 #[test]
 fn for_loop_inside_while() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let i = 0\n    while i < 2 {\n        for x in [10, 20] {\n            print(x + i)\n        }\n        i = i + 1\n    }\n}",
+        "fn main() {\n    let mut i = 0\n    while i < 2 {\n        for x in [10, 20] {\n            print(x + i)\n        }\n        i = i + 1\n    }\n}",
     );
     assert_eq!(out, "10\n20\n11\n21\n");
 }
@@ -159,7 +159,7 @@ fn for_loop_nested_same_array() {
 #[test]
 fn while_break() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let i = 0\n    while true {\n        if i == 3 {\n            break\n        }\n        print(i)\n        i = i + 1\n    }\n    print(99)\n}",
+        "fn main() {\n    let mut i = 0\n    while true {\n        if i == 3 {\n            break\n        }\n        print(i)\n        i = i + 1\n    }\n    print(99)\n}",
     );
     assert_eq!(out, "0\n1\n2\n99\n");
 }
@@ -193,7 +193,7 @@ fn break_outside_loop_rejected() {
 #[test]
 fn while_continue() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let i = 0\n    while i < 5 {\n        i = i + 1\n        if i == 3 {\n            continue\n        }\n        print(i)\n    }\n}",
+        "fn main() {\n    let mut i = 0\n    while i < 5 {\n        i = i + 1\n        if i == 3 {\n            continue\n        }\n        print(i)\n    }\n}",
     );
     assert_eq!(out, "1\n2\n4\n5\n");
 }

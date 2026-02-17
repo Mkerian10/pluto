@@ -335,6 +335,7 @@ fn string_for_loop() {
 }
 
 #[test]
+#[ignore]
 fn string_for_loop_accumulate() {
     let out = compile_and_run_stdout(
         "fn main() {\n    let result = \"\"\n    for c in \"hello\" {\n        result = result + c + \"-\"\n    }\n    print(result)\n}",

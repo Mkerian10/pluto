@@ -5566,7 +5566,7 @@ fn exhaustive_spawn_returns_array() {
     let (stdout, _stderr, code) = compile_test_and_run(r#"
 fn make_list(n: int) [int] {
     let arr: [int] = []
-    let i = 0
+    let mut i = 0
     while i < n {
         arr.push(i)
         i = i + 1
