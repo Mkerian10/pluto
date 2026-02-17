@@ -8,7 +8,7 @@ use crate::span::Spanned;
 use super::env::{self, mangle_method, ClassInfo, EnumInfo, ErrorInfo, FuncSig, GenericClassInfo, GenericEnumInfo, GenericFuncSig, TraitInfo, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::{resolve_type, resolve_type_with_params};
-use super::check::{check_function, has_potential_return_path};
+use super::check::{check_function, all_paths_return};
 use crate::parser::ast::ContractKind;
 
 /// Type-check requires contracts on a function or method.
@@ -716,9 +716,8 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
                 None => PlutoType::Void,
             };
 
-            // Basic check: non-void generic functions must have SOME potential return path
-            // (prevents Cranelift panics on straight-line code with no return)
-            if !matches!(return_type, PlutoType::Void) && !has_potential_return_path(&f.body.node) {
+            // Verify non-void generic functions have a return or raise on every control flow path
+            if !matches!(return_type, PlutoType::Void) && !all_paths_return(&f.body.node) {
                 return Err(CompileError::type_err(
                     format!("missing return statement in function with return type {}", return_type),
                     f.body.span,
