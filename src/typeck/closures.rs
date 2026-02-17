@@ -34,8 +34,16 @@ pub(crate) fn infer_closure(
     let final_ret = if let Some(rt) = return_type {
         resolve_type(rt, env)?
     } else {
-        // Infer from first return-with-value in the body
-        infer_closure_return_type(&body.node, env)?
+        // Infer from first return-with-value in the body (dry run that may add variables to scope)
+        let ret = infer_closure_return_type(&body.node, env)?;
+        // Reset closure scope to only contain params, removing any variables added by the dry run.
+        // This prevents check_block from seeing the dry-run variables as pre-existing declarations.
+        env.pop_scope();
+        env.push_scope();
+        for (i, p) in params.iter().enumerate() {
+            env.define(p.name.node.clone(), param_types[i].clone());
+        }
+        ret
     };
 
     // Check the body against the determined return type

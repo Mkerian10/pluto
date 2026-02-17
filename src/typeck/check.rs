@@ -148,6 +148,16 @@ fn check_stmt(
             } else {
                 infer_expr(&value.node, value.span, env)?
             };
+            // Check for same-scope redeclaration
+            let current_depth = env.scope_depth() - 1;
+            if let Some((_, existing_depth)) = env.lookup_with_depth(&name.node) {
+                if existing_depth == current_depth {
+                    return Err(CompileError::type_err(
+                        format!("variable '{}' is already declared in this scope", name.node),
+                        name.span,
+                    ));
+                }
+            }
             if let Some(declared_ty) = ty {
                 let expected = resolve_type(declared_ty, env)?;
                 if !types_compatible(&val_type, &expected, env) {

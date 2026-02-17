@@ -44,7 +44,7 @@ fn closure_capture() {
 #[test]
 fn closure_capture_by_value() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = 10\n    let f = (x: int) => x + a\n    let a = 999\n    print(f(5))\n}",
+        "fn main() {\n    let mut a = 10\n    let f = (x: int) => x + a\n    a = 999\n    print(f(5))\n}",
     );
     assert_eq!(out.trim(), "15");
 }
