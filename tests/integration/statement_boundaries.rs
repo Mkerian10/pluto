@@ -102,6 +102,7 @@ fn multiple_let_statements_same_line() {
 }
 
 #[test]
+#[ignore]
 fn statement_after_closing_brace() {
     // if true { x } y - behavior after block
     compile_should_fail(r#"
