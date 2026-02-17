@@ -249,7 +249,7 @@ fn map_grow_rehash() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let m = Map<int, int> {}
-    let i = 0
+    let mut i = 0
     while i < 100 {
         m.insert(i, i * 2)
         i = i + 1
