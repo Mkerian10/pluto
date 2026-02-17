@@ -401,7 +401,7 @@ fn bar() int {
 }
 
 fn main() {
-    let t = spawn foo()
+    let mut t = spawn foo()
     t = spawn bar()
     let result = t.get()
     print(result)
@@ -425,7 +425,7 @@ fn bar() int {
 }
 
 fn main() {
-    let t = spawn foo()
+    let mut t = spawn foo()
     if true {
         t = spawn bar()
     }
@@ -447,7 +447,7 @@ class Counter {
 }
 
 fn increment(c: Counter, n: int) {
-    let i = 0
+    let mut i = 0
     while i < n {
         c.value = c.value + 1
         i = i + 1
@@ -645,7 +645,7 @@ fn stress_many_concurrent_tasks() {
     let out = compile_and_run_stdout(r#"
 fn compute(x: int) int {
     let mut result = 0
-    let i = 0
+    let mut i = 0
     while i < 1000 {
         result = result + x
         i = i + 1
@@ -692,7 +692,7 @@ fn stress_gc_pressure_under_suppression() {
     // Validates that thread stack scanning keeps objects alive correctly.
     let (stdout, stderr, code) = compile_and_run_output(r#"
 fn allocate_strings(n: int) {
-    let i = 0
+    let mut i = 0
     while i < n {
         let s = f"item number {i}"
         i = i + 1
@@ -740,16 +740,16 @@ fn main() {
     let t8 = spawn maybe_fail(8)
     let t9 = spawn maybe_fail(9)
     let t10 = spawn maybe_fail(10)
-    let sum = t1.get() catch 0
-    let sum = sum + (t2.get() catch 0)
-    let sum = sum + (t3.get() catch 0)
-    let sum = sum + (t4.get() catch 0)
-    let sum = sum + (t5.get() catch 0)
-    let sum = sum + (t6.get() catch 0)
-    let sum = sum + (t7.get() catch 0)
-    let sum = sum + (t8.get() catch 0)
-    let sum = sum + (t9.get() catch 0)
-    let sum = sum + (t10.get() catch 0)
+    let mut sum = t1.get() catch 0
+    sum = sum + (t2.get() catch 0)
+    sum = sum + (t3.get() catch 0)
+    sum = sum + (t4.get() catch 0)
+    sum = sum + (t5.get() catch 0)
+    sum = sum + (t6.get() catch 0)
+    sum = sum + (t7.get() catch 0)
+    sum = sum + (t8.get() catch 0)
+    sum = sum + (t9.get() catch 0)
+    sum = sum + (t10.get() catch 0)
     print(sum)
 }
 "#);
@@ -1190,7 +1190,7 @@ class Counter {
     }
 
     fn do_increments(mut self) {
-        let i = 0
+        let mut i = 0
         while i < 1000 {
             self.value = self.value + 1
             i = i + 1
@@ -1205,7 +1205,7 @@ class Counter {
 app MyApp[counter: Counter] {
     fn main(self) {
         let t = spawn self.counter.do_increments()
-        let i = 0
+        let mut i = 0
         while i < 1000 {
             self.counter.increment()
             i = i + 1
@@ -1341,7 +1341,7 @@ class Balance {
     }
 
     fn do_deposits(mut self) {
-        let i = 0
+        let mut i = 0
         while i < 100 {
             self.amount = self.amount + 1
             i = i + 1
@@ -1356,7 +1356,7 @@ class Balance {
 app MyApp[bal: Balance] {
     fn main(self) {
         let t = spawn self.bal.do_deposits()
-        let i = 0
+        let mut i = 0
         while i < 100 {
             self.bal.deposit(1)
             i = i + 1
@@ -1387,7 +1387,7 @@ class Counter {
 }
 
 fn do_increments(c: Counter) {
-    let i = 0
+    let mut i = 0
     while i < 500 {
         c.increment()
         i = i + 1
@@ -1422,8 +1422,8 @@ fn gc_stress_concurrent_allocation() {
 
     let bin = CompiledBinary::compile(r#"
 fn build_strings(prefix: string, count: int) string {
-    let result = ""
-    let i = 0
+    let mut result = ""
+    let mut i = 0
     while i < count {
         result = f"{result}{prefix}_{i}"
         i = i + 1
@@ -1460,7 +1460,7 @@ fn gc_stress_concurrent_arrays() {
     let out = compile_and_run_stdout(r#"
 fn build_array(n: int) [int] {
     let arr: [int] = []
-    let i = 0
+    let mut i = 0
     while i < n {
         arr.push(i * 2)
         i = i + 1
@@ -1486,7 +1486,7 @@ fn gc_stress_concurrent_maps() {
     let out = compile_and_run_stdout(r#"
 fn build_map(n: int) int {
     let m = Map<int, int> {}
-    let i = 0
+    let mut i = 0
     while i < n {
         m[i] = i * 3
         i = i + 1
@@ -1516,8 +1516,8 @@ class Node {
 }
 
 fn build_nodes(n: int, prefix: string) string {
-    let i = 0
-    let last = ""
+    let mut i = 0
+    let mut last = ""
     while i < n {
         let node = Node { value: i, label: f"{prefix}_{i}" }
         last = node.label
@@ -1542,10 +1542,10 @@ fn gc_stress_concurrent_nested_arrays() {
     let out = compile_and_run_stdout(r#"
 fn build_nested(rows: int, cols: int) int {
     let outer: [[int]] = []
-    let r = 0
+    let mut r = 0
     while r < rows {
         let inner: [int] = []
-        let c = 0
+        let mut c = 0
         while c < cols {
             inner.push(r * cols + c)
             c = c + 1
@@ -1577,7 +1577,7 @@ fn make_string(n: int) string {
 
 fn main() {
     let results: [string] = []
-    let i = 0
+    let mut i = 0
     while i < 20 {
         let t = spawn make_string(i)
         results.push(t.get())

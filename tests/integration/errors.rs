@@ -108,7 +108,7 @@ fn error_multiple_catches_in_sequence() {
 #[test]
 fn error_in_while_loop() {
     let out = compile_and_run_stdout(
-        "error OutOfRange {}\n\nfn check(x: int) int {\n    if x > 5 {\n        raise OutOfRange {}\n    }\n    return x\n}\n\nfn main() {\n    let i = 0\n    let mut sum = 0\n    while i < 10 {\n        let val = check(i) catch 0\n        sum = sum + val\n        i = i + 1\n    }\n    print(sum)\n}",
+        "error OutOfRange {}\n\nfn check(x: int) int {\n    if x > 5 {\n        raise OutOfRange {}\n    }\n    return x\n}\n\nfn main() {\n    let mut i = 0\n    let mut sum = 0\n    while i < 10 {\n        let val = check(i) catch 0\n        sum = sum + val\n        i = i + 1\n    }\n    print(sum)\n}",
     );
     assert_eq!(out, "15\n");
 }
