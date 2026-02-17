@@ -8,8 +8,8 @@ use common::compile_should_fail_with;
 #[ignore] // #160: compiler doesn't enforce redeclaration rules
 fn redeclare_same_scope() { compile_should_fail_with(r#"fn main(){let x=1 let x=2}"#, "already declared"); }
 #[test]
-#[ignore] // #156: string literals don't work in compact syntax
-fn redeclare_different_types() { compile_should_fail_with(r#"fn main(){let x=1 let x=\"hi\"}"#, "already declared"); }
+#[ignore] // #160: compiler doesn't enforce redeclaration rules
+fn redeclare_different_types() { compile_should_fail_with(r#"fn main(){let x=1 let x=true}"#, "already declared"); }
 
 // Function parameter redeclaration
 #[test]
