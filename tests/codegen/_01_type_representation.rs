@@ -321,7 +321,7 @@ fn test_string_long_10kb() {
     let src = r#"
         fn main() {
             let s = "a"
-            let i = 0
+            let mut i = 0
             while i < 10000 {
                 s = s + "x"
                 i = i + 1
@@ -341,7 +341,7 @@ fn test_string_very_long_1mb() {
         fn main() {
             let chunk = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  // 64 bytes
             let s = ""
-            let i = 0
+            let mut i = 0
             while i < 16384 {  // 16384 * 64 = 1MB
                 s = s + chunk
                 i = i + 1
@@ -759,7 +759,7 @@ fn test_array_int_1000_elements() {
     let src = r#"
         fn main() {
             let arr: [int] = []
-            let i = 0
+            let mut i = 0
             while i < 1000 {
                 arr.push(i)
                 i = i + 1

@@ -344,8 +344,8 @@ fn test_propagate_in_loop() {
         }
 
         fn sum_until_error() int {
-            let total = 0
-            let i = 0
+            let mut total = 0
+            let mut i = 0
             while i < 10 {
                 total = total + check(i)!
                 i = i + 1
@@ -841,8 +841,8 @@ fn test_error_in_while_loop_with_catch() {
         }
 
         fn main() {
-            let i = 0
-            let sum = 0
+            let mut i = 0
+            let mut sum = 0
             while i < 10 {
                 let val = check(i) catch 0
                 sum = sum + val

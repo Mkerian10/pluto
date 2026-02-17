@@ -115,7 +115,7 @@ fn area(s: Shape) int {
 }
 
 fn main() {
-    let total = 0
+    let mut total = 0
     let i = 0
     while i < 10000 {
         let s = Shape.Circle { radius: 1 }
@@ -202,7 +202,7 @@ fn main() {
         j = j + 1
     }
     // Walk the chain via indices to verify integrity
-    let count = 0
+    let mut count = 0
     let idx = 9999
     while idx >= 0 {
         let n = nodes[idx]
