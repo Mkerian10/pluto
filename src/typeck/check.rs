@@ -21,25 +21,29 @@ pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Opt
     result
 }
 
-/// Checks if a block has ANY potential return path.
-/// This is a very conservative check - it returns true if there's any statement that COULD
-/// provide a return (return, raise, if, match, while, for). The goal is to avoid Cranelift
-/// panics on straight-line code with no return. Actual control flow validation happens at codegen.
-pub(crate) fn has_potential_return_path(block: &Block) -> bool {
+/// Checks if ALL control flow paths through a block terminate with `return` or `raise`.
+/// - `return` and `raise` both terminate a path
+/// - `if/else` terminates only if BOTH branches terminate (if without else never terminates)
+/// - `match` terminates only if ALL arms terminate
+/// - `while`/`for` never guarantee termination (body may execute 0 times)
+pub(crate) fn all_paths_return(block: &Block) -> bool {
     for stmt in &block.stmts {
-        if stmt_has_potential_return(&stmt.node) {
-            return true;
+        match &stmt.node {
+            Stmt::Return(_) | Stmt::Raise { .. } => return true,
+            Stmt::If { then_block, else_block: Some(else_block), .. } => {
+                if all_paths_return(&then_block.node) && all_paths_return(&else_block.node) {
+                    return true;
+                }
+            }
+            Stmt::Match { arms, .. } => {
+                if !arms.is_empty() && arms.iter().all(|arm| all_paths_return(&arm.body.node)) {
+                    return true;
+                }
+            }
+            _ => {}
         }
     }
     false
-}
-
-/// Checks if a statement could potentially provide a return path.
-fn stmt_has_potential_return(stmt: &Stmt) -> bool {
-    matches!(
-        stmt,
-        Stmt::Return(_) | Stmt::Raise { .. } | Stmt::If { .. } | Stmt::Match { .. } | Stmt::While { .. } | Stmt::For { .. }
-    )
 }
 
 fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
@@ -88,10 +92,8 @@ fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&s
     // Check body
     check_block(&func.body.node, env, &effective_return)?;
 
-    // Verify non-void functions have a return statement.
-    // This catches the simple cases that cause Cranelift to panic (no control flow at all).
-    // Complex control flow (incomplete if/else, match, loops) is still validated at codegen.
-    if !matches!(effective_return, PlutoType::Void) && !has_potential_return_path(&func.body.node) {
+    // Verify non-void functions have a return or raise on every control flow path.
+    if !matches!(effective_return, PlutoType::Void) && !all_paths_return(&func.body.node) {
         return Err(CompileError::type_err(
             format!("missing return statement in function with return type {}", effective_return),
             func.body.span,
