@@ -166,7 +166,7 @@ fn map_iterate_keys() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let m = Map<int, int> { 1: 10, 2: 20, 3: 30 }
-    let total = 0
+    let mut total = 0
     for k in m.keys() {
         total = total + m[k]
     }
@@ -181,7 +181,7 @@ fn main() int {
 fn map_as_function_param() {
     let out = compile_and_run_stdout(r#"
 fn sum_values(m: Map<string, int>) int {
-    let total = 0
+    let mut total = 0
     for v in m.values() {
         total = total + v
     }

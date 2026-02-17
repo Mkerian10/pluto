@@ -11,7 +11,7 @@ pub fn next() int {
 }
 
 pub fn between(low: int, high: int) int {
-    let r = __pluto_random_int()
+    let mut r = __pluto_random_int()
     if r < 0 {
         r = 0 - r
     }

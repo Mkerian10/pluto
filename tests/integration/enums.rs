@@ -273,7 +273,7 @@ fn enum_in_array_literal() {
 #[test]
 fn enum_in_for_loop() {
     let out = compile_and_run_stdout(
-        "enum Op {\n    Add { n: int }\n    Mul { n: int }\n    Noop\n}\n\nfn main() {\n    let ops = [Op.Add { n: 5 }, Op.Mul { n: 3 }, Op.Noop]\n    let result = 0\n    for op in ops {\n        match op {\n            Op.Add { n } { result = result + n }\n            Op.Mul { n } { result = result * n }\n            Op.Noop { result = result }\n        }\n    }\n    print(result)\n}",
+        "enum Op {\n    Add { n: int }\n    Mul { n: int }\n    Noop\n}\n\nfn main() {\n    let ops = [Op.Add { n: 5 }, Op.Mul { n: 3 }, Op.Noop]\n    let mut result = 0\n    for op in ops {\n        match op {\n            Op.Add { n } { result = result + n }\n            Op.Mul { n } { result = result * n }\n            Op.Noop { result = result }\n        }\n    }\n    print(result)\n}",
     );
     assert_eq!(out, "15\n");
 }
@@ -390,7 +390,7 @@ fn match_shadow_different_across_arms() {
 fn match_break_continue_in_loop() {
     // Test break/continue inside match arms within a for loop
     let out = compile_and_run_stdout(
-        "enum Action {\n    Skip\n    Process { n: int }\n    Stop\n}\n\nfn main() {\n    let actions = [Action.Process { n: 1 }, Action.Skip, Action.Process { n: 2 }, Action.Stop, Action.Process { n: 3 }]\n    let total = 0\n    for a in actions {\n        match a {\n            Action.Skip { continue }\n            Action.Process { n } { total = total + n }\n            Action.Stop { break }\n        }\n    }\n    print(total)\n}",
+        "enum Action {\n    Skip\n    Process { n: int }\n    Stop\n}\n\nfn main() {\n    let actions = [Action.Process { n: 1 }, Action.Skip, Action.Process { n: 2 }, Action.Stop, Action.Process { n: 3 }]\n    let mut total = 0\n    for a in actions {\n        match a {\n            Action.Skip { continue }\n            Action.Process { n } { total = total + n }\n            Action.Stop { break }\n        }\n    }\n    print(total)\n}",
     );
     assert_eq!(out, "3\n");
 }

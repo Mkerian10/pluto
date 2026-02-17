@@ -644,7 +644,7 @@ fn stress_many_concurrent_tasks() {
     // Spawn 20 tasks and collect all results
     let out = compile_and_run_stdout(r#"
 fn compute(x: int) int {
-    let result = 0
+    let mut result = 0
     let i = 0
     while i < 1000 {
         result = result + x

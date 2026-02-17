@@ -549,7 +549,7 @@ fn if_expr_in_map_literal() {
 fn if_expr_in_range() {
     let stdout = compile_and_run_stdout(r#"
         fn main() {
-            let total = 0
+            let mut total = 0
             for i in (if true { 0 } else { 5 })..(if false { 10 } else { 3 }) {
                 total = total + 1
             }

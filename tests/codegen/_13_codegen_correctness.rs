@@ -24,7 +24,7 @@ fn main() {
 fn test_int_to_float_zero() {
     let source = r#"
 fn main() {
-    let i = 0
+    let mut i = 0
     let f = i as float
     print(f)
 }
@@ -84,7 +84,7 @@ fn main() {
 fn test_int_to_bool_zero_is_false() {
     let source = r#"
 fn main() {
-    let i = 0
+    let mut i = 0
     let b = i as bool
     if b {
         print("true")
@@ -258,7 +258,7 @@ fn test_const_fold_bitwise() {
     // Bitwise operations on constants
     let source = r#"
 fn main() {
-    let result = 0b1010 & 0b1100
+    let mut result = 0b1010 & 0b1100
     print(result)
 }
 "#;

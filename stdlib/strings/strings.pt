@@ -80,7 +80,7 @@ pub fn join(arr: [string], sep: string) string {
     if arr.len() == 0 {
         return ""
     }
-    let result = arr[0]
+    let mut result = arr[0]
     for i in 1..arr.len() {
         result = result + sep + arr[i]
     }
