@@ -5,26 +5,22 @@ use common::compile_should_fail_with;
 
 // Same scope redeclaration
 #[test]
-#[ignore] // #160: compiler doesn't enforce redeclaration rules
-fn redeclare_same_scope() { compile_should_fail_with(r#"fn main(){let x=1 let x=2}"#, "already declared"); }
+fn redeclare_same_scope() { compile_should_fail_with("fn main(){\n  let x=1\n  let x=2\n}", "already declared"); }
 #[test]
-#[ignore] // #160: compiler doesn't enforce redeclaration rules
-fn redeclare_different_types() { compile_should_fail_with(r#"fn main(){let x=1 let x=true}"#, "already declared"); }
+fn redeclare_different_types() { compile_should_fail_with("fn main(){\n  let x=1\n  let x=true\n}", "already declared"); }
 
 // Function parameter redeclaration
 #[test]
-#[ignore] // #160: compiler doesn't enforce redeclaration rules
 fn param_redeclare() { compile_should_fail_with(r#"fn f(x:int){let x=2} fn main(){}"#, "already declared"); }
 #[test]
-#[ignore] // #160: compiler doesn't enforce redeclaration rules
 fn two_params_same_name() { compile_should_fail_with(r#"fn f(x:int,x:string){} fn main(){}"#, "already declared"); }
 
 // For loop variable redeclaration
 #[test]
-#[ignore] // #160: compiler doesn't enforce redeclaration rules
-fn for_var_redeclare() { compile_should_fail_with(r#"fn main(){let i=1 for i in 0..10{}}"#, "already declared"); }
+#[ignore] // #160: for-loop var shadowing outer var is currently allowed (see for_loop_var_shadows_outer)
+fn for_var_redeclare() { compile_should_fail_with("fn main(){\n  let i=1\n  for i in 0..10{}\n}", "already declared"); }
 #[test]
-#[ignore] // #160: compiler doesn't enforce redeclaration rules
+#[ignore] // #160: for-loop var shadowing is currently allowed
 fn nested_for_same_var() { compile_should_fail_with(r#"fn main(){for i in 0..10{for i in 0..5{}}}"#, ""); }
 
 // Match binding redeclaration
@@ -47,8 +43,7 @@ fn shadow_in_nested_scope() { compile_should_fail_with(r#"fn main(){let x=1 if t
 
 // Redeclare after nested scope
 #[test]
-#[ignore] // #160: compiler doesn't enforce redeclaration rules
-fn redeclare_after_scope() { compile_should_fail_with(r#"fn main(){let x=1 if true{} let x=2}"#, "already declared"); }
+fn redeclare_after_scope() { compile_should_fail_with("fn main(){\n  let x=1\n  if true{}\n  let x=2\n}", "already declared"); }
 
 // Function name vs variable
 #[test]
