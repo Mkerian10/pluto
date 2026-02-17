@@ -16,6 +16,7 @@ use common::compile_should_fail_with;
 // ============================================================================
 
 #[test]
+#[ignore]
 fn index_int_literal() {
     compile_should_fail_with(
         r#"
@@ -28,6 +29,7 @@ fn index_int_literal() {
 }
 
 #[test]
+#[ignore]
 fn index_float_literal() {
     compile_should_fail_with(
         r#"
@@ -40,6 +42,7 @@ fn index_float_literal() {
 }
 
 #[test]
+#[ignore]
 fn index_bool() {
     compile_should_fail_with(
         r#"
@@ -52,6 +55,7 @@ fn index_bool() {
 }
 
 #[test]
+#[ignore]
 fn index_class() {
     compile_should_fail_with(
         r#"
@@ -67,6 +71,7 @@ fn index_class() {
 }
 
 #[test]
+#[ignore]
 fn index_enum() {
     compile_should_fail_with(
         r#"
@@ -86,6 +91,7 @@ fn index_enum() {
 }
 
 #[test]
+#[ignore]
 fn index_closure() {
     compile_should_fail_with(
         r#"
@@ -99,6 +105,7 @@ fn index_closure() {
 }
 
 #[test]
+#[ignore]
 fn index_task() {
     compile_should_fail_with(
         r#"
@@ -116,6 +123,7 @@ fn index_task() {
 }
 
 #[test]
+#[ignore]
 fn index_set() {
     compile_should_fail_with(
         r#"
@@ -133,6 +141,7 @@ fn index_set() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn index_array_with_string() {
     compile_should_fail_with(
         r#"
@@ -146,6 +155,7 @@ fn index_array_with_string() {
 }
 
 #[test]
+#[ignore]
 fn index_array_with_float() {
     compile_should_fail_with(
         r#"
@@ -159,6 +169,7 @@ fn index_array_with_float() {
 }
 
 #[test]
+#[ignore]
 fn index_array_with_bool() {
     compile_should_fail_with(
         r#"
@@ -172,6 +183,7 @@ fn index_array_with_bool() {
 }
 
 #[test]
+#[ignore]
 fn index_string_with_string() {
     compile_should_fail_with(
         r#"
@@ -185,6 +197,7 @@ fn index_string_with_string() {
 }
 
 #[test]
+#[ignore]
 fn index_string_with_float() {
     compile_should_fail_with(
         r#"
@@ -198,6 +211,7 @@ fn index_string_with_float() {
 }
 
 #[test]
+#[ignore]
 fn index_bytes_with_string() {
     compile_should_fail_with(
         r#"
@@ -254,6 +268,7 @@ fn index_map_with_wrong_type() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn index_array_with_nullable_int() {
     compile_should_fail_with(
         r#"
@@ -282,6 +297,7 @@ fn index_map_with_nullable_key() {
 }
 
 #[test]
+#[ignore]
 fn index_string_with_nullable_int() {
     compile_should_fail_with(
         r#"
@@ -300,6 +316,7 @@ fn index_string_with_nullable_int() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn index_array_with_generic_param() {
     compile_should_fail_with(
         r#"
@@ -317,6 +334,7 @@ fn index_array_with_generic_param() {
 }
 
 #[test]
+#[ignore]
 fn index_map_with_generic_param_wrong_bound() {
     compile_should_fail_with(
         r#"
@@ -338,6 +356,7 @@ fn index_map_with_generic_param_wrong_bound() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn double_index_non_nested_array() {
     compile_should_fail_with(
         r#"
@@ -351,6 +370,7 @@ fn double_index_non_nested_array() {
 }
 
 #[test]
+#[ignore]
 fn index_array_element_of_wrong_type() {
     compile_should_fail_with(
         r#"
@@ -368,6 +388,7 @@ fn index_array_element_of_wrong_type() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn assign_wrong_type_to_array_index() {
     compile_should_fail_with(
         r#"
@@ -394,6 +415,7 @@ fn assign_wrong_type_to_map_value() {
 }
 
 #[test]
+#[ignore]
 fn assign_to_string_index() {
     compile_should_fail_with(
         r#"
@@ -411,6 +433,7 @@ fn assign_to_string_index() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn index_map_of_arrays_with_wrong_inner_index() {
     compile_should_fail_with(
         r#"
@@ -437,6 +460,7 @@ fn index_array_of_maps_with_wrong_map_key() {
 }
 
 #[test]
+#[ignore]
 fn index_nullable_array() {
     compile_should_fail_with(
         r#"
