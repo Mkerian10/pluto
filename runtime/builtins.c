@@ -28,7 +28,15 @@ void __pluto_print_int(long value) {
 }
 
 void __pluto_print_float(double value) {
-    printf("%f\n", value);
+    double abs_val = fabs(value);
+    /* Use scientific notation for extreme values to avoid unreadable output.
+     * Thresholds chosen to preserve existing %f output for all normal-range
+     * values (largest test value is 3e6, smallest nonzero is 3e-4). */
+    if (abs_val != 0.0 && (abs_val >= 1e15 || abs_val < 1e-4)) {
+        printf("%.16e\n", value);
+    } else {
+        printf("%f\n", value);
+    }
 }
 
 void __pluto_print_string(void *header) {
@@ -818,11 +826,20 @@ void *__pluto_int_to_string(long value) {
 }
 
 void *__pluto_float_to_string(double value) {
-    int len = snprintf(NULL, 0, "%f", value);
+    const char *fmt;
+    double abs_val = fabs(value);
+    /* Use scientific notation for extreme values — same thresholds as
+     * __pluto_print_float to keep string() and print() consistent. */
+    if (abs_val != 0.0 && (abs_val >= 1e15 || abs_val < 1e-4)) {
+        fmt = "%.16e";
+    } else {
+        fmt = "%f";
+    }
+    int len = snprintf(NULL, 0, fmt, value);
     size_t alloc_size = 8 + len + 1;
     void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
     *(long *)header = len;
-    snprintf((char *)header + 8, len + 1, "%f", value);
+    snprintf((char *)header + 8, len + 1, fmt, value);
     return header;
 }
 

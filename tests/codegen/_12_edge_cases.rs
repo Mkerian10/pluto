@@ -84,7 +84,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // LIMITATION: Pluto doesn't support scientific notation in numeric literals
 fn test_f64_max_literal() {
     let source = r#"
 fn main() {
@@ -98,7 +97,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // LIMITATION: Pluto doesn't support scientific notation in numeric literals
 fn test_f64_min_positive_literal() {
     let source = r#"
 fn main() {

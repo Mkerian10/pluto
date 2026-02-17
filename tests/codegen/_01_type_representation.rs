@@ -153,7 +153,6 @@ fn test_float_denormal() {
 }
 
 #[test]
-#[ignore] // LIMITATION: Pluto doesn't support scientific notation in numeric literals (e.g. 1.7976931348623157e308)
 fn test_float_max() {
     // f64::MAX is approximately 1.7976931348623157e308
     let src = r#"
@@ -167,7 +166,6 @@ fn test_float_max() {
 }
 
 #[test]
-#[ignore] // LIMITATION: Pluto doesn't support scientific notation in numeric literals (e.g. 2.2250738585072014e-308)
 fn test_float_min_positive() {
     // Smallest positive f64
     let src = r#"
