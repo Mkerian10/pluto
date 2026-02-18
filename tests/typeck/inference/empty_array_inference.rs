@@ -9,9 +9,11 @@ fn empty_array_no_annotation() {
 }
 
 #[test]
-#[ignore]
 fn empty_array_wrong_annotation() {
-    compile_should_fail_with(r#"fn main() { let x: [string] = [] let y = x[0] + 5 }"#, "type mismatch");
+    compile_should_fail_with(
+        "fn main() {\n    let x: [string] = []\n    let y = x[0] + 5\n}",
+        "type mismatch",
+    );
 }
 
 #[test]
@@ -46,7 +48,9 @@ fn empty_array_method_call() {
 
 #[test]
 fn empty_array_in_field() {
-    compile_should_fail_with(r#"class C{f:[int]} fn main(){let c=C{f:[]}}"#, "");
+    // C{f:[]} now succeeds because the field type [int] propagates to the empty array.
+    // Test that mismatched field type still fails.
+    compile_should_fail_with(r#"class C{f:[int]} fn main(){let c=C{f:[1,"bad"]}}"#, "type mismatch");
 }
 
 #[test]
@@ -56,7 +60,11 @@ fn empty_array_concat() {
 
 #[test]
 fn return_empty_array_no_type() {
-    compile_should_fail_with(r#"fn f() { return [] } fn main() {}"#, "cannot infer");
+    // fn f() has void return type, so `return []` now gets "type mismatch: expected void, found empty array"
+    compile_should_fail_with(
+        "fn f() {\n    return []\n}\nfn main() {}",
+        "type mismatch",
+    );
 }
 
 #[test]
@@ -65,9 +73,11 @@ fn empty_array_in_closure() {
 }
 
 #[test]
-#[ignore]
 fn assign_empty_to_typed_var() {
-    compile_should_fail_with(r#"fn main() { let x: [string] = [] x[0] = 5 }"#, "index assignment");
+    compile_should_fail_with(
+        "fn main() {\n    let x: [string] = []\n    x[0] = 5\n}",
+        "index assignment",
+    );
 }
 
 #[test]

@@ -39,7 +39,7 @@ fn check_function_contracts(
         }
         for contract in &func.contracts {
             if contract.node.kind == ContractKind::Requires {
-                let ty = super::infer::infer_expr(&contract.node.expr.node, contract.node.expr.span, env)?;
+                let ty = super::infer::infer_expr(&contract.node.expr.node, contract.node.expr.span, env, None)?;
                 if ty != PlutoType::Bool {
                     return Err(CompileError::type_err(
                         format!("requires expression must be bool, found {ty}"),
@@ -1604,7 +1604,7 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
             env.push_scope();
             env.define("self".to_string(), PlutoType::Class(c.name.node.clone()));
             for inv in &c.invariants {
-                let inv_type = super::infer::infer_expr(&inv.node.expr.node, inv.node.expr.span, env)?;
+                let inv_type = super::infer::infer_expr(&inv.node.expr.node, inv.node.expr.span, env, None)?;
                 if inv_type != PlutoType::Bool {
                     return Err(CompileError::type_err(
                         format!("invariant expression must be bool, found {inv_type}"),
@@ -1647,7 +1647,7 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
                 }
                 for contract in &m.contracts {
                     if contract.node.kind == ContractKind::Requires {
-                        let ty = super::infer::infer_expr(&contract.node.expr.node, contract.node.expr.span, env)?;
+                        let ty = super::infer::infer_expr(&contract.node.expr.node, contract.node.expr.span, env, None)?;
                         if ty != PlutoType::Bool {
                             return Err(CompileError::type_err(
                                 format!("requires expression must be bool, found {ty}"),

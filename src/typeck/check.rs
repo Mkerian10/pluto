@@ -142,27 +142,11 @@ fn check_stmt(
 ) -> Result<(), CompileError> {
     match stmt {
         Stmt::Let { name, ty, value, is_mut } => {
-            // Handle empty array literals with type annotations: `let x: [int] = []`
-            let is_empty_array = matches!(&value.node, Expr::ArrayLit { elements } if elements.is_empty());
-            let val_type = if is_empty_array {
-                if let Some(declared_ty) = ty {
-                    let expected = resolve_type(declared_ty, env)?;
-                    if !matches!(&expected, PlutoType::Array(_)) {
-                        return Err(CompileError::type_err(
-                            format!("type mismatch: expected {expected}, found empty array"),
-                            value.span,
-                        ));
-                    }
-                    expected.clone()
-                } else {
-                    return Err(CompileError::type_err(
-                        "cannot infer type of empty array literal; add a type annotation".to_string(),
-                        value.span,
-                    ));
-                }
-            } else {
-                infer_expr(&value.node, value.span, env)?
-            };
+            // Resolve declared type annotation for expected-type propagation (enables empty arrays)
+            let hint = ty.as_ref()
+                .map(|t| resolve_type(t, env))
+                .transpose()?;
+            let val_type = infer_expr(&value.node, value.span, env, hint.as_ref())?;
             // Check for same-scope redeclaration
             let current_depth = env.scope_depth() - 1;
             if let Some((_, existing_depth)) = env.lookup_with_depth(&name.node) {
@@ -222,7 +206,7 @@ fn check_stmt(
                 return Ok(());
             }
             let actual = match value {
-                Some(expr) => infer_expr(&expr.node, expr.span, env)?,
+                Some(expr) => infer_expr(&expr.node, expr.span, env, Some(return_type))?,
                 None => PlutoType::Void,
             };
             if !types_compatible(&actual, return_type, env) {
@@ -262,7 +246,7 @@ fn check_stmt(
                     target.span,
                 ));
             }
-            let val_type = infer_expr(&value.node, value.span, env)?;
+            let val_type = infer_expr(&value.node, value.span, env, Some(&var_type))?;
             if !types_compatible(&val_type, &var_type, env) {
                 return Err(CompileError::type_err(
                     format!("type mismatch in assignment: expected {var_type}, found {val_type}"),
@@ -291,7 +275,7 @@ fn check_stmt(
             check_field_assign(object, field, value, env)?;
         }
         Stmt::If { condition, then_block, else_block } => {
-            let cond_type = infer_expr(&condition.node, condition.span, env)?;
+            let cond_type = infer_expr(&condition.node, condition.span, env, None)?;
             if cond_type != PlutoType::Bool {
                 return Err(CompileError::type_err(
                     format!("condition must be bool, found {cond_type}"),
@@ -308,7 +292,7 @@ fn check_stmt(
             }
         }
         Stmt::While { condition, body } => {
-            let cond_type = infer_expr(&condition.node, condition.span, env)?;
+            let cond_type = infer_expr(&condition.node, condition.span, env, None)?;
             if cond_type != PlutoType::Bool {
                 return Err(CompileError::type_err(
                     format!("while condition must be bool, found {cond_type}"),
@@ -322,7 +306,7 @@ fn check_stmt(
             env.pop_scope();
         }
         Stmt::For { var, iterable, body } => {
-            let iter_type = infer_expr(&iterable.node, iterable.span, env)?;
+            let iter_type = infer_expr(&iterable.node, iterable.span, env, None)?;
             let elem_type = match iter_type {
                 PlutoType::Array(elem) => *elem,
                 PlutoType::Range => PlutoType::Int,
@@ -354,7 +338,7 @@ fn check_stmt(
             check_raise(error_name, fields, span, env)?;
         }
         Stmt::Assert { expr } => {
-            let ty = infer_expr(&expr.node, expr.span, env)?;
+            let ty = infer_expr(&expr.node, expr.span, env, None)?;
             if ty != PlutoType::Bool {
                 return Err(CompileError::type_err(
                     format!("assert expression must be bool, found {ty}"),
@@ -379,7 +363,7 @@ fn check_stmt(
             }
         }
         Stmt::Expr(expr) => {
-            let expr_type = infer_expr(&expr.node, expr.span, env)?;
+            let expr_type = infer_expr(&expr.node, expr.span, env, None)?;
             // Bare expect() as statement is likely a bug (forgot .to_equal() etc.)
             if let Expr::Call { name, .. } = &expr.node && name.node == "expect" {
                 return Err(CompileError::type_err(
@@ -398,7 +382,7 @@ fn check_stmt(
         Stmt::LetChan { sender, receiver, elem_type, capacity } => {
             let elem = resolve_type(elem_type, env)?;
             if let Some(cap) = capacity {
-                let cap_type = infer_expr(&cap.node, cap.span, env)?;
+                let cap_type = infer_expr(&cap.node, cap.span, env, None)?;
                 if cap_type != PlutoType::Int {
                     return Err(CompileError::type_err(
                         format!("channel capacity must be int, found {cap_type}"),
@@ -413,7 +397,7 @@ fn check_stmt(
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { binding, channel } => {
-                        let chan_type = infer_expr(&channel.node, channel.span, env)?;
+                        let chan_type = infer_expr(&channel.node, channel.span, env, None)?;
                         match &chan_type {
                             PlutoType::Receiver(elem_type) => {
                                 // Bind the received value in the arm body's scope
@@ -431,10 +415,10 @@ fn check_stmt(
                         }
                     }
                     SelectOp::Send { channel, value } => {
-                        let chan_type = infer_expr(&channel.node, channel.span, env)?;
+                        let chan_type = infer_expr(&channel.node, channel.span, env, None)?;
                         match &chan_type {
                             PlutoType::Sender(elem_type) => {
-                                let val_type = infer_expr(&value.node, value.span, env)?;
+                                let val_type = infer_expr(&value.node, value.span, env, None)?;
                                 if val_type != **elem_type {
                                     return Err(CompileError::type_err(
                                         format!("select send expects {}, found {val_type}", elem_type),
@@ -470,7 +454,7 @@ fn check_stmt(
                     ));
                 }
             };
-            let val_type = infer_expr(&value.node, value.span, env)?;
+            let val_type = infer_expr(&value.node, value.span, env, None)?;
             if !super::types_compatible(&val_type, &elem_type, env) {
                 return Err(CompileError::type_err(
                     format!("yield type mismatch: expected {elem_type}, found {val_type}"),
@@ -499,7 +483,7 @@ fn check_scope_stmt(
     let mut seed_class_names: DSet<String> = DSet::new();
 
     for (i, seed) in seeds.iter().enumerate() {
-        let ty = infer_expr(&seed.node, seed.span, env)?;
+        let ty = infer_expr(&seed.node, seed.span, env, None)?;
         match &ty {
             PlutoType::Class(name) => {
                 let info = env.classes.get(name).ok_or_else(|| {
@@ -843,7 +827,7 @@ fn check_field_assign(
             object.span,
         ));
     }
-    let obj_type = infer_expr(&object.node, object.span, env)?;
+    let obj_type = infer_expr(&object.node, object.span, env, None)?;
     let class_name = match &obj_type {
         PlutoType::Class(name) => name.clone(),
         _ => {
@@ -868,7 +852,7 @@ fn check_field_assign(
                 field.span,
             )
         })?;
-    let val_type = infer_expr(&value.node, value.span, env)?;
+    let val_type = infer_expr(&value.node, value.span, env, None)?;
     if val_type != field_type {
         return Err(CompileError::type_err(
             format!("field '{}': expected {field_type}, found {val_type}", field.node),
@@ -884,17 +868,17 @@ fn check_index_assign(
     value: &Spanned<Expr>,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let obj_type = infer_expr(&object.node, object.span, env)?;
+    let obj_type = infer_expr(&object.node, object.span, env, None)?;
     match &obj_type {
         PlutoType::Array(elem) => {
-            let idx_type = infer_expr(&index.node, index.span, env)?;
+            let idx_type = infer_expr(&index.node, index.span, env, None)?;
             if idx_type != PlutoType::Int {
                 return Err(CompileError::type_err(
                     format!("array index must be int, found {idx_type}"),
                     index.span,
                 ));
             }
-            let val_type = infer_expr(&value.node, value.span, env)?;
+            let val_type = infer_expr(&value.node, value.span, env, None)?;
             if val_type != **elem {
                 return Err(CompileError::type_err(
                     format!("index assignment: expected {elem}, found {val_type}"),
@@ -903,14 +887,14 @@ fn check_index_assign(
             }
         }
         PlutoType::Map(key_ty, val_ty) => {
-            let idx_type = infer_expr(&index.node, index.span, env)?;
+            let idx_type = infer_expr(&index.node, index.span, env, None)?;
             if idx_type != **key_ty {
                 return Err(CompileError::type_err(
                     format!("map key type mismatch: expected {key_ty}, found {idx_type}"),
                     index.span,
                 ));
             }
-            let val_type = infer_expr(&value.node, value.span, env)?;
+            let val_type = infer_expr(&value.node, value.span, env, None)?;
             if val_type != **val_ty {
                 return Err(CompileError::type_err(
                     format!("map value type mismatch: expected {val_ty}, found {val_type}"),
@@ -919,14 +903,14 @@ fn check_index_assign(
             }
         }
         PlutoType::Bytes => {
-            let idx_type = infer_expr(&index.node, index.span, env)?;
+            let idx_type = infer_expr(&index.node, index.span, env, None)?;
             if idx_type != PlutoType::Int {
                 return Err(CompileError::type_err(
                     format!("bytes index must be int, found {idx_type}"),
                     index.span,
                 ));
             }
-            let val_type = infer_expr(&value.node, value.span, env)?;
+            let val_type = infer_expr(&value.node, value.span, env, None)?;
             if val_type != PlutoType::Byte {
                 return Err(CompileError::type_err(
                     format!("bytes index assignment: expected byte, found {val_type}"),
@@ -951,7 +935,7 @@ fn check_match_stmt(
     env: &mut TypeEnv,
     return_type: &PlutoType,
 ) -> Result<(), CompileError> {
-    let scrutinee_type = infer_expr(&expr.node, expr.span, env)?;
+    let scrutinee_type = infer_expr(&expr.node, expr.span, env, None)?;
     let enum_name = match &scrutinee_type {
         PlutoType::Enum(name) => name.clone(),
         _ => {
@@ -1065,7 +1049,7 @@ fn check_raise(
                     lit_name.span,
                 )
             })?;
-        let val_type = infer_expr(&lit_val.node, lit_val.span, env)?;
+        let val_type = infer_expr(&lit_val.node, lit_val.span, env, None)?;
         if val_type != field_type {
             return Err(CompileError::type_err(
                 format!("field '{}': expected {field_type}, found {val_type}", lit_name.node),

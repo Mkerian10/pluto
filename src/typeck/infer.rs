@@ -13,6 +13,7 @@ pub(crate) fn infer_expr(
     expr: &Expr,
     span: crate::span::Span,
     env: &mut TypeEnv,
+    expected: Option<&PlutoType>,
 ) -> Result<PlutoType, CompileError> {
     match expr {
         Expr::IntLit(_) => Ok(PlutoType::Int),
@@ -22,7 +23,7 @@ pub(crate) fn infer_expr(
         Expr::StringInterp { parts } => {
             for part in parts {
                 if let StringInterpPart::Expr(e) = part {
-                    let t = infer_expr(&e.node, e.span, env)?;
+                    let t = infer_expr(&e.node, e.span, env, None)?;
                     match t {
                         PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Byte => {}
                         _ => {
@@ -50,7 +51,7 @@ pub(crate) fn infer_expr(
         }
         Expr::BinOp { op, lhs, rhs } => infer_binop(op, lhs, rhs, span, env),
         Expr::UnaryOp { op, operand } => {
-            let t = infer_expr(&operand.node, operand.span, env)?;
+            let t = infer_expr(&operand.node, operand.span, env, None)?;
             match op {
                 UnaryOp::Neg => {
                     match &t {
@@ -82,7 +83,7 @@ pub(crate) fn infer_expr(
             }
         }
         Expr::Cast { expr, target_type } => {
-            let source = infer_expr(&expr.node, expr.span, env)?;
+            let source = infer_expr(&expr.node, expr.span, env, None)?;
             let target = resolve_type(target_type, env)?;
             match (&source, &target) {
                 (PlutoType::Int, PlutoType::Float)
@@ -102,7 +103,7 @@ pub(crate) fn infer_expr(
             infer_struct_lit(name, lit_fields, type_args, span, env)
         }
         Expr::FieldAccess { object, field } => {
-            let obj_type = infer_expr(&object.node, object.span, env)?;
+            let obj_type = infer_expr(&object.node, object.span, env, None)?;
             match &obj_type {
                 PlutoType::Class(class_name) => {
                     let class_info = env.classes.get(class_name).ok_or_else(|| {
@@ -132,14 +133,27 @@ pub(crate) fn infer_expr(
         }
         Expr::ArrayLit { elements } => {
             if elements.is_empty() {
-                return Err(CompileError::type_err(
-                    "cannot infer type of empty array literal; add a type annotation".to_string(),
-                    span,
-                ));
+                return match expected {
+                    Some(PlutoType::Array(elem_type)) => {
+                        Ok(PlutoType::Array(elem_type.clone()))
+                    }
+                    Some(other) => {
+                        Err(CompileError::type_err(
+                            format!("type mismatch: expected {other}, found empty array"),
+                            span,
+                        ))
+                    }
+                    None => {
+                        Err(CompileError::type_err(
+                            "cannot infer type of empty array literal; add a type annotation".to_string(),
+                            span,
+                        ))
+                    }
+                };
             }
-            let first_type = infer_expr(&elements[0].node, elements[0].span, env)?;
+            let first_type = infer_expr(&elements[0].node, elements[0].span, env, None)?;
             for elem in &elements[1..] {
-                let t = infer_expr(&elem.node, elem.span, env)?;
+                let t = infer_expr(&elem.node, elem.span, env, None)?;
                 if t != first_type {
                     return Err(CompileError::type_err(
                         format!("array element type mismatch: expected {first_type}, found {t}"),
@@ -150,10 +164,10 @@ pub(crate) fn infer_expr(
             Ok(PlutoType::Array(Box::new(first_type)))
         }
         Expr::Index { object, index } => {
-            let obj_type = infer_expr(&object.node, object.span, env)?;
+            let obj_type = infer_expr(&object.node, object.span, env, None)?;
             match &obj_type {
                 PlutoType::Array(elem) => {
-                    let idx_type = infer_expr(&index.node, index.span, env)?;
+                    let idx_type = infer_expr(&index.node, index.span, env, None)?;
                     if idx_type != PlutoType::Int {
                         return Err(CompileError::type_err(
                             format!("array index must be int, found {idx_type}"),
@@ -163,7 +177,7 @@ pub(crate) fn infer_expr(
                     Ok(*elem.clone())
                 }
                 PlutoType::Map(key_ty, val_ty) => {
-                    let idx_type = infer_expr(&index.node, index.span, env)?;
+                    let idx_type = infer_expr(&index.node, index.span, env, None)?;
                     if idx_type != **key_ty {
                         return Err(CompileError::type_err(
                             format!("map key type mismatch: expected {key_ty}, found {idx_type}"),
@@ -173,7 +187,7 @@ pub(crate) fn infer_expr(
                     Ok(*val_ty.clone())
                 }
                 PlutoType::String => {
-                    let idx_type = infer_expr(&index.node, index.span, env)?;
+                    let idx_type = infer_expr(&index.node, index.span, env, None)?;
                     if idx_type != PlutoType::Int {
                         return Err(CompileError::type_err(
                             format!("string index must be int, found {idx_type}"),
@@ -183,7 +197,7 @@ pub(crate) fn infer_expr(
                     Ok(PlutoType::String)
                 }
                 PlutoType::Bytes => {
-                    let idx_type = infer_expr(&index.node, index.span, env)?;
+                    let idx_type = infer_expr(&index.node, index.span, env, None)?;
                     if idx_type != PlutoType::Int {
                         return Err(CompileError::type_err(
                             format!("bytes index must be int, found {idx_type}"),
@@ -207,7 +221,7 @@ pub(crate) fn infer_expr(
             infer_enum_data(enum_name, variant, lit_fields, type_args, span, env)
         }
         Expr::Propagate { expr } => {
-            let inner_type = infer_expr(&expr.node, expr.span, env)?;
+            let inner_type = infer_expr(&expr.node, expr.span, env, None)?;
             Ok(inner_type)
         }
         Expr::Catch { expr, handler } => infer_catch(expr, handler, span, env),
@@ -225,14 +239,14 @@ pub(crate) fn infer_expr(
             let vt = resolve_type(value_type, env)?;
             validate_hashable_key(&kt, key_type.span)?;
             for (k, v) in entries {
-                let actual_k = infer_expr(&k.node, k.span, env)?;
+                let actual_k = infer_expr(&k.node, k.span, env, None)?;
                 if actual_k != kt {
                     return Err(CompileError::type_err(
                         format!("map key type mismatch: expected {kt}, found {actual_k}"),
                         k.span,
                     ));
                 }
-                let actual_v = infer_expr(&v.node, v.span, env)?;
+                let actual_v = infer_expr(&v.node, v.span, env, None)?;
                 if actual_v != vt {
                     return Err(CompileError::type_err(
                         format!("map value type mismatch: expected {vt}, found {actual_v}"),
@@ -243,8 +257,8 @@ pub(crate) fn infer_expr(
             Ok(PlutoType::Map(Box::new(kt), Box::new(vt)))
         }
         Expr::Range { start, end, .. } => {
-            let start_type = infer_expr(&start.node, start.span, env)?;
-            let end_type = infer_expr(&end.node, end.span, env)?;
+            let start_type = infer_expr(&start.node, start.span, env, None)?;
+            let end_type = infer_expr(&end.node, end.span, env, None)?;
             if start_type != PlutoType::Int {
                 return Err(CompileError::type_err(
                     format!("range start must be int, found {start_type}"),
@@ -263,7 +277,7 @@ pub(crate) fn infer_expr(
             let et = resolve_type(elem_type, env)?;
             validate_hashable_key(&et, elem_type.span)?;
             for elem in elements {
-                let actual = infer_expr(&elem.node, elem.span, env)?;
+                let actual = infer_expr(&elem.node, elem.span, env, None)?;
                 if actual != et {
                     return Err(CompileError::type_err(
                         format!("set element type mismatch: expected {et}, found {actual}"),
@@ -276,7 +290,7 @@ pub(crate) fn infer_expr(
         Expr::Spawn { call } => {
             // After desugaring, call is a Closure wrapping the original function call.
             // Infer the closure type to get the return type.
-            let closure_type = infer_expr(&call.node, call.span, env)?;
+            let closure_type = infer_expr(&call.node, call.span, env, None)?;
             let inner_type = match &closure_type {
                 PlutoType::Fn(_, ret) => *ret.clone(),
                 _ => {
@@ -298,7 +312,7 @@ pub(crate) fn infer_expr(
                                 );
                             }
                             Expr::MethodCall { object, method, .. } => {
-                                let obj_type = infer_expr(&object.node, object.span, env)?;
+                                let obj_type = infer_expr(&object.node, object.span, env, None)?;
                                 if let PlutoType::Class(class_name) = &obj_type {
                                     let mangled = super::env::mangle_method(class_name, &method.node);
                                     env.spawn_target_fns.insert(
@@ -336,7 +350,7 @@ pub(crate) fn infer_expr(
             Ok(PlutoType::Nullable(Box::new(PlutoType::Void)))
         }
         Expr::NullPropagate { expr } => {
-            let inner_type = infer_expr(&expr.node, expr.span, env)?;
+            let inner_type = infer_expr(&expr.node, expr.span, env, None)?;
             match &inner_type {
                 PlutoType::Nullable(inner) => Ok(*inner.clone()),
                 _ => Err(CompileError::type_err(
@@ -390,7 +404,7 @@ pub(crate) fn infer_expr(
             }
 
             // Type check call arguments
-            let arg_types: Result<Vec<_>, _> = args.iter().map(|a| infer_expr(&a.node, a.span, env)).collect();
+            let arg_types: Result<Vec<_>, _> = args.iter().map(|a| infer_expr(&a.node, a.span, env, None)).collect();
             let arg_types = arg_types?;
 
             // Verify argument count matches
@@ -421,7 +435,7 @@ pub(crate) fn infer_expr(
         }
         Expr::If { condition, then_block, else_block } => {
             // Check condition is bool
-            let cond_type = infer_expr(&condition.node, condition.span, env)?;
+            let cond_type = infer_expr(&condition.node, condition.span, env, None)?;
             if cond_type != PlutoType::Bool {
                 return Err(CompileError::type_err(
                     format!("if condition must be bool, found {cond_type}"),
@@ -450,7 +464,7 @@ pub(crate) fn infer_expr(
             use std::collections::HashSet;
 
             // Infer scrutinee type → must be Enum
-            let scrutinee_type = infer_expr(&match_expr.node, match_expr.span, env)?;
+            let scrutinee_type = infer_expr(&match_expr.node, match_expr.span, env, None)?;
 
             let enum_name = match &scrutinee_type {
                 PlutoType::Enum(name) => name.clone(),
@@ -560,7 +574,7 @@ pub(crate) fn infer_expr(
                 }
 
                 // Infer arm value type
-                let arm_type = infer_expr(&arm.value.node, arm.value.span, env)?;
+                let arm_type = infer_expr(&arm.value.node, arm.value.span, env, None)?;
                 arm_types.push((arm_type, arm.value.span));
 
                 env.pop_scope();
@@ -618,8 +632,8 @@ fn infer_binop(
     span: crate::span::Span,
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
-    let lt = infer_expr(&lhs.node, lhs.span, env)?;
-    let rt = infer_expr(&rhs.node, rhs.span, env)?;
+    let lt = infer_expr(&lhs.node, lhs.span, env, None)?;
+    let rt = infer_expr(&rhs.node, rhs.span, env, None)?;
 
     match op {
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
@@ -725,7 +739,7 @@ fn infer_call(
                         span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 match arg_type {
                     PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Byte => {}
                     _ => {
@@ -762,7 +776,7 @@ fn infer_call(
                         span,
                     ));
                 }
-                let t = infer_expr(&args[0].node, args[0].span, env)?;
+                let t = infer_expr(&args[0].node, args[0].span, env, None)?;
                 match t {
                     PlutoType::Int | PlutoType::Float => Ok(t),
                     _ => Err(CompileError::type_err(
@@ -778,8 +792,8 @@ fn infer_call(
                         span,
                     ));
                 }
-                let left = infer_expr(&args[0].node, args[0].span, env)?;
-                let right = infer_expr(&args[1].node, args[1].span, env)?;
+                let left = infer_expr(&args[0].node, args[0].span, env, None)?;
+                let right = infer_expr(&args[1].node, args[1].span, env, None)?;
                 if left != right {
                     return Err(CompileError::type_err(
                         format!("{}() requires matching argument types, found {left} and {right}", name.node),
@@ -801,8 +815,8 @@ fn infer_call(
                         span,
                     ));
                 }
-                let base_ty = infer_expr(&args[0].node, args[0].span, env)?;
-                let exp_ty = infer_expr(&args[1].node, args[1].span, env)?;
+                let base_ty = infer_expr(&args[0].node, args[0].span, env, None)?;
+                let exp_ty = infer_expr(&args[1].node, args[1].span, env, None)?;
                 if base_ty != exp_ty {
                     return Err(CompileError::type_err(
                         format!("pow() requires matching argument types, found {base_ty} and {exp_ty}"),
@@ -831,7 +845,7 @@ fn infer_call(
                         span,
                     ));
                 }
-                let t = infer_expr(&args[0].node, args[0].span, env)?;
+                let t = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if t != PlutoType::Float {
                     return Err(CompileError::type_err(
                         format!("{}() expects float, found {t}", name.node),
@@ -847,7 +861,7 @@ fn infer_call(
                         span,
                     ));
                 }
-                let inner_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let inner_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 Ok(inner_type)  // passthrough — returns the inner type directly
             }
             _ => Err(CompileError::type_err(
@@ -870,12 +884,12 @@ fn infer_call(
                 span,
             ));
         }
-        for (i, (arg, expected)) in args.iter().zip(&param_types).enumerate() {
-            let actual = infer_expr(&arg.node, arg.span, env)?;
-            if !types_compatible(&actual, expected, env) {
+        for (i, (arg, expected_param)) in args.iter().zip(&param_types).enumerate() {
+            let actual = infer_expr(&arg.node, arg.span, env, Some(expected_param))?;
+            if !types_compatible(&actual, expected_param, env) {
                 return Err(CompileError::type_err(
                     format!(
-                        "argument {} of '{}': expected {expected}, found {actual}",
+                        "argument {} of '{}': expected {expected_param}, found {actual}",
                         i + 1,
                         name.node
                     ),
@@ -910,7 +924,7 @@ fn infer_call(
             }
             // Still need to type-check the arguments
             for arg in args {
-                infer_expr(&arg.node, arg.span, env)?;
+                infer_expr(&arg.node, arg.span, env, None)?;
             }
             call_type_args.iter()
                 .map(|a| resolve_type(a, env))
@@ -919,7 +933,7 @@ fn infer_call(
             // Infer type args from arguments
             let mut arg_types = Vec::new();
             for arg in args {
-                arg_types.push(infer_expr(&arg.node, arg.span, env)?);
+                arg_types.push(infer_expr(&arg.node, arg.span, env, None)?);
             }
             let mut bindings = HashMap::new();
             for (param_ty, arg_ty) in gen_sig.params.iter().zip(&arg_types) {
@@ -983,12 +997,12 @@ fn infer_call(
     }
 
     let sig_clone = sig.clone();
-    for (i, (arg, expected)) in args.iter().zip(&sig_clone.params).enumerate() {
-        let actual = infer_expr(&arg.node, arg.span, env)?;
-        if !types_compatible(&actual, expected, env) {
+    for (i, (arg, expected_param)) in args.iter().zip(&sig_clone.params).enumerate() {
+        let actual = infer_expr(&arg.node, arg.span, env, Some(expected_param))?;
+        if !types_compatible(&actual, expected_param, env) {
             return Err(CompileError::type_err(
                 format!(
-                    "argument {} of '{}': expected {expected}, found {actual}",
+                    "argument {} of '{}': expected {expected_param}, found {actual}",
                     i + 1,
                     name.node
                 ),
@@ -1076,7 +1090,7 @@ fn infer_struct_lit(
                     lit_name.span,
                 )
             })?;
-        let val_type = infer_expr(&lit_val.node, lit_val.span, env)?;
+        let val_type = infer_expr(&lit_val.node, lit_val.span, env, Some(&field_type))?;
 
         // Check type compatibility (==, Class→Trait, T→T?, Class→Trait?, none→T?)
         let types_match = field_types_compatible(&val_type, &field_type, env);
@@ -1326,7 +1340,7 @@ fn infer_enum_data(
                             lit_name.span,
                         )
                     })?;
-                let val_type = infer_expr(&lit_val.node, lit_val.span, env)?;
+                let val_type = infer_expr(&lit_val.node, lit_val.span, env, Some(&field_type))?;
 
                 // Check type compatibility with nullable coercion
                 let types_match = if val_type == field_type {
@@ -1363,7 +1377,7 @@ fn infer_catch(
     span: crate::span::Span,
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
-    let success_type = infer_expr(&expr.node, expr.span, env)?;
+    let success_type = infer_expr(&expr.node, expr.span, env, None)?;
     let handler_type = match handler {
         CatchHandler::Wildcard { var, body } => {
             env.push_scope();
@@ -1381,7 +1395,7 @@ fn infer_catch(
             // Determine result type from last statement
             let t = if let Some(last) = stmts.last() {
                 match &last.node {
-                    Stmt::Expr(e) => infer_expr(&e.node, e.span, env)?,
+                    Stmt::Expr(e) => infer_expr(&e.node, e.span, env, None)?,
                     Stmt::Return(_) => {
                         super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
                         env.pop_scope();
@@ -1400,7 +1414,7 @@ fn infer_catch(
             t
         }
         CatchHandler::Shorthand(fallback) => {
-            infer_expr(&fallback.node, fallback.span, env)?
+            infer_expr(&fallback.node, fallback.span, env, None)?
         }
     };
     if !types_compatible(&handler_type, &success_type, env) {
@@ -1421,7 +1435,7 @@ fn infer_method_call(
 ) -> Result<PlutoType, CompileError> {
     // Check for expect() intrinsic pattern
     if let Expr::Call { name, args: expect_args, .. } = &object.node && name.node == "expect" && expect_args.len() == 1 {
-        let inner_type = infer_expr(&expect_args[0].node, expect_args[0].span, env)?;
+        let inner_type = infer_expr(&expect_args[0].node, expect_args[0].span, env, None)?;
         // Register as builtin method resolution
         if let Some(ref current) = env.current_fn {
             env.method_resolutions.insert(
@@ -1443,7 +1457,7 @@ fn infer_method_call(
                         span,
                     ));
                 }
-                let expected_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let expected_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if inner_type != expected_type {
                     return Err(CompileError::type_err(
                         format!("to_equal: expected type {expected_type} but expect() wraps {inner_type}"),
@@ -1476,7 +1490,7 @@ fn infer_method_call(
         }
     }
 
-    let obj_type = infer_expr(&object.node, object.span, env)?;
+    let obj_type = infer_expr(&object.node, object.span, env, None)?;
     if let PlutoType::Array(elem) = &obj_type {
         match method.node.as_str() {
             "len" => {
@@ -1501,7 +1515,7 @@ fn infer_method_call(
                         span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != **elem {
                     return Err(CompileError::type_err(
                         format!("push(): expected {}, found {arg_type}", **elem),
@@ -1568,7 +1582,7 @@ fn infer_method_call(
                         span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != PlutoType::Int {
                     return Err(CompileError::type_err(
                         format!("remove_at(): expected int index, found {arg_type}"),
@@ -1590,14 +1604,14 @@ fn infer_method_call(
                         span,
                     ));
                 }
-                let idx_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let idx_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if idx_type != PlutoType::Int {
                     return Err(CompileError::type_err(
                         format!("insert_at(): expected int index, found {idx_type}"),
                         args[0].span,
                     ));
                 }
-                let val_type = infer_expr(&args[1].node, args[1].span, env)?;
+                let val_type = infer_expr(&args[1].node, args[1].span, env, None)?;
                 if val_type != **elem {
                     return Err(CompileError::type_err(
                         format!("insert_at(): expected {}, found {val_type}", **elem),
@@ -1619,14 +1633,14 @@ fn infer_method_call(
                         span,
                     ));
                 }
-                let start_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let start_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if start_type != PlutoType::Int {
                     return Err(CompileError::type_err(
                         format!("slice(): expected int start, found {start_type}"),
                         args[0].span,
                     ));
                 }
-                let end_type = infer_expr(&args[1].node, args[1].span, env)?;
+                let end_type = infer_expr(&args[1].node, args[1].span, env, None)?;
                 if end_type != PlutoType::Int {
                     return Err(CompileError::type_err(
                         format!("slice(): expected int end, found {end_type}"),
@@ -1648,7 +1662,7 @@ fn infer_method_call(
                         span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != **elem {
                     return Err(CompileError::type_err(
                         format!("contains(): expected {}, found {arg_type}", **elem),
@@ -1670,7 +1684,7 @@ fn infer_method_call(
                         span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != **elem {
                     return Err(CompileError::type_err(
                         format!("index_of(): expected {}, found {arg_type}", **elem),
@@ -1715,7 +1729,7 @@ fn infer_method_call(
                 if args.len() != 1 {
                     return Err(CompileError::type_err("contains() expects 1 argument".to_string(), span));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != **key_ty {
                     return Err(CompileError::type_err(
                         format!("contains(): expected {key_ty}, found {arg_type}"), args[0].span,
@@ -1728,13 +1742,13 @@ fn infer_method_call(
                 if args.len() != 2 {
                     return Err(CompileError::type_err("insert() expects 2 arguments".to_string(), span));
                 }
-                let k = infer_expr(&args[0].node, args[0].span, env)?;
+                let k = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if k != **key_ty {
                     return Err(CompileError::type_err(
                         format!("insert() key: expected {key_ty}, found {k}"), args[0].span,
                     ));
                 }
-                let v = infer_expr(&args[1].node, args[1].span, env)?;
+                let v = infer_expr(&args[1].node, args[1].span, env, None)?;
                 if v != **val_ty {
                     return Err(CompileError::type_err(
                         format!("insert() value: expected {val_ty}, found {v}"), args[1].span,
@@ -1747,7 +1761,7 @@ fn infer_method_call(
                 if args.len() != 1 {
                     return Err(CompileError::type_err("remove() expects 1 argument".to_string(), span));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != **key_ty {
                     return Err(CompileError::type_err(
                         format!("remove(): expected {key_ty}, found {arg_type}"), args[0].span,
@@ -1799,7 +1813,7 @@ fn infer_method_call(
                 if args.len() != 1 {
                     return Err(CompileError::type_err("contains() expects 1 argument".to_string(), span));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != **elem_ty {
                     return Err(CompileError::type_err(
                         format!("contains(): expected {elem_ty}, found {arg_type}"), args[0].span,
@@ -1812,7 +1826,7 @@ fn infer_method_call(
                 if args.len() != 1 {
                     return Err(CompileError::type_err("insert() expects 1 argument".to_string(), span));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != **elem_ty {
                     return Err(CompileError::type_err(
                         format!("insert(): expected {elem_ty}, found {arg_type}"), args[0].span,
@@ -1825,7 +1839,7 @@ fn infer_method_call(
                 if args.len() != 1 {
                     return Err(CompileError::type_err("remove() expects 1 argument".to_string(), span));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != **elem_ty {
                     return Err(CompileError::type_err(
                         format!("remove(): expected {elem_ty}, found {arg_type}"), args[0].span,
@@ -1932,7 +1946,7 @@ fn infer_method_call(
                 if args.len() != 1 {
                     return Err(CompileError::type_err("push() expects 1 argument".to_string(), span));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != PlutoType::Byte {
                     return Err(CompileError::type_err(
                         format!("push(): expected byte, found {arg_type}"), args[0].span,
@@ -1965,7 +1979,7 @@ fn infer_method_call(
                         span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != **inner {
                     return Err(CompileError::type_err(
                         format!("send() expects {}, found {}", inner, arg_type),
@@ -1987,7 +2001,7 @@ fn infer_method_call(
                         span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != **inner {
                     return Err(CompileError::type_err(
                         format!("try_send() expects {}, found {}", inner, arg_type),
@@ -2094,7 +2108,7 @@ fn infer_method_call(
                         format!("{}() expects 1 argument", method.node), span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != PlutoType::String {
                     return Err(CompileError::type_err(
                         format!("{}(): expected string, found {arg_type}", method.node), args[0].span,
@@ -2112,7 +2126,7 @@ fn infer_method_call(
                         "char_at() expects 1 argument".to_string(), span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != PlutoType::Int {
                     return Err(CompileError::type_err(
                         format!("char_at(): expected int, found {arg_type}"), args[0].span,
@@ -2127,7 +2141,7 @@ fn infer_method_call(
                         "byte_at() expects 1 argument".to_string(), span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != PlutoType::Int {
                     return Err(CompileError::type_err(
                         format!("byte_at(): expected int, found {arg_type}"), args[0].span,
@@ -2143,7 +2157,7 @@ fn infer_method_call(
                     ));
                 }
                 for arg in &args[..2] {
-                    let arg_type = infer_expr(&arg.node, arg.span, env)?;
+                    let arg_type = infer_expr(&arg.node, arg.span, env, None)?;
                     if arg_type != PlutoType::Int {
                         return Err(CompileError::type_err(
                             format!("substring(): expected int, found {arg_type}"), arg.span,
@@ -2160,7 +2174,7 @@ fn infer_method_call(
                     ));
                 }
                 for arg in &args[..2] {
-                    let arg_type = infer_expr(&arg.node, arg.span, env)?;
+                    let arg_type = infer_expr(&arg.node, arg.span, env, None)?;
                     if arg_type != PlutoType::String {
                         return Err(CompileError::type_err(
                             format!("replace(): expected string, found {arg_type}"), arg.span,
@@ -2176,7 +2190,7 @@ fn infer_method_call(
                         "split() expects 1 argument".to_string(), span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != PlutoType::String {
                     return Err(CompileError::type_err(
                         format!("split(): expected string, found {arg_type}"), args[0].span,
@@ -2227,7 +2241,7 @@ fn infer_method_call(
                         "repeat() expects 1 argument".to_string(), span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != PlutoType::Int {
                     return Err(CompileError::type_err(
                         format!("repeat(): expected int, found {arg_type}"), args[0].span,
@@ -2242,7 +2256,7 @@ fn infer_method_call(
                         format!("{}() expects 1 argument", method.node), span,
                     ));
                 }
-                let arg_type = infer_expr(&args[0].node, args[0].span, env)?;
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if arg_type != PlutoType::String {
                     return Err(CompileError::type_err(
                         format!("{}(): expected string, found {arg_type}", method.node), args[0].span,
@@ -2299,12 +2313,12 @@ fn infer_method_call(
                 span,
             ));
         }
-        for (i, (arg, expected)) in args.iter().zip(&expected_args).enumerate() {
-            let actual = infer_expr(&arg.node, arg.span, env)?;
-            if !types_compatible(&actual, expected, env) {
+        for (i, (arg, expected_param)) in args.iter().zip(&expected_args).enumerate() {
+            let actual = infer_expr(&arg.node, arg.span, env, Some(expected_param))?;
+            if !types_compatible(&actual, expected_param, env) {
                 return Err(CompileError::type_err(
                     format!(
-                        "argument {} of '{}': expected {expected}, found {actual}",
+                        "argument {} of '{}': expected {expected_param}, found {actual}",
                         i + 1,
                         method.node
                     ),
@@ -2382,12 +2396,12 @@ fn infer_method_call(
         ));
     }
 
-    for (i, (arg, expected)) in args.iter().zip(expected_args).enumerate() {
-        let actual = infer_expr(&arg.node, arg.span, env)?;
-        if !types_compatible(&actual, expected, env) {
+    for (i, (arg, expected_param)) in args.iter().zip(expected_args).enumerate() {
+        let actual = infer_expr(&arg.node, arg.span, env, Some(expected_param))?;
+        if !types_compatible(&actual, expected_param, env) {
             return Err(CompileError::type_err(
                 format!(
-                    "argument {} of '{}': expected {expected}, found {actual}",
+                    "argument {} of '{}': expected {expected_param}, found {actual}",
                     i + 1,
                     method.node
                 ),
@@ -2421,12 +2435,12 @@ fn infer_block_type(
     match &last.node {
         Stmt::Expr(expr) => {
             // Last statement is an expression → that's the block's value
-            infer_expr(&expr.node, expr.span, env)
+            infer_expr(&expr.node, expr.span, env, None)
         }
         Stmt::If { condition, then_block, else_block: Some(else_block) } => {
             // If-statement with else clause can act as an expression
             // Check condition is bool
-            let cond_type = infer_expr(&condition.node, condition.span, env)?;
+            let cond_type = infer_expr(&condition.node, condition.span, env, None)?;
             if cond_type != PlutoType::Bool {
                 return Err(CompileError::type_err(
                     format!("if condition must be bool, found {cond_type}"),
@@ -2466,11 +2480,11 @@ fn infer_stmt(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) -> Result<(), 
     // since type checking will validate everything later
     match stmt {
         Stmt::Let { value, .. } => {
-            infer_expr(&value.node, value.span, env)?;
+            infer_expr(&value.node, value.span, env, None)?;
             Ok(())
         }
         Stmt::Expr(expr) => {
-            infer_expr(&expr.node, expr.span, env)?;
+            infer_expr(&expr.node, expr.span, env, None)?;
             Ok(())
         }
         _ => Ok(())

@@ -716,11 +716,46 @@ fn test_class_memory_layout_field_order() {
 // ============================================================================
 
 #[test]
-#[ignore] // LIMITATION: Empty array literals not supported - compiler cannot infer type even with type annotation
 fn test_array_empty() {
     let src = r#"
         fn main() {
             let arr: [int] = []
+            print(arr.len())
+        }
+    "#;
+    assert_eq!(compile_and_run_stdout(src).trim(), "0");
+}
+
+#[test]
+fn test_array_empty_as_function_arg() {
+    let src = r#"
+        fn sum_array(arr: [int]) int {
+            let mut total = 0
+            let mut i = 0
+            while i < arr.len() {
+                total = total + arr[i]
+                i = i + 1
+            }
+            return total
+        }
+
+        fn main() {
+            let result = sum_array([])
+            print(result)
+        }
+    "#;
+    assert_eq!(compile_and_run_stdout(src).trim(), "0");
+}
+
+#[test]
+fn test_array_empty_as_return_value() {
+    let src = r#"
+        fn get_empty() [int] {
+            return []
+        }
+
+        fn main() {
+            let arr = get_empty()
             print(arr.len())
         }
     "#;

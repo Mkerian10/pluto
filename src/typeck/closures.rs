@@ -92,7 +92,11 @@ fn infer_closure_return_type(block: &Block, env: &mut TypeEnv) -> Result<PlutoTy
     for stmt in &block.stmts {
         match &stmt.node {
             Stmt::Let { name, ty, value, .. } => {
-                let val_type = infer_expr(&value.node, value.span, env)?;
+                // Mirror check_stmt: propagate declared type as expected hint (enables empty arrays)
+                let hint = ty.as_ref()
+                    .map(|t| resolve_type(t, env))
+                    .transpose()?;
+                let val_type = infer_expr(&value.node, value.span, env, hint.as_ref())?;
                 if let Some(declared_ty) = ty {
                     let expected = resolve_type(declared_ty, env)?;
                     env.define(name.node.clone(), expected);
@@ -106,7 +110,7 @@ fn infer_closure_return_type(block: &Block, env: &mut TypeEnv) -> Result<PlutoTy
                 env.define(receiver.node.clone(), PlutoType::Receiver(Box::new(resolved)));
             }
             Stmt::Return(Some(expr)) => {
-                return infer_expr(&expr.node, expr.span, env);
+                return infer_expr(&expr.node, expr.span, env, None);
             }
             _ => {}
         }
