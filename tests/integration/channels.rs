@@ -39,7 +39,7 @@ fn main() {
     print(val)
 }
 "#);
-    assert_eq!(out.trim(), "3.140000");
+    assert_eq!(out.trim(), "3.14");
 }
 
 #[test]

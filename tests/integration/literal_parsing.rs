@@ -82,7 +82,7 @@ fn float_scientific_notation_negative_exp_value() {
             print(x)
         }
     "#);
-    assert_eq!(stdout.trim(), "0.001000");
+    assert_eq!(stdout.trim(), "0.001");
 }
 
 #[test]

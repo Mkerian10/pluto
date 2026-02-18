@@ -580,7 +580,7 @@ fn if_expr_as_cast_target() {
             print(x)
         }
     "#);
-    assert_eq!(stdout.trim(), "10.000000");
+    assert_eq!(stdout.trim(), "10");
 }
 
 #[test]

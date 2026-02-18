@@ -432,7 +432,7 @@ fn main() {
     }
 }
 "#);
-    assert_eq!(out.trim(), "1.500000\n2.500000\n3.500000");
+    assert_eq!(out.trim(), "1.5\n2.5\n3.5");
 }
 
 #[test]

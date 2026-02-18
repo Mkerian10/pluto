@@ -161,7 +161,7 @@ fn enum_float_field() {
     let out = compile_and_run_stdout(
         "enum Measurement {\n    Length { meters: float }\n    Weight { kg: float }\n}\n\nfn main() {\n    let m = Measurement.Length { meters: 3.14 }\n    match m {\n        Measurement.Length { meters } { print(meters) }\n        Measurement.Weight { kg } { print(kg) }\n    }\n}",
     );
-    assert_eq!(out, "3.140000\n");
+    assert_eq!(out, "3.14\n");
 }
 
 #[test]
@@ -976,7 +976,7 @@ fn match_expr_data_variant_all_fields() {
             print(area)
         }
     "#);
-    assert_eq!(stdout.trim(), "75.000000");
+    assert_eq!(stdout.trim(), "75");
 }
 
 #[test]

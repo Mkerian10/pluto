@@ -17,7 +17,7 @@ test "interpolate integer variable" {
 test "interpolate float variable" {
     let pi = 3.14
     let result = f"Value: {pi}"
-    expect(result).to_equal("Value: 3.140000")
+    expect(result).to_equal("Value: 3.14")
 }
 
 test "interpolate true boolean" {

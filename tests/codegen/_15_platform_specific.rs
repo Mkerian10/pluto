@@ -109,9 +109,9 @@ fn test_aarch64_float_operations() {
     "#;
     let output = compile_and_run_stdout(src);
     let lines: Vec<&str> = output.trim().lines().collect();
-    assert_eq!(lines[0], "5.500000");
-    assert_eq!(lines[1], "7.000000");
-    assert_eq!(lines[2], "1.750000");
+    assert_eq!(lines[0], "5.5");
+    assert_eq!(lines[1], "7");
+    assert_eq!(lines[2], "1.75");
 }
 
 #[test]
@@ -536,7 +536,7 @@ fn test_cross_platform_mixed_types() {
     let output = compile_and_run_stdout(src);
     let lines: Vec<&str> = output.trim().lines().collect();
     assert_eq!(lines[0], "42");
-    assert_eq!(lines[1], "3.140000");
+    assert_eq!(lines[1], "3.14");
     assert_eq!(lines[2], "true");
     assert_eq!(lines[3], "test");
 }

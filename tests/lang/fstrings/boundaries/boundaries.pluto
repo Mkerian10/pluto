@@ -29,13 +29,13 @@ test "interpolate minus one" {
 test "interpolate negative float" {
     let x = -3.14
     let result = f"{x}"
-    expect(result).to_equal("-3.140000")
+    expect(result).to_equal("-3.14")
 }
 
 test "interpolate zero float" {
     let x = 0.0
     let result = f"{x}"
-    expect(result).to_equal("0.000000")
+    expect(result).to_equal("0")
 }
 
 test "hex addition result" {

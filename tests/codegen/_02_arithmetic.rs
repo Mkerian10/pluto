@@ -298,7 +298,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "2.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "2");
 }
 
 #[test]
@@ -309,7 +309,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "1.500000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "1.5");
 }
 
 #[test]
@@ -320,7 +320,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "0.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "0");
 }
 
 #[test]
@@ -331,7 +331,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "-2.500000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "-2.5");
 }
 
 #[test]
@@ -342,7 +342,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "10.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "10");
 }
 
 #[test]
@@ -353,7 +353,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "0.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "0");
 }
 
 #[test]
@@ -364,7 +364,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "-10.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "-10");
 }
 
 #[test]
@@ -375,7 +375,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "3.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "3");
 }
 
 #[test]
@@ -386,7 +386,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "3.500000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "3.5");
 }
 
 #[test]
@@ -447,7 +447,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "0.000300");
+    assert_eq!(compile_and_run_stdout(source).trim(), "0.0003");
 }
 
 #[test]
@@ -458,7 +458,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "3000000.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "3000000");
 }
 
 #[test]
@@ -469,7 +469,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "-4.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "-4");
 }
 
 #[test]
@@ -480,7 +480,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "14.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "14");
 }
 
 #[test]
@@ -491,7 +491,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "10.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "10");
 }
 
 // ============================================================================

@@ -1685,7 +1685,7 @@ fn main() {
     show(c)
 }
 "#);
-    assert_eq!(out, "7.000000\n");
+    assert_eq!(out, "7\n");
 }
 
 #[test]
@@ -3527,7 +3527,7 @@ fn main() {
     run(Value { base: 3.5 })
 }
 "#);
-    assert_eq!(out, "7.000000\n");
+    assert_eq!(out, "7\n");
 }
 
 #[test]
@@ -3549,7 +3549,7 @@ fn main() {
     print(f)
 }
 "#);
-    assert_eq!(out, "5.000000\n");
+    assert_eq!(out, "5\n");
 }
 
 #[test]
@@ -9148,7 +9148,7 @@ fn main() {
     run(Doubler { offset: 1.0 })
 }
 "#);
-    assert_eq!(out, "8.000000\n");
+    assert_eq!(out, "8\n");
 }
 
 #[test]
@@ -10568,7 +10568,7 @@ fn main() {
     run(RulerB { length: 3.5 })
 }
 "#);
-    assert_eq!(out, "3.500000\n7.000000\n");
+    assert_eq!(out, "3.5\n7\n");
 }
 
 #[test]
@@ -12210,7 +12210,7 @@ fn main() {
     print(f)
 }
 "#);
-    assert_eq!(out, "7.000000\n");
+    assert_eq!(out, "7\n");
 }
 
 #[test]

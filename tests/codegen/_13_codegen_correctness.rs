@@ -17,7 +17,7 @@ fn main() {
     print(f)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "42.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "42");
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn main() {
     print(f)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "0.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "0");
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn main() {
     print(f)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "-123.000000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "-123");
 }
 
 #[test]
@@ -530,7 +530,7 @@ fn main() {
 }
 "#;
     let output = compile_and_run_stdout(source);
-    assert!(output.contains("42.0"));
+    assert!(output.contains("42"));
     assert!(output.contains("1"));
 }
 
@@ -607,7 +607,7 @@ fn main() {
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "15.500000");
+    assert_eq!(compile_and_run_stdout(source).trim(), "15.5");
 }
 
 #[test]

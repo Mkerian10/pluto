@@ -95,7 +95,7 @@ fn for_loop_floats() {
     let out = compile_and_run_stdout(
         "fn main() {\n    let a = [1.5, 2.5, 3.5]\n    for f in a {\n        print(f)\n    }\n}",
     );
-    assert_eq!(out, "1.500000\n2.500000\n3.500000\n");
+    assert_eq!(out, "1.5\n2.5\n3.5\n");
 }
 
 #[test]

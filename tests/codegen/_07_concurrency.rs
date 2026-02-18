@@ -36,7 +36,7 @@ fn test_spawn_returning_float() {
             print(result)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "3.140000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "3.14");
 }
 
 #[test]
@@ -614,7 +614,7 @@ fn test_spawn_return_type_float_precision() {
             print(result)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "4.000000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "4");
 }
 
 #[test]

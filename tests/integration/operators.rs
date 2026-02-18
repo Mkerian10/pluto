@@ -52,7 +52,7 @@ fn float_arithmetic() {
     let out = compile_and_run_stdout(
         "fn main() {\n    print(1.5 + 2.5)\n    print(5.0 - 1.5)\n    print(2.0 * 3.0)\n    print(7.0 / 2.0)\n}",
     );
-    assert_eq!(out, "4.000000\n3.500000\n6.000000\n3.500000\n");
+    assert_eq!(out, "4\n3.5\n6\n3.5\n");
 }
 
 #[test]
@@ -283,7 +283,7 @@ fn compound_assign_float() {
     let out = compile_and_run_stdout(
         "fn main() {\n    let mut x = 1.5\n    x += 2.5\n    print(x)\n}",
     );
-    assert_eq!(out, "4.000000\n");
+    assert_eq!(out, "4\n");
 }
 
 #[test]

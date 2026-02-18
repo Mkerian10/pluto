@@ -54,7 +54,7 @@ fn array_of_floats() {
     let out = compile_and_run_stdout(
         "fn main() {\n    let a = [1.5, 2.5]\n    print(a[0])\n    print(a[1])\n}",
     );
-    assert_eq!(out, "1.500000\n2.500000\n");
+    assert_eq!(out, "1.5\n2.5\n");
 }
 
 #[test]

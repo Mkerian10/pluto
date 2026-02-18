@@ -26,7 +26,7 @@ fn test_call_c_function_print_float() {
             print(3.14)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "3.140000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "3.14");
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn test_pass_float_to_c() {
             print(floor_x)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "2.000000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "2");
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn test_return_float_from_c() {
             print(x)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "4.000000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "4");
 }
 
 #[test]
@@ -264,7 +264,7 @@ fn test_pass_float_parameter_pluto_to_pluto() {
             print(half(10.0))
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "5.000000");
+    assert_eq!(compile_and_run_stdout(src).trim(), "5");
 }
 
 #[test]
@@ -478,7 +478,7 @@ fn test_variadic_print_abi() {
     let output = compile_and_run_stdout(src);
     let lines: Vec<&str> = output.trim().lines().collect();
     assert_eq!(lines[0], "42");
-    assert_eq!(lines[1], "3.140000");
+    assert_eq!(lines[1], "3.14");
     assert_eq!(lines[2], "true");
     assert_eq!(lines[3], "string");
 }
@@ -519,7 +519,7 @@ fn test_math_builtins_abi_compliance() {
     let output = compile_and_run_stdout(src);
     let lines: Vec<&str> = output.trim().lines().collect();
     assert_eq!(lines[0], "10");
-    assert_eq!(lines[1], "5.000000");
+    assert_eq!(lines[1], "5");
     assert_eq!(lines[2], "42");
 }
 
