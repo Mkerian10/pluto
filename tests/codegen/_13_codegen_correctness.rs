@@ -253,7 +253,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // LIMITATION: Binary literal syntax (0b1010) not supported in Pluto
 fn test_const_fold_bitwise() {
     // Bitwise operations on constants
     let source = r#"

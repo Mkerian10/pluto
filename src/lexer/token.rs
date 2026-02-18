@@ -102,9 +102,9 @@ pub enum Token {
     Stream,
 
     // Literals
-    // Note: hex pattern uses \w* to match any characters after 0x,
+    // Note: hex and binary patterns use \w* to match any characters after 0x/0b,
     // which are then validated by the callback for better error messages
-    #[regex(r"0[xX][\w]*|[0-9][0-9_]*", |lex| {
+    #[regex(r"0[xX][\w]*|0[bB][\w]*|[0-9][0-9_]*", |lex| {
         let s = lex.slice();
         if s.starts_with("0x") || s.starts_with("0X") {
             let hex_part = &s[2..];
@@ -133,6 +133,36 @@ pub enum Token {
             // Parse as i128 first, then validate range
             // Accept i64::MIN..=i64::MAX, plus (i64::MAX + 1) for the i64::MIN literal special case
             match i128::from_str_radix(&cleaned, 16) {
+                Ok(val) if val >= i64::MIN as i128 && val <= i64::MAX as i128 + 1 => Some(val as i64),
+                _ => None,
+            }
+        } else if s.starts_with("0b") || s.starts_with("0B") {
+            let bin_part = &s[2..];
+
+            // Reject empty binary (just "0b")
+            if bin_part.is_empty() {
+                return None;
+            }
+
+            // Reject leading underscore (0b_1010)
+            if bin_part.starts_with('_') {
+                return None;
+            }
+
+            // Reject trailing underscore (0b1010_)
+            if bin_part.ends_with('_') {
+                return None;
+            }
+
+            // Validate all characters are binary digits or underscores
+            if !bin_part.chars().all(|c| c == '0' || c == '1' || c == '_') {
+                return None;
+            }
+
+            let cleaned = bin_part.replace('_', "");
+            // Parse as i128 first, then validate range
+            // Accept i64::MIN..=i64::MAX, plus (i64::MAX + 1) for the i64::MIN literal special case
+            match i128::from_str_radix(&cleaned, 2) {
                 Ok(val) if val >= i64::MIN as i128 && val <= i64::MAX as i128 + 1 => Some(val as i64),
                 _ => None,
             }
@@ -681,6 +711,69 @@ mod tests {
     fn test_hex_integer_invalid_chars() {
         let mut lex = Token::lexer("0xGG");
         assert_eq!(lex.next(), Some(Err(())));
+    }
+
+    // ===== Binary integer parsing tests via logos =====
+
+    #[test]
+    fn test_binary_integer_basic() {
+        let mut lex = Token::lexer("0b1010");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(10))));
+    }
+
+    #[test]
+    fn test_binary_integer_uppercase_prefix() {
+        let mut lex = Token::lexer("0B1010");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(10))));
+    }
+
+    #[test]
+    fn test_binary_integer_with_underscores() {
+        let mut lex = Token::lexer("0b1111_0000");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(0xF0))));
+    }
+
+    #[test]
+    fn test_binary_integer_all_zeros() {
+        let mut lex = Token::lexer("0b0000");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(0))));
+    }
+
+    #[test]
+    fn test_binary_integer_single_one() {
+        let mut lex = Token::lexer("0b1");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(1))));
+    }
+
+    #[test]
+    fn test_binary_integer_empty() {
+        let mut lex = Token::lexer("0b");
+        assert_eq!(lex.next(), Some(Err(())));
+    }
+
+    #[test]
+    fn test_binary_integer_leading_underscore() {
+        let mut lex = Token::lexer("0b_1010");
+        assert_eq!(lex.next(), Some(Err(())));
+    }
+
+    #[test]
+    fn test_binary_integer_trailing_underscore() {
+        let mut lex = Token::lexer("0b1010_");
+        assert_eq!(lex.next(), Some(Err(())));
+    }
+
+    #[test]
+    fn test_binary_integer_invalid_digit() {
+        let mut lex = Token::lexer("0b102");
+        assert_eq!(lex.next(), Some(Err(())));
+    }
+
+    #[test]
+    fn test_binary_integer_max_64_bits() {
+        // 63 ones = i64::MAX
+        let mut lex = Token::lexer("0b0111111111111111111111111111111111111111111111111111111111111111");
+        assert_eq!(lex.next(), Some(Ok(Token::IntLit(i64::MAX))));
     }
 
     #[test]

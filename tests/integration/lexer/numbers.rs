@@ -100,20 +100,43 @@ fn integer_hex_trailing_underscore() {
 }
 
 #[test]
-fn integer_binary_not_supported() {
-    // Binary literals (0b1010) are not in current lexer
-    // This will lex as 0 followed by Ident("b1010") or error
-    let src = "0b1010";
-    let result = lex(src);
-    // Expect either success (wrong parse) or failure
-    // Document which happens
-    if result.is_ok() {
-        let tokens = result.unwrap();
-        // Bug: 0b1010 should be binary literal but isn't supported
-        assert!(tokens.len() >= 2, "Bug: binary literals not supported, lexed as multiple tokens");
-    } else {
-        // Expected if 'b' is not valid after 0
-    }
+fn integer_binary_basic() {
+    assert_tokens("0b1010", &[Token::IntLit(10)]);
+}
+
+#[test]
+fn integer_binary_uppercase_prefix() {
+    assert_tokens("0B1010", &[Token::IntLit(10)]);
+}
+
+#[test]
+fn integer_binary_with_underscores() {
+    assert_tokens("0b1111_0000", &[Token::IntLit(0xF0)]);
+}
+
+#[test]
+fn integer_binary_leading_zeros() {
+    assert_tokens("0b0001", &[Token::IntLit(1)]);
+}
+
+#[test]
+fn integer_binary_empty() {
+    lex_fails("0b");
+}
+
+#[test]
+fn integer_binary_invalid_digit() {
+    lex_fails("0b102");
+}
+
+#[test]
+fn integer_binary_leading_underscore() {
+    lex_fails("0b_1010");
+}
+
+#[test]
+fn integer_binary_trailing_underscore() {
+    lex_fails("0b1010_");
 }
 
 #[test]
