@@ -394,7 +394,6 @@ fn test_cross_platform_closure_creation() {
 }
 
 #[test]
-#[ignore] // LIMITATION: Binary literal syntax (0b1010) not supported in Pluto
 fn test_cross_platform_bitwise_operations() {
     // Test bitwise operations (platform-independent but good to verify)
     let src = r#"

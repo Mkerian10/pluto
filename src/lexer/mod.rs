@@ -182,10 +182,35 @@ pub fn lex(source: &str) -> Result<Vec<Spanned<Token>>, CompileError> {
                 // Check if this looks like an integer literal that's out of range
                 let is_number = slice.chars().all(|c| c.is_ascii_digit() || c == '_');
                 let is_hex = slice.starts_with("0x") || slice.starts_with("0X");
+                let is_binary = slice.starts_with("0b") || slice.starts_with("0B");
 
-                if is_number || is_hex {
+                if is_number || is_hex || is_binary {
+                    // Special handling for binary literals with invalid digits
+                    if is_binary {
+                        let bin_part = &slice[2..];
+
+                        // Check for empty binary literal
+                        if bin_part.is_empty() {
+                            return Err(CompileError::syntax(
+                                format!("expected digits after binary prefix: {}", slice),
+                                Span::new(span.start, span.end),
+                            ));
+                        }
+
+                        // Check for invalid digits in binary literal
+                        let has_non_binary = bin_part.chars().any(|c| c != '0' && c != '1' && c != '_');
+                        if has_non_binary {
+                            return Err(CompileError::syntax(
+                                format!("invalid digit in binary literal: {}", slice),
+                                Span::new(span.start, span.end),
+                            ));
+                        }
+                    }
+
                     // Try parsing as i128 to see if it's just out of range
                     let cleaned = if is_hex {
+                        slice[2..].replace('_', "")
+                    } else if is_binary {
                         slice[2..].replace('_', "")
                     } else {
                         slice.replace('_', "")
@@ -193,6 +218,8 @@ pub fn lex(source: &str) -> Result<Vec<Spanned<Token>>, CompileError> {
 
                     let parse_result = if is_hex {
                         i128::from_str_radix(&cleaned, 16)
+                    } else if is_binary {
+                        i128::from_str_radix(&cleaned, 2)
                     } else {
                         cleaned.parse::<i128>()
                     };

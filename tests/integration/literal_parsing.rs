@@ -110,7 +110,6 @@ fn hex_literal_lowercase() {
 }
 
 #[test]
-#[ignore] // Feature not implemented: binary literals (0b prefix) in lexer
 fn binary_literal() {
     // 0b1010 = 10
     let stdout = compile_and_run_stdout(r#"
@@ -120,6 +119,17 @@ fn binary_literal() {
         }
     "#);
     assert_eq!(stdout.trim(), "10");
+}
+
+#[test]
+fn binary_literal_with_underscores() {
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let x = 0b1111_0000
+            print(x)
+        }
+    "#);
+    assert_eq!(stdout.trim(), "240");
 }
 
 #[test]
