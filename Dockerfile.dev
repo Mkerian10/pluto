@@ -32,7 +32,6 @@ COPY mcp/src/ mcp/src/
 COPY runtime/ runtime/
 COPY stdlib/ stdlib/
 COPY tests/ tests/
-COPY data/ data/
 COPY benches/ benches/
 
 # Build debug binary (keeps incremental artifacts in target/)

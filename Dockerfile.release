@@ -21,7 +21,6 @@ COPY sdk/src/ sdk/src/
 COPY mcp/src/ mcp/src/
 COPY runtime/ runtime/
 COPY stdlib/ stdlib/
-COPY data/ data/
 
 # Build the compiler
 RUN cargo build --release --bin pluto
