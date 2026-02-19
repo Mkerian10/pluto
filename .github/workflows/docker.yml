@@ -26,11 +26,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (builder)
-        id: meta-builder
+      - name: Extract metadata (dev)
+        id: meta-dev
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-builder
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-dev
           tags: |
             type=raw,value=latest
             type=sha,prefix=
@@ -44,15 +44,14 @@ jobs:
             type=raw,value=latest
             type=sha,prefix=
 
-      - name: Build and push builder image
+      - name: Build and push dev image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.release
-          target: builder
+          file: Dockerfile.dev
           push: true
-          tags: ${{ steps.meta-builder.outputs.tags }}
-          labels: ${{ steps.meta-builder.outputs.labels }}
+          tags: ${{ steps.meta-dev.outputs.tags }}
+          labels: ${{ steps.meta-dev.outputs.labels }}
 
       - name: Build and push release image
         uses: docker/build-push-action@v6

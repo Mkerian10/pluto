@@ -1,0 +1,33 @@
+FROM rust:1.93-bookworm
+
+RUN rustup component add clippy
+
+WORKDIR /app
+
+# Copy workspace manifests first for dependency layer caching
+COPY Cargo.toml Cargo.lock ./
+COPY sdk/Cargo.toml sdk/Cargo.toml
+COPY mcp/Cargo.toml mcp/Cargo.toml
+
+# Pre-build dependencies with dummy sources so they're cached
+RUN mkdir -p src sdk/src mcp/src && \
+    echo "fn main() {}" > src/main.rs && \
+    echo "" > sdk/src/lib.rs && \
+    echo "" > mcp/src/lib.rs && \
+    cargo build 2>/dev/null || true && \
+    rm -rf src sdk/src mcp/src
+
+# Copy all source and assets
+COPY src/ src/
+COPY sdk/src/ sdk/src/
+COPY mcp/src/ mcp/src/
+COPY runtime/ runtime/
+COPY stdlib/ stdlib/
+COPY tests/ tests/
+COPY data/ data/
+COPY benches/ benches/
+
+# Build debug binary (keeps incremental artifacts in target/)
+RUN cargo build --workspace
+
+CMD ["cargo", "test", "--workspace"]
