@@ -2,9 +2,12 @@ FROM rust:1.93-bookworm
 
 RUN rustup component add clippy
 
-# Install Node.js (required for Claude Code and Codex)
+# Install Node.js (required for Claude Code and Codex) and GitHub CLI
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends nodejs gh && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code and Codex
@@ -36,5 +39,12 @@ COPY benches/ benches/
 
 # Build debug binary (keeps incremental artifacts in target/)
 RUN cargo build --workspace
+
+# Create non-root user for Erebus agent execution
+# (Claude Code refuses --dangerously-skip-permissions as root)
+RUN useradd -m -s /bin/bash erebus && \
+    mkdir -p /home/erebus/.local/bin /home/erebus/.claude /home/erebus/.codex /home/erebus/.ssh && \
+    chmod 700 /home/erebus/.ssh && \
+    chown -R erebus:erebus /home/erebus /app
 
 CMD ["cargo", "test", "--workspace"]
