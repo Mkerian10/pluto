@@ -45,6 +45,6 @@ RUN cargo build --workspace
 RUN useradd -m -s /bin/bash erebus && \
     mkdir -p /home/erebus/.local/bin /home/erebus/.claude /home/erebus/.codex /home/erebus/.ssh && \
     chmod 700 /home/erebus/.ssh && \
-    chown -R erebus:erebus /home/erebus /app
+    chown -R erebus:erebus /home/erebus /app /usr/local/cargo
 
 CMD ["cargo", "test", "--workspace"]
