@@ -231,29 +231,77 @@ fn nullable_generic_type() {
 }
 
 #[test]
-#[ignore] // Test design issue: uses 'as int' cast to unwrap nullable, should use ? operator
 fn generic_of_nullable_type() {
-    // Box<int?>
+    // Box<int?> — test that nullable types work as generic arguments
     let stdout = compile_and_run_stdout(r#"
         class Box<T> {
             value: T
         }
 
-        fn main() {
+        fn main() int? {
             let b = Box<int?> { value: 42 }
-            print(b.value as int)  // Assuming unwrap
+            let v = b.value?
+            print(v)
+            return none
         }
     "#);
-    // This might fail due to type coercion, documenting the behavior
-    compile_should_fail(r#"
+    assert_eq!(stdout.trim(), "42");
+}
+
+// ============================================================
+// GtEq Token Splitting (>= split into > + =)
+// ============================================================
+
+#[test]
+fn gteq_split_map_nullable_value_no_space() {
+    // Map<string,int?>=... with no space — the critical edge case from #170
+    let stdout = compile_and_run_stdout(r#"
+        fn main() int? {
+            let m:Map<string,int?>=Map<string,int?>{}
+            let v: int? = 42
+            m["a"] = v
+            let r = m["a"]?
+            print(r)
+            return none
+        }
+    "#);
+    assert_eq!(stdout.trim(), "42");
+}
+
+#[test]
+fn gteq_split_box_nullable_no_space() {
+    // Box<int?>=... with no space
+    let stdout = compile_and_run_stdout(r#"
         class Box<T> {
             value: T
         }
 
-        fn main() {
-            let b = Box<int?> { value: 42 }
+        fn main() int? {
+            let b:Box<int?>=Box<int?>{value:42}
+            let v = b.value?
+            print(v)
+            return none
         }
     "#);
+    assert_eq!(stdout.trim(), "42");
+}
+
+#[test]
+fn gteq_split_with_spaces_still_works() {
+    // Verify that normal spaced syntax still works after the change
+    let stdout = compile_and_run_stdout(r#"
+        class Box<T> {
+            value: T
+        }
+
+        fn main() int? {
+            let b: Box<int?> = Box<int?> { value: 99 }
+            let v = b.value?
+            print(v)
+            return none
+        }
+    "#);
+    assert_eq!(stdout.trim(), "99");
 }
 
 // ============================================================

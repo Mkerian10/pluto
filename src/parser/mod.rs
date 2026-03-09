@@ -19,6 +19,10 @@ pub struct Parser<'a> {
     enum_names: HashSet<String>,
     /// Optional file path for generating unique test IDs when multiple files are compiled together
     file_path: Option<String>,
+    /// Synthetic tokens injected by token splitting (e.g., `>=` split into `>` + `=`).
+    /// Consumed before reading from `tokens`.
+    split_tokens: Vec<Spanned<Token>>,
+    split_pos: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -26,12 +30,12 @@ impl<'a> Parser<'a> {
         // Seed with prelude enum names so all parse paths (including interpolation
         // sub-parsers) know about Option, Result, etc.
         let enum_names = crate::prelude::prelude_enum_names().clone();
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: None }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: None, split_tokens: Vec::new(), split_pos: 0 }
     }
 
     /// Constructor without prelude seeding — used only to parse the prelude source itself.
     pub fn new_without_prelude(tokens: &'a [Spanned<Token>], source: &'a str) -> Self {
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names: HashSet::new(), file_path: None }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names: HashSet::new(), file_path: None, split_tokens: Vec::new(), split_pos: 0 }
     }
 
     /// Constructor with extra enum names added to the prelude set.
@@ -43,13 +47,13 @@ impl<'a> Parser<'a> {
     ) -> Self {
         let mut enum_names = crate::prelude::prelude_enum_names().clone();
         enum_names.extend(extra_enum_names);
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: None }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: None, split_tokens: Vec::new(), split_pos: 0 }
     }
 
     /// Constructor with file path for generating unique test IDs
     pub fn new_with_path(tokens: &'a [Spanned<Token>], source: &'a str, file_path: String) -> Self {
         let enum_names = crate::prelude::prelude_enum_names().clone();
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: Some(file_path) }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: Some(file_path), split_tokens: Vec::new(), split_pos: 0 }
     }
 
     /// Generate a unique test ID prefix from file path to avoid collisions when multiple files are compiled together
@@ -68,6 +72,10 @@ impl<'a> Parser<'a> {
     }
 
     fn peek(&self) -> Option<&Spanned<Token>> {
+        // Check split tokens first (they are never newlines)
+        if self.split_pos < self.split_tokens.len() {
+            return Some(&self.split_tokens[self.split_pos]);
+        }
         let mut i = self.pos;
         // Skip newlines when peeking
         while i < self.tokens.len() {
@@ -82,8 +90,17 @@ impl<'a> Parser<'a> {
 
     /// Peek at the nth token ahead (0-indexed, skipping newlines).
     fn peek_nth(&self, n: usize) -> Option<&Spanned<Token>> {
-        let mut i = self.pos;
         let mut count = 0;
+        // Check split tokens first (they are never newlines)
+        let mut si = self.split_pos;
+        while si < self.split_tokens.len() {
+            if count == n {
+                return Some(&self.split_tokens[si]);
+            }
+            count += 1;
+            si += 1;
+        }
+        let mut i = self.pos;
         while i < self.tokens.len() {
             if matches!(self.tokens[i].node, Token::Newline) {
                 i += 1;
@@ -99,10 +116,18 @@ impl<'a> Parser<'a> {
     }
 
     fn peek_raw(&self) -> Option<&Spanned<Token>> {
+        if self.split_pos < self.split_tokens.len() {
+            return Some(&self.split_tokens[self.split_pos]);
+        }
         self.tokens.get(self.pos)
     }
 
     fn advance(&mut self) -> Option<&Spanned<Token>> {
+        if self.split_pos < self.split_tokens.len() {
+            let idx = self.split_pos;
+            self.split_pos += 1;
+            return Some(&self.split_tokens[idx]);
+        }
         if self.pos < self.tokens.len() {
             let tok = &self.tokens[self.pos];
             self.pos += 1;
@@ -113,6 +138,10 @@ impl<'a> Parser<'a> {
     }
 
     fn skip_newlines(&mut self) {
+        // Split tokens are never newlines, so if one is pending, don't skip anything
+        if self.split_pos < self.split_tokens.len() {
+            return;
+        }
         while self.pos < self.tokens.len() && matches!(self.tokens[self.pos].node, Token::Newline) {
             self.pos += 1;
         }
@@ -120,6 +149,18 @@ impl<'a> Parser<'a> {
 
     fn expect(&mut self, expected: &Token) -> Result<&Spanned<Token>, CompileError> {
         self.skip_newlines();
+        // Check split tokens first
+        if self.split_pos < self.split_tokens.len() {
+            if std::mem::discriminant(&self.split_tokens[self.split_pos].node) == std::mem::discriminant(expected) {
+                let idx = self.split_pos;
+                self.split_pos += 1;
+                return Ok(&self.split_tokens[idx]);
+            }
+            return Err(CompileError::syntax(
+                format!("expected {expected}, found {}", self.split_tokens[self.split_pos].node),
+                self.split_tokens[self.split_pos].span,
+            ));
+        }
         match self.tokens.get(self.pos) {
             Some(tok) if std::mem::discriminant(&tok.node) == std::mem::discriminant(expected) => {
                 self.pos += 1;
@@ -138,6 +179,14 @@ impl<'a> Parser<'a> {
 
     fn expect_ident(&mut self) -> Result<Spanned<String>, CompileError> {
         self.skip_newlines();
+        // Check split tokens first
+        if self.split_pos < self.split_tokens.len() {
+            let tok = &self.split_tokens[self.split_pos];
+            return Err(CompileError::syntax(
+                format!("expected identifier, found {}", tok.node),
+                tok.span,
+            ));
+        }
         match self.tokens.get(self.pos) {
             Some(tok) if matches!(tok.node, Token::Ident) => {
                 let name = self.source[tok.span.start..tok.span.end].to_string();
@@ -181,6 +230,52 @@ impl<'a> Parser<'a> {
             Some(tok) if matches!(tok.node, Token::RBrace) => Ok(()),
             None => Ok(()),
             Some(tok) => Err(CompileError::syntax("expected newline after statement", tok.span)),
+        }
+    }
+
+    /// Expect a closing `>` for generic syntax. Handles the case where the lexer
+    /// greedily tokenized `>=` as `Token::GtEq` by splitting it into `>` + `=`.
+    fn expect_closing_gt(&mut self) -> Result<Span, CompileError> {
+        self.skip_newlines();
+        // Access the token stream directly (not via peek_raw, to avoid borrow issues)
+        if self.split_pos < self.split_tokens.len() {
+            let tok = &self.split_tokens[self.split_pos];
+            if matches!(tok.node, Token::Gt) {
+                let span = tok.span;
+                self.split_pos += 1;
+                return Ok(span);
+            }
+            return Err(CompileError::syntax(
+                format!("expected >, found {}", tok.node),
+                tok.span,
+            ));
+        }
+        match self.tokens.get(self.pos) {
+            Some(tok) if matches!(tok.node, Token::Gt) => {
+                let span = tok.span;
+                self.pos += 1;
+                Ok(span)
+            }
+            Some(tok) if matches!(tok.node, Token::GtEq) => {
+                let tok_span = tok.span;
+                self.pos += 1;
+                // Inject synthetic `=` token for subsequent parsing
+                self.split_tokens.clear();
+                self.split_pos = 0;
+                self.split_tokens.push(Spanned::new(
+                    Token::Eq,
+                    Span::new(tok_span.start + 1, tok_span.end),
+                ));
+                Ok(Span::new(tok_span.start, tok_span.start + 1))
+            }
+            Some(tok) => Err(CompileError::syntax(
+                format!("expected >, found {}", tok.node),
+                tok.span,
+            )),
+            None => Err(CompileError::syntax(
+                "expected >, found end of file",
+                self.eof_span(),
+            )),
         }
     }
 
@@ -1316,7 +1411,7 @@ impl<'a> Parser<'a> {
                 }
                 params.push(name);
             }
-            self.expect(&Token::Gt)?;
+            self.expect_closing_gt()?;
             Ok((params, bounds))
         } else {
             Ok((Vec::new(), HashMap::new()))
@@ -1324,10 +1419,27 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a type argument list: `<int, string>`, etc. Assumes we're positioned at `<`.
+    /// Uses an inline loop instead of `parse_comma_list` to handle `GtEq` (`>=`) as
+    /// a closing delimiter (the lexer greedily tokenizes `?>` + `=` as `?` + `>=`).
     fn parse_type_arg_list(&mut self) -> Result<Vec<Spanned<TypeExpr>>, CompileError> {
         self.expect(&Token::Lt)?;
-        let args = self.parse_comma_list(&Token::Gt, true, |p| p.parse_type())?;
-        self.expect(&Token::Gt)?;
+        let mut args = Vec::new();
+        while let Some(tok) = self.peek() {
+            if matches!(tok.node, Token::Gt | Token::GtEq) {
+                break;
+            }
+            if !args.is_empty() {
+                self.expect(&Token::Comma)?;
+                // Check for trailing comma
+                if let Some(tok) = self.peek() {
+                    if matches!(tok.node, Token::Gt | Token::GtEq) {
+                        break;
+                    }
+                }
+            }
+            args.push(self.parse_type()?);
+        }
+        self.expect_closing_gt()?;
         Ok(args)
     }
 
@@ -1759,7 +1871,7 @@ impl<'a> Parser<'a> {
         // Parse <T>
         self.expect(&Token::Lt)?;
         let elem_type = self.parse_type()?;
-        self.expect(&Token::Gt)?;
+        self.expect_closing_gt()?;
 
         // Parse ( [capacity] )
         self.expect(&Token::LParen)?;
@@ -4569,6 +4681,96 @@ mod tests {
                             }
                             _ => panic!("expected nullable type arg"),
                         }
+                    }
+                    _ => panic!("expected generic type annotation"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    // GtEq token splitting tests — verifies that `>=` is correctly split into `>` + `=`
+    // when it appears at the end of a generic type argument list.
+
+    #[test]
+    fn parse_gteq_split_in_let_type_annotation() {
+        // `Map<string,int?>=` — the `>=` must split into `>` (closing generic) + `=` (assignment)
+        let prog = parse("fn main() {\n    let m:Map<string,int?>=Map<string,int?>{}\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { ty, .. } => {
+                let type_ann = ty.as_ref().unwrap();
+                match &type_ann.node {
+                    TypeExpr::Generic { name, type_args } => {
+                        assert_eq!(name, "Map");
+                        assert_eq!(type_args.len(), 2);
+                        match &type_args[1].node {
+                            TypeExpr::Nullable(inner) => {
+                                assert!(matches!(inner.node, TypeExpr::Named(ref n) if n == "int"));
+                            }
+                            _ => panic!("expected nullable type arg, got {:?}", type_args[1].node),
+                        }
+                    }
+                    _ => panic!("expected generic type annotation"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_gteq_split_single_type_arg() {
+        // `Box<int?>=` — single nullable type arg followed by `>=`
+        let prog = parse("class Box<T> { value: T }\nfn main() {\n    let b:Box<int?>=Box<int?>{value:42}\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { ty, .. } => {
+                let type_ann = ty.as_ref().unwrap();
+                match &type_ann.node {
+                    TypeExpr::Generic { name, type_args } => {
+                        assert_eq!(name, "Box");
+                        assert_eq!(type_args.len(), 1);
+                        assert!(matches!(type_args[0].node, TypeExpr::Nullable(_)));
+                    }
+                    _ => panic!("expected generic type annotation"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_gteq_split_in_struct_lit_rhs() {
+        // The RHS `Box<int?>{}` also has `?>` but followed by `{`, so no split needed.
+        // This tests that both LHS and RHS parse correctly together.
+        let prog = parse("class Box<T> { value: T }\nfn main() {\n    let b: Box<int?> = Box<int?> { value: 42 }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                match &value.node {
+                    Expr::StructLit { name, .. } => {
+                        assert!(name.node.contains("Box"));
+                    }
+                    _ => panic!("expected struct literal on RHS"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_gteq_split_no_space() {
+        // Completely no-space version: `let x:Set<int?>=Set<int?>{}`
+        let prog = parse("fn main() {\n    let x:Set<int?>=Set<int?>{}\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { ty, .. } => {
+                let type_ann = ty.as_ref().unwrap();
+                match &type_ann.node {
+                    TypeExpr::Generic { name, type_args } => {
+                        assert_eq!(name, "Set");
+                        assert_eq!(type_args.len(), 1);
+                        assert!(matches!(type_args[0].node, TypeExpr::Nullable(_)));
                     }
                     _ => panic!("expected generic type annotation"),
                 }
