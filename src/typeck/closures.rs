@@ -52,7 +52,11 @@ pub(crate) fn infer_closure(
     env.loop_depth = 0;
     // Clear generator context so yield cannot be used inside closures
     let saved_gen_elem = env.current_generator_elem.take();
+    // Set current function return type for `?` operator validation in closures
+    let saved_function_return = env.current_function_return.take();
+    env.current_function_return = Some(final_ret.clone());
     check_block(&body.node, env, &final_ret)?;
+    env.current_function_return = saved_function_return;
     env.current_generator_elem = saved_gen_elem;
     env.loop_depth = saved_loop_depth;
 

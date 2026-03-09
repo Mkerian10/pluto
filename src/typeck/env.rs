@@ -204,6 +204,9 @@ pub struct TypeEnv {
     pub generators: HashSet<String>,
     /// When type-checking a generator body, holds the element type T from `stream T`
     pub current_generator_elem: Option<PlutoType>,
+    /// Return type of the current function/closure being type-checked.
+    /// Used to validate that `?` (null propagation) is only used in functions returning `T?` or `void`.
+    pub current_function_return: Option<PlutoType>,
 }
 
 impl Default for TypeEnv {
@@ -274,6 +277,7 @@ impl TypeEnv {
             scope_body_depths: Vec::new(),
             generators: HashSet::new(),
             current_generator_elem: None,
+            current_function_return: None,
         }
     }
 
