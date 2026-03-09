@@ -41,8 +41,7 @@ fn field_assign_nullable() { compile_should_fail_with(r#"class C{x:int} fn main(
 
 // Generic wrapping errors
 #[test]
-#[ignore] // #170: parser fails on nullable types in generic type arguments
-fn generic_nullable_to_non_nullable() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b1:Box<int?>=Box<int?>{value:42} let b2:Box<int>=b1}"#, "expected Box<int>, found Box<int?>"); }
+fn generic_nullable_to_non_nullable() { compile_should_fail_with("class Box<T>{value:T}\nfn main(){\nlet b1:Box<int?>=Box<int?>{value:42}\nlet b2:Box<int>=b1\n}", "type mismatch"); }
 
 // Method call wrapping errors
 #[test]

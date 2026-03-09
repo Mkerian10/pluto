@@ -15,7 +15,6 @@ fn void_nullable_param() { compile_should_fail_with(r#"fn f(x:void?){} fn main()
 #[test]
 fn array_of_void_nullable() { compile_should_fail_with(r#"fn main(){let a:[void?]=[none]}"#, "void? is not allowed"); }
 #[test]
-#[ignore] // #170: parser fails on nullable types in generic type arguments
 fn map_void_nullable_value() { compile_should_fail_with(r#"fn main(){let m:Map<string,void?>=Map<string,void?>{}}"#, "void? is not allowed"); }
 
 // In class
@@ -28,7 +27,6 @@ fn enum_variant_void_nullable() { compile_should_fail_with(r#"enum E{A{x:void?}}
 
 // Generic with void?
 #[test]
-#[ignore] // #170: parser fails on nullable types in generic type arguments
 fn generic_instantiated_void_nullable() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b:Box<void?>=Box<void?>{value:none}}"#, "void? is not allowed"); }
 
 // Nullable propagation on void
