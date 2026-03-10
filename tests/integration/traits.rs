@@ -2341,18 +2341,25 @@ class SimpleFinder impl Finder {
     }
 }
 
-fn search(f: Finder, key: int) int {
+fn search(f: Finder, key: int) int? {
     let result = f.find(key)
-    if result != none {
-        return result?
-    }
-    return -1
+    return result
 }
 
 fn main() {
     let f = SimpleFinder { target: 5 }
-    print(search(f, 5))
-    print(search(f, 3))
+    let r1 = search(f, 5)
+    if r1 != none {
+        print(r1?)
+    } else {
+        print(-1)
+    }
+    let r2 = search(f, 3)
+    if r2 != none {
+        print(r2?)
+    } else {
+        print(-1)
+    }
 }
 "#);
     assert_eq!(out, "50\n-1\n");
@@ -14165,23 +14172,31 @@ fn trait_method_with_to_int_string_parse() {
     // Trait method uses string.to_int() nullable result
     let out = compile_and_run_stdout(r#"
 trait IntParser {
-    fn parse(self, input: string) int
+    fn parse(self, input: string) int?
 }
 
 class SafeParser impl IntParser {
     default_val: int
-    fn parse(self, input: string) int {
+    fn parse(self, input: string) int? {
         let result = input.to_int()
         if result == none {
             return self.default_val
         }
-        return result?
+        return result
     }
 }
 
 fn run(p: IntParser) {
-    print(p.parse("42"))
-    print(p.parse("abc"))
+    let r1 = p.parse("42")
+    if r1 != none {
+        print(r1?)
+    }
+    let r2 = p.parse("abc")
+    if r2 != none {
+        print(r2?)
+    } else {
+        print(-1)
+    }
 }
 
 fn main() {

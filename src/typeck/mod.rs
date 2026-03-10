@@ -685,11 +685,10 @@ mod tests {
 
     #[test]
     fn question_requires_nullable_return() {
-        // Note: Currently `?` operator doesn't validate that function returns nullable type
-        // This test documents current behavior - validation should be added in future
+        // `?` in a function returning non-nullable type should be rejected
         let result = check("fn foo() int {\n    let x: int? = 42\n    return x?\n}");
-        // TODO: This should error but currently passes
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("non-nullable"));
     }
 
     #[test]

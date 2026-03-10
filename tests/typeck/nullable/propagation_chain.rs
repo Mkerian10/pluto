@@ -1,63 +1,80 @@
 //! Nullable propagation chain tests - 15 tests
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run, compile_should_fail_with};
 
 // Basic ? propagation errors
 #[test]
-#[ignore] // #173: compiles successfully - nullable propagation works or compiler bug
-fn propagate_in_non_nullable_fn() { compile_should_fail_with(r#"fn f()int{let x:int?=42 return x?} fn main(){}"#, "cannot propagate"); }
+fn propagate_in_non_nullable_fn() {
+    compile_should_fail_with("fn f() int {\nlet x: int? = 42\nreturn x?\n}\nfn main() {}\n", "non-nullable");
+}
 #[test]
-fn propagate_non_nullable_value() { compile_should_fail_with(r#"fn f()int?{return 42?} fn main(){}"#, "'?' applied to non-nullable type int"); }
+fn propagate_non_nullable_value() {
+    compile_should_fail_with("fn f() int? {\nreturn 42?\n}\nfn main() {}\n", "'?' applied to non-nullable type int");
+}
 
-// Chained field access
+// Chained field access — ? in void main() is valid (guard clause pattern)
 #[test]
-#[ignore] // #173: compiles successfully - nullable propagation chains work
-fn chain_field_access_nullable() { compile_should_fail_with(r#"class A{x:int} class B{a:A?} fn main(){let b=B{a:none} let x=b.a?.x}"#, ""); }
+fn chain_field_access_nullable() {
+    compile_and_run("class A {\nx: int\n}\nclass B {\na: A?\n}\nfn main() {\nlet b = B { a: none }\nlet x = b.a?.x\n}\n");
+}
 #[test]
-#[ignore] // #173: compiles successfully - nullable propagation chains work
-fn triple_chain_field_access() { compile_should_fail_with(r#"class A{x:int} class B{a:A?} class C{b:B?} fn main(){let c=C{b:none} let x=c.b?.a?.x}"#, ""); }
+fn triple_chain_field_access() {
+    compile_and_run("class A {\nx: int\n}\nclass B {\na: A?\n}\nclass C {\nb: B?\n}\nfn main() {\nlet c = C { b: none }\nlet x = c.b?.a?.x\n}\n");
+}
 
-// Method call chains
+// Method call chains — ? in void main() is valid
 #[test]
-#[ignore] // #173: compiles successfully - nullable propagation chains work
-fn nullable_method_chain() { compile_should_fail_with(r#"class C{fn foo(self)C?{return none}} fn main(){let c=C{} let x=c.foo()?.foo()}"#, ""); }
+fn nullable_method_chain() {
+    compile_and_run("class C {\nfn foo(self) C? {\nreturn none\n}\n}\nfn main() {\nlet c = C {}\nlet x = c.foo()?.foo()\n}\n");
+}
 #[test]
-#[ignore] // #173: compiles successfully - nullable propagation works
-fn propagate_method_result() { compile_should_fail_with(r#"class C{fn foo(self)int?{return none}} fn main(){let c=C{} let x=c.foo()?}"#, ""); }
+fn propagate_method_result() {
+    compile_and_run("class C {\nfn foo(self) int? {\nreturn none\n}\n}\nfn main() {\nlet c = C {}\nlet x = c.foo()?\n}\n");
+}
 
-// Propagation in expressions
+// Propagation in expressions — ? in functions returning T? is valid
 #[test]
-#[ignore] // #173: compiles successfully - nullable propagation works
-fn propagate_in_binop() { compile_should_fail_with(r#"fn f()int?{return none} fn g()int?{return f()?+1} fn main(){}"#, ""); }
+fn propagate_in_binop() {
+    compile_and_run("fn f() int? {\nreturn none\n}\nfn g() int? {\nreturn f()? + 1\n}\nfn main() {}\n");
+}
 #[test]
-#[ignore] // #173: compiles successfully - nullable propagation works
-fn propagate_in_array() { compile_should_fail_with(r#"fn f()int?{return none} fn g()[int]?{return [f()?,2,3]} fn main(){}"#, ""); }
+fn propagate_in_array() {
+    compile_and_run("fn f() int? {\nreturn none\n}\nfn g() [int]? {\nreturn [f()?, 2, 3]\n}\nfn main() {}\n");
+}
 #[test]
-#[ignore] // #173: compiles successfully - nullable propagation works
-fn propagate_in_struct() { compile_should_fail_with(r#"class C{x:int} fn f()int?{return none} fn g()C?{return C{x:f()?}} fn main(){}"#, ""); }
+fn propagate_in_struct() {
+    compile_and_run("class C {\nx: int\n}\nfn f() int? {\nreturn none\n}\nfn g() C? {\nreturn C { x: f()? }\n}\nfn main() {}\n");
+}
 
 // Mixed error and nullable propagation
-// These tests already pass - they test correct compilation
 #[test]
-fn nullable_and_error_propagate() { compile_should_fail_with(r#"error E{} fn f()int!{raise E{}} fn g()int?{return f()!?} fn main(){}"#, ""); }
+fn nullable_and_error_propagate() {
+    compile_should_fail_with("error E {}\nfn f() int! {\nraise E {}\n}\nfn g() int? {\nreturn f()!?\n}\nfn main() {}\n", "");
+}
 #[test]
-fn error_and_nullable_propagate() { compile_should_fail_with(r#"fn f()int?{return none} fn g()int!{return f()?!} fn main(){}"#, ""); }
+fn error_and_nullable_propagate() {
+    compile_should_fail_with("fn f() int? {\nreturn none\n}\nfn g() int! {\nreturn f()?!\n}\nfn main() {}\n", "");
+}
 
 // Propagate wrong type
-// This test already passes - correctly detects type mismatch
 #[test]
-fn propagate_returns_wrong_type() { compile_should_fail_with(r#"fn f()int?{return none} fn g()string?{return f()?} fn main(){}"#, "type mismatch"); }
+fn propagate_returns_wrong_type() {
+    compile_should_fail_with("fn f() int? {\nreturn none\n}\nfn g() string? {\nreturn f()?\n}\nfn main() {}\n", "type mismatch");
+}
 
-// Deep propagation chains
+// Deep propagation chains — all functions return int?, so ? is valid
 #[test]
-#[ignore] // #173: compiles successfully - deep nullable propagation chains work
-fn five_level_propagation() { compile_should_fail_with(r#"fn f1()int?{return none} fn f2()int?{return f1()?} fn f3()int?{return f2()?} fn f4()int?{return f3()?} fn f5()int?{return f4()?} fn main(){}"#, ""); }
+fn five_level_propagation() {
+    compile_and_run("fn f1() int? {\nreturn none\n}\nfn f2() int? {\nreturn f1()?\n}\nfn f3() int? {\nreturn f2()?\n}\nfn f4() int? {\nreturn f3()?\n}\nfn f5() int? {\nreturn f4()?\n}\nfn main() {}\n");
+}
 
-// Propagate in control flow
+// Propagate in control flow — ? in functions returning T? is valid
 #[test]
-#[ignore] // #173: compiles successfully - nullable propagation in control flow works
-fn propagate_in_if_early_return() { compile_should_fail_with(r#"fn f(x:int?)int?{if true{return x?}return 0} fn main(){}"#, ""); }
-// This test already passes - correct compilation
+fn propagate_in_if_early_return() {
+    compile_and_run("fn f(x: int?) int? {\nif true {\nreturn x?\n}\nreturn 0\n}\nfn main() {}\n");
+}
 #[test]
-fn propagate_in_match() { compile_should_fail_with(r#"enum E{A B} fn f(e:E,x:int?)int?{match e{E.A=>{return x?}E.B=>{return 0}}} fn main(){}"#, ""); }
+fn propagate_in_match() {
+    compile_should_fail_with("enum E {\nA\nB\n}\nfn f(e: E, x: int?) int? {\nmatch e {\nE.A => {\nreturn x?\n}\nE.B => {\nreturn 0\n}\n}\n}\nfn main() {}\n", "");
+}

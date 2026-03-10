@@ -89,6 +89,10 @@ fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&s
         expected_return.clone()
     };
 
+    // Set current function return type for `?` operator validation
+    let prev_function_return = env.current_function_return.take();
+    env.current_function_return = Some(effective_return.clone());
+
     // Check body
     check_block(&func.body.node, env, &effective_return)?;
 
@@ -101,6 +105,7 @@ fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&s
     }
 
     env.current_generator_elem = prev_gen_elem;
+    env.current_function_return = prev_function_return;
     env.pop_scope();
     Ok(())
 }
