@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use super::types::PlutoType;
+use crate::diagnostics::CompileError;
 use crate::parser::ast::{ContractClause, Lifecycle, TypeExpr};
 use crate::span::{Span, Spanned};
 use crate::visit::scope_tracker::ScopeTracker;
@@ -289,7 +290,84 @@ impl TypeEnv {
         self.immutable_vars.pop_scope();
     }
 
-    pub fn define(&mut self, name: String, ty: PlutoType) {
+    /// Define a variable with validation: same-scope redeclaration and
+    /// outer-scope variable shadowing checks.
+    pub fn define(&mut self, name: String, ty: PlutoType, span: Span) -> Result<(), CompileError> {
+        // Skip all checks for `self` — it's a keyword, not user-chosen
+        if name == "self" {
+            self.variables.insert(name, ty);
+            return Ok(());
+        }
+
+        // Same-scope redeclaration
+        if self.variables.contains_in_current(&name) {
+            return Err(CompileError::type_err(
+                format!("variable '{}' is already declared in this scope", name),
+                span,
+            ));
+        }
+
+        // Outer-scope shadowing
+        if self.variables.lookup(&name).is_some() {
+            return Err(CompileError::type_err(
+                format!("variable '{}' shadows an existing variable", name),
+                span,
+            ));
+        }
+
+        self.variables.insert(name, ty);
+        Ok(())
+    }
+
+    /// Check if a name collides with a global declaration (function, builtin,
+    /// class, enum, trait, error, or app). Called from `Stmt::Let` only —
+    /// function params, catch bindings, and scope bindings are exempt.
+    pub fn check_global_name_collision(&self, name: &str, span: Span) -> Result<(), CompileError> {
+        if self.functions.contains_key(name) || self.builtins.contains(name) {
+            return Err(CompileError::type_err(
+                format!("variable '{}' shadows a function", name),
+                span,
+            ));
+        }
+        if self.classes.contains_key(name) {
+            return Err(CompileError::type_err(
+                format!("variable '{}' shadows a class", name),
+                span,
+            ));
+        }
+        if self.enums.contains_key(name) {
+            return Err(CompileError::type_err(
+                format!("variable '{}' shadows an enum", name),
+                span,
+            ));
+        }
+        if self.traits.contains_key(name) {
+            return Err(CompileError::type_err(
+                format!("variable '{}' shadows a trait", name),
+                span,
+            ));
+        }
+        if self.errors.contains_key(name) {
+            return Err(CompileError::type_err(
+                format!("variable '{}' shadows an error", name),
+                span,
+            ));
+        }
+        if let Some((app_name, _)) = &self.app {
+            if name == *app_name {
+                return Err(CompileError::type_err(
+                    format!("variable '{}' shadows the app", name),
+                    span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Define a variable without any validation checks.
+    /// Used for contract-validation contexts (requires/ensures/invariants)
+    /// where params are defined in temporary scopes just for type-checking.
+    pub fn define_unchecked(&mut self, name: String, ty: PlutoType) {
         self.variables.insert(name, ty);
     }
 

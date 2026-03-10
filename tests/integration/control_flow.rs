@@ -108,10 +108,11 @@ fn for_loop_over_function_result() {
 
 #[test]
 fn for_loop_var_shadows_outer() {
-    let out = compile_and_run_stdout(
+    // for-loop variable must not shadow outer variable (issue #160)
+    compile_should_fail_with(
         "fn main() {\n    let x = 999\n    for x in [1, 2, 3] {\n        print(x)\n    }\n    print(x)\n}",
+        "shadows",
     );
-    assert_eq!(out, "1\n2\n3\n999\n");
 }
 
 #[test]

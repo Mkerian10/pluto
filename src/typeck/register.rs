@@ -30,11 +30,11 @@ fn check_function_contracts(
         for p in &func.params {
             if p.name.node == "self" {
                 if let Some(cn) = class_name {
-                    env.define("self".to_string(), PlutoType::Class(cn.to_string()));
+                    env.define_unchecked("self".to_string(), PlutoType::Class(cn.to_string()));
                 }
             } else {
                 let ty = resolve_type(&p.ty, env)?;
-                env.define(p.name.node.clone(), ty);
+                env.define_unchecked(p.name.node.clone(), ty);
             }
         }
         for contract in &func.contracts {
@@ -1602,7 +1602,7 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
         // Type-check class invariants
         if !c.invariants.is_empty() {
             env.push_scope();
-            env.define("self".to_string(), PlutoType::Class(c.name.node.clone()));
+            env.define_unchecked("self".to_string(), PlutoType::Class(c.name.node.clone()));
             for inv in &c.invariants {
                 let inv_type = super::infer::infer_expr(&inv.node.expr.node, inv.node.expr.span, env, None)?;
                 if inv_type != PlutoType::Bool {
@@ -1643,7 +1643,7 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
             if has_requires {
                 env.push_scope();
                 for (name, ty) in &param_types {
-                    env.define(name.clone(), ty.clone());
+                    env.define_unchecked(name.clone(), ty.clone());
                 }
                 for contract in &m.contracts {
                     if contract.node.kind == ContractKind::Requires {

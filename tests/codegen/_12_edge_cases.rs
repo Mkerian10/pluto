@@ -35,8 +35,8 @@ fn main() {
 fn test_i64_min_addition() {
     let source = r#"
 fn main() {
-    let min = -9223372036854775808
-    let result = min + 1
+    let min_val = -9223372036854775808
+    let result = min_val + 1
     print(result)
 }
 "#;
@@ -48,8 +48,8 @@ fn main() {
 fn test_i64_max_addition() {
     let source = r#"
 fn main() {
-    let max = 9223372036854775807
-    let result = max + 1
+    let max_val = 9223372036854775807
+    let result = max_val + 1
     print(result)
 }
 "#;
@@ -61,8 +61,8 @@ fn main() {
 fn test_i64_min_subtraction() {
     let source = r#"
 fn main() {
-    let min = -9223372036854775808
-    let result = min - 1
+    let min_val = -9223372036854775808
+    let result = min_val - 1
     print(result)
 }
 "#;
@@ -74,8 +74,8 @@ fn main() {
 fn test_i64_max_multiplication() {
     let source = r#"
 fn main() {
-    let max = 9223372036854775807
-    let result = max * 2
+    let max_val = 9223372036854775807
+    let result = max_val * 2
     print(result)
 }
 "#;
@@ -123,8 +123,8 @@ fn main() {
 fn test_max_int_negation() {
     let source = r#"
 fn main() {
-    let max = 9223372036854775807
-    let result = -max
+    let max_val = 9223372036854775807
+    let result = -max_val
     print(result)
 }
 "#;

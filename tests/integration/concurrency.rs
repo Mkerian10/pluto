@@ -333,7 +333,7 @@ fn main() {
 
 #[test]
 fn spawn_task_handle_shadowing() {
-    // Inner scope shadows t with fallible spawn, outer t is infallible
+    // Inner scope uses a different variable name to avoid shadowing
     let out = compile_and_run_stdout(r#"
 fn foo() int {
     return 10
@@ -342,8 +342,8 @@ fn foo() int {
 fn main() {
     let t = spawn foo()
     if true {
-        let t = spawn foo()
-        let inner = t.get()
+        let t2 = spawn foo()
+        let inner = t2.get()
         print(inner)
     }
     let outer = t.get()

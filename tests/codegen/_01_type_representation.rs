@@ -61,9 +61,9 @@ fn test_int_min_representation() {
     // We can't write this directly (lexer parses - separately), so test via arithmetic
     let src = r#"
         fn main() {
-            let max = 9223372036854775807
-            let min = max + 1  // Wraps to i64::MIN
-            print(min)
+            let max_val = 9223372036854775807
+            let min_val = max_val + 1  // Wraps to i64::MIN
+            print(min_val)
         }
     "#;
     let output_full = compile_and_run_stdout(src);
