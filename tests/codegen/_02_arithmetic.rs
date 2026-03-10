@@ -804,8 +804,8 @@ fn test_int_underflow_detection() {
     // Use arithmetic to produce i64::MIN instead
     let source = r#"
 fn main() {
-    let max = 9223372036854775807
-    let min_val = max + 1
+    let max_val = 9223372036854775807
+    let min_val = max_val + 1
     print(min_val)
 }
 "#;

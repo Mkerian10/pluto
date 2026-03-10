@@ -26,7 +26,7 @@ pub(crate) fn infer_closure(
     let mut param_types = Vec::new();
     for p in params {
         let ty = resolve_type(&p.ty, env)?;
-        env.define(p.name.node.clone(), ty.clone());
+        env.define(p.name.node.clone(), ty.clone(), p.name.span)?;
         param_types.push(ty);
     }
 
@@ -41,7 +41,7 @@ pub(crate) fn infer_closure(
         env.pop_scope();
         env.push_scope();
         for (i, p) in params.iter().enumerate() {
-            env.define(p.name.node.clone(), param_types[i].clone());
+            env.define_unchecked(p.name.node.clone(), param_types[i].clone());
         }
         ret
     };
@@ -103,15 +103,15 @@ fn infer_closure_return_type(block: &Block, env: &mut TypeEnv) -> Result<PlutoTy
                 let val_type = infer_expr(&value.node, value.span, env, hint.as_ref())?;
                 if let Some(declared_ty) = ty {
                     let expected = resolve_type(declared_ty, env)?;
-                    env.define(name.node.clone(), expected);
+                    env.define_unchecked(name.node.clone(), expected);
                 } else {
-                    env.define(name.node.clone(), val_type);
+                    env.define_unchecked(name.node.clone(), val_type);
                 }
             }
             Stmt::LetChan { sender, receiver, elem_type, .. } => {
                 let resolved = resolve_type(elem_type, env)?;
-                env.define(sender.node.clone(), PlutoType::Sender(Box::new(resolved.clone())));
-                env.define(receiver.node.clone(), PlutoType::Receiver(Box::new(resolved)));
+                env.define_unchecked(sender.node.clone(), PlutoType::Sender(Box::new(resolved.clone())));
+                env.define_unchecked(receiver.node.clone(), PlutoType::Receiver(Box::new(resolved)));
             }
             Stmt::Return(Some(expr)) => {
                 return infer_expr(&expr.node, expr.span, env, None);

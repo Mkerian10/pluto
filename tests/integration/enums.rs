@@ -63,8 +63,19 @@ fn enum_mixed_variants() {
 
 #[test]
 fn match_binding_shadow_restore() {
-    let out = compile_and_run_stdout(
+    // Match bindings that shadow outer variables are now rejected (issue #160).
+    // Use `as` rename to avoid shadowing: `Wrapper.Val { x as val }`
+    compile_should_fail_with(
         "enum Wrapper {\n    Val { x: int }\n    Empty\n}\n\nfn main() {\n    let x = 100\n    let w = Wrapper.Val { x: 7 }\n    match w {\n        Wrapper.Val { x } {\n            print(x)\n        }\n        Wrapper.Empty {\n            print(0)\n        }\n    }\n    print(x)\n}",
+        "shadows",
+    );
+}
+
+#[test]
+fn match_binding_with_rename_no_shadow() {
+    // Using `: rename` avoids the shadow error
+    let out = compile_and_run_stdout(
+        "enum Wrapper {\n    Val { x: int }\n    Empty\n}\n\nfn main() {\n    let x = 100\n    let w = Wrapper.Val { x: 7 }\n    match w {\n        Wrapper.Val { x: val } {\n            print(val)\n        }\n        Wrapper.Empty {\n            print(0)\n        }\n    }\n    print(x)\n}",
     );
     assert_eq!(out, "7\n100\n");
 }
@@ -379,9 +390,9 @@ fn match_with_function_calls_in_arms() {
 
 #[test]
 fn match_shadow_different_across_arms() {
-    // Each arm shadows the same outer variable `val` differently
+    // Match bindings with different names to avoid shadowing outer `val`
     let out = compile_and_run_stdout(
-        "enum Choice {\n    A { val: int }\n    B { val: int }\n}\n\nfn main() {\n    let val = 999\n    let c = Choice.A { val: 10 }\n    match c {\n        Choice.A { val } { print(val) }\n        Choice.B { val } { print(val) }\n    }\n    print(val)\n}",
+        "enum Choice {\n    A { val: int }\n    B { val: int }\n}\n\nfn main() {\n    let val = 999\n    let c = Choice.A { val: 10 }\n    match c {\n        Choice.A { val: v } { print(v) }\n        Choice.B { val: v } { print(v) }\n    }\n    print(val)\n}",
     );
     assert_eq!(out, "10\n999\n");
 }
@@ -1017,6 +1028,8 @@ fn match_expr_field_rename() {
 
 #[test]
 fn match_expr_binding_shadows_outer() {
+    // Shadowing outer variable via match binding is now rejected (#160).
+    // Use a renamed binding to avoid the shadow.
     let stdout = compile_and_run_stdout(r#"
         enum E {
             V { x: int }
@@ -1025,7 +1038,7 @@ fn match_expr_binding_shadows_outer() {
             let x = 999
             let e = E.V { x: 42 }
             let inner = match e {
-                E.V { x: x } => x
+                E.V { x: val } => val
             }
             print(inner)
             print(x)

@@ -582,10 +582,9 @@ pub(crate) fn infer_expr(
                         })?;
 
                     // Bind variable (use rename if provided)
-                    let var_name = opt_rename
-                        .as_ref()
-                        .map_or(&binding_field.node, |r| &r.node);
-                    env.define(var_name.clone(), field.1.clone());
+                    let (var_name, var_span) = opt_rename.as_ref()
+                        .map_or((&binding_field.node, binding_field.span), |r| (&r.node, r.span));
+                    env.define(var_name.clone(), field.1.clone(), var_span)?;
                 }
 
                 // Infer arm value type
@@ -1396,7 +1395,7 @@ fn infer_catch(
     let handler_type = match handler {
         CatchHandler::Wildcard { var, body } => {
             env.push_scope();
-            env.define(var.node.clone(), PlutoType::Error);
+            env.define(var.node.clone(), PlutoType::Error, var.span)?;
             let stmts = &body.node.stmts;
             // Type-check all statements except possibly the last
             let return_type = env.current_fn.as_ref()

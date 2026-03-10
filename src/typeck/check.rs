@@ -64,7 +64,7 @@ fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&s
         } else {
             resolve_type(&p.ty, env)?
         };
-        env.define(p.name.node.clone(), ty);
+        env.define(p.name.node.clone(), ty, p.name.span)?;
     }
 
     let lookup_name = if let Some(cn) = class_name {
@@ -152,16 +152,6 @@ fn check_stmt(
                 .map(|t| resolve_type(t, env))
                 .transpose()?;
             let val_type = infer_expr(&value.node, value.span, env, hint.as_ref())?;
-            // Check for same-scope redeclaration
-            let current_depth = env.scope_depth() - 1;
-            if let Some((_, existing_depth)) = env.lookup_with_depth(&name.node) {
-                if existing_depth == current_depth {
-                    return Err(CompileError::type_err(
-                        format!("variable '{}' is already declared in this scope", name.node),
-                        name.span,
-                    ));
-                }
-            }
             // Reject bare `none` without a type annotation (Nullable(Void) is the sentinel
             // for unresolved none literals — it can appear directly or nested in containers)
             if ty.is_none() && contains_unresolved_none(&val_type) {
@@ -170,6 +160,8 @@ fn check_stmt(
                     value.span,
                 ));
             }
+            // Check for collisions with global declarations (only for let, not params/bindings)
+            env.check_global_name_collision(&name.node, name.span)?;
             if let Some(declared_ty) = ty {
                 let expected = resolve_type(declared_ty, env)?;
                 if !types_compatible(&val_type, &expected, env) {
@@ -178,9 +170,9 @@ fn check_stmt(
                         value.span,
                     ));
                 }
-                env.define(name.node.clone(), expected.clone());
+                env.define(name.node.clone(), expected.clone(), name.span)?;
             } else {
-                env.define(name.node.clone(), val_type.clone());
+                env.define(name.node.clone(), val_type.clone(), name.span)?;
             }
             // Track immutable bindings (let without mut)
             if !is_mut {
@@ -327,7 +319,7 @@ fn check_stmt(
                 }
             };
             env.push_scope();
-            env.define(var.node.clone(), elem_type);
+            env.define(var.node.clone(), elem_type, var.span)?;
             env.loop_depth += 1;
             check_block(&body.node, env, return_type)?;
             env.loop_depth -= 1;
@@ -395,8 +387,8 @@ fn check_stmt(
                     ));
                 }
             }
-            env.define(sender.node.clone(), PlutoType::Sender(Box::new(elem.clone())));
-            env.define(receiver.node.clone(), PlutoType::Receiver(Box::new(elem)));
+            env.define(sender.node.clone(), PlutoType::Sender(Box::new(elem.clone())), sender.span)?;
+            env.define(receiver.node.clone(), PlutoType::Receiver(Box::new(elem)), receiver.span)?;
         }
         Stmt::Select { arms, default } => {
             for arm in arms {
@@ -407,7 +399,7 @@ fn check_stmt(
                             PlutoType::Receiver(elem_type) => {
                                 // Bind the received value in the arm body's scope
                                 env.push_scope();
-                                env.define(binding.node.clone(), *elem_type.clone());
+                                env.define(binding.node.clone(), *elem_type.clone(), binding.span)?;
                                 check_block(&arm.body.node, env, return_type)?;
                                 env.pop_scope();
                             }
@@ -757,7 +749,7 @@ fn check_scope_stmt(
     }
     for (i, binding) in bindings.iter().enumerate() {
         let (_, ty) = &binding_types[i];
-        env.define(binding.name.node.clone(), ty.clone());
+        env.define_unchecked(binding.name.node.clone(), ty.clone());
     }
     check_block(&body.node, env, return_type)?;
     env.scope_bindings.pop_scope();
@@ -1005,8 +997,9 @@ fn check_match_stmt(
                         binding_field.span,
                     )
                 })?;
-            let var_name = opt_rename.as_ref().map_or(&binding_field.node, |r| &r.node);
-            env.define(var_name.clone(), field_type);
+            let (var_name, var_span) = opt_rename.as_ref()
+                .map_or((&binding_field.node, binding_field.span), |r| (&r.node, r.span));
+            env.define(var_name.clone(), field_type, var_span)?;
         }
         check_block(&arm.body.node, env, return_type)?;
         env.pop_scope();
