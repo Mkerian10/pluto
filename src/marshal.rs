@@ -690,9 +690,12 @@ fn generate_marshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<Spa
         match_arms.push(arm);
     }
 
-    // Create function body: match value { ... }
+    // Create function body: match __enum_value { ... }
+    // The scrutinee param is named `__enum_value` (not `value`) so it can't
+    // collide with a variant field also named `value`, which the match arm
+    // binds — that collision is now a shadowing error under #160.
     let match_stmt = Stmt::Match {
-        expr: Spanned { node: mk_var("value"), span: mk_span() },
+        expr: Spanned { node: mk_var("__enum_value"), span: mk_span() },
         arms: match_arms,
     };
 
@@ -711,7 +714,7 @@ fn generate_marshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<Spa
         params: vec![
             Param {
                 id: Uuid::new_v4(),
-                name: Spanned { node: "value".to_string(), span: mk_span() },
+                name: Spanned { node: "__enum_value".to_string(), span: mk_span() },
                 ty: Spanned {
                     node: TypeExpr::Named(enum_name.clone()),
                     span: mk_span(),

@@ -67,7 +67,7 @@ pub class Json {
 
     fn get(self, key: string) Json {
         if self.tag == 6 {
-            let i = 0
+            let mut i = 0
             while i < self.keys.len() {
                 if self.keys[i] == key {
                     return self.children[i]
@@ -93,7 +93,7 @@ pub class Json {
     }
 
     fn set(mut self, key: string, value: Json) {
-        let i = 0
+        let mut i = 0
         while i < self.keys.len() {
             if self.keys[i] == key {
                 self.children[i] = value
@@ -161,8 +161,8 @@ pub fn object() Json {
 // ── Stringify ──────────────────────────────────────────────────────────────────
 
 fn escape_string(s: string) string {
-    let result = "\""
-    let i = 0
+    let mut result = "\""
+    let mut i = 0
     let slen = s.len()
     while i < slen {
         let b = strings.byte_at(s, i)
@@ -226,7 +226,7 @@ fn stringify(j: Json) string {
         return "false"
     }
     if j.tag == 2 {
-        return "{j.int_val}"
+        return f"{j.int_val}"
     }
     if j.tag == 3 {
         return strings.format_float(j.float_val)
@@ -235,8 +235,8 @@ fn stringify(j: Json) string {
         return escape_string(j.string_val)
     }
     if j.tag == 5 {
-        let result = "["
-        let i = 0
+        let mut result = "["
+        let mut i = 0
         while i < j.children.len() {
             if i > 0 {
                 result = result + ","
@@ -247,8 +247,8 @@ fn stringify(j: Json) string {
         return result + "]"
     }
     // tag == 6 (object)
-    let result = __pluto_codepoint_to_string(123)
-    let i = 0
+    let mut result = __pluto_codepoint_to_string(123)
+    let mut i = 0
     while i < j.keys.len() {
         if i > 0 {
             result = result + ","
@@ -376,7 +376,7 @@ class Parser {
     fn parse_string(mut self) Json {
         // skip opening "
         self.pos = self.pos + 1
-        let result = ""
+        let mut result = ""
         while self.pos < self.src_len {
             let b = strings.byte_at(self.src, self.pos)
             // '"' = 34
@@ -464,8 +464,8 @@ class Parser {
         if self.pos + 4 > self.src_len {
             raise JsonError { message: "invalid JSON" }
         }
-        let cp = 0
-        let i = 0
+        let mut cp = 0
+        let mut i = 0
         while i < 4 {
             let h = strings.byte_at(self.src, self.pos + i)
             cp = cp * 16
@@ -504,7 +504,7 @@ class Parser {
     }
 
     fn parse_unicode_escape(mut self) string {
-        let cp = self.parse_hex4()!
+        let mut cp = self.parse_hex4()!
         // Handle surrogate pairs: high surrogate 0xD800-0xDBFF
         if cp >= 55296 {
             if cp <= 56319 {
@@ -565,7 +565,7 @@ class Parser {
 
     fn parse_number(mut self) Json {
         let start = self.pos
-        let is_float = false
+        let mut is_float = false
         // '-' = 45
         if strings.byte_at(self.src, self.pos) == 45 {
             self.pos = self.pos + 1
@@ -755,7 +755,7 @@ fn parse_float_value(s: string) float {
 
 pub fn parse(s: string) Json {
     let mut p = Parser { src: s, pos: 0, src_len: s.len() }
-    let result = p.parse_value()!
+    let mut result = p.parse_value()!
     p.skip_whitespace()
     if p.pos < p.src_len {
         raise JsonError { message: "invalid JSON" }
