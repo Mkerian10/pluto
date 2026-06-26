@@ -2359,9 +2359,16 @@ fn infer_method_call(
 
     let mangled = mangle_method(&class_name, &method.node);
     if let Some(ref current) = env.current_fn {
+        // A call whose receiver type is a stage referenced by a `remote` dep
+        // crosses a service boundary — record it as a remote call.
+        let resolution = if env.remote_types.contains(&class_name) {
+            super::env::MethodResolution::RemoteClass { mangled_name: mangled.clone() }
+        } else {
+            super::env::MethodResolution::Class { mangled_name: mangled.clone() }
+        };
         env.method_resolutions.insert(
             (current.clone(), method.span.start),
-            super::env::MethodResolution::Class { mangled_name: mangled.clone() },
+            resolution,
         );
     }
     // Check caller-side mutability: cannot call mut self method on immutable binding

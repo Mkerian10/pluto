@@ -266,6 +266,13 @@ fn collect_expr_effects(
                         Some(MethodResolution::Class { mangled_name }) => {
                             edges.insert(mangled_name.clone());
                         }
+                        // Remote boundary call: the wire only carries NetworkError.
+                        // The callee's own (local) error set does not cross the
+                        // boundary, so we add NetworkError directly rather than
+                        // edging to the callee.
+                        Some(MethodResolution::RemoteClass { .. }) => {
+                            direct_errors.insert("NetworkError".to_string());
+                        }
                         Some(MethodResolution::TraitDynamic { trait_name, method_name }) => {
                             for (class_name, info) in &env.classes {
                                 if info.impl_traits.iter().any(|t| t == trait_name) {

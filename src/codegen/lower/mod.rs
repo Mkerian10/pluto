@@ -3002,6 +3002,33 @@ impl<'a> LowerContext<'a> {
             return Ok(self.builder.ins().iconst(types::I64, 0)); // void
         }
 
+        // Remote boundary call. Phase 1 has no transport yet, so a remote call
+        // always fails as if the network were unreachable: it raises NetworkError
+        // and yields a dummy value. Typeck guarantees every remote call is wrapped
+        // in `!`/`catch`, so the surrounding error check diverts control from here.
+        {
+            let pre_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
+            if let PlutoType::Class(cname) = &pre_type
+                && self.env.remote_types.contains(cname)
+            {
+                let nfields = self.env.errors.get("NetworkError")
+                    .map_or(1, |e| e.fields.len());
+                let size = (nfields as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
+                let size_val = self.builder.ins().iconst(types::I64, size);
+                let err_ptr = self.call_runtime("__pluto_alloc", &[size_val]);
+                let msg = format!(
+                    "remote call to {}.{} failed: no transport configured",
+                    cname, method.node
+                );
+                let raw = self.create_data_str(&msg)?;
+                let len = self.builder.ins().iconst(types::I64, msg.len() as i64);
+                let msg_str = self.call_runtime("__pluto_string_new", &[raw, len]);
+                self.builder.ins().store(MemFlags::new(), msg_str, err_ptr, Offset32::new(0));
+                self.call_runtime_void("__pluto_raise_error", &[err_ptr]);
+                return Ok(self.builder.ins().iconst(types::I64, 0));
+            }
+        }
+
         let obj_ptr = self.lower_expr(&object.node)?;
         let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
 

@@ -281,6 +281,7 @@ fn instantiate_generic_class(template: &ClassDecl, mangled_name: &str, type_arg_
             ty: Spanned { node: instantiated_ty, span: field.ty.span },
             is_injected: field.is_injected,
             is_ambient: field.is_ambient,
+            is_remote: field.is_remote,
         });
     }
 
@@ -324,6 +325,7 @@ fn instantiate_generic_enum(template: &crate::parser::ast::EnumDecl, mangled_nam
                 ty: Spanned { node: instantiated_ty, span: field.ty.span },
                 is_injected: field.is_injected,
                 is_ambient: field.is_ambient,
+                is_remote: field.is_remote,
             });
         }
         instantiated_variants.push(EnumVariant {
@@ -2752,6 +2754,7 @@ mod tests {
                 },
                 is_injected: false,
                 is_ambient: false,
+                is_remote: false,
             }],
             methods: vec![],
             invariants: vec![],
@@ -2803,6 +2806,7 @@ mod tests {
                 },
                 is_injected: false,
                 is_ambient: false,
+                is_remote: false,
             }],
             methods: vec![],
             invariants: vec![],
@@ -2859,6 +2863,7 @@ mod tests {
                         },
                         is_injected: false,
                         is_ambient: false,
+                        is_remote: false,
                     }],
                 },
                 EnumVariant {
@@ -2923,6 +2928,7 @@ mod tests {
                     },
                     is_injected: false,
                     is_ambient: false,
+                    is_remote: false,
                 }],
             }],
             is_pub: false,

@@ -564,6 +564,7 @@ mod tests {
             ty: Spanned::new(TypeExpr::Named("void".to_string()), Span::dummy()),
             is_injected: false,
             is_ambient: false,
+            is_remote: false,
         }
     }
 
