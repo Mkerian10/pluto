@@ -835,6 +835,9 @@ pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeE
         let mut fields = Vec::new();
         for f in &app.inject_fields {
             let ty = resolve_type(&f.ty, env)?;
+            if f.is_remote && let crate::parser::ast::TypeExpr::Named(ref n) = f.ty.node {
+                env.remote_types.insert(n.clone());
+            }
             fields.push((f.name.node.clone(), ty, f.is_injected));
         }
 
@@ -938,6 +941,9 @@ pub(crate) fn register_stage_fields_and_methods(program: &Program, env: &mut Typ
         let mut fields = Vec::new();
         for f in &stage.inject_fields {
             let ty = resolve_type(&f.ty, env)?;
+            if f.is_remote && let crate::parser::ast::TypeExpr::Named(ref n) = f.ty.node {
+                env.remote_types.insert(n.clone());
+            }
             fields.push((f.name.node.clone(), ty, f.is_injected));
         }
 
@@ -1089,9 +1095,12 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
         }
     }
 
-    // Add app dependencies to the graph
+    // Add app dependencies to the graph.
+    // Remote deps are cross-service connections, not constructed singletons —
+    // they create no DI construction dependency, so skip them.
     if let Some(app_spanned) = &program.app {
         for field in &app_spanned.node.inject_fields {
+            if field.is_remote { continue; }
             if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node {
                 all_di_classes.insert(type_name.clone());
             }
@@ -1101,6 +1110,7 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
     // Add stage dependencies to the graph
     for stage_spanned in &program.stages {
         for field in &stage_spanned.node.inject_fields {
+            if field.is_remote { continue; }
             if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node {
                 all_di_classes.insert(type_name.clone());
             }

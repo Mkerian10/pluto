@@ -101,6 +101,10 @@ name = "modules"
 path = "tests/integration/modules.rs"
 
 [[test]]
+name = "distributed"
+path = "tests/integration/distributed.rs"
+
+[[test]]
 name = "mutability"
 path = "tests/integration/mutability.rs"
 

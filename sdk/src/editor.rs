@@ -337,6 +337,7 @@ impl ModuleEditor {
             ty: Spanned::new(ty_expr, Span::dummy()),
             is_injected: false,
             is_ambient: false,
+            is_remote: false,
         };
         self.program.classes[class_idx].node.fields.push(field);
         Ok(field_id)

@@ -281,6 +281,7 @@ fn instantiate_generic_class(template: &ClassDecl, mangled_name: &str, type_arg_
             ty: Spanned { node: instantiated_ty, span: field.ty.span },
             is_injected: field.is_injected,
             is_ambient: field.is_ambient,
+            is_remote: field.is_remote,
         });
     }
 
@@ -324,6 +325,7 @@ fn instantiate_generic_enum(template: &crate::parser::ast::EnumDecl, mangled_nam
                 ty: Spanned { node: instantiated_ty, span: field.ty.span },
                 is_injected: field.is_injected,
                 is_ambient: field.is_ambient,
+                is_remote: field.is_remote,
             });
         }
         instantiated_variants.push(EnumVariant {
@@ -690,9 +692,12 @@ fn generate_marshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<Spa
         match_arms.push(arm);
     }
 
-    // Create function body: match value { ... }
+    // Create function body: match __enum_value { ... }
+    // The scrutinee param is named `__enum_value` (not `value`) so it can't
+    // collide with a variant field also named `value`, which the match arm
+    // binds — that collision is now a shadowing error under #160.
     let match_stmt = Stmt::Match {
-        expr: Spanned { node: mk_var("value"), span: mk_span() },
+        expr: Spanned { node: mk_var("__enum_value"), span: mk_span() },
         arms: match_arms,
     };
 
@@ -711,7 +716,7 @@ fn generate_marshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<Spa
         params: vec![
             Param {
                 id: Uuid::new_v4(),
-                name: Spanned { node: "value".to_string(), span: mk_span() },
+                name: Spanned { node: "__enum_value".to_string(), span: mk_span() },
                 ty: Spanned {
                     node: TypeExpr::Named(enum_name.clone()),
                     span: mk_span(),
@@ -2752,6 +2757,7 @@ mod tests {
                 },
                 is_injected: false,
                 is_ambient: false,
+                is_remote: false,
             }],
             methods: vec![],
             invariants: vec![],
@@ -2803,6 +2809,7 @@ mod tests {
                 },
                 is_injected: false,
                 is_ambient: false,
+                is_remote: false,
             }],
             methods: vec![],
             invariants: vec![],
@@ -2859,6 +2866,7 @@ mod tests {
                         },
                         is_injected: false,
                         is_ambient: false,
+                        is_remote: false,
                     }],
                 },
                 EnumVariant {
@@ -2923,6 +2931,7 @@ mod tests {
                     },
                     is_injected: false,
                     is_ambient: false,
+                    is_remote: false,
                 }],
             }],
             is_pub: false,

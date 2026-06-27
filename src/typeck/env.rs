@@ -88,6 +88,11 @@ pub enum InstKind {
 pub enum MethodResolution {
     /// Class method call — resolved to a specific mangled name
     Class { mangled_name: String },
+    /// Cross-service call through a `remote` dep. Type-checked against the
+    /// target service interface's signature, but invoked over a service
+    /// boundary, so it is always fallible (introduces NetworkError) regardless
+    /// of the callee body.
+    RemoteClass { mangled_name: String },
     /// Trait dynamic dispatch — can't know concrete class at compile time
     TraitDynamic { trait_name: String, method_name: String },
     /// Built-in method (array.push, array.len, string.len) — always infallible
@@ -167,6 +172,13 @@ pub struct TypeEnv {
     pub current_fn: Option<String>,
     /// Ambient types declared in the app (for validation)
     pub ambient_types: HashSet<String>,
+    /// Type names referenced by a `remote` dep anywhere in the program (the
+    /// interface of another service). Method calls resolving to these types
+    /// cross a service boundary and are treated as remote (always fallible,
+    /// NetworkError). NOTE (Phase 1): this is program-global — a type marked
+    /// `remote` in one place is remote for all calls to it. Per-call-site
+    /// precision is a later refinement.
+    pub remote_types: HashSet<String>,
     /// Nesting depth of loops (for validating break/continue)
     pub loop_depth: u32,
     /// Spawn span → target function name
@@ -258,6 +270,7 @@ impl TypeEnv {
             instantiations: HashSet::new(),
             generic_rewrites: HashMap::new(),
             method_resolutions: HashMap::new(),
+            remote_types: HashSet::new(),
             fallible_builtin_calls: HashSet::new(),
             current_fn: None,
             ambient_types: HashSet::new(),
@@ -414,6 +427,8 @@ impl TypeEnv {
         let key = (current_fn.to_string(), span_start);
         match self.method_resolutions.get(&key) {
             Some(MethodResolution::Class { mangled_name }) => Ok(self.is_fn_fallible(mangled_name)),
+            // Remote calls cross a service boundary: always fallible (NetworkError).
+            Some(MethodResolution::RemoteClass { .. }) => Ok(true),
             Some(MethodResolution::TraitDynamic { trait_name, method_name }) => {
                 Ok(self.is_trait_method_potentially_fallible(trait_name, method_name))
             }

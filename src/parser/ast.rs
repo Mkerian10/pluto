@@ -100,6 +100,12 @@ pub struct Field {
     pub ty: Spanned<TypeExpr>,
     pub is_injected: bool,
     pub is_ambient: bool,
+    /// True when this injected dep is a `remote` reference to another service's
+    /// stage interface. Method calls on a remote dep cross a service boundary:
+    /// they are type-checked against the target stage's signature and implicitly
+    /// add `NetworkError` to the caller's inferred error set.
+    #[serde(default)]
+    pub is_remote: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

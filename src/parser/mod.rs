@@ -177,6 +177,23 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Consume an identifier token if it matches `word`, returning true.
+    /// Used for contextual keywords (e.g. `remote`) that are not reserved.
+    fn eat_contextual_keyword(&mut self, word: &str) -> bool {
+        if self.split_pos < self.split_tokens.len() {
+            return false;
+        }
+        if let Some(tok) = self.tokens.get(self.pos) {
+            if matches!(tok.node, Token::Ident)
+                && &self.source[tok.span.start..tok.span.end] == word
+            {
+                self.pos += 1;
+                return true;
+            }
+        }
+        false
+    }
+
     fn expect_ident(&mut self) -> Result<Spanned<String>, CompileError> {
         self.skip_newlines();
         // Check split tokens first
@@ -839,8 +856,11 @@ impl<'a> Parser<'a> {
             let deps = self.parse_comma_list(&Token::RBracket, true, |p| {
                 let name = p.expect_ident()?;
                 p.expect(&Token::Colon)?;
+                // Contextual `remote` keyword: `[billing: remote BillingStage]`.
+                // Marks the dep as a cross-service boundary reference.
+                let is_remote = p.eat_contextual_keyword("remote");
                 let ty = p.parse_type()?;
-                Ok(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false })
+                Ok(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false, is_remote })
             })?;
             self.expect(&Token::RBracket)?;
             Ok(deps)
@@ -1085,7 +1105,7 @@ impl<'a> Parser<'a> {
                     let fname = p.expect_ident()?;
                     p.expect(&Token::Colon)?;
                     let fty = p.parse_type()?;
-                    Ok(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false })
+                    Ok(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false })
                 })?;
                 self.expect(&Token::RBrace)?;
                 fields
@@ -1123,7 +1143,7 @@ impl<'a> Parser<'a> {
             let fname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type()?;
-            fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false });
+            fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false });
             self.skip_newlines();
         }
 
@@ -1291,7 +1311,7 @@ impl<'a> Parser<'a> {
                 let fname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
-                fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false });
+                fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false });
                 // Allow comma-separated fields: x: int, y: int
                 if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Comma) {
                     self.advance(); // consume comma

@@ -23,15 +23,30 @@
 
 // ── Print functions ───────────────────────────────────────────────────────────
 
+// Line-buffer stdout (once) so output is flushed on each newline even when
+// stdout is a pipe. Without this, a process whose stdout is captured by a
+// parent (e.g. a server printing its port before blocking on accept) would
+// have its output stuck in a full buffer until exit, deadlocking the reader.
+static void __pluto_ensure_line_buffered(void) {
+    static int done = 0;
+    if (!done) {
+        setvbuf(stdout, NULL, _IOLBF, 0);
+        done = 1;
+    }
+}
+
 void __pluto_print_int(long value) {
+    __pluto_ensure_line_buffered();
     printf("%ld\n", value);
 }
 
 void __pluto_print_float(double value) {
+    __pluto_ensure_line_buffered();
     printf("%.15g\n", value);
 }
 
 void __pluto_print_string(void *header) {
+    __pluto_ensure_line_buffered();
     const char *data;
     long len;
     __pluto_string_data(header, &data, &len);
@@ -39,10 +54,12 @@ void __pluto_print_string(void *header) {
 }
 
 void __pluto_print_bool(int value) {
+    __pluto_ensure_line_buffered();
     printf("%s\n", value ? "true" : "false");
 }
 
 void __pluto_print_string_no_newline(void *header) {
+    __pluto_ensure_line_buffered();
     const char *data;
     long len;
     __pluto_string_data(header, &data, &len);
@@ -1068,6 +1085,67 @@ long __pluto_socket_get_port(long fd) {
     socklen_t len = sizeof(addr);
     if (getsockname((int)fd, (struct sockaddr *)&addr, &len) != 0) return -1;
     return (long)ntohs(addr.sin_port);
+}
+
+// ── Remote calls (Phase 2 transport) ──────────────────────────────────────────
+// Resolves the target service address from env PLUTO_REMOTE_<SERVICE> (uppercased),
+// connects, sends "<method>\n<payload>", and returns the response string.
+// Returns NULL on any failure so the caller can raise NetworkError.
+void *__pluto_remote_request(void *service_str, void *method_str, void *payload_str) {
+    const char *svc;
+    long svclen;
+    __pluto_string_data(service_str, &svc, &svclen);
+
+    char envname[256];
+    const char *prefix = "PLUTO_REMOTE_";
+    int n = 0;
+    while (prefix[n]) { envname[n] = prefix[n]; n++; }
+    for (long i = 0; i < svclen && n < (int)sizeof(envname) - 1; i++) {
+        char c = svc[i];
+        if (c >= 'a' && c <= 'z') c -= 32;
+        envname[n++] = c;
+    }
+    envname[n] = 0;
+
+    const char *addr = getenv(envname);
+    if (!addr) return NULL;
+    const char *colon = strchr(addr, ':');
+    if (!colon) return NULL;
+    size_t hlen = (size_t)(colon - addr);
+    char host[128];
+    if (hlen == 0 || hlen >= sizeof(host)) return NULL;
+    memcpy(host, addr, hlen);
+    host[hlen] = 0;
+    long port = atol(colon + 1);
+
+    long fd = __pluto_socket_create(2, 1, 0);
+    if (fd < 0) return NULL;
+    void *host_ps = __pluto_string_new(host, (long)hlen);
+    if (__pluto_socket_connect(fd, host_ps, port) < 0) {
+        __pluto_socket_close(fd);
+        return NULL;
+    }
+    void *nl = __pluto_string_new("\n", 1);
+    void *req = __pluto_string_concat(__pluto_string_concat(method_str, nl), payload_str);
+    if (__pluto_socket_write(fd, req) < 0) {
+        __pluto_socket_close(fd);
+        return NULL;
+    }
+    void *resp = __pluto_socket_read(fd, 65536);
+    __pluto_socket_close(fd);
+    return resp;
+}
+
+// Parse a pluto string as a long (for primitive remote responses).
+long __pluto_parse_long(void *s) {
+    const char *data;
+    long len;
+    __pluto_string_data(s, &data, &len);
+    char buf[32];
+    long m = len < 31 ? len : 31;
+    for (long i = 0; i < m; i++) buf[i] = data[i];
+    buf[m] = 0;
+    return atol(buf);
 }
 
 // ── Map and Set runtime ───────────────────────────────────────────────────────
