@@ -47,13 +47,13 @@ fn maybe_int() int? {
     return 42
 }
 
-fn unwrap(x: int?) int {
+fn unwrap(x: int?) int? {
     return x?
 }
 
 fn main() int? {
     let x = maybe_int()
-    let y = unwrap(x)
+    let y = unwrap(x)?
     print(y)
     return none
 }

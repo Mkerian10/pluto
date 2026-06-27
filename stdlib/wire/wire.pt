@@ -107,7 +107,7 @@ enum EncoderFrame {
 
 pub class WireValueEncoder impl Encoder {
     stack: [EncoderFrame]
-    root: WireValue?
+    root: WireValue
 
     fn encode_int(mut self, value: int) {
         self.push_value(wire_int(value))
@@ -228,8 +228,7 @@ pub class WireValueEncoder impl Encoder {
 
     fn push_value(mut self, value: WireValue) {
         if self.stack.len() == 0 {
-            let wrapped: WireValue? = value
-            self.root = wrapped
+            self.root = value
             return
         }
         let len = self.stack.len()
@@ -256,13 +255,13 @@ pub class WireValueEncoder impl Encoder {
     }
 
     fn result(self) WireValue {
-        return self.root?
+        return self.root
     }
 }
 
 pub fn wire_value_encoder() WireValueEncoder {
     let stack: [EncoderFrame] = []
-    let root: WireValue? = none
+    let root: WireValue = wire_null()
     return WireValueEncoder { stack: stack, root: root }
 }
 
@@ -455,7 +454,7 @@ pub class WireValueDecoder impl Decoder {
         }
     }
 
-    fn decode_field(mut self, name: string, index: int) {
+    fn decode_field(mut self, name: string, idx: int) {
         let stack_len = self.stack.len()
         let frame = self.stack[stack_len - 1]
         match frame {
@@ -477,7 +476,7 @@ pub class WireValueDecoder impl Decoder {
     fn decode_variant(mut self, type_name: string, variant_names: [string]) int {
         match self.current {
             WireValue.Variant { name, data } {
-                let i = 0
+                let mut i = 0
                 while i < variant_names.len() {
                     if variant_names[i] == name {
                         match data {
@@ -507,7 +506,7 @@ pub class WireValueDecoder impl Decoder {
                                 self.current = data
                                 return i
                             }
-                            WireValue.Variant { name, data } {
+                            WireValue.Variant { name: vname, data: vdata } {
                                 self.current = data
                                 return i
                             }
@@ -580,8 +579,8 @@ fn wire_to_json(w: WireValue) json.Json {
             return json.string(value)
         }
         WireValue.Array { elements } {
-            let arr = json.array()
-            let i = 0
+            let mut arr = json.array()
+            let mut i = 0
             while i < elements.len() {
                 arr.push(wire_to_json(elements[i]))
                 i = i + 1
@@ -589,8 +588,8 @@ fn wire_to_json(w: WireValue) json.Json {
             return arr
         }
         WireValue.Record { keys, values } {
-            let obj = json.object()
-            let i = 0
+            let mut obj = json.object()
+            let mut i = 0
             while i < keys.len() {
                 obj.set(keys[i], wire_to_json(values[i]))
                 i = i + 1
@@ -598,7 +597,7 @@ fn wire_to_json(w: WireValue) json.Json {
             return obj
         }
         WireValue.Variant { name, data } {
-            let obj = json.object()
+            let mut obj = json.object()
             obj.set("__variant", json.string(name))
             obj.set("__data", wire_to_json(data))
             return obj
@@ -627,7 +626,7 @@ fn json_to_wire(j: json.Json) WireValue {
     }
     if j.is_array() {
         let elems: [WireValue] = []
-        let i = 0
+        let mut i = 0
         while i < j.len() {
             elems.push(json_to_wire(j.at(i)))
             i = i + 1
@@ -645,7 +644,7 @@ fn json_to_wire(j: json.Json) WireValue {
         // Regular record
         let keys: [string] = []
         let vals: [WireValue] = []
-        let i = 0
+        let mut i = 0
         while i < j.len() {
             keys.push(j.keys[i])
             vals.push(json_to_wire(j.children[i]))

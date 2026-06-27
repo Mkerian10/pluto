@@ -352,7 +352,22 @@ pub(crate) fn infer_expr(
         Expr::NullPropagate { expr } => {
             let inner_type = infer_expr(&expr.node, expr.span, env, None)?;
             match &inner_type {
-                PlutoType::Nullable(inner) => Ok(*inner.clone()),
+                PlutoType::Nullable(inner) => {
+                    // Validate that the enclosing function can accept an early-return of `none`.
+                    // `?` is only valid in functions returning `T?` or `void`.
+                    if let Some(ref ret) = env.current_function_return {
+                        match ret {
+                            PlutoType::Nullable(_) | PlutoType::Void => {}
+                            other => {
+                                return Err(CompileError::type_err(
+                                    format!("'?' cannot be used in function returning non-nullable type {other}"),
+                                    span,
+                                ));
+                            }
+                        }
+                    }
+                    Ok(*inner.clone())
+                }
                 _ => Err(CompileError::type_err(
                     format!("'?' applied to non-nullable type {inner_type}"),
                     span,
