@@ -3002,30 +3002,95 @@ impl<'a> LowerContext<'a> {
             return Ok(self.builder.ins().iconst(types::I64, 0)); // void
         }
 
-        // Remote boundary call. Phase 1 has no transport yet, so a remote call
-        // always fails as if the network were unreachable: it raises NetworkError
-        // and yields a dummy value. Typeck guarantees every remote call is wrapped
-        // in `!`/`catch`, so the surrounding error check diverts control from here.
+        // Remote boundary call. Marshal the args, send them to the service's
+        // address (env PLUTO_REMOTE_<SERVICE>), and parse the response. Any
+        // transport failure raises NetworkError; typeck guarantees the call is
+        // wrapped in `!`/`catch`, so the surrounding check diverts control.
+        //
+        // Phase 2 scope: primitive int/string args and int/string/void returns,
+        // line-framed (`<method>\n<arg1>\n<arg2>...`). Complex types over the
+        // wire (via the marshalers) are a follow-up.
         {
             let pre_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
             if let PlutoType::Class(cname) = &pre_type
                 && self.env.remote_types.contains(cname)
             {
-                let nfields = self.env.errors.get("NetworkError")
-                    .map_or(1, |e| e.fields.len());
+                let cname = cname.clone();
+                let ret_type = self.env.functions
+                    .get(&mangle_method(&cname, &method.node))
+                    .map(|s| s.return_type.clone())
+                    .unwrap_or(PlutoType::Void);
+
+                // Build the payload: arg string-encodings joined with newlines.
+                let mut payload = self.make_string_literal("")?;
+                let nl = self.make_string_literal("\n")?;
+                for (i, arg) in args.iter().enumerate() {
+                    let aty = infer_type_for_expr(&arg.node, self.env, &self.var_types);
+                    let av = self.lower_expr(&arg.node)?;
+                    let s = match aty {
+                        PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[av]),
+                        PlutoType::String => av,
+                        other => return Err(CompileError::codegen(format!(
+                            "remote call '{}.{}': unsupported argument type {other} \
+                             (Phase 2 transport supports int and string)",
+                            cname, method.node
+                        ))),
+                    };
+                    if i > 0 {
+                        payload = self.call_runtime("__pluto_string_concat", &[payload, nl]);
+                    }
+                    payload = self.call_runtime("__pluto_string_concat", &[payload, s]);
+                }
+
+                // Use the unqualified class name as the service identifier so the
+                // env key (PLUTO_REMOTE_<SERVICE>) is independent of the importing
+                // module's prefix (e.g. `billing.BillingService` -> `BillingService`).
+                let service_name = cname.rsplit('.').next().unwrap_or(&cname);
+                let svc_s = self.make_string_literal(service_name)?;
+                let meth_s = self.make_string_literal(&method.node)?;
+                let resp = self.call_runtime("__pluto_remote_request", &[svc_s, meth_s, payload]);
+
+                let fail_bb = self.builder.create_block();
+                let ok_bb = self.builder.create_block();
+                let cont_bb = self.builder.create_block();
+                self.builder.append_block_param(cont_bb, types::I64);
+
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let is_null = self.builder.ins().icmp(IntCC::Equal, resp, zero);
+                self.builder.ins().brif(is_null, fail_bb, &[], ok_bb, &[]);
+
+                // Failure: raise NetworkError, yield a dummy value.
+                self.builder.switch_to_block(fail_bb);
+                self.builder.seal_block(fail_bb);
+                let nfields = self.env.errors.get("NetworkError").map_or(1, |e| e.fields.len());
                 let size = (nfields as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
                 let size_val = self.builder.ins().iconst(types::I64, size);
                 let err_ptr = self.call_runtime("__pluto_alloc", &[size_val]);
-                let msg = format!(
-                    "remote call to {}.{} failed: no transport configured",
-                    cname, method.node
-                );
-                let raw = self.create_data_str(&msg)?;
-                let len = self.builder.ins().iconst(types::I64, msg.len() as i64);
-                let msg_str = self.call_runtime("__pluto_string_new", &[raw, len]);
-                self.builder.ins().store(MemFlags::new(), msg_str, err_ptr, Offset32::new(0));
+                let msg = format!("remote call to {}.{} failed", cname, method.node);
+                let mstr = self.make_string_literal(&msg)?;
+                self.builder.ins().store(MemFlags::new(), mstr, err_ptr, Offset32::new(0));
                 self.call_runtime_void("__pluto_raise_error", &[err_ptr]);
-                return Ok(self.builder.ins().iconst(types::I64, 0));
+                let dflt = self.builder.ins().iconst(types::I64, 0);
+                self.builder.ins().jump(cont_bb, &[dflt]);
+
+                // Success: parse the response into the declared return type.
+                self.builder.switch_to_block(ok_bb);
+                self.builder.seal_block(ok_bb);
+                let parsed = match ret_type {
+                    PlutoType::Int => self.call_runtime("__pluto_parse_long", &[resp]),
+                    PlutoType::String => resp,
+                    PlutoType::Void => self.builder.ins().iconst(types::I64, 0),
+                    other => return Err(CompileError::codegen(format!(
+                        "remote call '{}.{}': unsupported return type {other} \
+                         (Phase 2 transport supports int, string, and void)",
+                        cname, method.node
+                    ))),
+                };
+                self.builder.ins().jump(cont_bb, &[parsed]);
+
+                self.builder.switch_to_block(cont_bb);
+                self.builder.seal_block(cont_bb);
+                return Ok(self.builder.block_params(cont_bb)[0]);
             }
         }
 

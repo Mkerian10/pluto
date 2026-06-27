@@ -61,6 +61,10 @@ impl RuntimeRegistry {
         // String slice escape (materializes slices to owned strings at escape boundaries)
         reg.declare(module, "__pluto_string_escape", &[types::I64], &[types::I64])?;
 
+        // Remote calls (Phase 2 transport)
+        reg.declare(module, "__pluto_remote_request", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_parse_long", &[types::I64], &[types::I64])?;
+
         // Error handling
         reg.declare(module, "__pluto_raise_error", &[types::I64], &[])?;
         reg.declare(module, "__pluto_has_error", &[], &[types::I64])?;

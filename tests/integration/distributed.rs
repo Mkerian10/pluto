@@ -1,11 +1,12 @@
-// Phase 1 of whole-program distributed safety: a `remote` dependency lets one
-// service hold a typed reference to another service's interface. The call is
-// type-checked across the boundary against the real signature, and crossing the
-// boundary implicitly adds NetworkError to the caller's inferred error set.
+// Whole-program distributed safety. A `remote` dependency lets one service hold
+// a typed reference to another service's interface. The call is type-checked
+// across the boundary against the real signature, and crossing the boundary
+// implicitly adds NetworkError to the caller's inferred error set.
 //
-// There is no transport yet: a remote call always raises NetworkError at runtime
-// (as if the network were unreachable). These tests pin the compile-time
-// guarantees plus the runtime stub behavior.
+// Phase 1 tests pin the compile-time guarantees. Phase 2 tests (further down)
+// exercise real transport: a remote call marshals its args, connects to the
+// address in env PLUTO_REMOTE_<SERVICE>, and parses the response — raising
+// NetworkError on any transport failure.
 
 mod common;
 
@@ -124,4 +125,122 @@ app Payments[billing: remote billing.BillingService] {
 }"),
     ]);
     assert_eq!(out, "result: -1\n");
+}
+
+// ── Phase 2: real transport over a socket ───────────────────────────────────────
+
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+
+fn manifest_stdlib() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("stdlib")
+}
+
+/// Compile a project (entry `main.pluto`) to a binary, resolving the repo stdlib.
+/// Returns the TempDir (kept alive by the caller) and the binary path.
+fn build_binary(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, content) in files {
+        let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+    }
+    let bin = dir.path().join("bin");
+    pluto::compile_file_with_stdlib(&dir.path().join("main.pluto"), &bin, Some(&manifest_stdlib()))
+        .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    (dir, bin)
+}
+
+// Service B's interface, as imported by the client (a plain `pub class` — stages
+// can't yet be `pub`/cross-module, see Phase 1 notes).
+const BILLING_IFACE: &str = "\
+pub class BillingService {
+    fn charge(self, amount: int) int {
+        return amount
+    }
+}";
+
+// The client app: the remote call looks exactly like a local method call.
+const CLIENT_SRC: &str = "\
+import billing
+
+app Payments[billing: remote billing.BillingService] {
+    fn main(self) {
+        let x = self.billing.charge(21) catch -1
+        print(f\"result:{x}\")
+    }
+}";
+
+// A hand-written server that speaks the wire protocol (`<method>\\n<arg>`),
+// binds an OS-assigned port, prints it, and serves one request.
+const SERVER_SRC: &str = "\
+import std.net
+import std.strings
+
+class BillingService {
+    rate: int
+    fn charge(self, amount: int) int {
+        return amount * self.rate
+    }
+}
+
+fn main() {
+    let svc = BillingService { rate: 2 }
+    let server = net.listen(\"127.0.0.1\", 0)
+    print(f\"{server.port()}\")
+    let conn = server.accept()
+    let req = conn.read(4096)
+    let parts = strings.split(req, \"\\n\")
+    let amount = parts[1].to_int()?
+    conn.write(f\"{svc.charge(amount)}\")
+    conn.close()
+    server.close()
+}";
+
+/// A `remote` call marshals its arg, crosses a real TCP socket to a separate
+/// server process, and parses the response — `charge(21)` against a x2 service
+/// yields 42.
+#[test]
+fn remote_call_round_trips_over_socket() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLIENT_SRC)]);
+
+    // Start the server and read the port it binds.
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+    assert!(!port.is_empty(), "server did not report a port");
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.wait();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "result:42\n");
+}
+
+/// When the service is unreachable, the boundary call raises NetworkError, which
+/// the caller handles via `catch` — yielding the fallback -1.
+#[test]
+fn remote_call_raises_networkerror_when_unreachable() {
+    let (_cd, client_bin) =
+        build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLIENT_SRC)]);
+
+    // Port 1 has nothing listening: connect fails -> NetworkError -> catch -1.
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BILLINGSERVICE", "127.0.0.1:1")
+        .output()
+        .unwrap();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "result:-1\n");
 }
