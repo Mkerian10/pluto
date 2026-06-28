@@ -1,0 +1,40 @@
+import std.wire
+
+// The orders service calls billing as a remote dependency. Its local
+// BillingService is the interface contract the compiler checks against the
+// real service across the system boundary.
+error PaymentError {
+    reason: string
+}
+
+class ChargeRequest {
+    account: string
+    amount: int
+}
+
+class Receipt {
+    account: string
+    charged: int
+    balance: int
+}
+
+pub class BillingService {
+    fn charge(self, req: ChargeRequest) Receipt {
+        raise PaymentError { reason: "interface" }
+    }
+}
+
+app OrdersApp[billing: remote BillingService] {
+    fn main(self) {
+        let req = ChargeRequest { account: "alice", amount: 30 }
+        let receipt = self.billing.charge(req) catch err: PaymentError {
+            print(f"payment declined: {err.reason}")
+            return
+        }
+        catch err {
+            print("billing service unavailable")
+            return
+        }
+        print(f"charged {receipt.charged} to {receipt.account}, balance now {receipt.balance}")
+    }
+}

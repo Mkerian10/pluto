@@ -1,0 +1,10 @@
+import billing
+import orders
+
+// The whole system: the compiler checks that orders' remote dependency on
+// BillingService is served by billing, and that their interfaces and error
+// contracts match — before either binary is built.
+system Shop {
+    billing: billing
+    orders: orders
+}
