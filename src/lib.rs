@@ -223,11 +223,13 @@ pub fn compile_file_with_options(entry_file: &Path, output_path: &Path, stdlib_r
 
 /// Compile with coverage instrumentation. Returns the coverage map.
 pub fn compile_file_with_coverage(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>) -> Result<coverage::CoverageMap, CompileError> {
-    compile_file_impl(entry_file, output_path, stdlib_root, false, GcBackend::default(), true)?
-        .ok_or_else(|| CompileError::codegen("coverage map should have been generated".to_string()))
+    let (cov, _errs) = compile_file_impl(entry_file, output_path, stdlib_root, false, GcBackend::default(), true)?;
+    cov.ok_or_else(|| CompileError::codegen("coverage map should have been generated".to_string()))
 }
 
-fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, skip_siblings: bool, gc: GcBackend, coverage: bool) -> Result<Option<coverage::CoverageMap>, CompileError> {
+type FnErrorSets = std::collections::HashMap<String, std::collections::HashSet<String>>;
+
+fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, skip_siblings: bool, gc: GcBackend, coverage: bool) -> Result<(Option<coverage::CoverageMap>, FnErrorSets), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
 
@@ -277,7 +279,7 @@ fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<
 
     let _ = std::fs::remove_file(&obj_path);
 
-    Ok(cov_map)
+    Ok((cov_map, result.env.fn_errors))
 }
 
 use parser::ast::Program;
@@ -1246,8 +1248,11 @@ pub fn compile_system_file_with_stdlib(
     std::fs::create_dir_all(output_dir)
         .map_err(|e| CompileError::codegen(format!("failed to create output directory: {e}")))?;
 
-    // Compile each member as a standalone program
+    // Compile each member as a standalone program, capturing each member's
+    // inferred error sets for the cross-service error conformance check below.
     let mut results = Vec::new();
+    let mut member_errors: std::collections::HashMap<String, FnErrorSets> =
+        std::collections::HashMap::new();
     for member in &system_decl.node.members {
         let module_name = &member.module_name.node;
         let member_name = &member.name.node;
@@ -1281,8 +1286,70 @@ pub fn compile_system_file_with_stdlib(
         };
 
         let output_path = output_dir.join(member_name);
-        compile_file_impl(&entry_file, &output_path, stdlib_root, true, GcBackend::default(), false)?;
+        let (_cov, fn_errors) =
+            compile_file_impl(&entry_file, &output_path, stdlib_root, true, GcBackend::default(), false)?;
+        member_errors.insert(member_name.clone(), fn_errors);
         results.push((member_name.clone(), output_path));
+    }
+
+    // Cross-service error conformance: every error the served method can raise
+    // (inferred, so it includes errors raised transitively) must be declared by
+    // the consumer's interface — otherwise the consumer wouldn't handle it.
+    {
+        use parser::ast::TypeExpr;
+        use std::collections::HashSet;
+        let unqual = |s: &str| s.rsplit('.').next().unwrap_or(s).to_string();
+        let errs_of = |member: &str, class: &str, method: &str| -> HashSet<String> {
+            member_errors.get(member)
+                .and_then(|m| m.get(&typeck::env::mangle_method(class, method)))
+                .cloned()
+                .unwrap_or_default()
+        };
+
+        // service -> (producer_member, served class name, method names)
+        let mut served: std::collections::HashMap<String, (String, String, Vec<String>)> =
+            std::collections::HashMap::new();
+        for member in &system_decl.node.members {
+            let Some(prog) = graph.imports.iter()
+                .find(|(n, _, _)| n == &member.module_name.node).map(|(_, p, _)| p)
+            else { continue };
+            for svc in collect_served_services(prog) {
+                if let Some(cd) = prog.classes.iter().find(|c| unqual(&c.node.name.node) == svc) {
+                    let methods = cd.node.methods.iter().map(|m| m.node.name.node.clone()).collect();
+                    served.insert(svc, (member.name.node.clone(), unqual(&cd.node.name.node), methods));
+                }
+            }
+        }
+
+        for member in &system_decl.node.members {
+            let Some(prog) = graph.imports.iter()
+                .find(|(n, _, _)| n == &member.module_name.node).map(|(_, p, _)| p)
+            else { continue };
+            let mut remote_fields: Vec<&parser::ast::Field> = Vec::new();
+            if let Some(app) = &prog.app { remote_fields.extend(app.node.inject_fields.iter()); }
+            for s in &prog.stages { remote_fields.extend(s.node.inject_fields.iter()); }
+            for f in remote_fields {
+                if !f.is_remote { continue; }
+                let TypeExpr::Named(n) = &f.ty.node else { continue };
+                let svc = unqual(n);
+                let Some((producer, served_class, methods)) = served.get(&svc) else { continue };
+                let iface_class = unqual(n);
+                for m in methods {
+                    let server_errs = errs_of(producer, served_class, m);
+                    let client_errs = errs_of(&member.name.node, &iface_class, m);
+                    for e in server_errs.difference(&client_errs) {
+                        let e = unqual(e);
+                        if e == "NetworkError" { continue; } // transport, always handled
+                        return Err(CompileError::type_err(
+                            format!("service '{svc}': server '{producer}' can raise '{e}' from \
+                                     method '{m}', but consumer '{}' does not declare it in its \
+                                     interface (so it would not be handled)", member.name.node),
+                            member.module_name.span,
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     Ok(results)
