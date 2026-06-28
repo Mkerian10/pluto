@@ -438,7 +438,7 @@ fn collect_expr_xrefs(
         Expr::Catch { expr: inner, handler } => {
             collect_expr_xrefs(&inner.node, inner.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
             match handler {
-                CatchHandler::Wildcard { body, .. } => {
+                CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => {
                     collect_block_xrefs(&body.node, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
                 }
                 CatchHandler::Shorthand(body) => {

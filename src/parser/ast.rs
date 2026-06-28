@@ -513,6 +513,14 @@ pub enum CatchHandler {
         var: Spanned<String>,
         body: Spanned<Block>,
     },
+    /// `catch err: ErrorType { body }` — handles only that error type; other
+    /// errors re-propagate. `var` is bound with the concrete error type so its
+    /// fields are accessible inside `body`.
+    Typed {
+        var: Spanned<String>,
+        error_type: Spanned<String>,
+        body: Spanned<Block>,
+    },
     Shorthand(Box<Spanned<Expr>>),
 }
 

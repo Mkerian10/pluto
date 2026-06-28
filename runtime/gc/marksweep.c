@@ -44,6 +44,7 @@ static size_t gc_data_interval_count = 0;
 
 // Thread-local storage definitions (referenced in header, defined here)
 __thread void *__pluto_current_error = NULL;
+__thread void *__pluto_current_error_type = NULL;
 __thread long *__pluto_current_task = NULL;
 
 // Fiber stack registry for GC scanning (test mode only).

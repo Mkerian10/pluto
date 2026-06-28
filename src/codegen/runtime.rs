@@ -80,6 +80,8 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_has_error", &[], &[types::I64])?;
         reg.declare(module, "__pluto_get_error", &[], &[types::I64])?;
         reg.declare(module, "__pluto_clear_error", &[], &[])?;
+        reg.declare(module, "__pluto_set_error_type", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_error_type", &[], &[types::I64])?;
 
         // Time
         reg.declare(module, "__pluto_time_ns", &[], &[types::I64])?;

@@ -105,6 +105,20 @@ pub(crate) fn infer_expr(
         Expr::FieldAccess { object, field } => {
             let obj_type = infer_expr(&object.node, object.span, env, None)?;
             match &obj_type {
+                // A typed-catch var is typed as Class(error_name); resolve its
+                // fields from the error declaration.
+                PlutoType::Class(class_name) if env.errors.contains_key(class_name)
+                    && !env.classes.contains_key(class_name) =>
+                {
+                    let err_info = &env.errors[class_name];
+                    err_info.fields.iter()
+                        .find(|(n, _)| *n == field.node)
+                        .map(|(_, t)| t.clone())
+                        .ok_or_else(|| CompileError::type_err(
+                            format!("error '{class_name}' has no field '{}'", field.node),
+                            field.span,
+                        ))
+                }
                 PlutoType::Class(class_name) => {
                     let class_info = env.classes.get(class_name).ok_or_else(|| {
                         CompileError::type_err(
@@ -1414,6 +1428,46 @@ fn infer_catch(
                         super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
                         env.pop_scope();
                         // Diverging — skip compat check
+                        return Ok(success_type);
+                    }
+                    _ => {
+                        super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
+                        PlutoType::Void
+                    }
+                }
+            } else {
+                PlutoType::Void
+            };
+            env.pop_scope();
+            t
+        }
+        CatchHandler::Typed { var, error_type, body } => {
+            if !env.errors.contains_key(&error_type.node) {
+                return Err(CompileError::type_err(
+                    format!("unknown error type '{}'", error_type.node),
+                    error_type.span,
+                ));
+            }
+            env.push_scope();
+            // Bind the var with the concrete error type so its fields are
+            // accessible in the body (field access on an error resolves via
+            // env.errors — see Expr::FieldAccess).
+            env.define(var.node.clone(), PlutoType::Class(error_type.node.clone()), var.span)?;
+            let stmts = &body.node.stmts;
+            let return_type = env.current_fn.as_ref()
+                .and_then(|name| env.functions.get(name).map(|f| f.return_type.clone()))
+                .unwrap_or(PlutoType::Void);
+            for (i, stmt) in stmts.iter().enumerate() {
+                if i < stmts.len() - 1 {
+                    super::check::check_block_stmt(&stmt.node, stmt.span, env, &return_type)?;
+                }
+            }
+            let t = if let Some(last) = stmts.last() {
+                match &last.node {
+                    Stmt::Expr(e) => infer_expr(&e.node, e.span, env, None)?,
+                    Stmt::Return(_) => {
+                        super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
+                        env.pop_scope();
                         return Ok(success_type);
                     }
                     _ => {

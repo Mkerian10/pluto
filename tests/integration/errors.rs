@@ -461,3 +461,23 @@ fn assign_to_immutable_variable() {
         "cannot assign to immutable variable",
     );
 }
+
+#[test]
+fn typed_catch_accesses_error_field() {
+    // A typed catch binds the error with its concrete type, so its fields are
+    // reachable in the handler.
+    let out = compile_and_run_stdout(
+        "error ValidationError {\n    reason: string\n}\n\nfn check(id: int) int {\n    if id < 0 {\n        raise ValidationError { reason: \"negative id\" }\n    }\n    return id\n}\n\nfn main() {\n    let x = check(-1) catch err: ValidationError {\n        print(err.reason)\n        return\n    }\n    print(x)\n}",
+    );
+    assert_eq!(out, "negative id\n");
+}
+
+#[test]
+fn typed_catch_requires_single_error_type() {
+    // Sound restriction: a typed catch may only be used when the call raises
+    // exactly the named error type.
+    compile_should_fail_with(
+        "error A {\n    x: int\n}\nerror B {\n    y: int\n}\n\nfn f(n: int) int {\n    if n == 1 {\n        raise A { x: 1 }\n    }\n    raise B { y: 2 }\n}\n\nfn main() {\n    let r = f(1) catch err: A {\n        return\n    }\n    print(r)\n}",
+        "can also raise",
+    );
+}

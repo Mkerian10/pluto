@@ -638,7 +638,7 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
         Expr::Catch { expr, handler } => {
             substitute_in_expr(&mut expr.node, bindings);
             match handler {
-                CatchHandler::Wildcard { body, .. } => {
+                CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => {
                     substitute_in_block(&mut body.node, bindings);
                 }
                 CatchHandler::Shorthand(body) => {

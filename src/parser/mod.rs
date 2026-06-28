@@ -2588,6 +2588,24 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_catch_handler(&mut self) -> Result<(CatchHandler, usize), CompileError> {
+        // Typed form: `catch err: ErrorType { body }` (ident followed by `:`).
+        if self.is_catch_typed_ahead() {
+            let var = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let first = self.expect_ident()?;
+            // Allow a module-qualified error type: `mod.ErrorType`.
+            let error_type = if self.peek_raw().is_some_and(|t| matches!(t.node, Token::Dot)) {
+                self.advance();
+                let second = self.expect_ident()?;
+                Spanned::new(format!("{}.{}", first.node, second.node),
+                             Span::new(first.span.start, second.span.end))
+            } else {
+                first
+            };
+            let body = self.parse_block()?;
+            let end = body.span.end;
+            return Ok((CatchHandler::Typed { var, error_type, body }, end));
+        }
         // Lookahead: if ident followed by {, it's wildcard form
         if self.is_catch_wildcard_ahead() {
             let var = self.expect_ident()?;
@@ -2599,6 +2617,21 @@ impl<'a> Parser<'a> {
             let end = fallback.span.end;
             Ok((CatchHandler::Shorthand(Box::new(fallback)), end))
         }
+    }
+
+    fn is_catch_typed_ahead(&self) -> bool {
+        let mut i = self.pos;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Ident) {
+            return false;
+        }
+        i += 1;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        i < self.tokens.len() && matches!(self.tokens[i].node, Token::Colon)
     }
 
     fn is_catch_wildcard_ahead(&self) -> bool {

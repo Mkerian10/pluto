@@ -1331,6 +1331,14 @@ impl PrettyPrinter {
                         self.write(" ");
                         self.emit_block(&body.node);
                     }
+                    CatchHandler::Typed { var, error_type, body } => {
+                        self.write(" catch ");
+                        self.write(&var.node);
+                        self.write(": ");
+                        self.write(&error_type.node);
+                        self.write(" ");
+                        self.emit_block(&body.node);
+                    }
                 }
             }
             Expr::Cast { expr, target_type } => {

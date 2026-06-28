@@ -107,6 +107,29 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
 }
 
 /// Collect direct error raises and propagation edges from a block.
+/// The set of error types a catch's inner call can raise (used to validate
+/// typed catch). Resolves the callee and reads its inferred error set; a remote
+/// call also adds NetworkError.
+fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<String> {
+    match inner {
+        Expr::Call { name, .. } => env.fn_errors.get(&name.node).cloned().unwrap_or_default(),
+        Expr::MethodCall { method, .. } => {
+            let key = (current_fn.to_string(), method.span.start);
+            match env.method_resolutions.get(&key) {
+                Some(MethodResolution::Class { mangled_name }) =>
+                    env.fn_errors.get(mangled_name).cloned().unwrap_or_default(),
+                Some(MethodResolution::RemoteClass { mangled_name }) => {
+                    let mut s = env.fn_errors.get(mangled_name).cloned().unwrap_or_default();
+                    s.insert("NetworkError".to_string());
+                    s
+                }
+                _ => HashSet::new(),
+            }
+        }
+        _ => HashSet::new(),
+    }
+}
+
 fn collect_block_effects(block: &Block, current_fn: &str, env: &TypeEnv) -> (HashSet<String>, HashSet<String>) {
     let mut direct_errors = HashSet::new();
     let mut edges = HashSet::new();
@@ -340,7 +363,7 @@ fn collect_expr_effects(
                 _ => collect_expr_effects(&inner.node, direct_errors, edges, current_fn, env),
             }
             match handler {
-                CatchHandler::Wildcard { body, .. } => {
+                CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => {
                     for stmt in &body.node.stmts {
                         collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
                     }
@@ -747,8 +770,27 @@ fn enforce_expr(
                     ));
                 }
             }
+            // A typed `catch err: E` consumes the error, so for soundness the
+            // call must raise only E — otherwise an un-caught error would escape
+            // inference. (Handling several error types needs a wildcard catch or
+            // future multi-catch.)
+            if let CatchHandler::Typed { error_type, .. } = handler {
+                let inner_errors = inner_error_set(&inner.node, current_fn, env);
+                let want = error_type.node.rsplit('.').next().unwrap_or(&error_type.node);
+                for e in &inner_errors {
+                    let got = e.rsplit('.').next().unwrap_or(e);
+                    if got != want {
+                        return Err(CompileError::type_err(
+                            format!("typed catch handles '{}', but the call can also raise '{e}'; \
+                                     typed catch requires the call to raise only that one error",
+                                error_type.node),
+                            span,
+                        ));
+                    }
+                }
+            }
             match handler {
-                CatchHandler::Wildcard { body, .. } => enforce_block(&body.node, current_fn, env),
+                CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => enforce_block(&body.node, current_fn, env),
                 CatchHandler::Shorthand(fb) => enforce_expr(&fb.node, fb.span, current_fn, env),
             }
         }

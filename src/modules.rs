@@ -1674,7 +1674,7 @@ fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &
         Expr::Catch { expr: inner, handler } => {
             resolve_qualified_access_in_expr(&mut inner.node, inner.span, module_names, enum_name_map);
             match handler {
-                CatchHandler::Wildcard { body, .. } => {
+                CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => {
                     resolve_qualified_access_in_block(&mut body.node, module_names, enum_name_map);
                 }
                 CatchHandler::Shorthand(fb) => {

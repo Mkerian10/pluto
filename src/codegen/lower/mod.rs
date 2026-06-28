@@ -774,6 +774,8 @@ impl<'a> LowerContext<'a> {
             self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
         }
         self.call_runtime_void("__pluto_raise_error", &[ptr]);
+        let type_str = self.make_string_literal(etype)?;
+        self.call_runtime_void("__pluto_set_error_type", &[type_str]);
         Ok(())
     }
 
@@ -789,7 +791,10 @@ impl<'a> LowerContext<'a> {
         let etype = errs[0].clone();
         let fields = self.env.errors.get(&etype).map(|e| e.fields.clone()).unwrap_or_default();
         let err_ptr = self.call_runtime("__pluto_get_error", &[]);
-        let mut resp = self.make_string_literal(&format!("ERR\n{etype}"))?;
+        // Send the unqualified error name so it's independent of each side's
+        // module prefix (server `ValidationError` vs client `dir.ValidationError`).
+        let ename = etype.rsplit('.').next().unwrap_or(&etype);
+        let mut resp = self.make_string_literal(&format!("ERR\n{ename}"))?;
         let nl = self.make_string_literal("\n")?;
         for (i, (_, fty)) in fields.iter().enumerate() {
             let offset = (i as i32) * POINTER_SIZE;
@@ -1733,8 +1738,10 @@ impl<'a> LowerContext<'a> {
             self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
         }
 
-        // Set TLS error pointer
+        // Set TLS error pointer and its type name (for typed catch).
         self.call_runtime_void("__pluto_raise_error", &[ptr]);
+        let type_str = self.make_string_literal(&error_name.node)?;
+        self.call_runtime_void("__pluto_set_error_type", &[type_str]);
 
         // Return default value (caller checks TLS)
         self.emit_default_return();
@@ -2294,6 +2301,21 @@ impl<'a> LowerContext<'a> {
             Expr::FieldAccess { object, field } => {
                 let ptr = self.lower_expr(&object.node)?;
                 let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
+                // Typed-catch var: Class(error_name). The error object lays out
+                // its fields in declaration order, same as a class.
+                if let PlutoType::Class(name) = &obj_type
+                    && !self.env.classes.contains_key(name)
+                    && let Some(err_info) = self.env.errors.get(name)
+                {
+                    let (field_idx, (_, field_type)) = err_info.fields.iter()
+                        .enumerate()
+                        .find(|(_, (n, _))| *n == field.node)
+                        .ok_or_else(|| CompileError::codegen(format!(
+                            "error '{name}' has no field '{}'", field.node)))?;
+                    let offset = (field_idx as i32) * POINTER_SIZE;
+                    let cl_type = pluto_to_cranelift(field_type);
+                    return Ok(self.builder.ins().load(cl_type, MemFlags::new(), ptr, Offset32::new(offset)));
+                }
                 if let PlutoType::Class(class_name) = &obj_type {
                     let class_info = self.env.classes.get(class_name).ok_or_else(|| {
                         CompileError::codegen(format!("unknown class '{class_name}'"))
@@ -2898,6 +2920,70 @@ impl<'a> LowerContext<'a> {
 
                 result.expect("catch block should produce a result value")
             }
+            CatchHandler::Typed { var, error_type, body } => {
+                // Only handle this error type; other errors re-propagate.
+                let err_type_str = self.call_runtime("__pluto_error_type", &[]);
+                let lit = self.make_string_literal(&error_type.node)?;
+                let is_match = self.call_runtime("__pluto_string_eq", &[err_type_str, lit]);
+                let handle_bb = self.builder.create_block();
+                let reraise_bb = self.builder.create_block();
+                self.builder.ins().brif(is_match, handle_bb, &[], reraise_bb, &[]);
+
+                // Re-propagate: leave the error set and return from the function.
+                self.builder.switch_to_block(reraise_bb);
+                self.builder.seal_block(reraise_bb);
+                self.emit_default_return();
+
+                // Handle: bind the error (typed, so its fields are accessible).
+                self.builder.switch_to_block(handle_bb);
+                self.builder.seal_block(handle_bb);
+                let err_obj = self.call_runtime("__pluto_get_error", &[]);
+                self.call_runtime_void("__pluto_clear_error", &[]);
+                let err_var = Variable::from_u32(self.next_var);
+                self.next_var += 1;
+                self.builder.declare_var(err_var, types::I64);
+                self.builder.def_var(err_var, err_obj);
+                let prev_var = self.variables.get(&var.node).cloned();
+                let prev_type = self.var_types.get(&var.node).cloned();
+                self.variables.insert(var.node.clone(), err_var);
+                self.var_types.insert(var.node.clone(), PlutoType::Class(error_type.node.clone()));
+
+                let stmts = &body.node.stmts;
+                let mut block_terminated = false;
+                for stmt in stmts.iter().take(stmts.len().saturating_sub(1)) {
+                    self.lower_stmt_covered(stmt, &mut block_terminated)?;
+                }
+                let (result, did_terminate) = if block_terminated {
+                    (None, true)
+                } else if let Some(last) = stmts.last() {
+                    match &last.node {
+                        Stmt::Expr(e) => (Some(self.lower_expr(&e.node)?), false),
+                        Stmt::Return(_) => {
+                            self.lower_stmt_covered(last, &mut block_terminated)?;
+                            (None, true)
+                        }
+                        _ => {
+                            self.lower_stmt_covered(last, &mut block_terminated)?;
+                            if block_terminated { (None, true) }
+                            else { (Some(self.builder.ins().iconst(types::I64, 0)), false) }
+                        }
+                    }
+                } else {
+                    (Some(self.builder.ins().iconst(types::I64, 0)), false)
+                };
+                if let Some(pv) = prev_var { self.variables.insert(var.node.clone(), pv); }
+                else { self.variables.remove(&var.node); }
+                if let Some(pt) = prev_type { self.var_types.insert(var.node.clone(), pt); }
+                else { self.var_types.remove(&var.node); }
+
+                if !did_terminate {
+                    let hv = result.expect("typed catch block should produce a result value");
+                    self.builder.ins().jump(merge_bb, &[hv]);
+                }
+                self.builder.switch_to_block(merge_bb);
+                self.builder.seal_block(merge_bb);
+                return Ok(self.builder.block_params(merge_bb)[0]);
+            }
             CatchHandler::Shorthand(fallback) => {
                 // Clear the error
                 self.call_runtime_void("__pluto_clear_error", &[]);
@@ -3346,7 +3432,9 @@ impl<'a> LowerContext<'a> {
                 for etype in &error_types {
                     let handle_bb = self.builder.create_block();
                     let next_bb = self.builder.create_block();
-                    let lit = self.make_string_literal(etype)?;
+                    // The wire carries the unqualified error name.
+                    let wire_name = etype.rsplit('.').next().unwrap_or(etype);
+                    let lit = self.make_string_literal(wire_name)?;
                     let eq = self.call_runtime("__pluto_string_eq", &[err_type, lit]);
                     self.builder.ins().brif(eq, handle_bb, &[], next_bb, &[]);
                     self.builder.switch_to_block(handle_bb);
@@ -5335,6 +5423,12 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                     class_info.fields.iter()
                         .find(|(n, _, _)| *n == field.node)
                         .map(|(_, t, _)| t.clone())
+                        .unwrap_or(PlutoType::Void)
+                } else if let Some(err_info) = env.errors.get(class_name) {
+                    // Typed-catch var: Class(error_name).
+                    err_info.fields.iter()
+                        .find(|(n, _)| *n == field.node)
+                        .map(|(_, t)| t.clone())
                         .unwrap_or(PlutoType::Void)
                 } else {
                     PlutoType::Void

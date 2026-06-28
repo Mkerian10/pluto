@@ -255,7 +255,8 @@ impl VisitMut for AmbientRewriter<'_> {
                 self.visit_expr_mut(inner);
                 // Handle the catch handler with proper scoping
                 match handler {
-                    CatchHandler::Wildcard { var, body } => {
+                    CatchHandler::Wildcard { var, body }
+                    | CatchHandler::Typed { var, body, .. } => {
                         let mut inner_active = self.active.clone();
                         inner_active.remove(&var.node);
                         let mut inner_rewriter = AmbientRewriter { active: &inner_active };
