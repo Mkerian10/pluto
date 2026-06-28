@@ -461,3 +461,114 @@ fn assign_to_immutable_variable() {
         "cannot assign to immutable variable",
     );
 }
+
+#[test]
+fn typed_catch_accesses_error_field() {
+    // A typed catch binds the error with its concrete type, so its fields are
+    // reachable in the handler.
+    let out = compile_and_run_stdout(
+        "error ValidationError {\n    reason: string\n}\n\nfn check(id: int) int {\n    if id < 0 {\n        raise ValidationError { reason: \"negative id\" }\n    }\n    return id\n}\n\nfn main() {\n    let x = check(-1) catch err: ValidationError {\n        print(err.reason)\n        return\n    }\n    print(x)\n}",
+    );
+    assert_eq!(out, "negative id\n");
+}
+
+#[test]
+fn typed_catch_must_cover_all_errors() {
+    // Soundness: a single typed catch must cover every error the call can raise;
+    // otherwise the uncovered error would escape. (Add another typed catch or a
+    // wildcard — see multi-catch.)
+    compile_should_fail_with(
+        "error A {\n    x: int\n}\nerror B {\n    y: int\n}\n\nfn f(n: int) int {\n    if n == 1 {\n        raise A { x: 1 }\n    }\n    raise B { y: 2 }\n}\n\nfn main() {\n    let r = f(1) catch err: A {\n        return\n    }\n    print(r)\n}",
+        "no catch handler covers",
+    );
+}
+
+#[test]
+fn multi_catch_two_typed_handlers() {
+    // A chain of typed handlers covering every error the call can raise; each
+    // reads its own error's fields.
+    let out = compile_and_run_stdout(
+        r#"
+error A { x: int }
+error B { y: int }
+
+fn f(n: int) int {
+    if n == 1 { raise A { x: 11 } }
+    if n == 2 { raise B { y: 22 } }
+    return n
+}
+
+fn handle(n: int) int {
+    return f(n) catch err: A {
+        return err.x
+    }
+    catch err: B {
+        return err.y
+    }
+}
+
+fn main() {
+    print(handle(1))
+    print(handle(2))
+    print(handle(3))
+}
+"#,
+    );
+    assert_eq!(out, "11\n22\n3\n");
+}
+
+#[test]
+fn multi_catch_typed_then_wildcard() {
+    // A typed handler plus a wildcard catch-all for the rest.
+    let out = compile_and_run_stdout(
+        r#"
+error A { x: int }
+error B { y: int }
+
+fn f(n: int) int {
+    if n == 1 { raise A { x: 1 } }
+    raise B { y: 2 }
+}
+
+fn g(n: int) int {
+    return f(n) catch err: A {
+        return 100
+    }
+    catch err {
+        return 200
+    }
+}
+
+fn main() {
+    print(g(1))
+    print(g(2))
+}
+"#,
+    );
+    assert_eq!(out, "100\n200\n");
+}
+
+#[test]
+fn multi_catch_uncovered_error_rejected() {
+    // Typed handlers must cover every error the call can raise (soundness).
+    compile_should_fail_with(
+        r#"
+error A { x: int }
+error B { y: int }
+
+fn f(n: int) int {
+    if n == 1 { raise A { x: 1 } }
+    raise B { y: 2 }
+}
+
+fn g(n: int) int {
+    return f(n) catch err: A {
+        return 0
+    }
+}
+
+fn main() { print(g(1)) }
+"#,
+        "no catch handler covers",
+    );
+}

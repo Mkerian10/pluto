@@ -1671,14 +1671,16 @@ fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &
         Expr::Propagate { expr: inner } => {
             resolve_qualified_access_in_expr(&mut inner.node, inner.span, module_names, enum_name_map);
         }
-        Expr::Catch { expr: inner, handler } => {
+        Expr::Catch { expr: inner, handlers } => {
             resolve_qualified_access_in_expr(&mut inner.node, inner.span, module_names, enum_name_map);
-            match handler {
-                CatchHandler::Wildcard { body, .. } => {
-                    resolve_qualified_access_in_block(&mut body.node, module_names, enum_name_map);
-                }
-                CatchHandler::Shorthand(fb) => {
-                    resolve_qualified_access_in_expr(&mut fb.node, fb.span, module_names, enum_name_map);
+            for handler in handlers {
+                match handler {
+                    CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => {
+                        resolve_qualified_access_in_block(&mut body.node, module_names, enum_name_map);
+                    }
+                    CatchHandler::Shorthand(fb) => {
+                        resolve_qualified_access_in_expr(&mut fb.node, fb.span, module_names, enum_name_map);
+                    }
                 }
             }
         }

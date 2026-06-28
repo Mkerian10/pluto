@@ -469,3 +469,99 @@ fn typed_error_propagates_over_rpc() {
 
     assert_eq!(String::from_utf8_lossy(&out.stdout), "caught\n");
 }
+
+// ── Phase 7: multi-catch on a remote call ───────────────────────────────────────
+
+// Server raises a typed ValidationError on bad input; otherwise returns a User.
+const MC_SERVER_SRC: &str = "\
+import std.wire
+
+error ValidationError {
+    reason: string
+}
+
+class User {
+    id: int
+    name: string
+}
+
+class Directory {
+    seed: int
+    fn lookup(self, id: int) User {
+        if id < 0 {
+            raise ValidationError { reason: \"id must be positive\" }
+        }
+        return User { id: id, name: \"alice\" }
+    }
+}
+
+fn main() {
+    let d = Directory { seed: 1 }
+    serve d on 0
+}";
+
+const MC_IFACE: &str = "\
+pub error ValidationError {
+    reason: string
+}
+pub class User {
+    id: int
+    name: string
+}
+pub class Directory {
+    fn lookup(self, id: int) User {
+        raise ValidationError { reason: \"contract\" }
+    }
+}";
+
+// Multi-catch: read the typed ValidationError's field, and handle the transport
+// NetworkError with a wildcard — both error paths of one remote call.
+const MC_CLIENT_SRC: &str = "\
+import std.wire
+import directory
+
+app App[dir: remote directory.Directory] {
+    fn main(self) {
+        let u = self.dir.lookup(-5) catch err: directory.ValidationError {
+            print(f\"rejected: {err.reason}\")
+            return
+        }
+        catch err {
+            print(\"network error\")
+            return
+        }
+        print(f\"ok id={u.id}\")
+    }
+}";
+
+/// Multi-catch makes both ends of the error story reachable on a single remote
+/// call: the typed server error (with its field data) AND the transport error.
+#[test]
+fn multi_catch_handles_typed_and_network_errors() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", MC_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("directory.pluto", MC_IFACE), ("main.pluto", MC_CLIENT_SRC)]);
+
+    // Validation path: server is up and rejects id=-5.
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_DIRECTORY", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "rejected: id must be positive\n");
+
+    // Network path: nothing listening -> NetworkError -> wildcard handler.
+    let down = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_DIRECTORY", "127.0.0.1:1")
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&down.stdout), "network error\n");
+}

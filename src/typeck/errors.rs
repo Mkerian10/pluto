@@ -107,6 +107,29 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
 }
 
 /// Collect direct error raises and propagation edges from a block.
+/// The set of error types a catch's inner call can raise (used to validate
+/// typed catch). Resolves the callee and reads its inferred error set; a remote
+/// call also adds NetworkError.
+fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<String> {
+    match inner {
+        Expr::Call { name, .. } => env.fn_errors.get(&name.node).cloned().unwrap_or_default(),
+        Expr::MethodCall { method, .. } => {
+            let key = (current_fn.to_string(), method.span.start);
+            match env.method_resolutions.get(&key) {
+                Some(MethodResolution::Class { mangled_name }) =>
+                    env.fn_errors.get(mangled_name).cloned().unwrap_or_default(),
+                Some(MethodResolution::RemoteClass { mangled_name }) => {
+                    let mut s = env.fn_errors.get(mangled_name).cloned().unwrap_or_default();
+                    s.insert("NetworkError".to_string());
+                    s
+                }
+                _ => HashSet::new(),
+            }
+        }
+        _ => HashSet::new(),
+    }
+}
+
 fn collect_block_effects(block: &Block, current_fn: &str, env: &TypeEnv) -> (HashSet<String>, HashSet<String>) {
     let mut direct_errors = HashSet::new();
     let mut edges = HashSet::new();
@@ -324,7 +347,7 @@ fn collect_expr_effects(
                 _ => collect_expr_effects(&inner.node, direct_errors, edges, current_fn, env),
             }
         }
-        Expr::Catch { expr: inner, handler } => {
+        Expr::Catch { expr: inner, handlers } => {
             match &inner.node {
                 Expr::Call { args, .. } => {
                     for arg in args {
@@ -339,14 +362,16 @@ fn collect_expr_effects(
                 }
                 _ => collect_expr_effects(&inner.node, direct_errors, edges, current_fn, env),
             }
-            match handler {
-                CatchHandler::Wildcard { body, .. } => {
-                    for stmt in &body.node.stmts {
-                        collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
+            for handler in handlers {
+                match handler {
+                    CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => {
+                        for stmt in &body.node.stmts {
+                            collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
+                        }
                     }
-                }
-                CatchHandler::Shorthand(fb) => {
-                    collect_expr_effects(&fb.node, direct_errors, edges, current_fn, env);
+                    CatchHandler::Shorthand(fb) => {
+                        collect_expr_effects(&fb.node, direct_errors, edges, current_fn, env);
+                    }
                 }
             }
         }
@@ -709,7 +734,7 @@ fn enforce_expr(
                 inner.span,
             )),
         },
-        Expr::Catch { expr: inner, handler } => {
+        Expr::Catch { expr: inner, handlers } => {
             match &inner.node {
                 Expr::Call { name, args, .. } => {
                     for arg in args {
@@ -747,10 +772,39 @@ fn enforce_expr(
                     ));
                 }
             }
-            match handler {
-                CatchHandler::Wildcard { body, .. } => enforce_block(&body.node, current_fn, env),
-                CatchHandler::Shorthand(fb) => enforce_expr(&fb.node, fb.span, current_fn, env),
+            // Coverage: the handlers must collectively handle every error the
+            // call can raise — otherwise an un-caught error would escape
+            // inference. A wildcard/shorthand handler is a catch-all; otherwise
+            // the union of typed error types must cover the call's error set.
+            let has_catch_all = handlers.iter().any(|h|
+                matches!(h, CatchHandler::Wildcard { .. } | CatchHandler::Shorthand(_)));
+            if !has_catch_all {
+                let inner_errors = inner_error_set(&inner.node, current_fn, env);
+                let handled: HashSet<&str> = handlers.iter().filter_map(|h| match h {
+                    CatchHandler::Typed { error_type, .. } =>
+                        Some(error_type.node.rsplit('.').next().unwrap_or(&error_type.node)),
+                    _ => None,
+                }).collect();
+                for e in &inner_errors {
+                    let un = e.rsplit('.').next().unwrap_or(e);
+                    if !handled.contains(un) {
+                        return Err(CompileError::type_err(
+                            format!("the call can raise '{e}', which no catch handler covers; \
+                                     add `catch err: {un} {{ ... }}` or a wildcard `catch err {{ ... }}`"),
+                            span,
+                        ));
+                    }
+                }
             }
+            for handler in handlers {
+                match handler {
+                    CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } =>
+                        enforce_block(&body.node, current_fn, env)?,
+                    CatchHandler::Shorthand(fb) =>
+                        enforce_expr(&fb.node, fb.span, current_fn, env)?,
+                }
+            }
+            Ok(())
         }
         Expr::BinOp { lhs, rhs, .. } => {
             enforce_expr(&lhs.node, lhs.span, current_fn, env)?;

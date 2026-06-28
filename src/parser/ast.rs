@@ -381,7 +381,10 @@ pub enum Expr {
     },
     Catch {
         expr: Box<Spanned<Expr>>,
-        handler: CatchHandler,
+        /// One or more chained handlers: `expr catch h1 catch h2 ...`. Typed
+        /// handlers match a specific error type; a wildcard/shorthand handler is
+        /// a catch-all and must come last. Tried in order at runtime.
+        handlers: Vec<CatchHandler>,
     },
     Cast {
         expr: Box<Spanned<Expr>>,
@@ -511,6 +514,14 @@ pub struct ErrorDecl {
 pub enum CatchHandler {
     Wildcard {
         var: Spanned<String>,
+        body: Spanned<Block>,
+    },
+    /// `catch err: ErrorType { body }` — handles only that error type; other
+    /// errors re-propagate. `var` is bound with the concrete error type so its
+    /// fields are accessible inside `body`.
+    Typed {
+        var: Spanned<String>,
+        error_type: Spanned<String>,
         body: Spanned<Block>,
     },
     Shorthand(Box<Spanned<Expr>>),

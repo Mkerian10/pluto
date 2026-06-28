@@ -945,6 +945,18 @@ void *__pluto_get_error() {
 
 void __pluto_clear_error() {
     __pluto_current_error = NULL;
+    __pluto_current_error_type = NULL;
+}
+
+// Record the type name of the currently-raised error (a pluto string), so a
+// typed `catch ... : T` can discriminate which error is in flight.
+void __pluto_set_error_type(void *type_str) {
+    __pluto_current_error_type = type_str;
+}
+
+// The type name of the current error, or "" if none/untyped.
+void *__pluto_error_type() {
+    return __pluto_current_error_type ? __pluto_current_error_type : __pluto_string_new("", 0);
 }
 
 // Time

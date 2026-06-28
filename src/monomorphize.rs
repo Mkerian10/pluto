@@ -635,14 +635,16 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
         Expr::Propagate { expr } => {
             substitute_in_expr(&mut expr.node, bindings);
         }
-        Expr::Catch { expr, handler } => {
+        Expr::Catch { expr, handlers } => {
             substitute_in_expr(&mut expr.node, bindings);
-            match handler {
-                CatchHandler::Wildcard { body, .. } => {
-                    substitute_in_block(&mut body.node, bindings);
-                }
-                CatchHandler::Shorthand(body) => {
-                    substitute_in_expr(&mut body.node, bindings);
+            for handler in handlers {
+                match handler {
+                    CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => {
+                        substitute_in_block(&mut body.node, bindings);
+                    }
+                    CatchHandler::Shorthand(body) => {
+                        substitute_in_expr(&mut body.node, bindings);
+                    }
                 }
             }
         }
@@ -2919,10 +2921,10 @@ mod tests {
 
         let mut expr = Expr::Catch {
             expr: Box::new(spanned(Expr::IntLit(42))),
-            handler: CatchHandler::Shorthand(Box::new(spanned(Expr::Cast {
+            handlers: vec![CatchHandler::Shorthand(Box::new(spanned(Expr::Cast {
                 expr: Box::new(spanned(Expr::IntLit(0))),
                 target_type: spanned(TypeExpr::Named("T".to_string())),
-            }))),
+            })))],
         };
 
         let mut bindings = HashMap::new();
@@ -2930,8 +2932,8 @@ mod tests {
 
         substitute_in_expr(&mut expr, &bindings);
 
-        if let Expr::Catch { handler, .. } = expr {
-            if let CatchHandler::Shorthand(body) = handler {
+        if let Expr::Catch { handlers, .. } = expr {
+            if let CatchHandler::Shorthand(body) = &handlers[0] {
                 if let Expr::Cast { target_type, .. } = &body.node {
                     assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
                 }

@@ -1090,7 +1090,7 @@ mod tests {
                 return_type: None,
                 body: spanned(Block { stmts: vec![] }),
             })),
-            handler: CatchHandler::Shorthand(Box::new(spanned(Expr::IntLit(0)))),
+            handlers: vec![CatchHandler::Shorthand(Box::new(spanned(Expr::IntLit(0))))],
         };
 
         lift_in_expr(&mut expr, dummy_span(), &mut env, &mut counter, &mut new_fns).unwrap();
@@ -1114,17 +1114,17 @@ mod tests {
 
         let mut expr = Expr::Catch {
             expr: Box::new(spanned(Expr::IntLit(0))),
-            handler: CatchHandler::Shorthand(Box::new(spanned(Expr::Closure {
+            handlers: vec![CatchHandler::Shorthand(Box::new(spanned(Expr::Closure {
                 params: vec![],
                 return_type: None,
                 body: spanned(Block { stmts: vec![] }),
-            }))),
+            })))],
         };
 
         lift_in_expr(&mut expr, dummy_span(), &mut env, &mut counter, &mut new_fns).unwrap();
 
         match expr {
-            Expr::Catch { handler, .. } => match handler {
+            Expr::Catch { handlers, .. } => match &handlers[0] {
                 CatchHandler::Shorthand(fb) => match &fb.node {
                     Expr::ClosureCreate { .. } => {
                         assert_eq!(new_fns.len(), 1);

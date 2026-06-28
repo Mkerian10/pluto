@@ -20,6 +20,7 @@ static size_t gc_bytes_allocated = 0;
 
 // TLS variables used by threading.c and builtins.c — must be defined by the GC module
 __thread void *__pluto_current_error = NULL;
+__thread void *__pluto_current_error_type = NULL;
 __thread long *__pluto_current_task = NULL;
 
 // ── Core API ─────────────────────────────────────────────────────────────────

@@ -435,14 +435,16 @@ fn collect_expr_xrefs(
         Expr::Propagate { expr } => {
             collect_expr_xrefs(&expr.node, expr.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
         }
-        Expr::Catch { expr: inner, handler } => {
+        Expr::Catch { expr: inner, handlers } => {
             collect_expr_xrefs(&inner.node, inner.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
-            match handler {
-                CatchHandler::Wildcard { body, .. } => {
-                    collect_block_xrefs(&body.node, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
-                }
-                CatchHandler::Shorthand(body) => {
-                    collect_expr_xrefs(&body.node, body.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
+            for handler in handlers {
+                match handler {
+                    CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => {
+                        collect_block_xrefs(&body.node, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
+                    }
+                    CatchHandler::Shorthand(body) => {
+                        collect_expr_xrefs(&body.node, body.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
+                    }
                 }
             }
         }

@@ -1318,9 +1318,10 @@ impl PrettyPrinter {
                 self.emit_expr(&expr.node, 25);
                 self.write("!");
             }
-            Expr::Catch { expr, handler } => {
+            Expr::Catch { expr, handlers } => {
                 self.emit_expr(&expr.node, 25);
-                match handler {
+                for handler in handlers {
+                  match handler {
                     CatchHandler::Shorthand(val) => {
                         self.write(" catch ");
                         self.emit_expr(&val.node, 0);
@@ -1331,6 +1332,15 @@ impl PrettyPrinter {
                         self.write(" ");
                         self.emit_block(&body.node);
                     }
+                    CatchHandler::Typed { var, error_type, body } => {
+                        self.write(" catch ");
+                        self.write(&var.node);
+                        self.write(": ");
+                        self.write(&error_type.node);
+                        self.write(" ");
+                        self.emit_block(&body.node);
+                    }
+                  }
                 }
             }
             Expr::Cast { expr, target_type } => {

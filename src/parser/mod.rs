@@ -2588,6 +2588,24 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_catch_handler(&mut self) -> Result<(CatchHandler, usize), CompileError> {
+        // Typed form: `catch err: ErrorType { body }` (ident followed by `:`).
+        if self.is_catch_typed_ahead() {
+            let var = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let first = self.expect_ident()?;
+            // Allow a module-qualified error type: `mod.ErrorType`.
+            let error_type = if self.peek_raw().is_some_and(|t| matches!(t.node, Token::Dot)) {
+                self.advance();
+                let second = self.expect_ident()?;
+                Spanned::new(format!("{}.{}", first.node, second.node),
+                             Span::new(first.span.start, second.span.end))
+            } else {
+                first
+            };
+            let body = self.parse_block()?;
+            let end = body.span.end;
+            return Ok((CatchHandler::Typed { var, error_type, body }, end));
+        }
         // Lookahead: if ident followed by {, it's wildcard form
         if self.is_catch_wildcard_ahead() {
             let var = self.expect_ident()?;
@@ -2599,6 +2617,21 @@ impl<'a> Parser<'a> {
             let end = fallback.span.end;
             Ok((CatchHandler::Shorthand(Box::new(fallback)), end))
         }
+    }
+
+    fn is_catch_typed_ahead(&self) -> bool {
+        let mut i = self.pos;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Ident) {
+            return false;
+        }
+        i += 1;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        i < self.tokens.len() && matches!(self.tokens[i].node, Token::Colon)
     }
 
     fn is_catch_wildcard_ahead(&self) -> bool {
@@ -2823,13 +2856,31 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Postfix catch — error handling (must be on same line via peek_raw)
+            // Postfix catch — error handling. The first `catch` must be on the
+            // same line as the expression (peek_raw); subsequent chained
+            // handlers may follow a newline after the previous handler block.
             if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Catch) {
-                self.advance(); // consume 'catch'
-                let (handler, end) = self.parse_catch_handler()?;
+                let mut handlers = Vec::new();
+                let mut end = lhs.span.end;
+                loop {
+                    self.advance(); // consume 'catch'
+                    let (handler, h_end) = self.parse_catch_handler()?;
+                    end = h_end;
+                    handlers.push(handler);
+                    // Look past newlines for another `catch` in the chain.
+                    let mut i = self.pos;
+                    while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+                        i += 1;
+                    }
+                    if i < self.tokens.len() && matches!(self.tokens[i].node, Token::Catch) {
+                        self.pos = i; // skip the newlines, continue the chain
+                    } else {
+                        break;
+                    }
+                }
                 let span = Span::new(lhs.span.start, end);
                 lhs = Spanned::new(
-                    Expr::Catch { expr: Box::new(lhs), handler },
+                    Expr::Catch { expr: Box::new(lhs), handlers },
                     span,
                 );
                 continue;

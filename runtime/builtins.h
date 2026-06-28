@@ -74,6 +74,7 @@
 
 // Error handling — thread-local so each thread has its own error state
 extern __thread void *__pluto_current_error;
+extern __thread void *__pluto_current_error_type;
 
 // Task handle — thread-local pointer to current task (NULL on main thread)
 extern __thread long *__pluto_current_task;
