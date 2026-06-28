@@ -1,0 +1,21 @@
+// RPC client — a `remote` dependency makes the call look local.
+//
+// `self.billing.charge(21)` is type-checked against BillingService's signature
+// and executed over the network. Crossing the boundary can fail, so the
+// compiler requires the call to be handled (here with `catch`).
+//
+// The server address comes from an env var named after the service:
+//   PLUTO_REMOTE_BILLINGSERVICE=127.0.0.1:<port>
+//
+// Run it (after starting the server, using the port it printed):
+//   PLUTO_REMOTE_BILLINGSERVICE=127.0.0.1:9000 \
+//     cargo run -- run examples/rpc/client/main.pt --stdlib stdlib
+
+import billing
+
+app Payments[billing: remote billing.BillingService] {
+    fn main(self) {
+        let charged = self.billing.charge(21) catch -1
+        print(f"charged: {charged}")
+    }
+}

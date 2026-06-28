@@ -289,3 +289,16 @@ Demonstrates Phase 1 compile-time reflection with the `TypeInfo` trait: `TypeInf
 ```bash
 cargo run -- run examples/reflection_demo.pt
 ```
+
+## rpc
+
+Cross-service RPC where both ends are compiler-generated. The server exposes a service with the `serve` statement (which generates the accept loop, request parsing, method dispatch, and reply); the client calls it through a `remote` dependency, so `self.billing.charge(21)` is type-checked across the boundary and executed over a socket — raising `NetworkError` (handled with `catch`) on any transport failure.
+
+```bash
+# Terminal 1 — start the server (prints its bound port)
+cargo run -- run examples/rpc/server.pt --stdlib stdlib
+
+# Terminal 2 — call it, pointing the env var at the server's port
+PLUTO_REMOTE_BILLINGSERVICE=127.0.0.1:9000 \
+  cargo run -- run examples/rpc/client/main.pt --stdlib stdlib
+```
