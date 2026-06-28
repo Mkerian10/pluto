@@ -36,6 +36,7 @@
 #include <ctype.h>
 #include <setjmp.h>
 #include <time.h>
+#include <sys/time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>

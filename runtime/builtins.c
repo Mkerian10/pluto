@@ -1227,8 +1227,21 @@ long __pluto_serve_listen(long port) {
 }
 
 // Accept one connection on the listener, returning the connection fd.
+//
+// A receive timeout is set on the accepted connection so that a slow or stuck
+// client (one that opens a connection but never sends a complete request) can't
+// block the single-threaded server indefinitely — head-of-line denial of
+// service. On timeout the recv fails, the handler abandons that connection, and
+// the server returns to accepting other clients.
 long __pluto_serve_accept(long fd) {
-    return __pluto_socket_accept(fd);
+    long conn = __pluto_socket_accept(fd);
+    if (conn >= 0) {
+        struct timeval tv;
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
+        setsockopt((int)conn, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    }
+    return conn;
 }
 
 // The actual port a listener is bound to (handy when binding port 0).
