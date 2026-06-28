@@ -225,6 +225,12 @@ fn collect_stmt_effects(
         Stmt::Assert { expr } => {
             collect_expr_effects(&expr.node, direct_errors, edges, current_fn, env);
         }
+        // The generated serve loop handles dispatched methods' errors internally
+        // (replying with an error response), so it adds none to the enclosing fn.
+        Stmt::Serve { service, port } => {
+            collect_expr_effects(&service.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&port.node, direct_errors, edges, current_fn, env);
+        }
         Stmt::Yield { value, .. } => {
             collect_expr_effects(&value.node, direct_errors, edges, current_fn, env);
         }
@@ -608,6 +614,11 @@ fn enforce_stmt(
         }
         Stmt::Assert { expr } => {
             enforce_expr(&expr.node, expr.span, current_fn, env)?;
+            Ok(())
+        }
+        Stmt::Serve { service, port } => {
+            enforce_expr(&service.node, service.span, current_fn, env)?;
+            enforce_expr(&port.node, port.span, current_fn, env)?;
             Ok(())
         }
         Stmt::Yield { value, .. } => {

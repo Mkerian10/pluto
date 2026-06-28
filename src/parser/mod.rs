@@ -1630,6 +1630,7 @@ impl<'a> Parser<'a> {
             Token::Scope => self.parse_scope_stmt(),
             Token::Raise => self.parse_raise_stmt(),
             Token::Assert => self.parse_assert_stmt(),
+            Token::Serve => self.parse_serve_stmt(),
             Token::Break => {
                 let span = self.advance().expect("token should exist after peek").span;
                 self.consume_statement_end()?;
@@ -2521,6 +2522,23 @@ impl<'a> Parser<'a> {
         let end = expr.span.end;
         self.consume_statement_end()?;
         Ok(Spanned::new(Stmt::Assert { expr }, Span::new(start, end)))
+    }
+
+    fn parse_serve_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let serve_tok = self.expect(&Token::Serve)?;
+        let start = serve_tok.span.start;
+        let service = self.parse_expr(0)?;
+        // `on` is a contextual keyword separating the service from the port.
+        if !self.eat_contextual_keyword("on") {
+            return Err(CompileError::syntax(
+                "expected 'on <port>' after the service in a serve statement",
+                service.span,
+            ));
+        }
+        let port = self.parse_expr(0)?;
+        let end = port.span.end;
+        self.consume_statement_end()?;
+        Ok(Spanned::new(Stmt::Serve { service, port }, Span::new(start, end)))
     }
 
     fn parse_raise_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {

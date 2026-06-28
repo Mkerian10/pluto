@@ -1148,6 +1148,46 @@ long __pluto_parse_long(void *s) {
     return atol(buf);
 }
 
+// ── Serve helpers (generated RPC server side) ─────────────────────────────────
+// Bind+listen a TCP socket on 0.0.0.0:<port>. Returns the listener fd, or -1.
+long __pluto_serve_listen(long port) {
+    long fd = __pluto_socket_create(2, 1, 0);
+    if (fd < 0) return -1;
+    __pluto_socket_set_reuseaddr(fd);
+    void *host = __pluto_string_new("0.0.0.0", 7);
+    if (__pluto_socket_bind(fd, host, port) < 0) { __pluto_socket_close(fd); return -1; }
+    if (__pluto_socket_listen(fd, 128) < 0) { __pluto_socket_close(fd); return -1; }
+    return fd;
+}
+
+// Accept one connection on the listener, returning the connection fd.
+long __pluto_serve_accept(long fd) {
+    return __pluto_socket_accept(fd);
+}
+
+// The actual port a listener is bound to (handy when binding port 0).
+long __pluto_serve_port(long fd) {
+    return __pluto_socket_get_port(fd);
+}
+
+// Return the nth newline-delimited field of `s` (0-based); empty if out of range.
+// Used to split a `<method>\n<arg1>\n<arg2>...` request.
+void *__pluto_request_field(void *s, long index) {
+    const char *data;
+    long len;
+    __pluto_string_data(s, &data, &len);
+    long field = 0;
+    long start = 0;
+    for (long i = 0; i <= len; i++) {
+        if (i == len || data[i] == '\n') {
+            if (field == index) return __pluto_string_new(data + start, i - start);
+            field++;
+            start = i + 1;
+        }
+    }
+    return __pluto_string_new("", 0);
+}
+
 // ── Map and Set runtime ───────────────────────────────────────────────────────
 // Key type tags: 0=int, 1=float, 2=bool, 3=string, 4=enum (discriminant)
 // Open addressing with linear probing.  Meta byte: 0=empty, 0x80=occupied.

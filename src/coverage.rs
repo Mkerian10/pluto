@@ -372,6 +372,7 @@ impl<'a> CoverageScanner<'a> {
             | Stmt::Raise { .. }
             | Stmt::Return(_)
             | Stmt::Assert { .. }
+            | Stmt::Serve { .. }
             | Stmt::Break
             | Stmt::Continue
             | Stmt::Yield { .. }
@@ -439,6 +440,10 @@ impl<'a> CoverageScanner<'a> {
             }
             Stmt::Yield { value, .. } => self.scan_expr(&value.node),
             Stmt::Assert { expr } => self.scan_expr(&expr.node),
+            Stmt::Serve { service, port } => {
+                self.scan_expr(&service.node);
+                self.scan_expr(&port.node);
+            }
             Stmt::Return(None)
             | Stmt::Break
             | Stmt::Continue

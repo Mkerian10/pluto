@@ -265,6 +265,13 @@ pub enum Stmt {
     Assert {
         expr: Spanned<Expr>,
     },
+    /// `serve <service> on <port>` — run a generated RPC dispatch loop that
+    /// exposes the service's methods over a TCP socket, matching the wire
+    /// protocol used by `remote` calls on the client side.
+    Serve {
+        service: Spanned<Expr>,
+        port: Spanned<Expr>,
+    },
     Break,
     Continue,
     Expr(Spanned<Expr>),
