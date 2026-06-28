@@ -382,3 +382,90 @@ fn large_payload_round_trips() {
 
     assert_eq!(String::from_utf8_lossy(&out.stdout), "len=200000\n");
 }
+
+// ── Phase 6: typed-error propagation ────────────────────────────────────────────
+
+// Server method raises ValidationError on bad input; the error crosses the wire
+// in an ERR frame and re-raises on the client.
+const ERR_SERVER_SRC: &str = "\
+import std.wire
+
+error ValidationError {
+    reason: string
+}
+
+class User {
+    id: int
+    name: string
+}
+
+class Directory {
+    seed: int
+    fn lookup(self, id: int) User {
+        if id < 0 {
+            raise ValidationError { reason: \"negative id\" }
+        }
+        return User { id: id, name: \"alice\" }
+    }
+}
+
+fn main() {
+    let d = Directory { seed: 1 }
+    serve d on 0
+}";
+
+// The interface declares the error contract (via a raising body, never executed
+// on the client) so the remote call's error set includes ValidationError.
+const ERR_IFACE: &str = "\
+pub error ValidationError {
+    reason: string
+}
+pub class User {
+    id: int
+    name: string
+}
+pub class Directory {
+    fn lookup(self, id: int) User {
+        raise ValidationError { reason: \"contract\" }
+    }
+}";
+
+const ERR_CLIENT_SRC: &str = "\
+import std.wire
+import directory
+
+app App[dir: remote directory.Directory] {
+    fn main(self) {
+        let u = self.dir.lookup(-5) catch err {
+            print(\"caught\")
+            return
+        }
+        print(f\"ok id={u.id}\")
+    }
+}";
+
+/// A typed error raised by the server crosses the wire and fires the client's
+/// `catch` — instead of the client receiving a garbage value as if it succeeded.
+#[test]
+fn typed_error_propagates_over_rpc() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", ERR_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("directory.pluto", ERR_IFACE), ("main.pluto", ERR_CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_DIRECTORY", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "caught\n");
+}

@@ -624,7 +624,7 @@ impl<'a> LowerContext<'a> {
         // we start mutating the builder): (method_name, mangled, arg_types, return).
         let supported = |t: &PlutoType| matches!(t,
             PlutoType::Int | PlutoType::String | PlutoType::Class(_) | PlutoType::Enum(_));
-        let mut methods: Vec<(String, String, Vec<PlutoType>, PlutoType)> = Vec::new();
+        let mut methods: Vec<(String, String, Vec<PlutoType>, PlutoType, Vec<String>)> = Vec::new();
         if let Some(info) = self.env.classes.get(&class_name) {
             for mname in &info.methods {
                 let mangled = mangle_method(&class_name, mname);
@@ -633,7 +633,12 @@ impl<'a> LowerContext<'a> {
                 let ret = sig.return_type.clone();
                 let ret_ok = supported(&ret) || ret == PlutoType::Void;
                 if arg_types.iter().all(supported) && ret_ok {
-                    methods.push((mname.clone(), mangled, arg_types, ret));
+                    // The method's statically-inferred error set — used to
+                    // serialize a raised error precisely when it's unambiguous.
+                    let errs: Vec<String> = self.env.fn_errors.get(&mangled)
+                        .map(|s| { let mut v: Vec<String> = s.iter().cloned().collect(); v.sort(); v })
+                        .unwrap_or_default();
+                    methods.push((mname.clone(), mangled, arg_types, ret, errs));
                 }
             }
         }
@@ -666,14 +671,14 @@ impl<'a> LowerContext<'a> {
         let method_str = self.call_runtime("__pluto_request_field", &[req, zero]);
 
         // Dispatch chain: compare the method name against each candidate.
-        for (mname, mangled, arg_types, ret) in &methods {
+        for (mname, mangled, arg_types, ret, errs) in &methods {
             let handle_bb = self.builder.create_block();
             let next_bb = self.builder.create_block();
             let lit = self.make_string_literal(mname)?;
             let eq = self.call_runtime("__pluto_string_eq", &[method_str, lit]);
             self.builder.ins().brif(eq, handle_bb, &[], next_bb, &[]);
 
-            // Handler: parse args, call the method, write the formatted result.
+            // Handler: parse args, call the method, then reply OK/ERR.
             self.builder.switch_to_block(handle_bb);
             self.builder.seal_block(handle_bb);
             let mut call_args = vec![svc_ptr];
@@ -694,20 +699,43 @@ impl<'a> LowerContext<'a> {
             })?;
             let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
             let call = self.builder.ins().call(func_ref, &call_args);
-            let resp = match ret {
+            let result_val = if *ret == PlutoType::Void {
+                self.builder.ins().iconst(types::I64, 0)
+            } else {
+                self.builder.inst_results(call)[0]
+            };
+
+            // If the method raised, reply with an ERR frame; otherwise OK.
+            let has_err = self.call_runtime("__pluto_has_error", &[]);
+            let zero2 = self.builder.ins().iconst(types::I64, 0);
+            let raised = self.builder.ins().icmp(IntCC::NotEqual, has_err, zero2);
+            let ok_bb = self.builder.create_block();
+            let err_bb = self.builder.create_block();
+            self.builder.ins().brif(raised, err_bb, &[], ok_bb, &[]);
+
+            // OK: "OK\n" + the formatted return value.
+            self.builder.switch_to_block(ok_bb);
+            self.builder.seal_block(ok_bb);
+            let payload = match ret {
                 PlutoType::Void => self.make_string_literal("")?,
-                PlutoType::Int => {
-                    let r = self.builder.inst_results(call)[0];
-                    self.call_runtime("__pluto_int_to_string", &[r])
-                }
-                PlutoType::String => self.builder.inst_results(call)[0],
+                PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[result_val]),
+                PlutoType::String => result_val,
                 PlutoType::Class(tn) | PlutoType::Enum(tn) => {
-                    let r = self.builder.inst_results(call)[0];
-                    self.call_named_func(&format!("__wire_encode_{tn}"), &[r])?
+                    self.call_named_func(&format!("__wire_encode_{tn}"), &[result_val])?
                 }
                 _ => self.make_string_literal("")?,
             };
-            self.call_runtime("__pluto_write_framed", &[conn, resp]);
+            let ok_prefix = self.make_string_literal("OK\n")?;
+            let ok_resp = self.call_runtime("__pluto_string_concat", &[ok_prefix, payload]);
+            self.call_runtime("__pluto_write_framed", &[conn, ok_resp]);
+            self.builder.ins().jump(close_bb, &[]);
+
+            // ERR: serialize the raised error, clear it, and reply.
+            self.builder.switch_to_block(err_bb);
+            self.builder.seal_block(err_bb);
+            let err_resp = self.build_error_response(errs)?;
+            self.call_runtime_void("__pluto_clear_error", &[]);
+            self.call_runtime("__pluto_write_framed", &[conn, err_resp]);
             self.builder.ins().jump(close_bb, &[]);
 
             self.builder.switch_to_block(next_bb);
@@ -724,6 +752,57 @@ impl<'a> LowerContext<'a> {
         self.builder.seal_block(loop_bb);
 
         Ok(())
+    }
+
+    /// Reconstruct error `etype` from an `ERR` response (its fields start at
+    /// response index 2) and raise it, so the caller's `catch` sees the real
+    /// typed error rather than a transport failure.
+    fn emit_raise_from_response(&mut self, etype: &str, resp: Value) -> Result<(), CompileError> {
+        let fields = self.env.errors.get(etype).map(|e| e.fields.clone()).unwrap_or_default();
+        let size = (fields.len() as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
+        let size_val = self.builder.ins().iconst(types::I64, size);
+        let ptr = self.call_runtime("__pluto_alloc", &[size_val]);
+        for (i, (_, fty)) in fields.iter().enumerate() {
+            let idx = self.builder.ins().iconst(types::I64, (i + 2) as i64);
+            let fstr = self.call_runtime("__pluto_request_field", &[resp, idx]);
+            let val = match fty {
+                PlutoType::Int => self.call_runtime("__pluto_parse_long", &[fstr]),
+                PlutoType::String => fstr,
+                _ => self.builder.ins().iconst(types::I64, 0), // MVP: primitive fields
+            };
+            let offset = (i as i32) * POINTER_SIZE;
+            self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
+        }
+        self.call_runtime_void("__pluto_raise_error", &[ptr]);
+        Ok(())
+    }
+
+    /// Build the `ERR\n<Type>\n<field>...` response for a raised error. When the
+    /// method's static error set has exactly one type, the error is serialized
+    /// precisely (its primitive fields read from the live error object). With
+    /// zero or multiple possible types there's no runtime tag to disambiguate,
+    /// so an `__unknown` marker is sent (the client raises a generic error).
+    fn build_error_response(&mut self, errs: &[String]) -> Result<Value, CompileError> {
+        if errs.len() != 1 {
+            return self.make_string_literal("ERR\n__unknown");
+        }
+        let etype = errs[0].clone();
+        let fields = self.env.errors.get(&etype).map(|e| e.fields.clone()).unwrap_or_default();
+        let err_ptr = self.call_runtime("__pluto_get_error", &[]);
+        let mut resp = self.make_string_literal(&format!("ERR\n{etype}"))?;
+        let nl = self.make_string_literal("\n")?;
+        for (i, (_, fty)) in fields.iter().enumerate() {
+            let offset = (i as i32) * POINTER_SIZE;
+            let raw = self.builder.ins().load(types::I64, MemFlags::new(), err_ptr, Offset32::new(offset));
+            let fstr = match fty {
+                PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[raw]),
+                PlutoType::String => raw,
+                _ => self.make_string_literal("")?, // MVP: primitive error fields
+            };
+            resp = self.call_runtime("__pluto_string_concat", &[resp, nl]);
+            resp = self.call_runtime("__pluto_string_concat", &[resp, fstr]);
+        }
+        Ok(resp)
     }
 
     fn lower_let(
@@ -3220,18 +3299,29 @@ impl<'a> LowerContext<'a> {
                 let dflt = self.builder.ins().iconst(types::I64, 0);
                 self.builder.ins().jump(cont_bb, &[dflt]);
 
-                // Success: parse the response into the declared return type.
+                // Got a response. It is `OK\n<payload>` or `ERR\n<Type>\n<fields>`.
                 self.builder.switch_to_block(ok_bb);
                 self.builder.seal_block(ok_bb);
+                let status = self.call_runtime("__pluto_request_field", &[resp, zero]);
+                let ok_lit = self.make_string_literal("OK")?;
+                let is_ok = self.call_runtime("__pluto_string_eq", &[status, ok_lit]);
+                // `one` is defined here (dominating both successors) so both the
+                // OK and ERR blocks can index response field 1.
+                let one = self.builder.ins().iconst(types::I64, 1);
+                let ok_payload_bb = self.builder.create_block();
+                let err_status_bb = self.builder.create_block();
+                self.builder.ins().brif(is_ok, ok_payload_bb, &[], err_status_bb, &[]);
+
+                // OK: parse field 1 (the payload) into the declared return type.
+                self.builder.switch_to_block(ok_payload_bb);
+                self.builder.seal_block(ok_payload_bb);
+                let payload = self.call_runtime("__pluto_request_field", &[resp, one]);
                 let parsed = match &ret_type {
-                    PlutoType::Int => self.call_runtime("__pluto_parse_long", &[resp]),
-                    PlutoType::String => resp,
+                    PlutoType::Int => self.call_runtime("__pluto_parse_long", &[payload]),
+                    PlutoType::String => payload,
                     PlutoType::Void => self.builder.ins().iconst(types::I64, 0),
-                    // Complex types: unmarshal the JSON wire string. The decode
-                    // wrapper is fallible; a malformed response sets the TLS error,
-                    // which the `!`/`catch` already wrapping this remote call sees.
                     PlutoType::Class(tn) | PlutoType::Enum(tn) => {
-                        self.call_named_func(&format!("__wire_decode_{tn}"), &[resp])?
+                        self.call_named_func(&format!("__wire_decode_{tn}"), &[payload])?
                     }
                     other => return Err(CompileError::codegen(format!(
                         "remote call '{}.{}': unsupported return type {other} \
@@ -3240,6 +3330,43 @@ impl<'a> LowerContext<'a> {
                     ))),
                 };
                 self.builder.ins().jump(cont_bb, &[parsed]);
+
+                // ERR: the server propagated a typed error. Reconstruct whichever
+                // of the interface method's declared errors matches the type name
+                // (field 1), and raise it so the caller's `catch` sees the real
+                // error. An unrecognized/ambiguous type falls back to NetworkError.
+                self.builder.switch_to_block(err_status_bb);
+                self.builder.seal_block(err_status_bb);
+                let err_type = self.call_runtime("__pluto_request_field", &[resp, one]);
+                let iface_mangled = mangle_method(&cname, &method.node);
+                let mut error_types: Vec<String> = self.env.fn_errors.get(&iface_mangled)
+                    .map(|s| s.iter().filter(|e| *e != "NetworkError").cloned().collect())
+                    .unwrap_or_default();
+                error_types.sort();
+                for etype in &error_types {
+                    let handle_bb = self.builder.create_block();
+                    let next_bb = self.builder.create_block();
+                    let lit = self.make_string_literal(etype)?;
+                    let eq = self.call_runtime("__pluto_string_eq", &[err_type, lit]);
+                    self.builder.ins().brif(eq, handle_bb, &[], next_bb, &[]);
+                    self.builder.switch_to_block(handle_bb);
+                    self.builder.seal_block(handle_bb);
+                    self.emit_raise_from_response(etype, resp)?;
+                    let d = self.builder.ins().iconst(types::I64, 0);
+                    self.builder.ins().jump(cont_bb, &[d]);
+                    self.builder.switch_to_block(next_bb);
+                    self.builder.seal_block(next_bb);
+                }
+                // Fallback: unrecognized error type -> NetworkError.
+                let nf = self.env.errors.get("NetworkError").map_or(1, |e| e.fields.len());
+                let nsize = (nf as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
+                let nsize_val = self.builder.ins().iconst(types::I64, nsize);
+                let nptr = self.call_runtime("__pluto_alloc", &[nsize_val]);
+                let nmsg = self.make_string_literal("remote error")?;
+                self.builder.ins().store(MemFlags::new(), nmsg, nptr, Offset32::new(0));
+                self.call_runtime_void("__pluto_raise_error", &[nptr]);
+                let d2 = self.builder.ins().iconst(types::I64, 0);
+                self.builder.ins().jump(cont_bb, &[d2]);
 
                 self.builder.switch_to_block(cont_bb);
                 self.builder.seal_block(cont_bb);
