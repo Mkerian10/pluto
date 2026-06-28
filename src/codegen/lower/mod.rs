@@ -653,9 +653,16 @@ impl<'a> LowerContext<'a> {
         self.builder.switch_to_block(loop_bb);
 
         let conn = self.call_runtime("__pluto_serve_accept", &[fd]);
-        let max_bytes = self.builder.ins().iconst(types::I64, 65536);
-        let req = self.call_runtime("__pluto_socket_read", &[conn, max_bytes]);
+        let req = self.call_runtime("__pluto_read_framed", &[conn]);
+
+        // Guard: a failed/closed connection yields a null request — skip dispatch.
+        let dispatch_bb = self.builder.create_block();
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let req_null = self.builder.ins().icmp(IntCC::Equal, req, zero);
+        self.builder.ins().brif(req_null, close_bb, &[], dispatch_bb, &[]);
+        self.builder.switch_to_block(dispatch_bb);
+        self.builder.seal_block(dispatch_bb);
+
         let method_str = self.call_runtime("__pluto_request_field", &[req, zero]);
 
         // Dispatch chain: compare the method name against each candidate.
@@ -700,7 +707,7 @@ impl<'a> LowerContext<'a> {
                 }
                 _ => self.make_string_literal("")?,
             };
-            self.call_runtime("__pluto_socket_write", &[conn, resp]);
+            self.call_runtime("__pluto_write_framed", &[conn, resp]);
             self.builder.ins().jump(close_bb, &[]);
 
             self.builder.switch_to_block(next_bb);

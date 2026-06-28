@@ -1091,6 +1091,60 @@ long __pluto_socket_get_port(long fd) {
 // Resolves the target service address from env PLUTO_REMOTE_<SERVICE> (uppercased),
 // connects, sends "<method>\n<payload>", and returns the response string.
 // Returns NULL on any failure so the caller can raise NetworkError.
+// ── Length-framed messages ────────────────────────────────────────────────────
+// A message is a 4-byte big-endian length followed by exactly that many bytes.
+// This lets a reader recover the full message regardless of how TCP splits it
+// across segments — necessary now that complex types produce multi-KB payloads.
+
+// Write a length-framed message. Returns 0 on success, -1 on failure.
+long __pluto_write_framed(long fd, void *str) {
+    const char *data;
+    long len;
+    __pluto_string_data(str, &data, &len);
+    unsigned char hdr[4];
+    hdr[0] = (unsigned char)((len >> 24) & 0xff);
+    hdr[1] = (unsigned char)((len >> 16) & 0xff);
+    hdr[2] = (unsigned char)((len >> 8) & 0xff);
+    hdr[3] = (unsigned char)(len & 0xff);
+    long off = 0;
+    while (off < 4) {
+        ssize_t n = write((int)fd, hdr + off, (size_t)(4 - off));
+        if (n <= 0) return -1;
+        off += n;
+    }
+    off = 0;
+    while (off < len) {
+        ssize_t n = write((int)fd, data + off, (size_t)(len - off));
+        if (n <= 0) return -1;
+        off += n;
+    }
+    return 0;
+}
+
+// Read a length-framed message into a pluto string. Returns NULL on failure.
+void *__pluto_read_framed(long fd) {
+    unsigned char hdr[4];
+    long got = 0;
+    while (got < 4) {
+        ssize_t n = read((int)fd, hdr + got, (size_t)(4 - got));
+        if (n <= 0) return NULL;
+        got += n;
+    }
+    long len = ((long)hdr[0] << 24) | ((long)hdr[1] << 16) | ((long)hdr[2] << 8) | (long)hdr[3];
+    if (len < 0 || len > (64L * 1024 * 1024)) return NULL; // 64MB sanity cap
+    char *buf = (char *)malloc(len > 0 ? (size_t)len : 1);
+    if (!buf) return NULL;
+    long off = 0;
+    while (off < len) {
+        ssize_t n = read((int)fd, buf + off, (size_t)(len - off));
+        if (n <= 0) { free(buf); return NULL; }
+        off += n;
+    }
+    void *result = __pluto_string_new(buf, len);
+    free(buf);
+    return result;
+}
+
 void *__pluto_remote_request(void *service_str, void *method_str, void *payload_str) {
     const char *svc;
     long svclen;
@@ -1127,13 +1181,13 @@ void *__pluto_remote_request(void *service_str, void *method_str, void *payload_
     }
     void *nl = __pluto_string_new("\n", 1);
     void *req = __pluto_string_concat(__pluto_string_concat(method_str, nl), payload_str);
-    if (__pluto_socket_write(fd, req) < 0) {
+    if (__pluto_write_framed(fd, req) < 0) {
         __pluto_socket_close(fd);
         return NULL;
     }
-    void *resp = __pluto_socket_read(fd, 65536);
+    void *resp = __pluto_read_framed(fd);
     __pluto_socket_close(fd);
-    return resp;
+    return resp; // NULL on read failure -> caller raises NetworkError
 }
 
 // Parse a pluto string as a long (for primitive remote responses).

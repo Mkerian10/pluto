@@ -72,6 +72,8 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_socket_read", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_socket_write", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_socket_close", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_read_framed", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_write_framed", &[types::I64, types::I64], &[types::I64])?;
 
         // Error handling
         reg.declare(module, "__pluto_raise_error", &[types::I64], &[])?;
