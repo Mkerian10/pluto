@@ -466,3 +466,62 @@ app ApiApp[c: Counter] {
     let out = run_binary(members.get("web").unwrap());
     assert_eq!(out, "0\n");
 }
+
+// ── System topology conformance ─────────────────────────────────────────────────
+
+// A server member: defines BillingService and serves it.
+const TOPO_BILLING: &str = "\
+class BillingService {
+    rate: int
+    fn charge(self, amount: int) int {
+        return amount * self.rate
+    }
+}
+
+app BillingApp {
+    fn main(self) {
+        let svc = BillingService { rate: 2 }
+        serve svc on 9000
+    }
+}";
+
+// A client member: a remote dependency on BillingService.
+const TOPO_ORDERS: &str = "\
+pub class BillingService {
+    fn charge(self, amount: int) int {
+        return amount
+    }
+}
+
+app OrdersApp[billing: remote BillingService] {
+    fn main(self) {
+        let x = self.billing.charge(10) catch -1
+        print(x)
+    }
+}";
+
+/// A system where one member serves a service and another consumes it remotely
+/// compiles — the topology is complete.
+#[test]
+fn system_topology_remote_dep_is_served() {
+    let members = compile_system_project(&[
+        ("main.pluto", "import billing\nimport orders\n\nsystem Shop {\n    billing_svc: billing\n    orders_svc: orders\n}"),
+        ("billing.pluto", TOPO_BILLING),
+        ("orders.pluto", TOPO_ORDERS),
+    ]);
+    assert!(members.contains_key("billing_svc"));
+    assert!(members.contains_key("orders_svc"));
+}
+
+/// A remote dependency on a service that no member of the system serves is a
+/// compile-time error — the compiler knows the whole topology.
+#[test]
+fn system_topology_unserved_remote_dep_rejected() {
+    compile_system_should_fail_with(
+        &[
+            ("main.pluto", "import orders\n\nsystem Shop {\n    orders_svc: orders\n}"),
+            ("orders.pluto", TOPO_ORDERS),
+        ],
+        "no member of the system serves it",
+    );
+}
