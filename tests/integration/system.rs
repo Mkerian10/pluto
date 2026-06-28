@@ -586,3 +586,96 @@ fn system_conformance_missing_method_rejected() {
         "does not provide it",
     );
 }
+
+// ── Cross-service error conformance ─────────────────────────────────────────────
+
+// Server whose charge() can raise a typed error.
+const ERR_BILLING: &str = "\
+error ValidationError {
+    reason: string
+}
+
+class BillingService {
+    rate: int
+    fn charge(self, amount: int) int {
+        if amount < 0 {
+            raise ValidationError { reason: \"negative\" }
+        }
+        return amount * self.rate
+    }
+}
+
+app BillingApp {
+    fn main(self) {
+        let svc = BillingService { rate: 2 }
+        serve svc on 9000
+    }
+}";
+
+// Client whose interface DECLARES the error (its body raises it as the contract).
+const ERR_ORDERS_DECLARES: &str = "\
+error ValidationError {
+    reason: string
+}
+
+pub class BillingService {
+    fn charge(self, amount: int) int {
+        raise ValidationError { reason: \"contract\" }
+    }
+}
+
+app OrdersApp[billing: remote BillingService] {
+    fn main(self) {
+        let x = self.billing.charge(10) catch err {
+            return
+        }
+        print(x)
+    }
+}";
+
+// Client whose interface does NOT declare the server's error.
+const ERR_ORDERS_MISSING: &str = "\
+error ValidationError {
+    reason: string
+}
+
+pub class BillingService {
+    fn charge(self, amount: int) int {
+        return amount
+    }
+}
+
+app OrdersApp[billing: remote BillingService] {
+    fn main(self) {
+        let x = self.billing.charge(10) catch err {
+            return
+        }
+        print(x)
+    }
+}";
+
+/// A system where the consumer's interface declares the same errors the server
+/// can raise compiles.
+#[test]
+fn system_error_conformance_declared_ok() {
+    let members = compile_system_project(&[
+        ("main.pluto", "import billing\nimport orders\n\nsystem Shop {\n    billing_svc: billing\n    orders_svc: orders\n}"),
+        ("billing.pluto", ERR_BILLING),
+        ("orders.pluto", ERR_ORDERS_DECLARES),
+    ]);
+    assert!(members.contains_key("orders_svc"));
+}
+
+/// If the server can raise an error the consumer's interface doesn't declare,
+/// the system fails to compile — the consumer wouldn't handle it.
+#[test]
+fn system_error_conformance_undeclared_rejected() {
+    compile_system_should_fail_with(
+        &[
+            ("main.pluto", "import billing\nimport orders\n\nsystem Shop {\n    billing_svc: billing\n    orders_svc: orders\n}"),
+            ("billing.pluto", ERR_BILLING),
+            ("orders.pluto", ERR_ORDERS_MISSING),
+        ],
+        "does not declare it",
+    );
+}
