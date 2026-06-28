@@ -347,7 +347,7 @@ fn collect_expr_effects(
                 _ => collect_expr_effects(&inner.node, direct_errors, edges, current_fn, env),
             }
         }
-        Expr::Catch { expr: inner, handler } => {
+        Expr::Catch { expr: inner, handlers } => {
             match &inner.node {
                 Expr::Call { args, .. } => {
                     for arg in args {
@@ -362,14 +362,16 @@ fn collect_expr_effects(
                 }
                 _ => collect_expr_effects(&inner.node, direct_errors, edges, current_fn, env),
             }
-            match handler {
-                CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => {
-                    for stmt in &body.node.stmts {
-                        collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
+            for handler in handlers {
+                match handler {
+                    CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => {
+                        for stmt in &body.node.stmts {
+                            collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
+                        }
                     }
-                }
-                CatchHandler::Shorthand(fb) => {
-                    collect_expr_effects(&fb.node, direct_errors, edges, current_fn, env);
+                    CatchHandler::Shorthand(fb) => {
+                        collect_expr_effects(&fb.node, direct_errors, edges, current_fn, env);
+                    }
                 }
             }
         }
@@ -732,7 +734,7 @@ fn enforce_expr(
                 inner.span,
             )),
         },
-        Expr::Catch { expr: inner, handler } => {
+        Expr::Catch { expr: inner, handlers } => {
             match &inner.node {
                 Expr::Call { name, args, .. } => {
                     for arg in args {
@@ -770,29 +772,39 @@ fn enforce_expr(
                     ));
                 }
             }
-            // A typed `catch err: E` consumes the error, so for soundness the
-            // call must raise only E — otherwise an un-caught error would escape
-            // inference. (Handling several error types needs a wildcard catch or
-            // future multi-catch.)
-            if let CatchHandler::Typed { error_type, .. } = handler {
+            // Coverage: the handlers must collectively handle every error the
+            // call can raise — otherwise an un-caught error would escape
+            // inference. A wildcard/shorthand handler is a catch-all; otherwise
+            // the union of typed error types must cover the call's error set.
+            let has_catch_all = handlers.iter().any(|h|
+                matches!(h, CatchHandler::Wildcard { .. } | CatchHandler::Shorthand(_)));
+            if !has_catch_all {
                 let inner_errors = inner_error_set(&inner.node, current_fn, env);
-                let want = error_type.node.rsplit('.').next().unwrap_or(&error_type.node);
+                let handled: HashSet<&str> = handlers.iter().filter_map(|h| match h {
+                    CatchHandler::Typed { error_type, .. } =>
+                        Some(error_type.node.rsplit('.').next().unwrap_or(&error_type.node)),
+                    _ => None,
+                }).collect();
                 for e in &inner_errors {
-                    let got = e.rsplit('.').next().unwrap_or(e);
-                    if got != want {
+                    let un = e.rsplit('.').next().unwrap_or(e);
+                    if !handled.contains(un) {
                         return Err(CompileError::type_err(
-                            format!("typed catch handles '{}', but the call can also raise '{e}'; \
-                                     typed catch requires the call to raise only that one error",
-                                error_type.node),
+                            format!("the call can raise '{e}', which no catch handler covers; \
+                                     add `catch err: {un} {{ ... }}` or a wildcard `catch err {{ ... }}`"),
                             span,
                         ));
                     }
                 }
             }
-            match handler {
-                CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => enforce_block(&body.node, current_fn, env),
-                CatchHandler::Shorthand(fb) => enforce_expr(&fb.node, fb.span, current_fn, env),
+            for handler in handlers {
+                match handler {
+                    CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } =>
+                        enforce_block(&body.node, current_fn, env)?,
+                    CatchHandler::Shorthand(fb) =>
+                        enforce_expr(&fb.node, fb.span, current_fn, env)?,
+                }
             }
+            Ok(())
         }
         Expr::BinOp { lhs, rhs, .. } => {
             enforce_expr(&lhs.node, lhs.span, current_fn, env)?;

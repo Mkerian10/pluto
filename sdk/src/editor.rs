@@ -780,11 +780,13 @@ fn collect_dangling_in_expr(expr: &Expr, span: Span, target: Uuid, out: &mut Vec
         Expr::Propagate { expr } | Expr::Cast { expr, .. } | Expr::Spawn { call: expr } | Expr::NullPropagate { expr } => {
             collect_dangling_in_expr(&expr.node, expr.span, target, out);
         }
-        Expr::Catch { expr: inner, handler } => {
+        Expr::Catch { expr: inner, handlers } => {
             collect_dangling_in_expr(&inner.node, inner.span, target, out);
-            match handler {
-                CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => collect_dangling_in_block(&body.node, target, out),
-                CatchHandler::Shorthand(body) => collect_dangling_in_expr(&body.node, body.span, target, out),
+            for handler in handlers {
+                match handler {
+                    CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => collect_dangling_in_block(&body.node, target, out),
+                    CatchHandler::Shorthand(body) => collect_dangling_in_expr(&body.node, body.span, target, out),
+                }
             }
         }
         Expr::Range { start, end, .. } => {
@@ -1104,11 +1106,13 @@ fn rename_in_expr(expr: &mut Expr, id: Uuid, kind: DeclKindSimple, old_name: &st
         Expr::Propagate { expr } | Expr::Cast { expr, .. } | Expr::Spawn { call: expr } | Expr::NullPropagate { expr } => {
             rename_in_expr(&mut expr.node, id, kind, old_name, new_name);
         }
-        Expr::Catch { expr: inner, handler } => {
+        Expr::Catch { expr: inner, handlers } => {
             rename_in_expr(&mut inner.node, id, kind, old_name, new_name);
-            match handler {
-                CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => rename_in_block(&mut body.node, id, kind, old_name, new_name),
-                CatchHandler::Shorthand(body) => rename_in_expr(&mut body.node, id, kind, old_name, new_name),
+            for handler in handlers {
+                match handler {
+                    CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => rename_in_block(&mut body.node, id, kind, old_name, new_name),
+                    CatchHandler::Shorthand(body) => rename_in_expr(&mut body.node, id, kind, old_name, new_name),
+                }
             }
         }
         Expr::Range { start, end, .. } => {

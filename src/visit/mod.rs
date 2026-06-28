@@ -667,11 +667,13 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
         }
 
         // Error handling
-        Expr::Catch { expr: inner, handler } => {
+        Expr::Catch { expr: inner, handlers } => {
             v.visit_expr(inner);
-            match handler {
-                CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => v.visit_block(body),
-                CatchHandler::Shorthand(fallback) => v.visit_expr(fallback),
+            for handler in handlers {
+                match handler {
+                    CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => v.visit_block(body),
+                    CatchHandler::Shorthand(fallback) => v.visit_expr(fallback),
+                }
             }
         }
 
@@ -1176,11 +1178,13 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, expr: &mut Spanned<Expr>) {
             v.visit_block_mut(body);
         }
 
-        Expr::Catch { expr: inner, handler } => {
+        Expr::Catch { expr: inner, handlers } => {
             v.visit_expr_mut(inner);
-            match handler {
-                CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => v.visit_block_mut(body),
-                CatchHandler::Shorthand(fallback) => v.visit_expr_mut(fallback),
+            for handler in handlers {
+                match handler {
+                    CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => v.visit_block_mut(body),
+                    CatchHandler::Shorthand(fallback) => v.visit_expr_mut(fallback),
+                }
             }
         }
 

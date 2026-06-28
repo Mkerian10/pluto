@@ -250,11 +250,12 @@ impl VisitMut for AmbientRewriter<'_> {
                 inner_rewriter.visit_block_mut(body);
                 return; // Don't use walk_expr_mut since we handled it manually
             }
-            Expr::Catch { expr: inner, handler } => {
+            Expr::Catch { expr: inner, handlers } => {
                 // Recurse into the expression
                 self.visit_expr_mut(inner);
-                // Handle the catch handler with proper scoping
-                match handler {
+                // Handle each catch handler with proper scoping
+                for handler in handlers {
+                  match handler {
                     CatchHandler::Wildcard { var, body }
                     | CatchHandler::Typed { var, body, .. } => {
                         let mut inner_active = self.active.clone();
@@ -265,6 +266,7 @@ impl VisitMut for AmbientRewriter<'_> {
                     CatchHandler::Shorthand(fb) => {
                         self.visit_expr_mut(fb);
                     }
+                  }
                 }
                 return; // Don't use walk_expr_mut
             }

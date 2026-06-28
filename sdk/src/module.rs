@@ -740,12 +740,12 @@ fn find_expr_recursive<'a>(expr: &'a Expr, span: Span, target: Span) -> Option<&
         Expr::Propagate { expr: inner } | Expr::Cast { expr: inner, .. } => {
             find_expr_recursive(&inner.node, inner.span, target)
         }
-        Expr::Catch { expr: inner, handler } => {
+        Expr::Catch { expr: inner, handlers } => {
             find_expr_recursive(&inner.node, inner.span, target)
-                .or_else(|| match handler {
+                .or_else(|| handlers.iter().find_map(|handler| match handler {
                     CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => find_expr_in_block(&body.node, target),
                     CatchHandler::Shorthand(body) => find_expr_recursive(&body.node, body.span, target),
-                })
+                }))
         }
         Expr::Range { start, end, .. } => {
             find_expr_recursive(&start.node, start.span, target)

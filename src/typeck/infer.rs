@@ -238,7 +238,7 @@ pub(crate) fn infer_expr(
             let inner_type = infer_expr(&expr.node, expr.span, env, None)?;
             Ok(inner_type)
         }
-        Expr::Catch { expr, handler } => infer_catch(expr, handler, span, env),
+        Expr::Catch { expr, handlers } => infer_catch(expr, handlers, span, env),
         Expr::MethodCall { object, method, args } => {
             infer_method_call(object, method, args, span, env)
         }
@@ -1401,97 +1401,81 @@ fn infer_enum_data(
 
 fn infer_catch(
     expr: &Spanned<Expr>,
-    handler: &CatchHandler,
+    handlers: &[CatchHandler],
     span: crate::span::Span,
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
     let success_type = infer_expr(&expr.node, expr.span, env, None)?;
-    let handler_type = match handler {
-        CatchHandler::Wildcard { var, body } => {
-            env.push_scope();
-            env.define(var.node.clone(), PlutoType::Error, var.span)?;
-            let stmts = &body.node.stmts;
-            // Type-check all statements except possibly the last
-            let return_type = env.current_fn.as_ref()
-                .and_then(|name| env.functions.get(name).map(|f| f.return_type.clone()))
-                .unwrap_or(PlutoType::Void);
-            for (i, stmt) in stmts.iter().enumerate() {
-                if i < stmts.len() - 1 {
-                    super::check::check_block_stmt(&stmt.node, stmt.span, env, &return_type)?;
-                }
+    for handler in handlers {
+        let handler_type: Option<PlutoType> = match handler {
+            CatchHandler::Wildcard { var, body } => {
+                infer_catch_body(var, PlutoType::Error, body, env)?
             }
-            // Determine result type from last statement
-            let t = if let Some(last) = stmts.last() {
-                match &last.node {
-                    Stmt::Expr(e) => infer_expr(&e.node, e.span, env, None)?,
-                    Stmt::Return(_) => {
-                        super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
-                        env.pop_scope();
-                        // Diverging — skip compat check
-                        return Ok(success_type);
-                    }
-                    _ => {
-                        super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
-                        PlutoType::Void
-                    }
+            CatchHandler::Typed { var, error_type, body } => {
+                if !env.errors.contains_key(&error_type.node) {
+                    return Err(CompileError::type_err(
+                        format!("unknown error type '{}'", error_type.node),
+                        error_type.span,
+                    ));
                 }
-            } else {
-                PlutoType::Void
-            };
-            env.pop_scope();
-            t
-        }
-        CatchHandler::Typed { var, error_type, body } => {
-            if !env.errors.contains_key(&error_type.node) {
-                return Err(CompileError::type_err(
-                    format!("unknown error type '{}'", error_type.node),
-                    error_type.span,
-                ));
+                // Bind the var with the concrete error type so its fields are
+                // accessible in the body (field access on an error resolves via
+                // env.errors — see Expr::FieldAccess).
+                infer_catch_body(var, PlutoType::Class(error_type.node.clone()), body, env)?
             }
-            env.push_scope();
-            // Bind the var with the concrete error type so its fields are
-            // accessible in the body (field access on an error resolves via
-            // env.errors — see Expr::FieldAccess).
-            env.define(var.node.clone(), PlutoType::Class(error_type.node.clone()), var.span)?;
-            let stmts = &body.node.stmts;
-            let return_type = env.current_fn.as_ref()
-                .and_then(|name| env.functions.get(name).map(|f| f.return_type.clone()))
-                .unwrap_or(PlutoType::Void);
-            for (i, stmt) in stmts.iter().enumerate() {
-                if i < stmts.len() - 1 {
-                    super::check::check_block_stmt(&stmt.node, stmt.span, env, &return_type)?;
-                }
+            CatchHandler::Shorthand(fallback) => {
+                Some(infer_expr(&fallback.node, fallback.span, env, None)?)
             }
-            let t = if let Some(last) = stmts.last() {
-                match &last.node {
-                    Stmt::Expr(e) => infer_expr(&e.node, e.span, env, None)?,
-                    Stmt::Return(_) => {
-                        super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
-                        env.pop_scope();
-                        return Ok(success_type);
-                    }
-                    _ => {
-                        super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
-                        PlutoType::Void
-                    }
-                }
-            } else {
-                PlutoType::Void
-            };
-            env.pop_scope();
-            t
+        };
+        // A diverging handler (ends in `return`) imposes no type constraint.
+        if let Some(t) = handler_type
+            && !types_compatible(&t, &success_type, env)
+        {
+            return Err(CompileError::type_err(
+                format!("catch handler type mismatch: expected {success_type}, found {t}"),
+                span,
+            ));
         }
-        CatchHandler::Shorthand(fallback) => {
-            infer_expr(&fallback.node, fallback.span, env, None)?
-        }
-    };
-    if !types_compatible(&handler_type, &success_type, env) {
-        return Err(CompileError::type_err(
-            format!("catch handler type mismatch: expected {success_type}, found {handler_type}"),
-            span,
-        ));
     }
     Ok(success_type)
+}
+
+/// Type-check a catch handler body with `var` bound to `var_type`. Returns the
+/// body's result type, or None if it diverges (ends in `return`).
+fn infer_catch_body(
+    var: &Spanned<String>,
+    var_type: PlutoType,
+    body: &Spanned<crate::parser::ast::Block>,
+    env: &mut TypeEnv,
+) -> Result<Option<PlutoType>, CompileError> {
+    env.push_scope();
+    env.define(var.node.clone(), var_type, var.span)?;
+    let stmts = &body.node.stmts;
+    let return_type = env.current_fn.as_ref()
+        .and_then(|name| env.functions.get(name).map(|f| f.return_type.clone()))
+        .unwrap_or(PlutoType::Void);
+    for (i, stmt) in stmts.iter().enumerate() {
+        if i < stmts.len() - 1 {
+            super::check::check_block_stmt(&stmt.node, stmt.span, env, &return_type)?;
+        }
+    }
+    let result = if let Some(last) = stmts.last() {
+        match &last.node {
+            Stmt::Expr(e) => Some(infer_expr(&e.node, e.span, env, None)?),
+            Stmt::Return(_) => {
+                super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
+                None
+            }
+            _ => {
+                super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
+                Some(PlutoType::Void)
+            }
+        }
+    } else {
+        Some(PlutoType::Void)
+    };
+    env.pop_scope();
+    Ok(result)
 }
 
 fn infer_method_call(

@@ -1234,12 +1234,14 @@ fn check_expr_for_mut_method_call(
         Expr::Propagate { expr: inner } | Expr::Cast { expr: inner, .. } | Expr::Spawn { call: inner } => {
             check_expr_for_mut_method_call(&inner.node, inner.span, class_name, env)?;
         }
-        Expr::Catch { expr: inner, handler } => {
+        Expr::Catch { expr: inner, handlers } => {
             check_expr_for_mut_method_call(&inner.node, inner.span, class_name, env)?;
-            if let CatchHandler::Shorthand(expr) = handler {
-                check_expr_for_mut_method_call(&expr.node, expr.span, class_name, env)?;
+            for handler in handlers {
+                if let CatchHandler::Shorthand(expr) = handler {
+                    check_expr_for_mut_method_call(&expr.node, expr.span, class_name, env)?;
+                }
             }
-            // Note: Wildcard bodies are checked via the visitor
+            // Note: Wildcard/Typed bodies are checked via the visitor
         }
         Expr::Call { args, .. } => {
             for arg in args {

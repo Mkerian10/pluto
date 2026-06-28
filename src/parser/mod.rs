@@ -2856,13 +2856,31 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Postfix catch — error handling (must be on same line via peek_raw)
+            // Postfix catch — error handling. The first `catch` must be on the
+            // same line as the expression (peek_raw); subsequent chained
+            // handlers may follow a newline after the previous handler block.
             if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Catch) {
-                self.advance(); // consume 'catch'
-                let (handler, end) = self.parse_catch_handler()?;
+                let mut handlers = Vec::new();
+                let mut end = lhs.span.end;
+                loop {
+                    self.advance(); // consume 'catch'
+                    let (handler, h_end) = self.parse_catch_handler()?;
+                    end = h_end;
+                    handlers.push(handler);
+                    // Look past newlines for another `catch` in the chain.
+                    let mut i = self.pos;
+                    while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+                        i += 1;
+                    }
+                    if i < self.tokens.len() && matches!(self.tokens[i].node, Token::Catch) {
+                        self.pos = i; // skip the newlines, continue the chain
+                    } else {
+                        break;
+                    }
+                }
                 let span = Span::new(lhs.span.start, end);
                 lhs = Spanned::new(
-                    Expr::Catch { expr: Box::new(lhs), handler },
+                    Expr::Catch { expr: Box::new(lhs), handlers },
                     span,
                 );
                 continue;
