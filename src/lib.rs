@@ -995,6 +995,48 @@ pub fn detect_system_file(entry_file: &Path) -> Result<Option<parser::ast::Progr
     }
 }
 
+/// The unqualified (module-prefix-stripped) names of service classes served via
+/// `serve` in a module program. A service is served by `serve <expr> on <port>`
+/// where `<expr>` is a struct literal of the class or a variable bound to one in
+/// the same function body. Mirrors the RPC interface tracing in `marshal.rs`.
+fn collect_served_services(prog: &parser::ast::Program) -> std::collections::HashSet<String> {
+    use parser::ast::{Stmt, Expr};
+    use std::collections::{HashMap, HashSet};
+
+    let unqual = |s: &str| s.rsplit('.').next().unwrap_or(s).to_string();
+    let mut bodies: Vec<&parser::ast::Block> = Vec::new();
+    for f in &prog.functions { bodies.push(&f.node.body.node); }
+    for c in &prog.classes { for m in &c.node.methods { bodies.push(&m.node.body.node); } }
+    for s in &prog.stages { for m in &s.node.methods { bodies.push(&m.node.body.node); } }
+    if let Some(a) = &prog.app { for m in &a.node.methods { bodies.push(&m.node.body.node); } }
+
+    let mut let_structs: HashMap<String, String> = HashMap::new();
+    let mut serve_targets: Vec<Expr> = Vec::new();
+    for body in &bodies {
+        for st in &body.stmts {
+            match &st.node {
+                Stmt::Let { name, value, .. } => {
+                    if let Expr::StructLit { name: tn, .. } = &value.node {
+                        let_structs.insert(name.node.clone(), tn.node.clone());
+                    }
+                }
+                Stmt::Serve { service, .. } => serve_targets.push(service.node.clone()),
+                _ => {}
+            }
+        }
+    }
+
+    let mut served = HashSet::new();
+    for target in &serve_targets {
+        match target {
+            Expr::StructLit { name, .. } => { served.insert(unqual(&name.node)); }
+            Expr::Ident(v) => { if let Some(t) = let_structs.get(v) { served.insert(unqual(t)); } }
+            _ => {}
+        }
+    }
+    served
+}
+
 /// Compile a system file: parse the system declaration, validate members,
 /// and compile each member app as a standalone binary.
 ///
@@ -1070,6 +1112,44 @@ pub fn compile_system_file_with_stdlib(
                 ));
             }
             _ => {} // Has app, valid
+        }
+    }
+
+    // Topology conformance: the compiler sees the whole system, so every `remote`
+    // dependency must be served by some member — a dangling remote dep (a service
+    // nothing in the system provides) is a compile-time error.
+    {
+        use parser::ast::TypeExpr;
+        let unqual = |s: &str| s.rsplit('.').next().unwrap_or(s).to_string();
+        let mut served: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // (service, consuming_member, span-in-system-file)
+        let mut consumed: Vec<(String, String, crate::span::Span)> = Vec::new();
+        for member in &system_decl.node.members {
+            let Some(prog) = graph.imports.iter()
+                .find(|(n, _, _)| n == &member.module_name.node)
+                .map(|(_, p, _)| p)
+            else { continue };
+            served.extend(collect_served_services(prog));
+
+            let mut remote_fields: Vec<&parser::ast::Field> = Vec::new();
+            if let Some(app) = &prog.app { remote_fields.extend(app.node.inject_fields.iter()); }
+            for s in &prog.stages { remote_fields.extend(s.node.inject_fields.iter()); }
+            for f in remote_fields {
+                if f.is_remote {
+                    if let TypeExpr::Named(n) = &f.ty.node {
+                        consumed.push((unqual(n), member.name.node.clone(), member.module_name.span));
+                    }
+                }
+            }
+        }
+        for (svc, member_name, span) in &consumed {
+            if !served.contains(svc) {
+                return Err(CompileError::type_err(
+                    format!("system member '{member_name}' depends on remote service '{svc}', \
+                             but no member of the system serves it"),
+                    *span,
+                ));
+            }
         }
     }
 
