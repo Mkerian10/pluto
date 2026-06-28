@@ -525,3 +525,64 @@ fn system_topology_unserved_remote_dep_rejected() {
         "no member of the system serves it",
     );
 }
+
+// A client whose interface disagrees with the server's signature (string vs int).
+const TOPO_ORDERS_BADSIG: &str = "\
+pub class BillingService {
+    fn charge(self, amount: string) int {
+        return 0
+    }
+}
+
+app OrdersApp[billing: remote BillingService] {
+    fn main(self) {
+        let x = self.billing.charge(\"hi\") catch -1
+        print(x)
+    }
+}";
+
+// A client whose interface expects a method the server doesn't provide.
+const TOPO_ORDERS_EXTRA_METHOD: &str = "\
+pub class BillingService {
+    fn charge(self, amount: int) int {
+        return amount
+    }
+    fn refund(self, id: int) int {
+        return id
+    }
+}
+
+app OrdersApp[billing: remote BillingService] {
+    fn main(self) {
+        let x = self.billing.charge(10) catch -1
+        print(x)
+    }
+}";
+
+/// Conformance: the consumer's interface signature must match the server's
+/// served implementation — a mismatched parameter type is a compile error.
+#[test]
+fn system_conformance_signature_mismatch_rejected() {
+    compile_system_should_fail_with(
+        &[
+            ("main.pluto", "import billing\nimport orders\n\nsystem Shop {\n    billing_svc: billing\n    orders_svc: orders\n}"),
+            ("billing.pluto", TOPO_BILLING),
+            ("orders.pluto", TOPO_ORDERS_BADSIG),
+        ],
+        "signature differs",
+    );
+}
+
+/// Conformance: a method the consumer expects but the server doesn't provide is
+/// a compile error.
+#[test]
+fn system_conformance_missing_method_rejected() {
+    compile_system_should_fail_with(
+        &[
+            ("main.pluto", "import billing\nimport orders\n\nsystem Shop {\n    billing_svc: billing\n    orders_svc: orders\n}"),
+            ("billing.pluto", TOPO_BILLING),
+            ("orders.pluto", TOPO_ORDERS_EXTRA_METHOD),
+        ],
+        "does not provide it",
+    );
+}

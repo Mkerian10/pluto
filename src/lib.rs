@@ -1037,6 +1037,72 @@ fn collect_served_services(prog: &parser::ast::Program) -> std::collections::Has
     served
 }
 
+/// A structural, module-prefix-independent signature of a type expression, used
+/// to compare a consumer's interface against a producer's service across the
+/// system boundary (where the same type may carry different module prefixes).
+fn typeexpr_sig(te: &parser::ast::TypeExpr) -> String {
+    use parser::ast::TypeExpr;
+    match te {
+        TypeExpr::Named(n) => n.rsplit('.').next().unwrap_or(n).to_string(),
+        TypeExpr::Array(e) => format!("[{}]", typeexpr_sig(&e.node)),
+        TypeExpr::Nullable(i) => format!("{}?", typeexpr_sig(&i.node)),
+        TypeExpr::Qualified { name, .. } => name.rsplit('.').next().unwrap_or(name).to_string(),
+        TypeExpr::Generic { name, type_args } => format!(
+            "{}<{}>", name,
+            type_args.iter().map(|a| typeexpr_sig(&a.node)).collect::<Vec<_>>().join(",")
+        ),
+        TypeExpr::Stream(i) => format!("stream<{}>", typeexpr_sig(&i.node)),
+        TypeExpr::Fn { params, return_type } => format!(
+            "fn({})->{}",
+            params.iter().map(|p| typeexpr_sig(&p.node)).collect::<Vec<_>>().join(","),
+            typeexpr_sig(&return_type.node)
+        ),
+    }
+}
+
+/// Check that a consumer's interface class conforms to the producer's served
+/// class: every method the consumer expects must exist on the server with a
+/// matching parameter and return signature. The server may have extra methods.
+fn check_service_conformance(
+    service: &str,
+    iface: &parser::ast::ClassDecl,
+    served: &parser::ast::ClassDecl,
+    consumer: &str,
+    producer: &str,
+    span: crate::span::Span,
+) -> Result<(), CompileError> {
+    let method_sig = |f: &parser::ast::Function| -> (Vec<String>, String) {
+        let params = f.params.iter()
+            .filter(|p| p.name.node != "self")
+            .map(|p| typeexpr_sig(&p.ty.node))
+            .collect();
+        let ret = f.return_type.as_ref().map(|t| typeexpr_sig(&t.node)).unwrap_or_else(|| "void".to_string());
+        (params, ret)
+    };
+    for m in &iface.methods {
+        let mname = &m.node.name.node;
+        let Some(sm) = served.methods.iter().find(|x| x.node.name.node == *mname) else {
+            return Err(CompileError::type_err(
+                format!("service '{service}': consumer '{consumer}' expects method '{mname}', \
+                         but server '{producer}' does not provide it"),
+                span,
+            ));
+        };
+        let (ip, ir) = method_sig(&m.node);
+        let (sp, sr) = method_sig(&sm.node);
+        if ip != sp || ir != sr {
+            return Err(CompileError::type_err(
+                format!("service '{service}': method '{mname}' signature differs between \
+                         consumer '{consumer}' ({}) and server '{producer}' ({})",
+                    format_args!("({}) {}", ip.join(", "), ir),
+                    format_args!("({}) {}", sp.join(", "), sr)),
+                span,
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Compile a system file: parse the system declaration, validate members,
 /// and compile each member app as a standalone binary.
 ///
@@ -1119,17 +1185,25 @@ pub fn compile_system_file_with_stdlib(
     // dependency must be served by some member — a dangling remote dep (a service
     // nothing in the system provides) is a compile-time error.
     {
-        use parser::ast::TypeExpr;
+        use parser::ast::{TypeExpr, ClassDecl};
         let unqual = |s: &str| s.rsplit('.').next().unwrap_or(s).to_string();
-        let mut served: std::collections::HashSet<String> = std::collections::HashSet::new();
-        // (service, consuming_member, span-in-system-file)
-        let mut consumed: Vec<(String, String, crate::span::Span)> = Vec::new();
+        // service -> (producer_member, served class definition)
+        let mut served: std::collections::HashMap<String, (String, &ClassDecl)> =
+            std::collections::HashMap::new();
+        // (service, consumer_member, consumer's local interface class if any, span)
+        let mut consumed: Vec<(String, String, Option<&ClassDecl>, crate::span::Span)> = Vec::new();
+
         for member in &system_decl.node.members {
             let Some(prog) = graph.imports.iter()
                 .find(|(n, _, _)| n == &member.module_name.node)
                 .map(|(_, p, _)| p)
             else { continue };
-            served.extend(collect_served_services(prog));
+
+            for svc_name in collect_served_services(prog) {
+                if let Some(cd) = prog.classes.iter().find(|c| unqual(&c.node.name.node) == svc_name) {
+                    served.insert(svc_name, (member.name.node.clone(), &cd.node));
+                }
+            }
 
             let mut remote_fields: Vec<&parser::ast::Field> = Vec::new();
             if let Some(app) = &prog.app { remote_fields.extend(app.node.inject_fields.iter()); }
@@ -1137,18 +1211,33 @@ pub fn compile_system_file_with_stdlib(
             for f in remote_fields {
                 if f.is_remote {
                     if let TypeExpr::Named(n) = &f.ty.node {
-                        consumed.push((unqual(n), member.name.node.clone(), member.module_name.span));
+                        let svc = unqual(n);
+                        // The consumer's interface class, if defined in this member.
+                        let iface = prog.classes.iter()
+                            .find(|c| unqual(&c.node.name.node) == svc)
+                            .map(|c| &c.node);
+                        consumed.push((svc, member.name.node.clone(), iface, member.module_name.span));
                     }
                 }
             }
         }
-        for (svc, member_name, span) in &consumed {
-            if !served.contains(svc) {
-                return Err(CompileError::type_err(
-                    format!("system member '{member_name}' depends on remote service '{svc}', \
-                             but no member of the system serves it"),
-                    *span,
-                ));
+
+        for (svc, member_name, iface, span) in &consumed {
+            match served.get(svc) {
+                None => {
+                    return Err(CompileError::type_err(
+                        format!("system member '{member_name}' depends on remote service '{svc}', \
+                                 but no member of the system serves it"),
+                        *span,
+                    ));
+                }
+                // Conformance: when the consumer has a local interface for the
+                // service, its methods must match the served implementation.
+                Some((producer, served_class)) => {
+                    if let Some(iface) = iface {
+                        check_service_conformance(svc, iface, served_class, member_name, producer, *span)?;
+                    }
+                }
             }
         }
     }
