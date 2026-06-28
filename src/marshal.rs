@@ -27,16 +27,24 @@ use crate::typeck::env::TypeEnv;
 /// that cross stage boundaries, and generates marshal/unmarshal functions.
 /// These are injected into the Program AST before typeck.
 pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileError> {
-    if program.stages.is_empty() {
-        return Ok(()); // No stages, no marshaling needed
+    let rpc_interfaces = collect_rpc_interface_classes(program);
+    if program.stages.is_empty() && rpc_interfaces.is_empty() {
+        return Ok(()); // No stages and no RPC boundaries: no marshaling needed
     }
 
-    // Skip marshaler generation if wire module isn't available
-    // Check for wire.wire_value_encoder function (proves wire module was imported and flattened)
+    // Marshaling needs std.wire. For stage-only programs we skip silently (back-
+    // compat); for RPC with complex types it's an error to omit the import.
     let has_wire = program.functions.iter().any(|f| {
         f.node.name.node == "wire.wire_value_encoder"
     });
     if !has_wire {
+        // Only fail if an RPC interface actually carries a non-primitive type.
+        let needs_wire = !collect_types_from_stage_methods(program)?.is_empty();
+        if needs_wire && !rpc_interfaces.is_empty() {
+            return Err(CompileError::codegen(
+                "RPC with complex (non-primitive) types requires `import std.wire`".to_string(),
+            ));
+        }
         return Ok(());
     }
 
@@ -101,17 +109,12 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
 
             let marshal_fn = generate_marshal_class(&class_decl.node)?;
             let unmarshal_fn = generate_unmarshal_class(&class_decl.node)?;
-
-            // // Debug: print generated functions
-            // if type_name == "Item" || type_name == "Data" {
-            //     eprintln!("\n=== Generated __marshal_{} ===", type_name);
-            //     eprintln!("{}", crate::pretty::pretty_print_function(&marshal_fn.node));
-            //     eprintln!("\n=== Generated __unmarshal_{} ===", type_name);
-            //     eprintln!("{}", crate::pretty::pretty_print_function(&unmarshal_fn.node));
-            // }
-
             generated_functions.push(marshal_fn);
             generated_functions.push(unmarshal_fn);
+            // Wire wrappers (T <-> JSON string) so RPC codegen can encode/decode
+            // a complex value with a single call.
+            generated_functions.push(generate_wire_encode(type_name));
+            generated_functions.push(generate_wire_decode(type_name));
         } else if let Some(enum_decl) = program.enums.iter().find(|e| &e.node.name.node == type_name) {
             // Skip generic enums (they'll be handled above)
             if !enum_decl.node.type_params.is_empty() {
@@ -120,6 +123,8 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
 
             generated_functions.push(generate_marshal_enum(&enum_decl.node)?);
             generated_functions.push(generate_unmarshal_enum(&enum_decl.node)?);
+            generated_functions.push(generate_wire_encode(type_name));
+            generated_functions.push(generate_wire_decode(type_name));
         }
     }
 
@@ -196,6 +201,61 @@ pub fn generate_marshalers_phase_b(
 /// Collects all types that cross stage boundaries (stage pub method parameters and returns).
 /// Returns a set of type names (classes and enums) that need marshalers.
 /// Uses fixed-point expansion to recursively collect nested types from class fields and enum variants.
+/// Top-level statements (no nested-block recursion) of every function/method
+/// body in the program. Enough to find `let svc = Svc {..}` / `serve svc ...`
+/// at the natural place they appear (the entry function body).
+fn each_top_level_stmt<'a>(program: &'a Program, mut f: impl FnMut(&'a Stmt)) {
+    let bodies = program.functions.iter().map(|x| &x.node.body)
+        .chain(program.classes.iter().flat_map(|c| c.node.methods.iter().map(|m| &m.node.body)))
+        .chain(program.stages.iter().flat_map(|s| s.node.methods.iter().map(|m| &m.node.body)))
+        .chain(program.app.iter().flat_map(|a| a.node.methods.iter().map(|m| &m.node.body)));
+    for body in bodies {
+        for st in &body.node.stmts {
+            f(&st.node);
+        }
+    }
+}
+
+/// The classes that act as RPC interfaces: the type behind every `remote` dep,
+/// and the class of every value passed to `serve` (traced to its `let`).
+fn collect_rpc_interface_classes(program: &Program) -> HashSet<String> {
+    let mut classes = HashSet::new();
+
+    let mut add_remote = |fields: &[crate::parser::ast::Field]| {
+        for fld in fields {
+            if fld.is_remote {
+                if let TypeExpr::Named(n) = &fld.ty.node {
+                    classes.insert(n.clone());
+                }
+            }
+        }
+    };
+    if let Some(app) = &program.app { add_remote(&app.node.inject_fields); }
+    for s in &program.stages { add_remote(&s.node.inject_fields); }
+
+    // Trace `serve <svc>`: map `let svc = Type {..}` then resolve serve targets.
+    let mut let_structs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut serve_targets: Vec<Expr> = Vec::new();
+    each_top_level_stmt(program, |st| match st {
+        Stmt::Let { name, value, .. } => {
+            if let Expr::StructLit { name: tn, .. } = &value.node {
+                let_structs.insert(name.node.clone(), tn.node.clone());
+            }
+        }
+        Stmt::Serve { service, .. } => serve_targets.push(service.node.clone()),
+        _ => {}
+    });
+    for target in &serve_targets {
+        match target {
+            Expr::StructLit { name, .. } => { classes.insert(name.node.clone()); }
+            Expr::Ident(v) => { if let Some(t) = let_structs.get(v) { classes.insert(t.clone()); } }
+            _ => {}
+        }
+    }
+
+    classes
+}
+
 fn collect_types_from_stage_methods(program: &Program) -> Result<HashSet<String>, CompileError> {
     let mut types = HashSet::new();
 
@@ -217,6 +277,23 @@ fn collect_types_from_stage_methods(program: &Program) -> Result<HashSet<String>
             // Collect from return type
             if let Some(ref ret_type) = method.node.return_type {
                 collect_types_from_type_expr(&ret_type.node, &mut types);
+            }
+        }
+    }
+
+    // Seed from RPC boundaries: the interface classes behind `remote` deps and
+    // the classes passed to `serve`. We collect those classes' method param and
+    // return types so complex values can cross the wire.
+    for cname in collect_rpc_interface_classes(program) {
+        if let Some(cd) = program.classes.iter().find(|c| c.node.name.node == cname) {
+            for m in &cd.node.methods {
+                for p in &m.node.params {
+                    if p.name.node == "self" { continue; }
+                    collect_types_from_type_expr(&p.ty.node, &mut types);
+                }
+                if let Some(rt) = &m.node.return_type {
+                    collect_types_from_type_expr(&rt.node, &mut types);
+                }
             }
         }
     }
@@ -1008,6 +1085,85 @@ fn mk_field_access(object: &str, field: &str) -> Expr {
         object: Box::new(Spanned { node: mk_var(object), span: mk_span() }),
         field: Spanned { node: field.to_string(), span: mk_span() },
     }
+}
+
+/// A plain function call by (possibly module-qualified) name, e.g.
+/// `wire.wire_value_encoder()`. Unlike `mk_call`, a dot here is part of the
+/// function name (module prefix), not a method receiver.
+fn mk_func_call(name: &str, args: Vec<Expr>) -> Expr {
+    Expr::Call {
+        name: Spanned { node: name.to_string(), span: mk_span() },
+        type_args: vec![],
+        args: args.into_iter().map(|e| Spanned { node: e, span: mk_span() }).collect(),
+        target_id: None,
+    }
+}
+
+fn mk_let(name: &str, ty: Option<TypeExpr>, value: Expr) -> Spanned<Stmt> {
+    Spanned {
+        node: Stmt::Let {
+            name: Spanned { node: name.to_string(), span: mk_span() },
+            ty: ty.map(|t| Spanned { node: t, span: mk_span() }),
+            value: Spanned { node: value, span: mk_span() },
+            is_mut: false,
+        },
+        span: mk_span(),
+    }
+}
+
+/// Build a `fn <name>(<param>: <param_ty>) <ret_ty> { <body> }` AST function.
+fn mk_function(name: String, param: (&str, TypeExpr), ret: Option<TypeExpr>, body: Vec<Spanned<Stmt>>) -> Spanned<Function> {
+    Spanned {
+        node: Function {
+            id: Uuid::new_v4(),
+            name: Spanned { node: name, span: mk_span() },
+            type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
+            params: vec![Param {
+                id: Uuid::new_v4(),
+                name: Spanned { node: param.0.to_string(), span: mk_span() },
+                ty: Spanned { node: param.1, span: mk_span() },
+                is_mut: false,
+            }],
+            return_type: ret.map(|t| Spanned { node: t, span: mk_span() }),
+            contracts: vec![],
+            body: Spanned { node: Block { stmts: body }, span: mk_span() },
+            is_pub: false,
+            is_override: false,
+            is_generator: false,
+        },
+        span: mk_span(),
+    }
+}
+
+/// `fn __wire_encode_<T>(value: T) string` — marshal a value to its JSON wire string.
+fn generate_wire_encode(type_name: &str) -> Spanned<Function> {
+    let fn_name = format!("__wire_encode_{}", type_name.replace("$$", "__"));
+    let marshal_fn = format!("__marshal_{}", type_name.replace("$$", "__"));
+    let body = vec![
+        mk_let("__enc", None, mk_func_call("wire.wire_value_encoder", vec![])),
+        mk_stmt_expr(mk_func_call(&marshal_fn, vec![mk_var("value"), mk_var("__enc")])),
+        mk_let("__fmt", None, mk_func_call("wire.json_wire_format", vec![])),
+        mk_return(mk_method_call("__fmt", "serialize", vec![
+            mk_method_call("__enc", "result", vec![]),
+        ])),
+    ];
+    mk_function(fn_name, ("value", TypeExpr::Named(type_name.to_string())),
+                Some(TypeExpr::Named("string".to_string())), body)
+}
+
+/// `fn __wire_decode_<T>(data: string) T` — parse a JSON wire string back to T.
+fn generate_wire_decode(type_name: &str) -> Spanned<Function> {
+    let fn_name = format!("__wire_decode_{}", type_name.replace("$$", "__"));
+    let unmarshal_fn = format!("__unmarshal_{}", type_name.replace("$$", "__"));
+    let body = vec![
+        mk_let("__fmt", None, mk_func_call("wire.json_wire_format", vec![])),
+        mk_let("__wv", None, mk_propagate(mk_method_call("__fmt", "deserialize", vec![mk_var("data")]))),
+        mk_let("__dec", None, mk_func_call("wire.wire_value_decoder", vec![mk_var("__wv")])),
+        mk_return(mk_propagate(mk_func_call(&unmarshal_fn, vec![mk_var("__dec")]))),
+    ];
+    mk_function(fn_name, ("data", TypeExpr::Named("string".to_string())),
+                Some(TypeExpr::Named(type_name.to_string())), body)
 }
 
 fn mk_propagate(expr: Expr) -> Expr {

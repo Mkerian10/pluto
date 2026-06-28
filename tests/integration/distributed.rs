@@ -289,3 +289,77 @@ fn serve_generated_server_round_trips() {
 
     assert_eq!(String::from_utf8_lossy(&out.stdout), "result:42\n");
 }
+
+// ── Phase 4: complex types over the wire ────────────────────────────────────────
+
+// Server exposing a method that takes AND returns a struct. Both sides import
+// std.wire; the generated marshalers carry the struct as JSON across the socket.
+const STRUCT_SERVER_SRC: &str = "\
+import std.wire
+
+class User {
+    id: int
+    name: string
+}
+
+class Echo {
+    seed: int
+    fn relabel(self, u: User) User {
+        return User { id: u.id, name: u.name + \"!\" }
+    }
+}
+
+fn main() {
+    let e = Echo { seed: 1 }
+    serve e on 0
+}";
+
+const STRUCT_IFACE: &str = "\
+pub class User {
+    id: int
+    name: string
+}
+pub class Echo {
+    fn relabel(self, u: User) User {
+        return u
+    }
+}";
+
+const STRUCT_CLIENT_SRC: &str = "\
+import std.wire
+import echo
+
+app App[e: remote echo.Echo] {
+    fn main(self) {
+        let input = echo.User { id: 3, name: \"bob\" }
+        let out = self.e.relabel(input) catch echo.User { id: -1, name: \"ERR\" }
+        print(f\"id={out.id} name={out.name}\")
+    }
+}";
+
+/// A struct crosses the wire in both directions: the client sends a `User`, the
+/// server relabels it and returns a `User` — marshaled as JSON by the generated
+/// wire wrappers on each side.
+#[test]
+fn complex_type_round_trips_over_rpc() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", STRUCT_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("echo.pluto", STRUCT_IFACE), ("main.pluto", STRUCT_CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_ECHO", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "id=3 name=bob!\n");
+}

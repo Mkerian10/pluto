@@ -72,6 +72,18 @@ impl<'a> LowerContext<'a> {
         results[0]
     }
 
+    /// Call a generated/user Pluto function by name (from func_ids), returning
+    /// its first result. Used to invoke synthesized helpers like the wire
+    /// encode/decode wrappers from RPC lowering.
+    fn call_named_func(&mut self, name: &str, args: &[Value]) -> Result<Value, CompileError> {
+        let func_id = self.func_ids.get(name).ok_or_else(|| {
+            CompileError::codegen(format!("internal: missing generated function '{name}'"))
+        })?;
+        let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+        let call = self.builder.ins().call(func_ref, args);
+        Ok(self.builder.inst_results(call)[0])
+    }
+
     /// Call a runtime function that returns void.
     fn call_runtime_void(&mut self, name: &str, args: &[Value]) {
         let func_ref = self.module.declare_func_in_func(self.runtime.get(name), self.builder.func);
@@ -610,7 +622,8 @@ impl<'a> LowerContext<'a> {
 
         // Collect dispatchable methods (owned, to release the env borrow before
         // we start mutating the builder): (method_name, mangled, arg_types, return).
-        let supported = |t: &PlutoType| matches!(t, PlutoType::Int | PlutoType::String);
+        let supported = |t: &PlutoType| matches!(t,
+            PlutoType::Int | PlutoType::String | PlutoType::Class(_) | PlutoType::Enum(_));
         let mut methods: Vec<(String, String, Vec<PlutoType>, PlutoType)> = Vec::new();
         if let Some(info) = self.env.classes.get(&class_name) {
             for mname in &info.methods {
@@ -662,6 +675,9 @@ impl<'a> LowerContext<'a> {
                 let field = self.call_runtime("__pluto_request_field", &[req, idx]);
                 let v = match aty {
                     PlutoType::Int => self.call_runtime("__pluto_parse_long", &[field]),
+                    PlutoType::Class(tn) | PlutoType::Enum(tn) => {
+                        self.call_named_func(&format!("__wire_decode_{tn}"), &[field])?
+                    }
                     _ => field, // string passed through
                 };
                 call_args.push(v);
@@ -672,12 +688,17 @@ impl<'a> LowerContext<'a> {
             let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
             let call = self.builder.ins().call(func_ref, &call_args);
             let resp = match ret {
+                PlutoType::Void => self.make_string_literal("")?,
                 PlutoType::Int => {
                     let r = self.builder.inst_results(call)[0];
                     self.call_runtime("__pluto_int_to_string", &[r])
                 }
                 PlutoType::String => self.builder.inst_results(call)[0],
-                _ => self.make_string_literal("")?, // void
+                PlutoType::Class(tn) | PlutoType::Enum(tn) => {
+                    let r = self.builder.inst_results(call)[0];
+                    self.call_named_func(&format!("__wire_encode_{tn}"), &[r])?
+                }
+                _ => self.make_string_literal("")?,
             };
             self.call_runtime("__pluto_socket_write", &[conn, resp]);
             self.builder.ins().jump(close_bb, &[]);
@@ -3144,9 +3165,14 @@ impl<'a> LowerContext<'a> {
                     let s = match aty {
                         PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[av]),
                         PlutoType::String => av,
+                        // Complex types: marshal to a JSON wire string via the
+                        // generated `__wire_encode_<T>` wrapper.
+                        PlutoType::Class(tn) | PlutoType::Enum(tn) => {
+                            self.call_named_func(&format!("__wire_encode_{tn}"), &[av])?
+                        }
                         other => return Err(CompileError::codegen(format!(
                             "remote call '{}.{}': unsupported argument type {other} \
-                             (Phase 2 transport supports int and string)",
+                             (supported: int, string, and class/enum via std.wire)",
                             cname, method.node
                         ))),
                     };
@@ -3190,13 +3216,19 @@ impl<'a> LowerContext<'a> {
                 // Success: parse the response into the declared return type.
                 self.builder.switch_to_block(ok_bb);
                 self.builder.seal_block(ok_bb);
-                let parsed = match ret_type {
+                let parsed = match &ret_type {
                     PlutoType::Int => self.call_runtime("__pluto_parse_long", &[resp]),
                     PlutoType::String => resp,
                     PlutoType::Void => self.builder.ins().iconst(types::I64, 0),
+                    // Complex types: unmarshal the JSON wire string. The decode
+                    // wrapper is fallible; a malformed response sets the TLS error,
+                    // which the `!`/`catch` already wrapping this remote call sees.
+                    PlutoType::Class(tn) | PlutoType::Enum(tn) => {
+                        self.call_named_func(&format!("__wire_decode_{tn}"), &[resp])?
+                    }
                     other => return Err(CompileError::codegen(format!(
                         "remote call '{}.{}': unsupported return type {other} \
-                         (Phase 2 transport supports int, string, and void)",
+                         (supported: int, string, void, and class/enum via std.wire)",
                         cname, method.node
                     ))),
                 };
