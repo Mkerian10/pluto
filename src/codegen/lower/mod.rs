@@ -72,6 +72,18 @@ impl<'a> LowerContext<'a> {
         results[0]
     }
 
+    /// Call a generated/user Pluto function by name (from func_ids), returning
+    /// its first result. Used to invoke synthesized helpers like the wire
+    /// encode/decode wrappers from RPC lowering.
+    fn call_named_func(&mut self, name: &str, args: &[Value]) -> Result<Value, CompileError> {
+        let func_id = self.func_ids.get(name).ok_or_else(|| {
+            CompileError::codegen(format!("internal: missing generated function '{name}'"))
+        })?;
+        let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+        let call = self.builder.ins().call(func_ref, args);
+        Ok(self.builder.inst_results(call)[0])
+    }
+
     /// Call a runtime function that returns void.
     fn call_runtime_void(&mut self, name: &str, args: &[Value]) {
         let func_ref = self.module.declare_func_in_func(self.runtime.get(name), self.builder.func);
@@ -411,6 +423,12 @@ impl<'a> LowerContext<'a> {
         }
         match stmt {
             Stmt::Let { name, ty, value, .. } => self.lower_let(name, ty, value),
+            Stmt::Serve { service, port } => {
+                self.lower_serve(service, port)?;
+                // The accept loop never returns; nothing after it is reachable.
+                *terminated = true;
+                Ok(())
+            }
             Stmt::LetChan { sender, receiver, elem_type, capacity } => self.lower_let_chan(sender, receiver, elem_type, capacity),
             Stmt::Return(value) => {
                 let target_block = self.exit_block;
@@ -583,6 +601,130 @@ impl<'a> LowerContext<'a> {
     }
 
     // ── lower_stmt extracted helpers ─────────────────────────────────────
+
+    /// Generate an RPC dispatch loop exposing a service's methods over TCP,
+    /// matching the line protocol used by `remote` calls: requests are
+    /// `<method>\n<arg1>\n<arg2>...`, responses are the formatted return value.
+    /// Supports primitive int/string args and int/string/void returns — methods
+    /// with other signatures are skipped (not dispatchable).
+    fn lower_serve(
+        &mut self,
+        service: &crate::span::Spanned<Expr>,
+        port: &crate::span::Spanned<Expr>,
+    ) -> Result<(), CompileError> {
+        let svc_type = infer_type_for_expr(&service.node, self.env, &self.var_types);
+        let class_name = match svc_type {
+            PlutoType::Class(n) => n,
+            other => return Err(CompileError::codegen(format!(
+                "serve expects a class instance, found {other}"
+            ))),
+        };
+
+        // Collect dispatchable methods (owned, to release the env borrow before
+        // we start mutating the builder): (method_name, mangled, arg_types, return).
+        let supported = |t: &PlutoType| matches!(t,
+            PlutoType::Int | PlutoType::String | PlutoType::Class(_) | PlutoType::Enum(_));
+        let mut methods: Vec<(String, String, Vec<PlutoType>, PlutoType)> = Vec::new();
+        if let Some(info) = self.env.classes.get(&class_name) {
+            for mname in &info.methods {
+                let mangled = mangle_method(&class_name, mname);
+                let Some(sig) = self.env.functions.get(&mangled) else { continue };
+                let arg_types: Vec<PlutoType> = sig.params.iter().skip(1).cloned().collect();
+                let ret = sig.return_type.clone();
+                let ret_ok = supported(&ret) || ret == PlutoType::Void;
+                if arg_types.iter().all(supported) && ret_ok {
+                    methods.push((mname.clone(), mangled, arg_types, ret));
+                }
+            }
+        }
+
+        let svc_ptr = self.lower_expr(&service.node)?;
+        let port_val = self.lower_expr(&port.node)?;
+
+        // Bind + listen, then announce the actual bound port (so port 0 works).
+        let fd = self.call_runtime("__pluto_serve_listen", &[port_val]);
+        let actual_port = self.call_runtime("__pluto_serve_port", &[fd]);
+        self.call_runtime_void("__pluto_print_int", &[actual_port]);
+
+        // Accept loop.
+        let loop_bb = self.builder.create_block();
+        let close_bb = self.builder.create_block();
+        self.builder.ins().jump(loop_bb, &[]);
+        self.builder.switch_to_block(loop_bb);
+
+        let conn = self.call_runtime("__pluto_serve_accept", &[fd]);
+        let req = self.call_runtime("__pluto_read_framed", &[conn]);
+
+        // Guard: a failed/closed connection yields a null request — skip dispatch.
+        let dispatch_bb = self.builder.create_block();
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let req_null = self.builder.ins().icmp(IntCC::Equal, req, zero);
+        self.builder.ins().brif(req_null, close_bb, &[], dispatch_bb, &[]);
+        self.builder.switch_to_block(dispatch_bb);
+        self.builder.seal_block(dispatch_bb);
+
+        let method_str = self.call_runtime("__pluto_request_field", &[req, zero]);
+
+        // Dispatch chain: compare the method name against each candidate.
+        for (mname, mangled, arg_types, ret) in &methods {
+            let handle_bb = self.builder.create_block();
+            let next_bb = self.builder.create_block();
+            let lit = self.make_string_literal(mname)?;
+            let eq = self.call_runtime("__pluto_string_eq", &[method_str, lit]);
+            self.builder.ins().brif(eq, handle_bb, &[], next_bb, &[]);
+
+            // Handler: parse args, call the method, write the formatted result.
+            self.builder.switch_to_block(handle_bb);
+            self.builder.seal_block(handle_bb);
+            let mut call_args = vec![svc_ptr];
+            for (ai, aty) in arg_types.iter().enumerate() {
+                let idx = self.builder.ins().iconst(types::I64, (ai + 1) as i64);
+                let field = self.call_runtime("__pluto_request_field", &[req, idx]);
+                let v = match aty {
+                    PlutoType::Int => self.call_runtime("__pluto_parse_long", &[field]),
+                    PlutoType::Class(tn) | PlutoType::Enum(tn) => {
+                        self.call_named_func(&format!("__wire_decode_{tn}"), &[field])?
+                    }
+                    _ => field, // string passed through
+                };
+                call_args.push(v);
+            }
+            let func_id = self.func_ids.get(mangled).ok_or_else(|| {
+                CompileError::codegen(format!("serve: undefined method '{mangled}'"))
+            })?;
+            let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+            let call = self.builder.ins().call(func_ref, &call_args);
+            let resp = match ret {
+                PlutoType::Void => self.make_string_literal("")?,
+                PlutoType::Int => {
+                    let r = self.builder.inst_results(call)[0];
+                    self.call_runtime("__pluto_int_to_string", &[r])
+                }
+                PlutoType::String => self.builder.inst_results(call)[0],
+                PlutoType::Class(tn) | PlutoType::Enum(tn) => {
+                    let r = self.builder.inst_results(call)[0];
+                    self.call_named_func(&format!("__wire_encode_{tn}"), &[r])?
+                }
+                _ => self.make_string_literal("")?,
+            };
+            self.call_runtime("__pluto_write_framed", &[conn, resp]);
+            self.builder.ins().jump(close_bb, &[]);
+
+            self.builder.switch_to_block(next_bb);
+            self.builder.seal_block(next_bb);
+        }
+
+        // No matching method: close and loop (the client sees an empty response).
+        self.builder.ins().jump(close_bb, &[]);
+
+        self.builder.switch_to_block(close_bb);
+        self.builder.seal_block(close_bb);
+        self.call_runtime("__pluto_socket_close", &[conn]);
+        self.builder.ins().jump(loop_bb, &[]);
+        self.builder.seal_block(loop_bb);
+
+        Ok(())
+    }
 
     fn lower_let(
         &mut self,
@@ -3030,9 +3172,14 @@ impl<'a> LowerContext<'a> {
                     let s = match aty {
                         PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[av]),
                         PlutoType::String => av,
+                        // Complex types: marshal to a JSON wire string via the
+                        // generated `__wire_encode_<T>` wrapper.
+                        PlutoType::Class(tn) | PlutoType::Enum(tn) => {
+                            self.call_named_func(&format!("__wire_encode_{tn}"), &[av])?
+                        }
                         other => return Err(CompileError::codegen(format!(
                             "remote call '{}.{}': unsupported argument type {other} \
-                             (Phase 2 transport supports int and string)",
+                             (supported: int, string, and class/enum via std.wire)",
                             cname, method.node
                         ))),
                     };
@@ -3076,13 +3223,19 @@ impl<'a> LowerContext<'a> {
                 // Success: parse the response into the declared return type.
                 self.builder.switch_to_block(ok_bb);
                 self.builder.seal_block(ok_bb);
-                let parsed = match ret_type {
+                let parsed = match &ret_type {
                     PlutoType::Int => self.call_runtime("__pluto_parse_long", &[resp]),
                     PlutoType::String => resp,
                     PlutoType::Void => self.builder.ins().iconst(types::I64, 0),
+                    // Complex types: unmarshal the JSON wire string. The decode
+                    // wrapper is fallible; a malformed response sets the TLS error,
+                    // which the `!`/`catch` already wrapping this remote call sees.
+                    PlutoType::Class(tn) | PlutoType::Enum(tn) => {
+                        self.call_named_func(&format!("__wire_decode_{tn}"), &[resp])?
+                    }
                     other => return Err(CompileError::codegen(format!(
                         "remote call '{}.{}': unsupported return type {other} \
-                         (Phase 2 transport supports int, string, and void)",
+                         (supported: int, string, void, and class/enum via std.wire)",
                         cname, method.node
                     ))),
                 };

@@ -1034,6 +1034,12 @@ impl PrettyPrinter {
                 self.write("assert ");
                 self.emit_expr(&expr.node, 0);
             }
+            Stmt::Serve { service, port } => {
+                self.write("serve ");
+                self.emit_expr(&service.node, 0);
+                self.write(" on ");
+                self.emit_expr(&port.node, 0);
+            }
             Stmt::Break => self.write("break"),
             Stmt::Continue => self.write("continue"),
             Stmt::Expr(e) => self.emit_expr(&e.node, 0),

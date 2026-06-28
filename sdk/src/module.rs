@@ -644,6 +644,10 @@ fn find_expr_in_stmt<'a>(stmt: &'a Stmt, target: Span) -> Option<&'a Expr> {
         Stmt::Assert { expr } => {
             find_expr_recursive(&expr.node, expr.span, target)
         }
+        Stmt::Serve { service, port } => {
+            find_expr_recursive(&service.node, service.span, target)
+                .or_else(|| find_expr_recursive(&port.node, port.span, target))
+        }
     }
 }
 

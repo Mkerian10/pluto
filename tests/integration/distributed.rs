@@ -174,60 +174,8 @@ app Payments[billing: remote billing.BillingService] {
     }
 }";
 
-// A hand-written server that speaks the wire protocol (`<method>\\n<arg>`),
-// binds an OS-assigned port, prints it, and serves one request.
-const SERVER_SRC: &str = "\
-import std.net
-import std.strings
-
-class BillingService {
-    rate: int
-    fn charge(self, amount: int) int {
-        return amount * self.rate
-    }
-}
-
-fn main() {
-    let svc = BillingService { rate: 2 }
-    let server = net.listen(\"127.0.0.1\", 0)
-    print(f\"{server.port()}\")
-    let conn = server.accept()
-    let req = conn.read(4096)
-    let parts = strings.split(req, \"\\n\")
-    let amount = parts[1].to_int()?
-    conn.write(f\"{svc.charge(amount)}\")
-    conn.close()
-    server.close()
-}";
-
-/// A `remote` call marshals its arg, crosses a real TCP socket to a separate
-/// server process, and parses the response — `charge(21)` against a x2 service
-/// yields 42.
-#[test]
-fn remote_call_round_trips_over_socket() {
-    let (_sd, server_bin) = build_binary(&[("main.pluto", SERVER_SRC)]);
-    let (_cd, client_bin) =
-        build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLIENT_SRC)]);
-
-    // Start the server and read the port it binds.
-    let mut server = Command::new(&server_bin)
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut reader = BufReader::new(server.stdout.take().unwrap());
-    let mut port_line = String::new();
-    reader.read_line(&mut port_line).unwrap();
-    let port = port_line.trim();
-    assert!(!port.is_empty(), "server did not report a port");
-
-    let out = Command::new(&client_bin)
-        .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
-        .output()
-        .unwrap();
-    let _ = server.wait();
-
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "result:42\n");
-}
+// (The round-trip over a real socket is covered by `serve_generated_server_round_trips`
+// below, which uses the generated server — the supported, framing-compatible path.)
 
 /// When the service is unreachable, the boundary call raises NetworkError, which
 /// the caller handles via `catch` — yielding the fallback -1.
@@ -243,4 +191,194 @@ fn remote_call_raises_networkerror_when_unreachable() {
         .unwrap();
 
     assert_eq!(String::from_utf8_lossy(&out.stdout), "result:-1\n");
+}
+
+// ── Phase 3: generated server (the `serve` statement) ───────────────────────────
+
+// A server with NO hand-written protocol code: `serve` generates the accept
+// loop, request parsing, method dispatch, and reply. It prints its bound port.
+const SERVE_SERVER_SRC: &str = "\
+class BillingService {
+    rate: int
+    fn charge(self, amount: int) int {
+        return amount * self.rate
+    }
+}
+
+fn main() {
+    let svc = BillingService { rate: 2 }
+    serve svc on 0
+}";
+
+/// Both ends of the RPC are now compiler-generated: the client uses a `remote`
+/// dep, the server uses `serve`. A real two-process round-trip with no
+/// hand-written transport on either side.
+#[test]
+fn serve_generated_server_round_trips() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", SERVE_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+    assert!(!port.is_empty(), "serve did not report a port");
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "result:42\n");
+}
+
+// ── Phase 4: complex types over the wire ────────────────────────────────────────
+
+// Server exposing a method that takes AND returns a struct. Both sides import
+// std.wire; the generated marshalers carry the struct as JSON across the socket.
+const STRUCT_SERVER_SRC: &str = "\
+import std.wire
+
+class User {
+    id: int
+    name: string
+}
+
+class Echo {
+    seed: int
+    fn relabel(self, u: User) User {
+        return User { id: u.id, name: u.name + \"!\" }
+    }
+}
+
+fn main() {
+    let e = Echo { seed: 1 }
+    serve e on 0
+}";
+
+const STRUCT_IFACE: &str = "\
+pub class User {
+    id: int
+    name: string
+}
+pub class Echo {
+    fn relabel(self, u: User) User {
+        return u
+    }
+}";
+
+const STRUCT_CLIENT_SRC: &str = "\
+import std.wire
+import echo
+
+app App[e: remote echo.Echo] {
+    fn main(self) {
+        let input = echo.User { id: 3, name: \"bob\" }
+        let out = self.e.relabel(input) catch echo.User { id: -1, name: \"ERR\" }
+        print(f\"id={out.id} name={out.name}\")
+    }
+}";
+
+/// A struct crosses the wire in both directions: the client sends a `User`, the
+/// server relabels it and returns a `User` — marshaled as JSON by the generated
+/// wire wrappers on each side.
+#[test]
+fn complex_type_round_trips_over_rpc() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", STRUCT_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("echo.pluto", STRUCT_IFACE), ("main.pluto", STRUCT_CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_ECHO", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "id=3 name=bob!\n");
+}
+
+// ── Phase 5: length-framed transport (large payloads) ───────────────────────────
+
+// Returns a string of `n` 'x' chars — a payload that exceeds any single socket
+// read, exercising the length-framed transport.
+const BLOB_SERVER_SRC: &str = "\
+import std.wire
+import std.strings
+
+class Blob {
+    text: string
+}
+
+class Store {
+    seed: int
+    fn fetch(self, n: int) Blob {
+        return Blob { text: strings.repeat(\"x\", n) }
+    }
+}
+
+fn main() {
+    let s = Store { seed: 1 }
+    serve s on 0
+}";
+
+const BLOB_IFACE: &str = "\
+pub class Blob {
+    text: string
+}
+pub class Store {
+    fn fetch(self, n: int) Blob {
+        return Blob { text: \"\" }
+    }
+}";
+
+const BLOB_CLIENT_SRC: &str = "\
+import std.wire
+import store
+
+app App[store: remote store.Store] {
+    fn main(self) {
+        let b = self.store.fetch(200000) catch store.Blob { text: \"ERR\" }
+        print(f\"len={b.text.len()}\")
+    }
+}";
+
+/// A 200 KB payload round-trips intact. Without length-framing the response
+/// would be truncated at the first socket read.
+#[test]
+fn large_payload_round_trips() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", BLOB_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("store.pluto", BLOB_IFACE), ("main.pluto", BLOB_CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_STORE", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "len=200000\n");
 }

@@ -1552,6 +1552,10 @@ fn resolve_qualified_access_in_stmt(stmt: &mut Stmt, module_names: &HashSet<Stri
         Stmt::Assert { expr } => {
             resolve_qualified_access_in_expr(&mut expr.node, expr.span, module_names, enum_name_map);
         }
+        Stmt::Serve { service, port } => {
+            resolve_qualified_access_in_expr(&mut service.node, service.span, module_names, enum_name_map);
+            resolve_qualified_access_in_expr(&mut port.node, port.span, module_names, enum_name_map);
+        }
         Stmt::Break | Stmt::Continue => {}
     }
 }

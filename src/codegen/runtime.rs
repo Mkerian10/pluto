@@ -64,6 +64,16 @@ impl RuntimeRegistry {
         // Remote calls (Phase 2 transport)
         reg.declare(module, "__pluto_remote_request", &[types::I64, types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_parse_long", &[types::I64], &[types::I64])?;
+        // Serve side (generated RPC server)
+        reg.declare(module, "__pluto_serve_listen", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_serve_accept", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_serve_port", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_request_field", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_socket_read", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_socket_write", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_socket_close", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_read_framed", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_write_framed", &[types::I64, types::I64], &[types::I64])?;
 
         // Error handling
         reg.declare(module, "__pluto_raise_error", &[types::I64], &[])?;

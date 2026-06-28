@@ -40,6 +40,8 @@ pub enum Token {
     Catch,
     #[token("spawn")]
     Spawn,
+    #[token("serve")]
+    Serve,
     #[token("enum")]
     Enum,
     #[token("impl")]
@@ -301,7 +303,7 @@ pub enum Token {
 /// Returns true if the given string is a Pluto keyword.
 pub fn is_keyword(s: &str) -> bool {
     matches!(s, "fn" | "let" | "mut" | "return" | "if" | "else" | "while" | "true" | "false"
-        | "class" | "trait" | "app" | "inject" | "error" | "raise" | "catch" | "spawn"
+        | "class" | "trait" | "app" | "inject" | "error" | "raise" | "catch" | "spawn" | "serve"
         | "enum" | "impl" | "self" | "pub" | "for" | "in" | "break" | "continue"
         | "match" | "import" | "as" | "extern" | "uses" | "ambient" | "tests" | "test"
         | "invariant" | "requires" | "assert" | "select" | "default"
@@ -329,6 +331,7 @@ impl std::fmt::Display for Token {
             Token::Raise => write!(f, "raise"),
             Token::Catch => write!(f, "catch"),
             Token::Spawn => write!(f, "spawn"),
+            Token::Serve => write!(f, "serve"),
             Token::Enum => write!(f, "enum"),
             Token::Impl => write!(f, "impl"),
             Token::SelfVal => write!(f, "self"),
@@ -423,6 +426,7 @@ mod tests {
         let keywords = vec![
             "fn", "let", "mut", "return", "if", "else", "while", "true", "false",
             "class", "trait", "app", "inject", "error", "raise", "catch", "spawn",
+            "serve",
             "enum", "impl", "self", "pub", "for", "in", "break", "continue",
             "match", "import", "as", "extern", "uses", "ambient", "tests", "test",
             "invariant", "requires", "assert", "select", "default",

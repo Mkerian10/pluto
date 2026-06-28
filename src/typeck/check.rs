@@ -343,6 +343,22 @@ fn check_stmt(
                 ));
             }
         }
+        Stmt::Serve { service, port } => {
+            let svc_ty = infer_expr(&service.node, service.span, env, None)?;
+            if !matches!(svc_ty, PlutoType::Class(_)) {
+                return Err(CompileError::type_err(
+                    format!("serve expects a service object (a class instance), found {svc_ty}"),
+                    service.span,
+                ));
+            }
+            let port_ty = infer_expr(&port.node, port.span, env, None)?;
+            if port_ty != PlutoType::Int {
+                return Err(CompileError::type_err(
+                    format!("serve port must be int, found {port_ty}"),
+                    port.span,
+                ));
+            }
+        }
         Stmt::Break => {
             if env.loop_depth == 0 {
                 return Err(CompileError::type_err(

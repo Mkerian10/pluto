@@ -682,6 +682,10 @@ fn collect_dangling_in_stmt(stmt: &Stmt, span: Span, target: Uuid, out: &mut Vec
         Stmt::Assert { expr } => {
             collect_dangling_in_expr(&expr.node, expr.span, target, out);
         }
+        Stmt::Serve { service, port } => {
+            collect_dangling_in_expr(&service.node, service.span, target, out);
+            collect_dangling_in_expr(&port.node, port.span, target, out);
+        }
     }
 }
 
@@ -1013,6 +1017,10 @@ fn rename_in_stmt(stmt: &mut Stmt, id: Uuid, kind: DeclKindSimple, old_name: &st
         }
         Stmt::Assert { expr } => {
             rename_in_expr(&mut expr.node, id, kind, old_name, new_name);
+        }
+        Stmt::Serve { service, port } => {
+            rename_in_expr(&mut service.node, id, kind, old_name, new_name);
+            rename_in_expr(&mut port.node, id, kind, old_name, new_name);
         }
     }
 }

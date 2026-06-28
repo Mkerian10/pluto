@@ -304,6 +304,10 @@ fn collect_stmt_xrefs(
         Stmt::Assert { expr } => {
             collect_expr_xrefs(&expr.node, expr.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
         }
+        Stmt::Serve { service, port } => {
+            collect_expr_xrefs(&service.node, service.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
+            collect_expr_xrefs(&port.node, port.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
+        }
     }
 }
 

@@ -1,0 +1,7 @@
+// The service interface the client calls. It mirrors the server's signatures;
+// the bodies are never run on the client (calls go over the network).
+pub class BillingService {
+    fn charge(self, amount: int) int {
+        return amount
+    }
+}
