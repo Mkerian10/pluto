@@ -662,3 +662,46 @@ fn remote_call_rejected_on_interface_skew() {
 
     assert_eq!(String::from_utf8_lossy(&out.stdout), "result:-1\n");
 }
+
+/// The forked server handles connections concurrently: a real client is served
+/// promptly even while another client holds a stuck, half-open request. Under
+/// the old single-threaded server the real client would wait behind the stuck
+/// one until its 5s recv timeout; concurrently it returns almost immediately.
+#[test]
+fn serve_handles_clients_concurrently() {
+    use std::io::Write;
+    use std::net::TcpStream;
+    use std::time::{Duration, Instant};
+
+    let (_sd, server_bin) = build_binary(&[("main.pluto", SERVE_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim().to_string();
+
+    // A stuck client holds a half-open request; its handler blocks ~5s.
+    let mut stuck = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    stuck.write_all(&[0, 0, 0, 0x10]).unwrap();
+    stuck.write_all(b"charge").unwrap();
+    stuck.flush().unwrap();
+
+    // The real client should be served in well under the stuck handler's timeout.
+    let start = Instant::now();
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let elapsed = start.elapsed();
+    let _ = server.kill();
+    drop(stuck);
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "result:42\n");
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "real client took {elapsed:?} — not served concurrently with the stuck client"
+    );
+}

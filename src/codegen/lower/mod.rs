@@ -707,18 +707,34 @@ impl<'a> LowerContext<'a> {
         let actual_port = self.call_runtime("__pluto_serve_port", &[fd]);
         self.call_runtime_void("__pluto_print_int", &[actual_port]);
 
-        // Accept loop.
+        // Accept loop. Each connection is handled in a forked child, so a slow
+        // or stuck client blocks only its own child and clients are served
+        // concurrently. Each request runs in an isolated copy-on-write process.
         let loop_bb = self.builder.create_block();
+        let child_bb = self.builder.create_block();
+        let parent_bb = self.builder.create_block();
         let close_bb = self.builder.create_block();
         self.builder.ins().jump(loop_bb, &[]);
         self.builder.switch_to_block(loop_bb);
 
         let conn = self.call_runtime("__pluto_serve_accept", &[fd]);
-        let req = self.call_runtime("__pluto_read_framed", &[conn]);
-
-        // Guard: a failed/closed connection yields a null request — skip dispatch.
-        let dispatch_bb = self.builder.create_block();
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let pid = self.call_runtime("__pluto_fork", &[]);
+        let is_child = self.builder.ins().icmp(IntCC::Equal, pid, zero);
+        self.builder.ins().brif(is_child, child_bb, &[], parent_bb, &[]);
+
+        // Parent: the child owns this connection; go back to accepting.
+        self.builder.switch_to_block(parent_bb);
+        self.builder.seal_block(parent_bb);
+        self.call_runtime("__pluto_socket_close", &[conn]);
+        self.builder.ins().jump(loop_bb, &[]);
+        self.builder.seal_block(loop_bb);
+
+        // Child: handle exactly one request, then exit (via close_bb).
+        self.builder.switch_to_block(child_bb);
+        self.builder.seal_block(child_bb);
+        let req = self.call_runtime("__pluto_read_framed", &[conn]);
+        let dispatch_bb = self.builder.create_block();
         let req_null = self.builder.ins().icmp(IntCC::Equal, req, zero);
         self.builder.ins().brif(req_null, close_bb, &[], dispatch_bb, &[]);
         self.builder.switch_to_block(dispatch_bb);
@@ -800,14 +816,18 @@ impl<'a> LowerContext<'a> {
             self.builder.seal_block(next_bb);
         }
 
-        // No matching method: close and loop (the client sees an empty response).
+        // No matching method (incl. an interface-hash mismatch): the client
+        // sees an empty response. Fall through to close.
         self.builder.ins().jump(close_bb, &[]);
 
+        // Child close: close the connection and exit this handler process.
         self.builder.switch_to_block(close_bb);
         self.builder.seal_block(close_bb);
         self.call_runtime("__pluto_socket_close", &[conn]);
-        self.builder.ins().jump(loop_bb, &[]);
-        self.builder.seal_block(loop_bb);
+        let exit_ok = self.builder.ins().iconst(types::I64, 0);
+        self.call_runtime_void("__pluto_process_exit", &[exit_ok]);
+        // process_exit never returns, but Cranelift needs a terminator.
+        self.builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
 
         Ok(())
     }
