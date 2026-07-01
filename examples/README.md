@@ -302,3 +302,23 @@ cargo run -- run examples/rpc/server.pt --stdlib stdlib
 PLUTO_REMOTE_BILLINGSERVICE=127.0.0.1:9000 \
   cargo run -- run examples/rpc/client/main.pt --stdlib stdlib
 ```
+
+## distributed
+
+A whole `system` of two services, checked end to end at compile time. `billing` serves a `BillingService` that takes a `ChargeRequest` and returns a `Receipt` (structs that marshal across the wire); `orders` calls it as a `remote` dependency and handles failures with multi-catch — a typed `PaymentError` (whose `reason` field arrives from the server) and a wildcard for transport errors.
+
+The `system` declaration ties them together: before either binary is built, the compiler checks that `orders`' remote dependency is served by `billing`, that their interface signatures match, and that every error the server can raise is handled by the client.
+
+```bash
+# Compile the system → one binary per member (build/billing, build/orders)
+cargo run -- compile examples/distributed/main.pt -o examples/distributed/build --stdlib stdlib
+
+# Terminal 1 — start billing (serves on port 9000)
+./examples/distributed/build/billing
+
+# Terminal 2 — run orders, pointed at billing
+PLUTO_REMOTE_BILLINGSERVICE=127.0.0.1:9000 ./examples/distributed/build/orders
+# -> charged 30 to alice, balance now 70
+```
+
+Stop `billing` and re-run `orders` to see the wildcard path (`billing service unavailable`). Change the charge amount above the server's funds to see the typed error cross the wire (`payment declined: insufficient funds`).

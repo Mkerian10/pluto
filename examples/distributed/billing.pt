@@ -1,0 +1,37 @@
+import std.wire
+
+// The billing service: charges an account, or rejects the payment.
+error PaymentError {
+    reason: string
+}
+
+class ChargeRequest {
+    account: string
+    amount: int
+}
+
+class Receipt {
+    account: string
+    charged: int
+    balance: int
+}
+
+class BillingService {
+    funds: int
+    fn charge(self, req: ChargeRequest) Receipt {
+        if req.amount <= 0 {
+            raise PaymentError { reason: "amount must be positive" }
+        }
+        if req.amount > self.funds {
+            raise PaymentError { reason: "insufficient funds" }
+        }
+        return Receipt { account: req.account, charged: req.amount, balance: self.funds - req.amount }
+    }
+}
+
+app BillingApp {
+    fn main(self) {
+        let svc = BillingService { funds: 100 }
+        serve svc on 9000
+    }
+}

@@ -1257,28 +1257,35 @@ pub fn compile_system_file_with_stdlib(
         let module_name = &member.module_name.node;
         let member_name = &member.name.node;
 
-        // Find the module's entry point
+        // Find the module's entry point. Both formats are accepted, `.pluto`
+        // preferred over `.pt` (matching module resolution elsewhere).
         let dir_path = system_dir.join(module_name);
-        let file_path = system_dir.join(format!("{}.pluto", module_name));
+        let pluto_file = system_dir.join(format!("{}.pluto", module_name));
+        let pt_file = system_dir.join(format!("{}.pt", module_name));
 
         let entry_file = if dir_path.is_dir() {
-            // Directory module: use main.pluto if it exists, otherwise first .pluto file
+            // Directory module: prefer main.{pluto,pt}, otherwise the first source file.
             let main_pluto = dir_path.join("main.pluto");
+            let main_pt = dir_path.join("main.pt");
             if main_pluto.is_file() {
                 main_pluto
+            } else if main_pt.is_file() {
+                main_pt
             } else {
                 let mut files: Vec<PathBuf> = std::fs::read_dir(&dir_path)
                     .map_err(|e| CompileError::codegen(format!("could not read directory '{}': {e}", dir_path.display())))?
                     .filter_map(|e| e.ok())
                     .map(|e| e.path())
-                    .filter(|p| p.extension().is_some_and(|ext| ext == "pluto"))
+                    .filter(|p| p.extension().is_some_and(|ext| ext == "pluto" || ext == "pt"))
                     .collect();
-                files.sort();
+                files.sort(); // ".pluto" sorts before ".pt", so .pluto wins
                 files.into_iter().next().ok_or_else(||
-                    CompileError::codegen(format!("no .pluto files found in module directory '{}'", dir_path.display())))?
+                    CompileError::codegen(format!("no .pluto or .pt files found in module directory '{}'", dir_path.display())))?
             }
-        } else if file_path.is_file() {
-            file_path
+        } else if pluto_file.is_file() {
+            pluto_file
+        } else if pt_file.is_file() {
+            pt_file
         } else {
             return Err(CompileError::codegen(format!(
                 "cannot find module '{}': no directory or file found", module_name

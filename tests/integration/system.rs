@@ -679,3 +679,16 @@ fn system_error_conformance_undeclared_rejected() {
         "does not declare it",
     );
 }
+
+/// System members can be `.pt` source files (not only `.pluto`) — both formats
+/// are accepted, matching module resolution elsewhere.
+#[test]
+fn system_members_can_be_pt_files() {
+    let members = compile_system_project(&[
+        ("main.pluto", "import billing\nimport orders\n\nsystem Shop {\n    billing_svc: billing\n    orders_svc: orders\n}"),
+        ("billing.pt", TOPO_BILLING),
+        ("orders.pt", TOPO_ORDERS),
+    ]);
+    assert!(members.contains_key("billing_svc"));
+    assert!(members.contains_key("orders_svc"));
+}

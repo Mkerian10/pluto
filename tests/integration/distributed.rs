@@ -565,3 +565,53 @@ fn multi_catch_handles_typed_and_network_errors() {
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&down.stdout), "network error\n");
 }
+
+// ── Robustness: a stuck client must not be able to hang the server ──────────────
+
+/// A client that opens a connection, sends a partial request, then stalls must
+/// not hang the (single-threaded) server forever. The server's receive timeout
+/// drops the stuck connection and goes on to serve real clients — bounding what
+/// would otherwise be a head-of-line denial of service.
+#[test]
+fn serve_recovers_from_a_stuck_client() {
+    use std::io::Write;
+    use std::net::TcpStream;
+    use std::time::{Duration, Instant};
+
+    let (_sd, server_bin) = build_binary(&[("main.pluto", SERVE_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim().to_string();
+
+    // Stuck client: a partial length-framed request, then hold the socket open.
+    let mut stuck = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    stuck.write_all(&[0, 0, 0, 0x10]).unwrap(); // header claims 16 bytes...
+    stuck.write_all(b"charge").unwrap();        // ...but only 6 are sent, then we stall
+    stuck.flush().unwrap();
+
+    // A real client must still be served, after the server's recv timeout.
+    let mut client = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let served = loop {
+        if client.try_wait().unwrap().is_some() { break true; }
+        if Instant::now() > deadline { break false; }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    if !served { let _ = client.kill(); }
+    let out = client.wait_with_output().unwrap();
+    let _ = server.kill();
+    drop(stuck);
+
+    assert!(served, "real client hung behind a stuck client (head-of-line DoS)");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "result:42\n");
+}
