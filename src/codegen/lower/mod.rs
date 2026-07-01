@@ -607,6 +607,58 @@ impl<'a> LowerContext<'a> {
     /// `<method>\n<arg1>\n<arg2>...`, responses are the formatted return value.
     /// Supports primitive int/string args and int/string/void returns — methods
     /// with other signatures are skipped (not dispatchable).
+    /// A stable hash of a service's dispatchable interface — its method names
+    /// with parameter and return signatures. Computed identically for the served
+    /// class and a remote consumer's interface class (same method filter, same
+    /// module-prefix-independent type strings), so a version-skewed pairing of
+    /// independently-compiled binaries can be caught at the boundary. The hash is
+    /// folded into the RPC method token (`method#hash`): a mismatch matches no
+    /// dispatch arm, so the server rejects the call instead of running it with
+    /// misparsed arguments.
+    fn compute_interface_hash(&self, class_name: &str) -> String {
+        fn sig(t: &PlutoType) -> String {
+            match t {
+                PlutoType::Int => "int".to_string(),
+                PlutoType::Float => "float".to_string(),
+                PlutoType::Bool => "bool".to_string(),
+                PlutoType::Byte => "byte".to_string(),
+                PlutoType::Bytes => "bytes".to_string(),
+                PlutoType::String => "string".to_string(),
+                PlutoType::Void => "void".to_string(),
+                PlutoType::Class(n) | PlutoType::Enum(n) => n.rsplit('.').next().unwrap_or(n).to_string(),
+                PlutoType::Array(e) => format!("[{}]", sig(e)),
+                PlutoType::Nullable(i) => format!("{}?", sig(i)),
+                other => format!("{other}"),
+            }
+        }
+        let supported = |t: &PlutoType| matches!(t,
+            PlutoType::Int | PlutoType::String | PlutoType::Class(_) | PlutoType::Enum(_));
+        let mut sigs: Vec<String> = Vec::new();
+        if let Some(info) = self.env.classes.get(class_name) {
+            for mname in &info.methods {
+                let mangled = mangle_method(class_name, mname);
+                let Some(fsig) = self.env.functions.get(&mangled) else { continue };
+                let arg_types: Vec<PlutoType> = fsig.params.iter().skip(1).cloned().collect();
+                let ret = fsig.return_type.clone();
+                let ret_ok = supported(&ret) || ret == PlutoType::Void;
+                if arg_types.iter().all(supported) && ret_ok {
+                    let params = arg_types.iter().map(sig).collect::<Vec<_>>().join(",");
+                    sigs.push(format!("{mname}({params}){}", sig(&ret)));
+                }
+            }
+        }
+        sigs.sort();
+        // FNV-1a over the joined signatures — deterministic across builds (unlike
+        // DefaultHasher), so two separately-compiled binaries agree on the hash.
+        let joined = sigs.join(";");
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in joined.bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        format!("{h:016x}")
+    }
+
     fn lower_serve(
         &mut self,
         service: &crate::span::Spanned<Expr>,
@@ -643,6 +695,10 @@ impl<'a> LowerContext<'a> {
             }
         }
 
+        // The served interface's hash — folded into each dispatch token so a
+        // client compiled against a different interface matches no method.
+        let server_hash = self.compute_interface_hash(&class_name);
+
         let svc_ptr = self.lower_expr(&service.node)?;
         let port_val = self.lower_expr(&port.node)?;
 
@@ -670,11 +726,13 @@ impl<'a> LowerContext<'a> {
 
         let method_str = self.call_runtime("__pluto_request_field", &[req, zero]);
 
-        // Dispatch chain: compare the method name against each candidate.
+        // Dispatch chain: compare the request's `method#interface_hash` token
+        // against each candidate. A hash mismatch matches nothing and falls
+        // through to close — the client sees a failed call (NetworkError).
         for (mname, mangled, arg_types, ret, errs) in &methods {
             let handle_bb = self.builder.create_block();
             let next_bb = self.builder.create_block();
-            let lit = self.make_string_literal(mname)?;
+            let lit = self.make_string_literal(&format!("{mname}#{server_hash}"))?;
             let eq = self.call_runtime("__pluto_string_eq", &[method_str, lit]);
             self.builder.ins().brif(eq, handle_bb, &[], next_bb, &[]);
 
@@ -3295,7 +3353,12 @@ impl<'a> LowerContext<'a> {
                 // module's prefix (e.g. `billing.BillingService` -> `BillingService`).
                 let service_name = cname.rsplit('.').next().unwrap_or(&cname);
                 let svc_s = self.make_string_literal(service_name)?;
-                let meth_s = self.make_string_literal(&method.node)?;
+                // Send `method#interface_hash`: the server dispatches only if its
+                // served interface hashes to the same value, so a version-skewed
+                // client is rejected instead of running against a mismatched
+                // signature. The hash is compile-time constant on both sides.
+                let iface_hash = self.compute_interface_hash(&cname);
+                let meth_s = self.make_string_literal(&format!("{}#{iface_hash}", method.node))?;
                 let resp = self.call_runtime("__pluto_remote_request", &[svc_s, meth_s, payload]);
 
                 let fail_bb = self.builder.create_block();

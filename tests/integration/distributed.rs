@@ -615,3 +615,50 @@ fn serve_recovers_from_a_stuck_client() {
     assert!(served, "real client hung behind a stuck client (head-of-line DoS)");
     assert_eq!(String::from_utf8_lossy(&out.stdout), "result:42\n");
 }
+
+// ── Interface-hash handshake: reject version-skewed clients ─────────────────────
+
+// A client interface that disagrees with the server: charge takes a string, not
+// an int. Its interface hash differs, so the server won't dispatch to it.
+const SKEW_IFACE: &str = "\
+pub class BillingService {
+    fn charge(self, amount: string) int {
+        return 0
+    }
+}";
+
+const SKEW_CLIENT_SRC: &str = "\
+import billing
+
+app Payments[billing: remote billing.BillingService] {
+    fn main(self) {
+        let x = self.billing.charge(\"hi\") catch -1
+        print(f\"result:{x}\")
+    }
+}";
+
+/// A client compiled against a different interface signature is rejected by the
+/// server's interface-hash check: the call fails cleanly (NetworkError -> -1)
+/// instead of silently running the method with a misparsed argument. This is the
+/// runtime complement to the compile-time conformance check — it catches version
+/// skew between independently-compiled binaries.
+#[test]
+fn remote_call_rejected_on_interface_skew() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", SERVE_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("billing.pluto", SKEW_IFACE), ("main.pluto", SKEW_CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "result:-1\n");
+}
