@@ -16,6 +16,23 @@ cargo run -- compile <file.pt> -o <output>  # Compile a .pt source file
 cargo run -- run <file.pt>      # Compile and immediately run
 ```
 
+### Debugging the C runtime
+
+The C runtime is compiled once and cached by a content hash of its sources
+(`runtime/*.c`, `runtime/builtins.h`) in `~/.pluto/cache/runtime/`. When
+iterating on the runtime, two env vars make the otherwise-invisible cache
+decision observable:
+
+```bash
+PLUTO_VERBOSE=1          # log "runtime: cache hit (<hash>)" / "compiling fresh (<hash>)"
+PLUTO_RUNTIME_NO_CACHE=1 # bypass the disk cache — force a fresh runtime compile
+```
+
+If a runtime change seems not to take effect, check the hash with `PLUTO_VERBOSE`
+(a "cache hit" on the *same* hash means your edit didn't reach the compile). Also
+remember a fixed-port server example can collide with a leaked process from a
+prior run — which looks like a stale binary but isn't (`lsof -ti :PORT | xargs kill`).
+
 ## Compiler Pipeline
 
 Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and `compile()` (single-source-string). The full pipeline has 17 stages, orchestrated by `run_frontend()`:
