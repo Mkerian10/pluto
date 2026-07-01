@@ -674,6 +674,14 @@ impl GcBackend {
 /// Compute a content-addressed cache key for the runtime object file.
 /// The key incorporates all C source content, compilation flags, GC backend,
 /// and host platform so that any change triggers a cache miss.
+/// Emit a diagnostic line to stderr when `PLUTO_VERBOSE` is set. Used to surface
+/// build decisions (like the runtime cache) that are otherwise invisible.
+fn runtime_log(msg: &str) {
+    if std::env::var_os("PLUTO_VERBOSE").is_some() {
+        eprintln!("pluto: {msg}");
+    }
+}
+
 fn runtime_cache_key(test_mode: bool, gc: GcBackend) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -720,11 +728,23 @@ fn store_disk_cache(cache_key: &str, object_path: &Path) -> Result<(), CompileEr
 /// Uses a three-tier cache: OnceLock (in-process) → disk cache → full compilation.
 fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, CompileError> {
     let cache_key = runtime_cache_key(test_mode, gc);
+    // The cache key is a content hash of the runtime sources — but a hash with no
+    // reader can't answer "did my runtime change take effect?". `PLUTO_VERBOSE`
+    // surfaces the cache decision (and the key), and `PLUTO_RUNTIME_NO_CACHE`
+    // forces a fresh compile when iterating on the C runtime.
+    let no_cache = std::env::var_os("PLUTO_RUNTIME_NO_CACHE").is_some();
 
-    // Tier 2: Check persistent disk cache
-    if let Some(cached) = check_disk_cache(&cache_key) {
-        return Ok(cached);
+    // Tier 2: Check persistent disk cache (skipped when the cache is disabled).
+    if !no_cache {
+        if let Some(cached) = check_disk_cache(&cache_key) {
+            runtime_log(&format!("runtime: cache hit ({cache_key})"));
+            return Ok(cached);
+        }
     }
+    runtime_log(&format!(
+        "runtime: compiling fresh ({cache_key}){}",
+        if no_cache { " [PLUTO_RUNTIME_NO_CACHE]" } else { "" }
+    ));
 
     // Tier 3: Full compilation
     let gc_src = gc.gc_source();
@@ -840,8 +860,10 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
         return Err(CompileError::link("failed to link runtime"));
     }
 
-    // Store in persistent disk cache before cleaning up
-    let _ = store_disk_cache(&cache_key, &runtime_o);
+    // Store in persistent disk cache before cleaning up (skipped when disabled).
+    if !no_cache {
+        let _ = store_disk_cache(&cache_key, &runtime_o);
+    }
 
     // Cleanup intermediate files
     let _ = std::fs::remove_file(&header_h);
@@ -854,14 +876,16 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     let _ = std::fs::remove_file(&builtins_o);
     let _ = std::fs::remove_file(&coverage_o);
 
-    // Return the disk-cached path if it was stored successfully, otherwise the temp path
-    if let Some(cached) = check_disk_cache(&cache_key) {
-        let _ = std::fs::remove_file(&runtime_o);
-        let _ = std::fs::remove_dir(&dir);
-        Ok(cached)
-    } else {
-        Ok(runtime_o)
+    // Return the disk-cached path if it was stored successfully, otherwise the
+    // freshly built temp path. With the cache disabled, always use the fresh one.
+    if !no_cache {
+        if let Some(cached) = check_disk_cache(&cache_key) {
+            let _ = std::fs::remove_file(&runtime_o);
+            let _ = std::fs::remove_dir(&dir);
+            return Ok(cached);
+        }
     }
+    Ok(runtime_o)
 }
 
 /// Compile the runtime once per process (per backend) and cache the resulting .o path.
@@ -1375,3 +1399,27 @@ pub fn update_git_deps(dir: &Path) -> Result<(), CompileError> {
     Ok(())
 }
 
+
+#[cfg(test)]
+mod runtime_cache_tests {
+    use super::*;
+
+    #[test]
+    fn cache_key_is_deterministic_and_discriminates() {
+        // Same inputs -> same key, so a "cache hit" is genuinely the same runtime.
+        assert_eq!(
+            runtime_cache_key(false, GcBackend::MarkSweep),
+            runtime_cache_key(false, GcBackend::MarkSweep),
+        );
+        // Different config -> different key, so caches never collide across GC
+        // backend or test/non-test builds.
+        assert_ne!(
+            runtime_cache_key(false, GcBackend::MarkSweep),
+            runtime_cache_key(false, GcBackend::Noop),
+        );
+        assert_ne!(
+            runtime_cache_key(false, GcBackend::MarkSweep),
+            runtime_cache_key(true, GcBackend::MarkSweep),
+        );
+    }
+}
