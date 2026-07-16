@@ -1270,6 +1270,50 @@ long __pluto_serve_port(long fd) {
 
 // Return the nth newline-delimited field of `s` (0-based); empty if out of range.
 // Used to split a `<method>\n<arg1>\n<arg2>...` request.
+// Escape a primitive string for the newline-delimited RPC wire so it carries no
+// raw newline (the field delimiter): '\' -> "\\", newline -> "\n". Reversed by
+// __pluto_wire_unescape. Struct/enum arguments go through JSON, which already
+// escapes newlines, so only primitive string fields need this.
+void *__pluto_wire_escape(void *s) {
+    const char *data;
+    long len;
+    __pluto_string_data(s, &data, &len);
+    char *buf = (char *)malloc((size_t)(len * 2 + 1));
+    if (!buf) return s;
+    long j = 0;
+    for (long i = 0; i < len; i++) {
+        char c = data[i];
+        if (c == '\\') { buf[j++] = '\\'; buf[j++] = '\\'; }
+        else if (c == '\n') { buf[j++] = '\\'; buf[j++] = 'n'; }
+        else { buf[j++] = c; }
+    }
+    void *r = __pluto_string_new(buf, j);
+    free(buf);
+    return r;
+}
+
+void *__pluto_wire_unescape(void *s) {
+    const char *data;
+    long len;
+    __pluto_string_data(s, &data, &len);
+    char *buf = (char *)malloc((size_t)(len + 1));
+    if (!buf) return s;
+    long j = 0;
+    for (long i = 0; i < len; i++) {
+        if (data[i] == '\\' && i + 1 < len) {
+            char n = data[i + 1];
+            if (n == '\\') { buf[j++] = '\\'; i++; }
+            else if (n == 'n') { buf[j++] = '\n'; i++; }
+            else { buf[j++] = data[i]; }
+        } else {
+            buf[j++] = data[i];
+        }
+    }
+    void *r = __pluto_string_new(buf, j);
+    free(buf);
+    return r;
+}
+
 void *__pluto_request_field(void *s, long index) {
     const char *data;
     long len;
