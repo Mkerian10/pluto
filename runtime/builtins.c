@@ -1223,7 +1223,26 @@ long __pluto_serve_listen(long port) {
     void *host = __pluto_string_new("0.0.0.0", 7);
     if (__pluto_socket_bind(fd, host, port) < 0) { __pluto_socket_close(fd); return -1; }
     if (__pluto_socket_listen(fd, 128) < 0) { __pluto_socket_close(fd); return -1; }
+    // Reap connection-handler children automatically (see __pluto_fork) so they
+    // don't accumulate as zombies.
+    signal(SIGCHLD, SIG_IGN);
     return fd;
+}
+
+// Fork a child to handle one connection concurrently: returns 0 in the child,
+// the child pid in the parent. The accept loop forks per connection so a slow
+// or stuck client blocks only its own child, not the whole server, and multiple
+// clients are served in parallel. Each request is handled in an isolated
+// process (copy-on-write): per-request mutations do not persist across requests
+// — durable state belongs in an external store.
+long __pluto_fork(void) {
+    return (long)fork();
+}
+
+// Exit the current process (used by a handler child after replying). `_exit`
+// avoids re-running atexit handlers / flushing the parent's inherited buffers.
+void __pluto_process_exit(long code) {
+    _exit((int)code);
 }
 
 // Accept one connection on the listener, returning the connection fd.
