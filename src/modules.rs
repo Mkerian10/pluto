@@ -1025,13 +1025,16 @@ fn validate_module_visibility(graph: &ModuleGraph) -> Result<(), CompileError> {
     }
 
     let mut v = VisibilityValidator {
-        imports: &imports, pub_items: &pub_items, all_items: &all_items, violations: Vec::new(),
+        imports: &imports, pub_items: &pub_items, all_items: &all_items,
+        violations: Vec::new(),
     };
     use crate::visit::Visitor;
+    // Only the root (the user's own program) is checked. Imported modules'
+    // programs are already transitively flattened — they contain their
+    // dependencies' code merged in under prefixed names, whose internal
+    // qualified references are intra-module and must not be treated as the
+    // user's cross-module access.
     v.visit_program(&graph.root);
-    for (_, prog, _) in &graph.imports {
-        v.visit_program(prog);
-    }
     if let Some((module, item, span)) = v.violations.into_iter().next() {
         return Err(CompileError::type_err(
             format!("'{item}' is private to module '{module}'; declare it `pub` to use it from another module"),
