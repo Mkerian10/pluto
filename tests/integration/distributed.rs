@@ -705,3 +705,206 @@ fn serve_handles_clients_concurrently() {
         "real client took {elapsed:?} — not served concurrently with the stuck client"
     );
 }
+
+// ── Bug hunt: newline in a string argument corrupts the line-delimited wire ─────
+
+const NL_SERVER: &str = "\
+class Echo {
+    tag: int
+    fn slen(self, s: string) int {
+        return s.len()
+    }
+}
+fn main() {
+    let e = Echo { tag: 1 }
+    serve e on 0
+}";
+
+const NL_IFACE: &str = "\
+pub class Echo {
+    fn slen(self, s: string) int {
+        return 0
+    }
+}";
+
+const NL_CLIENT: &str = "\
+import echo
+app App[e: remote echo.Echo] {
+    fn main(self) {
+        let n = self.e.slen(\"ab\\ncd\") catch -1
+        print(f\"len:{n}\")
+    }
+}";
+
+/// A string argument that contains a newline must survive the round-trip. The
+/// request is newline-delimited, so an unescaped newline in a string arg splits
+/// into extra fields and the server sees a truncated argument.
+#[test]
+fn remote_string_arg_with_newline_roundtrips() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", NL_SERVER)]);
+    let (_cd, client_bin) =
+        build_binary(&[("echo.pluto", NL_IFACE), ("main.pluto", NL_CLIENT)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_ECHO", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    // "ab\ncd" is 5 bytes; a corrupted split would yield 2 ("ab").
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "len:5\n");
+}
+
+// Does a newline in a STRUCT's string field survive? (structs go through JSON.)
+const SNL_SERVER: &str = "\
+import std.wire
+class User {
+    id: int
+    name: string
+}
+class Store {
+    tag: int
+    fn namelen(self, u: User) int {
+        return u.name.len()
+    }
+}
+fn main() {
+    let s = Store { tag: 1 }
+    serve s on 0
+}";
+
+const SNL_IFACE: &str = "\
+import std.wire
+pub class User {
+    id: int
+    name: string
+}
+pub class Store {
+    fn namelen(self, u: User) int {
+        return 0
+    }
+}";
+
+const SNL_CLIENT: &str = "\
+import std.wire
+import store
+app App[s: remote store.Store] {
+    fn main(self) {
+        let u = store.User { id: 1, name: \"a\\nb\" }
+        let n = self.s.namelen(u) catch -1
+        print(f\"nlen:{n}\")
+    }
+}";
+
+#[test]
+fn remote_struct_string_field_with_newline_roundtrips() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", SNL_SERVER)]);
+    let (_cd, client_bin) =
+        build_binary(&[("store.pluto", SNL_IFACE), ("main.pluto", SNL_CLIENT)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_STORE", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    // "a\nb" is 3 bytes.
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "nlen:3\n");
+}
+
+// The return-value direction of the same bug: a returned string with a newline.
+const RET_SERVER: &str = "\
+class Banner {
+    tag: int
+    fn make(self) string {
+        return \"x\\ny\"
+    }
+}
+fn main() {
+    let b = Banner { tag: 1 }
+    serve b on 0
+}";
+
+const RET_IFACE: &str = "\
+pub class Banner {
+    fn make(self) string {
+        return \"\"
+    }
+}";
+
+const RET_CLIENT: &str = "\
+import banner
+app App[b: remote banner.Banner] {
+    fn main(self) {
+        let s = self.b.make() catch \"?\"
+        print(f\"blen:{s.len()}\")
+    }
+}";
+
+#[test]
+fn remote_string_return_with_newline_roundtrips() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", RET_SERVER)]);
+    let (_cd, client_bin) =
+        build_binary(&[("banner.pluto", RET_IFACE), ("main.pluto", RET_CLIENT)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BANNER", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    // "x\ny" is 3 bytes; truncation at the newline would yield 1.
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "blen:3\n");
+}
+
+// Stress the escape scheme: a string with a literal backslash AND a newline.
+const BS_CLIENT: &str = "\
+import echo
+app App[e: remote echo.Echo] {
+    fn main(self) {
+        let n = self.e.slen(\"a\\\\b\\nc\") catch -1
+        print(f\"len:{n}\")
+    }
+}";
+
+/// A string with a backslash and a newline must round-trip: the escaping of the
+/// delimiter must not confuse a literal backslash with an escape.
+#[test]
+fn remote_string_arg_with_backslash_and_newline_roundtrips() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", NL_SERVER)]);
+    let (_cd, client_bin) =
+        build_binary(&[("echo.pluto", NL_IFACE), ("main.pluto", BS_CLIENT)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_ECHO", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    // "a\b\nc" is 5 bytes: 'a', '\', 'b', newline, 'c'.
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "len:5\n");
+}

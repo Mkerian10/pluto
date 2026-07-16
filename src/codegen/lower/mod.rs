@@ -764,7 +764,9 @@ impl<'a> LowerContext<'a> {
                     PlutoType::Class(tn) | PlutoType::Enum(tn) => {
                         self.call_named_func(&format!("__wire_decode_{tn}"), &[field])?
                     }
-                    _ => field, // string passed through
+                    // Reverse the wire escaping applied to the string on the client.
+                    PlutoType::String => self.call_runtime("__pluto_wire_unescape", &[field]),
+                    _ => field,
                 };
                 call_args.push(v);
             }
@@ -793,7 +795,7 @@ impl<'a> LowerContext<'a> {
             let payload = match ret {
                 PlutoType::Void => self.make_string_literal("")?,
                 PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[result_val]),
-                PlutoType::String => result_val,
+                PlutoType::String => self.call_runtime("__pluto_wire_escape", &[result_val]),
                 PlutoType::Class(tn) | PlutoType::Enum(tn) => {
                     self.call_named_func(&format!("__wire_encode_{tn}"), &[result_val])?
                 }
@@ -3350,7 +3352,8 @@ impl<'a> LowerContext<'a> {
                     let av = self.lower_expr(&arg.node)?;
                     let s = match aty {
                         PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[av]),
-                        PlutoType::String => av,
+                        // Escape so a newline in the string can't split the field.
+                        PlutoType::String => self.call_runtime("__pluto_wire_escape", &[av]),
                         // Complex types: marshal to a JSON wire string via the
                         // generated `__wire_encode_<T>` wrapper.
                         PlutoType::Class(tn) | PlutoType::Enum(tn) => {
@@ -3423,7 +3426,7 @@ impl<'a> LowerContext<'a> {
                 let payload = self.call_runtime("__pluto_request_field", &[resp, one]);
                 let parsed = match &ret_type {
                     PlutoType::Int => self.call_runtime("__pluto_parse_long", &[payload]),
-                    PlutoType::String => payload,
+                    PlutoType::String => self.call_runtime("__pluto_wire_unescape", &[payload]),
                     PlutoType::Void => self.builder.ins().iconst(types::I64, 0),
                     PlutoType::Class(tn) | PlutoType::Enum(tn) => {
                         self.call_named_func(&format!("__wire_decode_{tn}"), &[payload])?
