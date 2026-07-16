@@ -1185,3 +1185,17 @@ fn pub_items_remain_visible_across_modules() {
     ]);
     assert_eq!(out, "1\n");
 }
+
+#[test]
+fn imported_module_using_multifile_stdlib_compiles() {
+    // Regression (visibility enforcement): an imported module that itself imports
+    // a multi-file stdlib module (std.wire pulls in json + strings) is
+    // transitively flattened, so its program contains the stdlib's merged
+    // internal (non-pub) helpers under prefixed names. The visibility check must
+    // not mistake those library internals for the user's cross-module access.
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", "import lib\n\nfn main() {\n    print(lib.encode())\n}"),
+        ("lib.pluto", "import std.wire\n\npub fn encode() int {\n    return 42\n}"),
+    ]);
+    assert_eq!(out, "42\n");
+}
