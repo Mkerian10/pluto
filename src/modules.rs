@@ -943,10 +943,109 @@ fn resolve_modules_inner(
 /// For each imported module:
 /// - Add ALL items with prefixed names (visibility deferred)
 /// - Rewrite qualified references in the root program's AST
+/// Validate that qualified cross-module references (`module.item`) target items
+/// declared `pub`. A qualified reference is only ever written from *outside* the
+/// module (intra-module code uses unqualified names), so any `M.item` reference
+/// requires `item` to be public in `M`.
+struct VisibilityValidator<'a> {
+    imports: &'a HashSet<String>,
+    pub_items: &'a HashMap<String, HashSet<String>>,
+    all_items: &'a HashMap<String, HashSet<String>>,
+    violations: Vec<(String, String, Span)>,
+}
+
+impl VisibilityValidator<'_> {
+    // Only flags a reference to an item that genuinely exists in the module and
+    // is non-pub — so imperfect name-splitting can miss but never over-flag.
+    fn check(&mut self, module: &str, item: &str, span: Span) {
+        if self.imports.contains(module)
+            && self.all_items.get(module).is_some_and(|s| s.contains(item))
+            && !self.pub_items.get(module).is_some_and(|s| s.contains(item))
+        {
+            self.violations.push((module.to_string(), item.to_string(), span));
+        }
+    }
+    // A `module.item` reference stored as a single dotted string (the item is the
+    // last segment; the module may itself be dotted, e.g. `std.math`).
+    fn check_dotted(&mut self, dotted: &str, span: Span) {
+        if let Some((module, item)) = dotted.rsplit_once('.') {
+            self.check(module, item, span);
+        }
+    }
+}
+
+impl crate::visit::Visitor for VisibilityValidator<'_> {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        match &expr.node {
+            // `module.func(...)` — a MethodCall on an Ident naming a module.
+            Expr::MethodCall { object, method, .. } => {
+                if let Expr::Ident(m) = &object.node {
+                    self.check(m, &method.node, expr.span);
+                }
+            }
+            Expr::Call { name, .. } => self.check_dotted(&name.node, name.span),
+            Expr::StructLit { name, .. } => self.check_dotted(&name.node, name.span),
+            Expr::EnumUnit { enum_name, .. } | Expr::EnumData { enum_name, .. } => {
+                self.check_dotted(&enum_name.node, enum_name.span)
+            }
+            Expr::QualifiedAccess { segments } if segments.len() >= 2 => {
+                self.check(&segments[0].node, &segments[1].node, expr.span);
+            }
+            _ => {}
+        }
+        crate::visit::walk_expr(self, expr);
+    }
+    fn visit_type_expr(&mut self, te: &Spanned<TypeExpr>) {
+        if let TypeExpr::Qualified { module, name } = &te.node {
+            self.check(module, name, te.span);
+        }
+        crate::visit::walk_type_expr(self, te);
+    }
+}
+
+fn validate_module_visibility(graph: &ModuleGraph) -> Result<(), CompileError> {
+    let imports: HashSet<String> = graph.imports.iter().map(|(n, _, _)| n.clone()).collect();
+    let mut pub_items: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut all_items: HashMap<String, HashSet<String>> = HashMap::new();
+    for (name, prog, _) in &graph.imports {
+        let mut all = HashSet::new();
+        let mut pubs = HashSet::new();
+        let mut add = |n: &str, is_pub: bool| {
+            all.insert(n.to_string());
+            if is_pub { pubs.insert(n.to_string()); }
+        };
+        for f in &prog.functions { add(&f.node.name.node, f.node.is_pub); }
+        for c in &prog.classes { add(&c.node.name.node, c.node.is_pub); }
+        for e in &prog.enums { add(&e.node.name.node, e.node.is_pub); }
+        for e in &prog.errors { add(&e.node.name.node, e.node.is_pub); }
+        for t in &prog.traits { add(&t.node.name.node, t.node.is_pub); }
+        drop(add);
+        all_items.insert(name.clone(), all);
+        pub_items.insert(name.clone(), pubs);
+    }
+
+    let mut v = VisibilityValidator {
+        imports: &imports, pub_items: &pub_items, all_items: &all_items, violations: Vec::new(),
+    };
+    use crate::visit::Visitor;
+    v.visit_program(&graph.root);
+    for (_, prog, _) in &graph.imports {
+        v.visit_program(prog);
+    }
+    if let Some((module, item, span)) = v.violations.into_iter().next() {
+        return Err(CompileError::type_err(
+            format!("'{item}' is private to module '{module}'; declare it `pub` to use it from another module"),
+            span,
+        ));
+    }
+    Ok(())
+}
+
 pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), CompileError> {
     let import_names: HashSet<String> = graph.imports.iter().map(|(n, _, _)| n.clone()).collect();
 
     validate_imported_modules(&graph.imports)?;
+    validate_module_visibility(&graph)?;
 
     // Filter out test functions from imported modules before merging
     for (_module_name, module_prog, _origin) in &mut graph.imports {

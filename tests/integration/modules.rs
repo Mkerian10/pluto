@@ -119,12 +119,11 @@ fn qualified_type_in_param() {
 
 #[test]
 fn private_function_not_visible() {
-    // Visibility is deferred (Python-style) — private items are flattened and accessible
-    let out = run_project(&[
+    // A non-pub function is not reachable from another module (pub is enforced).
+    compile_project_should_fail(&[
         ("main.pluto", "import math\n\nfn main() {\n    print(math.secret(1))\n}"),
         ("math.pluto", "fn secret(x: int) int {\n    return x\n}\n\npub fn add(a: int, b: int) int {\n    return a + b\n}"),
     ]);
-    assert_eq!(out, "1\n");
 }
 
 // ============================================================
@@ -133,12 +132,11 @@ fn private_function_not_visible() {
 
 #[test]
 fn private_class_not_visible() {
-    // Visibility is deferred (Python-style) — private items are flattened and accessible
-    let out = run_project(&[
+    // A non-pub class is not constructible from another module (pub is enforced).
+    compile_project_should_fail(&[
         ("main.pluto", "import geo\n\nfn main() {\n    let p = geo.Internal { x: 1 }\n    print(p.x)\n}"),
         ("geo.pluto", "class Internal {\n    x: int\n}\n\npub class Point {\n    x: int\n    y: int\n}"),
     ]);
-    assert_eq!(out, "1\n");
 }
 
 // ============================================================
@@ -348,8 +346,8 @@ pub fn make_circle(r: int) Kind {
 
 #[test]
 fn private_enum_not_visible() {
-    // Visibility is deferred (Python-style) — private items are flattened and accessible
-    let out = run_project(&[
+    // A non-pub enum is not reachable from another module (pub is enforced).
+    compile_project_should_fail(&[
         ("main.pluto", r#"import inner
 
 fn main() {
@@ -370,7 +368,6 @@ fn main() {
 }
 "#),
     ]);
-    assert_eq!(out, "a\n");
 }
 
 // ============================================================
@@ -1177,4 +1174,14 @@ fn standalone_compilation_skips_siblings() {
     let output = Command::new(&bin_path).output().unwrap();
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "from main");
+}
+
+#[test]
+fn pub_items_remain_visible_across_modules() {
+    // Control: `pub` items must still be reachable.
+    let out = run_project(&[
+        ("main.pluto", "import lib\nfn main() {\n    print(lib.ok())\n}"),
+        ("lib.pluto", "fn secret() int {\n    return 7\n}\npub fn ok() int {\n    return 1\n}"),
+    ]);
+    assert_eq!(out, "1\n");
 }
