@@ -894,7 +894,7 @@ fn rename_in_type_expr(te: &mut TypeExpr, kind: DeclKindSimple, old_name: &str, 
         TypeExpr::Array(inner) => {
             rename_in_type_expr(&mut inner.node, kind, old_name, new_name);
         }
-        TypeExpr::Fn { params, return_type } => {
+        TypeExpr::Fn { params, return_type, fallible: _ } => {
             for p in params {
                 rename_in_type_expr(&mut p.node, kind, old_name, new_name);
             }

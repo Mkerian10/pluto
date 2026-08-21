@@ -470,14 +470,15 @@ pub fn type_expr_to_string(te: &TypeExpr) -> String {
         TypeExpr::Named(n) => n.clone(),
         TypeExpr::Array(inner) => format!("[{}]", type_expr_to_string(&inner.node)),
         TypeExpr::Qualified { module, name } => format!("{module}.{name}"),
-        TypeExpr::Fn { params, return_type } => {
+        TypeExpr::Fn { params, return_type, fallible } => {
             let params_str: Vec<String> =
                 params.iter().map(|p| type_expr_to_string(&p.node)).collect();
             let ret = type_expr_to_string(&return_type.node);
+            let bang = if *fallible { "!" } else { "" };
             if ret == "void" {
-                format!("fn({})", params_str.join(", "))
+                format!("fn({}){}", params_str.join(", "), bang)
             } else {
-                format!("fn({}) {}", params_str.join(", "), ret)
+                format!("fn({}) {}{}", params_str.join(", "), ret, bang)
             }
         }
         TypeExpr::Generic { name, type_args } => {

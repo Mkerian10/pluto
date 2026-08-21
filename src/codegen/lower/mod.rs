@@ -5704,7 +5704,7 @@ mod tests {
 
     #[test]
     fn test_needs_deep_copy_closures() {
-        assert!(needs_deep_copy(&PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::String))));
+        assert!(needs_deep_copy(&PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::String), false)));
     }
 
     #[test]
@@ -5753,7 +5753,7 @@ mod tests {
     #[test]
     fn test_pluto_to_cranelift_closures() {
         assert_eq!(
-            pluto_to_cranelift(&PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::String))),
+            pluto_to_cranelift(&PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::String), false)),
             types::I64
         );
     }
@@ -6113,6 +6113,7 @@ mod tests {
 
         let result = resolve_type_expr_to_pluto(
             &TypeExpr::Fn {
+            fallible: false,
                 params: vec![
                     Box::new(crate::span::Spanned::dummy(TypeExpr::Named("int".to_string()))),
                     Box::new(crate::span::Spanned::dummy(TypeExpr::Named("string".to_string()))),
@@ -6123,7 +6124,7 @@ mod tests {
         );
         assert_eq!(
             result,
-            PlutoType::Fn(vec![PlutoType::Int, PlutoType::String], Box::new(PlutoType::Bool))
+            PlutoType::Fn(vec![PlutoType::Int, PlutoType::String], Box::new(PlutoType::Bool), false)
         );
     }
 
@@ -6133,6 +6134,7 @@ mod tests {
 
         let result = resolve_type_expr_to_pluto(
             &TypeExpr::Fn {
+            fallible: false,
                 params: vec![Box::new(crate::span::Spanned::dummy(TypeExpr::Named("int".to_string())))],
                 return_type: Box::new(crate::span::Spanned::dummy(TypeExpr::Named("void".to_string()))),
             },
@@ -6141,7 +6143,7 @@ mod tests {
         // "void" is not a primitive, so it maps to PlutoType::Void
         assert_eq!(
             result,
-            PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::Void))
+            PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::Void), false)
         );
     }
 

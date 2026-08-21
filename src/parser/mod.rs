@@ -4314,7 +4314,7 @@ mod tests {
         let prog = parse("fn apply(f: fn(int, int) int, x: int) int {\n    return f(x, x)\n}");
         let f = &prog.functions[0].node;
         match &f.params[0].ty.node {
-            TypeExpr::Fn { params, return_type } => {
+            TypeExpr::Fn { params, return_type, fallible: _ } => {
                 assert_eq!(params.len(), 2);
                 assert!(matches!(&params[0].node, TypeExpr::Named(n) if n == "int"));
                 assert!(matches!(&params[1].node, TypeExpr::Named(n) if n == "int"));
@@ -4329,7 +4329,7 @@ mod tests {
         let prog = parse("fn apply(f: fn(int)) {\n}");
         let f = &prog.functions[0].node;
         match &f.params[0].ty.node {
-            TypeExpr::Fn { params, return_type } => {
+            TypeExpr::Fn { params, return_type, fallible: _ } => {
                 assert_eq!(params.len(), 1);
                 assert!(matches!(&return_type.node, TypeExpr::Named(n) if n == "void"));
             }

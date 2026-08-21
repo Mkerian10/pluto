@@ -499,7 +499,7 @@ fn collect_types_from_type_expr(ty: &TypeExpr, types: &mut HashSet<String>) {
             let flattened = format!("{}.{}", module, name);
             types.insert(flattened);
         }
-        TypeExpr::Fn { .. } => {
+        TypeExpr::Fn { fallible: _, .. } => {
             // Closures are not serializable (caught by validation)
         }
         TypeExpr::Stream(_) => {
@@ -2275,6 +2275,7 @@ mod tests {
     fn test_type_expr_to_string_unknown() {
         // Fn types should return "unknown"
         let ty = TypeExpr::Fn {
+            fallible: false,
             params: vec![],
             return_type: Box::new(Spanned {
                 node: TypeExpr::Named("void".to_string()),

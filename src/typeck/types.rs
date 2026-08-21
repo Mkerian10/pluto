@@ -221,7 +221,7 @@ mod tests {
         let ty = PlutoType::Fn(
             vec![PlutoType::Int, PlutoType::Bool],
             Box::new(PlutoType::String),
-        );
+            false,);
         let result = ty.map_inner_types(&|t| {
             if matches!(t, PlutoType::Int) {
                 PlutoType::Float
@@ -234,7 +234,7 @@ mod tests {
             PlutoType::Fn(
                 vec![PlutoType::Float, PlutoType::Bool],
                 Box::new(PlutoType::String)
-            )
+            , false)
         );
     }
 
@@ -350,7 +350,7 @@ mod tests {
         let ty = PlutoType::Fn(
             vec![PlutoType::Int, PlutoType::Bool],
             Box::new(PlutoType::String),
-        );
+            false,);
         assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::Int)));
         assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::Bool)));
     }
@@ -360,7 +360,7 @@ mod tests {
         let ty = PlutoType::Fn(
             vec![PlutoType::Int],
             Box::new(PlutoType::String),
-        );
+            false,);
         assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::String)));
     }
 
@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn test_display_fn_no_params() {
-        let ty = PlutoType::Fn(vec![], Box::new(PlutoType::Int));
+        let ty = PlutoType::Fn(vec![], Box::new(PlutoType::Int), false);
         assert_eq!(ty.to_string(), "fn() int");
     }
 
@@ -448,7 +448,7 @@ mod tests {
         let ty = PlutoType::Fn(
             vec![PlutoType::Int, PlutoType::String],
             Box::new(PlutoType::Bool),
-        );
+            false,);
         assert_eq!(ty.to_string(), "fn(int, string) bool");
     }
 
@@ -544,10 +544,10 @@ mod tests {
         let ty = PlutoType::Fn(
             vec![PlutoType::Int, PlutoType::Bool],
             Box::new(PlutoType::String),
-        );
+            false,);
         let expr = pluto_type_to_type_expr(&ty);
         match expr {
-            TypeExpr::Fn { params, return_type } => {
+            TypeExpr::Fn { params, return_type, fallible: _ } => {
                 assert_eq!(params.len(), 2);
                 assert!(matches!(return_type.node, TypeExpr::Named(s) if s == "string"));
             }
@@ -656,7 +656,7 @@ mod tests {
         let ty = PlutoType::Fn(
             vec![PlutoType::Int, PlutoType::String],
             Box::new(PlutoType::Bool),
-        );
+            false,);
         let cloned = ty.clone();
         assert_eq!(ty, cloned);
     }

@@ -533,18 +533,20 @@ mod tests {
     #[test]
     fn resolve_type_fn_no_params() {
         let ty = TypeExpr::Fn {
+            fallible: false,
             params: vec![],
             return_type: Box::new(spanned(TypeExpr::Named("void".to_string()))),
         };
         assert_eq!(
             resolve_type_for_lift(&ty),
-            PlutoType::Fn(vec![], Box::new(PlutoType::Void))
+            PlutoType::Fn(vec![], Box::new(PlutoType::Void), false)
         );
     }
 
     #[test]
     fn resolve_type_fn_with_params() {
         let ty = TypeExpr::Fn {
+            fallible: false,
             params: vec![
                 Box::new(spanned(TypeExpr::Named("int".to_string()))),
                 Box::new(spanned(TypeExpr::Named("string".to_string()))),
@@ -556,7 +558,7 @@ mod tests {
             PlutoType::Fn(
                 vec![PlutoType::Int, PlutoType::String],
                 Box::new(PlutoType::Bool)
-            )
+            , false)
         );
     }
 

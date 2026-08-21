@@ -1934,6 +1934,7 @@ mod tests {
     #[test]
     fn test_type_expr_eq_fn_same() {
         let a = TypeExpr::Fn {
+            fallible: false,
             params: vec![
                 Box::new(spanned(TypeExpr::Named("int".to_string()))),
                 Box::new(spanned(TypeExpr::Named("string".to_string()))),
@@ -1941,6 +1942,7 @@ mod tests {
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
         let b = TypeExpr::Fn {
+            fallible: false,
             params: vec![
                 Box::new(spanned(TypeExpr::Named("int".to_string()))),
                 Box::new(spanned(TypeExpr::Named("string".to_string()))),
@@ -1953,10 +1955,12 @@ mod tests {
     #[test]
     fn test_type_expr_eq_fn_different_param_count() {
         let a = TypeExpr::Fn {
+            fallible: false,
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
         let b = TypeExpr::Fn {
+            fallible: false,
             params: vec![
                 Box::new(spanned(TypeExpr::Named("int".to_string()))),
                 Box::new(spanned(TypeExpr::Named("string".to_string()))),
@@ -1969,10 +1973,12 @@ mod tests {
     #[test]
     fn test_type_expr_eq_fn_different_param_type() {
         let a = TypeExpr::Fn {
+            fallible: false,
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
         let b = TypeExpr::Fn {
+            fallible: false,
             params: vec![Box::new(spanned(TypeExpr::Named("float".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
@@ -1982,10 +1988,12 @@ mod tests {
     #[test]
     fn test_type_expr_eq_fn_different_return_type() {
         let a = TypeExpr::Fn {
+            fallible: false,
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
         let b = TypeExpr::Fn {
+            fallible: false,
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("string".to_string()))),
         };

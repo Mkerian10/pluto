@@ -710,13 +710,13 @@ mod tests {
 
     #[test]
     fn test_mangle_type_fn_no_params() {
-        let fn_type = PlutoType::Fn(vec![], Box::new(PlutoType::Void));
+        let fn_type = PlutoType::Fn(vec![], Box::new(PlutoType::Void), false);
         assert_eq!(mangle_type(&fn_type), "fn$$ret$void");
     }
 
     #[test]
     fn test_mangle_type_fn_one_param() {
-        let fn_type = PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::String));
+        let fn_type = PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::String), false);
         assert_eq!(mangle_type(&fn_type), "fn$int$ret$string");
     }
 
@@ -725,7 +725,7 @@ mod tests {
         let fn_type = PlutoType::Fn(
             vec![PlutoType::Int, PlutoType::Float, PlutoType::Bool],
             Box::new(PlutoType::String),
-        );
+            false,);
         assert_eq!(mangle_type(&fn_type), "fn$int$float$bool$ret$string");
     }
 
@@ -770,7 +770,7 @@ mod tests {
                 PlutoType::Map(Box::new(PlutoType::String), Box::new(PlutoType::Float)),
             ],
             Box::new(PlutoType::Bool),
-        );
+            false,);
         assert_eq!(mangle_type(&fn_type), "fn$arr$int$map$string$float$ret$bool");
     }
 }

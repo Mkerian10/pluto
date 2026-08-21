@@ -1737,6 +1737,7 @@ mod tests {
     #[test]
     fn test_walk_type_expr_visits_fn_params_and_return() {
         let fn_te = dummy(TypeExpr::Fn {
+            fallible: false,
             params: vec![
                 Box::new(dummy(TypeExpr::Named("int".to_string()))),
                 Box::new(dummy(TypeExpr::Named("float".to_string()))),
