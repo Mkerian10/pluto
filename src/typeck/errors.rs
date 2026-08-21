@@ -9,6 +9,7 @@ use super::env::{mangle_method, mangle_name, InstKind, MethodResolution, TypeEnv
 pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
     let mut direct_errors: HashMap<String, HashSet<String>> = HashMap::new();
     let mut propagation_edges: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut closure_call_sites: HashMap<(String, usize), String> = HashMap::new();
 
     // Collect effects from top-level functions. Generic templates are included
     // under their unmangled name: their bodies aren't type-checked yet, so
@@ -17,9 +18,8 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
     // sites of generics be enforced before monomorphization.
     for func in &program.functions {
         let name = func.node.name.node.clone();
-        let (directs, edges) = collect_block_effects(&func.node.body.node, &name, env);
-        direct_errors.insert(name.clone(), directs);
-        propagation_edges.insert(name, edges);
+        collect_decl_effects(&func.node.body.node, &name, env,
+            &mut direct_errors, &mut propagation_edges, &mut closure_call_sites);
     }
 
     // Collect effects from class methods (generic templates included, keyed
@@ -28,9 +28,8 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
         let class_name = &class.node.name.node;
         for method in &class.node.methods {
             let mangled = mangle_method(class_name, &method.node.name.node);
-            let (directs, edges) = collect_block_effects(&method.node.body.node, &mangled, env);
-            direct_errors.insert(mangled.clone(), directs);
-            propagation_edges.insert(mangled, edges);
+            collect_decl_effects(&method.node.body.node, &mangled, env,
+                &mut direct_errors, &mut propagation_edges, &mut closure_call_sites);
         }
     }
 
@@ -45,10 +44,8 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
                     for tm in &trait_decl.node.methods {
                         if let Some(body) = &tm.body && !class_method_names.contains(&tm.name.node) {
                             let mangled = mangle_method(class_name, &tm.name.node);
-                            let (directs, edges) =
-                                collect_block_effects(&body.node, &mangled, env);
-                            direct_errors.insert(mangled.clone(), directs);
-                            propagation_edges.insert(mangled, edges);
+                            collect_decl_effects(&body.node, &mangled, env,
+                                &mut direct_errors, &mut propagation_edges, &mut closure_call_sites);
                         }
                     }
                 }
@@ -61,9 +58,8 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
         let app_name = &app_spanned.node.name.node;
         for method in &app_spanned.node.methods {
             let mangled = mangle_method(app_name, &method.node.name.node);
-            let (directs, edges) = collect_block_effects(&method.node.body.node, &mangled, env);
-            direct_errors.insert(mangled.clone(), directs);
-            propagation_edges.insert(mangled, edges);
+            collect_decl_effects(&method.node.body.node, &mangled, env,
+                &mut direct_errors, &mut propagation_edges, &mut closure_call_sites);
         }
     }
 
@@ -72,11 +68,12 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
         let stage_name = &stage_spanned.node.name.node;
         for method in &stage_spanned.node.methods {
             let mangled = mangle_method(stage_name, &method.node.name.node);
-            let (directs, edges) = collect_block_effects(&method.node.body.node, &mangled, env);
-            direct_errors.insert(mangled.clone(), directs);
-            propagation_edges.insert(mangled, edges);
+            collect_decl_effects(&method.node.body.node, &mangled, env,
+                &mut direct_errors, &mut propagation_edges, &mut closure_call_sites);
         }
     }
+
+    env.closure_call_sites = closure_call_sites;
 
     // Fixed-point iteration: propagate error sets through call edges.
     // Start from pre-existing fn_errors (e.g. seeded FFI fallible functions).
@@ -180,13 +177,18 @@ pub(crate) fn copy_class_method_error_sets(
     }
 }
 
-/// Collect direct error raises and propagation edges from a block.
 /// The set of error types a catch's inner call can raise (used to validate
 /// typed catch). Resolves the callee and reads its inferred error set; a remote
-/// call also adds NetworkError.
+/// call also adds NetworkError. A call through a closure variable reads the
+/// closure node recorded during effect collection.
 fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<String> {
     match inner {
-        Expr::Call { name, .. } => env.fn_errors.get(&name.node).cloned().unwrap_or_default(),
+        Expr::Call { name, .. } => {
+            if let Some(node) = env.closure_call_sites.get(&(current_fn.to_string(), name.span.start)) {
+                return env.fn_errors.get(node).cloned().unwrap_or_default();
+            }
+            env.fn_errors.get(&name.node).cloned().unwrap_or_default()
+        }
         Expr::MethodCall { method, .. } => {
             let key = (current_fn.to_string(), method.span.start);
             match env.method_resolutions.get(&key) {
@@ -204,170 +206,265 @@ fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<Str
     }
 }
 
-fn collect_block_effects(block: &Block, current_fn: &str, env: &TypeEnv) -> (HashSet<String>, HashSet<String>) {
-    let mut direct_errors = HashSet::new();
-    let mut edges = HashSet::new();
-    for stmt in &block.stmts {
-        collect_stmt_effects(&stmt.node, &mut direct_errors, &mut edges, current_fn, env);
-    }
-    (direct_errors, edges)
+/// Key for a closure literal's node in the error-inference graph, derived from
+/// its body span (unique within a program; cannot collide with function names).
+fn closure_node_key(span: crate::span::Span) -> String {
+    format!("<closure@{}>", span.start)
 }
 
-fn collect_stmt_effects(
-    stmt: &Stmt,
-    direct_errors: &mut HashSet<String>,
-    edges: &mut HashSet<String>,
-    current_fn: &str,
+/// Mutable state threaded through effect collection. Effects accrue to
+/// `current_node`: the enclosing named function, or — inside a closure literal
+/// bound to a variable — that closure's own node, so defining a fallible
+/// closure does not by itself make the definer fallible; calling it (with `!`)
+/// or letting it escape does.
+struct EffectCtx<'a> {
+    env: &'a TypeEnv,
+    /// Enclosing named function — method resolutions and closure call sites
+    /// are keyed under it.
+    current_fn: String,
+    /// Node currently accruing effects (named function or closure node).
+    current_node: String,
+    direct: &'a mut HashMap<String, HashSet<String>>,
+    edges: &'a mut HashMap<String, HashSet<String>>,
+    /// Lexical scopes mapping closure-bound variable names to closure nodes.
+    closure_scopes: Vec<HashMap<String, String>>,
+    /// (enclosing fn, callee name span start) -> closure node, consumed by
+    /// enforcement and typed-catch coverage.
+    closure_call_sites: &'a mut HashMap<(String, usize), String>,
+}
+
+impl EffectCtx<'_> {
+    fn raise(&mut self, err: String) {
+        self.direct.entry(self.current_node.clone()).or_default().insert(err);
+    }
+
+    fn edge(&mut self, callee: String) {
+        self.edges.entry(self.current_node.clone()).or_default().insert(callee);
+    }
+
+    fn bind_closure(&mut self, var: &str, node: String) {
+        if let Some(scope) = self.closure_scopes.last_mut() {
+            scope.insert(var.to_string(), node);
+        }
+    }
+
+    fn lookup_closure(&self, var: &str) -> Option<&String> {
+        self.closure_scopes.iter().rev().find_map(|s| s.get(var))
+    }
+
+    fn record_closure_call(&mut self, span_start: usize, node: String) {
+        self.closure_call_sites.insert((self.current_fn.clone(), span_start), node);
+    }
+
+    /// Collect a closure literal's body under its own fresh node.
+    fn collect_closure(&mut self, body: &Spanned<Block>) -> String {
+        let node = closure_node_key(body.span);
+        self.direct.entry(node.clone()).or_default();
+        self.edges.entry(node.clone()).or_default();
+        self.collect_closure_into(body, node.clone());
+        node
+    }
+
+    /// Collect a closure literal's body into an existing node (used to union a
+    /// reassigned variable's closures, keeping resolution flow-insensitive).
+    fn collect_closure_into(&mut self, body: &Spanned<Block>, node: String) {
+        let prev = std::mem::replace(&mut self.current_node, node);
+        self.closure_scopes.push(HashMap::new());
+        for stmt in &body.node.stmts {
+            collect_stmt_effects(&stmt.node, self);
+        }
+        self.closure_scopes.pop();
+        self.current_node = prev;
+    }
+}
+
+/// Collect direct error raises and propagation edges from a declaration body
+/// into the shared per-node maps.
+fn collect_decl_effects(
+    block: &Block,
+    name: &str,
     env: &TypeEnv,
+    direct: &mut HashMap<String, HashSet<String>>,
+    edges: &mut HashMap<String, HashSet<String>>,
+    closure_call_sites: &mut HashMap<(String, usize), String>,
 ) {
+    direct.entry(name.to_string()).or_default();
+    edges.entry(name.to_string()).or_default();
+    let mut ctx = EffectCtx {
+        env,
+        current_fn: name.to_string(),
+        current_node: name.to_string(),
+        direct,
+        edges,
+        closure_scopes: vec![HashMap::new()],
+        closure_call_sites,
+    };
+    for stmt in &block.stmts {
+        collect_stmt_effects(&stmt.node, &mut ctx);
+    }
+}
+
+/// Collect a nested block's statements in a fresh closure-binding scope.
+fn collect_block_stmts(stmts: &[Spanned<Stmt>], ctx: &mut EffectCtx) {
+    ctx.closure_scopes.push(HashMap::new());
+    for s in stmts {
+        collect_stmt_effects(&s.node, ctx);
+    }
+    ctx.closure_scopes.pop();
+}
+
+fn collect_stmt_effects(stmt: &Stmt, ctx: &mut EffectCtx) {
     match stmt {
         Stmt::Raise { error_name, fields, .. } => {
-            direct_errors.insert(error_name.node.clone());
+            ctx.raise(error_name.node.clone());
             for (_, val) in fields {
-                collect_expr_effects(&val.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&val.node, ctx);
             }
         }
-        Stmt::Let { value, .. } => {
-            collect_expr_effects(&value.node, direct_errors, edges, current_fn, env);
+        Stmt::Let { name, value, .. } => {
+            // A closure literal bound to a variable gets its own node; calls
+            // through the variable resolve to it.
+            if let Expr::Closure { body, .. } = &value.node {
+                let node = ctx.collect_closure(body);
+                ctx.bind_closure(&name.node, node);
+            } else {
+                collect_expr_effects(&value.node, ctx);
+            }
         }
         Stmt::Expr(expr) => {
-            collect_expr_effects(&expr.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&expr.node, ctx);
         }
         Stmt::Return(Some(expr)) => {
-            collect_expr_effects(&expr.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&expr.node, ctx);
         }
         Stmt::Return(None) => {}
-        Stmt::Assign { value, .. } => {
-            collect_expr_effects(&value.node, direct_errors, edges, current_fn, env);
+        Stmt::Assign { target, value } => {
+            if let Expr::Closure { body, .. } = &value.node {
+                // Reassignment unions the new closure's effects into the
+                // variable's existing node (flow-insensitive but sound for
+                // calls that precede the assignment in a loop); a closure
+                // assigned to an untracked variable starts tracking it.
+                if let Some(node) = ctx.lookup_closure(&target.node).cloned() {
+                    ctx.collect_closure_into(body, node);
+                } else {
+                    let node = ctx.collect_closure(body);
+                    ctx.bind_closure(&target.node, node);
+                }
+            } else {
+                collect_expr_effects(&value.node, ctx);
+            }
         }
         Stmt::FieldAssign { object, value, .. } => {
-            collect_expr_effects(&object.node, direct_errors, edges, current_fn, env);
-            collect_expr_effects(&value.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&object.node, ctx);
+            collect_expr_effects(&value.node, ctx);
         }
         Stmt::IndexAssign { object, index, value } => {
-            collect_expr_effects(&object.node, direct_errors, edges, current_fn, env);
-            collect_expr_effects(&index.node, direct_errors, edges, current_fn, env);
-            collect_expr_effects(&value.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&object.node, ctx);
+            collect_expr_effects(&index.node, ctx);
+            collect_expr_effects(&value.node, ctx);
         }
         Stmt::If { condition, then_block, else_block } => {
-            collect_expr_effects(&condition.node, direct_errors, edges, current_fn, env);
-            for s in &then_block.node.stmts {
-                collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
-            }
+            collect_expr_effects(&condition.node, ctx);
+            collect_block_stmts(&then_block.node.stmts, ctx);
             if let Some(eb) = else_block {
-                for s in &eb.node.stmts {
-                    collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
-                }
+                collect_block_stmts(&eb.node.stmts, ctx);
             }
         }
         Stmt::While { condition, body } => {
-            collect_expr_effects(&condition.node, direct_errors, edges, current_fn, env);
-            for s in &body.node.stmts {
-                collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
-            }
+            collect_expr_effects(&condition.node, ctx);
+            collect_block_stmts(&body.node.stmts, ctx);
         }
         Stmt::For { iterable, body, .. } => {
-            collect_expr_effects(&iterable.node, direct_errors, edges, current_fn, env);
-            for s in &body.node.stmts {
-                collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
-            }
+            collect_expr_effects(&iterable.node, ctx);
+            collect_block_stmts(&body.node.stmts, ctx);
         }
         Stmt::Match { expr, arms } => {
-            collect_expr_effects(&expr.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&expr.node, ctx);
             for arm in arms {
-                for s in &arm.body.node.stmts {
-                    collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
-                }
+                collect_block_stmts(&arm.body.node.stmts, ctx);
             }
         }
         Stmt::LetChan { capacity, .. } => {
             if let Some(cap) = capacity {
-                collect_expr_effects(&cap.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&cap.node, ctx);
             }
         }
         Stmt::Select { arms, default } => {
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { channel, .. } => {
-                        collect_expr_effects(&channel.node, direct_errors, edges, current_fn, env);
+                        collect_expr_effects(&channel.node, ctx);
                     }
                     SelectOp::Send { channel, value } => {
-                        collect_expr_effects(&channel.node, direct_errors, edges, current_fn, env);
-                        collect_expr_effects(&value.node, direct_errors, edges, current_fn, env);
+                        collect_expr_effects(&channel.node, ctx);
+                        collect_expr_effects(&value.node, ctx);
                     }
                 }
-                for s in &arm.body.node.stmts {
-                    collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
-                }
+                collect_block_stmts(&arm.body.node.stmts, ctx);
             }
             if let Some(def) = default {
-                for s in &def.node.stmts {
-                    collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
-                }
+                collect_block_stmts(&def.node.stmts, ctx);
             }
             // Select without default is implicitly fallible — raises ChannelClosed
             // when all channels are closed
             if default.is_none() {
-                direct_errors.insert("ChannelClosed".to_string());
+                ctx.raise("ChannelClosed".to_string());
             }
         }
         Stmt::Scope { seeds, body, .. } => {
             for seed in seeds {
-                collect_expr_effects(&seed.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&seed.node, ctx);
             }
-            for s in &body.node.stmts {
-                collect_stmt_effects(&s.node, direct_errors, edges, current_fn, env);
-            }
+            collect_block_stmts(&body.node.stmts, ctx);
         }
         Stmt::Assert { expr } => {
-            collect_expr_effects(&expr.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&expr.node, ctx);
         }
         // The generated serve loop handles dispatched methods' errors internally
         // (replying with an error response), so it adds none to the enclosing fn.
         Stmt::Serve { service, port } => {
-            collect_expr_effects(&service.node, direct_errors, edges, current_fn, env);
-            collect_expr_effects(&port.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&service.node, ctx);
+            collect_expr_effects(&port.node, ctx);
         }
         Stmt::Yield { value, .. } => {
-            collect_expr_effects(&value.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&value.node, ctx);
         }
         Stmt::Break | Stmt::Continue => {}
     }
 }
 
-fn collect_expr_effects(
-    expr: &Expr,
-    direct_errors: &mut HashSet<String>,
-    edges: &mut HashSet<String>,
-    current_fn: &str,
-    env: &TypeEnv,
-) {
+fn collect_expr_effects(expr: &Expr, ctx: &mut EffectCtx) {
     match expr {
         Expr::Propagate { expr: inner } => {
             match &inner.node {
                 Expr::Call { name, args, .. } => {
-                    if name.node == "pow"
-                        && env
+                    if let Some(node) = ctx.lookup_closure(&name.node).cloned() {
+                        ctx.record_closure_call(name.span.start, node.clone());
+                        ctx.edge(node);
+                    } else if name.node == "pow"
+                        && ctx
+                            .env
                             .fallible_builtin_calls
-                            .contains(&(current_fn.to_string(), name.span.start))
+                            .contains(&(ctx.current_fn.clone(), name.span.start))
                     {
-                        direct_errors.insert("MathError".to_string());
+                        ctx.raise("MathError".to_string());
                     } else {
-                        edges.insert(name.node.clone());
+                        ctx.edge(name.node.clone());
                     }
                     for arg in args {
-                        collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                        collect_expr_effects(&arg.node, ctx);
                     }
                 }
                 Expr::MethodCall { object, method, args } => {
-                    collect_expr_effects(&object.node, direct_errors, edges, current_fn, env);
+                    collect_expr_effects(&object.node, ctx);
                     for arg in args {
-                        collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                        collect_expr_effects(&arg.node, ctx);
                     }
-                    let key = (current_fn.to_string(), method.span.start);
-                    match env.method_resolutions.get(&key) {
+                    let key = (ctx.current_fn.clone(), method.span.start);
+                    let resolution = ctx.env.method_resolutions.get(&key).cloned();
+                    match resolution {
                         Some(MethodResolution::Class { mangled_name }) => {
-                            edges.insert(mangled_name.clone());
+                            ctx.edge(mangled_name);
                         }
                         // Remote boundary call: always adds NetworkError (the
                         // transport can fail), and also inherits the interface
@@ -375,42 +472,48 @@ fn collect_expr_effects(
                         // which the server propagates over the wire — can be
                         // handled with `catch` on the caller side.
                         Some(MethodResolution::RemoteClass { mangled_name }) => {
-                            direct_errors.insert("NetworkError".to_string());
-                            edges.insert(mangled_name.clone());
+                            ctx.raise("NetworkError".to_string());
+                            ctx.edge(mangled_name);
                         }
                         Some(MethodResolution::TraitDynamic { trait_name, method_name }) => {
-                            for (class_name, info) in &env.classes {
-                                if info.impl_traits.iter().any(|t| t == trait_name) {
-                                    edges.insert(mangle_method(class_name, method_name));
-                                }
+                            let impls: Vec<String> = ctx
+                                .env
+                                .classes
+                                .iter()
+                                .filter(|(_, info)| info.impl_traits.iter().any(|t| *t == trait_name))
+                                .map(|(class_name, _)| mangle_method(class_name, &method_name))
+                                .collect();
+                            for m in impls {
+                                ctx.edge(m);
                             }
                         }
                         Some(MethodResolution::TaskGet { spawned_fn }) => {
                             match spawned_fn {
                                 Some(fn_name) => {
-                                    edges.insert(fn_name.clone());
+                                    ctx.edge(fn_name);
                                 }
                                 None => {
                                     // Unknown origin — conservatively add all declared error types
-                                    for err_name in env.errors.keys() {
-                                        direct_errors.insert(err_name.clone());
+                                    let all: Vec<String> = ctx.env.errors.keys().cloned().collect();
+                                    for err_name in all {
+                                        ctx.raise(err_name);
                                     }
                                 }
                             }
                         }
                         Some(MethodResolution::ChannelSend) => {
-                            direct_errors.insert("ChannelClosed".to_string());
+                            ctx.raise("ChannelClosed".to_string());
                         }
                         Some(MethodResolution::ChannelRecv) => {
-                            direct_errors.insert("ChannelClosed".to_string());
+                            ctx.raise("ChannelClosed".to_string());
                         }
                         Some(MethodResolution::ChannelTrySend) => {
-                            direct_errors.insert("ChannelClosed".to_string());
-                            direct_errors.insert("ChannelFull".to_string());
+                            ctx.raise("ChannelClosed".to_string());
+                            ctx.raise("ChannelFull".to_string());
                         }
                         Some(MethodResolution::ChannelTryRecv) => {
-                            direct_errors.insert("ChannelClosed".to_string());
-                            direct_errors.insert("ChannelEmpty".to_string());
+                            ctx.raise("ChannelClosed".to_string());
+                            ctx.raise("ChannelEmpty".to_string());
                         }
                         Some(MethodResolution::TaskDetach) => {}
                         Some(MethodResolution::TaskCancel) => {}
@@ -418,90 +521,108 @@ fn collect_expr_effects(
                         None => {}
                     }
                 }
-                _ => collect_expr_effects(&inner.node, direct_errors, edges, current_fn, env),
+                _ => collect_expr_effects(&inner.node, ctx),
             }
         }
         Expr::Catch { expr: inner, handlers } => {
             match &inner.node {
-                Expr::Call { args, .. } => {
+                Expr::Call { name, args, .. } => {
+                    if let Some(node) = ctx.lookup_closure(&name.node).cloned() {
+                        ctx.record_closure_call(name.span.start, node);
+                    }
                     for arg in args {
-                        collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                        collect_expr_effects(&arg.node, ctx);
                     }
                 }
                 Expr::MethodCall { object, args, .. } => {
-                    collect_expr_effects(&object.node, direct_errors, edges, current_fn, env);
+                    collect_expr_effects(&object.node, ctx);
                     for arg in args {
-                        collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                        collect_expr_effects(&arg.node, ctx);
                     }
                 }
-                _ => collect_expr_effects(&inner.node, direct_errors, edges, current_fn, env),
+                _ => collect_expr_effects(&inner.node, ctx),
             }
             for handler in handlers {
                 match handler {
                     CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => {
-                        for stmt in &body.node.stmts {
-                            collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
-                        }
+                        collect_block_stmts(&body.node.stmts, ctx);
                     }
                     CatchHandler::Shorthand(fb) => {
-                        collect_expr_effects(&fb.node, direct_errors, edges, current_fn, env);
+                        collect_expr_effects(&fb.node, ctx);
                     }
                 }
             }
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            collect_expr_effects(&lhs.node, direct_errors, edges, current_fn, env);
-            collect_expr_effects(&rhs.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&lhs.node, ctx);
+            collect_expr_effects(&rhs.node, ctx);
         }
         Expr::UnaryOp { operand, .. } => {
-            collect_expr_effects(&operand.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&operand.node, ctx);
         }
         Expr::Cast { expr: inner, .. } => {
-            collect_expr_effects(&inner.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&inner.node, ctx);
         }
-        Expr::Call { args, .. } => {
+        Expr::Call { name, args, .. } => {
+            // A plain (unhandled) call adds no edge — enforcement requires
+            // fallible calls to be handled — but a call through a closure
+            // variable records its resolution for enforcement to consult.
+            if let Some(node) = ctx.lookup_closure(&name.node).cloned() {
+                ctx.record_closure_call(name.span.start, node);
+            }
             for arg in args {
-                collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&arg.node, ctx);
             }
         }
         Expr::MethodCall { object, args, .. } => {
-            collect_expr_effects(&object.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&object.node, ctx);
             for arg in args {
-                collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&arg.node, ctx);
             }
         }
         Expr::StructLit { fields, .. } => {
             for (_, val) in fields {
-                collect_expr_effects(&val.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&val.node, ctx);
             }
         }
         Expr::FieldAccess { object, .. } => {
-            collect_expr_effects(&object.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&object.node, ctx);
         }
         Expr::ArrayLit { elements } => {
             for e in elements {
-                collect_expr_effects(&e.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&e.node, ctx);
             }
         }
         Expr::Index { object, index } => {
-            collect_expr_effects(&object.node, direct_errors, edges, current_fn, env);
-            collect_expr_effects(&index.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&object.node, ctx);
+            collect_expr_effects(&index.node, ctx);
         }
         Expr::EnumData { fields, .. } => {
             for (_, val) in fields {
-                collect_expr_effects(&val.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&val.node, ctx);
             }
         }
         Expr::StringInterp { parts } => {
             for part in parts {
                 if let StringInterpPart::Expr(e) = part {
-                    collect_expr_effects(&e.node, direct_errors, edges, current_fn, env);
+                    collect_expr_effects(&e.node, ctx);
                 }
             }
         }
         Expr::Closure { body, .. } => {
-            for stmt in &body.node.stmts {
-                collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
+            // A closure literal in a non-binding position (argument, return
+            // value, field...) escapes by construction: collect its body under
+            // its own node and conservatively absorb that node's errors into
+            // the enclosing node — someone may call it where we can't see.
+            let node = ctx.collect_closure(body);
+            ctx.edge(node);
+        }
+        Expr::Ident(name) => {
+            // A closure variable referenced outside call position escapes the
+            // local analysis (passed as argument, returned, stored). Absorb
+            // its error set into the enclosing node, conservatively.
+            if let Some(node) = ctx.lookup_closure(name).cloned() {
+                ctx.edge(node);
             }
         }
         Expr::Spawn { call } => {
@@ -517,7 +638,7 @@ fn collect_expr_effects(
                         };
                         if let Some(args) = args {
                             for arg in args {
-                                collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                                collect_expr_effects(&arg.node, ctx);
                             }
                         }
                     }
@@ -526,40 +647,36 @@ fn collect_expr_effects(
         }
         Expr::MapLit { entries, .. } => {
             for (k, v) in entries {
-                collect_expr_effects(&k.node, direct_errors, edges, current_fn, env);
-                collect_expr_effects(&v.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&k.node, ctx);
+                collect_expr_effects(&v.node, ctx);
             }
         }
         Expr::SetLit { elements, .. } => {
             for e in elements {
-                collect_expr_effects(&e.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&e.node, ctx);
             }
         }
         Expr::Range { start, end, .. } => {
-            collect_expr_effects(&start.node, direct_errors, edges, current_fn, env);
-            collect_expr_effects(&end.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&start.node, ctx);
+            collect_expr_effects(&end.node, ctx);
         }
         Expr::NullPropagate { expr: inner } => {
-            collect_expr_effects(&inner.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&inner.node, ctx);
         }
         Expr::StaticTraitCall { args, .. } => {
             for arg in args {
-                collect_expr_effects(&arg.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&arg.node, ctx);
             }
         }
         Expr::If { condition, then_block, else_block } => {
-            collect_expr_effects(&condition.node, direct_errors, edges, current_fn, env);
-            for stmt in &then_block.node.stmts {
-                collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
-            }
-            for stmt in &else_block.node.stmts {
-                collect_stmt_effects(&stmt.node, direct_errors, edges, current_fn, env);
-            }
+            collect_expr_effects(&condition.node, ctx);
+            collect_block_stmts(&then_block.node.stmts, ctx);
+            collect_block_stmts(&else_block.node.stmts, ctx);
         }
         Expr::Match { expr, arms } => {
-            collect_expr_effects(&expr.node, direct_errors, edges, current_fn, env);
+            collect_expr_effects(&expr.node, ctx);
             for arm in arms {
-                collect_expr_effects(&arm.value.node, direct_errors, edges, current_fn, env);
+                collect_expr_effects(&arm.value.node, ctx);
             }
         }
         Expr::QualifiedAccess { segments } => {
@@ -569,7 +686,7 @@ fn collect_expr_effects(
             )
         }
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_)
-        | Expr::Ident(_) | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
+        | Expr::EnumUnit { .. } | Expr::ClosureCreate { .. } | Expr::NoneLit => {}
     }
 }
 
@@ -754,6 +871,18 @@ fn enforce_expr(
             for arg in args {
                 enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
             }
+            if let Some(node) = env.closure_call_sites.get(&(current_fn.to_string(), name.span.start)) {
+                if env.is_fn_fallible(node) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "call to fallible closure '{}' must be handled with ! or catch",
+                            name.node
+                        ),
+                        span,
+                    ));
+                }
+                return Ok(());
+            }
             let is_fallible_pow = name.node == "pow"
                 && env
                     .fallible_builtin_calls
@@ -794,11 +923,17 @@ fn enforce_expr(
                 for arg in args {
                     enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
                 }
-                let is_fallible_pow = name.node == "pow"
-                    && env
-                        .fallible_builtin_calls
-                        .contains(&(current_fn.to_string(), name.span.start));
-                if !lenient && !is_fallible_pow && !env.is_fn_fallible(&name.node) {
+                let is_fallible = match env.closure_call_sites.get(&(current_fn.to_string(), name.span.start)) {
+                    Some(node) => env.is_fn_fallible(node),
+                    None => {
+                        (name.node == "pow"
+                            && env
+                                .fallible_builtin_calls
+                                .contains(&(current_fn.to_string(), name.span.start)))
+                            || env.is_fn_fallible(&name.node)
+                    }
+                };
+                if !lenient && !is_fallible {
                     return Err(CompileError::type_err(
                         format!("'!' applied to infallible function '{}'", name.node),
                         span,
@@ -834,11 +969,17 @@ fn enforce_expr(
                     for arg in args {
                         enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
                     }
-                    let is_fallible_pow = name.node == "pow"
-                        && env
-                            .fallible_builtin_calls
-                            .contains(&(current_fn.to_string(), name.span.start));
-                    if !lenient && !is_fallible_pow && !env.is_fn_fallible(&name.node) {
+                    let is_fallible = match env.closure_call_sites.get(&(current_fn.to_string(), name.span.start)) {
+                        Some(node) => env.is_fn_fallible(node),
+                        None => {
+                            (name.node == "pow"
+                                && env
+                                    .fallible_builtin_calls
+                                    .contains(&(current_fn.to_string(), name.span.start)))
+                                || env.is_fn_fallible(&name.node)
+                        }
+                    };
+                    if !lenient && !is_fallible {
                         return Err(CompileError::type_err(
                             format!("catch applied to infallible function '{}'", name.node),
                             span,

@@ -156,8 +156,13 @@ pub struct TypeEnv {
     /// DI singletons that need rwlock synchronization (accessed concurrently from spawn + main)
     pub synchronized_singletons: HashSet<String>,
     /// Per-function error sets: maps function name to set of error type names it can raise.
-    /// Populated by the error inference pass.
+    /// Populated by the error inference pass. Also holds per-closure nodes
+    /// keyed as `<closure@span>` for closures bound to local variables.
     pub fn_errors: HashMap<String, HashSet<String>>,
+    /// Calls through closure variables, keyed by (enclosing fn mangled name,
+    /// callee name span start) -> closure node key in `fn_errors`.
+    /// Populated by the error inference pass; consumed by enforcement.
+    pub closure_call_sites: HashMap<(String, usize), String>,
     // Generics
     pub generic_functions: HashMap<String, GenericFuncSig>,
     pub generic_classes: HashMap<String, GenericClassInfo>,
@@ -264,6 +269,7 @@ impl TypeEnv {
             di_order: Vec::new(),
             synchronized_singletons: HashSet::new(),
             fn_errors: HashMap::new(),
+            closure_call_sites: HashMap::new(),
             generic_functions: HashMap::new(),
             generic_classes: HashMap::new(),
             generic_enums: HashMap::new(),

@@ -50,8 +50,9 @@ fn propagate_on_field_access() { compile_should_fail_with(r#"class C{x:int} fn m
 #[ignore]
 fn propagate_on_index() { compile_should_fail_with(r#"fn main(){let arr=[1,2,3] let x=arr[0]!}"#, "cannot propagate"); }
 #[test]
-#[ignore]
-fn propagate_on_closure_call() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x+1 let y=f(5)!}"#, "cannot propagate"); }
+fn propagate_on_closure_call() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x+1
+let y=f(5)!
+print(y)}"#, "'!' applied to infallible function"); }
 
 // Propagate on control flow that doesn't raise
 #[test]
