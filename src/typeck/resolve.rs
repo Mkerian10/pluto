@@ -252,7 +252,25 @@ pub(crate) fn substitute_pluto_type(ty: &PlutoType, bindings: &HashMap<String, P
     ty.map_inner_types(&|inner| substitute_pluto_type(inner, bindings))
 }
 
-pub(crate) fn unify(pattern: &PlutoType, concrete: &PlutoType, bindings: &mut HashMap<String, PlutoType>) -> bool {
+/// Look up the type args a mangled instance name was created from, so a
+/// GenericInstance pattern (e.g. `Opt<T>`) can unify against an
+/// already-instantiated concrete type (e.g. `Opt$$int` or `Opt$$%T`).
+fn instantiation_args_for(base: &str, mangled: &str, want_class: bool, env: &TypeEnv) -> Option<Vec<PlutoType>> {
+    env.instantiations.iter().find_map(|inst| {
+        let matches_kind = match &inst.kind {
+            InstKind::Class(n) => want_class && n == base,
+            InstKind::Enum(n) => !want_class && n == base,
+            InstKind::Function(_) => false,
+        };
+        if matches_kind && env::mangle_name(base, &inst.type_args) == mangled {
+            Some(inst.type_args.clone())
+        } else {
+            None
+        }
+    })
+}
+
+pub(crate) fn unify(pattern: &PlutoType, concrete: &PlutoType, bindings: &mut HashMap<String, PlutoType>, env: &TypeEnv) -> bool {
     match pattern {
         PlutoType::TypeParam(name) => {
             if let Some(existing) = bindings.get(name) {
@@ -264,7 +282,7 @@ pub(crate) fn unify(pattern: &PlutoType, concrete: &PlutoType, bindings: &mut Ha
         }
         PlutoType::Array(p_inner) => {
             if let PlutoType::Array(c_inner) = concrete {
-                unify(p_inner, c_inner, bindings)
+                unify(p_inner, c_inner, bindings, env)
             } else {
                 false
             }
@@ -273,64 +291,79 @@ pub(crate) fn unify(pattern: &PlutoType, concrete: &PlutoType, bindings: &mut Ha
             if let PlutoType::Fn(cp, cr) = concrete {
                 if pp.len() != cp.len() { return false; }
                 for (p, c) in pp.iter().zip(cp.iter()) {
-                    if !unify(p, c, bindings) { return false; }
+                    if !unify(p, c, bindings, env) { return false; }
                 }
-                unify(pr, cr, bindings)
+                unify(pr, cr, bindings, env)
             } else {
                 false
             }
         }
         PlutoType::Map(pk, pv) => {
             if let PlutoType::Map(ck, cv) = concrete {
-                unify(pk, ck, bindings) && unify(pv, cv, bindings)
+                unify(pk, ck, bindings, env) && unify(pv, cv, bindings, env)
             } else {
                 false
             }
         }
         PlutoType::Set(pt) => {
             if let PlutoType::Set(ct) = concrete {
-                unify(pt, ct, bindings)
+                unify(pt, ct, bindings, env)
             } else {
                 false
             }
         }
         PlutoType::Task(pt) => {
             if let PlutoType::Task(ct) = concrete {
-                unify(pt, ct, bindings)
+                unify(pt, ct, bindings, env)
             } else {
                 false
             }
         }
         PlutoType::Sender(pt) => {
             if let PlutoType::Sender(ct) = concrete {
-                unify(pt, ct, bindings)
+                unify(pt, ct, bindings, env)
             } else {
                 false
             }
         }
         PlutoType::Receiver(pt) => {
             if let PlutoType::Receiver(ct) = concrete {
-                unify(pt, ct, bindings)
+                unify(pt, ct, bindings, env)
             } else {
                 false
             }
         }
         PlutoType::Nullable(p_inner) => {
             if let PlutoType::Nullable(c_inner) = concrete {
-                unify(p_inner, c_inner, bindings)
+                unify(p_inner, c_inner, bindings, env)
             } else {
                 false
             }
         }
         PlutoType::GenericInstance(pk, pn, pargs) => {
-            if let PlutoType::GenericInstance(ck, cn, cargs) = concrete {
-                if pk != ck || pn != cn || pargs.len() != cargs.len() { return false; }
-                for (p, c) in pargs.iter().zip(cargs.iter()) {
-                    if !unify(p, c, bindings) { return false; }
+            match concrete {
+                PlutoType::GenericInstance(ck, cn, cargs) => {
+                    if pk != ck || pn != cn || pargs.len() != cargs.len() { return false; }
+                    for (p, c) in pargs.iter().zip(cargs.iter()) {
+                        if !unify(p, c, bindings, env) { return false; }
+                    }
+                    true
                 }
-                true
-            } else {
-                false
+                // The argument may already be an instantiated concrete type
+                // (`Opt$$int`); recover its type args from the instantiation
+                // registry and unify against those.
+                PlutoType::Class(n) | PlutoType::Enum(n) => {
+                    let want_class = matches!(concrete, PlutoType::Class(_));
+                    let Some(cargs) = instantiation_args_for(pn, n, want_class, env) else {
+                        return false;
+                    };
+                    if pargs.len() != cargs.len() { return false; }
+                    for (p, c) in pargs.iter().zip(cargs.iter()) {
+                        if !unify(p, c, bindings, env) { return false; }
+                    }
+                    true
+                }
+                _ => false,
             }
         }
         _ => pattern == concrete,
@@ -460,28 +493,40 @@ pub(crate) fn ensure_generic_class_instantiated(
         .zip(type_args.iter())
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let concrete_fields: Vec<(String, PlutoType, bool)> = gen_info.fields.iter()
-        .map(|(n, t, inj)| (n.clone(), resolve_generic_instances(&substitute_pluto_type(t, &bindings), env), *inj))
-        .collect();
+    // Reserve the entry BEFORE resolving fields: a self-referential field
+    // (`children: [Node<T>]`) resolves through this same function, and the
+    // early-return guard above must see the instance as already present or
+    // the recursion never terminates. The re-entrant call only needs the
+    // class *name*; the resolved fields are filled in right after.
     env.classes.insert(mangled.clone(), ClassInfo {
-        fields: concrete_fields,
+        fields: Vec::new(),
         methods: gen_info.methods.clone(),
         impl_traits: gen_info.impl_traits.clone(),
         lifecycle: gen_info.lifecycle,
     });
+    let concrete_fields: Vec<(String, PlutoType, bool)> = gen_info.fields.iter()
+        .map(|(n, t, inj)| (n.clone(), resolve_generic_instances(&substitute_pluto_type(t, &bindings), env), *inj))
+        .collect();
+    if let Some(info) = env.classes.get_mut(&mangled) {
+        info.fields = concrete_fields;
+    }
     // Also register concrete method signatures
     // Need to substitute self type as well (it references the base class name)
     for (method_name, sig) in &gen_info.method_sigs {
-        let concrete_params: Vec<PlutoType> = sig.params.iter()
-            .map(|p| {
-                if *p == PlutoType::Class(base_name.to_string()) {
-                    PlutoType::Class(mangled.clone())
-                } else {
-                    substitute_pluto_type(p, &bindings)
-                }
-            })
-            .collect();
-        let concrete_ret = substitute_pluto_type(&sig.return_type, &bindings);
+        let mut concrete_params: Vec<PlutoType> = Vec::new();
+        for p in &sig.params {
+            if *p == PlutoType::Class(base_name.to_string()) {
+                concrete_params.push(PlutoType::Class(mangled.clone()));
+            } else {
+                // Self-referencing sigs (`fn boxed(self) Box<T>`) substitute to
+                // a GenericInstance with concrete args — resolve it so the sig
+                // carries the instance's mangled class type.
+                let substituted = substitute_pluto_type(p, &bindings);
+                concrete_params.push(resolve_generic_instances(&substituted, env));
+            }
+        }
+        let concrete_ret =
+            resolve_generic_instances(&substitute_pluto_type(&sig.return_type, &bindings), env);
         let func_name = mangle_method(&mangled, method_name);
         // Propagate mut self from generic class info
         if gen_info.mut_self_methods.contains(method_name) {

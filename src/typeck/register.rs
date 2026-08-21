@@ -518,6 +518,20 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                     }
                 }
             }
+            // Pre-register a skeleton so the class can reference itself in its
+            // own fields and method signatures (`fn boxed(self) Box<T>`): the
+            // GenericInstance path in resolve_type_with_params only needs the
+            // name to be known. The full info overwrites this below.
+            env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
+                type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
+                type_param_bounds: bounds.clone(),
+                fields: Vec::new(),
+                methods: Vec::new(),
+                method_sigs: HashMap::new(),
+                impl_traits: c.impl_traits.iter().map(|t| t.node.clone()).collect(),
+                mut_self_methods: HashSet::new(),
+                lifecycle: c.lifecycle,
+            });
             let mut fields = Vec::new();
             for f in &c.fields {
                 let ty = resolve_type_with_params(&f.ty, env, &tp_names)?;
@@ -550,6 +564,17 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                 if !m.node.params.is_empty() && m.node.params[0].name.node == "self" && m.node.params[0].is_mut {
                     generic_mut_self.insert(m.node.name.node.clone());
                 }
+            }
+            for (fname, fty, _) in &fields {
+                let fspan = c.fields.iter().find(|f| &f.name.node == fname)
+                    .map(|f| f.ty.span).unwrap_or(c.name.span);
+                check_expanding_self_reference(&c.name.node, fty, fspan)?;
+            }
+            for sig in method_sigs.values() {
+                for p in &sig.params {
+                    check_expanding_self_reference(&c.name.node, p, c.name.span)?;
+                }
+                check_expanding_self_reference(&c.name.node, &sig.return_type, c.name.span)?;
             }
             env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
                 type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
@@ -1591,6 +1616,68 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
         }
     }
     Ok(())
+}
+
+
+/// Reject *expanding* self-references in a generic class: a field or method
+/// signature referencing the class itself must instantiate it with plain type
+/// parameters (`next: Node<T>?`, in any order) or fully concrete args — a
+/// structured arg containing a type parameter (`inner: Box<Box<T>>`) demands
+/// an ever-deeper instantiation chain that can never terminate.
+fn check_expanding_self_reference(
+    class_name: &str,
+    ty: &PlutoType,
+    span: crate::span::Span,
+) -> Result<(), CompileError> {
+    fn contains_param(ty: &PlutoType) -> bool {
+        matches!(ty, PlutoType::TypeParam(_)) || ty.any_inner_type(&contains_param)
+    }
+    fn walk(class_name: &str, ty: &PlutoType, span: crate::span::Span) -> Result<(), CompileError> {
+        if let PlutoType::GenericInstance(_, name, args) = ty {
+            if name == class_name {
+                for arg in args {
+                    let ok = matches!(arg, PlutoType::TypeParam(_)) || !contains_param(arg);
+                    if !ok {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "expanding recursive reference to '{class_name}' — a self-reference \
+                                 must use the class's own type parameters or concrete types; \
+                                 '{class_name}<{arg}>'-style nesting would instantiate forever"
+                            ),
+                            span,
+                        ));
+                    }
+                }
+            }
+        }
+        match ty {
+            PlutoType::Array(t)
+            | PlutoType::Nullable(t)
+            | PlutoType::Set(t)
+            | PlutoType::Task(t)
+            | PlutoType::Sender(t)
+            | PlutoType::Receiver(t)
+            | PlutoType::Stream(t) => walk(class_name, t, span),
+            PlutoType::Map(k, v) => {
+                walk(class_name, k, span)?;
+                walk(class_name, v, span)
+            }
+            PlutoType::Fn(ps, r) => {
+                for p in ps {
+                    walk(class_name, p, span)?;
+                }
+                walk(class_name, r, span)
+            }
+            PlutoType::GenericInstance(_, _, args) => {
+                for a in args {
+                    walk(class_name, a, span)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+    walk(class_name, ty, span)
 }
 
 pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {

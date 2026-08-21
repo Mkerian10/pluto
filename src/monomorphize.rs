@@ -325,7 +325,7 @@ fn instantiate_enum(
 // ── Type substitution helpers ───────────────────────────────────────
 
 /// Build a map from type param names to concrete TypeExpr values.
-fn build_type_expr_bindings(type_params: &[String], type_args: &[PlutoType]) -> HashMap<String, TypeExpr> {
+pub(crate) fn build_type_expr_bindings(type_params: &[String], type_args: &[PlutoType]) -> HashMap<String, TypeExpr> {
     type_params
         .iter()
         .zip(type_args.iter())
@@ -394,7 +394,7 @@ fn reassign_enum_uuids(edecl: &mut EnumDecl) {
     }
 }
 
-fn substitute_in_function(func: &mut Function, bindings: &HashMap<String, TypeExpr>) {
+pub(crate) fn substitute_in_function(func: &mut Function, bindings: &HashMap<String, TypeExpr>) {
     // Substitute in parameter types
     for p in &mut func.params {
         substitute_in_type_expr(&mut p.ty.node, bindings);

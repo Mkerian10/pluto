@@ -424,6 +424,10 @@ path = "tests/typeck/generics/forward_references.rs"
 name = "typeck_recursive_generics"
 path = "tests/typeck/generics/recursive_generics.rs"
 
+[[test]]
+name = "typeck_template_checking"
+path = "tests/typeck/generics/template_checking.rs"
+
 # Typeck edge case tests - error propagation category
 [[test]]
 name = "typeck_propagation_chain"

@@ -6,4 +6,4 @@
 mod integration_common;
 
 // Re-export test helpers
-pub use integration_common::{compile_and_run, compile_should_fail_with};
+pub use integration_common::{compile_and_run, compile_and_run_stdout, compile_should_fail_with};

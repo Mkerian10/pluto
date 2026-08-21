@@ -7,6 +7,7 @@ mod infer;
 mod check;
 mod closures;
 pub(crate) mod errors;
+mod templates;
 
 // Re-exports for external use
 pub(crate) use check::check_function;
@@ -98,6 +99,7 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     register::validate_di_graph(program, &mut env)?;
     register::check_trait_conformance(program, &mut env)?;
     register::check_all_bodies(program, &mut env)?;
+    templates::check_generic_templates(program, &mut env)?;
     check::enforce_mut_self(program, &env)?;
     // Seed Rust FFI fallible functions into fn_errors before inference
     // so that infer_error_sets can propagate RustError through callers.
@@ -108,6 +110,9 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     }
     errors::infer_error_sets(program, &mut env);
     errors::enforce_error_handling(program, &env)?;
+    // Skolem artifacts served error inference/enforcement above; they must not
+    // reach monomorphization, reflection, or marshaling.
+    templates::sweep_skolems(&mut env);
     crate::concurrency::infer_synchronization(program, &mut env);
 
     let warnings = generate_warnings(&env, program);
