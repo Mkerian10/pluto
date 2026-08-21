@@ -676,14 +676,16 @@ fn main() {
 
 #[test]
 fn chan_non_spawn_closure_capturing_sender() {
-    // Regular closure captures sender, no inc/dec per call, closes at fn exit
+    // Regular closure captures sender, no inc/dec per call, closes at fn exit.
+    // The closure propagates ChannelClosed (`tx.send(x)!`), so it is inferred
+    // fallible and its calls must be handled.
     let out = compile_and_run_stdout(r#"
 fn main() {
     let (tx, rx) = chan<int>(10)
     let send_val = (x: int) => { tx.send(x)! }
-    send_val(1)
-    send_val(2)
-    send_val(3)
+    send_val(1)!
+    send_val(2)!
+    send_val(3)!
     let v1 = rx.recv()!
     let v2 = rx.recv()!
     let v3 = rx.recv()!

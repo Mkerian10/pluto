@@ -1,5 +1,5 @@
 mod common;
-use common::compile_and_run_stdout;
+use common::{compile_and_run_stdout, compile_should_fail_with};
 
 #[test]
 fn closure_basic() {
@@ -158,4 +158,242 @@ fn nested_closures_with_if_expr() {
         "#,
     );
     assert_eq!(out.trim(), "10");
+}
+
+// ── Closure error inference ──────────────────────────────────────────────────
+// Closures bound to variables get their own node in the error graph: calls
+// through the variable are enforced and can be handled with catch/!.
+
+#[test]
+fn fallible_closure_call_with_catch() {
+    let out = compile_and_run_stdout(
+        r#"
+error ClosureError { value: int }
+
+fn main() {
+    let threshold = 10
+    let check = (x: int) => {
+        if x > threshold {
+            raise ClosureError { value: x }
+        }
+        return x * 2
+    }
+
+    let a = check(5) catch 0
+    print(a)
+    let b = check(15) catch 0
+    print(b)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "10\n0");
+}
+
+#[test]
+fn unhandled_fallible_closure_call_rejected() {
+    compile_should_fail_with(
+        r#"
+error E { code: int }
+
+fn main() {
+    let f = (x: int) => {
+        if x > 3 {
+            raise E { code: x }
+        }
+        return x
+    }
+    let a = f(5)
+    print(a)
+}
+"#,
+        "call to fallible closure 'f' must be handled with ! or catch",
+    );
+}
+
+#[test]
+fn catch_on_infallible_closure_rejected() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let f = (x: int) => x + 1
+    let a = f(5) catch 0
+    print(a)
+}
+"#,
+        "catch applied to infallible function 'f'",
+    );
+}
+
+#[test]
+fn closure_error_propagates_through_function() {
+    let out = compile_and_run_stdout(
+        r#"
+error E { code: int }
+
+fn use_it(x: int) int {
+    let f = (n: int) => {
+        if n > 3 {
+            raise E { code: n }
+        }
+        return n * 2
+    }
+    return f(x)!
+}
+
+fn main() {
+    let ok = use_it(2) catch -1
+    print(ok)
+    let bad = use_it(9) catch err: E { err.code }
+    print(bad)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "4\n9");
+}
+
+#[test]
+fn closure_calling_fallible_function_is_fallible() {
+    let out = compile_and_run_stdout(
+        r#"
+error E { code: int }
+
+fn raiser() int {
+    raise E { code: 3 }
+    return 0
+}
+
+fn main() {
+    let f = (x: int) => {
+        return raiser()! + x
+    }
+    let a = f(10) catch err: E { err.code }
+    print(a)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "3");
+}
+
+#[test]
+fn typed_catch_must_cover_closure_error_set() {
+    compile_should_fail_with(
+        r#"
+error A { x: int }
+error B { y: int }
+
+fn main() {
+    let f = (n: int) => {
+        if n == 1 {
+            raise A { x: 1 }
+        }
+        raise B { y: 2 }
+        return n
+    }
+    let a = f(1) catch err: A { 0 }
+    print(a)
+}
+"#,
+        "no catch handler covers",
+    );
+}
+
+#[test]
+fn function_handling_closure_error_internally_is_infallible() {
+    let out = compile_and_run_stdout(
+        r#"
+error E { code: int }
+
+fn handles_internally(x: int) int {
+    let f = (n: int) => {
+        if n > 3 {
+            raise E { code: n }
+        }
+        return n
+    }
+    return f(x) catch -1
+}
+
+fn main() {
+    let a = handles_internally(9)
+    print(a)
+    let b = handles_internally(2)
+    print(b)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "-1\n2");
+}
+
+#[test]
+fn escaping_fallible_closure_keeps_definer_fallible() {
+    // A fallible closure passed to another function may be called where the
+    // analysis can't see it; the defining function conservatively absorbs its
+    // error set, so callers can catch.
+    let out = compile_and_run_stdout(
+        r#"
+error E { code: int }
+
+fn apply(g: fn(int) int, x: int) int {
+    return g(x)
+}
+
+fn definer(x: int) int {
+    let f = (n: int) => {
+        if n > 3 {
+            raise E { code: n }
+        }
+        return n
+    }
+    return apply(f, x)
+}
+
+fn main() {
+    let a = definer(1) catch -1
+    print(a)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1");
+}
+
+#[test]
+fn reassigned_closure_unions_error_sets() {
+    let out = compile_and_run_stdout(
+        r#"
+error E { code: int }
+
+fn main() {
+    let mut f = (n: int) => n + 1
+    f = (n: int) => {
+        raise E { code: n }
+        return n
+    }
+    let a = f(5) catch -1
+    print(a)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "-1");
+}
+
+#[test]
+fn nested_closure_error_propagation() {
+    let out = compile_and_run_stdout(
+        r#"
+error E { code: int }
+
+fn main() {
+    let counter = (n: int) => {
+        let inner = (m: int) => {
+            raise E { code: m }
+            return m
+        }
+        return inner(n)!
+    }
+    let a = counter(4) catch err: E { err.code + 100 }
+    print(a)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "104");
 }

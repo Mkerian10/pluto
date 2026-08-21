@@ -67,16 +67,56 @@ fn method_call_fallible_no_handler() { compile_should_fail_with(r#"error E{} cla
 #[ignore]
 fn method_calls_fallible_no_propagate() { compile_should_fail_with(r#"error E{} fn f()!{raise E{}} class C{x:int fn foo(self){f()}} fn main(){}"#, "unhandled error"); }
 
-// Unhandled in closures
+// Unhandled in closures. Defining a fallible closure is fine — its errors
+// surface at its call sites (or absorb into the definer if it escapes).
 #[test]
-#[ignore]
-fn closure_raises_no_handler() { compile_should_fail_with(r#"error E{} fn main(){let f=()=>{raise E{}}}"#, "unhandled error"); }
+fn closure_raises_no_handler() {
+    compile_should_fail_with(
+        r#"error E{}
+fn main() {
+    let f = () => {
+        raise E{}
+    }
+    f()
+}"#,
+        "call to fallible closure 'f' must be handled",
+    );
+}
 #[test]
-#[ignore]
-fn closure_calls_fallible_no_handler() { compile_should_fail_with(r#"error E{} fn g()!{raise E{}} fn main(){let f=()=>{g()}}"#, "unhandled error"); }
+fn closure_calls_fallible_no_handler() {
+    compile_should_fail_with(
+        r#"error E{}
+fn g() int {
+    raise E{}
+    return 0
+}
+fn main() {
+    let f = () => {
+        g()
+        return 0
+    }
+    print(f())
+}"#,
+        "call to fallible function 'g' must be handled",
+    );
+}
 #[test]
-#[ignore]
-fn closure_calls_fallible_no_propagate() { compile_should_fail_with(r#"error E{} fn g()int!{raise E{}} fn main(){let f=()int=>{return g()}}"#, "unhandled error"); }
+fn closure_propagating_makes_call_site_fallible() {
+    compile_should_fail_with(
+        r#"error E{}
+fn g() int {
+    raise E{}
+    return 0
+}
+fn main() {
+    let f = () => {
+        return g()!
+    }
+    print(f())
+}"#,
+        "call to fallible closure 'f' must be handled",
+    );
+}
 
 // Unhandled in match arms
 #[test]
