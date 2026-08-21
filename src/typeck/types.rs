@@ -87,10 +87,12 @@ impl std::fmt::Display for PlutoType {
             PlutoType::Bool => write!(f, "bool"),
             PlutoType::String => write!(f, "string"),
             PlutoType::Void => write!(f, "void"),
-            PlutoType::Class(name) => write!(f, "{name}"),
+            // '%' marks skolem classes standing in for type parameters during
+            // generic template checking; show the parameter name users wrote.
+            PlutoType::Class(name) => write!(f, "{}", name.replace('%', "")),
             PlutoType::Array(inner) => write!(f, "[{inner}]"),
             PlutoType::Trait(name) => write!(f, "trait {name}"),
-            PlutoType::Enum(name) => write!(f, "{name}"),
+            PlutoType::Enum(name) => write!(f, "{}", name.replace('%', "")),
             PlutoType::Fn(params, ret) => {
                 write!(f, "fn(")?;
                 for (i, p) in params.iter().enumerate() {

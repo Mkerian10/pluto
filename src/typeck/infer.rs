@@ -130,10 +130,23 @@ pub(crate) fn infer_expr(
                         .find(|(n, _, _)| *n == field.node)
                         .map(|(_, t, _)| t.clone())
                         .ok_or_else(|| {
-                            CompileError::type_err(
-                                format!("class '{class_name}' has no field '{}'", field.node),
-                                field.span,
-                            )
+                            // A skolem stands in for an opaque type parameter:
+                            // no field on T is visible in a generic body.
+                            if let Some(param) = class_name.strip_prefix('%') {
+                                CompileError::type_err(
+                                    format!(
+                                        "type parameter '{param}' has no field '{}' — fields of an \
+                                         opaque type parameter are not accessible in a generic body",
+                                        field.node
+                                    ),
+                                    field.span,
+                                )
+                            } else {
+                                CompileError::type_err(
+                                    format!("class '{}' has no field '{}'", class_name.replace('%', ""), field.node),
+                                    field.span,
+                                )
+                            }
                         })
                 }
                 PlutoType::Error if field.node == "message" && env.errors.contains_key("MathError") => {
@@ -646,6 +659,11 @@ pub(crate) fn infer_expr(
 fn validate_hashable_key(ty: &PlutoType, span: crate::span::Span) -> Result<(), CompileError> {
     match ty {
         PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Enum(_) | PlutoType::Byte => Ok(()),
+        // A skolem (opaque type parameter under generic template checking):
+        // there is no hashable bound to declare, so `Map<T, V>`/`Set<T>` in a
+        // template defers this check to each instantiation, which re-validates
+        // with the concrete key type.
+        PlutoType::Class(name) if name.starts_with('%') => Ok(()),
         _ => Err(CompileError::type_err(
             format!("type {ty} cannot be used as a map/set key (must be int, float, bool, string, byte, or enum)"),
             span,
@@ -965,7 +983,7 @@ fn infer_call(
             }
             let mut bindings = HashMap::new();
             for (param_ty, arg_ty) in gen_sig.params.iter().zip(&arg_types) {
-                if !unify(param_ty, arg_ty, &mut bindings) {
+                if !unify(param_ty, arg_ty, &mut bindings, env) {
                     return Err(CompileError::type_err(
                         format!("cannot infer type parameters for '{}'", name.node),
                         span,
@@ -1186,6 +1204,15 @@ fn infer_enum_unit(
                         env,
                     );
                 }
+                if env.generic_enums.contains_key(&enum_name.node) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "cannot infer type arguments for generic enum '{0}'; write '{0}<...>.{1}'",
+                            enum_name.node, variant.node
+                        ),
+                        enum_name.span,
+                    ));
+                }
                 return Err(CompileError::type_err(
                     format!("unknown enum '{}'", enum_name.node),
                     enum_name.span,
@@ -1335,10 +1362,20 @@ fn infer_enum_data(
         (ei, mangled)
     } else {
         let ei = env.enums.get(&enum_name.node).ok_or_else(|| {
-            CompileError::type_err(
-                format!("unknown enum '{}'", enum_name.node),
-                enum_name.span,
-            )
+            if env.generic_enums.contains_key(&enum_name.node) {
+                CompileError::type_err(
+                    format!(
+                        "cannot infer type arguments for generic enum '{0}'; write '{0}<...>.{1}'",
+                        enum_name.node, variant.node
+                    ),
+                    enum_name.span,
+                )
+            } else {
+                CompileError::type_err(
+                    format!("unknown enum '{}'", enum_name.node),
+                    enum_name.span,
+                )
+            }
         })?.clone();
         (ei, enum_name.node.clone())
     };

@@ -29,8 +29,24 @@ fn option_multi_instance_error() { compile_should_fail_with(r#"enum Opt<T>{Some{
 #[ignore]
 fn generic_method_multi_instance() { compile_should_fail_with(r#"class Box<T>{value:T fn get(self)T{return self.value}} fn main(){let b1=Box<int>{value:42} let b2=Box<bool>{value:true} let x:int=b2.get()}"#, "type mismatch"); }
 #[test]
-#[ignore] // #182: compiler doesn't detect type mismatch in generic method body
-fn generic_method_wrong_return() { compile_should_fail_with(r#"class Box<T>{value:T fn wrong(self)T{return 42}} fn main(){let b=Box<bool>{value:true} b.wrong()}"#, "type mismatch"); }
+fn generic_method_wrong_return() {
+    compile_should_fail_with(
+        r#"
+class Box<T> {
+    value: T
+
+    fn wrong(self) T {
+        return 42
+    }
+}
+fn main() {
+    let b = Box<bool> { value: true }
+    b.wrong()
+}
+"#,
+        "type mismatch",
+    );
+}
 
 // Closure capture with generics
 #[test]

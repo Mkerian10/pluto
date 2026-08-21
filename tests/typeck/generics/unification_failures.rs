@@ -8,22 +8,18 @@ use common::compile_should_fail_with;
 #[ignore] // #182: compiler doesn't detect type mismatch when generic function stored in variable
 fn infer_from_conflicting_uses() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn main(){let f=id f(42) f(true)}"#, "type mismatch"); }
 #[test]
-#[ignore] // #182: compiler doesn't detect type mismatch in generic function body
 fn param_return_conflict() { compile_should_fail_with(r#"fn bad<T>(x:T)T{if true{return x}return 42} fn main(){}"#, "type mismatch"); }
 #[test]
-#[ignore]
-fn two_params_conflict() { compile_should_fail_with(r#"fn same<T>(x:T,y:T)T{return x} fn main(){same(42,true)}"#, "expected int, found bool"); }
+fn two_params_conflict() { compile_should_fail_with(r#"fn same<T>(x:T,y:T)T{return x} fn main(){same(42,true)}"#, "cannot infer type parameters"); }
 
 // Array element unification
 #[test]
 fn array_mixed_types() { compile_should_fail_with(r#"fn first<T>(arr:[T])T{return arr[0]} fn main(){first([42,true])}"#, "type mismatch"); }
 #[test]
-#[ignore] // #182: compiler doesn't detect type mismatch in generic function body
 fn array_return_conflict() { compile_should_fail_with(r#"fn make<T>()[T]{if true{return [42]}return [true]} fn main(){}"#, "type mismatch"); }
 
 // Field type unification
 #[test]
-#[ignore] // #182: compiler doesn't detect type mismatch in generic function body
 fn class_field_conflict() { compile_should_fail_with(r#"class Box<T>{value:T} fn make<T>()Box<T>{if true{return Box<int>{value:42}}return Box<bool>{value:true}} fn main(){}"#, "type mismatch"); }
 #[test]
 #[ignore]
@@ -39,11 +35,31 @@ fn nested_call_conflict() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x}
 
 // Return type unification
 #[test]
-#[ignore] // #182: compiler doesn't detect type mismatch in generic function body
 fn if_branches_differ() { compile_should_fail_with(r#"fn make<T>(b:bool)T{if b{return 42}return true} fn main(){}"#, "type mismatch"); }
 #[test]
-#[ignore] // Syntax error: match arm with => not supported
-fn match_arms_differ() { compile_should_fail_with(r#"enum E{A B} fn get<T>(e:E)T{match e{E.A=>{return 42}E.B=>{return \"hi\"}}} fn main(){}"#, "type mismatch"); }
+fn match_arms_differ() {
+    compile_should_fail_with(
+        r#"
+enum E {
+    A
+    B
+}
+fn get<T>(e: E) T {
+    match e {
+        E.A {
+            return 42
+        }
+        E.B {
+            return 43
+        }
+    }
+    return get<T>(e)
+}
+fn main() {}
+"#,
+        "type mismatch",
+    );
+}
 
 // Closure unification
 #[test]
@@ -60,20 +76,31 @@ fn method_receiver_conflict() { compile_should_fail_with(r#"class Box<T>{value:T
 
 // Enum variant unification
 #[test]
-#[ignore] // #182: compiler doesn't detect type mismatch in generic function body
-fn enum_variant_param_conflict() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} fn make<U>(b:bool)Opt<U>{if b{return Opt.Some{v:42}}return Opt.Some{v:true}} fn main(){}"#, "type mismatch"); }
+fn enum_variant_param_conflict() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} fn make<U>(b:bool)Opt<U>{if b{return Opt.Some{v:42}}return Opt.Some{v:true}} fn main(){}"#, "cannot infer type arguments for generic enum"); }
 
 // Multiple type parameters
 #[test]
 #[ignore]
 fn two_params_cross_conflict() { compile_should_fail_with(r#"fn swap<T,U>(x:T,y:U)(U,T){return (y,x)} fn main(){let (a,b)=swap(42,true) let c:int=a}"#, "type mismatch"); }
 #[test]
-#[ignore] // #182: compiler doesn't detect conflicting generic instantiations across calls
-fn param_reuse_conflict() { compile_should_fail_with(r#"fn use_twice<T>(x:T,y:T)T{return x} fn f<U>(a:U){use_twice(a,42) use_twice(a,true)} fn main(){}"#, "type mismatch"); }
+fn param_reuse_conflict() {
+    compile_should_fail_with(
+        r#"
+fn use_twice<T>(x: T, y: T) T {
+    return x
+}
+fn f<U>(a: U) {
+    use_twice(a, 42)
+    use_twice(a, true)
+}
+fn main() {}
+"#,
+        "cannot infer type parameters",
+    );
+}
 
 // Recursive unification
 #[test]
-#[ignore] // #182: compiler doesn't detect type mismatch in generic function body
 fn recursive_type_conflict() { compile_should_fail_with(r#"class Box<T>{value:T} fn nest<U>()Box<Box<U>>{if true{return Box<Box<int>>{value:Box<int>{value:42}}}return Box<Box<bool>>{value:Box<bool>{value:true}}} fn main(){}"#, "type mismatch"); }
 
 // Unification with builtin types
