@@ -81,45 +81,45 @@ jobs:
           script: |
             const message = `## 🤖 AST Walker Guidelines Reminder
 
-This PR modifies core compiler files. If you're adding a new AST variant or modifying walker functions, please ensure:
+            This PR modifies core compiler files. If you're adding a new AST variant or modifying walker functions, please ensure:
 
-- ✅ **Exhaustive matching** — Core walker functions must NOT use \`_ => {}\` catch-all patterns
-- ✅ **Update visitor functions** — Add new variants to \`walk_expr\`/\`walk_stmt\`/\`walk_type_expr\` in \`src/visit.rs\`
-- ✅ **Follow the checklist** — See \`docs/checklists/add-ast-variant.md\`
+            - ✅ **Exhaustive matching** — Core walker functions must NOT use \`_ => {}\` catch-all patterns
+            - ✅ **Update visitor functions** — Add new variants to \`walk_expr\`/\`walk_stmt\`/\`walk_type_expr\` in \`src/visit.rs\`
+            - ✅ **Follow the checklist** — See \`docs/checklists/add-ast-variant.md\`
 
-**Why exhaustive matching?**
-Catch-all patterns cause new AST variants to be silently skipped instead of forcing explicit handling. This prevents bugs.
+            **Why exhaustive matching?**
+            Catch-all patterns cause new AST variants to be silently skipped instead of forcing explicit handling. This prevents bugs.
 
-**Core walker functions** (require exhaustive matching):
-- \`src/typeck/infer.rs\` — type inference
-- \`src/typeck/check.rs\` — type checking
-- \`src/typeck/errors.rs\` — error analysis
-- \`src/codegen/lower/mod.rs\` — code generation
-- \`src/pretty.rs\` — pretty printing
+            **Core walker functions** (require exhaustive matching):
+            - \`src/typeck/infer.rs\` — type inference
+            - \`src/typeck/check.rs\` — type checking
+            - \`src/typeck/errors.rs\` — error analysis
+            - \`src/codegen/lower/mod.rs\` — code generation
+            - \`src/pretty.rs\` — pretty printing
 
-**Example:**
-\`\`\`rust
-// ❌ BAD: Catch-all pattern
-match &expr.node {
-    Expr::Call { .. } => { /* ... */ }
-    _ => {}
-}
+            **Example:**
+            \`\`\`rust
+            // ❌ BAD: Catch-all pattern
+            match &expr.node {
+                Expr::Call { .. } => { /* ... */ }
+                _ => {}
+            }
 
-// ✅ GOOD: Exhaustive matching
-match &expr.node {
-    Expr::Call { .. } => { /* ... */ }
-    Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
-    | Expr::StringLit(_) | Expr::NoneLit | Expr::Ident(_) => {}
-}
-\`\`\`
+            // ✅ GOOD: Exhaustive matching
+            match &expr.node {
+                Expr::Call { .. } => { /* ... */ }
+                Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
+                | Expr::StringLit(_) | Expr::NoneLit | Expr::Ident(_) => {}
+            }
+            \`\`\`
 
-**More info:**
-- [AST Variant Checklist](../blob/master/docs/checklists/add-ast-variant.md)
-- [Visitor Pattern Assessment](../blob/master/docs/design/visitor-phase4-assessment.md)
-- [AST Walker Policy](../blob/master/CLAUDE.md#ast-walker-policy)
+            **More info:**
+            - [AST Variant Checklist](../blob/master/docs/checklists/add-ast-variant.md)
+            - [Visitor Pattern Assessment](../blob/master/docs/design/visitor-phase4-assessment.md)
+            - [AST Walker Policy](../blob/master/CLAUDE.md#ast-walker-policy)
 
----
-*This is an automated reminder to help maintain code quality. Review carefully, but it won't block your PR.*`;
+            ---
+            *This is an automated reminder to help maintain code quality. Review carefully, but it won't block your PR.*`;
 
             // Check if we've already posted this comment
             const { data: comments } = await github.rest.issues.listComments({
