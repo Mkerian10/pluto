@@ -130,10 +130,23 @@ pub(crate) fn infer_expr(
                         .find(|(n, _, _)| *n == field.node)
                         .map(|(_, t, _)| t.clone())
                         .ok_or_else(|| {
-                            CompileError::type_err(
-                                format!("class '{class_name}' has no field '{}'", field.node),
-                                field.span,
-                            )
+                            // A skolem stands in for an opaque type parameter:
+                            // no field on T is visible in a generic body.
+                            if let Some(param) = class_name.strip_prefix('%') {
+                                CompileError::type_err(
+                                    format!(
+                                        "type parameter '{param}' has no field '{}' — fields of an \
+                                         opaque type parameter are not accessible in a generic body",
+                                        field.node
+                                    ),
+                                    field.span,
+                                )
+                            } else {
+                                CompileError::type_err(
+                                    format!("class '{}' has no field '{}'", class_name.replace('%', ""), field.node),
+                                    field.span,
+                                )
+                            }
                         })
                 }
                 PlutoType::Error if field.node == "message" && env.errors.contains_key("MathError") => {

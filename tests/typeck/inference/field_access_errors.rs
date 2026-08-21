@@ -273,7 +273,7 @@ fn field_access_on_generic_type_param() {
             let v = get_x(42)
         }
         "#,
-        "field access on non-class type",
+        "type parameter 'T' has no field 'x'",
     );
 }
 

@@ -1,7 +1,7 @@
 //! Recursive type and type cycle tests - 20 tests
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run, compile_should_fail_with};
 
 // Direct recursive class
 #[test]
@@ -58,7 +58,11 @@ fn mutual_enum_recursion() { compile_should_fail_with(r#"enum A{B{b:B}} enum B{A
 
 // Recursive generic class
 #[test]
-fn recursive_generic_class() { compile_should_fail_with(r#"class C<T>{x:C<T>} fn main(){}"#, ""); }
+fn recursive_generic_class() {
+    // Non-expanding self-references are legal — classes are GC references.
+    // (Expanding ones like `x: C<C<T>>` are rejected at registration.)
+    assert_eq!(compile_and_run(r#"class C<T>{x:C<T>} fn main(){}"#), 0);
+}
 
 // Recursive trait implementation
 #[test]
