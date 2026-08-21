@@ -17,6 +17,21 @@ fn apply(f: fn(int) int, x: int) int {
     return f(x)
 }
 
+// A fallible contract: `!` on the fn type accepts functions that may raise,
+// and calls through the value must be handled.
+error TooBig { value: int }
+
+fn checked(x: int) int {
+    if x > 100 {
+        raise TooBig { value: x }
+    }
+    return x
+}
+
+fn apply_checked(f: fn(int) int!, x: int) int {
+    return f(x)!
+}
+
 fn compose(f: fn(int) int, g: fn(int) int) fn(int) int {
     return (x: int) => g(f(x))
 }
@@ -38,4 +53,9 @@ fn main() {
     // Compose two named functions into a new one
     let double_then_square = compose(double, square)
     print(double_then_square(3))
+
+    // Fallible function values: the contract says failure is allowed,
+    // so the caller handles it
+    print(apply_checked(checked, 7) catch -1)
+    print(apply_checked(checked, 700) catch -1)
 }

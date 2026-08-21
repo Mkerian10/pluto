@@ -163,7 +163,7 @@ fn check_serializable(
         }
 
         // Non-serializable types
-        PlutoType::Fn(_, _) => Err("closures cannot be serialized".to_string()),
+        PlutoType::Fn(_, _, _) => Err("closures cannot be serialized".to_string()),
         PlutoType::Task(_) => Err("Task<T> is a runtime handle and cannot be serialized".to_string()),
         PlutoType::Sender(_) => Err("Sender<T> is a runtime handle and cannot be serialized".to_string()),
         PlutoType::Receiver(_) => Err("Receiver<T> is a runtime handle and cannot be serialized".to_string()),
@@ -290,12 +290,12 @@ fn resolve_type_expr(ty_expr: &TypeExpr, env: &TypeEnv) -> Result<PlutoType, Com
             }
         }
 
-        TypeExpr::Fn { params: param_tys, return_type: ret_ty } => {
+        TypeExpr::Fn { params: param_tys, return_type: ret_ty, fallible } => {
             let params: Result<Vec<_>, _> = param_tys.iter()
                 .map(|p| resolve_type_expr(&p.node, env))
                 .collect();
             let ret = resolve_type_expr(&ret_ty.node, env)?;
-            Ok(PlutoType::Fn(params?, Box::new(ret)))
+            Ok(PlutoType::Fn(params?, Box::new(ret), *fallible))
         }
 
         TypeExpr::Qualified { module, name } => {

@@ -204,10 +204,10 @@ fn main() {
 }
 
 #[test]
-fn escaping_fallible_fn_ref_keeps_definer_fallible() {
-    // Passing a fallible function reference away means it may be called where
-    // the analysis can't see; the passer conservatively absorbs its error set.
-    let out = compile_and_run_stdout(
+fn fallible_fn_ref_into_infallible_contract_rejected() {
+    // fn(int) int is an infallible contract: a fallible reference cannot
+    // cross it. Declare the parameter fallible or handle in a wrapper.
+    compile_should_fail_with(
         r#"
 error E { code: int }
 
@@ -222,14 +222,35 @@ fn apply(f: fn(int) int, x: int) int {
     return f(x)
 }
 
-fn run_it(x: int) int {
-    return apply(risky, x)
+fn main() {
+    print(apply(risky, 1))
+}
+"#,
+        "cannot pass fallible function 'risky' where an infallible function type is expected",
+    );
+}
+
+#[test]
+fn fallible_fn_ref_into_fallible_contract_works() {
+    let out = compile_and_run_stdout(
+        r#"
+error E { code: int }
+
+fn risky(x: int) int {
+    if x > 3 {
+        raise E { code: x }
+    }
+    return x
+}
+
+fn apply(f: fn(int) int!, x: int) int {
+    return f(x)!
 }
 
 fn main() {
-    let ok = run_it(1) catch -1
+    let ok = apply(risky, 1) catch -1
     print(ok)
-    let bad = run_it(7) catch -1
+    let bad = apply(risky, 7) catch -1
     print(bad)
 }
 "#,

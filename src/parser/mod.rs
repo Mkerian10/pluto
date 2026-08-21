@@ -1551,7 +1551,7 @@ impl<'a> Parser<'a> {
             // Optional return type — if next token looks like a type, parse it; otherwise void
             let return_type = if !self.at_statement_boundary()
                 && self.peek().is_some()
-                && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Comma | Token::RParen | Token::FatArrow | Token::RBracket | Token::Eq)
+                && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Comma | Token::RParen | Token::FatArrow | Token::RBracket | Token::Eq | Token::Bang)
             {
                 let ty = self.parse_type()?;
                 end = ty.span.end;
@@ -1559,7 +1559,14 @@ impl<'a> Parser<'a> {
             } else {
                 Box::new(Spanned::new(TypeExpr::Named("void".to_string()), Span::new(end, end)))
             };
-            Ok(Spanned::new(TypeExpr::Fn { params, return_type }, Span::new(start, end)))
+            // Optional fallibility marker: fn(int) int!
+            let mut fallible = false;
+            if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Bang) {
+                let bang = self.advance().expect("bang token peeked");
+                end = bang.span.end;
+                fallible = true;
+            }
+            Ok(Spanned::new(TypeExpr::Fn { params, return_type, fallible }, Span::new(start, end)))
         } else {
             let ident = self.expect_ident()?;
             // Check for qualified type: module.Type
@@ -4307,7 +4314,7 @@ mod tests {
         let prog = parse("fn apply(f: fn(int, int) int, x: int) int {\n    return f(x, x)\n}");
         let f = &prog.functions[0].node;
         match &f.params[0].ty.node {
-            TypeExpr::Fn { params, return_type } => {
+            TypeExpr::Fn { params, return_type, fallible: _ } => {
                 assert_eq!(params.len(), 2);
                 assert!(matches!(&params[0].node, TypeExpr::Named(n) if n == "int"));
                 assert!(matches!(&params[1].node, TypeExpr::Named(n) if n == "int"));
@@ -4322,7 +4329,7 @@ mod tests {
         let prog = parse("fn apply(f: fn(int)) {\n}");
         let f = &prog.functions[0].node;
         match &f.params[0].ty.node {
-            TypeExpr::Fn { params, return_type } => {
+            TypeExpr::Fn { params, return_type, fallible: _ } => {
                 assert_eq!(params.len(), 1);
                 assert!(matches!(&return_type.node, TypeExpr::Named(n) if n == "void"));
             }

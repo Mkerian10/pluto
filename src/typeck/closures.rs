@@ -84,7 +84,7 @@ pub(crate) fn infer_closure(
 
     env.pop_scope();
 
-    Ok(PlutoType::Fn(param_types, Box::new(final_ret)))
+    Ok(PlutoType::Fn(param_types, Box::new(final_ret), false))
 }
 
 /// Infer the return type of a closure body by looking for return statements.

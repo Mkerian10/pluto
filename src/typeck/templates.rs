@@ -231,7 +231,7 @@ fn type_contains_skolem(ty: &PlutoType) -> bool {
         | PlutoType::Receiver(t)
         | PlutoType::Stream(t) => type_contains_skolem(t),
         PlutoType::Map(k, v) => type_contains_skolem(k) || type_contains_skolem(v),
-        PlutoType::Fn(ps, r) => ps.iter().any(type_contains_skolem) || type_contains_skolem(r),
+        PlutoType::Fn(ps, r, _) => ps.iter().any(type_contains_skolem) || type_contains_skolem(r),
         PlutoType::GenericInstance(_, _, args) => args.iter().any(type_contains_skolem),
         _ => false,
     }

@@ -714,6 +714,7 @@ impl PrettyPrinter {
             TypeExpr::Fn {
                 params,
                 return_type,
+                fallible,
             } => {
                 self.write("fn(");
                 for (i, p) in params.iter().enumerate() {
@@ -727,6 +728,9 @@ impl PrettyPrinter {
                 if !matches!(&return_type.node, TypeExpr::Named(n) if n == "void") {
                     self.write(" ");
                     self.emit_type_expr(&return_type.node);
+                }
+                if *fallible {
+                    self.write("!");
                 }
             }
             TypeExpr::Generic { name, type_args } => {

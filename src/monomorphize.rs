@@ -346,7 +346,7 @@ fn substitute_in_type_expr(te: &mut TypeExpr, bindings: &HashMap<String, TypeExp
             substitute_in_type_expr(&mut inner.node, bindings);
         }
         TypeExpr::Qualified { .. } => {}
-        TypeExpr::Fn { params, return_type } => {
+        TypeExpr::Fn { params, return_type, fallible: _ } => {
             for p in params.iter_mut() {
                 substitute_in_type_expr(&mut p.node, bindings);
             }
@@ -936,7 +936,7 @@ fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), Compil
             *te = TypeExpr::Named(mangled);
         }
         TypeExpr::Array(inner) => resolve_generic_te(&mut inner.node, env)?,
-        TypeExpr::Fn { params, return_type } => {
+        TypeExpr::Fn { params, return_type, fallible: _ } => {
             for p in params.iter_mut() {
                 resolve_generic_te(&mut p.node, env)?;
             }
@@ -975,12 +975,12 @@ fn type_expr_to_pluto_type(te: &TypeExpr, env: &TypeEnv) -> Result<PlutoType, Co
         TypeExpr::Array(inner) => {
             Ok(PlutoType::Array(Box::new(type_expr_to_pluto_type(&inner.node, env)?)))
         }
-        TypeExpr::Fn { params, return_type } => {
+        TypeExpr::Fn { params, return_type, fallible } => {
             let param_types: Vec<PlutoType> = params.iter()
                 .map(|p| type_expr_to_pluto_type(&p.node, env))
                 .collect::<Result<Vec<_>, _>>()?;
             let ret = type_expr_to_pluto_type(&return_type.node, env)?;
-            Ok(PlutoType::Fn(param_types, Box::new(ret)))
+            Ok(PlutoType::Fn(param_types, Box::new(ret), *fallible))
         }
         TypeExpr::Qualified { module, name } => {
             Ok(PlutoType::Class(format!("{}.{}", module, name)))
@@ -1135,6 +1135,7 @@ mod tests {
     #[test]
     fn test_substitute_fn_types() {
         let mut te = TypeExpr::Fn {
+            fallible: false,
             params: vec![Box::new(spanned(TypeExpr::Named("T".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("U".to_string()))),
         };
@@ -1143,7 +1144,7 @@ mod tests {
         bindings.insert("U".to_string(), TypeExpr::Named("string".to_string()));
 
         substitute_in_type_expr(&mut te, &bindings);
-        if let TypeExpr::Fn { params, return_type } = te {
+        if let TypeExpr::Fn { params, return_type, fallible: _ } = te {
             assert!(matches!(&params[0].node, TypeExpr::Named(n) if n == "int"));
             assert!(matches!(&return_type.node, TypeExpr::Named(n) if n == "string"));
         } else {
@@ -1336,11 +1337,12 @@ mod tests {
     fn test_type_expr_to_pluto_type_fn() {
         let env = TypeEnv::new();
         let te = TypeExpr::Fn {
+            fallible: false,
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("string".to_string()))),
         };
 
-        if let Ok(PlutoType::Fn(params, ret)) = type_expr_to_pluto_type(&te, &env) {
+        if let Ok(PlutoType::Fn(params, ret, _)) = type_expr_to_pluto_type(&te, &env) {
             assert_eq!(params.len(), 1);
             assert!(matches!(params[0], PlutoType::Int));
             assert!(matches!(*ret, PlutoType::String));

@@ -648,8 +648,9 @@ fn type_expr_eq(a: &TypeExpr, b: &TypeExpr) -> bool {
         (TypeExpr::Qualified { module: ma, name: na }, TypeExpr::Qualified { module: mb, name: nb }) => {
             ma == mb && na == nb
         }
-        (TypeExpr::Fn { params: pa, return_type: ra }, TypeExpr::Fn { params: pb, return_type: rb }) => {
-            pa.len() == pb.len()
+        (TypeExpr::Fn { params: pa, return_type: ra, fallible: fa }, TypeExpr::Fn { params: pb, return_type: rb, fallible: fb }) => {
+            fa == fb
+                && pa.len() == pb.len()
                 && pa.iter().zip(pb.iter()).all(|(a, b)| type_expr_eq(&a.node, &b.node))
                 && type_expr_eq(&ra.node, &rb.node)
         }
@@ -1105,7 +1106,7 @@ fn prefix_type_expr(ty: &mut TypeExpr, module_name: &str, module_prog: &Program)
         TypeExpr::Qualified { .. } => {
             // Already qualified, leave alone
         }
-        TypeExpr::Fn { params, return_type } => {
+        TypeExpr::Fn { params, return_type, fallible: _ } => {
             for p in params {
                 prefix_type_expr(&mut p.node, module_name, module_prog);
             }
@@ -1356,7 +1357,7 @@ fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, import_names: &HashSet<String>)
             rewrite_type_expr(inner, import_names);
         }
         TypeExpr::Named(_) => {}
-        TypeExpr::Fn { params, return_type } => {
+        TypeExpr::Fn { params, return_type, fallible: _ } => {
             for p in params {
                 rewrite_type_expr(p, import_names);
             }
@@ -1933,6 +1934,7 @@ mod tests {
     #[test]
     fn test_type_expr_eq_fn_same() {
         let a = TypeExpr::Fn {
+            fallible: false,
             params: vec![
                 Box::new(spanned(TypeExpr::Named("int".to_string()))),
                 Box::new(spanned(TypeExpr::Named("string".to_string()))),
@@ -1940,6 +1942,7 @@ mod tests {
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
         let b = TypeExpr::Fn {
+            fallible: false,
             params: vec![
                 Box::new(spanned(TypeExpr::Named("int".to_string()))),
                 Box::new(spanned(TypeExpr::Named("string".to_string()))),
@@ -1952,10 +1955,12 @@ mod tests {
     #[test]
     fn test_type_expr_eq_fn_different_param_count() {
         let a = TypeExpr::Fn {
+            fallible: false,
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
         let b = TypeExpr::Fn {
+            fallible: false,
             params: vec![
                 Box::new(spanned(TypeExpr::Named("int".to_string()))),
                 Box::new(spanned(TypeExpr::Named("string".to_string()))),
@@ -1968,10 +1973,12 @@ mod tests {
     #[test]
     fn test_type_expr_eq_fn_different_param_type() {
         let a = TypeExpr::Fn {
+            fallible: false,
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
         let b = TypeExpr::Fn {
+            fallible: false,
             params: vec![Box::new(spanned(TypeExpr::Named("float".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
@@ -1981,10 +1988,12 @@ mod tests {
     #[test]
     fn test_type_expr_eq_fn_different_return_type() {
         let a = TypeExpr::Fn {
+            fallible: false,
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
         let b = TypeExpr::Fn {
+            fallible: false,
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("string".to_string()))),
         };

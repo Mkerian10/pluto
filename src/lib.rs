@@ -1078,10 +1078,11 @@ fn typeexpr_sig(te: &parser::ast::TypeExpr) -> String {
             type_args.iter().map(|a| typeexpr_sig(&a.node)).collect::<Vec<_>>().join(",")
         ),
         TypeExpr::Stream(i) => format!("stream<{}>", typeexpr_sig(&i.node)),
-        TypeExpr::Fn { params, return_type } => format!(
-            "fn({})->{}",
+        TypeExpr::Fn { params, return_type, fallible } => format!(
+            "fn({})->{}{}",
             params.iter().map(|p| typeexpr_sig(&p.node)).collect::<Vec<_>>().join(","),
-            typeexpr_sig(&return_type.node)
+            typeexpr_sig(&return_type.node),
+            if *fallible { "!" } else { "" }
         ),
     }
 }
