@@ -383,3 +383,152 @@ fn main() {
 "#);
     assert_eq!(out.trim(), "bounded");
 }
+
+// ── Concurrent GC stress (issue #219) ────────────────────────────────────────
+// These exercise stop-the-world under real thread concurrency. Before the
+// safe-region protocol, each of these could deadlock (threads blocked on the
+// allocator mutex, in channel cond waits, or in select polling were never
+// counted as stopped) or corrupt memory (threads past the 64-slot registry
+// cap ran unregistered and unscanned during collection).
+
+#[test]
+fn gc_concurrent_allocation_churn() {
+    // 4 tasks + main all allocating heavily — many collections must coordinate
+    let out = compile_and_run_stdout(
+        r#"
+fn churn(id: int) int {
+    let mut total = 0
+    let mut i = 0
+    while i < 2000 {
+        let s = f"task-{id}-iter-{i}"
+        let arr = [i, i + 1, i + 2, i + 3]
+        total = total + arr[0] + s.len()
+        i = i + 1
+    }
+    return total
+}
+
+fn main() {
+    let t1 = spawn churn(1)
+    let t2 = spawn churn(2)
+    let t3 = spawn churn(3)
+    let t4 = spawn churn(4)
+    let mut j = 0
+    while j < 2000 {
+        let s = f"main-{j}"
+        if s.len() > 0 {
+            j = j + 1
+        }
+    }
+    let r = t1.get() + t2.get() + t3.get() + t4.get()
+    print(r)
+    print("done")
+}
+"#,
+    );
+    let lines: Vec<&str> = out.trim().lines().collect();
+    assert_eq!(lines[1], "done");
+}
+
+#[test]
+fn gc_collects_while_task_blocked_on_channel() {
+    // Consumer parks in a channel receive while main churns allocations
+    // through several collections, then the handoff completes.
+    let out = compile_and_run_stdout(
+        r#"
+fn consumer(rx: Receiver<int>) int {
+    let mut total = 0
+    for v in rx {
+        total = total + v
+    }
+    return total
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(4)
+    let t = spawn consumer(rx)
+    let mut j = 0
+    while j < 3000 {
+        let s = f"pressure-{j}"
+        if s.len() > 0 {
+            j = j + 1
+        }
+    }
+    let mut i = 1
+    while i <= 100 {
+        tx.send(i)!
+        i = i + 1
+    }
+    tx.close()
+    print(t.get())
+}
+"#,
+    );
+    assert_eq!(out.trim(), "5050");
+}
+
+#[test]
+fn gc_thread_registry_reuses_slots() {
+    // 200 sequential task threads — far past the old fixed 64-slot registry.
+    // Un-reused slots meant later threads ran unregistered: invisible to
+    // stop-the-world and unscanned as roots.
+    let out = compile_and_run_stdout(
+        r#"
+fn worker(n: int) int {
+    let s = f"w{n}"
+    return s.len() + n
+}
+
+fn main() {
+    let mut rnd = 0
+    let mut total = 0
+    while rnd < 100 {
+        let t1 = spawn worker(rnd)
+        let t2 = spawn worker(rnd + 1)
+        total = total + t1.get() + t2.get()
+        let pad = f"round-{rnd}-padding-string-to-allocate"
+        total = total + pad.len() - pad.len()
+        rnd = rnd + 1
+    }
+    print(total)
+    print("done")
+}
+"#,
+    );
+    let lines: Vec<&str> = out.trim().lines().collect();
+    assert_eq!(lines[1], "done");
+}
+
+#[test]
+fn gc_collects_while_main_blocked_in_select() {
+    // Main parks in select polling while the spawned task allocates enough
+    // to force collections, then sends.
+    let out = compile_and_run_stdout(
+        r#"
+fn slow_sender(tx: Sender<int>) int {
+    let mut i = 0
+    while i < 2000 {
+        let s = f"alloc-{i}"
+        if s.len() > 0 {
+            i = i + 1
+        }
+    }
+    tx.send(42)!
+    return 0
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let t = spawn slow_sender(tx)
+    select {
+        v = rx.recv() {
+            print(v)
+        }
+    }
+    t.get() catch 0
+    print("done")
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42\ndone");
+}

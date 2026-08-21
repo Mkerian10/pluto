@@ -97,68 +97,193 @@ void __pluto_gc_disable_fiber_scanning(void) {
 static pthread_mutex_t gc_mutex = PTHREAD_MUTEX_INITIALIZER;
 static atomic_int __pluto_active_tasks = 0;
 
-// Thread registry for stop-the-world GC.
-// Each spawned thread registers itself so the GC can coordinate safepoints.
-#define GC_MAX_THREAD_STACKS 64
+// Thread registry for stop-the-world GC (dynamic, slots reused).
+// Each spawned thread registers itself so the GC can coordinate safepoints
+// and scan its stack. Mutated only under gc_mutex; the collector holds
+// gc_mutex for the whole collection, so the table is stable while scanning.
 typedef struct {
     pthread_t thread;
     void *stack_lo;
     void *stack_hi;
     int active;
 } GCThreadStack;
-static GCThreadStack gc_thread_stacks[GC_MAX_THREAD_STACKS];
-static int gc_thread_stack_count = 0;
+static GCThreadStack *gc_thread_stacks = NULL;
+static int gc_thread_stack_count = 0;   // high-water slot count
+static int gc_thread_stack_cap = 0;
 
-// Safepoint-based stop-the-world state.
-// GC sets gc_safepoint_requested; threads check this flag periodically and yield.
-// When yielding, threads increment gc_stw_stopped and spin on gc_stw_resume.
+// Pending-task roots: a spawned task handle is only reachable from the new
+// thread's stack, and that stack isn't registered until the trampoline runs.
+// The spawner parks the handle here before pthread_create; the trampoline
+// removes it after registering its stack. Scanned as explicit GC roots.
+static void **gc_pending_roots = NULL;
+static int gc_pending_root_count = 0;
+static int gc_pending_root_cap = 0;
+
+// Stop-the-world state. The collector sets gc_safepoint_requested and waits
+// until every other registered thread is parked: either stopped at a
+// safepoint (gc_stw_stopped) or blocked in a safe region (gc_safe_count) —
+// a region that cannot touch the GC heap (cond waits, blocking syscalls,
+// waiting for gc_mutex itself). After collecting, the collector clears the
+// request and waits for every safepoint-stopped thread to acknowledge resume
+// (gc_stw_resumed) before the counters can be reused — a thread still inside
+// the old cycle's spin can therefore never be confused with the next cycle.
 static atomic_int gc_safepoint_requested = 0;
-static volatile int gc_stw_stopped = 0;
-static volatile int gc_stw_resume = 0;
+static atomic_int gc_stw_stopped = 0;
+static atomic_int gc_stw_resumed = 0;
+static atomic_int gc_safe_count = 0;
 
-// Safepoint check - called by threads at regular intervals (loop back-edges, allocations).
-// If GC has requested a safepoint, the thread yields here until GC completes.
+// Safepoint check - called by threads at regular intervals (loop back-edges,
+// runtime waits). If GC has requested a safepoint, park here until it's done.
 void __pluto_safepoint(void) {
     if (atomic_load(&gc_safepoint_requested) == 0) {
         return;  // Fast path - no GC pending
     }
 
-    // GC is running - yield at this safepoint
-    // Flush registers to stack so GC can scan them
+    // Flush registers to stack so the conservative scan can see them
     jmp_buf regs;
     setjmp(regs);
     (void)regs;  // prevent optimization
 
-    // Signal that we've stopped
-    __sync_fetch_and_add(&gc_stw_stopped, 1);
-
-    // Spin-wait until GC is done (memory barrier to see the update)
-    while (!gc_stw_resume) {
-        __sync_synchronize();
+    atomic_fetch_add(&gc_stw_stopped, 1);
+    while (atomic_load(&gc_safepoint_requested)) {
+        usleep(100);
     }
+    // Acknowledge resume: the collector waits for this before starting a new
+    // cycle, so the stop/resume counters can't be reset out from under us.
+    atomic_fetch_add(&gc_stw_resumed, 1);
+}
+
+// A safe region brackets code that blocks without touching the GC heap.
+// While inside, the thread counts as stopped for stop-the-world purposes.
+void __pluto_gc_enter_safe_region(void) {
+    atomic_fetch_add(&gc_safe_count, 1);
+}
+
+void __pluto_gc_leave_safe_region(void) {
+    for (;;) {
+        if (atomic_load(&gc_safepoint_requested) == 0) {
+            atomic_fetch_sub(&gc_safe_count, 1);
+            // A collection may have started between the check and the
+            // decrement; re-check before returning to heap-touching code.
+            if (atomic_load(&gc_safepoint_requested) == 0) {
+                return;
+            }
+            atomic_fetch_add(&gc_safe_count, 1);  // undo; park below
+        }
+        while (atomic_load(&gc_safepoint_requested)) {
+            usleep(100);
+        }
+    }
+}
+
+// Acquire gc_mutex, counting the (possibly long) wait as a safe region: the
+// collector holds gc_mutex for the entire collection, and a thread blocked
+// here must not stall it. Holding gc_mutex implies no collection is running,
+// so the leave on the way out never parks.
+static void gc_heap_lock(void) {
+    __pluto_gc_enter_safe_region();
+    pthread_mutex_lock(&gc_mutex);
+    __pluto_gc_leave_safe_region();
 }
 
 // Thread registration API for spawned tasks
 void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi) {
-    pthread_mutex_lock(&gc_mutex);
-    if (gc_thread_stack_count < GC_MAX_THREAD_STACKS) {
-        int slot = gc_thread_stack_count++;
-        gc_thread_stacks[slot].thread = pthread_self();
-        gc_thread_stacks[slot].stack_lo = stack_lo;
-        gc_thread_stacks[slot].stack_hi = stack_hi;
-        gc_thread_stacks[slot].active = 1;
+    gc_heap_lock();
+    int slot = -1;
+    for (int i = 0; i < gc_thread_stack_count; i++) {
+        if (!gc_thread_stacks[i].active) { slot = i; break; }
     }
+    if (slot < 0) {
+        if (gc_thread_stack_count == gc_thread_stack_cap) {
+            int new_cap = gc_thread_stack_cap ? gc_thread_stack_cap * 2 : 64;
+            GCThreadStack *grown =
+                (GCThreadStack *)realloc(gc_thread_stacks, new_cap * sizeof(GCThreadStack));
+            if (!grown) {
+                pthread_mutex_unlock(&gc_mutex);
+                fprintf(stderr, "pluto: out of memory registering thread\n");
+                exit(1);
+            }
+            gc_thread_stacks = grown;
+            gc_thread_stack_cap = new_cap;
+        }
+        slot = gc_thread_stack_count++;
+    }
+    gc_thread_stacks[slot].thread = pthread_self();
+    gc_thread_stacks[slot].stack_lo = stack_lo;
+    gc_thread_stacks[slot].stack_hi = stack_hi;
+    gc_thread_stacks[slot].active = 1;
     pthread_mutex_unlock(&gc_mutex);
 }
 
 void __pluto_gc_deregister_thread_stack(void) {
     pthread_t self = pthread_self();
-    pthread_mutex_lock(&gc_mutex);
+    gc_heap_lock();
     for (int i = 0; i < gc_thread_stack_count; i++) {
-        if (pthread_equal(gc_thread_stacks[i].thread, self)) {
+        if (gc_thread_stacks[i].active && pthread_equal(gc_thread_stacks[i].thread, self)) {
             gc_thread_stacks[i].active = 0;
             break;
         }
+    }
+    pthread_mutex_unlock(&gc_mutex);
+}
+
+// Pending-task root API (used by threading.c around pthread_create)
+void __pluto_gc_add_pending_root(void *p) {
+    gc_heap_lock();
+    if (gc_pending_root_count == gc_pending_root_cap) {
+        int new_cap = gc_pending_root_cap ? gc_pending_root_cap * 2 : 16;
+        void **grown = (void **)realloc(gc_pending_roots, new_cap * sizeof(void *));
+        if (!grown) {
+            pthread_mutex_unlock(&gc_mutex);
+            fprintf(stderr, "pluto: out of memory tracking task root\n");
+            exit(1);
+        }
+        gc_pending_roots = grown;
+        gc_pending_root_cap = new_cap;
+    }
+    gc_pending_roots[gc_pending_root_count++] = p;
+    pthread_mutex_unlock(&gc_mutex);
+}
+
+void __pluto_gc_remove_pending_root(void *p) {
+    gc_heap_lock();
+    for (int i = 0; i < gc_pending_root_count; i++) {
+        if (gc_pending_roots[i] == p) {
+            gc_pending_roots[i] = gc_pending_roots[--gc_pending_root_count];
+            break;
+        }
+    }
+    pthread_mutex_unlock(&gc_mutex);
+}
+
+// Fork support. The forking thread holds gc_mutex across fork() so the child
+// inherits consistent heap metadata and an unheld (held-by-us) allocator lock.
+// In the child, only the forking thread survives: every other registry entry
+// is a ghost whose stack no longer runs, and any of them counted in a
+// stop-the-world wait would hang the child's first collection — so the child
+// resets all GC coordination state to a single-threaded baseline.
+void __pluto_gc_prepare_fork(void) {
+    gc_heap_lock();
+}
+
+void __pluto_gc_after_fork(int is_child) {
+    if (is_child) {
+        // Deactivate every registry slot except the surviving (current) thread.
+        pthread_t self = pthread_self();
+        for (int i = 0; i < gc_thread_stack_count; i++) {
+            if (gc_thread_stacks[i].active
+                && !pthread_equal(gc_thread_stacks[i].thread, self)) {
+                gc_thread_stacks[i].active = 0;
+            }
+        }
+        // Ghost threads can no longer leave safe regions or ack a resume.
+        atomic_store(&gc_safe_count, 0);
+        atomic_store(&gc_stw_stopped, 0);
+        atomic_store(&gc_stw_resumed, 0);
+        atomic_store(&gc_safepoint_requested, 0);
+        atomic_store(&__pluto_active_tasks, 0);
+        // Parent's in-flight spawns will never register here; drop their roots.
+        gc_pending_root_count = 0;
     }
     pthread_mutex_unlock(&gc_mutex);
 }
@@ -179,6 +304,12 @@ void __pluto_gc_task_end(void) {
 void __pluto_safepoint(void) {
     // Test mode: no-op
 }
+void __pluto_gc_enter_safe_region(void) {}
+void __pluto_gc_leave_safe_region(void) {}
+void __pluto_gc_add_pending_root(void *p) { (void)p; }
+void __pluto_gc_remove_pending_root(void *p) { (void)p; }
+void __pluto_gc_prepare_fork(void) {}
+void __pluto_gc_after_fork(int is_child) { (void)is_child; }
 #endif
 
 // Get GC header from user pointer
@@ -208,66 +339,63 @@ void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
     return (char *)h + sizeof(GCHeader);
 }
 #else
-// Stop all registered task threads via safepoint polling.
-// Sets the global safepoint flag and waits for all threads to yield.
-// Returns the number of threads that were stopped. Caller must call gc_stw_resume_threads() after GC.
+// Stop all other registered threads. Called with gc_mutex held.
+// Sets the safepoint request and waits until every other active registered
+// thread is either stopped at a safepoint or parked in a safe region.
+// Returns the number of safepoint-stopped threads, which the caller must pass
+// to gc_stw_resume_threads() after collecting.
 static int gc_stw_stop_threads(void) {
-    int count = 0;
-    gc_stw_stopped = 0;
-    gc_stw_resume = 0;
-    __sync_synchronize();  // memory barrier
+    atomic_store(&gc_stw_stopped, 0);
+    atomic_store(&gc_stw_resumed, 0);
 
     // Count active threads (excluding self)
     pthread_t self = pthread_self();
+    int count = 0;
     for (int i = 0; i < gc_thread_stack_count; i++) {
         if (!gc_thread_stacks[i].active) continue;
-        if (pthread_equal(gc_thread_stacks[i].thread, self)) continue;  // skip self
+        if (pthread_equal(gc_thread_stacks[i].thread, self)) continue;
         count++;
     }
+    if (count == 0) return 0;
 
-    if (count > 0) {
-        // Request all threads to stop at their next safepoint
-        atomic_store(&gc_safepoint_requested, 1);
-        __sync_synchronize();
+    atomic_store(&gc_safepoint_requested, 1);
 
-        // Wait for all threads to acknowledge (NO TIMEOUT - they WILL hit a safepoint)
-        while (__sync_fetch_and_add(&gc_stw_stopped, 0) < count) {
-            __sync_synchronize();
-            usleep(100);  // yield CPU, don't spin
-        }
+    // No timeout: every registered thread either polls safepoints (loop
+    // back-edges, runtime waits) or parks in a safe region around anything
+    // that blocks, so this converges. Proceeding early would let an unpaused
+    // thread mutate the heap mid-collection (use-after-free).
+    for (;;) {
+        int stopped = atomic_load(&gc_stw_stopped);
+        int safe = atomic_load(&gc_safe_count);
+        if (stopped + safe >= count) break;
+        usleep(100);
     }
-    return count;
+    return atomic_load(&gc_stw_stopped);
 }
 
-static void gc_stw_resume_threads(void) {
-    gc_stw_resume = 1;
-    __sync_synchronize();  // ensure visibility
-    atomic_store(&gc_safepoint_requested, 0);  // Clear safepoint request
-    __sync_synchronize();
+static void gc_stw_resume_threads(int stopped_count) {
+    atomic_store(&gc_safepoint_requested, 0);
+    // Wait for every safepoint-stopped thread to leave its spin before the
+    // counters can be reused by a later cycle.
+    while (atomic_load(&gc_stw_resumed) < stopped_count) {
+        usleep(100);
+    }
 }
 
 void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
-    pthread_mutex_lock(&gc_mutex);
+    // The wait for gc_mutex counts as a safe region: the collector holds it
+    // for the whole collection, and a thread parked here must count as
+    // stopped or stop-the-world would deadlock.
+    gc_heap_lock();
     if (gc_stack_bottom
         && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold) {
-        // Atomic test-and-set: only one thread wins the race to initiate GC
-        int expected = 0;
-        if (atomic_compare_exchange_strong(&gc_collecting, &expected, 1)) {
-            // This thread won - run GC
-            int stopped = gc_stw_stop_threads();
-            __pluto_gc_collect();  // This will set gc_collecting back to 0
-            if (stopped > 0) gc_stw_resume_threads();
-        } else {
-            // Another thread is collecting - wait for it to finish
-            // Note: Cannot use usleep() here because SA_RESTART in signal handler
-            // would cause usleep() to restart when SIGUSR1 arrives, creating deadlock.
-            pthread_mutex_unlock(&gc_mutex);
-            while (atomic_load(&gc_collecting) == 1) {
-                // Yield CPU to let GC thread make progress
-                __sync_synchronize();  // memory barrier
-            }
-            pthread_mutex_lock(&gc_mutex);
-        }
+        // Initiation is serialized by gc_mutex: whoever holds it and sees the
+        // threshold exceeded collects. A thread that was parked waiting on
+        // gc_mutex during a collection re-checks the (now raised) threshold
+        // and usually just allocates.
+        int stopped = gc_stw_stop_threads();
+        __pluto_gc_collect();
+        gc_stw_resume_threads(stopped);
     }
     size_t total = sizeof(GCHeader) + user_size;
     GCHeader *h = (GCHeader *)calloc(1, total);
@@ -684,6 +812,14 @@ void __pluto_gc_collect(void) {
         gc_mark_candidate(__pluto_current_error);
     }
 
+#ifndef PLUTO_TEST_MODE
+    // 4b. Scan pending-task roots: task handles between spawn and the new
+    // thread registering its stack are reachable from nowhere else.
+    for (int pi = 0; pi < gc_pending_root_count; pi++) {
+        gc_mark_candidate(gc_pending_roots[pi]);
+    }
+#endif
+
     // 5. Drain worklist (breadth-first trace)
     while (gc_worklist_count > 0) {
         void *obj = gc_worklist[--gc_worklist_count];
@@ -799,11 +935,8 @@ void __pluto_gc_init(void *stack_bottom) {
         stack_hi = (char *)stack_lo + stack_sz;
         pthread_attr_destroy(&pattr);
 #endif
-        gc_thread_stacks[0].thread = self;
-        gc_thread_stacks[0].stack_lo = stack_lo;
-        gc_thread_stacks[0].stack_hi = stack_hi;
-        gc_thread_stacks[0].active = 1;
-        gc_thread_stack_count = 1;
+        __pluto_gc_register_thread_stack(stack_lo, stack_hi);
+        (void)self;
     }
 #endif
 }
