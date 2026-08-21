@@ -322,3 +322,14 @@ PLUTO_REMOTE_BILLINGSERVICE=127.0.0.1:9000 ./examples/distributed/build/orders
 ```
 
 Stop `billing` and re-run `orders` to see the wildcard path (`billing service unavailable`). Change the charge amount above the server's funds to see the typed error cross the wire (`payment declined: insufficient funds`).
+
+## function-references
+
+Named functions as first-class values: bind them to variables, pass them to
+higher-order functions, store them in arrays, and return them. `compose`
+builds a new function out of two named ones. (Generic functions can't be
+referenced bare — wrap them in a closure with concrete types.)
+
+```bash
+cargo run -- run examples/function-references/main.pt
+```

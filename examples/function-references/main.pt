@@ -1,0 +1,41 @@
+// Function references: named functions are first-class values.
+// Bind them, pass them to higher-order functions, store them, return them.
+
+fn double(x: int) int {
+    return x * 2
+}
+
+fn triple(x: int) int {
+    return x * 3
+}
+
+fn square(x: int) int {
+    return x * x
+}
+
+fn apply(f: fn(int) int, x: int) int {
+    return f(x)
+}
+
+fn compose(f: fn(int) int, g: fn(int) int) fn(int) int {
+    return (x: int) => g(f(x))
+}
+
+fn main() {
+    // Bind a function to a variable and call it
+    let f = double
+    print(f(21))
+
+    // Pass named functions to a higher-order function
+    print(apply(triple, 5))
+
+    // Store references in an array and iterate
+    let ops = [double, triple, square]
+    for op in ops {
+        print(op(4))
+    }
+
+    // Compose two named functions into a new one
+    let double_then_square = compose(double, square)
+    print(double_then_square(3))
+}

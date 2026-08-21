@@ -1,12 +1,27 @@
 //! Type unification failure tests - 30 tests
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run_stdout, compile_should_fail_with};
 
 // Basic unification failures
 #[test]
-#[ignore] // #182: compiler doesn't detect type mismatch when generic function stored in variable
-fn infer_from_conflicting_uses() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn main(){let f=id f(42) f(true)}"#, "type mismatch"); }
+fn infer_from_conflicting_uses() {
+    // A bare generic function is not a value — its type parameters cannot be
+    // inferred without a call.
+    compile_should_fail_with(
+        r#"
+fn id<T>(x: T) T {
+    return x
+}
+fn main() {
+    let f = id
+    f(42)
+    f(true)
+}
+"#,
+        "generic function 'id' cannot be used as a value",
+    );
+}
 #[test]
 fn param_return_conflict() { compile_should_fail_with(r#"fn bad<T>(x:T)T{if true{return x}return 42} fn main(){}"#, "type mismatch"); }
 #[test]
@@ -27,11 +42,39 @@ fn two_fields_same_param() { compile_should_fail_with(r#"class Pair<T>{first:T s
 
 // Function call unification
 #[test]
-#[ignore] // #182: compiler doesn't detect conflicting generic instantiations across calls
-fn call_with_conflicting_inferred() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn apply<U>(f:fn(U)U,x:U)U{return f(x)} fn main(){apply(id,42) apply(id,true)}"#, "type mismatch"); }
+fn call_with_conflicting_inferred() {
+    compile_should_fail_with(
+        r#"
+fn id<T>(x: T) T {
+    return x
+}
+fn apply<U>(f: fn(U) U, x: U) U {
+    return f(x)
+}
+fn main() {
+    apply(id, 42)
+    apply(id, true)
+}
+"#,
+        "generic function 'id' cannot be used as a value",
+    );
+}
 #[test]
-#[ignore] // #182: compiler doesn't detect conflicting generic instantiations across calls
-fn nested_call_conflict() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn main(){id(id(42)) id(id(true))}"#, "type mismatch"); }
+fn nested_call_conflict() {
+    // Each call site instantiates independently — this is legal by design.
+    let out = compile_and_run_stdout(
+        r#"
+fn id<T>(x: T) T {
+    return x
+}
+fn main() {
+    print(id(id(42)))
+    print(id(id(true)))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42\ntrue");
+}
 
 // Return type unification
 #[test]
@@ -63,7 +106,7 @@ fn main() {}
 
 // Closure unification
 #[test]
-#[ignore] // #182: compiler doesn't detect conflicting generic instantiations across calls
+#[ignore] // untyped closure params ((x)=>x) are not supported
 fn closure_param_conflict() { compile_should_fail_with(r#"fn apply<T>(f:fn(T)T,x:T)T{return f(x)} fn main(){let f=(x)=>x apply(f,42) apply(f,true)}"#, "type mismatch"); }
 #[test]
 #[ignore]
@@ -71,8 +114,27 @@ fn closure_return_conflict() { compile_should_fail_with(r#"fn main(){let f=(b:bo
 
 // Method call unification
 #[test]
-#[ignore] // #182: compiler doesn't detect conflicting generic instantiations across calls
-fn method_receiver_conflict() { compile_should_fail_with(r#"class Box<T>{value:T fn get(self)T{return self.value}} fn use<U>(b:Box<U>)U{return b.get()} fn main(){use(Box<int>{value:42}) use(Box<bool>{value:true})}"#, "type mismatch"); }
+fn method_receiver_conflict() {
+    let out = compile_and_run_stdout(
+        r#"
+class Box<T> {
+    value: T
+
+    fn get(self) T {
+        return self.value
+    }
+}
+fn unwrap<U>(b: Box<U>) U {
+    return b.get()
+}
+fn main() {
+    print(unwrap(Box<int> { value: 42 }))
+    print(unwrap(Box<bool> { value: true }))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42\ntrue");
+}
 
 // Enum variant unification
 #[test]
@@ -105,17 +167,44 @@ fn recursive_type_conflict() { compile_should_fail_with(r#"class Box<T>{value:T}
 
 // Unification with builtin types
 #[test]
-#[ignore] // #182: compiler doesn't detect conflicting generic instantiations across calls
-fn builtin_generic_conflict() { compile_should_fail_with(r#"fn first<T>(arr:[T])T{return arr[0]} fn main(){first([42]) first([true])}"#, "type mismatch"); }
+fn builtin_generic_conflict() {
+    let out = compile_and_run_stdout(
+        r#"
+fn first<T>(arr: [T]) T {
+    return arr[0]
+}
+fn main() {
+    print(first([42]))
+    print(first([true]))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42\ntrue");
+}
 #[test]
-#[ignore] // #182: compiler doesn't detect conflicting generic instantiations across calls
-fn map_value_conflict() { compile_should_fail_with(r#"fn get<T>(m:Map<int,T>,k:int)T{return m[k]} fn main(){let m=Map<int,int>{} get(m,1) let m2=Map<int,bool>{} get(m,2)}"#, "type mismatch"); }
+fn map_value_conflict() {
+    // Instantiating with different map value types across calls is legal.
+    let out = compile_and_run_stdout(
+        r#"
+fn get<T>(m: Map<int, T>, k: int) T {
+    return m[k]
+}
+fn main() {
+    let m = Map<int, int> { 1: 10 }
+    print(get(m, 1))
+    let m2 = Map<int, bool> { 2: true }
+    print(get(m2, 2))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "10\ntrue");
+}
 
 // Ambiguous bindings
 #[test]
 fn cannot_infer_from_void() { compile_should_fail_with(r#"fn ignore<T>(x:T){} fn main(){ignore()}"#, "expects 1 arguments, got 0"); }
 #[test]
-fn multiple_possible_types() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn main(){let x=id}"#, "undefined variable"); }
+fn multiple_possible_types() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn main(){let x=id}"#, "generic function 'id' cannot be used as a value"); }
 
 // Unification with nullable
 #[test]
@@ -136,8 +225,27 @@ fn self_referential_type() { compile_should_fail_with(r#"fn loop<T>(x:T)T{return
 
 // Unification across function boundaries
 #[test]
-#[ignore] // #182: compiler doesn't detect conflicting generic instantiations across calls
-fn cross_function_conflict() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn a(){id(42)} fn b(){id(true)} fn main(){a() b()}"#, "type mismatch"); }
+fn cross_function_conflict() {
+    // Different functions may instantiate the same generic differently.
+    let out = compile_and_run_stdout(
+        r#"
+fn id<T>(x: T) T {
+    return x
+}
+fn a() int {
+    return id(42)
+}
+fn b() bool {
+    return id(true)
+}
+fn main() {
+    print(a())
+    print(b())
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42\ntrue");
+}
 
 // Generic instance conflicts
 #[test]

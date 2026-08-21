@@ -16,7 +16,112 @@ use crate::visit::{walk_expr_mut, walk_stmt_mut, VisitMut};
 /// 4. Registers the lifted function in `env.functions` and `env.closure_fns`
 ///
 /// Returns the list of newly created functions to append to `program.functions`.
+
+/// Eta-expand named-function references into wrapper closures.
+///
+/// Typeck recorded every identifier site that resolved to a function (not a
+/// variable) in `env.fn_ref_sites`. Each such `Expr::Ident(f)` becomes
+/// `(a0: P0, ...) => f(a0, ...)` (with `!` when `f` is fallible, so errors
+/// propagate to whoever calls the reference), and the ordinary closure lifting
+/// below turns that into a captureless closure object — codegen needs no new
+/// cases. Runs after monomorphization, so signatures and fallibility are final.
+struct FnRefExpander<'a> {
+    env: &'a mut TypeEnv,
+}
+
+impl VisitMut for FnRefExpander<'_> {
+    fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+        walk_expr_mut(self, expr);
+        let key = (expr.span.start, expr.span.end);
+        let fn_name = match &expr.node {
+            // Requiring the recorded name to match guards against span-key
+            // collisions across files (span keys carry no file id).
+            Expr::Ident(n) if self.env.fn_ref_sites.get(&key) == Some(n) => n.clone(),
+            _ => return,
+        };
+        let Some(sig) = self.env.functions.get(&fn_name).cloned() else {
+            return;
+        };
+        let fallible = self.env.is_fn_fallible(&fn_name);
+
+        let params: Vec<Param> = sig
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, pt)| Param {
+                id: Uuid::new_v4(),
+                name: Spanned::dummy(format!("__fr{i}")),
+                ty: Spanned::dummy(pluto_type_to_type_expr(pt)),
+                is_mut: false,
+            })
+            .collect();
+        let args: Vec<Spanned<Expr>> = (0..sig.params.len())
+            .map(|i| Spanned::dummy(Expr::Ident(format!("__fr{i}"))))
+            .collect();
+        let call = Expr::Call {
+            name: Spanned::dummy(fn_name),
+            args,
+            type_args: vec![],
+            target_id: None,
+        };
+        let result = if fallible {
+            Expr::Propagate { expr: Box::new(Spanned::dummy(call)) }
+        } else {
+            call
+        };
+        let body_stmt = if sig.return_type == PlutoType::Void {
+            Stmt::Expr(Spanned::dummy(result))
+        } else {
+            Stmt::Return(Some(Spanned::dummy(result)))
+        };
+        let body = Spanned::new(
+            Block { stmts: vec![Spanned::dummy(body_stmt)] },
+            expr.span,
+        );
+        // The lifter reads the return type keyed by the closure expression's
+        // span; register it so it doesn't fall back to body inference.
+        self.env.closure_return_types.insert(key, sig.return_type.clone());
+        expr.node = Expr::Closure { params, return_type: None, body };
+    }
+
+    fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
+        walk_stmt_mut(self, stmt);
+    }
+}
+
 pub fn lift_closures(program: &mut Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    // Rewrite named-function references into wrapper closures first, so the
+    // lifting below treats them like any other closure literal.
+    if !env.fn_ref_sites.is_empty() {
+        let mut expander = FnRefExpander { env };
+        for func in &mut program.functions {
+            for stmt in &mut func.node.body.node.stmts {
+                expander.visit_stmt_mut(stmt);
+            }
+        }
+        for class in &mut program.classes {
+            for method in &mut class.node.methods {
+                for stmt in &mut method.node.body.node.stmts {
+                    expander.visit_stmt_mut(stmt);
+                }
+            }
+        }
+        if let Some(app) = &mut program.app {
+            for method in &mut app.node.methods {
+                for stmt in &mut method.node.body.node.stmts {
+                    expander.visit_stmt_mut(stmt);
+                }
+            }
+        }
+        for stage in &mut program.stages {
+            for method in &mut stage.node.methods {
+                for stmt in &mut method.node.body.node.stmts {
+                    expander.visit_stmt_mut(stmt);
+                }
+            }
+        }
+    }
+
     let mut counter = 0usize;
     let mut new_fns = Vec::new();
 

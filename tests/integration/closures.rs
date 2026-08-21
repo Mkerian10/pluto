@@ -397,3 +397,25 @@ fn main() {
     );
     assert_eq!(out.trim(), "104");
 }
+
+#[test]
+fn nested_closure_calls_captured_fn_typed_var() {
+    // A call's callee is a name, not an Ident expression — the capture
+    // collector must still capture an outer fn-typed variable that is only
+    // ever *called* inside the nested closure.
+    let out = compile_and_run_stdout(
+        r#"
+fn compose(f: fn(int) int, g: fn(int) int) fn(int) int {
+    return (x: int) => g(f(x))
+}
+
+fn main() {
+    let d = (x: int) => x * 2
+    let s = (x: int) => x * x
+    let c = compose(d, s)
+    print(c(3))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "36");
+}

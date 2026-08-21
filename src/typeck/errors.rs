@@ -318,24 +318,34 @@ fn collect_stmt_effects(stmt: &Stmt, ctx: &mut EffectCtx) {
         Stmt::Raise { error_name, fields, .. } => {
             ctx.raise(error_name.node.clone());
             for (_, val) in fields {
-                collect_expr_effects(&val.node, ctx);
+                collect_expr_effects(val, ctx);
             }
         }
         Stmt::Let { name, value, .. } => {
             // A closure literal bound to a variable gets its own node; calls
-            // through the variable resolve to it.
+            // through the variable resolve to it. A named-function reference
+            // (`let g = f`) aliases the variable to the function's own node —
+            // calls through `g` then carry f's error set; this is a binding,
+            // not an escape, so nothing is absorbed here.
             if let Expr::Closure { body, .. } = &value.node {
                 let node = ctx.collect_closure(body);
                 ctx.bind_closure(&name.node, node);
+            } else if let Expr::Ident(refname) = &value.node {
+                let key = (value.span.start, value.span.end);
+                if ctx.env.fn_ref_sites.get(&key) == Some(refname) {
+                    ctx.bind_closure(&name.node, refname.clone());
+                } else {
+                    collect_expr_effects(value, ctx);
+                }
             } else {
-                collect_expr_effects(&value.node, ctx);
+                collect_expr_effects(value, ctx);
             }
         }
         Stmt::Expr(expr) => {
-            collect_expr_effects(&expr.node, ctx);
+            collect_expr_effects(expr, ctx);
         }
         Stmt::Return(Some(expr)) => {
-            collect_expr_effects(&expr.node, ctx);
+            collect_expr_effects(expr, ctx);
         }
         Stmt::Return(None) => {}
         Stmt::Assign { target, value } => {
@@ -351,53 +361,53 @@ fn collect_stmt_effects(stmt: &Stmt, ctx: &mut EffectCtx) {
                     ctx.bind_closure(&target.node, node);
                 }
             } else {
-                collect_expr_effects(&value.node, ctx);
+                collect_expr_effects(value, ctx);
             }
         }
         Stmt::FieldAssign { object, value, .. } => {
-            collect_expr_effects(&object.node, ctx);
-            collect_expr_effects(&value.node, ctx);
+            collect_expr_effects(object, ctx);
+            collect_expr_effects(value, ctx);
         }
         Stmt::IndexAssign { object, index, value } => {
-            collect_expr_effects(&object.node, ctx);
-            collect_expr_effects(&index.node, ctx);
-            collect_expr_effects(&value.node, ctx);
+            collect_expr_effects(object, ctx);
+            collect_expr_effects(index, ctx);
+            collect_expr_effects(value, ctx);
         }
         Stmt::If { condition, then_block, else_block } => {
-            collect_expr_effects(&condition.node, ctx);
+            collect_expr_effects(condition, ctx);
             collect_block_stmts(&then_block.node.stmts, ctx);
             if let Some(eb) = else_block {
                 collect_block_stmts(&eb.node.stmts, ctx);
             }
         }
         Stmt::While { condition, body } => {
-            collect_expr_effects(&condition.node, ctx);
+            collect_expr_effects(condition, ctx);
             collect_block_stmts(&body.node.stmts, ctx);
         }
         Stmt::For { iterable, body, .. } => {
-            collect_expr_effects(&iterable.node, ctx);
+            collect_expr_effects(iterable, ctx);
             collect_block_stmts(&body.node.stmts, ctx);
         }
         Stmt::Match { expr, arms } => {
-            collect_expr_effects(&expr.node, ctx);
+            collect_expr_effects(expr, ctx);
             for arm in arms {
                 collect_block_stmts(&arm.body.node.stmts, ctx);
             }
         }
         Stmt::LetChan { capacity, .. } => {
             if let Some(cap) = capacity {
-                collect_expr_effects(&cap.node, ctx);
+                collect_expr_effects(cap, ctx);
             }
         }
         Stmt::Select { arms, default } => {
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { channel, .. } => {
-                        collect_expr_effects(&channel.node, ctx);
+                        collect_expr_effects(channel, ctx);
                     }
                     SelectOp::Send { channel, value } => {
-                        collect_expr_effects(&channel.node, ctx);
-                        collect_expr_effects(&value.node, ctx);
+                        collect_expr_effects(channel, ctx);
+                        collect_expr_effects(value, ctx);
                     }
                 }
                 collect_block_stmts(&arm.body.node.stmts, ctx);
@@ -413,28 +423,28 @@ fn collect_stmt_effects(stmt: &Stmt, ctx: &mut EffectCtx) {
         }
         Stmt::Scope { seeds, body, .. } => {
             for seed in seeds {
-                collect_expr_effects(&seed.node, ctx);
+                collect_expr_effects(seed, ctx);
             }
             collect_block_stmts(&body.node.stmts, ctx);
         }
         Stmt::Assert { expr } => {
-            collect_expr_effects(&expr.node, ctx);
+            collect_expr_effects(expr, ctx);
         }
         // The generated serve loop handles dispatched methods' errors internally
         // (replying with an error response), so it adds none to the enclosing fn.
         Stmt::Serve { service, port } => {
-            collect_expr_effects(&service.node, ctx);
-            collect_expr_effects(&port.node, ctx);
+            collect_expr_effects(service, ctx);
+            collect_expr_effects(port, ctx);
         }
         Stmt::Yield { value, .. } => {
-            collect_expr_effects(&value.node, ctx);
+            collect_expr_effects(value, ctx);
         }
         Stmt::Break | Stmt::Continue => {}
     }
 }
 
-fn collect_expr_effects(expr: &Expr, ctx: &mut EffectCtx) {
-    match expr {
+fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
+    match &expr.node {
         Expr::Propagate { expr: inner } => {
             match &inner.node {
                 Expr::Call { name, args, .. } => {
@@ -452,13 +462,13 @@ fn collect_expr_effects(expr: &Expr, ctx: &mut EffectCtx) {
                         ctx.edge(name.node.clone());
                     }
                     for arg in args {
-                        collect_expr_effects(&arg.node, ctx);
+                        collect_expr_effects(arg, ctx);
                     }
                 }
                 Expr::MethodCall { object, method, args } => {
-                    collect_expr_effects(&object.node, ctx);
+                    collect_expr_effects(object, ctx);
                     for arg in args {
-                        collect_expr_effects(&arg.node, ctx);
+                        collect_expr_effects(arg, ctx);
                     }
                     let key = (ctx.current_fn.clone(), method.span.start);
                     let resolution = ctx.env.method_resolutions.get(&key).cloned();
@@ -521,7 +531,7 @@ fn collect_expr_effects(expr: &Expr, ctx: &mut EffectCtx) {
                         None => {}
                     }
                 }
-                _ => collect_expr_effects(&inner.node, ctx),
+                _ => collect_expr_effects(inner, ctx),
             }
         }
         Expr::Catch { expr: inner, handlers } => {
@@ -531,16 +541,16 @@ fn collect_expr_effects(expr: &Expr, ctx: &mut EffectCtx) {
                         ctx.record_closure_call(name.span.start, node);
                     }
                     for arg in args {
-                        collect_expr_effects(&arg.node, ctx);
+                        collect_expr_effects(arg, ctx);
                     }
                 }
                 Expr::MethodCall { object, args, .. } => {
-                    collect_expr_effects(&object.node, ctx);
+                    collect_expr_effects(object, ctx);
                     for arg in args {
-                        collect_expr_effects(&arg.node, ctx);
+                        collect_expr_effects(arg, ctx);
                     }
                 }
-                _ => collect_expr_effects(&inner.node, ctx),
+                _ => collect_expr_effects(inner, ctx),
             }
             for handler in handlers {
                 match handler {
@@ -548,20 +558,20 @@ fn collect_expr_effects(expr: &Expr, ctx: &mut EffectCtx) {
                         collect_block_stmts(&body.node.stmts, ctx);
                     }
                     CatchHandler::Shorthand(fb) => {
-                        collect_expr_effects(&fb.node, ctx);
+                        collect_expr_effects(fb, ctx);
                     }
                 }
             }
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            collect_expr_effects(&lhs.node, ctx);
-            collect_expr_effects(&rhs.node, ctx);
+            collect_expr_effects(lhs, ctx);
+            collect_expr_effects(rhs, ctx);
         }
         Expr::UnaryOp { operand, .. } => {
-            collect_expr_effects(&operand.node, ctx);
+            collect_expr_effects(operand, ctx);
         }
         Expr::Cast { expr: inner, .. } => {
-            collect_expr_effects(&inner.node, ctx);
+            collect_expr_effects(inner, ctx);
         }
         Expr::Call { name, args, .. } => {
             // A plain (unhandled) call adds no edge — enforcement requires
@@ -571,41 +581,41 @@ fn collect_expr_effects(expr: &Expr, ctx: &mut EffectCtx) {
                 ctx.record_closure_call(name.span.start, node);
             }
             for arg in args {
-                collect_expr_effects(&arg.node, ctx);
+                collect_expr_effects(arg, ctx);
             }
         }
         Expr::MethodCall { object, args, .. } => {
-            collect_expr_effects(&object.node, ctx);
+            collect_expr_effects(object, ctx);
             for arg in args {
-                collect_expr_effects(&arg.node, ctx);
+                collect_expr_effects(arg, ctx);
             }
         }
         Expr::StructLit { fields, .. } => {
             for (_, val) in fields {
-                collect_expr_effects(&val.node, ctx);
+                collect_expr_effects(val, ctx);
             }
         }
         Expr::FieldAccess { object, .. } => {
-            collect_expr_effects(&object.node, ctx);
+            collect_expr_effects(object, ctx);
         }
         Expr::ArrayLit { elements } => {
             for e in elements {
-                collect_expr_effects(&e.node, ctx);
+                collect_expr_effects(e, ctx);
             }
         }
         Expr::Index { object, index } => {
-            collect_expr_effects(&object.node, ctx);
-            collect_expr_effects(&index.node, ctx);
+            collect_expr_effects(object, ctx);
+            collect_expr_effects(index, ctx);
         }
         Expr::EnumData { fields, .. } => {
             for (_, val) in fields {
-                collect_expr_effects(&val.node, ctx);
+                collect_expr_effects(val, ctx);
             }
         }
         Expr::StringInterp { parts } => {
             for part in parts {
                 if let StringInterpPart::Expr(e) = part {
-                    collect_expr_effects(&e.node, ctx);
+                    collect_expr_effects(e, ctx);
                 }
             }
         }
@@ -620,9 +630,14 @@ fn collect_expr_effects(expr: &Expr, ctx: &mut EffectCtx) {
         Expr::Ident(name) => {
             // A closure variable referenced outside call position escapes the
             // local analysis (passed as argument, returned, stored). Absorb
-            // its error set into the enclosing node, conservatively.
+            // its error set into the enclosing node, conservatively. A
+            // named-function reference in value position escapes the same way
+            // (typeck recorded the site, so params sharing a function's name
+            // are not confused with references).
             if let Some(node) = ctx.lookup_closure(name).cloned() {
                 ctx.edge(node);
+            } else if ctx.env.fn_ref_sites.get(&(expr.span.start, expr.span.end)) == Some(name) {
+                ctx.edge(name.clone());
             }
         }
         Expr::Spawn { call } => {
@@ -638,7 +653,7 @@ fn collect_expr_effects(expr: &Expr, ctx: &mut EffectCtx) {
                         };
                         if let Some(args) = args {
                             for arg in args {
-                                collect_expr_effects(&arg.node, ctx);
+                                collect_expr_effects(arg, ctx);
                             }
                         }
                     }
@@ -647,36 +662,36 @@ fn collect_expr_effects(expr: &Expr, ctx: &mut EffectCtx) {
         }
         Expr::MapLit { entries, .. } => {
             for (k, v) in entries {
-                collect_expr_effects(&k.node, ctx);
-                collect_expr_effects(&v.node, ctx);
+                collect_expr_effects(k, ctx);
+                collect_expr_effects(v, ctx);
             }
         }
         Expr::SetLit { elements, .. } => {
             for e in elements {
-                collect_expr_effects(&e.node, ctx);
+                collect_expr_effects(e, ctx);
             }
         }
         Expr::Range { start, end, .. } => {
-            collect_expr_effects(&start.node, ctx);
-            collect_expr_effects(&end.node, ctx);
+            collect_expr_effects(start, ctx);
+            collect_expr_effects(end, ctx);
         }
         Expr::NullPropagate { expr: inner } => {
-            collect_expr_effects(&inner.node, ctx);
+            collect_expr_effects(inner, ctx);
         }
         Expr::StaticTraitCall { args, .. } => {
             for arg in args {
-                collect_expr_effects(&arg.node, ctx);
+                collect_expr_effects(arg, ctx);
             }
         }
         Expr::If { condition, then_block, else_block } => {
-            collect_expr_effects(&condition.node, ctx);
+            collect_expr_effects(condition, ctx);
             collect_block_stmts(&then_block.node.stmts, ctx);
             collect_block_stmts(&else_block.node.stmts, ctx);
         }
         Expr::Match { expr, arms } => {
-            collect_expr_effects(&expr.node, ctx);
+            collect_expr_effects(expr, ctx);
             for arm in arms {
-                collect_expr_effects(&arm.value.node, ctx);
+                collect_expr_effects(&arm.value, ctx);
             }
         }
         Expr::QualifiedAccess { segments } => {

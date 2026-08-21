@@ -149,6 +149,25 @@ impl Visitor for FreeVarCollector<'_> {
             return;
         }
 
+        // A call's callee is a name, not an Ident expression — calling an
+        // outer fn-typed variable (`g(x)` where g is a param or local of the
+        // enclosing function) must capture it too.
+        if let Expr::Call { name, .. } = &expr.node {
+            let n = &name.node;
+            if !self.param_names.contains(n.as_str())
+                && !self.env.functions.contains_key(n)
+                && !self.env.builtins.contains(n)
+                && !self.seen.contains(n)
+                && let Some((ty, depth)) = self.env.lookup_with_depth(n)
+                && depth < self.outer_depth
+            {
+                self.seen.insert(n.clone());
+                self.captures.push((n.clone(), ty.clone()));
+            }
+            walk_expr(self, expr);
+            return;
+        }
+
         // Handle QualifiedAccess panic
         if let Expr::QualifiedAccess { segments } = &expr.node {
             panic!(

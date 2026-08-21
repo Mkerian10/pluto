@@ -75,11 +75,38 @@ fn many_instances_span_test() { compile_should_fail_with(r#"fn id<T>(x:T)T{retur
 
 // Monomorphized function body error
 #[test]
-#[ignore] // #182: compiler doesn't detect type mismatch in generic function body
-fn body_error_after_mono() { compile_should_fail_with(r#"fn bad<T>(x:T)T{let y:int=x return x} fn main(){bad(42)}"#, "type mismatch"); }
+fn body_error_after_mono() {
+    compile_should_fail_with(
+        r#"
+fn bad<T>(x: T) T {
+    let y: int = x
+    print(y)
+    return x
+}
+fn main() {
+    bad(42)
+}
+"#,
+        "type mismatch: expected int, found T",
+    );
+}
 #[test]
-#[ignore] // #182: compiler doesn't detect type mismatch in generic function body
-fn body_error_second_instance() { compile_should_fail_with(r#"fn bad<T>(x:T)T{let y:bool=x return x} fn main(){bad(42) bad(true)}"#, "type mismatch"); }
+fn body_error_second_instance() {
+    compile_should_fail_with(
+        r#"
+fn bad<T>(x: T) T {
+    let y: bool = x
+    print(y)
+    return x
+}
+fn main() {
+    bad(42)
+    bad(true)
+}
+"#,
+        "type mismatch: expected bool, found T",
+    );
+}
 
 // Match on generic enum errors
 #[test]
