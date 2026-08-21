@@ -171,3 +171,40 @@ pub fn sum_float(arr: [float]) float {
     }
     return total
 }
+
+// ── Fallible-callback variants ───────────────────────────────────────────────
+// These accept callbacks that may raise (`fn(T) U!`) and propagate the first
+// error to the caller. Infallible callbacks are accepted too (subsumption),
+// but calls to try_* must always be handled with `!` or `catch`.
+
+pub fn try_map<T, U>(arr: [T], f: fn(T) U!) [U] {
+    let result: [U] = []
+    for item in arr {
+        result.push(f(item)!)
+    }
+    return result
+}
+
+pub fn try_filter<T>(arr: [T], f: fn(T) bool!) [T] {
+    let result: [T] = []
+    for item in arr {
+        if f(item)! {
+            result.push(item)
+        }
+    }
+    return result
+}
+
+pub fn try_fold<T, U>(arr: [T], initial: U, f: fn(U, T) U!) U {
+    let mut acc = initial
+    for item in arr {
+        acc = f(acc, item)!
+    }
+    return acc
+}
+
+pub fn try_for_each<T>(arr: [T], f: fn(T)!) {
+    for item in arr {
+        f(item)!
+    }
+}

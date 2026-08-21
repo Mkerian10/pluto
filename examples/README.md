@@ -167,7 +167,7 @@ cargo run -- generate-pt /tmp/main.pt
 
 ## collections-lib
 
-Demonstrates the `std.collections` functional collections library: `map`, `filter`, `fold`, `reduce`, `any`, `all`, `count`, `flat_map`, `for_each`, `reverse`, `take`, `drop`, `zip` (with `Pair`), `enumerate`, `flatten`, `sum`, and `sum_float`. Shows function composition by chaining filter, map, and fold.
+Demonstrates the `std.collections` functional collections library: `map`, `filter`, `fold`, `reduce`, `any`, `all`, `count`, `flat_map`, `for_each`, `reverse`, `take`, `drop`, `zip` (with `Pair`), `enumerate`, `flatten`, `sum`, and `sum_float`. Shows function composition by chaining filter, map, and fold — plus the fallible-callback variants (`try_map`, `try_filter`, `try_fold`, `try_for_each`), whose callbacks may `raise` (`fn(T) U!`); the first error propagates to the caller, which handles it with `catch`.
 
 ```bash
 cargo run -- run examples/collections-lib/main.pt --stdlib stdlib
