@@ -164,6 +164,10 @@ fn instantiate_function(
     // Type-check the body to discover transitive instantiations
     crate::typeck::check_function(&func, env, None)?;
 
+    // The instance raises whatever the template raises — copy its inferred
+    // error set so enforcement/codegen/analysis see the mangled name as fallible.
+    crate::typeck::errors::copy_error_set(env, name, mangled);
+
     Ok(())
 }
 
@@ -275,6 +279,10 @@ fn instantiate_class(
     for method in &class.methods {
         crate::typeck::check_function(&method.node, env, Some(mangled))?;
     }
+
+    // Instance methods raise whatever the template methods raise — copy their
+    // inferred error sets onto the instance-mangled names.
+    crate::typeck::errors::copy_class_method_error_sets(program, env, name, mangled);
 
     Ok(())
 }

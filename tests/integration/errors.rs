@@ -572,3 +572,126 @@ fn main() { print(g(1)) }
         "no catch handler covers",
     );
 }
+
+// ── Generic error inference ──────────────────────────────────────────────────
+// Errors raised in generic functions/methods are inferred and enforced at call
+// sites; catch and ! work across the monomorphization boundary.
+
+#[test]
+fn generic_fn_error_caught_at_call_site() {
+    let out = compile_and_run_stdout(
+        r#"
+error E { code: int }
+
+fn id<T>(x: T) T {
+    raise E { code: 7 }
+    return x
+}
+
+fn main() {
+    let a = id(1) catch -1
+    print(a)
+    let s = id("hi") catch "fallback"
+    print(s)
+}
+"#,
+    );
+    assert_eq!(out, "-1\nfallback\n");
+}
+
+#[test]
+fn generic_fn_error_propagates_through_wrapper() {
+    let out = compile_and_run_stdout(
+        r#"
+error E { code: int }
+
+fn id<T>(x: T) T {
+    raise E { code: 7 }
+    return x
+}
+
+fn wrapper(x: int) int {
+    return id(x)!
+}
+
+fn main() {
+    let b = wrapper(2) catch err: E {
+        err.code
+    }
+    print(b)
+}
+"#,
+    );
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn generic_class_method_error_caught() {
+    let out = compile_and_run_stdout(
+        r#"
+error E { code: int }
+
+class Box<T> {
+    value: T
+
+    fn get(self) T {
+        raise E { code: 9 }
+        return self.value
+    }
+
+    fn peek(self) T {
+        return self.value
+    }
+}
+
+fn main() {
+    let b = Box<int> { value: 5 }
+    let c = b.get() catch -2
+    print(c)
+    print(b.peek())
+}
+"#,
+    );
+    assert_eq!(out, "-2\n5\n");
+}
+
+#[test]
+fn infallible_generic_fn_needs_no_handler() {
+    let out = compile_and_run_stdout(
+        r#"
+fn twice<T>(x: T) T {
+    return x
+}
+
+fn main() {
+    print(twice(10))
+    print(twice("ok"))
+}
+"#,
+    );
+    assert_eq!(out, "10\nok\n");
+}
+
+#[test]
+fn generic_fn_conditional_error_runtime_paths() {
+    let out = compile_and_run_stdout(
+        r#"
+error TooBig { value: int }
+
+fn clamp<T>(x: T, big: bool) T {
+    if big {
+        raise TooBig { value: 0 }
+    }
+    return x
+}
+
+fn main() {
+    let a = clamp(3, false) catch -1
+    print(a)
+    let b = clamp(3, true) catch -1
+    print(b)
+}
+"#,
+    );
+    assert_eq!(out, "3\n-1\n");
+}
