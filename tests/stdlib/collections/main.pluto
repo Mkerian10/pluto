@@ -308,3 +308,120 @@ test "filter then count" {
     let big = collections.filter(nums, (x: int) => x > 2)
     expect(collections.count(big, (x: int) => x % 2 == 0)).to_equal(1)
 }
+
+// -- fallible callbacks --
+
+error CallbackError {
+    value: int
+}
+
+test "try_map success with fallible callback" {
+    let nums = [1, 2, 3]
+    let fallback: [int] = []
+    let doubled = collections.try_map(nums, (x: int) => {
+        if x > 100 {
+            raise CallbackError { value: x }
+        }
+        return x * 2
+    }) catch err {
+        fallback
+    }
+    expect(doubled.len()).to_equal(3)
+    expect(doubled[0]).to_equal(2)
+    expect(doubled[2]).to_equal(6)
+}
+
+test "try_map propagates callback error" {
+    let nums = [1, 500, 3]
+    let fallback: [int] = [-1]
+    let result = collections.try_map(nums, (x: int) => {
+        if x > 100 {
+            raise CallbackError { value: x }
+        }
+        return x * 2
+    }) catch err {
+        fallback
+    }
+    expect(result.len()).to_equal(1)
+    expect(result[0]).to_equal(-1)
+}
+
+test "try_map accepts infallible callback" {
+    let nums = [4, 5]
+    let fallback: [int] = []
+    let tripled = collections.try_map(nums, (x: int) => x * 3) catch err {
+        fallback
+    }
+    expect(tripled[0]).to_equal(12)
+    expect(tripled[1]).to_equal(15)
+}
+
+test "try_filter success and error paths" {
+    let nums = [1, 2, 3, 4]
+    let fallback: [int] = []
+    let evens = collections.try_filter(nums, (x: int) => {
+        if x < 0 {
+            raise CallbackError { value: x }
+        }
+        return x % 2 == 0
+    }) catch err {
+        fallback
+    }
+    expect(evens.len()).to_equal(2)
+
+    let bad = collections.try_filter([1, -5], (x: int) => {
+        if x < 0 {
+            raise CallbackError { value: x }
+        }
+        return x % 2 == 0
+    }) catch err {
+        fallback
+    }
+    expect(bad.len()).to_equal(0)
+}
+
+test "try_fold accumulates and propagates" {
+    let nums = [1, 2, 3]
+    let total = collections.try_fold(nums, 0, (acc: int, x: int) => {
+        if x > 100 {
+            raise CallbackError { value: x }
+        }
+        return acc + x
+    }) catch -1
+    expect(total).to_equal(6)
+
+    let failed = collections.try_fold([1, 500], 0, (acc: int, x: int) => {
+        if x > 100 {
+            raise CallbackError { value: x }
+        }
+        return acc + x
+    }) catch -1
+    expect(failed).to_equal(-1)
+}
+
+test "try_for_each success does not raise" {
+    // Closures capture by value, so effects can't be observed through an
+    // outer counter; assert by failing loudly if the catch arm ever runs.
+    collections.try_for_each([1, 2, 3], (x: int) => {
+        if x > 100 {
+            raise CallbackError { value: x }
+        }
+    }) catch err {
+        expect(true).to_be_false()
+    }
+    expect(true).to_be_true()
+}
+
+test "try_for_each propagates callback error" {
+    // The raising input must route through the catch arm (asserted via the
+    // sentinel), not crash or silently continue.
+    let sentinel = collections.try_fold([0], 0, (acc: int, x: int) => acc) catch -1
+    expect(sentinel).to_equal(0)
+    collections.try_for_each([1, 500], (x: int) => {
+        if x > 100 {
+            raise CallbackError { value: x }
+        }
+    }) catch err {
+        expect(true).to_be_true()
+    }
+}
