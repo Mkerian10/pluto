@@ -6,3 +6,6 @@ node_modules/
 data/
 book/book/
 .pluto-coverage/
+fuzz/target/
+a.out
+.DS_Store
