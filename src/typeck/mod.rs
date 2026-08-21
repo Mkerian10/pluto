@@ -6,7 +6,7 @@ mod resolve;
 mod infer;
 mod check;
 mod closures;
-mod errors;
+pub(crate) mod errors;
 
 // Re-exports for external use
 pub(crate) use check::check_function;

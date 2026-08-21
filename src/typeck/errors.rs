@@ -4,24 +4,27 @@ use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
 use crate::span::Spanned;
 use crate::visit::{walk_expr, Visitor};
-use super::env::{mangle_method, MethodResolution, TypeEnv};
+use super::env::{mangle_method, mangle_name, InstKind, MethodResolution, TypeEnv};
 
 pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
     let mut direct_errors: HashMap<String, HashSet<String>> = HashMap::new();
     let mut propagation_edges: HashMap<String, HashSet<String>> = HashMap::new();
 
-    // Collect effects from top-level functions
+    // Collect effects from top-level functions. Generic templates are included
+    // under their unmangled name: their bodies aren't type-checked yet, so
+    // method-call edges inside them are missed (no resolutions recorded), but
+    // direct raises and named-function edges are type-independent and let call
+    // sites of generics be enforced before monomorphization.
     for func in &program.functions {
-        if !func.node.type_params.is_empty() { continue; }
         let name = func.node.name.node.clone();
         let (directs, edges) = collect_block_effects(&func.node.body.node, &name, env);
         direct_errors.insert(name.clone(), directs);
         propagation_edges.insert(name, edges);
     }
 
-    // Collect effects from class methods
+    // Collect effects from class methods (generic templates included, keyed
+    // under the template class name; instances get a copy after the fixed point)
     for class in &program.classes {
-        if !class.node.type_params.is_empty() { continue; }
         let class_name = &class.node.name.node;
         for method in &class.node.methods {
             let mangled = mangle_method(class_name, &method.node.name.node);
@@ -33,7 +36,6 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
 
     // Collect effects from inherited default trait methods
     for class in &program.classes {
-        if !class.node.type_params.is_empty() { continue; }
         let class_name = &class.node.name.node;
         let class_method_names: Vec<String> =
             class.node.methods.iter().map(|m| m.node.name.node.clone()).collect();
@@ -104,6 +106,78 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
     }
 
     env.fn_errors = fn_errors;
+
+    // Copy template error sets onto the instantiations recorded so far, so
+    // method calls on eagerly-instantiated generic classes (whose resolutions
+    // use instance-mangled names like `Box$$int$get`) are enforceable.
+    // Instantiations discovered later during monomorphize get the same copy in
+    // `monomorphize::instantiate_function`/`instantiate_class`.
+    let instantiations: Vec<_> = env.instantiations.iter().cloned().collect();
+    for inst in instantiations {
+        match &inst.kind {
+            InstKind::Function(name) => {
+                let mangled = mangle_name(name, &inst.type_args);
+                copy_error_set(env, name, &mangled);
+            }
+            InstKind::Class(name) => {
+                let mangled = mangle_name(name, &inst.type_args);
+                copy_class_method_error_sets(program, env, name, &mangled);
+            }
+            InstKind::Enum(_) => {}
+        }
+    }
+}
+
+/// Copy the inferred error set of `from` (a generic template key) onto `to`
+/// (an instance-mangled key). Union semantics: safe to call repeatedly.
+pub(crate) fn copy_error_set(env: &mut TypeEnv, from: &str, to: &str) {
+    if let Some(errs) = env.fn_errors.get(from).cloned()
+        && !errs.is_empty()
+    {
+        env.fn_errors.entry(to.to_string()).or_default().extend(errs);
+    }
+}
+
+/// Copy the error sets of every method of generic class template `class_name`
+/// (including inherited default trait methods) onto the instance `mangled`.
+pub(crate) fn copy_class_method_error_sets(
+    program: &Program,
+    env: &mut TypeEnv,
+    class_name: &str,
+    mangled: &str,
+) {
+    let Some(class) = program
+        .classes
+        .iter()
+        .find(|c| c.node.name.node == class_name)
+    else {
+        return;
+    };
+    for method in &class.node.methods {
+        let m = &method.node.name.node;
+        let from = mangle_method(class_name, m);
+        let to = mangle_method(mangled, m);
+        copy_error_set(env, &from, &to);
+    }
+    let class_method_names: Vec<&str> =
+        class.node.methods.iter().map(|m| m.node.name.node.as_str()).collect();
+    let mut inherited: Vec<String> = Vec::new();
+    for trait_name in &class.node.impl_traits {
+        if let Some(trait_info) = env.traits.get(&trait_name.node) {
+            inherited.extend(
+                trait_info
+                    .default_methods
+                    .iter()
+                    .filter(|m| !class_method_names.contains(&m.as_str()))
+                    .cloned(),
+            );
+        }
+    }
+    for m in inherited {
+        let from = mangle_method(class_name, &m);
+        let to = mangle_method(mangled, &m);
+        copy_error_set(env, &from, &to);
+    }
 }
 
 /// Collect direct error raises and propagation edges from a block.
@@ -501,18 +575,24 @@ fn collect_expr_effects(
 
 // ── Phase 2c: Error handling enforcement ──────────────────────────────────────
 
+/// Enforce error handling at call sites. Generic template bodies are enforced
+/// in `lenient` mode: their bodies were never type-checked (no method
+/// resolutions exist), so unresolved method calls are skipped and `catch`/`!`
+/// are never rejected as applied-to-infallible — but unhandled calls to known
+/// fallible named functions are still errors, closing the soundness hole where
+/// a generic body could silently leak an error past the checker.
 pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result<(), CompileError> {
     for func in &program.functions {
-        if !func.node.type_params.is_empty() { continue; }
+        let lenient = !func.node.type_params.is_empty();
         let current_fn = func.node.name.node.clone();
-        enforce_block(&func.node.body.node, &current_fn, env)?;
+        enforce_block(&func.node.body.node, &current_fn, env, lenient)?;
     }
     for class in &program.classes {
-        if !class.node.type_params.is_empty() { continue; }
+        let lenient = !class.node.type_params.is_empty();
         let class_name = &class.node.name.node;
         for method in &class.node.methods {
             let current_fn = mangle_method(class_name, &method.node.name.node);
-            enforce_block(&method.node.body.node, &current_fn, env)?;
+            enforce_block(&method.node.body.node, &current_fn, env, lenient)?;
         }
     }
     for class in &program.classes {
@@ -526,7 +606,7 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
                     for tm in &trait_decl.node.methods {
                         if let Some(body) = &tm.body && !class_method_names.contains(&tm.name.node) {
                             let current_fn = mangle_method(class_name, &tm.name.node);
-                            enforce_block(&body.node, &current_fn, env)?;
+                            enforce_block(&body.node, &current_fn, env, false)?;
                         }
                     }
                 }
@@ -537,7 +617,7 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
         let app_name = &app_spanned.node.name.node;
         for method in &app_spanned.node.methods {
             let current_fn = mangle_method(app_name, &method.node.name.node);
-            enforce_block(&method.node.body.node, &current_fn, env)?;
+            enforce_block(&method.node.body.node, &current_fn, env, false)?;
         }
     }
     // Enforce error handling in stage methods
@@ -545,15 +625,20 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
         let stage_name = &stage_spanned.node.name.node;
         for method in &stage_spanned.node.methods {
             let current_fn = mangle_method(stage_name, &method.node.name.node);
-            enforce_block(&method.node.body.node, &current_fn, env)?;
+            enforce_block(&method.node.body.node, &current_fn, env, false)?;
         }
     }
     Ok(())
 }
 
-fn enforce_block(block: &Block, current_fn: &str, env: &TypeEnv) -> Result<(), CompileError> {
+fn enforce_block(
+    block: &Block,
+    current_fn: &str,
+    env: &TypeEnv,
+    lenient: bool,
+) -> Result<(), CompileError> {
     for stmt in &block.stmts {
-        enforce_stmt(&stmt.node, stmt.span, current_fn, env)?;
+        enforce_stmt(&stmt.node, stmt.span, current_fn, env, lenient)?;
     }
     Ok(())
 }
@@ -563,54 +648,55 @@ fn enforce_stmt(
     _span: crate::span::Span,
     current_fn: &str,
     env: &TypeEnv,
+    lenient: bool,
 ) -> Result<(), CompileError> {
     match stmt {
-        Stmt::Let { value, .. } => enforce_expr(&value.node, value.span, current_fn, env),
-        Stmt::Expr(expr) => enforce_expr(&expr.node, expr.span, current_fn, env),
-        Stmt::Return(Some(expr)) => enforce_expr(&expr.node, expr.span, current_fn, env),
+        Stmt::Let { value, .. } => enforce_expr(&value.node, value.span, current_fn, env, lenient),
+        Stmt::Expr(expr) => enforce_expr(&expr.node, expr.span, current_fn, env, lenient),
+        Stmt::Return(Some(expr)) => enforce_expr(&expr.node, expr.span, current_fn, env, lenient),
         Stmt::Return(None) => Ok(()),
-        Stmt::Assign { value, .. } => enforce_expr(&value.node, value.span, current_fn, env),
+        Stmt::Assign { value, .. } => enforce_expr(&value.node, value.span, current_fn, env, lenient),
         Stmt::FieldAssign { object, value, .. } => {
-            enforce_expr(&object.node, object.span, current_fn, env)?;
-            enforce_expr(&value.node, value.span, current_fn, env)
+            enforce_expr(&object.node, object.span, current_fn, env, lenient)?;
+            enforce_expr(&value.node, value.span, current_fn, env, lenient)
         }
         Stmt::IndexAssign { object, index, value } => {
-            enforce_expr(&object.node, object.span, current_fn, env)?;
-            enforce_expr(&index.node, index.span, current_fn, env)?;
-            enforce_expr(&value.node, value.span, current_fn, env)
+            enforce_expr(&object.node, object.span, current_fn, env, lenient)?;
+            enforce_expr(&index.node, index.span, current_fn, env, lenient)?;
+            enforce_expr(&value.node, value.span, current_fn, env, lenient)
         }
         Stmt::If { condition, then_block, else_block } => {
-            enforce_expr(&condition.node, condition.span, current_fn, env)?;
-            enforce_block(&then_block.node, current_fn, env)?;
+            enforce_expr(&condition.node, condition.span, current_fn, env, lenient)?;
+            enforce_block(&then_block.node, current_fn, env, lenient)?;
             if let Some(eb) = else_block {
-                enforce_block(&eb.node, current_fn, env)?;
+                enforce_block(&eb.node, current_fn, env, lenient)?;
             }
             Ok(())
         }
         Stmt::While { condition, body } => {
-            enforce_expr(&condition.node, condition.span, current_fn, env)?;
-            enforce_block(&body.node, current_fn, env)
+            enforce_expr(&condition.node, condition.span, current_fn, env, lenient)?;
+            enforce_block(&body.node, current_fn, env, lenient)
         }
         Stmt::For { iterable, body, .. } => {
-            enforce_expr(&iterable.node, iterable.span, current_fn, env)?;
-            enforce_block(&body.node, current_fn, env)
+            enforce_expr(&iterable.node, iterable.span, current_fn, env, lenient)?;
+            enforce_block(&body.node, current_fn, env, lenient)
         }
         Stmt::Match { expr, arms } => {
-            enforce_expr(&expr.node, expr.span, current_fn, env)?;
+            enforce_expr(&expr.node, expr.span, current_fn, env, lenient)?;
             for arm in arms {
-                enforce_block(&arm.body.node, current_fn, env)?;
+                enforce_block(&arm.body.node, current_fn, env, lenient)?;
             }
             Ok(())
         }
         Stmt::Raise { fields, .. } => {
             for (_, val) in fields {
-                enforce_expr(&val.node, val.span, current_fn, env)?;
+                enforce_expr(&val.node, val.span, current_fn, env, lenient)?;
             }
             Ok(())
         }
         Stmt::LetChan { capacity, .. } => {
             if let Some(cap) = capacity {
-                enforce_expr(&cap.node, cap.span, current_fn, env)?;
+                enforce_expr(&cap.node, cap.span, current_fn, env, lenient)?;
             }
             Ok(())
         }
@@ -618,38 +704,38 @@ fn enforce_stmt(
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { channel, .. } => {
-                        enforce_expr(&channel.node, channel.span, current_fn, env)?;
+                        enforce_expr(&channel.node, channel.span, current_fn, env, lenient)?;
                     }
                     SelectOp::Send { channel, value } => {
-                        enforce_expr(&channel.node, channel.span, current_fn, env)?;
-                        enforce_expr(&value.node, value.span, current_fn, env)?;
+                        enforce_expr(&channel.node, channel.span, current_fn, env, lenient)?;
+                        enforce_expr(&value.node, value.span, current_fn, env, lenient)?;
                     }
                 }
-                enforce_block(&arm.body.node, current_fn, env)?;
+                enforce_block(&arm.body.node, current_fn, env, lenient)?;
             }
             if let Some(def) = default {
-                enforce_block(&def.node, current_fn, env)?;
+                enforce_block(&def.node, current_fn, env, lenient)?;
             }
             Ok(())
         }
         Stmt::Scope { seeds, body, .. } => {
             for seed in seeds {
-                enforce_expr(&seed.node, seed.span, current_fn, env)?;
+                enforce_expr(&seed.node, seed.span, current_fn, env, lenient)?;
             }
-            enforce_block(&body.node, current_fn, env)?;
+            enforce_block(&body.node, current_fn, env, lenient)?;
             Ok(())
         }
         Stmt::Assert { expr } => {
-            enforce_expr(&expr.node, expr.span, current_fn, env)?;
+            enforce_expr(&expr.node, expr.span, current_fn, env, lenient)?;
             Ok(())
         }
         Stmt::Serve { service, port } => {
-            enforce_expr(&service.node, service.span, current_fn, env)?;
-            enforce_expr(&port.node, port.span, current_fn, env)?;
+            enforce_expr(&service.node, service.span, current_fn, env, lenient)?;
+            enforce_expr(&port.node, port.span, current_fn, env, lenient)?;
             Ok(())
         }
         Stmt::Yield { value, .. } => {
-            enforce_expr(&value.node, value.span, current_fn, env)?;
+            enforce_expr(&value.node, value.span, current_fn, env, lenient)?;
             Ok(())
         }
         Stmt::Break | Stmt::Continue => Ok(()),
@@ -661,11 +747,12 @@ fn enforce_expr(
     span: crate::span::Span,
     current_fn: &str,
     env: &TypeEnv,
+    lenient: bool,
 ) -> Result<(), CompileError> {
     match expr {
         Expr::Call { name, args, .. } => {
             for arg in args {
-                enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
             }
             let is_fallible_pow = name.node == "pow"
                 && env
@@ -683,12 +770,17 @@ fn enforce_expr(
             Ok(())
         }
         Expr::MethodCall { object, method, args } => {
-            enforce_expr(&object.node, object.span, current_fn, env)?;
+            enforce_expr(&object.node, object.span, current_fn, env, lenient)?;
             for arg in args {
-                enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
             }
-            let is_fallible = env.resolve_method_fallibility(current_fn, method.span.start)
-                .map_err(|msg| CompileError::type_err(msg, method.span))?;
+            let is_fallible = match env.resolve_method_fallibility(current_fn, method.span.start) {
+                Ok(f) => f,
+                // Lenient (generic template) bodies were never type-checked,
+                // so their method calls have no recorded resolution — skip.
+                Err(_) if lenient => false,
+                Err(msg) => return Err(CompileError::type_err(msg, method.span)),
+            };
             if is_fallible {
                 return Err(CompileError::type_err(
                     format!("call to fallible method '{}' must be handled with ! or catch", method.node),
@@ -700,13 +792,13 @@ fn enforce_expr(
         Expr::Propagate { expr: inner } => match &inner.node {
             Expr::Call { name, args, .. } => {
                 for arg in args {
-                    enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                    enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
                 }
                 let is_fallible_pow = name.node == "pow"
                     && env
                         .fallible_builtin_calls
                         .contains(&(current_fn.to_string(), name.span.start));
-                if !is_fallible_pow && !env.is_fn_fallible(&name.node) {
+                if !lenient && !is_fallible_pow && !env.is_fn_fallible(&name.node) {
                     return Err(CompileError::type_err(
                         format!("'!' applied to infallible function '{}'", name.node),
                         span,
@@ -715,17 +807,19 @@ fn enforce_expr(
                 Ok(())
             }
             Expr::MethodCall { object, method, args } => {
-                enforce_expr(&object.node, object.span, current_fn, env)?;
+                enforce_expr(&object.node, object.span, current_fn, env, lenient)?;
                 for arg in args {
-                    enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                    enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
                 }
-                let is_fallible = env.resolve_method_fallibility(current_fn, method.span.start)
-                    .map_err(|msg| CompileError::type_err(msg, method.span))?;
-                if !is_fallible {
-                    return Err(CompileError::type_err(
-                        format!("'!' applied to infallible method '{}'", method.node),
-                        span,
-                    ));
+                if !lenient {
+                    let is_fallible = env.resolve_method_fallibility(current_fn, method.span.start)
+                        .map_err(|msg| CompileError::type_err(msg, method.span))?;
+                    if !is_fallible {
+                        return Err(CompileError::type_err(
+                            format!("'!' applied to infallible method '{}'", method.node),
+                            span,
+                        ));
+                    }
                 }
                 Ok(())
             }
@@ -738,13 +832,13 @@ fn enforce_expr(
             match &inner.node {
                 Expr::Call { name, args, .. } => {
                     for arg in args {
-                        enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                        enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
                     }
                     let is_fallible_pow = name.node == "pow"
                         && env
                             .fallible_builtin_calls
                             .contains(&(current_fn.to_string(), name.span.start));
-                    if !is_fallible_pow && !env.is_fn_fallible(&name.node) {
+                    if !lenient && !is_fallible_pow && !env.is_fn_fallible(&name.node) {
                         return Err(CompileError::type_err(
                             format!("catch applied to infallible function '{}'", name.node),
                             span,
@@ -752,17 +846,19 @@ fn enforce_expr(
                     }
                 }
                 Expr::MethodCall { object, method, args } => {
-                    enforce_expr(&object.node, object.span, current_fn, env)?;
+                    enforce_expr(&object.node, object.span, current_fn, env, lenient)?;
                     for arg in args {
-                        enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                        enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
                     }
-                    let is_fallible = env.resolve_method_fallibility(current_fn, method.span.start)
-                        .map_err(|msg| CompileError::type_err(msg, method.span))?;
-                    if !is_fallible {
-                        return Err(CompileError::type_err(
-                            format!("catch applied to infallible method '{}'", method.node),
-                            span,
-                        ));
+                    if !lenient {
+                        let is_fallible = env.resolve_method_fallibility(current_fn, method.span.start)
+                            .map_err(|msg| CompileError::type_err(msg, method.span))?;
+                        if !is_fallible {
+                            return Err(CompileError::type_err(
+                                format!("catch applied to infallible method '{}'", method.node),
+                                span,
+                            ));
+                        }
                     }
                 }
                 _ => {
@@ -799,69 +895,69 @@ fn enforce_expr(
             for handler in handlers {
                 match handler {
                     CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } =>
-                        enforce_block(&body.node, current_fn, env)?,
+                        enforce_block(&body.node, current_fn, env, lenient)?,
                     CatchHandler::Shorthand(fb) =>
-                        enforce_expr(&fb.node, fb.span, current_fn, env)?,
+                        enforce_expr(&fb.node, fb.span, current_fn, env, lenient)?,
                 }
             }
             Ok(())
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            enforce_expr(&lhs.node, lhs.span, current_fn, env)?;
-            enforce_expr(&rhs.node, rhs.span, current_fn, env)
+            enforce_expr(&lhs.node, lhs.span, current_fn, env, lenient)?;
+            enforce_expr(&rhs.node, rhs.span, current_fn, env, lenient)
         }
-        Expr::UnaryOp { operand, .. } => enforce_expr(&operand.node, operand.span, current_fn, env),
-        Expr::Cast { expr: inner, .. } => enforce_expr(&inner.node, inner.span, current_fn, env),
+        Expr::UnaryOp { operand, .. } => enforce_expr(&operand.node, operand.span, current_fn, env, lenient),
+        Expr::Cast { expr: inner, .. } => enforce_expr(&inner.node, inner.span, current_fn, env, lenient),
         Expr::StructLit { fields, .. } => {
             for (_, val) in fields {
-                enforce_expr(&val.node, val.span, current_fn, env)?;
+                enforce_expr(&val.node, val.span, current_fn, env, lenient)?;
             }
             Ok(())
         }
-        Expr::FieldAccess { object, .. } => enforce_expr(&object.node, object.span, current_fn, env),
+        Expr::FieldAccess { object, .. } => enforce_expr(&object.node, object.span, current_fn, env, lenient),
         Expr::ArrayLit { elements } => {
             for e in elements {
-                enforce_expr(&e.node, e.span, current_fn, env)?;
+                enforce_expr(&e.node, e.span, current_fn, env, lenient)?;
             }
             Ok(())
         }
         Expr::Index { object, index } => {
-            enforce_expr(&object.node, object.span, current_fn, env)?;
-            enforce_expr(&index.node, index.span, current_fn, env)
+            enforce_expr(&object.node, object.span, current_fn, env, lenient)?;
+            enforce_expr(&index.node, index.span, current_fn, env, lenient)
         }
         Expr::EnumData { fields, .. } => {
             for (_, val) in fields {
-                enforce_expr(&val.node, val.span, current_fn, env)?;
+                enforce_expr(&val.node, val.span, current_fn, env, lenient)?;
             }
             Ok(())
         }
         Expr::StringInterp { parts } => {
             for part in parts {
                 if let StringInterpPart::Expr(e) = part {
-                    enforce_expr(&e.node, e.span, current_fn, env)?;
+                    enforce_expr(&e.node, e.span, current_fn, env, lenient)?;
                 }
             }
             Ok(())
         }
         Expr::Closure { body, .. } => {
-            enforce_block(&body.node, current_fn, env)
+            enforce_block(&body.node, current_fn, env, lenient)
         }
         Expr::MapLit { entries, .. } => {
             for (k, v) in entries {
-                enforce_expr(&k.node, k.span, current_fn, env)?;
-                enforce_expr(&v.node, v.span, current_fn, env)?;
+                enforce_expr(&k.node, k.span, current_fn, env, lenient)?;
+                enforce_expr(&v.node, v.span, current_fn, env, lenient)?;
             }
             Ok(())
         }
         Expr::SetLit { elements, .. } => {
             for e in elements {
-                enforce_expr(&e.node, e.span, current_fn, env)?;
+                enforce_expr(&e.node, e.span, current_fn, env, lenient)?;
             }
             Ok(())
         }
         Expr::Range { start, end, .. } => {
-            enforce_expr(&start.node, start.span, current_fn, env)?;
-            enforce_expr(&end.node, end.span, current_fn, env)
+            enforce_expr(&start.node, start.span, current_fn, env, lenient)?;
+            enforce_expr(&end.node, end.span, current_fn, env, lenient)
         }
         Expr::Spawn { call } => {
             // Enforce spawn arg expressions + reject Propagate in args.
@@ -876,7 +972,7 @@ fn enforce_expr(
                         };
                         if let Some(args) = args {
                             for arg in args {
-                                enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                                enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
                                 if contains_propagate(arg) {
                                     return Err(CompileError::type_err(
                                         "error propagation (!) is not allowed in spawn arguments; evaluate before spawn",
@@ -891,28 +987,28 @@ fn enforce_expr(
             Ok(())
         }
         Expr::NullPropagate { expr: inner } => {
-            enforce_expr(&inner.node, inner.span, current_fn, env)
+            enforce_expr(&inner.node, inner.span, current_fn, env, lenient)
         }
         Expr::StaticTraitCall { args, .. } => {
             for arg in args {
-                enforce_expr(&arg.node, arg.span, current_fn, env)?;
+                enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
             }
             Ok(())
         }
         Expr::If { condition, then_block, else_block } => {
-            enforce_expr(&condition.node, condition.span, current_fn, env)?;
+            enforce_expr(&condition.node, condition.span, current_fn, env, lenient)?;
             for stmt in &then_block.node.stmts {
-                enforce_stmt(&stmt.node, stmt.span, current_fn, env)?;
+                enforce_stmt(&stmt.node, stmt.span, current_fn, env, lenient)?;
             }
             for stmt in &else_block.node.stmts {
-                enforce_stmt(&stmt.node, stmt.span, current_fn, env)?;
+                enforce_stmt(&stmt.node, stmt.span, current_fn, env, lenient)?;
             }
             Ok(())
         }
         Expr::Match { expr, arms } => {
-            enforce_expr(&expr.node, expr.span, current_fn, env)?;
+            enforce_expr(&expr.node, expr.span, current_fn, env, lenient)?;
             for arm in arms {
-                enforce_expr(&arm.value.node, arm.value.span, current_fn, env)?;
+                enforce_expr(&arm.value.node, arm.value.span, current_fn, env, lenient)?;
             }
             Ok(())
         }
