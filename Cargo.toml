@@ -85,6 +85,10 @@ name = "closures"
 path = "tests/integration/closures.rs"
 
 [[test]]
+name = "fn_refs"
+path = "tests/integration/fn_refs.rs"
+
+[[test]]
 name = "di"
 path = "tests/integration/di.rs"
 

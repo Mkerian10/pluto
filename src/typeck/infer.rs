@@ -42,12 +42,33 @@ pub(crate) fn infer_expr(
             if let Some((_, depth)) = env.lookup_with_depth(name) {
                 env.variable_reads.insert((name.clone(), depth));
             }
-            env.lookup(name)
-                .cloned()
-                .ok_or_else(|| CompileError::type_err(
-                    format!("undefined variable '{name}'"),
+            if let Some(ty) = env.lookup(name).cloned() {
+                return Ok(ty);
+            }
+            // Not a variable — a bare identifier may reference a named
+            // function as a value. Variables can't shadow function names via
+            // `let` (and scoped binders were checked first above), so this is
+            // unambiguous. The site is recorded so the eta-expansion pass in
+            // closures.rs can rewrite it into a wrapper closure.
+            if let Some(sig) = env.functions.get(name) {
+                let fn_ty = PlutoType::Fn(sig.params.clone(), Box::new(sig.return_type.clone()));
+                env.fn_ref_sites.insert((span.start, span.end), name.clone());
+                return Ok(fn_ty);
+            }
+            if env.generic_functions.contains_key(name) {
+                return Err(CompileError::type_err(
+                    format!(
+                        "generic function '{name}' cannot be used as a value — its type \
+                         parameters cannot be inferred without a call; wrap it in a closure \
+                         with concrete parameter types, e.g. `(x: int) => {name}(x)`"
+                    ),
                     span,
-                ))
+                ));
+            }
+            Err(CompileError::type_err(
+                format!("undefined variable '{name}'"),
+                span,
+            ))
         }
         Expr::BinOp { op, lhs, rhs } => infer_binop(op, lhs, rhs, span, env),
         Expr::UnaryOp { op, operand } => {

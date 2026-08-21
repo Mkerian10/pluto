@@ -194,6 +194,11 @@ pub struct TypeEnv {
     pub invalidated_task_vars: HashSet<String>,
     /// Closure span → return type (set during typeck, used during closure lifting)
     pub closure_return_types: HashMap<(usize, usize), PlutoType>,
+    /// Identifier sites that resolved to a named-function reference (not a
+    /// variable), keyed by (span.start, span.end) -> function name. Consumed
+    /// by error inference (aliasing/escape) and by the eta-expansion pass in
+    /// closures.rs that rewrites them into wrapper closures before lifting.
+    pub fn_ref_sites: HashMap<(usize, usize), String>,
     /// Mangled names of methods that declare `mut self`
     pub mut_self_methods: HashSet<String>,
     /// Scope-mirrored: tracks variables declared with `let` (not `let mut`)
@@ -285,6 +290,7 @@ impl TypeEnv {
             task_origins: ScopeTracker::with_initial_scope(),
             invalidated_task_vars: HashSet::new(),
             closure_return_types: HashMap::new(),
+            fn_ref_sites: HashMap::new(),
             mut_self_methods: HashSet::new(),
             immutable_vars: ScopeTracker::with_initial_scope(),
             variable_decls: HashMap::new(),
