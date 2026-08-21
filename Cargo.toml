@@ -89,6 +89,10 @@ name = "fn_refs"
 path = "tests/integration/fn_refs.rs"
 
 [[test]]
+name = "fn_effects"
+path = "tests/integration/fn_effects.rs"
+
+[[test]]
 name = "di"
 path = "tests/integration/di.rs"
 

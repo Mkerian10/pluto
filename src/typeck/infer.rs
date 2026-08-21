@@ -51,7 +51,7 @@ pub(crate) fn infer_expr(
             // unambiguous. The site is recorded so the eta-expansion pass in
             // closures.rs can rewrite it into a wrapper closure.
             if let Some(sig) = env.functions.get(name) {
-                let fn_ty = PlutoType::Fn(sig.params.clone(), Box::new(sig.return_type.clone()));
+                let fn_ty = PlutoType::Fn(sig.params.clone(), Box::new(sig.return_type.clone()), false);
                 env.fn_ref_sites.insert((span.start, span.end), name.clone());
                 return Ok(fn_ty);
             }
@@ -340,7 +340,7 @@ pub(crate) fn infer_expr(
             // Infer the closure type to get the return type.
             let closure_type = infer_expr(&call.node, call.span, env, None)?;
             let inner_type = match &closure_type {
-                PlutoType::Fn(_, ret) => *ret.clone(),
+                PlutoType::Fn(_, ret, _) => *ret.clone(),
                 _ => {
                     return Err(CompileError::type_err(
                         "spawn requires a function call".to_string(),
@@ -677,6 +677,48 @@ pub(crate) fn infer_expr(
     }
 }
 
+
+/// If `expr` is a function value with known provenance (closure literal,
+/// named-function reference, or a variable aliasing one) flowing into an
+/// *infallible* fn-typed slot, record the boundary. Enforcement validates the
+/// provenance node's inferred error set is empty after inference runs —
+/// fallibility of values is inferred, so it cannot be checked here.
+pub(crate) fn record_fn_value_boundary(
+    expr: &Spanned<Expr>,
+    expected: &PlutoType,
+    env: &mut TypeEnv,
+) {
+    let PlutoType::Fn(_, _, target_fallible) = expected else { return };
+    if *target_fallible {
+        // The receiver declared it accepts fallible values — this escape is
+        // its responsibility, not the passer's; absorption skips it.
+        env.handled_fn_value_escapes
+            .insert((expr.span.start, expr.span.end));
+        return;
+    }
+    let (node, desc) = match &expr.node {
+        Expr::Closure { body, .. } => (
+            super::errors::closure_node_key(body.span),
+            "closure".to_string(),
+        ),
+        Expr::Ident(n) => {
+            if env.fn_ref_sites.get(&(expr.span.start, expr.span.end)) == Some(n) {
+                (n.clone(), format!("function '{n}'"))
+            } else if let Some(node) = env.fn_value_provenance.lookup(n) {
+                (node.clone(), format!("'{n}'"))
+            } else {
+                return;
+            }
+        }
+        _ => return,
+    };
+    env.fn_value_boundaries.push(crate::typeck::env::FnValueBoundary {
+        node,
+        span: expr.span,
+        desc,
+    });
+}
+
 fn validate_hashable_key(ty: &PlutoType, span: crate::span::Span) -> Result<(), CompileError> {
     match ty {
         PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Enum(_) | PlutoType::Byte => Ok(()),
@@ -939,7 +981,13 @@ fn infer_call(
     }
 
     // Check if calling a closure variable
-    if let Some(PlutoType::Fn(param_types, ret_type)) = env.lookup(&name.node).cloned() {
+    if let Some(PlutoType::Fn(param_types, ret_type, value_fallible)) = env.lookup(&name.node).cloned() {
+        // A call through a variable whose *type* declares fallibility
+        // (annotation-flagged params/fields) must be handled; record the site
+        // for enforcement and inference.
+        if value_fallible && let Some(current) = env.current_fn.clone() {
+            env.fallible_value_calls.insert((current, name.span.start));
+        }
         if args.len() != param_types.len() {
             return Err(CompileError::type_err(
                 format!(
@@ -953,6 +1001,7 @@ fn infer_call(
         }
         for (i, (arg, expected_param)) in args.iter().zip(&param_types).enumerate() {
             let actual = infer_expr(&arg.node, arg.span, env, Some(expected_param))?;
+            record_fn_value_boundary(arg, expected_param, env);
             if !types_compatible(&actual, expected_param, env) {
                 return Err(CompileError::type_err(
                     format!(
@@ -1027,6 +1076,12 @@ fn infer_call(
         // Validate type bounds before instantiation
         validate_type_bounds(&gen_sig.type_params, &type_args, &gen_sig.type_param_bounds, env, span, &name.node)?;
         let mangled = ensure_generic_func_instantiated(&name.node, &type_args, env);
+        // Record fn-value boundaries against the instantiated (concrete) params
+        if let Some(concrete_sig) = env.functions.get(&mangled).cloned() {
+            for (arg, expected_param) in args.iter().zip(&concrete_sig.params) {
+                record_fn_value_boundary(arg, expected_param, env);
+            }
+        }
         // Store rewrite
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
         // Use the return type from the registered FuncSig — it has GenericInstance types resolved
@@ -1066,6 +1121,7 @@ fn infer_call(
     let sig_clone = sig.clone();
     for (i, (arg, expected_param)) in args.iter().zip(&sig_clone.params).enumerate() {
         let actual = infer_expr(&arg.node, arg.span, env, Some(expected_param))?;
+        record_fn_value_boundary(arg, expected_param, env);
         if !types_compatible(&actual, expected_param, env) {
             return Err(CompileError::type_err(
                 format!(
@@ -2425,6 +2481,7 @@ fn infer_method_call(
         }
         for (i, (arg, expected_param)) in args.iter().zip(&expected_args).enumerate() {
             let actual = infer_expr(&arg.node, arg.span, env, Some(expected_param))?;
+            record_fn_value_boundary(arg, expected_param, env);
             if !types_compatible(&actual, expected_param, env) {
                 return Err(CompileError::type_err(
                     format!(
@@ -2515,6 +2572,7 @@ fn infer_method_call(
 
     for (i, (arg, expected_param)) in args.iter().zip(expected_args).enumerate() {
         let actual = infer_expr(&arg.node, arg.span, env, Some(expected_param))?;
+        record_fn_value_boundary(arg, expected_param, env);
         if !types_compatible(&actual, expected_param, env) {
             return Err(CompileError::type_err(
                 format!(

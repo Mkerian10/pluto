@@ -27,8 +27,15 @@ fn types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> 
         return env.class_implements_trait(cn, tn);
     }
     // Fn types: structural compatibility (same param count, each param compatible, return compatible)
-    if let (PlutoType::Fn(a_params, a_ret), PlutoType::Fn(e_params, e_ret)) = (actual, expected) {
+    if let (PlutoType::Fn(a_params, a_ret, a_fallible), PlutoType::Fn(e_params, e_ret, e_fallible)) =
+        (actual, expected)
+    {
         if a_params.len() != e_params.len() {
+            return false;
+        }
+        // Subsumption: an infallible value satisfies a fallible contract, but
+        // a fallible-typed value never satisfies an infallible contract.
+        if *a_fallible && !e_fallible {
             return false;
         }
         for (ap, ep) in a_params.iter().zip(e_params.iter()) {

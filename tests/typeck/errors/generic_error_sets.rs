@@ -330,11 +330,10 @@ fn main() {
     );
 }
 
-// Fallibility does not flow through fn-typed values: calling a function
-// received as a parameter is not inferred as fallible. Needs error sets in fn
-// types (effect typing) — tracked separately.
+// Fallibility flows through fn types: `fn() T` is an infallible contract, so
+// passing a fallible function into it is rejected at the boundary; `fn() T!`
+// accepts fallible values and its calls must be handled.
 #[test]
-#[ignore]
 fn generic_fn_calls_fallible() {
     compile_should_fail_with(
         r#"
@@ -350,12 +349,11 @@ fn main() {
     wrap(f)
 }
 "#,
-        MUST_HANDLE,
+        "cannot pass fallible function 'f' where an infallible function type is expected",
     );
 }
 
 #[test]
-#[ignore]
 fn generic_closure_param_fallible() {
     compile_should_fail_with(
         r#"
@@ -369,6 +367,26 @@ fn apply<T>(f: fn(T) T, x: T) T {
 }
 fn main() {
     apply(id, 42)
+}
+"#,
+        "cannot pass fallible function 'id' where an infallible function type is expected",
+    );
+}
+
+#[test]
+fn generic_fallible_fn_contract_enforced_at_call_site() {
+    compile_should_fail_with(
+        r#"
+error E{}
+fn f() int {
+    raise E{}
+    return 1
+}
+fn wrap<T>(maker: fn() T!) T {
+    return maker()!
+}
+fn main() {
+    wrap(f)
 }
 "#,
         MUST_HANDLE,

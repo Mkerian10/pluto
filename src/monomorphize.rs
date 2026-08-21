@@ -346,7 +346,7 @@ fn substitute_in_type_expr(te: &mut TypeExpr, bindings: &HashMap<String, TypeExp
             substitute_in_type_expr(&mut inner.node, bindings);
         }
         TypeExpr::Qualified { .. } => {}
-        TypeExpr::Fn { params, return_type } => {
+        TypeExpr::Fn { params, return_type, fallible: _ } => {
             for p in params.iter_mut() {
                 substitute_in_type_expr(&mut p.node, bindings);
             }
@@ -936,7 +936,7 @@ fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), Compil
             *te = TypeExpr::Named(mangled);
         }
         TypeExpr::Array(inner) => resolve_generic_te(&mut inner.node, env)?,
-        TypeExpr::Fn { params, return_type } => {
+        TypeExpr::Fn { params, return_type, fallible: _ } => {
             for p in params.iter_mut() {
                 resolve_generic_te(&mut p.node, env)?;
             }
@@ -975,12 +975,12 @@ fn type_expr_to_pluto_type(te: &TypeExpr, env: &TypeEnv) -> Result<PlutoType, Co
         TypeExpr::Array(inner) => {
             Ok(PlutoType::Array(Box::new(type_expr_to_pluto_type(&inner.node, env)?)))
         }
-        TypeExpr::Fn { params, return_type } => {
+        TypeExpr::Fn { params, return_type, fallible } => {
             let param_types: Vec<PlutoType> = params.iter()
                 .map(|p| type_expr_to_pluto_type(&p.node, env))
                 .collect::<Result<Vec<_>, _>>()?;
             let ret = type_expr_to_pluto_type(&return_type.node, env)?;
-            Ok(PlutoType::Fn(param_types, Box::new(ret)))
+            Ok(PlutoType::Fn(param_types, Box::new(ret), *fallible))
         }
         TypeExpr::Qualified { module, name } => {
             Ok(PlutoType::Class(format!("{}.{}", module, name)))

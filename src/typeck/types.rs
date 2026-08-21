@@ -12,7 +12,7 @@ pub enum PlutoType {
     Array(Box<PlutoType>),
     Trait(std::string::String),
     Enum(std::string::String),
-    Fn(Vec<PlutoType>, Box<PlutoType>),
+    Fn(Vec<PlutoType>, Box<PlutoType>, bool),
     Map(Box<PlutoType>, Box<PlutoType>),
     Set(Box<PlutoType>),
     Range,
@@ -44,9 +44,10 @@ impl PlutoType {
     pub fn map_inner_types(&self, f: &impl Fn(&PlutoType) -> PlutoType) -> PlutoType {
         match self {
             PlutoType::Array(inner) => PlutoType::Array(Box::new(f(inner))),
-            PlutoType::Fn(params, ret) => PlutoType::Fn(
+            PlutoType::Fn(params, ret, fallible) => PlutoType::Fn(
                 params.iter().map(|p| f(p)).collect(),
                 Box::new(f(ret)),
+                *fallible,
             ),
             PlutoType::Map(k, v) => PlutoType::Map(Box::new(f(k)), Box::new(f(v))),
             PlutoType::Set(t) => PlutoType::Set(Box::new(f(t))),
@@ -69,7 +70,7 @@ impl PlutoType {
     pub fn any_inner_type(&self, pred: &impl Fn(&PlutoType) -> bool) -> bool {
         match self {
             PlutoType::Array(inner) => pred(inner),
-            PlutoType::Fn(params, ret) => params.iter().any(|p| pred(p)) || pred(ret),
+            PlutoType::Fn(params, ret, _) => params.iter().any(|p| pred(p)) || pred(ret),
             PlutoType::Map(k, v) => pred(k) || pred(v),
             PlutoType::Set(t) | PlutoType::Task(t) | PlutoType::Sender(t)
             | PlutoType::Receiver(t) | PlutoType::Nullable(t) => pred(t),
@@ -93,13 +94,18 @@ impl std::fmt::Display for PlutoType {
             PlutoType::Array(inner) => write!(f, "[{inner}]"),
             PlutoType::Trait(name) => write!(f, "trait {name}"),
             PlutoType::Enum(name) => write!(f, "{}", name.replace('%', "")),
-            PlutoType::Fn(params, ret) => {
+            PlutoType::Fn(params, ret, fallible) => {
                 write!(f, "fn(")?;
+                let fallible = *fallible;
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
                     write!(f, "{}", p)?;
                 }
-                write!(f, ") {}", ret)
+                write!(f, ") {}", ret)?;
+                if fallible {
+                    write!(f, "!")?;
+                }
+                Ok(())
             }
             PlutoType::Map(k, v) => write!(f, "Map<{k}, {v}>"),
             PlutoType::Set(t) => write!(f, "Set<{t}>"),
@@ -140,12 +146,13 @@ pub fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         }
         PlutoType::Trait(name) => TypeExpr::Named(name.clone()),
         PlutoType::Enum(name) => TypeExpr::Named(name.clone()),
-        PlutoType::Fn(params, ret) => TypeExpr::Fn {
+        PlutoType::Fn(params, ret, fallible) => TypeExpr::Fn {
             params: params
                 .iter()
                 .map(|p| Box::new(Spanned::dummy(pluto_type_to_type_expr(p))))
                 .collect(),
             return_type: Box::new(Spanned::dummy(pluto_type_to_type_expr(ret))),
+            fallible: *fallible,
         },
         PlutoType::Map(k, v) => TypeExpr::Generic {
             name: "Map".to_string(),

@@ -184,6 +184,12 @@ pub(crate) fn copy_class_method_error_sets(
 fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<String> {
     match inner {
         Expr::Call { name, .. } => {
+            if env.fallible_value_calls.contains(&(current_fn.to_string(), name.span.start)) {
+                // Opaque fallible-typed value: the error set is unknown, so
+                // typed handlers must cover everything (in practice: use a
+                // wildcard or shorthand arm).
+                return env.errors.keys().cloned().collect();
+            }
             if let Some(node) = env.closure_call_sites.get(&(current_fn.to_string(), name.span.start)) {
                 return env.fn_errors.get(node).cloned().unwrap_or_default();
             }
@@ -208,7 +214,7 @@ fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<Str
 
 /// Key for a closure literal's node in the error-inference graph, derived from
 /// its body span (unique within a program; cannot collide with function names).
-fn closure_node_key(span: crate::span::Span) -> String {
+pub(crate) fn closure_node_key(span: crate::span::Span) -> String {
     format!("<closure@{}>", span.start)
 }
 
@@ -448,7 +454,16 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
         Expr::Propagate { expr: inner } => {
             match &inner.node {
                 Expr::Call { name, args, .. } => {
-                    if let Some(node) = ctx.lookup_closure(&name.node).cloned() {
+                    let fv_key = (ctx.current_fn.clone(), name.span.start);
+                    if ctx.env.fallible_value_calls.contains(&fv_key) {
+                        // Propagating through an opaque fallible-typed value:
+                        // widen by every declared error (same conservative
+                        // treatment as an unknown task origin).
+                        let all: Vec<String> = ctx.env.errors.keys().cloned().collect();
+                        for e in all {
+                            ctx.raise(e);
+                        }
+                    } else if let Some(node) = ctx.lookup_closure(&name.node).cloned() {
                         ctx.record_closure_call(name.span.start, node.clone());
                         ctx.edge(node);
                     } else if name.node == "pow"
@@ -624,8 +639,12 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
             // value, field...) escapes by construction: collect its body under
             // its own node and conservatively absorb that node's errors into
             // the enclosing node — someone may call it where we can't see.
+            // Unless it flowed into a *fallible* fn-typed slot: the receiver
+            // declared responsibility for its errors.
             let node = ctx.collect_closure(body);
-            ctx.edge(node);
+            if !ctx.env.handled_fn_value_escapes.contains(&(expr.span.start, expr.span.end)) {
+                ctx.edge(node);
+            }
         }
         Expr::Ident(name) => {
             // A closure variable referenced outside call position escapes the
@@ -634,7 +653,9 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
             // named-function reference in value position escapes the same way
             // (typeck recorded the site, so params sharing a function's name
             // are not confused with references).
-            if let Some(node) = ctx.lookup_closure(name).cloned() {
+            if ctx.env.handled_fn_value_escapes.contains(&(expr.span.start, expr.span.end)) {
+                // Escaped into a fallible-typed slot — receiver's responsibility.
+            } else if let Some(node) = ctx.lookup_closure(name).cloned() {
                 ctx.edge(node);
             } else if ctx.env.fn_ref_sites.get(&(expr.span.start, expr.span.end)) == Some(name) {
                 ctx.edge(name.clone());
@@ -714,6 +735,21 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
 /// fallible named functions are still errors, closing the soundness hole where
 /// a generic body could silently leak an error past the checker.
 pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result<(), CompileError> {
+    // Function values with known provenance that flowed into an *infallible*
+    // fn-typed slot: now that inference has run, their error sets are known.
+    for b in &env.fn_value_boundaries {
+        if env.is_fn_fallible(&b.node) {
+            return Err(CompileError::type_err(
+                format!(
+                    "cannot pass fallible {} where an infallible function type is \
+                     expected — declare the target fallible (`fn(...) T!`) and handle \
+                     its calls with ! or catch, or handle the errors in a wrapper closure",
+                    b.desc
+                ),
+                b.span,
+            ));
+        }
+    }
     for func in &program.functions {
         let lenient = !func.node.type_params.is_empty();
         let current_fn = func.node.name.node.clone();
@@ -886,6 +922,15 @@ fn enforce_expr(
             for arg in args {
                 enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
             }
+            if env.fallible_value_calls.contains(&(current_fn.to_string(), name.span.start)) {
+                return Err(CompileError::type_err(
+                    format!(
+                        "call through fallible function value '{}' must be handled with ! or catch",
+                        name.node
+                    ),
+                    span,
+                ));
+            }
             if let Some(node) = env.closure_call_sites.get(&(current_fn.to_string(), name.span.start)) {
                 if env.is_fn_fallible(node) {
                     return Err(CompileError::type_err(
@@ -938,16 +983,19 @@ fn enforce_expr(
                 for arg in args {
                     enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
                 }
-                let is_fallible = match env.closure_call_sites.get(&(current_fn.to_string(), name.span.start)) {
-                    Some(node) => env.is_fn_fallible(node),
-                    None => {
-                        (name.node == "pow"
-                            && env
-                                .fallible_builtin_calls
-                                .contains(&(current_fn.to_string(), name.span.start)))
-                            || env.is_fn_fallible(&name.node)
-                    }
-                };
+                let is_fallible = env
+                    .fallible_value_calls
+                    .contains(&(current_fn.to_string(), name.span.start))
+                    || match env.closure_call_sites.get(&(current_fn.to_string(), name.span.start)) {
+                        Some(node) => env.is_fn_fallible(node),
+                        None => {
+                            (name.node == "pow"
+                                && env
+                                    .fallible_builtin_calls
+                                    .contains(&(current_fn.to_string(), name.span.start)))
+                                || env.is_fn_fallible(&name.node)
+                        }
+                    };
                 if !lenient && !is_fallible {
                     return Err(CompileError::type_err(
                         format!("'!' applied to infallible function '{}'", name.node),
@@ -984,16 +1032,19 @@ fn enforce_expr(
                     for arg in args {
                         enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
                     }
-                    let is_fallible = match env.closure_call_sites.get(&(current_fn.to_string(), name.span.start)) {
-                        Some(node) => env.is_fn_fallible(node),
-                        None => {
-                            (name.node == "pow"
-                                && env
-                                    .fallible_builtin_calls
-                                    .contains(&(current_fn.to_string(), name.span.start)))
-                                || env.is_fn_fallible(&name.node)
-                        }
-                    };
+                    let is_fallible = env
+                        .fallible_value_calls
+                        .contains(&(current_fn.to_string(), name.span.start))
+                        || match env.closure_call_sites.get(&(current_fn.to_string(), name.span.start)) {
+                            Some(node) => env.is_fn_fallible(node),
+                            None => {
+                                (name.node == "pow"
+                                    && env
+                                        .fallible_builtin_calls
+                                        .contains(&(current_fn.to_string(), name.span.start)))
+                                    || env.is_fn_fallible(&name.node)
+                            }
+                        };
                     if !lenient && !is_fallible {
                         return Err(CompileError::type_err(
                             format!("catch applied to infallible function '{}'", name.node),
@@ -1031,13 +1082,30 @@ fn enforce_expr(
             let has_catch_all = handlers.iter().any(|h|
                 matches!(h, CatchHandler::Wildcard { .. } | CatchHandler::Shorthand(_)));
             if !has_catch_all {
+                // Through an opaque fallible-typed value the error set is
+                // unknown - typed handlers can never prove coverage.
+                if let Expr::Call { name, .. } = &inner.node
+                    && env.fallible_value_calls.contains(&(current_fn.to_string(), name.span.start))
+                {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "typed catch cannot prove coverage for a call through the \
+                             fallible function value '{}' - its error set is unknown; \
+                             add a wildcard `catch err {{ ... }}` or a shorthand fallback",
+                            name.node
+                        ),
+                        span,
+                    ));
+                }
                 let inner_errors = inner_error_set(&inner.node, current_fn, env);
                 let handled: HashSet<&str> = handlers.iter().filter_map(|h| match h {
                     CatchHandler::Typed { error_type, .. } =>
                         Some(error_type.node.rsplit('.').next().unwrap_or(&error_type.node)),
                     _ => None,
                 }).collect();
-                for e in &inner_errors {
+                let mut sorted_errors: Vec<&String> = inner_errors.iter().collect();
+                sorted_errors.sort();
+                for e in sorted_errors {
                     let un = e.rsplit('.').next().unwrap_or(e);
                     if !handled.contains(un) {
                         return Err(CompileError::type_err(

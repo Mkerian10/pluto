@@ -708,6 +708,7 @@ pub fn walk_type_expr<V: Visitor>(v: &mut V, te: &Spanned<TypeExpr>) {
         TypeExpr::Fn {
             params,
             return_type,
+            fallible: _,
         } => {
             for p in params {
                 v.visit_type_expr(p);
@@ -1214,6 +1215,7 @@ pub fn walk_type_expr_mut<V: VisitMut>(v: &mut V, te: &mut Spanned<TypeExpr>) {
         TypeExpr::Fn {
             params,
             return_type,
+            fallible: _,
         } => {
             for p in params {
                 v.visit_type_expr_mut(p);

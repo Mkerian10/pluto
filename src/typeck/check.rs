@@ -5,7 +5,7 @@ use crate::visit::{walk_expr, walk_stmt, Visitor};
 use super::env::{mangle_method, TypeEnv};
 use super::types::PlutoType;
 use super::resolve::resolve_type;
-use super::infer::infer_expr;
+use super::infer::{infer_expr, record_fn_value_boundary};
 use super::types_compatible;
 use crate::parser::ast::Expr;
 
@@ -174,6 +174,30 @@ fn check_stmt(
             } else {
                 env.define(name.node.clone(), val_type.clone(), name.span)?;
             }
+            // Fn-value provenance: remember which error-graph node a
+            // fn-valued variable came from (closure literal, function
+            // reference, or another tracked variable), for boundary checks.
+            match &value.node {
+                Expr::Closure { body, .. } => {
+                    let node = super::errors::closure_node_key(body.span);
+                    env.fn_value_provenance.insert(name.node.clone(), node);
+                }
+                Expr::Ident(refname) => {
+                    let key = (value.span.start, value.span.end);
+                    if env.fn_ref_sites.get(&key) == Some(refname) {
+                        env.fn_value_provenance.insert(name.node.clone(), refname.clone());
+                    } else if let Some(p) = env.fn_value_provenance.lookup(refname).cloned() {
+                        env.fn_value_provenance.insert(name.node.clone(), p);
+                    }
+                }
+                _ => {}
+            }
+            // A fn-valued binding with an explicit *infallible* annotation is
+            // a boundary: `let f: fn(int) int = fallible_thing` must fail.
+            if let Some(declared_ty) = ty {
+                let expected = resolve_type(declared_ty, env)?;
+                record_fn_value_boundary(value, &expected, env);
+            }
             // Track immutable bindings (let without mut)
             if !is_mut {
                 env.mark_immutable(&name.node);
@@ -206,6 +230,9 @@ fn check_stmt(
                 Some(expr) => infer_expr(&expr.node, expr.span, env, Some(return_type))?,
                 None => PlutoType::Void,
             };
+            if let Some(expr) = value {
+                record_fn_value_boundary(expr, return_type, env);
+            }
             if !types_compatible(&actual, return_type, env) {
                 let err_span = value.as_ref().map_or(span, |v| v.span);
                 return Err(CompileError::type_err(
@@ -244,11 +271,28 @@ fn check_stmt(
                 ));
             }
             let val_type = infer_expr(&value.node, value.span, env, Some(&var_type))?;
+            record_fn_value_boundary(value, &var_type, env);
             if !types_compatible(&val_type, &var_type, env) {
                 return Err(CompileError::type_err(
                     format!("type mismatch in assignment: expected {var_type}, found {val_type}"),
                     value.span,
                 ));
+            }
+            // Reassignment updates fn-value provenance
+            match &value.node {
+                Expr::Closure { body, .. } => {
+                    let node = super::errors::closure_node_key(body.span);
+                    env.fn_value_provenance.insert(target.node.clone(), node);
+                }
+                Expr::Ident(refname) => {
+                    let key = (value.span.start, value.span.end);
+                    if env.fn_ref_sites.get(&key) == Some(refname) {
+                        env.fn_value_provenance.insert(target.node.clone(), refname.clone());
+                    } else if let Some(p) = env.fn_value_provenance.lookup(refname).cloned() {
+                        env.fn_value_provenance.insert(target.node.clone(), p);
+                    }
+                }
+                _ => {}
             }
             // Permanently invalidate task origin on reassignment
             if matches!(&var_type, PlutoType::Task(_)) {

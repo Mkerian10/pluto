@@ -26,13 +26,16 @@ fn types_equal(t1: &Spanned<TypeExpr>, t2: &Spanned<TypeExpr>) -> bool {
             TypeExpr::Fn {
                 params: p1,
                 return_type: r1,
+                fallible: f1,
             },
             TypeExpr::Fn {
                 params: p2,
                 return_type: r2,
+                fallible: f2,
             },
         ) => {
-            p1.len() == p2.len()
+            f1 == f2
+                && p1.len() == p2.len()
                 && p1.iter().zip(p2.iter()).all(|(a, b)| types_equal(a, b))
                 && types_equal(r1, r2)
         }

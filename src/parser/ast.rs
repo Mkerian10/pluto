@@ -184,6 +184,10 @@ pub enum TypeExpr {
     Fn {
         params: Vec<Box<Spanned<TypeExpr>>>,
         return_type: Box<Spanned<TypeExpr>>,
+        /// `fn(int) int!` — values bound here may raise; calls through them
+        /// must be handled. Only annotations carry this; closure literals and
+        /// function references have inferred fallibility.
+        fallible: bool,
     },
     Generic {
         name: String,

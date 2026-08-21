@@ -365,10 +365,10 @@ fn resolve_type_for_lift(ty: &TypeExpr) -> PlutoType {
         },
         TypeExpr::Array(inner) => PlutoType::Array(Box::new(resolve_type_for_lift(&inner.node))),
         TypeExpr::Qualified { module, name } => PlutoType::Class(format!("{}.{}", module, name)),
-        TypeExpr::Fn { params, return_type } => {
+        TypeExpr::Fn { params, return_type, fallible } => {
             let pts: Vec<PlutoType> = params.iter().map(|p| resolve_type_for_lift(&p.node)).collect();
             let ret = resolve_type_for_lift(&return_type.node);
-            PlutoType::Fn(pts, Box::new(ret))
+            PlutoType::Fn(pts, Box::new(ret), *fallible)
         }
         TypeExpr::Generic { name, type_args } => {
             if name == "Map" && type_args.len() == 2 {

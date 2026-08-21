@@ -2683,7 +2683,7 @@ impl<'a> LowerContext<'a> {
         }
 
         // Check if calling a closure variable
-        if let Some(PlutoType::Fn(ref param_types, ref ret_type)) = self.var_types.get(&name.node).cloned() {
+        if let Some(PlutoType::Fn(ref param_types, ref ret_type, _)) = self.var_types.get(&name.node).cloned() {
             let closure_var = self.variables[&name.node];
             let closure_ptr = self.builder.use_var(closure_var);
 
@@ -4092,7 +4092,7 @@ impl<'a> LowerContext<'a> {
                 let widened = self.builder.ins().uextend(types::I64, arg_val);
                 self.call_runtime_void("__pluto_print_int", &[widened]);
             }
-            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes | PlutoType::GenericInstance(_, _, _) | PlutoType::Nullable(_) | PlutoType::Stream(_) => {
+            PlutoType::Void | PlutoType::Class(_) | PlutoType::Array(_) | PlutoType::Trait(_) | PlutoType::Enum(_) | PlutoType::Fn(_, _, _) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Task(_) | PlutoType::Sender(_) | PlutoType::Receiver(_) | PlutoType::Range | PlutoType::Error | PlutoType::TypeParam(_) | PlutoType::Bytes | PlutoType::GenericInstance(_, _, _) | PlutoType::Nullable(_) | PlutoType::Stream(_) => {
                 return Err(CompileError::codegen(format!("cannot print {arg_type}")));
             }
         }
@@ -5184,12 +5184,12 @@ pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
                 PlutoType::Void
             }
         }
-        TypeExpr::Fn { params, return_type } => {
+        TypeExpr::Fn { params, return_type, fallible } => {
             let param_types = params.iter()
                 .map(|p| resolve_type_expr_to_pluto(&p.node, env))
                 .collect();
             let ret = resolve_type_expr_to_pluto(&return_type.node, env);
-            PlutoType::Fn(param_types, Box::new(ret))
+            PlutoType::Fn(param_types, Box::new(ret), *fallible)
         }
         TypeExpr::Generic { name, type_args } => {
             if name == "Map" && type_args.len() == 2 {
@@ -5351,7 +5351,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
         PlutoType::Array(_) => types::I64,     // pointer to handle
         PlutoType::Trait(_) => types::I64,     // pointer to trait handle
         PlutoType::Enum(_) => types::I64,      // pointer to heap-allocated enum
-        PlutoType::Fn(_, _) => types::I64,     // pointer to closure object
+        PlutoType::Fn(_, _, _) => types::I64,  // pointer to closure object
         PlutoType::Map(_, _) => types::I64,    // pointer to map handle
         PlutoType::Set(_) => types::I64,       // pointer to set handle
         PlutoType::Task(_) => types::I64,      // pointer to task handle
@@ -5407,7 +5407,7 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
         Expr::Cast { target_type, .. } => resolve_type_expr_to_pluto(&target_type.node, env),
         Expr::Call { name, args, .. } => {
             // Check if calling a closure variable first
-            if let Some(PlutoType::Fn(_, ret)) = var_types.get(&name.node) {
+            if let Some(PlutoType::Fn(_, ret, _)) = var_types.get(&name.node) {
                 return *ret.clone();
             }
             // Check builtins
@@ -5596,13 +5596,13 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 Some(rt) => resolve_type_expr_to_pluto(&rt.node, env),
                 None => PlutoType::Void,
             };
-            PlutoType::Fn(param_types, Box::new(ret))
+            PlutoType::Fn(param_types, Box::new(ret), false)
         }
         Expr::ClosureCreate { fn_name, .. } => {
             if let Some(sig) = env.functions.get(fn_name) {
                 // Return fn type: skip the __env param (first param)
                 let param_types = sig.params[1..].to_vec();
-                PlutoType::Fn(param_types, Box::new(sig.return_type.clone()))
+                PlutoType::Fn(param_types, Box::new(sig.return_type.clone()), false)
             } else {
                 PlutoType::Void
             }
@@ -5610,7 +5610,7 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
         Expr::Spawn { call } => {
             let closure_type = infer_type_for_expr(&call.node, env, var_types);
             match closure_type {
-                PlutoType::Fn(_, ret) => PlutoType::Task(ret),
+                PlutoType::Fn(_, ret, _) => PlutoType::Task(ret),
                 _ => PlutoType::Void,
             }
         }

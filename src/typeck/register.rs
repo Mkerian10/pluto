@@ -1662,7 +1662,7 @@ fn check_expanding_self_reference(
                 walk(class_name, k, span)?;
                 walk(class_name, v, span)
             }
-            PlutoType::Fn(ps, r) => {
+            PlutoType::Fn(ps, r, _) => {
                 for p in ps {
                     walk(class_name, p, span)?;
                 }

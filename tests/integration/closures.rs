@@ -325,11 +325,10 @@ fn main() {
 }
 
 #[test]
-fn escaping_fallible_closure_keeps_definer_fallible() {
-    // A fallible closure passed to another function may be called where the
-    // analysis can't see it; the defining function conservatively absorbs its
-    // error set, so callers can catch.
-    let out = compile_and_run_stdout(
+fn fallible_closure_into_infallible_contract_rejected() {
+    // fn(int) int is an infallible contract: a fallible closure cannot cross
+    // it. Declare the parameter fallible (fn(int) int!) or handle inside.
+    compile_should_fail_with(
         r#"
 error E { code: int }
 
@@ -348,12 +347,40 @@ fn definer(x: int) int {
 }
 
 fn main() {
-    let a = definer(1) catch -1
-    print(a)
+    print(definer(1))
+}
+"#,
+        "cannot pass fallible 'f' where an infallible function type is expected",
+    );
+}
+
+#[test]
+fn fallible_closure_into_fallible_contract_works() {
+    let out = compile_and_run_stdout(
+        r#"
+error E { code: int }
+
+fn apply(g: fn(int) int!, x: int) int {
+    return g(x)!
+}
+
+fn definer(x: int) int {
+    let f = (n: int) => {
+        if n > 3 {
+            raise E { code: n }
+        }
+        return n
+    }
+    return apply(f, x) catch -1
+}
+
+fn main() {
+    print(definer(1))
+    print(definer(9))
 }
 "#,
     );
-    assert_eq!(out.trim(), "1");
+    assert_eq!(out.trim(), "1\n-1");
 }
 
 #[test]

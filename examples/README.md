@@ -330,6 +330,11 @@ higher-order functions, store them in arrays, and return them. `compose`
 builds a new function out of two named ones. (Generic functions can't be
 referenced bare — wrap them in a closure with concrete types.)
 
+Also shows fallibility in function types: `fn(int) int!` accepts functions
+that may raise (calls through the value are handled with `!`/`catch`), while
+plain `fn(int) int` is an infallible contract that rejects fallible values at
+the boundary.
+
 ```bash
 cargo run -- run examples/function-references/main.pt
 ```

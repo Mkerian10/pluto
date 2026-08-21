@@ -84,6 +84,18 @@ pub enum InstKind {
     Enum(String),
 }
 
+/// A function value with known provenance flowing into an infallible
+/// fn-typed slot; enforcement validates the node's inferred error set is empty.
+#[derive(Debug, Clone)]
+pub struct FnValueBoundary {
+    /// Node key in fn_errors (closure node or function name)
+    pub node: String,
+    /// Span of the value expression at the boundary
+    pub span: Span,
+    /// Human description for the error message
+    pub desc: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum MethodResolution {
     /// Class method call — resolved to a specific mangled name
@@ -163,6 +175,20 @@ pub struct TypeEnv {
     /// callee name span start) -> closure node key in `fn_errors`.
     /// Populated by the error inference pass; consumed by enforcement.
     pub closure_call_sites: HashMap<(String, usize), String>,
+    /// Call sites through variables whose *type* is a fallible fn contract
+    /// (`f: fn(int) int!`), keyed by (enclosing fn, callee span start). Such
+    /// calls must be handled; propagation widens by all declared errors.
+    pub fallible_value_calls: HashSet<(String, usize)>,
+    /// Function values with known provenance flowing into an *infallible*
+    /// fn-typed slot. Validated after error inference: the provenance node's
+    /// error set must be empty.
+    pub fn_value_boundaries: Vec<FnValueBoundary>,
+    /// Scope-tracked provenance of fn-valued variables: variable name ->
+    /// error-graph node (closure node key or function name).
+    pub fn_value_provenance: ScopeTracker<String>,
+    /// Spans of function values flowing into a *fallible* fn-typed slot: the
+    /// receiver declared responsibility, so escape absorption skips them.
+    pub handled_fn_value_escapes: HashSet<(usize, usize)>,
     // Generics
     pub generic_functions: HashMap<String, GenericFuncSig>,
     pub generic_classes: HashMap<String, GenericClassInfo>,
@@ -275,6 +301,10 @@ impl TypeEnv {
             synchronized_singletons: HashSet::new(),
             fn_errors: HashMap::new(),
             closure_call_sites: HashMap::new(),
+            fallible_value_calls: HashSet::new(),
+            fn_value_boundaries: Vec::new(),
+            fn_value_provenance: ScopeTracker::new(),
+            handled_fn_value_escapes: HashSet::new(),
             generic_functions: HashMap::new(),
             generic_classes: HashMap::new(),
             generic_enums: HashMap::new(),
@@ -311,12 +341,14 @@ impl TypeEnv {
         self.variables.push_scope();
         self.task_origins.push_scope();
         self.immutable_vars.push_scope();
+        self.fn_value_provenance.push_scope();
     }
 
     pub fn pop_scope(&mut self) {
         self.variables.pop_scope();
         self.task_origins.pop_scope();
         self.immutable_vars.pop_scope();
+        self.fn_value_provenance.pop_scope();
     }
 
     /// Define a variable with validation: same-scope redeclaration and
@@ -502,9 +534,10 @@ fn mangle_type(ty: &PlutoType) -> String {
         PlutoType::Void => "void".into(),
         PlutoType::Class(n) | PlutoType::Enum(n) => n.clone(),
         PlutoType::Array(inner) => format!("arr${}", mangle_type(inner)),
-        PlutoType::Fn(ps, r) => {
+        PlutoType::Fn(ps, r, fallible) => {
             let ps: Vec<_> = ps.iter().map(mangle_type).collect();
-            format!("fn${}$ret${}", ps.join("$"), mangle_type(r))
+            let suffix = if *fallible { "$err" } else { "" };
+            format!("fn${}$ret${}{}", ps.join("$"), mangle_type(r), suffix)
         }
         PlutoType::Map(k, v) => format!("map${}${}", mangle_type(k), mangle_type(v)),
         PlutoType::Set(t) => format!("set${}", mangle_type(t)),
