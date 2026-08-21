@@ -976,7 +976,9 @@ void __pluto_time_sleep_ns(long ns) {
     struct timespec req;
     req.tv_sec = ns / 1000000000L;
     req.tv_nsec = ns % 1000000000L;
+    __pluto_gc_enter_safe_region();
     nanosleep(&req, NULL);
+    __pluto_gc_leave_safe_region();
 }
 
 // Random — xorshift64*
@@ -1046,7 +1048,10 @@ long __pluto_socket_listen(long fd, long backlog) {
 long __pluto_socket_accept(long fd) {
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
-    return (long)accept((int)fd, (struct sockaddr *)&client_addr, &client_len);
+    __pluto_gc_enter_safe_region();
+    long conn = (long)accept((int)fd, (struct sockaddr *)&client_addr, &client_len);
+    __pluto_gc_leave_safe_region();
+    return conn;
 }
 
 long __pluto_socket_connect(long fd, void *host_str, long port) {
@@ -1056,7 +1061,10 @@ long __pluto_socket_connect(long fd, void *host_str, long port) {
     addr.sin_family = AF_INET;
     addr.sin_port = htons((uint16_t)port);
     if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) return -1;
-    return connect((int)fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 ? 0 : -1;
+    __pluto_gc_enter_safe_region();
+    int rc = connect((int)fd, (struct sockaddr *)&addr, sizeof(addr));
+    __pluto_gc_leave_safe_region();
+    return rc == 0 ? 0 : -1;
 }
 
 void *__pluto_socket_read(long fd, long max_bytes) {
@@ -1066,7 +1074,9 @@ void *__pluto_socket_read(long fd, long max_bytes) {
     if (max_bytes > 1048576) max_bytes = 1048576;
     char *buf = (char *)malloc(max_bytes);
     if (!buf) return __pluto_string_new("", 0);
+    __pluto_gc_enter_safe_region();
     ssize_t n = read((int)fd, buf, (size_t)max_bytes);
+    __pluto_gc_leave_safe_region();
     if (n <= 0) {
         free(buf);
         return __pluto_string_new("", 0);
@@ -1120,13 +1130,17 @@ long __pluto_write_framed(long fd, void *str) {
     hdr[3] = (unsigned char)(len & 0xff);
     long off = 0;
     while (off < 4) {
+        __pluto_gc_enter_safe_region();
         ssize_t n = write((int)fd, hdr + off, (size_t)(4 - off));
+        __pluto_gc_leave_safe_region();
         if (n <= 0) return -1;
         off += n;
     }
     off = 0;
     while (off < len) {
+        __pluto_gc_enter_safe_region();
         ssize_t n = write((int)fd, data + off, (size_t)(len - off));
+        __pluto_gc_leave_safe_region();
         if (n <= 0) return -1;
         off += n;
     }
@@ -1138,7 +1152,9 @@ void *__pluto_read_framed(long fd) {
     unsigned char hdr[4];
     long got = 0;
     while (got < 4) {
+        __pluto_gc_enter_safe_region();
         ssize_t n = read((int)fd, hdr + got, (size_t)(4 - got));
+        __pluto_gc_leave_safe_region();
         if (n <= 0) return NULL;
         got += n;
     }
@@ -1148,7 +1164,9 @@ void *__pluto_read_framed(long fd) {
     if (!buf) return NULL;
     long off = 0;
     while (off < len) {
+        __pluto_gc_enter_safe_region();
         ssize_t n = read((int)fd, buf + off, (size_t)(len - off));
+        __pluto_gc_leave_safe_region();
         if (n <= 0) { free(buf); return NULL; }
         off += n;
     }
@@ -1236,7 +1254,10 @@ long __pluto_serve_listen(long port) {
 // process (copy-on-write): per-request mutations do not persist across requests
 // — durable state belongs in an external store.
 long __pluto_fork(void) {
-    return (long)fork();
+    __pluto_gc_prepare_fork();
+    long pid = (long)fork();
+    __pluto_gc_after_fork(pid == 0);
+    return pid;
 }
 
 // Exit the current process (used by a handler child after replying). `_exit`

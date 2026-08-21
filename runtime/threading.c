@@ -735,6 +735,9 @@ static void *__pluto_spawn_trampoline(void *arg) {
 #endif
         __pluto_gc_register_thread_stack(stack_lo, stack_hi);
     }
+    // Stack is registered (and holds `task`): the pre-registration root is no
+    // longer needed to keep the task alive.
+    __pluto_gc_remove_pending_root(task);
 
     long fn_ptr = *(long *)closure_ptr;
     long result = ((long(*)(long))fn_ptr)(closure_ptr);
@@ -782,6 +785,11 @@ long __pluto_task_spawn(long closure_ptr) {
     task[4] = (long)sync;
 
     __pluto_gc_task_start();
+
+    // Until the new thread registers its stack, this handle may be reachable
+    // from nowhere the GC scans (e.g. spawn(...).detach() drops it) — park it
+    // as an explicit root; the trampoline removes it after registering.
+    __pluto_gc_add_pending_root(task);
 
     pthread_t tid;
     pthread_attr_t attr;
@@ -1319,13 +1327,32 @@ long __pluto_chan_create(long capacity) {
     return (long)ch;
 }
 
+// Acquire a channel mutex, counting the wait as a GC-safe region. A holder
+// can be parked in a safe region for a whole collection (see chan_cond_wait),
+// so a thread blocked on the mutex must count as stopped too. The collector
+// itself never takes channel mutexes, so parking while holding one is fine.
+static void chan_lock(ChannelSync *sync) {
+    __pluto_gc_enter_safe_region();
+    pthread_mutex_lock(&sync->mutex);
+    __pluto_gc_leave_safe_region();
+}
+
+// Block on a channel condvar as a GC-safe region: the wait releases the
+// mutex, and on wake the leave parks (holding the mutex, before any channel
+// mutation) until an in-progress collection finishes.
+static void chan_cond_wait(pthread_cond_t *cond, ChannelSync *sync) {
+    __pluto_gc_enter_safe_region();
+    pthread_cond_wait(cond, &sync->mutex);
+    __pluto_gc_leave_safe_region();
+}
+
 long __pluto_chan_send(long handle, long value) {
     long *ch = (long *)handle;
     ChannelSync *sync = (ChannelSync *)ch[0];
 
-    pthread_mutex_lock(&sync->mutex);
+    chan_lock(sync);
     while (ch[3] == ch[2] && !ch[6]) {
-        pthread_cond_wait(&sync->not_full, &sync->mutex);
+        chan_cond_wait(&sync->not_full, sync);
         // Check for task cancellation after waking from condvar
         if (__pluto_current_task && __pluto_current_task[6]) {
             pthread_mutex_unlock(&sync->mutex);
@@ -1351,9 +1378,9 @@ long __pluto_chan_recv(long handle) {
     long *ch = (long *)handle;
     ChannelSync *sync = (ChannelSync *)ch[0];
 
-    pthread_mutex_lock(&sync->mutex);
+    chan_lock(sync);
     while (ch[3] == 0 && !ch[6]) {
-        pthread_cond_wait(&sync->not_empty, &sync->mutex);
+        chan_cond_wait(&sync->not_empty, sync);
         // Check for task cancellation after waking from condvar
         if (__pluto_current_task && __pluto_current_task[6]) {
             pthread_mutex_unlock(&sync->mutex);
@@ -1379,7 +1406,7 @@ long __pluto_chan_try_send(long handle, long value) {
     long *ch = (long *)handle;
     ChannelSync *sync = (ChannelSync *)ch[0];
 
-    pthread_mutex_lock(&sync->mutex);
+    chan_lock(sync);
     if (ch[6]) {
         pthread_mutex_unlock(&sync->mutex);
         chan_raise_error("channel closed");
@@ -1403,7 +1430,7 @@ long __pluto_chan_try_recv(long handle) {
     long *ch = (long *)handle;
     ChannelSync *sync = (ChannelSync *)ch[0];
 
-    pthread_mutex_lock(&sync->mutex);
+    chan_lock(sync);
     if (ch[3] == 0 && ch[6]) {
         pthread_mutex_unlock(&sync->mutex);
         chan_raise_error("channel closed");
@@ -1427,7 +1454,7 @@ void __pluto_chan_close(long handle) {
     long *ch = (long *)handle;
     ChannelSync *sync = (ChannelSync *)ch[0];
 
-    pthread_mutex_lock(&sync->mutex);
+    chan_lock(sync);
     ch[6] = 1;
     pthread_cond_broadcast(&sync->not_empty);
     pthread_cond_broadcast(&sync->not_full);
@@ -1603,7 +1630,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
             long *ch = (long *)handles[i];
             ChannelSync *sync = (ChannelSync *)ch[0];
 
-            pthread_mutex_lock(&sync->mutex);
+            chan_lock(sync);
 
             if (ops[i] == 0) {
                 /* recv */
@@ -1650,6 +1677,9 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
             chan_raise_error("channel closed");
             return -2;
         }
+
+        /* Participate in stop-the-world while polling (no locks held here) */
+        __pluto_safepoint();
 
         /* Adaptive sleep: 100us -> 200us -> ... -> 1ms max */
         usleep((useconds_t)spin_us);

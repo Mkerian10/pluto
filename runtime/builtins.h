@@ -107,6 +107,23 @@ void __pluto_gc_collect(void);
 void *__pluto_alloc(long size);
 void __pluto_safepoint(void);
 
+// Safe (native) regions: bracket code that blocks without touching the GC
+// heap (cond waits, blocking syscalls). A thread inside a safe region counts
+// as stopped for stop-the-world; leave parks until an in-progress collection
+// finishes. No-ops in test mode and the noop backend.
+void __pluto_gc_enter_safe_region(void);
+void __pluto_gc_leave_safe_region(void);
+
+// Pending-task roots: keep a spawned task handle alive between spawn and the
+// new thread registering its stack. No-ops in test mode and the noop backend.
+void __pluto_gc_add_pending_root(void *p);
+void __pluto_gc_remove_pending_root(void *p);
+
+// Fork support: hold the allocator lock across fork(); in the child, reset
+// GC coordination state (ghost threads from the parent must not be waited on).
+void __pluto_gc_prepare_fork(void);
+void __pluto_gc_after_fork(int is_child);
+
 // Internal GC allocation API (used by runtime, not by generated code)
 void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count);
 size_t __pluto_gc_bytes_allocated(void);

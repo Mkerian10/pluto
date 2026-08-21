@@ -34,6 +34,13 @@ void __pluto_gc_collect(void) {
     // No-op: never collect
 }
 
+void __pluto_gc_enter_safe_region(void) {}
+void __pluto_gc_leave_safe_region(void) {}
+void __pluto_gc_add_pending_root(void *p) { (void)p; }
+void __pluto_gc_remove_pending_root(void *p) { (void)p; }
+void __pluto_gc_prepare_fork(void) {}
+void __pluto_gc_after_fork(int is_child) { (void)is_child; }
+
 void __pluto_safepoint(void) {
     // No-op: no STW coordination needed
 }
