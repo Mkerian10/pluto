@@ -39,6 +39,9 @@ struct ModuleMetadata {
     module: Module,
     /// File modification time when loaded
     loaded_at: SystemTime,
+    /// Stdlib root the module was originally loaded with, so reload_module
+    /// reproduces the exact original load instead of failing on std.* imports.
+    stdlib: Option<PathBuf>,
 }
 
 impl ModuleMetadata {
@@ -46,6 +49,15 @@ impl ModuleMetadata {
         Self {
             module,
             loaded_at: mtime,
+            stdlib: None,
+        }
+    }
+
+    fn with_stdlib(module: Module, mtime: SystemTime, stdlib: Option<PathBuf>) -> Self {
+        Self {
+            module,
+            loaded_at: mtime,
+            stdlib,
         }
     }
 
@@ -184,7 +196,10 @@ impl PlutoMcp {
             .and_then(|m| m.modified())
             .unwrap_or_else(|_| SystemTime::now());
 
-        self.modules.write().await.insert(canonical, ModuleMetadata::new(module, mtime));
+        self.modules.write().await.insert(
+            canonical,
+            ModuleMetadata::with_stdlib(module, mtime, stdlib_path),
+        );
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -669,7 +684,10 @@ impl PlutoMcp {
                     let mtime = std::fs::metadata(&canonical)
                         .and_then(|m| m.modified())
                         .unwrap_or_else(|_| SystemTime::now());
-                    modules.insert(canonical, ModuleMetadata::new(module, mtime));
+                    modules.insert(
+                        canonical,
+                        ModuleMetadata::with_stdlib(module, mtime, stdlib_path.clone()),
+                    );
                 }
                 Err(e) => {
                     load_errors.push(serialize::LoadError {
@@ -1010,13 +1028,20 @@ impl PlutoMcp {
     ) -> Result<CallToolResult, McpError> {
         let canonical = canon(&input.path);
 
-        // Check if module is loaded
-        {
+        // Reload must reproduce the ORIGINAL load: same stdlib root and the
+        // same standalone mode load_module uses. Reloading in sibling-merging
+        // mode made list_declarations suddenly include every transitive
+        // import ("import pollution"), and dropping the stdlib root made any
+        // std.* import fail.
+        let stdlib_path = {
             let modules = self.modules.read().await;
-            if !modules.contains_key(&canonical) {
-                return Err(mcp_err(format!("Module not loaded: '{}'", canonical)));
+            match modules.get(&canonical) {
+                Some(meta) => meta.stdlib.clone(),
+                None => {
+                    return Err(mcp_err(format!("Module not loaded: '{}'", canonical)));
+                }
             }
-        }
+        };
 
         // Reload from disk
         let first_bytes = std::fs::read(&canonical)
@@ -1025,7 +1050,7 @@ impl PlutoMcp {
         let module = if first_bytes.len() >= 4 && &first_bytes[..4] == b"PLTO" {
             Module::open(&canonical).map_err(|e| mcp_internal(format!("Failed to load binary: {e}")))?
         } else {
-            Module::from_source_file(&canonical)
+            Module::from_source_file_standalone(&canonical, stdlib_path.as_deref())
                 .map_err(|e| mcp_internal(format!("Failed to analyze source: {e}")))?
         };
 
@@ -1034,8 +1059,11 @@ impl PlutoMcp {
             .and_then(|m| m.modified())
             .unwrap_or_else(|_| SystemTime::now());
 
-        // Replace in cache
-        self.modules.write().await.insert(canonical.clone(), ModuleMetadata::new(module, mtime));
+        // Replace in cache, keeping the load options for the next reload
+        self.modules.write().await.insert(
+            canonical.clone(),
+            ModuleMetadata::with_stdlib(module, mtime, stdlib_path),
+        );
 
         let result = serialize::ReloadResult {
             path: canonical,

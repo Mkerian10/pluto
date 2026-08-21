@@ -74,6 +74,18 @@ impl ModuleEditor {
             return Err(SdkError::Edit("source contains multiple declarations; expected exactly one".to_string()));
         }
 
+        // Merge any imports from the input source (previously silently dropped).
+        merge_imports(&mut self.program.imports, &program.imports);
+
+        // Merge test metadata so a `test "name" { ... }` block (which parses
+        // into a synthetic __test_N function plus a test_info entry) survives:
+        // without this the pretty printer emits a bare function the test
+        // runner never discovers.
+        self.program.test_info.append(&mut program.test_info);
+        if program.tests.is_some() && self.program.tests.is_none() {
+            self.program.tests = program.tests.take();
+        }
+
         if let Some(f) = program.functions.pop() {
             let id = f.node.id;
             self.program.functions.push(f);
