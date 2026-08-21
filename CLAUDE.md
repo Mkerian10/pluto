@@ -62,13 +62,15 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 
 **Spanned types** — All AST nodes are wrapped in `Spanned<T>` (defined in `src/span.rs`), carrying a `Span { start, end }` byte offset. Access the inner value with `.node` and source location with `.span`.
 
-**Type system** — `PlutoType` enum in `src/typeck/types.rs`: `Int` (I64), `Float` (F64), `Bool` (I8), `Byte`, `Bytes`, `String` (heap-allocated), `Void`, `Class(name)`, `Array(element_type)`, `Trait(name)`, `Enum(name)`, `Fn(params, return_type)`, `Map(key, value)`, `Set(element)`, `Range`, `Error`, `TypeParam(name)`, `Task(inner)`, `Sender(inner)`, `Receiver(inner)`, `Stream(inner)`, `GenericInstance(kind, name, args)`, `Nullable(inner)`. Nominal typing by default, structural for traits (via vtables).
+**Type system** — `PlutoType` enum in `src/typeck/types.rs`: `Int` (I64), `Float` (F64), `Bool` (I8), `Byte`, `Bytes`, `String` (heap-allocated), `Void`, `Class(name)`, `Array(element_type)`, `Trait(name)`, `Enum(name)`, `Fn(params, return_type, can_raise)`, `Map(key, value)`, `Set(element)`, `Range`, `Error`, `TypeParam(name)`, `Task(inner)`, `Sender(inner)`, `Receiver(inner)`, `Stream(inner)`, `GenericInstance(kind, name, args)`, `Nullable(inner)`. Nominal typing by default, structural for traits (via vtables).
 
 **Enums** — Unit variants (`Color::Red`) and data-carrying variants (`Shape::Circle { radius: float }`). `match` with exhaustiveness checking.
 
-**Closures** — Arrow syntax `(x: int) => x + 1`. Capture by value. Represented as heap-allocated `[fn_ptr, captures...]`. Lifted to top-level functions by `src/closures.rs` after monomorphization (stage 17).
+**Closures** — Arrow syntax `(x: int) => x + 1`. Capture by value. Represented as heap-allocated `[fn_ptr, captures...]`. Lifted to top-level functions by `src/closures.rs` after monomorphization (stage 17). Closures bound to variables get their own node in the error-inference graph, so `catch`/`!` on closure calls works.
 
-**Error handling** — `error` declarations, `raise` to throw, `!` postfix to propagate, `catch` (shorthand or wildcard) to handle. Compiler infers error-ability via fixed-point analysis and enforces handling at call sites.
+**Function references** — A bare identifier naming a non-generic top-level function is a first-class value (`let f = double`, `apply(double, 5)`, arrays of functions, returns). Implemented by eta-expansion into wrapper closures during lifting. Bare generic functions are rejected with guidance (wrap in a closure with concrete types).
+
+**Error handling** — `error` declarations, `raise` to throw, `!` postfix to propagate, `catch` (shorthand, wildcard, or typed with coverage checking) to handle. Compiler infers error-ability via fixed-point analysis and enforces handling at call sites — including generic functions/classes (checked pre-monomorphization via skolem substitution) and closures. Function *types* carry a fallibility contract: `fn(int) int!` accepts fallible values (calls through them must be handled); plain `fn(int) int` rejects fallible values at the boundary. See `docs/design/rfc-fn-effects.md`.
 
 **App + DI** — `app` declaration with `fn main(self)`. Classes use bracket deps `class Foo[dep: Type]` for injection. Compile-time topological sort wires singletons. Codegen synthesizes `main()` that allocates and connects all dependencies.
 
@@ -76,7 +78,7 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 
 **Dual file formats** — The compiler accepts both `.pt` (human-readable text source) and `.pluto` (binary AST with UUIDs). All entry points auto-detect format via magic bytes. Module resolution tries `.pluto` first, falls back to `.pt`. Stdlib and examples use `.pt`. When both `name.pluto` and `name.pt` exist, `.pluto` is preferred.
 
-**String interpolation** — `"hello {name}"` with arbitrary expressions inside `{}`.
+**String interpolation** — f-strings: `f"hello {name}"` with arbitrary expressions inside `{}`. Plain strings do NOT interpolate (`"{x}"` is literal).
 
 **Codegen target** — Auto-detected via `host_target_triple()` in `src/codegen/mod.rs` and `src/toolchain.rs`. Supports aarch64/x86_64 on macOS/Linux.
 
@@ -87,7 +89,7 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 - `runtime/builtins.h` — Shared declarations and GC tags
 - `runtime/coverage.c` — Coverage instrumentation (when enabled)
 
-Additional split-out runtime files exist but are compiled into `builtins.c` or linked separately: `arrays.c`, `bytes.c`, `collections.c`, `core.c`, `errors.c`, `fs.c`, `http.c`, `io.c`, `math.c`, `net.c`, `strings.c`, `test.c`, `time.c`.
+NOTE: the untracked split-out files in `runtime/` (`arrays.c`, `net.c`, `strings.c`, …) are NOT part of the build — the shipped runtime is exactly the files above (see the `include_str!` calls in `src/lib.rs`). They are leftovers from an unfinished split refactor; do not edit them expecting effects.
 
 Each `.c` file is compiled to a `.o` file, then linked with `ld -r` into a single relocatable `runtime.o`, which is finally linked with the Cranelift-generated object code.
 
@@ -171,6 +173,8 @@ let output = tc.run().unwrap();
 **Pre-commit hook** — A git pre-commit hook runs `cargo test` before every commit. All tests must pass for a commit to succeed.
 
 **Running the full test suite** — Do NOT run `cargo test` (all tests) locally when verifying a feature branch. Instead, push the branch, create a PR, and let CI run the full test suite. Running all tests locally is slow and CI is the source of truth. You may run individual test files locally for quick iteration (e.g., `cargo test --test generators`).
+
+**Matching CI's build surface** — CI builds the whole workspace including `#[cfg(test)]` modules and the sdk/mcp crates, which `cargo test --tests` does not compile. Before pushing a change that touches shared AST/type shapes, run `cargo test --workspace --no-run` to catch non-exhaustive matches in unit tests and workspace members.
 
 ## Protected Feature Branches
 

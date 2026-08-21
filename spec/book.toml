@@ -1,0 +1,7 @@
+[book]
+title = "The Pluto Language Specification"
+authors = ["Matt Kerian"]
+language = "en"
+
+[build]
+build-dir = "book"

@@ -1,0 +1,74 @@
+name: Bug Report
+description: Report a compiler bug, incorrect codegen, type checker issue, or runtime error
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What's wrong? Be specific about expected vs actual behavior.
+      placeholder: "The compiler accepts `foo(1, 2)` but `foo` only takes one argument..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal Pluto code that triggers the bug. Include the exact error message or incorrect output.
+      render: pluto
+      placeholder: |
+        fn main() {
+            let x = 1.5e10  // Error: unexpected character 'e'
+        }
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Lexer / Parser
+        - Type Checker
+        - Codegen
+        - Runtime
+        - Stdlib
+        - MCP Tooling
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: |
+        critical = crash, data loss, or security issue
+        high = incorrect behavior, no workaround
+        medium = incorrect behavior, workaround exists
+        low = cosmetic, minor inconvenience
+      options:
+        - medium
+        - high
+        - critical
+        - low
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should happen instead?
+      placeholder: "Should compile and produce the float value 15000000000.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Affected tests, related issues, workarounds, or anything else relevant.
+    validations:
+      required: false
