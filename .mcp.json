@@ -1,8 +1,15 @@
 {
   "mcpServers": {
     "pluto": {
-      "command": "/Users/matthewkerian/Documents/pluto/target/release/pluto-mcp",
-      "args": []
+      "command": "cargo",
+      "args": [
+        "run",
+        "--quiet",
+        "--release",
+        "-p",
+        "pluto-mcp"
+      ],
+      "cwd": "/Users/matthewkerian/Documents/pluto"
     }
   }
 }

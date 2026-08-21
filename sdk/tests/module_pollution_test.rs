@@ -98,3 +98,40 @@ fn main() {
     // Cleanup
     std::fs::remove_dir_all(&test_dir).ok();
 }
+
+#[test]
+fn standalone_mode_excludes_sibling_files() {
+    // reload_module in the MCP server must reload with the same standalone
+    // mode load_module used: the merging loader pulls sibling files into the
+    // program, so a reload in the wrong mode suddenly reports every sibling
+    // declaration ("import pollution resurfaces after reload").
+    let test_dir = std::env::temp_dir().join("pluto_test_standalone_siblings");
+    std::fs::create_dir_all(&test_dir).unwrap();
+
+    std::fs::write(
+        test_dir.join("sibling.pluto"),
+        "fn sibling_only() int {\n    return 7\n}\n",
+    )
+    .unwrap();
+    let main_file = test_dir.join("main.pluto");
+    std::fs::write(
+        &main_file,
+        "fn local_only() int {\n    return 42\n}\n\nfn main() {\n    local_only()\n}\n",
+    )
+    .unwrap();
+
+    let standalone = Module::from_source_file_standalone(&main_file, None)
+        .expect("standalone load");
+    let names: Vec<String> = standalone
+        .functions()
+        .iter()
+        .map(|f| f.name().to_string())
+        .collect();
+    assert!(names.contains(&"local_only".to_string()));
+    assert!(
+        !names.contains(&"sibling_only".to_string()),
+        "standalone load must not merge sibling files; got {names:?}"
+    );
+
+    std::fs::remove_dir_all(&test_dir).ok();
+}

@@ -37,6 +37,24 @@ impl Module {
         Self::from_bytes(&bytes)
     }
 
+    /// Serialize to PLTO binary bytes. This is the round-trip that preserves
+    /// declaration UUIDs — pretty-printed text carries no identity, so a
+    /// module that must keep stable UUIDs across sessions is persisted in
+    /// binary form and re-opened with `from_bytes`/`open`.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, SdkError> {
+        Ok(pluto::binary::serialize_program(
+            &self.program,
+            &self.source,
+            &self.derived,
+        )?)
+    }
+
+    /// Write the module to a PLTO file on disk (see `to_bytes`).
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<(), SdkError> {
+        std::fs::write(path, self.to_bytes()?)?;
+        Ok(())
+    }
+
     /// Analyze a .pluto source file (runs full front-end pipeline).
     pub fn from_source_file(path: impl AsRef<Path>) -> Result<Self, SdkError> {
         Self::from_source_file_with_stdlib(path, None)
