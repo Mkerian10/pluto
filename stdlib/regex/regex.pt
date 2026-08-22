@@ -3,7 +3,7 @@
 // Limited quantifier support
 
 pub fn matches(pattern: string, text: string) bool {
-    let i = 0
+    let mut i = 0
     while i <= text.len() {
         if pattern_at(pattern, 0, text, i) >= 0 {
             return true
@@ -14,9 +14,9 @@ pub fn matches(pattern: string, text: string) bool {
 }
 
 pub fn find(pattern: string, text: string) int {
-    let i = 0
+    let mut i = 0
     while i <= text.len() {
-        let result = pattern_at(pattern, 0, text, i)
+        let mut result = pattern_at(pattern, 0, text, i)
         if result >= 0 {
             return i
         }
@@ -27,9 +27,9 @@ pub fn find(pattern: string, text: string) int {
 
 pub fn find_all(pattern: string, text: string) [int] {
     let results: [int] = []
-    let pos = 0
+    let mut pos = 0
     while pos <= text.len() {
-        let result = pattern_at(pattern, 0, text, pos)
+        let mut result = pattern_at(pattern, 0, text, pos)
         if result >= 0 {
             results.push(pos)
             if result == 0 {
@@ -45,7 +45,7 @@ pub fn find_all(pattern: string, text: string) [int] {
 }
 
 pub fn replace(pattern: string, replacement: string, text: string) string {
-    let pos = find(pattern, text)
+    let mut pos = find(pattern, text)
     if pos < 0 {
         return text
     }
@@ -56,10 +56,10 @@ pub fn replace(pattern: string, replacement: string, text: string) string {
 }
 
 pub fn replace_all(pattern: string, replacement: string, text: string) string {
-    let result = text
-    let iterations = 0
+    let mut result = text
+    let mut iterations = 0
     while iterations < 100 {
-        let pos = find(pattern, result)
+        let mut pos = find(pattern, result)
         if pos < 0 {
             break
         }
@@ -77,8 +77,8 @@ pub fn replace_all(pattern: string, replacement: string, text: string) string {
 
 pub fn split(pattern: string, text: string) [string] {
     let results: [string] = []
-    let pos = 0
-    let prev = 0
+    let mut pos = 0
+    let mut prev = 0
     while pos <= text.len() {
         let result = pattern_at(pattern, 0, text, pos)
         if result >= 0 {
@@ -102,8 +102,8 @@ pub fn split(pattern: string, text: string) [string] {
 // ─── Internals ──────────────────────────────────────────────────────
 
 fn pattern_at(pattern: string, p_idx: int, text: string, t_idx: int) int {
-    let p = p_idx
-    let t = t_idx
+    let mut p = p_idx
+    let mut t = t_idx
 
     while p < pattern.len() && t <= text.len() {
         let pc = pattern.char_at(p)
@@ -128,9 +128,9 @@ fn pattern_at(pattern: string, p_idx: int, text: string, t_idx: int) int {
         }
 
         // Check for quantifier
-        let has_star = false
-        let has_plus = false
-        let has_question = false
+        let mut has_star = false
+        let mut has_plus = false
+        let mut has_question = false
         if p + 1 < pattern.len() {
             let next = pattern.char_at(p + 1)
             has_star = next == "*"
@@ -140,9 +140,9 @@ fn pattern_at(pattern: string, p_idx: int, text: string, t_idx: int) int {
 
         if has_star {
             // * = zero or more
-            let matched = false
+            let mut matched = false
             while t < text.len() {
-                let tc = text.char_at(t)
+                let mut tc = text.char_at(t)
                 if !single_match(pc, tc) {
                     break
                 }
@@ -155,7 +155,7 @@ fn pattern_at(pattern: string, p_idx: int, text: string, t_idx: int) int {
             if t >= text.len() {
                 return -1
             }
-            let tc = text.char_at(t)
+            let mut tc = text.char_at(t)
             if !single_match(pc, tc) {
                 return -1
             }

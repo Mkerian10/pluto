@@ -62,7 +62,7 @@ fn parse_request_path(request: string) string {
 }
 
 fn serve_file(conn: net.TcpConnection, root: string, url_path: string) {
-    let file_path = root + url_path
+    let mut file_path = root + url_path
 
     // Serve index.html for directory requests
     if file_path.ends_with("/") {

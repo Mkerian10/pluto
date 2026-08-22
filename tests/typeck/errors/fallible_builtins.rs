@@ -50,6 +50,31 @@ fn fallible_builtins_in_if() { compile_should_fail_with(r#"fn main(){if true{let
 #[test]
 #[ignore]
 fn recv_after_close_no_handler() { compile_should_fail_with(r#"fn main(){let (tx,rx)=chan<int>(1) tx.close() rx.recv()}"#, "call to fallible method"); }
+// #167 resolution: a select arm's operation only fires when ready, so the
+// fallible thing is the select statement itself (ChannelClosed when every
+// channel closes). Inside a function that makes the *function* fallible and
+// callers must handle it (see channels.rs select_all_closed_error). In `main`
+// there is no call site to enforce — the escape is caught at runtime instead:
+// the process reports "unhandled error escaped main: ChannelClosed" and exits
+// nonzero (channels.rs select_all_closed_escaping_main_fails_process).
 #[test]
-#[ignore] // #167: select expressions don't enforce error handling for fallible operations
-fn select_no_default_no_handler() { compile_should_fail_with(r#"fn main(){let (tx,rx)=chan<int>(1) select{val=rx.recv(){print(val)}}}"#, "must be handled"); }
+fn select_in_fallible_fn_enforced_at_call_site() {
+    compile_should_fail_with(
+        r#"
+fn pick(rx: Receiver<int>) int {
+    select {
+        val = rx.recv() {
+            return val
+        }
+    }
+    return 0
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    print(pick(rx))
+}
+"#,
+        "must be handled",
+    );
+}

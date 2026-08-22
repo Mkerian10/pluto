@@ -958,3 +958,63 @@ fn main() {
 }
 "#, "Sender");
 }
+
+// ── Unhandled-error exit check + typed runtime errors (#167) ─────────────────
+
+#[test]
+fn select_all_closed_escaping_main_fails_process() {
+    // A select with no default whose channels are all closed raises
+    // ChannelClosed. Inside a function, that makes the function fallible and
+    // callers must handle it (covered above). When it escapes `main` itself
+    // there is no call site to enforce — instead of vanishing silently, the
+    // process reports the error and exits nonzero.
+    let (_out, err, code) = compile_and_run_output(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.close()
+    select {
+        val = rx.recv() {
+            print(val)
+        }
+    }
+}
+"#);
+    assert_eq!(code, 1, "unhandled escape must fail the process; stderr: {err}");
+    assert!(
+        err.contains("unhandled error escaped main: ChannelClosed"),
+        "stderr must name the escaped error; got: {err}"
+    );
+}
+
+#[test]
+fn typed_catch_matches_runtime_channel_error() {
+    // Runtime-raised channel errors now carry their type name, so a typed
+    // catch can discriminate them (previously the type was unset and typed
+    // handlers could never match).
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.close()
+    let v = rx.recv() catch err: ChannelClosed {
+        -7
+    }
+    print(v)
+}
+"#);
+    assert_eq!(out.trim(), "-7");
+}
+
+#[test]
+fn typed_catch_matches_channel_full() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.send(1)!
+    tx.try_send(2) catch err: ChannelFull {
+        print(-8)
+    }
+    print(rx.recv()!)
+}
+"#);
+    assert_eq!(out.trim(), "-8\n1");
+}

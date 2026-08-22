@@ -35,6 +35,9 @@ static void task_raise_cancelled(void) {
     void *err_obj = __pluto_alloc(8);  // 1 field: message
     *(long *)err_obj = (long)msg_str;
     __pluto_raise_error(err_obj);
+    // Name the type so typed catch can discriminate and the unhandled-error
+    // exit report can say what escaped.
+    __pluto_set_error_type(__pluto_string_new("TaskCancelled", 13));
 }
 
 #ifdef PLUTO_TEST_MODE
@@ -1103,11 +1106,12 @@ long __pluto_deep_copy(long ptr) {
 //   [5] tail       (int, write position)
 //   [6] closed     (int, 0 or 1)
 
-static void chan_raise_error(const char *msg) {
+static void chan_raise_error_typed(const char *type_name, const char *msg) {
     void *msg_str = __pluto_string_new((char *)msg, (long)strlen(msg));
     void *err_obj = __pluto_alloc(8);  // 1 field: message
     *(long *)err_obj = (long)msg_str;
     __pluto_raise_error(err_obj);
+    __pluto_set_error_type(__pluto_string_new((char *)type_name, (long)strlen(type_name)));
 }
 
 #ifdef PLUTO_TEST_MODE
@@ -1139,7 +1143,7 @@ long __pluto_chan_send(long handle, long value) {
         // Fiber mode: yield when buffer is full
         while (1) {
             if (ch[6]) {
-                chan_raise_error("channel closed");
+                chan_raise_error_typed("ChannelClosed", "channel closed");
                 return 0;
             }
             if (ch[3] < ch[2]) {
@@ -1165,7 +1169,7 @@ long __pluto_chan_send(long handle, long value) {
 
     // Sequential mode
     if (ch[6]) {
-        chan_raise_error("channel closed");
+        chan_raise_error_typed("ChannelClosed", "channel closed");
         return 0;
     }
     if (ch[3] == ch[2]) {
@@ -1200,7 +1204,7 @@ long __pluto_chan_recv(long handle) {
                 return val;
             }
             if (ch[6]) {
-                chan_raise_error("channel closed");
+                chan_raise_error_typed("ChannelClosed", "channel closed");
                 return 0;
             }
             // Buffer empty — yield
@@ -1214,7 +1218,7 @@ long __pluto_chan_recv(long handle) {
 
     // Sequential mode
     if (ch[3] == 0 && ch[6]) {
-        chan_raise_error("channel closed");
+        chan_raise_error_typed("ChannelClosed", "channel closed");
         return 0;
     }
     if (ch[3] == 0) {
@@ -1231,11 +1235,11 @@ long __pluto_chan_recv(long handle) {
 long __pluto_chan_try_send(long handle, long value) {
     long *ch = (long *)handle;
     if (ch[6]) {
-        chan_raise_error("channel closed");
+        chan_raise_error_typed("ChannelClosed", "channel closed");
         return 0;
     }
     if (ch[3] == ch[2]) {
-        chan_raise_error("channel full");
+        chan_raise_error_typed("ChannelFull", "channel full");
         return 0;
     }
     long *buf = (long *)ch[1];
@@ -1252,11 +1256,11 @@ long __pluto_chan_try_send(long handle, long value) {
 long __pluto_chan_try_recv(long handle) {
     long *ch = (long *)handle;
     if (ch[3] == 0 && ch[6]) {
-        chan_raise_error("channel closed");
+        chan_raise_error_typed("ChannelClosed", "channel closed");
         return 0;
     }
     if (ch[3] == 0) {
-        chan_raise_error("channel empty");
+        chan_raise_error_typed("ChannelEmpty", "channel empty");
         return 0;
     }
     long *buf = (long *)ch[1];
@@ -1362,7 +1366,7 @@ long __pluto_chan_send(long handle, long value) {
     }
     if (ch[6]) {
         pthread_mutex_unlock(&sync->mutex);
-        chan_raise_error("channel closed");
+        chan_raise_error_typed("ChannelClosed", "channel closed");
         return 0;
     }
     long *buf = (long *)ch[1];
@@ -1390,7 +1394,7 @@ long __pluto_chan_recv(long handle) {
     }
     if (ch[3] == 0 && ch[6]) {
         pthread_mutex_unlock(&sync->mutex);
-        chan_raise_error("channel closed");
+        chan_raise_error_typed("ChannelClosed", "channel closed");
         return 0;
     }
     long *buf = (long *)ch[1];
@@ -1409,12 +1413,12 @@ long __pluto_chan_try_send(long handle, long value) {
     chan_lock(sync);
     if (ch[6]) {
         pthread_mutex_unlock(&sync->mutex);
-        chan_raise_error("channel closed");
+        chan_raise_error_typed("ChannelClosed", "channel closed");
         return 0;
     }
     if (ch[3] == ch[2]) {
         pthread_mutex_unlock(&sync->mutex);
-        chan_raise_error("channel full");
+        chan_raise_error_typed("ChannelFull", "channel full");
         return 0;
     }
     long *buf = (long *)ch[1];
@@ -1433,12 +1437,12 @@ long __pluto_chan_try_recv(long handle) {
     chan_lock(sync);
     if (ch[3] == 0 && ch[6]) {
         pthread_mutex_unlock(&sync->mutex);
-        chan_raise_error("channel closed");
+        chan_raise_error_typed("ChannelClosed", "channel closed");
         return 0;
     }
     if (ch[3] == 0) {
         pthread_mutex_unlock(&sync->mutex);
-        chan_raise_error("channel empty");
+        chan_raise_error_typed("ChannelEmpty", "channel empty");
         return 0;
     }
     long *buf = (long *)ch[1];
@@ -1572,7 +1576,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
             if (result >= 0) return result;
             if (has_default) return -1;
             if (result == -2) {
-                chan_raise_error("channel closed");
+                chan_raise_error_typed("ChannelClosed", "channel closed");
                 return -2;
             }
             // Block and yield
@@ -1589,7 +1593,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
     if (result >= 0) return result;
     if (has_default) return -1;
     if (result == -2) {
-        chan_raise_error("channel closed");
+        chan_raise_error_typed("ChannelClosed", "channel closed");
         return -2;
     }
     fprintf(stderr, "pluto: deadlock detected — select with no ready channels in sequential test mode\n");
@@ -1674,7 +1678,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
 
         if (all_closed) {
             /* Raise ChannelClosed error */
-            chan_raise_error("channel closed");
+            chan_raise_error_typed("ChannelClosed", "channel closed");
             return -2;
         }
 

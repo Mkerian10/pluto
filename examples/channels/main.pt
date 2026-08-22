@@ -15,7 +15,7 @@ fn main() {
     spawn producer(tx, 10).detach()
 
     // Consume values using for-in on the receiver
-    let sum = 0
+    let mut sum = 0
     for val in rx {
         sum = sum + val
     }

@@ -103,6 +103,9 @@ typedef struct {
 // ── GC Public API (implemented in gc.c) ──────────────────────────────────────
 
 void __pluto_gc_init(void *stack_bottom);
+// Registers the atexit handler that fails the process if an error escapes
+// main unhandled (defined in builtins.c, called from __pluto_gc_init).
+void __pluto_register_exit_check(void);
 void __pluto_gc_collect(void);
 void *__pluto_alloc(long size);
 void __pluto_safepoint(void);
@@ -155,6 +158,7 @@ GCHeader *__pluto_gc_get_head(void);
 
 // Error handling
 void __pluto_raise_error(void *error_obj);
+void __pluto_set_error_type(void *type_str);
 
 // String functions (needed by threading for error messages)
 void *__pluto_string_new(const char *src, long len);

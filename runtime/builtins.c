@@ -959,6 +959,31 @@ void *__pluto_error_type() {
     return __pluto_current_error_type ? __pluto_current_error_type : __pluto_string_new("", 0);
 }
 
+// ── Unhandled-error exit check ────────────────────────────────────────────────
+// An error that reaches the end of main with no handler must not vanish
+// silently (a select with all channels closed, a leaked error through an
+// untyped escape, ...). Registered via atexit from __pluto_gc_init: if the
+// main thread's error slot is still occupied when the process exits normally,
+// report it and fail the process.
+static void __pluto_unhandled_error_exit_check(void) {
+    if (__pluto_current_error) {
+        fflush(NULL);
+        if (__pluto_current_error_type) {
+            long *type_ps = (long *)__pluto_current_error_type;
+            long len = type_ps[0];
+            const char *data = (const char *)&type_ps[1];
+            fprintf(stderr, "pluto: unhandled error escaped main: %.*s\n", (int)len, data);
+        } else {
+            fprintf(stderr, "pluto: unhandled error escaped main\n");
+        }
+        _exit(1);
+    }
+}
+
+void __pluto_register_exit_check(void) {
+    atexit(__pluto_unhandled_error_exit_check);
+}
+
 // Time
 long __pluto_time_ns(void) {
     struct timespec ts;

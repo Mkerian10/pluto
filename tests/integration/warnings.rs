@@ -110,3 +110,69 @@ fn method_param_not_warned() {
     // 'x' is a method param, 'f' is used — no warnings
     assert!(warnings.is_empty(), "expected no warnings, got: {:?}", warnings);
 }
+
+// ── Unreachable code (#163) ──────────────────────────────────────────────────
+
+#[test]
+fn code_after_return_warns() {
+    let warnings = compile_and_get_warnings(
+        "fn f() int {\n    return 1\n    print(2)\n}\nfn main() {\n    print(f())\n}",
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("unreachable code")),
+        "expected unreachable warning, got: {warnings:?}"
+    );
+}
+
+#[test]
+fn code_after_raise_warns() {
+    let warnings = compile_and_get_warnings(
+        "error E {\n    code: int\n}\nfn f() int {\n    raise E { code: 1 }\n    return 0\n}\nfn main() {\n    print(f() catch -1)\n}",
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("unreachable code")),
+        "expected unreachable warning, got: {warnings:?}"
+    );
+}
+
+#[test]
+fn code_after_break_warns() {
+    let warnings = compile_and_get_warnings(
+        "fn main() {\n    while true {\n        break\n        print(1)\n    }\n}",
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("unreachable code")),
+        "expected unreachable warning, got: {warnings:?}"
+    );
+}
+
+#[test]
+fn code_after_terminating_if_else_warns() {
+    let warnings = compile_and_get_warnings(
+        "fn f(b: bool) int {\n    if b {\n        return 1\n    } else {\n        return 2\n    }\n    return 3\n}\nfn main() {\n    print(f(true))\n}",
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("unreachable code")),
+        "expected unreachable warning, got: {warnings:?}"
+    );
+}
+
+#[test]
+fn reachable_code_after_partial_if_no_warning() {
+    let warnings = compile_and_get_warnings(
+        "fn f(b: bool) int {\n    if b {\n        return 1\n    }\n    return 2\n}\nfn main() {\n    print(f(true))\n}",
+    );
+    assert!(
+        !warnings.iter().any(|w| w.contains("unreachable code")),
+        "if-without-else does not terminate; got: {warnings:?}"
+    );
+}
+
+#[test]
+fn one_unreachable_warning_per_block() {
+    let warnings = compile_and_get_warnings(
+        "fn f() int {\n    return 1\n    print(2)\n    print(3)\n    print(4)\n}\nfn main() {\n    print(f())\n}",
+    );
+    let count = warnings.iter().filter(|w| w.contains("unreachable code")).count();
+    assert_eq!(count, 1, "one warning per block; got: {warnings:?}");
+}

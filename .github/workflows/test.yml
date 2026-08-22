@@ -35,6 +35,18 @@ jobs:
       - name: Test workspace members
         run: cargo nextest run --workspace --exclude pluto --profile ci
 
+  examples:
+    name: Examples Compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build compiler
+        run: cargo build
+      - name: Compile all examples
+        run: ./scripts/check_examples.sh
+
   stdlib-test:
     name: Stdlib Tests
     strategy:

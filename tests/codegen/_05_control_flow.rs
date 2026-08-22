@@ -171,7 +171,6 @@ fn test_empty_else_block() {
 }
 
 #[test]
-#[ignore] // LIMITATION: If-as-expression not supported (let x = if cond { ... })
 fn test_if_as_expression() {
     // If/else producing a value (expression context)
     let src = r#"
@@ -601,9 +600,8 @@ fn test_match_nested() {
 }
 
 #[test]
-#[ignore] // LIMITATION: Pluto doesn't support match as expression (let x = match y { ... })
 fn test_match_returning_values() {
-    // Match as expression (returning values)
+    // Match as expression: `=>` arms with comma separators
     let src = r#"
         enum Result {
             Ok { value: int }
@@ -613,8 +611,8 @@ fn test_match_returning_values() {
         fn main() int {
             let r = Result.Ok { value: 42 }
             let output = match r {
-                Result.Ok { value } => value
-                Result.Error => 0
+                Result.Ok { value } => value,
+                Result.Error => 0,
             }
             return output
         }
@@ -969,7 +967,6 @@ fn test_continue_skip_logic() {
 }
 
 #[test]
-#[ignore] // LIMITATION: Pluto doesn't support match as expression (let x = match y { ... })
 fn test_match_in_if_condition() {
     // Match result used in if condition
     let src = r#"
@@ -981,8 +978,8 @@ fn test_match_in_if_condition() {
         fn main() int {
             let s = Status.Success
             let code = match s {
-                Status.Success => 0
-                Status.Failure => 1
+                Status.Success => 0,
+                Status.Failure => 1,
             }
 
             if code == 0 {

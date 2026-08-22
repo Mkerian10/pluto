@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail_with};
+use common::{compile_and_run_output, compile_and_run_stdout, compile_should_fail_with};
 
 #[test]
 fn error_catch_shorthand_on_error() {
@@ -83,10 +83,15 @@ fn error_multiple_types() {
 
 #[test]
 fn error_propagation_in_main() {
-    let out = compile_and_run_stdout(
+    // An error propagating out of main no longer vanishes silently: nothing
+    // after the propagation runs, and the process reports the escaped error
+    // and exits nonzero.
+    let (out, err, code) = compile_and_run_output(
         "error Fail {}\n\nfn will_fail() {\n    raise Fail {}\n}\n\nfn main() {\n    will_fail()!\n    print(42)\n}",
     );
     assert_eq!(out, "");
+    assert_eq!(code, 1);
+    assert!(err.contains("unhandled error escaped main: Fail"), "got stderr: {err}");
 }
 
 #[test]

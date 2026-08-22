@@ -28,7 +28,7 @@ fn main() {
     print("press Ctrl+C to stop")
 
     // Serve 3 requests then exit (no infinite loops in v1)
-    let i = 0
+    let mut i = 0
     while i < 3 {
         let conn = server.accept()
         handle(conn)

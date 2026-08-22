@@ -36,9 +36,9 @@ fn main() int {
     print(f"First byte: {raw[0] as int}")
 
     // Iterate over bytes
-    let sum = 0
-    for b in raw {
-        sum = sum + (b as int)
+    let mut sum = 0
+    for byte_val in raw {
+        sum = sum + (byte_val as int)
     }
     print(f"Sum of byte values: {sum}")
 

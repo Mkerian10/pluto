@@ -15,11 +15,11 @@ fn main() {
     print(f"  Scores: {s0}, {s1}, {s2}")
 
     // Build JSON programmatically
-    let response = json.object()
+    let mut response = json.object()
     response.set("status", json.string("ok"))
     response.set("count", json.int(3))
 
-    let items = json.array()
+    let mut items = json.array()
     items.push(json.string("apple"))
     items.push(json.string("banana"))
     items.push(json.string("cherry"))

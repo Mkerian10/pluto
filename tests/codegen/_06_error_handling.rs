@@ -802,7 +802,7 @@ fn test_error_state_isolation_in_sequence() {
 }
 
 #[test]
-fn test_propagate_in_main_exits_silently() {
+fn test_propagate_in_main_reports_and_fails() {
     let src = r#"
         error Fatal {}
 
@@ -815,8 +815,12 @@ fn test_propagate_in_main_exits_silently() {
             print(42)  // Should not execute
         }
     "#;
-    // When error propagates in main, program exits without printing
-    assert_eq!(compile_and_run_stdout(src).trim(), "");
+    // An error propagating out of main reports itself and fails the process
+    // (previously it exited 0 silently).
+    let (out, err, code) = compile_and_run_output(src);
+    assert_eq!(out.trim(), "");
+    assert_eq!(code, 1);
+    assert!(err.contains("unhandled error escaped main: Fatal"), "got stderr: {err}");
 }
 
 // ============================================================================

@@ -14,7 +14,7 @@ fn letters(tx: Sender<string>) {
 }
 
 fn try_select(num_rx: Receiver<int>, str_rx: Receiver<string>) {
-    let count = 0
+    let mut count = 0
     while count < 10 {
         select {
             n = num_rx.recv() {
