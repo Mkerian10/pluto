@@ -3,18 +3,18 @@ import std.json
 
 fn handle_request(req: http.Request) http.Response {
     if req.path == "/hello" {
-        let resp = json.object()
+        let mut resp = json.object()
         resp.set("message", json.string("Hello, World!"))
         return http.ok_json(resp.to_string())
     }
 
     if req.path == "/echo" {
         if req.method == "POST" {
-            let body = json.parse(req.body) catch json.Json { handle: 0 }
+            let mut body = json.parse(req.body) catch err { json.null() }
             if body.is_null() {
                 return http.bad_request()
             }
-            let resp = json.object()
+            let mut resp = json.object()
             resp.set("echo", body)
             return http.ok_json(resp.to_string())
         }

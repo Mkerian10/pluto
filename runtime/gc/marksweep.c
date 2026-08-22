@@ -917,6 +917,7 @@ void __pluto_gc_collect(void) {
 
 void __pluto_gc_init(void *stack_bottom) {
     gc_stack_bottom = stack_bottom;
+    __pluto_register_exit_check();
 #ifndef PLUTO_TEST_MODE
     // Register main thread's stack for GC root scanning
     {

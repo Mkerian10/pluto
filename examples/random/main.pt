@@ -4,7 +4,7 @@ fn main() {
     print("=== Random Module Demo ===")
 
     print("Random integers:")
-    let i = 0
+    let mut i = 0
     while i < 5 {
         let n = random.next()
         print(f"  {n}")

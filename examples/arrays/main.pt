@@ -1,6 +1,6 @@
 fn sum_array(a: [int]) int {
-    let total = 0
-    let i = 0
+    let mut total = 0
+    let mut i = 0
     while i < a.len() {
         total = total + a[i]
         i = i + 1

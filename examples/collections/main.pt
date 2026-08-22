@@ -13,18 +13,22 @@ fn main() int {
 
     // Update existing
     scores["bob"] = 90
-    print(f"Bob's new score: {scores["bob"]}")
+    let bob_score = scores["bob"]
+    print(f"Bob's new score: {bob_score}")
 
     // Contains + remove
-    print(f"Has alice? {scores.contains("alice")}")
+    let has_alice = scores.contains("alice")
+    print(f"Has alice? {has_alice}")
     scores.remove("alice")
     print(f"After removing alice: {scores.len()}")
 
     // Sets: unique collections
     let fruits = Set<string> { "apple", "banana", "cherry" }
     print(f"\nFruits: {fruits.len()} items")
-    print(f"Has apple? {fruits.contains("apple")}")
-    print(f"Has grape? {fruits.contains("grape")}")
+    let has_apple = fruits.contains("apple")
+    print(f"Has apple? {has_apple}")
+    let has_grape = fruits.contains("grape")
+    print(f"Has grape? {has_grape}")
 
     // Duplicates are ignored
     fruits.insert("apple")
@@ -35,7 +39,7 @@ fn main() int {
     print(f"After removing banana: {fruits.len()}")
 
     // Iterate via to_array
-    let total = 0
+    let mut total = 0
     let numbers = Set<int> { 10, 20, 30, 40 }
     for n in numbers.to_array() {
         total = total + n

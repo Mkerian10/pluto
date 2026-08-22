@@ -84,6 +84,7 @@ pub struct CompileWarning {
 #[derive(Debug, Clone)]
 pub enum WarningKind {
     UnusedVariable,
+    UnreachableCode,
 }
 
 /// Render a CompileWarning with ariadne for nice terminal output (yellow).

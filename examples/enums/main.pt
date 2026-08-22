@@ -10,7 +10,7 @@ enum Result {
 }
 
 fn color_name(c: Color) string {
-    let name = "unknown"
+    let mut name = "unknown"
     match c {
         Color.Red {
             name = "red"

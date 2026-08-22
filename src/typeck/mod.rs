@@ -178,9 +178,101 @@ fn generate_warnings(env: &TypeEnv, program: &Program) -> Vec<CompileWarning> {
         });
     }
 
+    // Unreachable code: statements after a point where every path has
+    // terminated (return/raise/break/continue, or an if/match whose branches
+    // all terminate). One warning per block to avoid cascades. This is a
+    // warning, not an error: `raise E{} return x` is a widespread idiom.
+    for func in &program.functions {
+        collect_unreachable_warnings(&func.node.body.node, &mut warnings);
+    }
+    for class in &program.classes {
+        for method in &class.node.methods {
+            collect_unreachable_warnings(&method.node.body.node, &mut warnings);
+        }
+    }
+    if let Some(app) = &program.app {
+        for m in &app.node.methods {
+            collect_unreachable_warnings(&m.node.body.node, &mut warnings);
+        }
+    }
+    for stage in &program.stages {
+        for m in &stage.node.methods {
+            collect_unreachable_warnings(&m.node.body.node, &mut warnings);
+        }
+    }
+
     // Sort for deterministic output
     warnings.sort_by_key(|w| w.span.start);
     warnings
+}
+
+/// Does this statement terminate every path through its containing block?
+fn stmt_terminates(stmt: &crate::parser::ast::Stmt) -> bool {
+    use crate::parser::ast::Stmt;
+    match stmt {
+        Stmt::Return(_) | Stmt::Raise { .. } | Stmt::Break | Stmt::Continue => true,
+        Stmt::If { then_block, else_block: Some(eb), .. } => {
+            block_terminates(&then_block.node) && block_terminates(&eb.node)
+        }
+        Stmt::Match { arms, .. } => {
+            !arms.is_empty() && arms.iter().all(|a| block_terminates(&a.body.node))
+        }
+        _ => false,
+    }
+}
+
+fn block_terminates(block: &crate::parser::ast::Block) -> bool {
+    block.stmts.iter().any(|s| stmt_terminates(&s.node))
+}
+
+fn collect_unreachable_warnings(
+    block: &crate::parser::ast::Block,
+    warnings: &mut Vec<CompileWarning>,
+) {
+    use crate::parser::ast::Stmt;
+    let mut terminated = false;
+    for stmt in &block.stmts {
+        if terminated {
+            warnings.push(CompileWarning {
+                msg: "unreachable code".to_string(),
+                span: stmt.span,
+                kind: WarningKind::UnreachableCode,
+            });
+            break; // one warning per block
+        }
+        // Recurse into nested blocks first, then check termination
+        match &stmt.node {
+            Stmt::If { then_block, else_block, .. } => {
+                collect_unreachable_warnings(&then_block.node, warnings);
+                if let Some(eb) = else_block {
+                    collect_unreachable_warnings(&eb.node, warnings);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                collect_unreachable_warnings(&body.node, warnings);
+            }
+            Stmt::Match { arms, .. } => {
+                for arm in arms {
+                    collect_unreachable_warnings(&arm.body.node, warnings);
+                }
+            }
+            Stmt::Scope { body, .. } => {
+                collect_unreachable_warnings(&body.node, warnings);
+            }
+            Stmt::Select { arms, default } => {
+                for arm in arms {
+                    collect_unreachable_warnings(&arm.body.node, warnings);
+                }
+                if let Some(def) = default {
+                    collect_unreachable_warnings(&def.node, warnings);
+                }
+            }
+            _ => {}
+        }
+        if stmt_terminates(&stmt.node) {
+            terminated = true;
+        }
+    }
 }
 
 #[cfg(test)]

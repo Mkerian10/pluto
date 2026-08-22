@@ -22,7 +22,7 @@ pub class Request {
     fn header(self, name: string) string {
         let lines = self.headers_raw.split("\r\n")
         let lower_name = name.to_lower()
-        let i = 0
+        let mut i = 0
         while i < lines.len() {
             let line = lines[i]
             let colon = line.index_of(":")
@@ -46,7 +46,7 @@ pub class Response {
 
     fn to_string(self) string {
         let content_length = self.body.len()
-        let result = "HTTP/1.1 {self.status} {self.status_text}\r\n"
+        let mut result = "HTTP/1.1 {self.status} {self.status_text}\r\n"
         if self.headers_raw.len() > 0 {
             result = result + self.headers_raw + "\r\n"
         }
@@ -104,8 +104,8 @@ pub fn response(status: int, status_text: string, body: string) Response {
 
 fn parse_request(raw: string) Request {
     let header_end = raw.index_of("\r\n\r\n")
-    let header_section = ""
-    let body = ""
+    let mut header_section = ""
+    let mut body = ""
     if header_end >= 0 {
         header_section = raw.substring(0, header_end)
         body = raw.substring(header_end + 4, raw.len() - header_end - 4)
@@ -114,8 +114,8 @@ fn parse_request(raw: string) Request {
     }
 
     let first_line_end = header_section.index_of("\r\n")
-    let first_line = ""
-    let rest_headers = ""
+    let mut first_line = ""
+    let mut rest_headers = ""
     if first_line_end >= 0 {
         first_line = header_section.substring(0, first_line_end)
         rest_headers = header_section.substring(first_line_end + 2, header_section.len() - first_line_end - 2)
@@ -123,8 +123,8 @@ fn parse_request(raw: string) Request {
         first_line = header_section
     }
 
-    let method = ""
-    let path = ""
+    let mut method = ""
+    let mut path = ""
     let space1 = first_line.index_of(" ")
     if space1 >= 0 {
         method = first_line.substring(0, space1)

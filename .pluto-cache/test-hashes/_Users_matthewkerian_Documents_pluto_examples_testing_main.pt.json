@@ -1,0 +1,10 @@
+{
+  "source_hash": "37f34ffff9d47cdf",
+  "test_hashes": {
+    "negative addition": "394a5752d56957d0",
+    "addition works": "d1e9bb9b51b3aa59",
+    "string equality": "a931b8f39cb11cfe",
+    "boolean logic": "56398024656f7d91"
+  },
+  "timestamp": 1787376779
+}

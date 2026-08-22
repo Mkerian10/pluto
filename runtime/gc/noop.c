@@ -27,7 +27,7 @@ __thread long *__pluto_current_task = NULL;
 
 void __pluto_gc_init(void *stack_bottom) {
     (void)stack_bottom;
-    // Nothing to initialize
+    __pluto_register_exit_check();
 }
 
 void __pluto_gc_collect(void) {
