@@ -197,18 +197,11 @@ pub(crate) fn register_enum_names(program: &Program, env: &mut TypeEnv) -> Resul
                 }
             }
 
-            // Generic enum — register in generic_enums with TypeParam types
-            // (These still need immediate resolution because TypeParam can be used)
+            // Generic enum — register a SKELETON (name, params, bounds).
+            // Variant field types are resolved in resolve_enum_fields, after
+            // every class/enum name is known, so variants may reference
+            // declarations that appear later in the file.
             let tp_names: std::collections::HashSet<String> = e.type_params.iter().map(|tp| tp.node.clone()).collect();
-            let mut variants = Vec::new();
-            for v in &e.variants {
-                let mut fields = Vec::new();
-                for f in &v.fields {
-                    let ty = resolve_type_with_params(&f.ty, env, &tp_names)?;
-                    fields.push((f.name.node.clone(), ty));
-                }
-                variants.push((v.name.node.clone(), fields));
-            }
             // Extract and validate type param bounds
             let enum_bounds: HashMap<String, Vec<String>> = e.type_param_bounds.iter()
                 .map(|(tp, traits)| {
@@ -228,10 +221,11 @@ pub(crate) fn register_enum_names(program: &Program, env: &mut TypeEnv) -> Resul
                     }
                 }
             }
+            let _ = &tp_names;
             env.generic_enums.insert(e.name.node.clone(), GenericEnumInfo {
                 type_params: e.type_params.iter().map(|tp| tp.node.clone()).collect(),
                 type_param_bounds: enum_bounds,
-                variants,
+                variants: Vec::new(),
             });
             continue;
         }
@@ -258,7 +252,22 @@ pub(crate) fn resolve_enum_fields(program: &Program, env: &mut TypeEnv) -> Resul
     for enum_decl in &program.enums {
         let e = &enum_decl.node;
         if !e.type_params.is_empty() {
-            // Generic enums already resolved in register_enum_names
+            // Generic enum: fill in the skeleton's variants now that all names
+            // are registered.
+            let tp_names: std::collections::HashSet<String> =
+                e.type_params.iter().map(|tp| tp.node.clone()).collect();
+            let mut variants = Vec::new();
+            for v in &e.variants {
+                let mut fields = Vec::new();
+                for f in &v.fields {
+                    let ty = resolve_type_with_params(&f.ty, env, &tp_names)?;
+                    fields.push((f.name.node.clone(), ty));
+                }
+                variants.push((v.name.node.clone(), fields));
+            }
+            if let Some(info) = env.generic_enums.get_mut(&e.name.node) {
+                info.variants = variants;
+            }
             continue;
         }
 
@@ -428,7 +437,39 @@ pub(crate) fn register_class_names(program: &Program, env: &mut TypeEnv) -> Resu
         }
 
         if !c.type_params.is_empty() {
-            // Generic class — skip concrete registration (handled in resolve_class_fields)
+            // Generic class — register a SKELETON (name, params, bounds) so any
+            // declaration can reference it regardless of source order. Fields
+            // and method signatures are filled in by resolve_class_fields.
+            if env.generic_classes.contains_key(&c.name.node) {
+                return Err(CompileError::type_err(
+                    format!("class '{}' is already declared", c.name.node),
+                    c.name.span,
+                ));
+            }
+            let mut seen_tparams = HashSet::new();
+            for tp in &c.type_params {
+                if !seen_tparams.insert(&tp.node) {
+                    return Err(CompileError::type_err(
+                        format!("type parameter '{}' is already declared in class '{}'", tp.node, c.name.node),
+                        tp.span,
+                    ));
+                }
+            }
+            let bounds: HashMap<String, Vec<String>> = c.type_param_bounds.iter()
+                .map(|(tp, traits)| {
+                    (tp.clone(), traits.iter().map(|t| t.node.clone()).collect())
+                })
+                .collect();
+            env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
+                type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
+                type_param_bounds: bounds,
+                fields: Vec::new(),
+                methods: Vec::new(),
+                method_sigs: HashMap::new(),
+                impl_traits: c.impl_traits.iter().map(|t| t.node.clone()).collect(),
+                mut_self_methods: HashSet::new(),
+                lifecycle: c.lifecycle,
+            });
             continue;
         }
         env.classes.insert(
@@ -448,26 +489,9 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
     for class in &program.classes {
         let c = &class.node;
         if !c.type_params.is_empty() {
-            // Generic class — register in generic_classes
-
-            // Check for duplicate generic class declarations
-            if env.generic_classes.contains_key(&c.name.node) {
-                return Err(CompileError::type_err(
-                    format!("class '{}' is already declared", c.name.node),
-                    c.name.span,
-                ));
-            }
-
-            // Check for duplicate type parameters
-            let mut seen_tparams = HashSet::new();
-            for tp in &c.type_params {
-                if !seen_tparams.insert(&tp.node) {
-                    return Err(CompileError::type_err(
-                        format!("type parameter '{}' is already declared in class '{}'", tp.node, c.name.node),
-                        tp.span,
-                    ));
-                }
-            }
+            // Generic class — skeleton was registered in register_class_names;
+            // fill in fields and method signatures now that every declaration's
+            // name (concrete and generic alike) is known.
 
             // Validate trait names for generic classes
             for trait_name in &c.impl_traits {
@@ -518,20 +542,6 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                     }
                 }
             }
-            // Pre-register a skeleton so the class can reference itself in its
-            // own fields and method signatures (`fn boxed(self) Box<T>`): the
-            // GenericInstance path in resolve_type_with_params only needs the
-            // name to be known. The full info overwrites this below.
-            env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
-                type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
-                type_param_bounds: bounds.clone(),
-                fields: Vec::new(),
-                methods: Vec::new(),
-                method_sigs: HashMap::new(),
-                impl_traits: c.impl_traits.iter().map(|t| t.node.clone()).collect(),
-                mut_self_methods: HashSet::new(),
-                lifecycle: c.lifecycle,
-            });
             let mut fields = Vec::new();
             for f in &c.fields {
                 let ty = resolve_type_with_params(&f.ty, env, &tp_names)?;
@@ -564,17 +574,6 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                 if !m.node.params.is_empty() && m.node.params[0].name.node == "self" && m.node.params[0].is_mut {
                     generic_mut_self.insert(m.node.name.node.clone());
                 }
-            }
-            for (fname, fty, _) in &fields {
-                let fspan = c.fields.iter().find(|f| &f.name.node == fname)
-                    .map(|f| f.ty.span).unwrap_or(c.name.span);
-                check_expanding_self_reference(&c.name.node, fty, fspan)?;
-            }
-            for sig in method_sigs.values() {
-                for p in &sig.params {
-                    check_expanding_self_reference(&c.name.node, p, c.name.span)?;
-                }
-                check_expanding_self_reference(&c.name.node, &sig.return_type, c.name.span)?;
             }
             env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
                 type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
@@ -1619,65 +1618,198 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
 }
 
 
-/// Reject *expanding* self-references in a generic class: a field or method
-/// signature referencing the class itself must instantiate it with plain type
-/// parameters (`next: Node<T>?`, in any order) or fully concrete args — a
-/// structured arg containing a type parameter (`inner: Box<Box<T>>`) demands
-/// an ever-deeper instantiation chain that can never terminate.
-fn check_expanding_self_reference(
-    class_name: &str,
-    ty: &PlutoType,
-    span: crate::span::Span,
-) -> Result<(), CompileError> {
+/// After registration completes, instantiate every deferred GenericInstance
+/// in the registered signatures. During registration, generic references
+/// resolve symbolically (see `defer_eager_instantiation`) so declaration order
+/// cannot matter; now that every generic's full info is known, concrete
+/// instances can be created safely.
+pub(crate) fn normalize_registered_types(env: &mut TypeEnv) {
+    use super::resolve::resolve_generic_instances;
+
+    let class_names: Vec<String> = env.classes.keys().cloned().collect();
+    for name in class_names {
+        let fields = env.classes[&name].fields.clone();
+        let resolved: Vec<(String, PlutoType, bool)> = fields
+            .iter()
+            .map(|(f, t, inj)| (f.clone(), resolve_generic_instances(t, env), *inj))
+            .collect();
+        if let Some(info) = env.classes.get_mut(&name) {
+            info.fields = resolved;
+        }
+    }
+
+    let enum_names: Vec<String> = env.enums.keys().cloned().collect();
+    for name in enum_names {
+        let variants = env.enums[&name].variants.clone();
+        let resolved: Vec<(String, Vec<(String, PlutoType)>)> = variants
+            .iter()
+            .map(|(v, fields)| {
+                (
+                    v.clone(),
+                    fields
+                        .iter()
+                        .map(|(f, t)| (f.clone(), resolve_generic_instances(t, env)))
+                        .collect(),
+                )
+            })
+            .collect();
+        if let Some(info) = env.enums.get_mut(&name) {
+            info.variants = resolved;
+        }
+    }
+
+    let fn_names: Vec<String> = env.functions.keys().cloned().collect();
+    for name in fn_names {
+        let sig = env.functions[&name].clone();
+        let params: Vec<PlutoType> = sig
+            .params
+            .iter()
+            .map(|p| resolve_generic_instances(p, env))
+            .collect();
+        let return_type = resolve_generic_instances(&sig.return_type, env);
+        if let Some(s) = env.functions.get_mut(&name) {
+            s.params = params;
+            s.return_type = return_type;
+        }
+    }
+
+    let trait_names: Vec<String> = env.traits.keys().cloned().collect();
+    for name in trait_names {
+        let methods = env.traits[&name].methods.clone();
+        let resolved: Vec<(String, FuncSig)> = methods
+            .iter()
+            .map(|(m, sig)| {
+                (
+                    m.clone(),
+                    FuncSig {
+                        params: sig.params.iter().map(|p| resolve_generic_instances(p, env)).collect(),
+                        return_type: resolve_generic_instances(&sig.return_type, env),
+                    },
+                )
+            })
+            .collect();
+        if let Some(info) = env.traits.get_mut(&name) {
+            info.methods = resolved;
+        }
+    }
+}
+
+/// Reject *expanding* recursive instantiation across generic declarations.
+/// A reference from one generic to another whose type args contain a type
+/// parameter inside structure (`b: B<Box<T>>`) demands an ever-deeper
+/// instantiation if a cycle leads back — `A<T> → B<Box<T>> → A<Box<T>> → …`
+/// would never terminate. Plain-param or fully-concrete args are fine, even
+/// in cycles (mutually recursive references close after one round).
+pub(crate) fn check_expanding_reference_cycles(env: &TypeEnv) -> Result<(), CompileError> {
+    use std::collections::VecDeque;
+
     fn contains_param(ty: &PlutoType) -> bool {
         matches!(ty, PlutoType::TypeParam(_)) || ty.any_inner_type(&contains_param)
     }
-    fn walk(class_name: &str, ty: &PlutoType, span: crate::span::Span) -> Result<(), CompileError> {
-        if let PlutoType::GenericInstance(_, name, args) = ty {
-            if name == class_name {
-                for arg in args {
-                    let ok = matches!(arg, PlutoType::TypeParam(_)) || !contains_param(arg);
-                    if !ok {
-                        return Err(CompileError::type_err(
-                            format!(
-                                "expanding recursive reference to '{class_name}' — a self-reference \
-                                 must use the class's own type parameters or concrete types; \
-                                 '{class_name}<{arg}>'-style nesting would instantiate forever"
-                            ),
-                            span,
-                        ));
-                    }
+
+    // Collect (target, expanding?) references from a type.
+    fn collect_refs(ty: &PlutoType, out: &mut Vec<(String, bool)>) {
+        match ty {
+            PlutoType::GenericInstance(_, name, args) => {
+                let expanding = args
+                    .iter()
+                    .any(|a| !matches!(a, PlutoType::TypeParam(_)) && contains_param(a));
+                out.push((name.clone(), expanding));
+                for a in args {
+                    collect_refs(a, out);
                 }
             }
-        }
-        match ty {
             PlutoType::Array(t)
             | PlutoType::Nullable(t)
             | PlutoType::Set(t)
             | PlutoType::Task(t)
             | PlutoType::Sender(t)
             | PlutoType::Receiver(t)
-            | PlutoType::Stream(t) => walk(class_name, t, span),
+            | PlutoType::Stream(t) => collect_refs(t, out),
             PlutoType::Map(k, v) => {
-                walk(class_name, k, span)?;
-                walk(class_name, v, span)
+                collect_refs(k, out);
+                collect_refs(v, out);
             }
             PlutoType::Fn(ps, r, _) => {
                 for p in ps {
-                    walk(class_name, p, span)?;
+                    collect_refs(p, out);
                 }
-                walk(class_name, r, span)
+                collect_refs(r, out);
             }
-            PlutoType::GenericInstance(_, _, args) => {
-                for a in args {
-                    walk(class_name, a, span)?;
-                }
-                Ok(())
-            }
-            _ => Ok(()),
+            _ => {}
         }
     }
-    walk(class_name, ty, span)
+
+    // Build edge lists over generic classes + enums.
+    let mut edges: HashMap<String, Vec<String>> = HashMap::new();
+    let mut expanding_edges: Vec<(String, String)> = Vec::new();
+    let mut add_refs = |from: &str, refs: Vec<(String, bool)>,
+                        edges: &mut HashMap<String, Vec<String>>,
+                        expanding: &mut Vec<(String, String)>| {
+        for (target, is_expanding) in refs {
+            edges.entry(from.to_string()).or_default().push(target.clone());
+            if is_expanding {
+                expanding.push((from.to_string(), target));
+            }
+        }
+    };
+
+    for (name, info) in &env.generic_classes {
+        let mut refs = Vec::new();
+        for (_, t, _) in &info.fields {
+            collect_refs(t, &mut refs);
+        }
+        for sig in info.method_sigs.values() {
+            for p in &sig.params {
+                collect_refs(p, &mut refs);
+            }
+            collect_refs(&sig.return_type, &mut refs);
+        }
+        add_refs(name, refs, &mut edges, &mut expanding_edges);
+    }
+    for (name, info) in &env.generic_enums {
+        let mut refs = Vec::new();
+        for (_, fields) in &info.variants {
+            for (_, t) in fields {
+                collect_refs(t, &mut refs);
+            }
+        }
+        add_refs(name, refs, &mut edges, &mut expanding_edges);
+    }
+
+    // An expanding edge A→B is fatal iff B can reach A (the growth feeds back).
+    for (from, to) in &expanding_edges {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut queue: VecDeque<&str> = VecDeque::new();
+        queue.push_back(to.as_str());
+        let mut reaches_back = to == from;
+        while let Some(n) = queue.pop_front() {
+            if !seen.insert(n) {
+                continue;
+            }
+            if n == from {
+                reaches_back = true;
+                break;
+            }
+            if let Some(next) = edges.get(n) {
+                for t in next {
+                    queue.push_back(t.as_str());
+                }
+            }
+        }
+        if reaches_back {
+            return Err(CompileError::type_err(
+                format!(
+                    "expanding recursive reference: '{from}' instantiates '{to}' with \
+                     nested type arguments on a reference cycle back to '{from}' — \
+                     each round would demand a deeper instantiation, forever. \
+                     Use plain type parameters or concrete types in the reference."
+                ),
+                crate::span::Span::dummy(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {

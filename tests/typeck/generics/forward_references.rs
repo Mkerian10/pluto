@@ -1,103 +1,368 @@
-//! Forward reference tests for generics - 25 tests
+//! Forward references (#175): top-level declaration order does not matter.
+//!
+//! Any declaration may reference any other declared anywhere in the file —
+//! concrete or generic, class, enum, trait, function, or bracket dep.
+//! Registration records skeletons for every generic first and defers eager
+//! instantiation until all signatures are known (see
+//! `defer_eager_instantiation` / `normalize_registered_types`), so the only
+//! ordering error left is a genuinely non-terminating one: expanding
+//! recursive instantiation on a reference cycle.
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run_stdout, compile_should_fail_with};
 
-// Class forward references
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn forward_ref_in_generic_param() { compile_should_fail_with(r#"class Box<T>{value:Forward} class Forward{x:int} fn main(){}"#, "undefined"); }
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn forward_ref_generic_field() { compile_should_fail_with(r#"class Container<T>{data:T next:Forward} fn main(){} class Forward{x:int}"#, "undefined"); }
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn forward_ref_in_bound() { compile_should_fail_with(r#"fn f<T:ForwardTrait>(x:T){} trait ForwardTrait{} fn main(){}"#, "undefined"); }
+// ── Generic ↔ concrete, both directions ─────────────────────────────────────
 
-// Function forward references
 #[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn call_forward_generic_fn() { compile_should_fail_with(r#"fn caller(){forward<int>(42)} fn forward<T>(x:T)T{return x} fn main(){}"#, "undefined"); }
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn generic_returns_forward_class() { compile_should_fail_with(r#"fn make<T>()Forward{return Forward{x:42}} class Forward{x:int} fn main(){}"#, "undefined"); }
+fn generic_field_references_later_class() {
+    let out = compile_and_run_stdout(
+        r#"
+class Box<T> {
+    value: T
+    tag: Late
+}
 
-// Enum forward references
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn forward_ref_in_enum_variant() { compile_should_fail_with(r#"enum Container<T>{Some{v:T other:Forward}None} class Forward{x:int} fn main(){}"#, "undefined"); }
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn generic_enum_forward_variant() { compile_should_fail_with(r#"enum E<T>{A{x:T} B{y:Forward}} fn main(){} class Forward{x:int}"#, "undefined"); }
+class Late {
+    n: int
+}
 
-// Trait forward references
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn impl_forward_trait() { compile_should_fail_with(r#"class C{x:int} impl ForwardTrait fn main(){} trait ForwardTrait{}"#, "undefined"); }
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn generic_bound_forward_trait() { compile_should_fail_with(r#"fn f<T:ForwardT>(x:T){} fn main(){} trait ForwardT{}"#, "undefined"); }
+fn main() {
+    let b = Box<int> { value: 1, tag: Late { n: 7 } }
+    print(b.tag.n)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "7");
+}
 
-// Circular references with generics
 #[test]
-fn circular_generic_classes() { compile_should_fail_with(r#"class A<T>{b:B<T>} class B<U>{a:A<U>} fn main(){}"#, ""); }
-#[test]
-fn circular_through_param() { compile_should_fail_with(r#"class Node<T>{value:T next:Node<T>?} fn main(){}"#, ""); }
+fn use_generic_before_decl() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let b = Box<int> { value: 42 }
+    print(b.value)
+}
 
-// Method forward references
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn generic_method_forward_return() { compile_should_fail_with(r#"class C{fn foo<T>(self)Forward{return Forward{x:42}}} class Forward{x:int} fn main(){}"#, "undefined"); }
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn forward_ref_method_param() { compile_should_fail_with(r#"class C{fn foo<T>(self,f:Forward)T{return f.x}} fn main(){} class Forward{x:int}"#, "undefined"); }
+class Box<T> {
+    value: T
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42");
+}
 
-// Nested forward references
 #[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn nested_forward_in_generic() { compile_should_fail_with(r#"class Box<T>{value:T} fn make()Box<Forward>{return Box<Forward>{value:Forward{x:42}}} class Forward{x:int} fn main(){}"#, "undefined"); }
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn array_of_forward_in_generic() { compile_should_fail_with(r#"class Container<T>{items:[T]} fn make()Container<Forward>{return Container<Forward>{items:[Forward{x:1}]}} class Forward{x:int} fn main(){}"#, "undefined"); }
+fn explicit_type_arg_forward() {
+    let out = compile_and_run_stdout(
+        r#"
+fn id<T>(x: T) T {
+    return x
+}
 
-// Generic instance before class declaration
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn use_generic_before_decl() { compile_should_fail_with(r#"fn main(){let b=Box<int>{value:42}} class Box<T>{value:T}"#, "undefined"); }
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn explicit_type_arg_forward() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn main(){id<Forward>(Forward{x:1})} class Forward{x:int}"#, "undefined"); }
+fn main() {
+    print(id<Forward>(Forward { x: 1 }).x)
+}
 
-// Forward ref in type alias context
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn generic_param_forward_type() { compile_should_fail_with(r#"fn use<T>(x:Forward<T>){} fn main(){} class Forward<U>{value:U}"#, "undefined"); }
+class Forward {
+    x: int
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1");
+}
 
-// Multiple forward references
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn two_forward_refs() { compile_should_fail_with(r#"fn f(){let a=A{x:1} let b=B{y:2}} class A{x:int} class B{y:int} fn main(){}"#, "undefined"); }
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn forward_in_generic_bound_chain() { compile_should_fail_with(r#"fn f<T:Trait1>(x:T){} trait Trait1{} fn main(){}"#, "undefined"); }
+// ── Generic → later generic ─────────────────────────────────────────────────
 
-// Forward ref with DI
 #[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn di_forward_ref() { compile_should_fail_with(r#"class Service[dep:Forward]{} class Forward{x:int} app MyApp{fn main(self){}} fn main(){}"#, "undefined"); }
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn generic_di_forward() { compile_should_fail_with(r#"class Repo<T>[dep:Forward]{value:T} fn main(){} class Forward{x:int}"#, "undefined"); }
+fn generic_field_references_later_generic() {
+    let out = compile_and_run_stdout(
+        r#"
+class A<T> {
+    b: B<T>
+}
 
-// Forward ref in match
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn match_forward_enum() { compile_should_fail_with(r#"fn use(e:E){match e{E.A=>{}}} enum E{A} fn main(){}"#, "undefined"); }
-#[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn generic_match_forward() { compile_should_fail_with(r#"fn unwrap<T>(o:Opt<T>)T{match o{Opt.Some{v}=>{return v}Opt.None=>{return none}}} enum Opt<U>{Some{v:U}None} fn main(){}"#, "undefined"); }
+class B<U> {
+    x: U
+}
 
-// Forward ref in error context
+fn main() {
+    let a = A<int> { b: B<int> { x: 5 } }
+    print(a.b.x)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "5");
+}
+
 #[test]
-#[ignore] // Syntax error or unsupported feature in test
-fn forward_error_type() { compile_should_fail_with(r#"fn f()!E{raise E{}} error E{} fn main(){}"#, "undefined"); }
+fn generic_fn_param_references_later_generic() {
+    let out = compile_and_run_stdout(
+        r#"
+fn open<T>(w: Wrapper<T>) T {
+    return w.inner
+}
+
+class Wrapper<T> {
+    inner: T
+}
+
+fn main() {
+    print(open(Wrapper<int> { inner: 3 }))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "3");
+}
+
+// ── Enums ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn generic_enum_variant_references_later_class() {
+    let out = compile_and_run_stdout(
+        r#"
+enum Holder<T> {
+    Has { v: T, tag: Late }
+    Empty
+}
+
+class Late {
+    n: int
+}
+
+fn main() {
+    let h = Holder<int>.Has { v: 1, tag: Late { n: 9 } }
+    match h {
+        Holder.Has { v, tag } {
+            print(tag.n)
+        }
+        Holder.Empty {
+            print(-1)
+        }
+    }
+}
+"#,
+    );
+    assert_eq!(out.trim(), "9");
+}
+
+#[test]
+fn fn_signature_references_later_generic_enum() {
+    let out = compile_and_run_stdout(
+        r#"
+fn get(o: Opt<int>) int {
+    match o {
+        Opt.Some { v } {
+            return v
+        }
+        Opt.None {
+            return -1
+        }
+    }
+    return -2
+}
+
+enum Opt<T> {
+    Some { v: T }
+    None
+}
+
+fn main() {
+    print(get(Opt<int>.Some { v: 3 }))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "3");
+}
+
+// ── Traits and bounds ───────────────────────────────────────────────────────
+
+#[test]
+fn generic_bound_references_later_trait() {
+    let out = compile_and_run_stdout(
+        r#"
+fn describe<T: Named>(x: T) string {
+    return x.name()
+}
+
+trait Named {
+    fn name(self) string
+}
+
+class Dog impl Named {
+    tag: string
+
+    fn name(self) string {
+        return self.tag
+    }
+}
+
+fn main() {
+    print(describe(Dog { tag: "rex" }))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "rex");
+}
+
+// ── DI bracket deps ─────────────────────────────────────────────────────────
+
+#[test]
+fn bracket_dep_references_later_class() {
+    let out = compile_and_run_stdout(
+        r#"
+class Service[dep: Late] {
+    fn tag(self) int {
+        return self.dep.n()
+    }
+}
+
+class Late {
+    fn n(self) int {
+        return 11
+    }
+}
+
+app Main[svc: Service] {
+    fn main(self) {
+        print(self.svc.tag())
+    }
+}
+"#,
+    );
+    assert_eq!(out.trim(), "11");
+}
+
+// ── Recursion: legal (non-expanding) cycles ─────────────────────────────────
+
+#[test]
+fn mutually_recursive_generic_classes() {
+    let out = compile_and_run_stdout(
+        r#"
+class A<T> {
+    b: B<T>?
+}
+
+class B<U> {
+    a: A<U>?
+    val: U
+}
+
+fn main() {
+    let b = B<int> { a: none, val: 9 }
+    let a = A<int> { b: b }
+    print(a.b == none)
+    print(b.val)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "false\n9");
+}
+
+#[test]
+fn recursive_generic_enum_linked_list() {
+    let out = compile_and_run_stdout(
+        r#"
+enum List<T> {
+    Cons { head: T, tail: List<T> }
+    Nil
+}
+
+fn sum(l: List<int>) int {
+    match l {
+        List.Cons { head, tail } {
+            return head + sum(tail)
+        }
+        List.Nil {
+            return 0
+        }
+    }
+    return 0
+}
+
+fn main() {
+    let l = List<int>.Cons { head: 1, tail: List<int>.Cons { head: 2, tail: List<int>.Nil } }
+    print(sum(l))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "3");
+}
+
+#[test]
+fn circular_through_param() {
+    let out = compile_and_run_stdout(
+        r#"
+class Node<T> {
+    value: T
+    next: Node<T>?
+}
+
+fn main() {
+    let tail = Node<int> { value: 2, next: none }
+    let head = Node<int> { value: 1, next: tail }
+    print(head.value)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1");
+}
+
+// ── Rejection: expanding instantiation cycles ───────────────────────────────
+
+#[test]
+fn expanding_mutual_cycle_rejected() {
+    compile_should_fail_with(
+        r#"
+class A<T> {
+    b: B<Box<T>>?
+}
+
+class B<U> {
+    a: A<U>?
+}
+
+class Box<T> {
+    v: T
+}
+
+fn main() {}
+"#,
+        "expanding recursive reference",
+    );
+}
+
+#[test]
+fn expanding_self_reference_still_rejected() {
+    compile_should_fail_with(
+        r#"
+class Box<T> {
+    inner: Box<Box<T>>?
+}
+fn main() {}
+"#,
+        "expanding recursive reference",
+    );
+}
+
+#[test]
+fn expanding_indirect_cycle_rejected() {
+    compile_should_fail_with(
+        r#"
+class A<T> {
+    b: B<T>?
+}
+
+class B<U> {
+    c: C<[U]>?
+}
+
+class C<V> {
+    a: A<V>?
+}
+
+fn main() {}
+"#,
+        "expanding recursive reference",
+    );
+}

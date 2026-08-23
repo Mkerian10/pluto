@@ -94,7 +94,10 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     });
     register::register_class_names(program, &mut env)?;
 
-    // Pass 1: Resolve types now that all names are registered
+    // Pass 1: Resolve types now that all names are registered. Generic
+    // references stay symbolic (GenericInstance) during this phase so that
+    // declaration order cannot matter — see defer_eager_instantiation.
+    env.defer_eager_instantiation = true;
     register::resolve_trait_signatures(program, &mut env)?;
     register::resolve_enum_fields(program, &mut env)?;
     register::resolve_class_fields(program, &mut env)?;
@@ -103,6 +106,11 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     register::register_method_sigs(program, &mut env)?;
     register::register_app_fields_and_methods(program, &mut env)?;
     register::register_stage_fields_and_methods(program, &mut env)?;
+    // Registration complete: instantiate deferred generic references and
+    // reject expanding instantiation cycles before anything consumes them.
+    env.defer_eager_instantiation = false;
+    register::normalize_registered_types(&mut env);
+    register::check_expanding_reference_cycles(&env)?;
     register::validate_di_graph(program, &mut env)?;
     register::check_trait_conformance(program, &mut env)?;
     register::check_all_bodies(program, &mut env)?;

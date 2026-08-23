@@ -1,7 +1,7 @@
 //! Recursive generic instantiation tests - 25 tests
 #[path = "../common.rs"]
 mod common;
-use common::{compile_and_run, compile_should_fail_with};
+use common::{compile_and_run, compile_and_run_stdout, compile_should_fail_with};
 
 // Infinite instantiation detection
 #[test]
@@ -12,7 +12,11 @@ fn self_instantiating_class() {
     assert_eq!(compile_and_run(r#"class Box<T>{value:Box<T>} fn main(){}"#), 0);
 }
 #[test]
-fn mutually_recursive_instantiation() { compile_should_fail_with(r#"class A<T>{b:B<T>} class B<U>{a:A<U>} fn main(){}"#, ""); }
+fn mutually_recursive_instantiation() {
+    // Mutual recursion with plain type parameters closes after one round —
+    // legal, like concrete mutual recursion (classes are references).
+    assert_eq!(compile_and_run(r#"class A<T>{b:B<T>} class B<U>{a:A<U>} fn main(){}"#), 0);
+}
 
 // Bounded recursion that should work
 #[test]
@@ -33,9 +37,39 @@ fn mutual_rec_generic_fns() { compile_should_fail_with(r#"fn a<T>(x:T)T{return b
 
 // Recursive enum
 #[test]
-fn recursive_enum_variant() { compile_should_fail_with(r#"enum List<T>{Cons{head:T tail:List<T>}Nil} fn main(){}"#, ""); }
+fn recursive_enum_variant() {
+    // Recursive enums are the idiomatic functional list — constructible and
+    // matchable end to end.
+    let out = compile_and_run_stdout(
+        r#"
+enum List<T> {
+    Cons { head: T, tail: List<T> }
+    Nil
+}
+
+fn len(l: List<int>) int {
+    match l {
+        List.Cons { head, tail } {
+            return 1 + len(tail)
+        }
+        List.Nil {
+            return 0
+        }
+    }
+    return 0
+}
+
+fn main() {
+    print(len(List<int>.Cons { head: 1, tail: List<int>.Nil }))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1");
+}
 #[test]
-fn enum_with_boxed_recursion() { compile_should_fail_with(r#"class Box<T>{value:T} enum Tree<U>{Leaf{val:U}Node{left:Tree<U>right:Tree<U>}} fn main(){}"#, ""); }
+fn enum_with_boxed_recursion() {
+    assert_eq!(compile_and_run(r#"class Box<T>{value:T} enum Tree<U>{Leaf{val:U}Node{left:Tree<U>right:Tree<U>}} fn main(){}"#), 0);
+}
 
 // Recursive type through array
 #[test]
@@ -95,7 +129,11 @@ fn trait_self_ref() { compile_should_fail_with(r#"trait T{} class C<U:T>{value:U
 
 // Indirect infinite through field
 #[test]
-fn indirect_infinite() { compile_should_fail_with(r#"class A<T>{b:B<T>} class B<U>{c:C<U>} class C<V>{a:A<V>} fn main(){}"#, ""); }
+fn indirect_infinite() {
+    // A three-way cycle with plain params also closes — only *expanding*
+    // cycles (nested type args feeding back) are rejected.
+    assert_eq!(compile_and_run(r#"class A<T>{b:B<T>} class B<U>{c:C<U>} class C<V>{a:A<V>} fn main(){}"#), 0);
+}
 
 // Recursive generic with bound
 #[test]
