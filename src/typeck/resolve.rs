@@ -103,6 +103,16 @@ pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<
             if let Some(result) = resolve_builtin_generic(name, &resolved_args, ty.span) {
                 return result;
             }
+            // During registration, defer instantiation: another declaration's
+            // generic info may not be filled in yet.
+            if env.defer_eager_instantiation {
+                if env.generic_classes.contains_key(name.as_str()) {
+                    return Ok(PlutoType::GenericInstance(GenericKind::Class, name.clone(), resolved_args));
+                }
+                if env.generic_enums.contains_key(name.as_str()) {
+                    return Ok(PlutoType::GenericInstance(GenericKind::Enum, name.clone(), resolved_args));
+                }
+            }
             // Check if already instantiated
             let mangled = env::mangle_name(name, &resolved_args);
             if env.classes.contains_key(&mangled) {
@@ -179,6 +189,18 @@ pub(crate) fn resolve_type_with_params(
             if resolved_args.iter().any(contains_type_param) {
                 // Still has unresolved type params — store as GenericInstance
                 // substitute_pluto_type will resolve when concrete types are bound
+                if env.generic_classes.contains_key(name.as_str()) {
+                    Ok(PlutoType::GenericInstance(GenericKind::Class, name.clone(), resolved_args))
+                } else if env.generic_enums.contains_key(name.as_str()) {
+                    Ok(PlutoType::GenericInstance(GenericKind::Enum, name.clone(), resolved_args))
+                } else {
+                    Err(CompileError::type_err(
+                        format!("unknown generic type '{name}'"),
+                        ty.span,
+                    ))
+                }
+            } else if env.defer_eager_instantiation {
+                // Registration phase: defer (see resolve_type)
                 if env.generic_classes.contains_key(name.as_str()) {
                     Ok(PlutoType::GenericInstance(GenericKind::Class, name.clone(), resolved_args))
                 } else if env.generic_enums.contains_key(name.as_str()) {
@@ -597,18 +619,30 @@ pub(crate) fn ensure_generic_enum_instantiated(
         .zip(type_args.iter())
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    // Reserve the entry BEFORE resolving variants: a self-referential variant
+    // (`Cons { tail: List<T> }`) resolves through this same function and the
+    // early-return guard must see the instance as present (same pattern as
+    // ensure_generic_class_instantiated).
+    env.enums.insert(mangled.clone(), EnumInfo {
+        variants: Vec::new(),
+        variant_type_exprs: Vec::new(),
+    });
     let concrete_variants: Vec<(String, Vec<(String, PlutoType)>)> = gen_info.variants.iter()
         .map(|(vname, fields)| {
             let concrete_fields: Vec<(String, PlutoType)> = fields.iter()
-                .map(|(fname, fty)| (fname.clone(), substitute_pluto_type(fty, &bindings)))
+                .map(|(fname, fty)| {
+                    // Resolve nested generic references so instantiated
+                    // variants never carry symbolic GenericInstance types.
+                    let substituted = substitute_pluto_type(fty, &bindings);
+                    (fname.clone(), resolve_generic_instances(&substituted, env))
+                })
                 .collect();
             (vname.clone(), concrete_fields)
         })
         .collect();
-    env.enums.insert(mangled.clone(), EnumInfo {
-        variants: concrete_variants,
-        variant_type_exprs: Vec::new(),  // Empty for instantiated enums
-    });
+    if let Some(info) = env.enums.get_mut(&mangled) {
+        info.variants = concrete_variants;
+    }
     env.instantiations.insert(Instantiation {
         kind: InstKind::Enum(base_name.to_string()),
         type_args: type_args.to_vec(),

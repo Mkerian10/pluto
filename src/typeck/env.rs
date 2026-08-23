@@ -225,6 +225,12 @@ pub struct TypeEnv {
     /// by error inference (aliasing/escape) and by the eta-expansion pass in
     /// closures.rs that rewrites them into wrapper closures before lifting.
     pub fn_ref_sites: HashMap<(usize, usize), String>,
+    /// True while declaration signatures are being registered: user generics
+    /// referenced with concrete args resolve to GenericInstance instead of
+    /// eagerly instantiating, so a reference to a not-yet-fully-registered
+    /// generic can't cache an instance with incomplete info. Cleared before
+    /// normalize_registered_types instantiates everything.
+    pub defer_eager_instantiation: bool,
     /// Mangled names of methods that declare `mut self`
     pub mut_self_methods: HashSet<String>,
     /// Scope-mirrored: tracks variables declared with `let` (not `let mut`)
@@ -321,6 +327,7 @@ impl TypeEnv {
             invalidated_task_vars: HashSet::new(),
             closure_return_types: HashMap::new(),
             fn_ref_sites: HashMap::new(),
+            defer_eager_instantiation: false,
             mut_self_methods: HashSet::new(),
             immutable_vars: ScopeTracker::with_initial_scope(),
             variable_decls: HashMap::new(),

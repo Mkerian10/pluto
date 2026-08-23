@@ -1,7 +1,7 @@
 //! Initialization order errors - 15 tests
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run, compile_should_fail_with};
 
 // Variable used before initialization - correctly detected
 #[test]
@@ -51,9 +51,12 @@ fn method_before_class_init() { compile_should_fail_with(r#"class C{} fn foo(sel
 fn impl_before_trait() { compile_should_fail_with(r#"class C{} impl T{fn foo(self){}} trait T{fn foo(self)} fn main(){}"#, "Syntax error: expected 'fn'"); }
 
 // Enum variant before enum - forward reference allowed
+// #175 resolution: forward references are supported consistently — top-level
+// declaration order does not matter for any declaration kind.
 #[test]
-#[ignore] // #175: forward references allowed for enums
-fn variant_before_enum() { compile_should_fail_with(r#"fn f(){let e=E.A} enum E{A B} fn main(){}"#, ""); }
+fn variant_before_enum() {
+    assert_eq!(compile_and_run(r#"fn f(){let e=E.A} enum E{A B} fn main(){f()}"#), 0);
+}
 
 // Error raise before error decl - syntax error in compact function notation
 #[test]
@@ -61,10 +64,23 @@ fn raise_before_error() { compile_should_fail_with(r#"fn f()!{raise E{}} error E
 
 // Generic instantiation before decl - forward reference allowed
 #[test]
-#[ignore] // #175: forward references allowed for generic classes
-fn generic_before_decl() { compile_should_fail_with(r#"fn f(){let b=Box<int>{value:1}} class Box<T>{value:T} fn main(){}"#, ""); }
+fn generic_before_decl() {
+    assert_eq!(compile_and_run(r#"
+fn f() {
+    let b = Box<int> { value: 1 }
+    print(b.value)
+}
+fn main() {
+    f()
+}
+class Box<T> {
+    value: T
+}
+"#), 0);
+}
 
 // Bracket dep before class decl - forward reference allowed
 #[test]
-#[ignore] // #175: forward references allowed for bracket deps
-fn bracket_dep_before_decl() { compile_should_fail_with(r#"class A[b:B]{} class B{} fn main(){}"#, ""); }
+fn bracket_dep_before_decl() {
+    assert_eq!(compile_and_run(r#"class A[b:B]{x:int} class B{y:int} fn main(){}"#), 0);
+}
