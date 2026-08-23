@@ -220,6 +220,10 @@ pub struct TypeEnv {
     pub invalidated_task_vars: HashSet<String>,
     /// Closure span → return type (set during typeck, used during closure lifting)
     pub closure_return_types: HashMap<(usize, usize), PlutoType>,
+    /// Resolved parameter types per closure (keyed by closure expr span).
+    /// Lifting uses this to materialize `TypeExpr::Infer` params that were
+    /// resolved from the expected fn type at the use site.
+    pub closure_param_types: HashMap<(usize, usize), Vec<PlutoType>>,
     /// Identifier sites that resolved to a named-function reference (not a
     /// variable), keyed by (span.start, span.end) -> function name. Consumed
     /// by error inference (aliasing/escape) and by the eta-expansion pass in
@@ -240,6 +244,10 @@ pub struct TypeEnv {
     /// value types and sees the narrowed type (the none-branch is proven
     /// dead).
     pub narrow_sites: HashMap<(usize, usize), String>,
+    /// Expression sites that codegen must coerce to a target type it cannot
+    /// derive locally (array-literal elements adopting an annotated element
+    /// type, yield values adopting the stream element type), keyed by span.
+    pub coercion_sites: HashMap<(usize, usize), PlutoType>,
     /// Mangled names of methods that declare `mut self`
     pub mut_self_methods: HashSet<String>,
     /// Scope-mirrored: tracks variables declared with `let` (not `let mut`)
@@ -335,10 +343,12 @@ impl TypeEnv {
             task_origins: ScopeTracker::with_initial_scope(),
             invalidated_task_vars: HashSet::new(),
             closure_return_types: HashMap::new(),
+            closure_param_types: HashMap::new(),
             fn_ref_sites: HashMap::new(),
             defer_eager_instantiation: false,
             narrowed_vars: ScopeTracker::new(),
             narrow_sites: HashMap::new(),
+            coercion_sites: HashMap::new(),
             mut_self_methods: HashSet::new(),
             immutable_vars: ScopeTracker::with_initial_scope(),
             variable_decls: HashMap::new(),

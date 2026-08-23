@@ -1106,6 +1106,7 @@ fn prefix_type_expr(ty: &mut TypeExpr, module_name: &str, module_prog: &Program)
         TypeExpr::Qualified { .. } => {
             // Already qualified, leave alone
         }
+        TypeExpr::Infer => {}
         TypeExpr::Fn { params, return_type, fallible: _ } => {
             for p in params {
                 prefix_type_expr(&mut p.node, module_name, module_prog);
@@ -1357,6 +1358,7 @@ fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, import_names: &HashSet<String>)
             rewrite_type_expr(inner, import_names);
         }
         TypeExpr::Named(_) => {}
+        TypeExpr::Infer => {}
         TypeExpr::Fn { params, return_type, fallible: _ } => {
             for p in params {
                 rewrite_type_expr(p, import_names);

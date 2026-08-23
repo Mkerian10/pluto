@@ -195,6 +195,10 @@ pub enum TypeExpr {
     },
     Nullable(Box<Spanned<TypeExpr>>),
     Stream(Box<Spanned<TypeExpr>>),
+    /// Placeholder for an omitted closure parameter type (`(x) => x + 1`);
+    /// resolved from the expected fn type at the use site during typeck.
+    /// Never produced outside closure parameter lists.
+    Infer,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

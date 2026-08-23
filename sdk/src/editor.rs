@@ -890,6 +890,7 @@ fn rename_in_return_type(rt: &mut Option<Spanned<TypeExpr>>, kind: DeclKindSimpl
 
 fn rename_in_type_expr(te: &mut TypeExpr, kind: DeclKindSimple, old_name: &str, new_name: &str) {
     match te {
+        TypeExpr::Infer => {}
         TypeExpr::Named(name) => {
             if name == old_name && matches!(kind, DeclKindSimple::Class | DeclKindSimple::Enum | DeclKindSimple::Trait | DeclKindSimple::Error) {
                 *name = new_name.to_string();

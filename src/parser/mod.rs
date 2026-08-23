@@ -3539,23 +3539,49 @@ impl<'a> Parser<'a> {
         if i >= self.tokens.len() {
             return false;
         }
-        // Case 1: `() =>` — zero-param closure
-        if matches!(self.tokens[i].node, Token::RParen) {
-            i += 1;
-            while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
-                i += 1;
+        // Scan to the matching `)`, then decide by what follows: a `=>`
+        // (optionally preceded by a return-type annotation) means closure.
+        // A `=>` can never follow a parenthesized expression, so this is
+        // unambiguous; malformed parameter lists are diagnosed in
+        // parse_closure rather than here.
+        let mut depth = 1;
+        while i < self.tokens.len() && depth > 0 {
+            match &self.tokens[i].node {
+                Token::LParen => depth += 1,
+                Token::RParen => depth -= 1,
+                _ => {}
             }
-            return i < self.tokens.len() && matches!(self.tokens[i].node, Token::FatArrow);
-        }
-        // Case 2: `(ident :` — closure with typed params
-        if matches!(self.tokens[i].node, Token::Ident) {
             i += 1;
-            while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
-                i += 1;
-            }
-            return i < self.tokens.len() && matches!(self.tokens[i].node, Token::Colon);
         }
-        false
+        if depth > 0 {
+            return false;
+        }
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        // Allow a run of type-annotation tokens before the `=>`
+        // (`(x: int) [string] => ...`). Anything outside this set means
+        // we're looking at an ordinary parenthesized expression.
+        while i < self.tokens.len()
+            && matches!(
+                self.tokens[i].node,
+                Token::Ident
+                    | Token::Lt
+                    | Token::Gt
+                    | Token::LBracket
+                    | Token::RBracket
+                    | Token::Question
+                    | Token::Bang
+                    | Token::Comma
+                    | Token::Dot
+                    | Token::Fn
+                    | Token::LParen
+                    | Token::RParen
+            )
+        {
+            i += 1;
+        }
+        i < self.tokens.len() && matches!(self.tokens[i].node, Token::FatArrow)
     }
 
     /// Parse a closure expression: `(params) => body` or `(params) return_type => body`
@@ -3563,18 +3589,32 @@ impl<'a> Parser<'a> {
         let open = self.expect(&Token::LParen)?;
         let start = open.span.start;
 
-        // Parse params
+        // Parse params; the type annotation is optional (`(x) => x + 1`)
+        // and defaults to Infer, resolved from context during typeck.
         let params = self.parse_comma_list(&Token::RParen, true, |p| {
             let pname = p.expect_ident()?;
-            p.expect(&Token::Colon)?;
-            let pty = p.parse_type()?;
+            let pty = if p.peek().is_some_and(|t| matches!(t.node, Token::Colon)) {
+                p.expect(&Token::Colon)?;
+                p.parse_type()?
+            } else {
+                Spanned::new(TypeExpr::Infer, pname.span)
+            };
             Ok(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false })
         })?;
         self.expect(&Token::RParen)?;
 
         // Optional return type: if next non-newline token is NOT `=>`, parse a type first
         let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::FatArrow) {
-            Some(self.parse_type()?)
+            let ty = self.parse_type()?;
+            // `!` on a closure return annotation is meaningless: a closure's
+            // error effect is inferred from its body, not declared.
+            if self.peek().is_some_and(|t| matches!(t.node, Token::Bang)) {
+                return Err(CompileError::syntax(
+                    "closure error effects are inferred from the body; remove the '!' from the return type annotation",
+                    self.peek().expect("peeked above").span,
+                ));
+            }
+            Some(ty)
         } else {
             None
         };

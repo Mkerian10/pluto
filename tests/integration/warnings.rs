@@ -176,3 +176,21 @@ fn one_unreachable_warning_per_block() {
     let count = warnings.iter().filter(|w| w.contains("unreachable code")).count();
     assert_eq!(count, 1, "one warning per block; got: {warnings:?}");
 }
+
+#[test]
+fn closure_variable_called_not_warned() {
+    // Calling through a fn-typed variable is a read of it
+    let warnings = compile_and_get_warnings(
+        "fn main() {\n    let f = (x: int) => x + 1\n    print(f(1))\n}",
+    );
+    assert!(warnings.is_empty(), "expected no warnings, got: {:?}", warnings);
+}
+
+#[test]
+fn closure_variable_never_called_warns() {
+    let warnings = compile_and_get_warnings(
+        "fn main() {\n    let f = (x: int) => x + 1\n}",
+    );
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("unused variable 'f'"));
+}

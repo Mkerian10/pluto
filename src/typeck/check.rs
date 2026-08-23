@@ -572,12 +572,18 @@ fn check_stmt(
                     ));
                 }
             };
-            let val_type = infer_expr(&value.node, value.span, env, None)?;
+            let val_type = infer_expr(&value.node, value.span, env, Some(&elem_type))?;
             if !super::types_compatible(&val_type, &elem_type, env) {
                 return Err(CompileError::type_err(
                     format!("yield type mismatch: expected {elem_type}, found {val_type}"),
                     value.span,
                 ));
+            }
+            // Codegen can't see the stream element type at the yield site;
+            // record the coercion target (Class→Trait wrap, T→T? box).
+            if val_type != elem_type {
+                env.coercion_sites
+                    .insert((value.span.start, value.span.end), elem_type.clone());
             }
         }
     }
@@ -970,8 +976,8 @@ fn check_field_assign(
                 field.span,
             )
         })?;
-    let val_type = infer_expr(&value.node, value.span, env, None)?;
-    if val_type != field_type {
+    let val_type = infer_expr(&value.node, value.span, env, Some(&field_type))?;
+    if !types_compatible(&val_type, &field_type, env) {
         return Err(CompileError::type_err(
             format!("field '{}': expected {field_type}, found {val_type}", field.node),
             value.span,
@@ -996,8 +1002,8 @@ fn check_index_assign(
                     index.span,
                 ));
             }
-            let val_type = infer_expr(&value.node, value.span, env, None)?;
-            if val_type != **elem {
+            let val_type = infer_expr(&value.node, value.span, env, Some(elem))?;
+            if !types_compatible(&val_type, elem, env) {
                 return Err(CompileError::type_err(
                     format!("index assignment: expected {elem}, found {val_type}"),
                     value.span,
@@ -1012,8 +1018,8 @@ fn check_index_assign(
                     index.span,
                 ));
             }
-            let val_type = infer_expr(&value.node, value.span, env, None)?;
-            if val_type != **val_ty {
+            let val_type = infer_expr(&value.node, value.span, env, Some(val_ty))?;
+            if !types_compatible(&val_type, val_ty, env) {
                 return Err(CompileError::type_err(
                     format!("map value type mismatch: expected {val_ty}, found {val_type}"),
                     value.span,

@@ -207,6 +207,27 @@ pub(crate) fn infer_expr(
                     }
                 };
             }
+            // With an expected element type, each element only needs to be
+            // coercible to it (Class→Trait, T→T?); mismatching elements are
+            // recorded so codegen coerces them at build time.
+            if let Some(PlutoType::Array(target)) = expected
+                && **target != PlutoType::Void
+            {
+                for elem in elements {
+                    let t = infer_expr(&elem.node, elem.span, env, Some(target))?;
+                    if !super::types_compatible(&t, target, env) {
+                        return Err(CompileError::type_err(
+                            format!("array element type mismatch: expected {target}, found {t}"),
+                            elem.span,
+                        ));
+                    }
+                    if t != **target {
+                        env.coercion_sites
+                            .insert((elem.span.start, elem.span.end), (**target).clone());
+                    }
+                }
+                return Ok(PlutoType::Array(target.clone()));
+            }
             let first_type = infer_expr(&elements[0].node, elements[0].span, env, None)?;
             for elem in &elements[1..] {
                 let t = infer_expr(&elem.node, elem.span, env, None)?;
@@ -285,7 +306,7 @@ pub(crate) fn infer_expr(
             infer_method_call(object, method, args, span, env)
         }
         Expr::Closure { params, return_type, body } => {
-            infer_closure(params, return_type, body, span, env)
+            infer_closure(params, return_type, body, span, env, expected)
         }
         Expr::ClosureCreate { .. } => {
             Ok(PlutoType::Void)
@@ -302,8 +323,8 @@ pub(crate) fn infer_expr(
                         k.span,
                     ));
                 }
-                let actual_v = infer_expr(&v.node, v.span, env, None)?;
-                if actual_v != vt {
+                let actual_v = infer_expr(&v.node, v.span, env, Some(&vt))?;
+                if !super::types_compatible(&actual_v, &vt, env) {
                     return Err(CompileError::type_err(
                         format!("map value type mismatch: expected {vt}, found {actual_v}"),
                         v.span,
@@ -1044,6 +1065,10 @@ fn infer_call(
 
     // Check if calling a closure variable
     if let Some(PlutoType::Fn(param_types, ret_type, value_fallible)) = env.lookup(&name.node).cloned() {
+        // A call through the variable is a read of it
+        if let Some((_, depth)) = env.lookup_with_depth(&name.node) {
+            env.variable_reads.insert((name.node.clone(), depth));
+        }
         // A call through a variable whose *type* declares fallibility
         // (annotation-flagged params/fields) must be handled; record the site
         // for enforcement and inference.

@@ -177,6 +177,10 @@ name = "contracts"
 path = "tests/integration/contracts.rs"
 
 [[test]]
+name = "coercion"
+path = "tests/integration/coercion.rs"
+
+[[test]]
 name = "io"
 path = "tests/integration/io.rs"
 

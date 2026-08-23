@@ -705,7 +705,7 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
 /// updates are made (visitor infrastructure, type checking, codegen, pretty printing, etc.).
 pub fn walk_type_expr<V: Visitor>(v: &mut V, te: &Spanned<TypeExpr>) {
     match &te.node {
-        TypeExpr::Named(_) | TypeExpr::Qualified { .. } => {}
+        TypeExpr::Named(_) | TypeExpr::Qualified { .. } | TypeExpr::Infer => {}
         TypeExpr::Array(inner) => v.visit_type_expr(inner),
         TypeExpr::Nullable(inner) => v.visit_type_expr(inner),
         TypeExpr::Stream(inner) => v.visit_type_expr(inner),
@@ -1216,7 +1216,7 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, expr: &mut Spanned<Expr>) {
 
 pub fn walk_type_expr_mut<V: VisitMut>(v: &mut V, te: &mut Spanned<TypeExpr>) {
     match &mut te.node {
-        TypeExpr::Named(_) | TypeExpr::Qualified { .. } => {}
+        TypeExpr::Named(_) | TypeExpr::Qualified { .. } | TypeExpr::Infer => {}
         TypeExpr::Array(inner) => v.visit_type_expr_mut(inner),
         TypeExpr::Nullable(inner) => v.visit_type_expr_mut(inner),
         TypeExpr::Stream(inner) => v.visit_type_expr_mut(inner),

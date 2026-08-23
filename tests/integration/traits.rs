@@ -15147,9 +15147,8 @@ fn main() {
 #[test]
 fn pluto_002_struct_lit_trait_nullable_move_dispatch() {
     // Class→Trait? in struct literal, container copied to new variable.
-    // Verifies the trait handle survives struct copy and nullable comparison works.
-    // Note: ! unwrap on nullable trait has a pre-existing typeck limitation,
-    // so we verify non-none instead of dispatching through the nullable.
+    // Dispatches through the nullable trait handle via flow narrowing to
+    // prove the vtable wrap survives the struct copy (#147).
     let out = compile_and_run_stdout(r#"
 trait Worker {
     fn work(self) int
@@ -15163,10 +15162,11 @@ class Box {
 fn main() {
     let a = Box { w: W {} }
     let b = a
-    if b.w != none { print(1) }
+    let w: Worker? = b.w
+    if w != none { print(w.work()) }
 }
 "#);
-    assert_eq!(out, "1\n");
+    assert_eq!(out, "9\n");
 }
 
 #[test]

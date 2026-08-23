@@ -444,17 +444,10 @@ impl<'a> LowerContext<'a> {
                         if val_type == PlutoType::Void {
                             self.emit_default_return();
                         } else {
-                            // If returning a class where a trait is expected, wrap it
-                            // If returning T where T? is expected, box value types
                             let expected = self.expected_return_type.clone();
-                            let final_val = match (&val_type, &expected) {
-                                (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
-                                    self.wrap_class_as_trait(val, cn, tn)?
-                                }
-                                (inner, Some(PlutoType::Nullable(expected_inner))) if !matches!(inner, PlutoType::Nullable(_)) && **expected_inner != PlutoType::Void => {
-                                    self.emit_nullable_wrap(val, inner)
-                                }
-                                _ => val,
+                            let final_val = match &expected {
+                                Some(exp) => self.coerce_to_expected_type(val, &val_type, exp)?,
+                                None => val,
                             };
                             // Spawn closures must return I64 (C runtime reads integer register)
                             let final_val = if self.is_spawn_closure && val_type != PlutoType::Void {
@@ -481,12 +474,9 @@ impl<'a> LowerContext<'a> {
                 let val_type = infer_type_for_expr(&value.node, self.env, &self.var_types);
                 let target_type = self.var_types.get(&target.node).cloned();
 
-                // If assigning a class to a trait-typed variable, wrap it
-                let final_val = match (&val_type, &target_type) {
-                    (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
-                        self.wrap_class_as_trait(val, cn, tn)?
-                    }
-                    _ => val,
+                let final_val = match &target_type {
+                    Some(t) => self.coerce_to_expected_type(val, &val_type, t)?,
+                    None => val,
                 };
 
                 let var = self.variables.get(&target.node).ok_or_else(|| {
@@ -505,9 +495,13 @@ impl<'a> LowerContext<'a> {
                 if let PlutoType::Class(class_name) = &obj_type
                     && let Some(class_info) = self.env.classes.get(class_name)
                 {
-                    let offset = class_info.fields.iter()
-                        .position(|(n, _, _)| *n == field.node)
-                        .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{class_name}'", field.node)))? as i32 * POINTER_SIZE;
+                    let (pos, field_type) = class_info.fields.iter()
+                        .enumerate()
+                        .find(|(_, (n, _, _))| *n == field.node)
+                        .map(|(i, (_, t, _))| (i, t.clone()))
+                        .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{class_name}'", field.node)))?;
+                    let offset = pos as i32 * POINTER_SIZE;
+                    let val = self.coerce_to_expected_type(val, &val_type, &field_type)?;
                     self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
                 }
 
@@ -519,6 +513,8 @@ impl<'a> LowerContext<'a> {
                 let val = self.lower_expr(&value.node)?;
                 let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
                 if let PlutoType::Array(elem) = &obj_type {
+                    let val_type = infer_type_for_expr(&value.node, self.env, &self.var_types);
+                    let val = self.coerce_to_expected_type(val, &val_type, elem)?;
                     let val = self.emit_string_escape(val, elem);
                     let slot = to_array_slot(val, elem, &mut self.builder);
                     self.call_runtime_void("__pluto_array_set", &[handle, idx, slot]);
@@ -526,6 +522,8 @@ impl<'a> LowerContext<'a> {
                     let val_wide = self.builder.ins().uextend(types::I64, val);
                     self.call_runtime_void("__pluto_bytes_set", &[handle, idx, val_wide]);
                 } else if let PlutoType::Map(key_ty, val_ty) = &obj_type {
+                    let val_type = infer_type_for_expr(&value.node, self.env, &self.var_types);
+                    let val = self.coerce_to_expected_type(val, &val_type, val_ty)?;
                     let tag = self.builder.ins().iconst(types::I64, key_type_tag(key_ty));
                     let idx = self.emit_string_escape(idx, key_ty);
                     let val = self.emit_string_escape(val, val_ty);
@@ -902,22 +900,9 @@ impl<'a> LowerContext<'a> {
         // Resolve declared type if present
         let declared_type = ty.as_ref().map(|t| resolve_type_expr_to_pluto(&t.node, self.env));
 
-        // If assigning a class to a trait-typed variable, wrap it
-        // If assigning T to T?, box value types
-        let (final_val, store_type) = match (&val_type, &declared_type) {
-            (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) => {
-                let cn = cn.clone();
-                let tn = tn.clone();
-                let wrapped = self.wrap_class_as_trait(val, &cn, &tn)?;
-                (wrapped, PlutoType::Trait(tn))
-            }
-            // T → T? coercion: box value types
-            (inner, Some(PlutoType::Nullable(expected_inner))) if !matches!(inner, PlutoType::Nullable(_)) && **expected_inner != PlutoType::Void => {
-                let wrapped = self.emit_nullable_wrap(val, inner);
-                (wrapped, PlutoType::Nullable(expected_inner.clone()))
-            }
-            (_, Some(dt)) => (val, dt.clone()),
-            _ => (val, val_type),
+        let (final_val, store_type) = match &declared_type {
+            Some(dt) => (self.coerce_to_expected_type(val, &val_type, dt)?, dt.clone()),
+            None => (val, val_type),
         };
 
         let cl_type = pluto_to_cranelift(&store_type);
@@ -2359,13 +2344,19 @@ impl<'a> LowerContext<'a> {
                 let handle = self.call_runtime("__pluto_array_new", &[cap_val]);
 
                 if !elements.is_empty() {
-                    let elem_type = infer_type_for_expr(&elements[0].node, self.env, &self.var_types);
-                    // Hoist func_ref before loop to avoid repeated HashMap lookups
-                    let func_ref_push = self.module.declare_func_in_func(self.runtime.get("__pluto_array_push"), self.builder.func);
+                    // An annotated element type (recorded by typeck as a
+                    // coercion site) wins over first-element inference.
+                    let elem_type = elements
+                        .iter()
+                        .find_map(|e| self.env.coercion_sites.get(&(e.span.start, e.span.end)).cloned())
+                        .unwrap_or_else(|| infer_type_for_expr(&elements[0].node, self.env, &self.var_types));
                     for elem in elements {
                         let val = self.lower_expr(&elem.node)?;
+                        let actual = infer_type_for_expr(&elem.node, self.env, &self.var_types);
+                        let val = self.coerce_to_expected_type(val, &actual, &elem_type)?;
                         let val = self.emit_string_escape(val, &elem_type);
                         let slot = to_array_slot(val, &elem_type, &mut self.builder);
+                        let func_ref_push = self.module.declare_func_in_func(self.runtime.get("__pluto_array_push"), self.builder.func);
                         self.builder.ins().call(func_ref_push, &[handle, slot]);
                     }
                 }
@@ -2380,6 +2371,8 @@ impl<'a> LowerContext<'a> {
                 for (k_expr, v_expr) in entries {
                     let k_val = self.lower_expr(&k_expr.node)?;
                     let v_val = self.lower_expr(&v_expr.node)?;
+                    let actual_v = infer_type_for_expr(&v_expr.node, self.env, &self.var_types);
+                    let v_val = self.coerce_to_expected_type(v_val, &actual_v, &vt)?;
                     let k_val = self.emit_string_escape(k_val, &kt);
                     let v_val = self.emit_string_escape(v_val, &vt);
                     let key_slot = to_array_slot(k_val, &kt, &mut self.builder);
@@ -2873,6 +2866,7 @@ impl<'a> LowerContext<'a> {
             TypeExpr::Qualified { module, name } => format!("{}_{}", module, name),
             TypeExpr::Fn { .. } => "fn".to_string(), // Function types in type args (rare)
             TypeExpr::Stream(inner) => format!("stream_{}", self.mangle_type_expr(&inner.node)),
+            TypeExpr::Infer => "_".to_string(),
         }
     }
 
@@ -4818,7 +4812,21 @@ fn lower_generator_block(
             Stmt::Yield { value } => {
                 // 1. Lower the yield value expression
                 let val = ctx.lower_expr(&value.node)?;
-                let val_type = infer_type_for_expr(&value.node, ctx.env, &ctx.var_types);
+                let mut val_type = infer_type_for_expr(&value.node, ctx.env, &ctx.var_types);
+                // Coerce to the stream element type when typeck recorded one
+                // (Class→Trait wrap, T→T? box)
+                let val = if let Some(target) = ctx
+                    .env
+                    .coercion_sites
+                    .get(&(value.span.start, value.span.end))
+                    .cloned()
+                {
+                    let coerced = ctx.coerce_to_expected_type(val, &val_type, &target)?;
+                    val_type = target;
+                    coerced
+                } else {
+                    val
+                };
 
                 // 2. Store result at gen_ptr[24]
                 let slot_val = to_array_slot(val, &val_type, &mut ctx.builder);
@@ -5211,6 +5219,9 @@ fn resolve_param_type(param: &Param, env: &TypeEnv) -> PlutoType {
 
 pub fn resolve_type_expr_to_pluto(ty: &TypeExpr, env: &TypeEnv) -> PlutoType {
     match ty {
+        // Infer only survives on closure params, which are materialized
+        // to concrete types before lifting; unreachable in practice.
+        TypeExpr::Infer => PlutoType::Void,
         TypeExpr::Named(name) => match name.as_str() {
             "int" => PlutoType::Int,
             "float" => PlutoType::Float,
