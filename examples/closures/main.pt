@@ -17,4 +17,13 @@ fn main() {
 
     let greet = (name: string) => "hello " + name
     print(greet("pluto"))
+
+    // Param types can be omitted when context provides them
+    print(apply((x) => x + 1, 41))
+    let sum: fn(int, int) int = (a, b) => a + b
+    print(sum(2, 3))
+
+    // Explicit return-type annotation
+    let seven = () int => 7
+    print(seven())
 }

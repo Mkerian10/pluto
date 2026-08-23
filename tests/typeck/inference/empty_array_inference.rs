@@ -1,7 +1,7 @@
 //! Empty array type inference tests - 15 tests
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run_stdout, compile_should_fail_with};
 
 #[test]
 fn empty_array_no_annotation() {
@@ -33,7 +33,17 @@ fn nested_empty_array() {
 
 #[test]
 fn empty_array_in_map_value() {
-    compile_should_fail_with(r#"fn main(){ let m=Map<string,[int]>{"a":[]} }"#, "");
+    // Map literal values receive the declared value type as an inference
+    // hint, so an empty array literal resolves to [int] here.
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let m = Map<string, [int]> { "a": [] }
+    print(m["a"].len())
+}
+"#,
+    );
+    assert_eq!(out.trim(), "0");
 }
 
 #[test]

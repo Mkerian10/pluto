@@ -1,11 +1,10 @@
 //! Nullable in containers tests - 15 tests
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run_stdout, compile_should_fail_with};
 
 // Arrays with nullable elements
 #[test]
-#[ignore]
 fn array_nullable_element_mismatch() { compile_should_fail_with(r#"fn main(){let a:[int?]=[42,true]}"#, "expected int?, found bool"); }
 // This test already passes - correctly rejects none in non-nullable array
 #[test]
@@ -35,9 +34,23 @@ fn set_nullable_element() { compile_should_fail_with(r#"fn main(){let s=Set<int?
 fn set_nullable_contains() { compile_should_fail_with(r#"fn main(){let s=Set<int?>{42,none} let b=s.contains(none)}"#, ""); }
 
 // Nested containers with nullable
-// This test already passes - compiles successfully (nested nullable containers work)
 #[test]
-fn array_of_nullable_arrays() { compile_should_fail_with(r#"fn main(){let a:[[int]?]=[[1,2],none]}"#, ""); }
+fn array_of_nullable_arrays() {
+    // The annotated element type [int]? lets literal elements and none mix
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let a: [[int]?] = [[1, 2], none]
+    print(a[1] == none)
+    let first = a[0]
+    if first != none {
+        print(first[0] + first[1])
+    }
+}
+"#,
+    );
+    assert_eq!(out.trim(), "true\n3");
+}
 // This test already passes - compiles successfully (nested nullable maps work)
 #[test]
 fn map_of_nullable_maps() { compile_should_fail_with(r#"fn main(){let m:Map<string,Map<string,int>?>=Map<string,Map<string,int>?>{} m[\"a\"]=none}"#, ""); }

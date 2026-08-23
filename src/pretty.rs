@@ -752,6 +752,9 @@ impl PrettyPrinter {
                 self.write("stream ");
                 self.emit_type_expr(&inner.node);
             }
+            // Emitted only for closure params, where emit_params omits the
+            // annotation entirely; harmless placeholder elsewhere.
+            TypeExpr::Infer => self.write("_"),
         }
     }
 
@@ -765,6 +768,9 @@ impl PrettyPrinter {
                 self.write("mut self");
             } else if p.name.node == "self" && matches!(&p.ty.node, TypeExpr::Named(n) if n == "Self") {
                 self.write("self");
+            } else if matches!(&p.ty.node, TypeExpr::Infer) {
+                // Untyped closure param: `(x) => ...`
+                self.write(&p.name.node);
             } else {
                 self.write(&p.name.node);
                 self.write(": ");

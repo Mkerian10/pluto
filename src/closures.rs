@@ -187,9 +187,21 @@ impl VisitMut for ClosureLifter<'_> {
             let dummy = Expr::IntLit(0);
             let old_expr = std::mem::replace(&mut expr.node, dummy);
 
-            if let Expr::Closure { params, return_type: _, body } = old_expr {
+            if let Expr::Closure { mut params, return_type: _, body } = old_expr {
                 let fn_name = format!("__closure_{}", *self.counter);
                 *self.counter += 1;
+
+                // Materialize params left as Infer from the types typeck
+                // resolved at the use site (keyed by closure expr span).
+                if params.iter().any(|p| matches!(p.ty.node, TypeExpr::Infer))
+                    && let Some(ptys) = self.env.closure_param_types.get(&(span.start, span.end))
+                {
+                    for (p, t) in params.iter_mut().zip(ptys.iter()) {
+                        if matches!(p.ty.node, TypeExpr::Infer) {
+                            p.ty = Spanned::new(pluto_type_to_type_expr(t), p.ty.span);
+                        }
+                    }
+                }
 
                 // Look up captures from typeck's closure_captures (keyed by span)
                 let captures = self.env.closure_captures
@@ -376,6 +388,9 @@ fn resolve_type_for_lift(ty: &TypeExpr) -> PlutoType {
         },
         TypeExpr::Array(inner) => PlutoType::Array(Box::new(resolve_type_for_lift(&inner.node))),
         TypeExpr::Qualified { module, name } => PlutoType::Class(format!("{}.{}", module, name)),
+        // Infer params are materialized from closure_param_types before
+        // lifting; a leftover means typeck never saw this closure.
+        TypeExpr::Infer => PlutoType::Void,
         TypeExpr::Fn { params, return_type, fallible } => {
             let pts: Vec<PlutoType> = params.iter().map(|p| resolve_type_for_lift(&p.node)).collect();
             let ret = resolve_type_for_lift(&return_type.node);

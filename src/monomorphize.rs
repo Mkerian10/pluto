@@ -346,6 +346,7 @@ fn substitute_in_type_expr(te: &mut TypeExpr, bindings: &HashMap<String, TypeExp
             substitute_in_type_expr(&mut inner.node, bindings);
         }
         TypeExpr::Qualified { .. } => {}
+        TypeExpr::Infer => {}
         TypeExpr::Fn { params, return_type, fallible: _ } => {
             for p in params.iter_mut() {
                 substitute_in_type_expr(&mut p.node, bindings);
@@ -910,6 +911,7 @@ fn resolve_generic_te_in_function(func: &mut Function, env: &mut TypeEnv) -> Res
 /// Also ensures the instantiation is registered.
 fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), CompileError> {
     match te {
+        TypeExpr::Infer => {}
         TypeExpr::Generic { name, type_args } => {
             // Built-in generic types (Map, Set) are kept as-is — no monomorphization needed
             if name == "Map" || name == "Set" || name == "Task" || name == "Sender" || name == "Receiver" {
@@ -956,6 +958,9 @@ fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), Compil
 /// Convert a TypeExpr to a PlutoType (simple case for already-resolved exprs).
 fn type_expr_to_pluto_type(te: &TypeExpr, env: &TypeEnv) -> Result<PlutoType, CompileError> {
     match te {
+        // Closure Infer params are resolved from context when the
+        // (monomorphized) body is type-checked; a placeholder is fine here.
+        TypeExpr::Infer => Ok(PlutoType::Void),
         TypeExpr::Named(name) => match name.as_str() {
             "int" => Ok(PlutoType::Int),
             "float" => Ok(PlutoType::Float),

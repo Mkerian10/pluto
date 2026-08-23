@@ -468,6 +468,7 @@ fn collect_types_from_type_expr(ty: &TypeExpr, types: &mut HashSet<String>) {
         TypeExpr::Nullable(inner) => {
             collect_types_from_type_expr(&inner.node, types);
         }
+        TypeExpr::Infer => {}
         TypeExpr::Generic { name, type_args } => {
             // Handle built-in generics (Map, Set)
             match name.as_str() {

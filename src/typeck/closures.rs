@@ -16,19 +16,43 @@ pub(crate) fn infer_closure(
     body: &Spanned<Block>,
     span: crate::span::Span,
     env: &mut TypeEnv,
+    expected: Option<&PlutoType>,
 ) -> Result<PlutoType, CompileError> {
     let outer_depth = env.scope_depth();
 
     // Push a scope for the closure parameters
     env.push_scope();
 
+    // Untyped params (`(x) => ...`) resolve from the expected fn type
+    let expected_params = match expected {
+        Some(PlutoType::Fn(ps, _, _)) => Some(ps.clone()),
+        _ => None,
+    };
+
     // Resolve and define each param
     let mut param_types = Vec::new();
-    for p in params {
-        let ty = resolve_type(&p.ty, env)?;
+    for (i, p) in params.iter().enumerate() {
+        let ty = if matches!(p.ty.node, TypeExpr::Infer) {
+            match expected_params.as_ref().and_then(|ps| ps.get(i)) {
+                Some(t) if !matches!(t, PlutoType::TypeParam(_)) => t.clone(),
+                _ => {
+                    env.pop_scope();
+                    return Err(CompileError::type_err(
+                        format!(
+                            "cannot infer type of closure parameter '{}'; add a type annotation (e.g. `({}: int) => ...`)",
+                            p.name.node, p.name.node
+                        ),
+                        p.name.span,
+                    ));
+                }
+            }
+        } else {
+            resolve_type(&p.ty, env)?
+        };
         env.define(p.name.node.clone(), ty.clone(), p.name.span)?;
         param_types.push(ty);
     }
+    env.closure_param_types.insert((span.start, span.end), param_types.clone());
 
     // Determine the return type: annotated or inferred from body
     let final_ret = if let Some(rt) = return_type {

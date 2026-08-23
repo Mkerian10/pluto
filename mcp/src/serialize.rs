@@ -467,6 +467,7 @@ pub fn compile_warning_to_diagnostic(w: &pluto::diagnostics::CompileWarning, sou
 
 pub fn type_expr_to_string(te: &TypeExpr) -> String {
     match te {
+        TypeExpr::Infer => "_".to_string(),
         TypeExpr::Named(n) => n.clone(),
         TypeExpr::Array(inner) => format!("[{}]", type_expr_to_string(&inner.node)),
         TypeExpr::Qualified { module, name } => format!("{module}.{name}"),

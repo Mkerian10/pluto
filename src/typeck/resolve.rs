@@ -154,6 +154,12 @@ pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<
             let elem = resolve_type(inner, env)?;
             Ok(PlutoType::Stream(Box::new(elem)))
         }
+        // Only closure params carry Infer, and infer_closure resolves them
+        // from the expected fn type before hitting resolve_type.
+        TypeExpr::Infer => Err(CompileError::type_err(
+            "cannot infer a type in this position; add a type annotation",
+            ty.span,
+        )),
     }
 }
 

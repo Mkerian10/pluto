@@ -1084,6 +1084,7 @@ fn typeexpr_sig(te: &parser::ast::TypeExpr) -> String {
             typeexpr_sig(&return_type.node),
             if *fallible { "!" } else { "" }
         ),
+        TypeExpr::Infer => "_".to_string(),
     }
 }
 

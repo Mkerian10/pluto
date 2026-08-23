@@ -321,5 +321,8 @@ fn resolve_type_expr(ty_expr: &TypeExpr, env: &TypeEnv) -> Result<PlutoType, Com
             let inner = resolve_type_expr(&inner_ty.node, env)?;
             Ok(PlutoType::Stream(Box::new(inner)))
         }
+        TypeExpr::Infer => Err(CompileError::codegen(
+            "unexpected inferred type in serializable validation",
+        )),
     }
 }

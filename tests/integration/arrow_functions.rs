@@ -173,3 +173,115 @@ fn arrow_complex_nesting() {
     "#);
     assert_eq!(stdout.trim(), "15");
 }
+
+// ── #165: untyped params and return-type annotations ─────────────────────────
+
+#[test]
+fn untyped_param_from_call_context() {
+    // Param type comes from the function signature the closure is passed to
+    let stdout = compile_and_run_stdout(r#"
+        fn apply(f: fn(int) int, x: int) int {
+            return f(x)
+        }
+
+        fn main() {
+            print(apply((x) => x + 1, 41))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "42");
+}
+
+#[test]
+fn untyped_params_from_let_annotation() {
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let add: fn(int, int) int = (a, b) => a + b
+            print(add(2, 3))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "5");
+}
+
+#[test]
+fn untyped_param_void_callback() {
+    let stdout = compile_and_run_stdout(r#"
+        fn each(arr: [int], f: fn(int)) {
+            for x in arr {
+                f(x)
+            }
+        }
+
+        fn main() {
+            each([1, 2], (x) => print(x * 10))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "10\n20");
+}
+
+#[test]
+fn untyped_param_string_context() {
+    let stdout = compile_and_run_stdout(r#"
+        fn shout(f: fn(string) string, s: string) string {
+            return f(s)
+        }
+
+        fn main() {
+            print(shout((s) => s + "!", "hey"))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "hey!");
+}
+
+#[test]
+fn explicit_return_type_annotation() {
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let f = () int => 7
+            print(f())
+        }
+    "#);
+    assert_eq!(stdout.trim(), "7");
+}
+
+#[test]
+fn explicit_void_return_annotation_block_body() {
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let g = () void => {
+                print(99)
+            }
+            g()
+        }
+    "#);
+    assert_eq!(stdout.trim(), "99");
+}
+
+#[test]
+fn untyped_param_capture_still_works() {
+    let stdout = compile_and_run_stdout(r#"
+        fn apply(f: fn(int) int, x: int) int {
+            return f(x)
+        }
+
+        fn main() {
+            let base = 100
+            print(apply((x) => x + base, 1))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "101");
+}
+
+#[test]
+fn untyped_param_in_generic_call_with_explicit_type_args() {
+    // With explicit type args the expected fn type is concrete, but generic
+    // arg inference runs without hints — annotated params still required
+    compile_should_fail_with(r#"
+        fn apply<T>(f: fn(T) T, x: T) T {
+            return f(x)
+        }
+
+        fn main() {
+            print(apply((x) => x + 1, 42))
+        }
+    "#, "cannot infer");
+}
