@@ -2959,6 +2959,25 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            // Null coalescing: `a ?? b`, lowest precedence, right-associative
+            if matches!(tok.node, Token::QuestionQuestion) {
+                let (lbp, rbp) = (2u8, 1u8);
+                if lbp < min_bp {
+                    break;
+                }
+                self.advance(); // consume `??`
+                let rhs = self.parse_expr(rbp)?;
+                let span = Span::new(lhs.span.start, rhs.span.end);
+                lhs = Spanned::new(
+                    Expr::NullCoalesce {
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    span,
+                );
+                continue;
+            }
+
             // Range: `..` (exclusive) or `..=` (inclusive)
             if matches!(tok.node, Token::DotDot | Token::DotDotEq) {
                 let inclusive = matches!(tok.node, Token::DotDotEq);
@@ -3763,16 +3782,17 @@ impl<'a> Parser<'a> {
 
 fn infix_binding_power(op: BinOp) -> (u8, u8) {
     match op {
-        BinOp::Or => (1, 2),
-        BinOp::And => (3, 4),
-        BinOp::BitOr => (5, 6),
-        BinOp::BitXor => (7, 8),
-        BinOp::BitAnd => (9, 10),
-        BinOp::Eq | BinOp::Neq => (11, 12),
-        BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => (13, 14),
-        BinOp::Shl | BinOp::Shr => (15, 16),
-        BinOp::Add | BinOp::Sub => (17, 18),
-        BinOp::Mul | BinOp::Div | BinOp::Mod => (19, 20),
+        // (1, 2) is reserved for `??`, the lowest-precedence infix operator
+        BinOp::Or => (3, 4),
+        BinOp::And => (5, 6),
+        BinOp::BitOr => (7, 8),
+        BinOp::BitXor => (9, 10),
+        BinOp::BitAnd => (11, 12),
+        BinOp::Eq | BinOp::Neq => (13, 14),
+        BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => (15, 16),
+        BinOp::Shl | BinOp::Shr => (17, 18),
+        BinOp::Add | BinOp::Sub => (19, 20),
+        BinOp::Mul | BinOp::Div | BinOp::Mod => (21, 22),
     }
 }
 

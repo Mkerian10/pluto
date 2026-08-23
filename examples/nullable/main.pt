@@ -81,5 +81,36 @@ fn main() {
     let y: int? = none
     print("int? can hold a value or none")
 
+    // ?? and narrowing
+    print(double_or_zero("21"))
+    print(double_or_zero("oops"))
+    print(describe(5))
+    print(describe(none))
+    print(guard_style("1"))
+    print(guard_style("nope"))
+
     print("done")
+}
+
+fn double_or_zero(text: string) int {
+    // ?? provides a default when a nullable is none
+    let n = text.to_int() ?? 0
+    return n * 2
+}
+
+fn describe(x: int?) string {
+    // A null check narrows the type: x is a plain int inside the branch
+    if x != none {
+        return f"twice {x} is {x + x}"
+    }
+    return "nothing"
+}
+
+fn guard_style(text: string) int {
+    let n = text.to_int()
+    if n == none {
+        return -1
+    }
+    // n is a plain int from here on
+    return n + 100
 }

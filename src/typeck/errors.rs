@@ -699,6 +699,10 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
         Expr::NullPropagate { expr: inner } => {
             collect_expr_effects(inner, ctx);
         }
+        Expr::NullCoalesce { lhs, rhs } => {
+            collect_expr_effects(lhs, ctx);
+            collect_expr_effects(rhs, ctx);
+        }
         Expr::StaticTraitCall { args, .. } => {
             for arg in args {
                 collect_expr_effects(arg, ctx);
@@ -1212,6 +1216,10 @@ fn enforce_expr(
         }
         Expr::NullPropagate { expr: inner } => {
             enforce_expr(&inner.node, inner.span, current_fn, env, lenient)
+        }
+        Expr::NullCoalesce { lhs, rhs } => {
+            enforce_expr(&lhs.node, lhs.span, current_fn, env, lenient)?;
+            enforce_expr(&rhs.node, rhs.span, current_fn, env, lenient)
         }
         Expr::StaticTraitCall { args, .. } => {
             for arg in args {

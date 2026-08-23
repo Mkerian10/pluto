@@ -231,6 +231,15 @@ pub struct TypeEnv {
     /// generic can't cache an instance with incomplete info. Cleared before
     /// normalize_registered_types instantiates everything.
     pub defer_eager_instantiation: bool,
+    /// Flow-narrowed nullable variables: name -> narrowed (non-nullable)
+    /// type, scoped to the branch/region where a null check proved them
+    /// non-none. Consulted by identifier inference before regular lookup.
+    pub narrowed_vars: ScopeTracker<PlutoType>,
+    /// Identifier read sites of narrowed variables, keyed by span -> name.
+    /// A post-typeck desugar wraps these in NullPropagate so codegen unboxes
+    /// value types and sees the narrowed type (the none-branch is proven
+    /// dead).
+    pub narrow_sites: HashMap<(usize, usize), String>,
     /// Mangled names of methods that declare `mut self`
     pub mut_self_methods: HashSet<String>,
     /// Scope-mirrored: tracks variables declared with `let` (not `let mut`)
@@ -328,6 +337,8 @@ impl TypeEnv {
             closure_return_types: HashMap::new(),
             fn_ref_sites: HashMap::new(),
             defer_eager_instantiation: false,
+            narrowed_vars: ScopeTracker::new(),
+            narrow_sites: HashMap::new(),
             mut_self_methods: HashSet::new(),
             immutable_vars: ScopeTracker::with_initial_scope(),
             variable_decls: HashMap::new(),
@@ -349,6 +360,7 @@ impl TypeEnv {
         self.task_origins.push_scope();
         self.immutable_vars.push_scope();
         self.fn_value_provenance.push_scope();
+        self.narrowed_vars.push_scope();
     }
 
     pub fn pop_scope(&mut self) {
@@ -356,6 +368,7 @@ impl TypeEnv {
         self.task_origins.pop_scope();
         self.immutable_vars.pop_scope();
         self.fn_value_provenance.pop_scope();
+        self.narrowed_vars.pop_scope();
     }
 
     /// Define a variable with validation: same-scope redeclaration and

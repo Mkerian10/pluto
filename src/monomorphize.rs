@@ -536,6 +536,10 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
     match expr {
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_)
         | Expr::StringLit(_) | Expr::Ident(_) | Expr::NoneLit => {}
+        Expr::NullCoalesce { lhs, rhs } => {
+            substitute_in_expr(&mut lhs.node, bindings);
+            substitute_in_expr(&mut rhs.node, bindings);
+        }
         Expr::NullPropagate { expr } => {
             substitute_in_expr(&mut expr.node, bindings);
         }

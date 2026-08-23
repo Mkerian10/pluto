@@ -42,6 +42,14 @@ pub(crate) fn infer_expr(
             if let Some((_, depth)) = env.lookup_with_depth(name) {
                 env.variable_reads.insert((name.clone(), depth));
             }
+            if let Some(narrowed) = env.narrowed_vars.lookup(name).cloned() {
+                if !matches!(narrowed, PlutoType::Nullable(_)) {
+                    // A null check proved this variable non-none here; record
+                    // the read so the post-typeck desugar can unwrap it.
+                    env.narrow_sites.insert((span.start, span.end), name.clone());
+                }
+                return Ok(narrowed);
+            }
             if let Some(ty) = env.lookup(name).cloned() {
                 return Ok(ty);
             }
@@ -397,7 +405,61 @@ pub(crate) fn infer_expr(
             // The actual nullable type will be determined by context (let annotation, return type, etc.)
             Ok(PlutoType::Nullable(Box::new(PlutoType::Void)))
         }
+        Expr::NullCoalesce { lhs, rhs } => {
+            let lhs_type = infer_expr(&lhs.node, lhs.span, env, None)?;
+            let PlutoType::Nullable(inner) = &lhs_type else {
+                return Err(CompileError::type_err(
+                    format!("'??' applied to non-nullable type {lhs_type}"),
+                    lhs.span,
+                ));
+            };
+            // A bare `none` on the left contributes no type; take it from the right.
+            let base = if **inner == PlutoType::Void { None } else { Some((**inner).clone()) };
+            let rhs_hint = base.clone();
+            let rhs_type = infer_expr(&rhs.node, rhs.span, env, rhs_hint.as_ref())?;
+            let Some(base) = base else {
+                // `none ?? x` — the result is just x's type.
+                return Ok(rhs_type);
+            };
+            match &rhs_type {
+                // Chaining: `a ?? b` with a nullable fallback stays nullable.
+                PlutoType::Nullable(rhs_inner) => {
+                    if !types_compatible(rhs_inner, &base, env)
+                        && **rhs_inner != PlutoType::Void
+                    {
+                        return Err(CompileError::type_err(
+                            format!("'??' fallback type mismatch: expected {base}?, found {rhs_type}"),
+                            rhs.span,
+                        ));
+                    }
+                    Ok(PlutoType::Nullable(Box::new(base)))
+                }
+                _ => {
+                    if !types_compatible(&rhs_type, &base, env) {
+                        return Err(CompileError::type_err(
+                            format!("'??' fallback type mismatch: expected {base}, found {rhs_type}"),
+                            rhs.span,
+                        ));
+                    }
+                    Ok(base)
+                }
+            }
+        }
         Expr::NullPropagate { expr } => {
+            // Redundant `?` on a flow-narrowed variable (`if f != none {
+            // print(f?.x) }`) stays legal: the unwrap runs on the plain
+            // nullable slot (no narrow-site recorded for the inner read), and
+            // its none-branch is provably dead.
+            if let Expr::Ident(n) = &expr.node {
+                if let Some(narrowed) = env.narrowed_vars.lookup(n).cloned() {
+                    if !matches!(narrowed, PlutoType::Nullable(_)) {
+                        if let Some((_, depth)) = env.lookup_with_depth(n) {
+                            env.variable_reads.insert((n.clone(), depth));
+                        }
+                        return Ok(narrowed);
+                    }
+                }
+            }
             let inner_type = infer_expr(&expr.node, expr.span, env, None)?;
             match &inner_type {
                 PlutoType::Nullable(inner) => {

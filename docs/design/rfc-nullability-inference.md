@@ -20,6 +20,12 @@ Reasons for rejection:
 
 This document is retained as design history only.
 
+**Update (2026-08-22):** while inference stayed rejected, the two ergonomics
+features specced below shipped independently: the `??` null-coalescing
+operator and flow narrowing after null checks (`if x != none { ... }`,
+including the `if x == none { return }` guard idiom). See
+`tests/integration/nullable_ergonomics.rs` for the implemented semantics.
+
 ## Motivation
 
 Pluto already infers error-ability. A function doesn't declare `fn foo() int ! SomeError` — the compiler walks the call graph, finds all `raise` statements, propagates error sets through callers, and enforces that every fallible call site uses `!` or `catch`. This is one of Pluto's best features.

@@ -456,6 +456,10 @@ impl<'a> CoverageScanner<'a> {
     /// Recursively scan an expression for NullPropagate and Propagate nodes.
     fn scan_expr(&mut self, expr: &Expr) {
         match expr {
+            Expr::NullCoalesce { lhs, rhs } => {
+                self.scan_expr(&lhs.node);
+                self.scan_expr(&rhs.node);
+            }
             Expr::NullPropagate { expr: inner } => {
                 if inner.span.start < self.source_len() {
                     // branch_id 1: null path, branch_id 2: value path

@@ -403,6 +403,11 @@ pub enum Expr {
         call: Box<Spanned<Expr>>,
     },
     NoneLit,
+    /// `a ?? b` — a if non-none, else b. Result is non-nullable when b is.
+    NullCoalesce {
+        lhs: Box<Spanned<Expr>>,
+        rhs: Box<Spanned<Expr>>,
+    },
     NullPropagate {
         expr: Box<Spanned<Expr>>,
     },

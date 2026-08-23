@@ -193,6 +193,10 @@ name = "nullable"
 path = "tests/integration/nullable.rs"
 
 [[test]]
+name = "nullable_ergonomics"
+path = "tests/integration/nullable_ergonomics.rs"
+
+[[test]]
 name = "sync"
 path = "tests/integration/sync.rs"
 

@@ -33,6 +33,17 @@ impl VisitMut for FnRefExpander<'_> {
     fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
         walk_expr_mut(self, expr);
         let key = (expr.span.start, expr.span.end);
+        // Flow-narrowed nullable read: typeck proved this variable non-none
+        // here. Wrap it in NullPropagate so codegen unboxes value types and
+        // downstream typing sees the narrowed type — the none branch the
+        // wrap emits is provably dead.
+        if let Expr::Ident(n) = &expr.node {
+            if self.env.narrow_sites.get(&key) == Some(n) {
+                let inner = Spanned::new(Expr::Ident(n.clone()), expr.span);
+                expr.node = Expr::NullPropagate { expr: Box::new(inner) };
+                return;
+            }
+        }
         let fn_name = match &expr.node {
             // Requiring the recorded name to match guards against span-key
             // collisions across files (span keys carry no file id).
@@ -92,7 +103,7 @@ impl VisitMut for FnRefExpander<'_> {
 pub fn lift_closures(program: &mut Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     // Rewrite named-function references into wrapper closures first, so the
     // lifting below treats them like any other closure literal.
-    if !env.fn_ref_sites.is_empty() {
+    if !env.fn_ref_sites.is_empty() || !env.narrow_sites.is_empty() {
         let mut expander = FnRefExpander { env };
         for func in &mut program.functions {
             for stmt in &mut func.node.body.node.stmts {
