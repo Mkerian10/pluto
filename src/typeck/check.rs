@@ -9,6 +9,29 @@ use super::infer::{infer_expr, record_fn_value_boundary};
 use super::types_compatible;
 use crate::parser::ast::Expr;
 
+
+/// If `cond` is a bare null check on a nullable variable (`x != none`,
+/// `x == none`, or the reversed operand order), return
+/// (name, is_not_equal, inner_type).
+fn null_check_target(cond: &Expr, env: &TypeEnv) -> Option<(String, bool, PlutoType)> {
+    let Expr::BinOp { op, lhs, rhs } = cond else { return None };
+    let is_neq = match op {
+        BinOp::Neq => true,
+        BinOp::Eq => false,
+        _ => return None,
+    };
+    let name = match (&lhs.node, &rhs.node) {
+        (Expr::Ident(n), Expr::NoneLit) | (Expr::NoneLit, Expr::Ident(n)) => n.clone(),
+        _ => return None,
+    };
+    match env.lookup(&name) {
+        Some(PlutoType::Nullable(inner)) if **inner != PlutoType::Void => {
+            Some((name, is_neq, (**inner).clone()))
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
     let prev_fn = env.current_fn.take();
     env.current_fn = Some(if let Some(cn) = class_name {
@@ -298,6 +321,11 @@ fn check_stmt(
             if matches!(&var_type, PlutoType::Task(_)) {
                 env.invalidated_task_vars.insert(target.node.clone());
             }
+            // Reassignment re-widens a flow-narrowed nullable (the new value
+            // may be none again).
+            if env.narrowed_vars.lookup(&target.node).is_some() {
+                env.narrowed_vars.insert(target.node.clone(), var_type.clone());
+            }
             // Reject scope-tainted closures escaping via assignment to outer variable
             if !env.scope_tainted.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
                 if let Some(scope_depth) = env.scope_body_depths.last() {
@@ -323,13 +351,46 @@ fn check_stmt(
                     condition.span,
                 ));
             }
+            // Flow narrowing: `x != none` proves x non-none in the then
+            // branch; `x == none` proves it in the else branch; a guard
+            // (`if x == none { return }` with no else, or `if x != none`
+            // whose else terminates) proves it for the rest of the block.
+            let null_check = null_check_target(&condition.node, env);
             env.push_scope();
+            if let Some((ref name, is_neq, ref inner)) = null_check {
+                if is_neq {
+                    env.narrowed_vars.insert(name.clone(), inner.clone());
+                }
+            }
             check_block(&then_block.node, env, return_type)?;
             env.pop_scope();
             if let Some(else_blk) = else_block {
                 env.push_scope();
+                if let Some((ref name, is_neq, ref inner)) = null_check {
+                    if !is_neq {
+                        env.narrowed_vars.insert(name.clone(), inner.clone());
+                    }
+                }
                 check_block(&else_blk.node, env, return_type)?;
                 env.pop_scope();
+            }
+            // Guard idiom: the branch that sees `none` never falls through,
+            // so the variable is non-none for the rest of the current block.
+            if let Some((name, is_neq, inner)) = null_check {
+                let then_terminates = super::block_always_terminates(&then_block.node);
+                let else_terminates = else_block
+                    .as_ref()
+                    .is_some_and(|eb| super::block_always_terminates(&eb.node));
+                let none_path_dead = if is_neq {
+                    // `if x != none { ... } else { <terminates> }`
+                    else_terminates
+                } else {
+                    // `if x == none { <terminates> }` (with or without else)
+                    then_terminates
+                };
+                if none_path_dead {
+                    env.narrowed_vars.insert(name, inner);
+                }
             }
         }
         Stmt::While { condition, body } => {

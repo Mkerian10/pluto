@@ -387,12 +387,14 @@ fn boundary_punctuation_combinations() {
 
 #[test]
 fn boundary_question_marks() {
-    // Test nullable type operator: T?, T??, T???
+    // `??` lexes as the null-coalescing token (longest match); a lone `?`
+    // stays Question. x? y?? z??? → ?, ??, then ??+?.
     let src = "x? y?? z???";
     let tokens = lex_ok(src);
-    // x ? y ? ? z ? ? ?
     let question_count = tokens.iter().filter(|(t, _)| matches!(t, Token::Question)).count();
-    assert_eq!(question_count, 6);
+    let coalesce_count = tokens.iter().filter(|(t, _)| matches!(t, Token::QuestionQuestion)).count();
+    assert_eq!(question_count, 2);
+    assert_eq!(coalesce_count, 2);
 }
 
 #[test]

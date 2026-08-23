@@ -289,6 +289,8 @@ pub enum Token {
     Dot,
     #[token("?")]
     Question,
+    #[token("??")]
+    QuestionQuestion,
 
     // Newline (significant for statement termination)
     // Supports both LF (\n) and CRLF (\r\n) line endings
@@ -409,6 +411,7 @@ impl std::fmt::Display for Token {
             Token::DotDot => write!(f, ".."),
             Token::Dot => write!(f, "."),
             Token::Question => write!(f, "?"),
+            Token::QuestionQuestion => write!(f, "??"),
             Token::Newline => write!(f, "newline"),
             Token::Comment => write!(f, "comment"),
         }

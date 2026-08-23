@@ -113,6 +113,10 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
         )),
 
         // Null propagation — rejected (side-effectful)
+        Expr::NullCoalesce { .. } => Err(CompileError::syntax(
+            "null coalescing (??) is not allowed in contracts",
+            span,
+        )),
         Expr::NullPropagate { .. } => Err(CompileError::syntax(
             "null propagation is not allowed in contract expressions",
             span,

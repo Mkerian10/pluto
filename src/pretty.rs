@@ -1380,6 +1380,11 @@ impl PrettyPrinter {
             Expr::NoneLit => {
                 self.write("none");
             }
+            Expr::NullCoalesce { lhs, rhs } => {
+                self.emit_expr(&lhs.node, 2);
+                self.write(" ?? ");
+                self.emit_expr(&rhs.node, 1);
+            }
             Expr::NullPropagate { expr } => {
                 self.emit_expr(&expr.node, 25);
                 self.write("?");

@@ -78,6 +78,8 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 
 **Dual file formats** — The compiler accepts both `.pt` (human-readable text source) and `.pluto` (binary AST with UUIDs). All entry points auto-detect format via magic bytes. Module resolution tries `.pluto` first, falls back to `.pt`. Stdlib and examples use `.pt`. When both `name.pluto` and `name.pt` exist, `.pluto` is preferred.
 
+**Nullable ergonomics** — `a ?? b` null-coalescing (lowest precedence, right-associative; result non-nullable when `b` is). Flow narrowing: `if x != none { /* x: T here */ }`, `x == none` narrows the else branch, and a guard whose none-path terminates (`if x == none { return }`) narrows the rest of the block. Redundant `?` on a narrowed variable stays legal.
+
 **String interpolation** — f-strings: `f"hello {name}"` with arbitrary expressions inside `{}`. Plain strings do NOT interpolate (`"{x}"` is literal).
 
 **Codegen target** — Auto-detected via `host_target_triple()` in `src/codegen/mod.rs` and `src/toolchain.rs`. Supports aarch64/x86_64 on macOS/Linux.

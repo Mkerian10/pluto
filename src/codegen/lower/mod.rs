@@ -2175,6 +2175,69 @@ impl<'a> LowerContext<'a> {
             Expr::FloatLit(n) => Ok(self.builder.ins().f64const(*n)),
             Expr::BoolLit(b) => Ok(self.builder.ins().iconst(types::I8, if *b { 1 } else { 0 })),
             Expr::NoneLit => Ok(self.builder.ins().iconst(types::I64, 0)),
+            Expr::NullCoalesce { lhs, rhs } => {
+                // a ?? b: a if non-none, else b. When b is non-nullable the
+                // result is unwrapped T (value types unbox); when b is
+                // nullable the result stays in nullable representation.
+                let lhs_val = self.lower_expr(&lhs.node)?;
+                let lhs_type = infer_type_for_expr(&lhs.node, self.env, &self.var_types);
+                let rhs_type = infer_type_for_expr(&rhs.node, self.env, &self.var_types);
+                let result_nullable = matches!(rhs_type, PlutoType::Nullable(_));
+
+                let inner_type = match &lhs_type {
+                    PlutoType::Nullable(inner) => (**inner).clone(),
+                    _ => return Err(CompileError::codegen("?? applied to non-nullable in lowered AST")),
+                };
+                let result_cl = if result_nullable {
+                    types::I64
+                } else {
+                    pluto_to_cranelift(&inner_type)
+                };
+
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let is_none = self.builder.ins().icmp(IntCC::Equal, lhs_val, zero);
+
+                let rhs_bb = self.builder.create_block();
+                let unwrap_bb = self.builder.create_block();
+                let merge_bb = self.builder.create_block();
+                self.builder.append_block_param(merge_bb, result_cl);
+
+                self.builder.ins().brif(is_none, rhs_bb, &[], unwrap_bb, &[]);
+
+                // Fallback: evaluate b
+                self.builder.switch_to_block(rhs_bb);
+                self.builder.seal_block(rhs_bb);
+                let rhs_val = self.lower_expr(&rhs.node)?;
+                self.builder.ins().jump(merge_bb, &[rhs_val]);
+
+                // Non-none: pass through (nullable result) or unwrap
+                self.builder.switch_to_block(unwrap_bb);
+                self.builder.seal_block(unwrap_bb);
+                let unwrapped = if result_nullable {
+                    lhs_val
+                } else {
+                    match &inner_type {
+                        PlutoType::Int => {
+                            self.builder.ins().load(types::I64, MemFlags::new(), lhs_val, Offset32::new(0))
+                        }
+                        PlutoType::Float => {
+                            let raw = self.builder.ins().load(types::I64, MemFlags::new(), lhs_val, Offset32::new(0));
+                            self.builder.ins().bitcast(types::F64, MemFlags::new(), raw)
+                        }
+                        PlutoType::Bool | PlutoType::Byte => {
+                            let raw = self.builder.ins().load(types::I64, MemFlags::new(), lhs_val, Offset32::new(0));
+                            self.builder.ins().ireduce(types::I8, raw)
+                        }
+                        // Heap types: nullable repr IS the pointer
+                        _ => lhs_val,
+                    }
+                };
+                self.builder.ins().jump(merge_bb, &[unwrapped]);
+
+                self.builder.switch_to_block(merge_bb);
+                self.builder.seal_block(merge_bb);
+                Ok(self.builder.block_params(merge_bb)[0])
+            }
             Expr::NullPropagate { expr: inner } => {
                 // Lower the inner expression (must be Nullable(T))
                 let val = self.lower_expr(&inner.node)?;
@@ -2729,14 +2792,13 @@ impl<'a> LowerContext<'a> {
         for (i, arg) in args.iter().enumerate() {
             let val = self.lower_expr(&arg.node)?;
             let arg_actual_type = infer_type_for_expr(&arg.node, self.env, &self.var_types);
-            let param_expected = param_types.get(i);
-
-            if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_actual_type, param_expected) {
-                // Wrap class as trait handle (single pointer)
-                let wrapped = self.wrap_class_as_trait(val, cn, tn)?;
-                arg_values.push(wrapped);
-            } else {
-                arg_values.push(val);
+            match param_types.get(i) {
+                Some(expected) => {
+                    // Class→Trait wrap and T→T? boxing both live here
+                    let coerced = self.coerce_to_expected_type(val, &arg_actual_type, expected)?;
+                    arg_values.push(coerced);
+                }
+                None => arg_values.push(val),
             }
         }
 
@@ -3822,12 +3884,13 @@ impl<'a> LowerContext<'a> {
             for (i, arg) in args.iter().enumerate() {
                 let val = self.lower_expr(&arg.node)?;
                 let arg_type = infer_type_for_expr(&arg.node, self.env, &self.var_types);
-                let param_expected = method_sig.params.get(i + 1); // +1 to skip self
-                if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_type, param_expected) {
-                    let wrapped = self.wrap_class_as_trait(val, cn, tn)?;
-                    call_args.push(wrapped);
-                } else {
-                    call_args.push(val);
+                match method_sig.params.get(i + 1) {
+                    // +1 to skip self
+                    Some(expected) => {
+                        let coerced = self.coerce_to_expected_type(val, &arg_type, expected)?;
+                        call_args.push(coerced);
+                    }
+                    None => call_args.push(val),
                 }
             }
 
@@ -3863,15 +3926,14 @@ impl<'a> LowerContext<'a> {
             for (i, arg) in args.iter().enumerate() {
                 let val = self.lower_expr(&arg.node)?;
                 let arg_type = infer_type_for_expr(&arg.node, self.env, &self.var_types);
-
-                // Check if we're passing a class instance to a trait parameter
-                let param_expected = method_sig.as_ref().and_then(|sig| sig.params.get(i + 1)); // +1 to skip self
-                if let (PlutoType::Class(cn), Some(PlutoType::Trait(tn))) = (&arg_type, param_expected) {
-                    // Wrap the class instance as a trait handle
-                    let wrapped = self.wrap_class_as_trait(val, &cn, &tn)?;
-                    arg_values.push(wrapped);
-                } else {
-                    arg_values.push(val);
+                match method_sig.as_ref().and_then(|sig| sig.params.get(i + 1)) {
+                    // +1 to skip self
+                    Some(expected) => {
+                        let expected = expected.clone();
+                        let coerced = self.coerce_to_expected_type(val, &arg_type, &expected)?;
+                        arg_values.push(coerced);
+                    }
+                    None => arg_values.push(val),
                 }
             }
 
@@ -5616,6 +5678,20 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
         }
         Expr::Range { .. } => PlutoType::Range,
         Expr::NoneLit => PlutoType::Nullable(Box::new(PlutoType::Void)),
+        Expr::NullCoalesce { lhs, rhs } => {
+            let rhs_type = infer_type_for_expr(&rhs.node, env, var_types);
+            if matches!(rhs_type, PlutoType::Nullable(_)) {
+                match infer_type_for_expr(&lhs.node, env, var_types) {
+                    PlutoType::Nullable(inner) if *inner != PlutoType::Void => PlutoType::Nullable(inner),
+                    _ => rhs_type,
+                }
+            } else {
+                match infer_type_for_expr(&lhs.node, env, var_types) {
+                    PlutoType::Nullable(inner) if *inner != PlutoType::Void => *inner,
+                    _ => rhs_type,
+                }
+            }
+        }
         Expr::NullPropagate { expr } => {
             // The result of `expr?` is the inner type if nullable, otherwise same type
             let inner = infer_type_for_expr(&expr.node, env, var_types);

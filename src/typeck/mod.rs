@@ -215,7 +215,7 @@ fn generate_warnings(env: &TypeEnv, program: &Program) -> Vec<CompileWarning> {
 }
 
 /// Does this statement terminate every path through its containing block?
-fn stmt_terminates(stmt: &crate::parser::ast::Stmt) -> bool {
+pub(crate) fn stmt_terminates(stmt: &crate::parser::ast::Stmt) -> bool {
     use crate::parser::ast::Stmt;
     match stmt {
         Stmt::Return(_) | Stmt::Raise { .. } | Stmt::Break | Stmt::Continue => true,
@@ -227,6 +227,10 @@ fn stmt_terminates(stmt: &crate::parser::ast::Stmt) -> bool {
         }
         _ => false,
     }
+}
+
+pub(crate) fn block_always_terminates(block: &crate::parser::ast::Block) -> bool {
+    block_terminates(block)
 }
 
 fn block_terminates(block: &crate::parser::ast::Block) -> bool {

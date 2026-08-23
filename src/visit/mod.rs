@@ -537,6 +537,10 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
         Expr::UnaryOp { operand, .. } => v.visit_expr(operand),
         Expr::Propagate { expr: inner } => v.visit_expr(inner),
         Expr::NullPropagate { expr: inner } => v.visit_expr(inner),
+        Expr::NullCoalesce { lhs, rhs } => {
+            v.visit_expr(lhs);
+            v.visit_expr(rhs);
+        }
         Expr::Spawn { call } => v.visit_expr(call),
         Expr::Cast {
             expr: inner,
@@ -1055,6 +1059,10 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, expr: &mut Spanned<Expr>) {
         Expr::UnaryOp { operand, .. } => v.visit_expr_mut(operand),
         Expr::Propagate { expr: inner } => v.visit_expr_mut(inner),
         Expr::NullPropagate { expr: inner } => v.visit_expr_mut(inner),
+        Expr::NullCoalesce { lhs, rhs } => {
+            v.visit_expr_mut(lhs);
+            v.visit_expr_mut(rhs);
+        }
         Expr::Spawn { call } => v.visit_expr_mut(call),
         Expr::Cast {
             expr: inner,
@@ -1274,6 +1282,7 @@ mod tests {
                 Expr::MapLit { .. } => "MapLit",
                 Expr::SetLit { .. } => "SetLit",
                 Expr::NullPropagate { .. } => "NullPropagate",
+                Expr::NullCoalesce { .. } => "NullCoalesce",
                 Expr::StaticTraitCall { .. } => "StaticTraitCall",
                 Expr::QualifiedAccess { .. } => "QualifiedAccess",
                 Expr::If { .. } => "If",
