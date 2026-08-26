@@ -1,0 +1,74 @@
+name: Publish Experimental Release
+
+# Manually-triggered release channel for downstream projects (MCP server,
+# external tools) that want something more stable than master without
+# pinning to a commit. The `experimental` tag and release are replaced
+# in place on each run. See issue #194.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+          - os: macos-latest
+            target: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # The channel's promise is "more stable than master": a commit only
+      # ships if the full suite passes on the release build's platform.
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Build release binaries
+        run: cargo build --release -p pluto -p pluto-mcp
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar czf dist/pluto-experimental-${{ matrix.target }}.tar.gz \
+            -C target/release pluto pluto-mcp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pluto-experimental-${{ matrix.target }}
+          path: dist/pluto-experimental-${{ matrix.target }}.tar.gz
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Replace experimental release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete experimental --cleanup-tag -y || true
+          gh release create experimental \
+            --prerelease \
+            --title "Experimental Build" \
+            --notes "Experimental early-alpha build from commit ${{ github.sha }}.
+
+          **WARNING**: unversioned release, replaced in place on each publish. Not for production use.
+
+          Contents: \`pluto\` (compiler CLI) and \`pluto-mcp\` (MCP server) for linux-x86_64 and macos-arm64.
+
+          Built from: ${{ github.sha }}" \
+            dist/*.tar.gz
