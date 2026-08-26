@@ -5,62 +5,62 @@ use common::compile_should_fail_with;
 
 // Scoped class depends on singleton
 #[test]
-#[ignore] // Compiler limitation: DI scoping not fully implemented
+#[ignore] // Unimplemented: DI lifetime-mixing validation (singleton/scoped/transient dependency rules) — see #125
 fn scoped_depends_singleton() { compile_should_fail_with(r#"class A{} scoped class B[a:A]{} app MyApp{fn main(self){}}"#, ""); }
 
 // Singleton depends on scoped (invalid)
 #[test]
-#[ignore] // Compiler limitation: DI scoping not fully implemented
+#[ignore] // Unimplemented: DI lifetime-mixing validation (singleton/scoped/transient dependency rules) — see #125
 fn singleton_depends_scoped() { compile_should_fail_with(r#"scoped class A{} class B[a:A]{} app MyApp{fn main(self){}}"#, "scope"); }
 
 // Transient depends on singleton
 #[test]
-#[ignore] // Compiler limitation: DI scoping not fully implemented
+#[ignore] // Unimplemented: DI lifetime-mixing validation (singleton/scoped/transient dependency rules) — see #125
 fn transient_depends_singleton() { compile_should_fail_with(r#"class A{} transient class B[a:A]{} app MyApp{fn main(self){}}"#, ""); }
 
 // Singleton depends on transient (invalid)
 #[test]
-#[ignore] // Compiler limitation: DI scoping not fully implemented
+#[ignore] // Unimplemented: DI lifetime-mixing validation (singleton/scoped/transient dependency rules) — see #125
 fn singleton_depends_transient() { compile_should_fail_with(r#"transient class A{} class B[a:A]{} app MyApp{fn main(self){}}"#, "scope"); }
 
 // Scoped depends on transient
 #[test]
-#[ignore] // Compiler limitation: DI scoping not fully implemented
+#[ignore] // Unimplemented: DI lifetime-mixing validation (singleton/scoped/transient dependency rules) — see #125
 fn scoped_depends_transient() { compile_should_fail_with(r#"transient class A{} scoped class B[a:A]{} app MyApp{fn main(self){}}"#, ""); }
 
 // Transient depends on scoped (invalid)
 #[test]
-#[ignore] // Compiler limitation: DI scoping not fully implemented
+#[ignore] // Unimplemented: DI lifetime-mixing validation (singleton/scoped/transient dependency rules) — see #125
 fn transient_depends_scoped() { compile_should_fail_with(r#"scoped class A{} transient class B[a:A]{} app MyApp{fn main(self){}}"#, "scope"); }
 
 // App depends on scoped
 #[test]
-#[ignore] // Compiler limitation: DI scoping not fully implemented
+#[ignore] // Unimplemented: DI lifetime-mixing validation (singleton/scoped/transient dependency rules) — see #125
 fn app_depends_scoped() { compile_should_fail_with(r#"scoped class A{} app MyApp[a:A]{fn main(self){}}"#, "scope"); }
 
 // App depends on transient
 #[test]
-#[ignore] // Compiler limitation: DI scoping not fully implemented
+#[ignore] // Unimplemented: DI lifetime-mixing validation (singleton/scoped/transient dependency rules) — see #125
 fn app_depends_transient() { compile_should_fail_with(r#"transient class A{} app MyApp[a:A]{fn main(self){}}"#, "scope"); }
 
 // Scope violation in chain
 #[test]
-#[ignore] // Compiler limitation: DI scoping not fully implemented
+#[ignore] // Unimplemented: DI lifetime-mixing validation (singleton/scoped/transient dependency rules) — see #125
 fn scope_chain_violation() { compile_should_fail_with(r#"scoped class A{} class B[a:A]{} class C[b:B]{} app MyApp{fn main(self){}}"#, "scope"); }
 
 // Mixed scope deps
 #[test]
-#[ignore] // Compiler limitation: DI scoping not fully implemented
+#[ignore] // Unimplemented: DI lifetime-mixing validation (singleton/scoped/transient dependency rules) — see #125
 fn mixed_scope_deps() { compile_should_fail_with(r#"class A{} scoped class B{} class C[a:A,b:B]{} app MyApp{fn main(self){}}"#, "scope"); }
 
 // Scoped class without app
 #[test]
-#[ignore] // Compiler limitation: DI scoping not fully implemented
+#[ignore] // Unimplemented: DI lifetime-mixing validation (singleton/scoped/transient dependency rules) — see #125
 fn scoped_no_app() { compile_should_fail_with(r#"scoped class A{} fn main(){let a=A{}}"#, ""); }
 
 // Transient class without app
 #[test]
-#[ignore] // Compiler limitation: DI scoping not fully implemented
+#[ignore] // Unimplemented: DI lifetime-mixing validation (singleton/scoped/transient dependency rules) — see #125
 fn transient_no_app() { compile_should_fail_with(r#"transient class A{} fn main(){let a=A{}}"#, ""); }
 
 // Manual construction of DI class
