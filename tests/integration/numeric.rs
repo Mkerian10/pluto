@@ -249,3 +249,69 @@ fn pow_int_catch_wildcard() {
     );
     assert_eq!(out, "99\n");
 }
+
+// ── Deterministic float formatting (#130) ────────────────────────────────────
+// Floats print as the shortest decimal string that round-trips to the same
+// double: fixed notation for decimal exponents -4..15, scientific outside,
+// canonical inf/-inf/nan. Platform-independent by construction.
+
+#[test]
+fn float_formatting_shortest_roundtrip() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    print(5.5)
+    print(7.0)
+    print(10.0)
+    print(3000000.0)
+    print(0.1 + 0.2)
+    print(1.0 / 3.0)
+    print(0.0001)
+    print(0.0)
+    print(-0.0)
+}
+"#,
+    );
+    assert_eq!(
+        out.trim(),
+        "5.5\n7\n10\n3000000\n0.30000000000000004\n0.3333333333333333\n0.0001\n0\n-0"
+    );
+}
+
+#[test]
+fn float_formatting_scientific_extremes() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    print(100000000000000000000.0)
+    print(0.00001)
+    print(1000000000000000.0)
+    print(10000000000000000.0)
+    print(2.5e-10)
+    print(1.7976931348623157e308)
+    print(5e-324)
+}
+"#,
+    );
+    assert_eq!(
+        out.trim(),
+        "1e+20\n1e-05\n1000000000000000\n1e+16\n2.5e-10\n1.7976931348623157e+308\n5e-324"
+    );
+}
+
+#[test]
+fn float_formatting_special_values() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    print(1.0 / 0.0)
+    print(-1.0 / 0.0)
+    print(0.0 / 0.0)
+    let inf = 1.0 / 0.0
+    print(inf - inf)
+    print(f"got {0.0 / 0.0} and {2.5}")
+}
+"#,
+    );
+    assert_eq!(out.trim(), "inf\n-inf\nnan\nnan\ngot nan and 2.5");
+}
