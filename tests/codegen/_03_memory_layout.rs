@@ -128,7 +128,8 @@ fn test_two_fields_float_float() {
             print(t.x + t.y)
         }
     "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "3.3");
+    // Shortest-roundtrip formatting shows the true sum of 1.1 + 2.2
+    assert_eq!(compile_and_run_stdout(src).trim(), "3.3000000000000003");
 }
 
 // ============================================================================

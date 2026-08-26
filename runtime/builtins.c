@@ -40,9 +40,49 @@ void __pluto_print_int(long value) {
     printf("%ld\n", value);
 }
 
+// Deterministic float formatting: canonical "inf"/"-inf"/"nan" for special
+// values; otherwise the shortest decimal digit string that parses back to the
+// exact same double (minimal significant digits found by widening %e until
+// the value round-trips), rendered in fixed notation for decimal exponents
+// -4..15 and scientific notation outside that range. Both libcs we target
+// (glibc, Apple libc) produce identical correctly-rounded %e/%f output in the
+// C locale, and the runtime never calls setlocale, so the result is
+// platform-independent. Returns the length.
+static int __pluto_format_double(double value, char *buf, size_t cap) {
+    if (isnan(value)) {
+        return snprintf(buf, cap, "nan");
+    }
+    if (isinf(value)) {
+        return snprintf(buf, cap, value < 0 ? "-inf" : "inf");
+    }
+    char sci[40];
+    int digits = 17;
+    for (int d = 1; d <= 17; d++) {
+        snprintf(sci, sizeof sci, "%.*e", d - 1, value);
+        if (strtod(sci, NULL) == value) {
+            digits = d;
+            break;
+        }
+    }
+    snprintf(sci, sizeof sci, "%.*e", digits - 1, value);
+    int exp = atoi(strchr(sci, 'e') + 1);
+    if (exp >= -4 && exp < 16) {
+        // Fixed notation with exactly the significant digits found above.
+        // Integer parts here are < 10^16 < 2^53, so %f prints them exactly.
+        int prec = digits - 1 - exp;
+        if (prec < 0) {
+            prec = 0;
+        }
+        return snprintf(buf, cap, "%.*f", prec, value);
+    }
+    return snprintf(buf, cap, "%s", sci);
+}
+
 void __pluto_print_float(double value) {
     __pluto_ensure_line_buffered();
-    printf("%.15g\n", value);
+    char buf[40];
+    __pluto_format_double(value, buf, sizeof buf);
+    printf("%s\n", buf);
 }
 
 void __pluto_print_string(void *header) {
@@ -631,11 +671,12 @@ long __pluto_string_byte_at(void *s, long index) {
 }
 
 void *__pluto_string_format_float(double value) {
-    int len = snprintf(NULL, 0, "%.15g", value);
+    char buf[40];
+    int len = __pluto_format_double(value, buf, sizeof buf);
     size_t alloc_size = 8 + len + 1;
     void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
     *(long *)header = len;
-    snprintf((char *)header + 8, len + 1, "%.15g", value);
+    memcpy((char *)header + 8, buf, len + 1);
     return header;
 }
 
@@ -835,11 +876,12 @@ void *__pluto_int_to_string(long value) {
 }
 
 void *__pluto_float_to_string(double value) {
-    int len = snprintf(NULL, 0, "%.15g", value);
+    char buf[40];
+    int len = __pluto_format_double(value, buf, sizeof buf);
     size_t alloc_size = 8 + len + 1;
     void *header = gc_alloc(alloc_size, GC_TAG_STRING, 0);
     *(long *)header = len;
-    snprintf((char *)header + 8, len + 1, "%.15g", value);
+    memcpy((char *)header + 8, buf, len + 1);
     return header;
 }
 

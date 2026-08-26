@@ -390,7 +390,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Platform-specific float edge case - NaN/Infinity representation varies
 fn test_float_div_by_zero_positive_infinity() {
     let source = r#"
 fn main() {
@@ -402,7 +401,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Platform-specific float edge case - NaN/Infinity representation varies
 fn test_float_div_by_zero_negative_infinity() {
     let source = r#"
 fn main() {
@@ -414,7 +412,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Platform-specific float edge case - NaN/Infinity representation varies
 fn test_float_div_zero_by_zero_nan() {
     let source = r#"
 fn main() {
@@ -441,13 +438,15 @@ fn main() {
 
 #[test]
 fn test_float_very_small() {
+    // Shortest-roundtrip formatting shows the true sum, which is not the
+    // double nearest 0.0003 (0.0001 + 0.0002 accumulates representation error)
     let source = r#"
 fn main() {
     let mut result = 0.0001 + 0.0002
     print(result)
 }
 "#;
-    assert_eq!(compile_and_run_stdout(source).trim(), "0.0003");
+    assert_eq!(compile_and_run_stdout(source).trim(), "0.00030000000000000003");
 }
 
 #[test]
@@ -814,7 +813,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Platform-specific float edge case - NaN/Infinity representation varies
 fn test_float_inf_addition() {
     let source = r#"
 fn main() {
@@ -827,7 +825,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Platform-specific float edge case - NaN/Infinity representation varies
 fn test_float_inf_minus_inf() {
     let source = r#"
 fn main() {
@@ -842,7 +839,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Platform-specific float edge case - NaN/Infinity representation varies
 fn test_float_inf_times_zero() {
     let source = r#"
 fn main() {
