@@ -115,10 +115,9 @@ fn use_it() string? {
     return s
 }
 
-fn main() string? {
+fn main() {
     let s = use_it()?
     print(s)
-    return none
 }
 "#);
     assert_eq!(out.trim(), "hello");
@@ -156,10 +155,9 @@ fn use_it() float? {
     return f
 }
 
-fn main() float? {
+fn main() {
     let f = use_it()?
     print(f)
-    return none
 }
 "#);
     assert_eq!(out.trim(), "3.14");
@@ -177,10 +175,9 @@ fn use_it() bool? {
     return b
 }
 
-fn main() bool? {
+fn main() {
     let b = use_it()?
     print(b)
-    return none
 }
 "#);
     assert_eq!(out.trim(), "true");

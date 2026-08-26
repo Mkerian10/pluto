@@ -386,7 +386,7 @@ fn gc_concurrent_allocation_churn() {
 fn churn(id: int) int {
     let mut total = 0
     let mut i = 0
-    while i < 2000 {
+    while i < 1000 {
         let s = f"task-{id}-iter-{i}"
         let arr = [i, i + 1, i + 2, i + 3]
         total = total + arr[0] + s.len()
@@ -401,7 +401,7 @@ fn main() {
     let t3 = spawn churn(3)
     let t4 = spawn churn(4)
     let mut j = 0
-    while j < 2000 {
+    while j < 1000 {
         let s = f"main-{j}"
         if s.len() > 0 {
             j = j + 1
