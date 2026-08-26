@@ -19,10 +19,14 @@ fn unqualified_import() { compile_should_fail_with(r#"import math fn main(){let 
 #[test]
 fn module_scope_confusion() { compile_should_fail_with(r#"import mod1 class C{} fn main(){let c=C{} let m=mod1.C{}}"#, ""); }
 
-// Nested scope lookup
+// Nested scope lookup of an undefined name still errors at depth
 #[test]
-#[ignore] // Compiler bug: should detect undefined variable
-fn nested_scope_lookup() { compile_should_fail_with(r#"fn main(){let x=1 if true{if true{if true{let y=x}}}}"#, ""); }
+fn nested_scope_lookup() {
+    compile_should_fail_with(
+        "fn main(){\n    let x = 1\n    if true {\n        if true {\n            if true {\n                let y = z\n            }\n        }\n    }\n}",
+        "undefined variable 'z'",
+    );
+}
 
 // Function scope vs class scope
 #[test]

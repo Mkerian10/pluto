@@ -24,10 +24,14 @@ fn module_name_collision() { compile_should_fail_with("import math\nclass math{}
 #[test]
 fn type_param_shadows_class() { compile_should_fail_with(r#"class C{} fn f<C>(x:C){} fn main(){}"#, "shadows class"); }
 
-// Local variable shadows global - intentional shadowing, not a compile error
+// Local variable shadowing a global function is rejected (#160)
 #[test]
-#[ignore] // #176: design decision - local variable shadowing global function may be intentional
-fn local_shadows_global() { compile_should_fail_with(r#"fn g()int{return 1} fn main(){let g=2}"#, ""); }
+fn local_shadows_global() {
+    compile_should_fail_with(
+        "fn g() int {\n    return 1\n}\n\nfn main(){\n    let g = 2\n}",
+        "shadows a function",
+    );
+}
 
 // Parameter shadows field - fails due to inline class syntax requiring newlines
 #[test]

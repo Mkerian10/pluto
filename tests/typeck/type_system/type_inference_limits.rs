@@ -5,8 +5,7 @@ use common::compile_should_fail_with;
 
 // Ambiguous type inference
 #[test]
-#[ignore] // Compiler limitation: doesn't catch ambiguous inference
-fn ambiguous_inference() { compile_should_fail_with(r#"fn main(){let x=none}"#, ""); }
+fn ambiguous_inference() { compile_should_fail_with(r#"fn main(){let x=none}"#, "cannot infer"); }
 
 // Cannot infer from empty array
 #[test]

@@ -62,7 +62,6 @@ fn else_if_chain_10_branches() {
 // Forward-compatible test for if-as-expression feature (not yet implemented).
 // Will pass once if can be used in expression position: let x = if cond { 1 } else { 2 }
 #[test]
-#[ignore]
 fn if_as_expression_assigned_to_variable() {
     // let x = if cond { 1 } else { 2 }
     let stdout = compile_and_run_stdout(r#"
@@ -78,7 +77,6 @@ fn if_as_expression_assigned_to_variable() {
 // Forward-compatible test for nested if-as-expression (not yet implemented).
 // Will pass once if can be used as a sub-expression in conditions.
 #[test]
-#[ignore]
 fn if_in_if_condition() {
     // if (if x { true } else { false }) { }
     let stdout = compile_and_run_stdout(r#"

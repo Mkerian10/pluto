@@ -42,5 +42,4 @@ fn generic_app() { compile_should_fail_with(r#"app MyApp<T>{fn main(self){}}"#, 
 
 // App name collision
 #[test]
-#[ignore] // Compiler bug: not detecting name collision between class and app
 fn app_name_collision() { compile_should_fail_with(r#"class MyApp{} app MyApp{fn main(self){}}"#, "already declared"); }

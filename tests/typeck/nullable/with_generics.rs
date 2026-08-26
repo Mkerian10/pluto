@@ -16,7 +16,6 @@ fn generic_unwrap_type_mismatch() { compile_should_fail_with(r#"fn unwrap<T>(x:T
 
 // Generic classes with nullable type params
 #[test]
-#[ignore] // #170: parser fails on nullable types in generic type arguments
 fn box_nullable_type_param() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b:Box<int?>=Box<int>{value:42}}"#, "type mismatch"); }
 // This test already passes - correctly rejects int? to int assignment
 #[test]
@@ -25,7 +24,6 @@ fn box_get_nullable_value() { compile_should_fail_with(r#"class Box<T>{value:T f
 
 // Generic enums with nullable
 #[test]
-#[ignore] // #170: parser fails on nullable types in generic type arguments
 fn option_nullable_variant() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} fn main(){let o:Opt<int?>=Opt<int>.Some{v:42}}"#, "type mismatch"); }
 #[test]
 #[ignore] // Parser error: "expected identifier, found =>" in match arm - match syntax issue

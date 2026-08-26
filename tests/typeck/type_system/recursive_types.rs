@@ -1,7 +1,7 @@
 //! Recursive type and type cycle tests - 20 tests
 #[path = "../common.rs"]
 mod common;
-use common::{compile_and_run, compile_should_fail_with};
+use common::{compile_and_run, compile_and_run_stdout, compile_should_fail_with};
 
 // Direct recursive class
 #[test]
@@ -23,10 +23,14 @@ fn recursive_enum_variant() { compile_should_fail_with(r#"enum E{Node{next:E}Lea
 #[ignore] // Compiler limitation: doesn't detect recursive types
 fn three_class_cycle() { compile_should_fail_with(r#"class A{b:B} class B{c:C} class C{a:A} fn main(){}"#, ""); }
 
-// Recursive type parameter
+// Deeply nested generic instantiation is a valid type
 #[test]
-#[ignore] // Compiler limitation: doesn't detect recursive types
-fn recursive_type_param() { compile_should_fail_with(r#"class C<T>{x:T} fn f()C<C<C<int>>>{} fn main(){}"#, ""); }
+fn recursive_type_param() {
+    let out = compile_and_run_stdout(
+        "class C<T> {\n    x: T\n}\n\nfn f() C<C<C<int>>> {\n    return C<C<C<int>>> { x: C<C<int>> { x: C<int> { x: 9 } } }\n}\n\nfn main(){\n    print(f().x.x.x)\n}",
+    );
+    assert_eq!(out.trim(), "9");
+}
 
 // Recursive trait bound
 #[test]
@@ -76,10 +80,14 @@ fn cycle_bracket_deps() { compile_should_fail_with(r#"class A[b:B]{} class B[a:A
 #[test]
 fn recursive_error_type() { compile_should_fail_with(r#"error E{cause:E} fn main(){}"#, ""); }
 
-// Recursive task type
+// Nested task type: a spawned fn that itself returns a task
 #[test]
-#[ignore] // Compiler limitation: doesn't detect recursive types
-fn recursive_task_type() { compile_should_fail_with(r#"fn task()Task<Task<int>>{} fn main(){}"#, ""); }
+fn recursive_task_type() {
+    let out = compile_and_run_stdout(
+        "fn leaf() int {\n    return 7\n}\n\nfn inner() Task<int> {\n    return spawn leaf()\n}\n\nfn task() Task<Task<int>> {\n    return spawn inner()\n}\n\nfn main(){\n    let t = task()\n    let t2 = t.get()!\n    print(t2.get()!)\n}",
+    );
+    assert_eq!(out.trim(), "7");
+}
 
 // Recursive channel type
 #[test]
