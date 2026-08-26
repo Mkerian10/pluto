@@ -1,93 +1,157 @@
-//! Error propagation chain tests - 25 tests
+//! Error propagation chains.
+//!
+//! Fallibility is inferred: `a()!` inside `b` makes `b` fallible, and the
+//! chain continues until someone catches (or it escapes main at runtime).
+//! These tests exercise `!` in every expression position and verify the
+//! error actually travels the chain; the rejected case is calling the top
+//! of a chain without handling it.
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run_stdout, compile_should_fail_with};
 
-// Basic propagation chains
-#[test]
-#[ignore]
-fn two_level_propagation() { compile_should_fail_with(r#"error E{} fn a()!{raise E{}} fn b(){a()!} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn three_level_propagation() { compile_should_fail_with(r#"error E{} fn a()!{raise E{}} fn b()!{return a()!} fn c(){b()!} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn propagate_in_non_fallible() { compile_should_fail_with(r#"error E{} fn a()!{raise E{}} fn b(){return a()!} fn main(){}"#, "cannot propagate"); }
-#[test]
-#[ignore]
-fn propagate_through_assignment() { compile_should_fail_with(r#"error E{} fn a()int!{raise E{}} fn b(){let x=a()!} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn propagate_in_binop() { compile_should_fail_with(r#"error E{} fn a()int!{raise E{}} fn b(){let x=a()!+1} fn main(){}"#, "unhandled error"); }
+const PREAMBLE: &str = "error E {\n    code: int\n}\n\nfn a() int {\n    raise E { code: 7 }\n}\n";
 
-// Multiple error types in chain
-#[test]
-#[ignore]
-fn two_errors_same_chain() { compile_should_fail_with(r#"error E1{} error E2{} fn a()!E1{raise E1{}} fn b()!E2{a()!} fn main(){}"#, "type mismatch"); }
-#[test]
-#[ignore]
-fn union_errors_in_chain() { compile_should_fail_with(r#"error E1{} error E2{} fn a()!E1{raise E1{}} fn b()!E2{raise E2{}} fn c()!{a()!b()!} fn d(){c()!} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn propagate_wrong_error_type() { compile_should_fail_with(r#"error E1{} error E2{} fn a()!E1{raise E1{}} fn b()!E2{return a()!} fn main(){}"#, "type mismatch"); }
+fn run_chain(body: &str) -> String {
+    compile_and_run_stdout(&format!("{PREAMBLE}\n{body}"))
+}
 
-// Propagation through control flow
-#[test]
-#[ignore]
-fn propagate_in_if_branch() { compile_should_fail_with(r#"error E{} fn a()!{raise E{}} fn b(){if true{a()!}} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn propagate_in_else_branch() { compile_should_fail_with(r#"error E{} fn a()!{raise E{}} fn b(){if false{}else{a()!}} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn propagate_in_while_body() { compile_should_fail_with(r#"error E{} fn a()!{raise E{}} fn b(){while true{a()!}} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn propagate_in_for_body() { compile_should_fail_with(r#"error E{} fn a()!{raise E{}} fn b(){for i in 0..10{a()!}} fn main(){}"#, "unhandled error"); }
+// ── Chains propagate ─────────────────────────────────────────────────────────
 
-// Propagation through expressions
 #[test]
-#[ignore]
-fn propagate_in_array_element() { compile_should_fail_with(r#"error E{} fn a()int!{raise E{}} fn b(){let arr=[a()!,2,3]} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn propagate_in_struct_field() { compile_should_fail_with(r#"error E{} class C{x:int} fn a()int!{raise E{}} fn b(){let c=C{x:a()!}} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn propagate_in_return_expr() { compile_should_fail_with(r#"error E{} fn a()int!{raise E{}} fn b()int{return a()!} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn propagate_in_function_arg() { compile_should_fail_with(r#"error E{} fn a()int!{raise E{}} fn c(x:int){} fn b(){c(a()!)} fn main(){}"#, "unhandled error"); }
+fn two_level_propagation() {
+    let out = run_chain(
+        "fn b() int {\n    return a()!\n}\n\nfn main(){\n    print(b() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "-1");
+}
 
-// Propagation with multiple calls in same expr
 #[test]
-#[ignore]
-fn two_propagates_same_line() { compile_should_fail_with(r#"error E{} fn a()int!{raise E{}} fn b(){let x=a()!+a()!} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn propagate_nested_call() { compile_should_fail_with(r#"error E{} fn a()int!{raise E{}} fn c(x:int)int{return x} fn b(){let x=c(a()!)} fn main(){}"#, "unhandled error"); }
+fn three_level_propagation() {
+    let out = run_chain(
+        "fn b() int {\n    return a()! + 1\n}\n\nfn c() int {\n    return b()!\n}\n\nfn main(){\n    print(c() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "-1");
+}
 
-// Propagation through method calls
 #[test]
-#[ignore]
-fn propagate_in_method_call() { compile_should_fail_with(r#"error E{} class C{fn foo(self){}} fn a()!{raise E{}} fn b(){let c=C{} c.foo() a()!} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn propagate_in_method_arg() { compile_should_fail_with(r#"error E{} class C{fn foo(self,x:int){}} fn a()int!{raise E{}} fn b(){let c=C{} c.foo(a()!)} fn main(){}"#, "unhandled error"); }
+fn propagate_through_assignment() {
+    let out = run_chain(
+        "fn b() int {\n    let x = a()!\n    return x\n}\n\nfn main(){\n    print(b() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "-1");
+}
 
-// Edge cases
 #[test]
-#[ignore]
-fn propagate_void_fallible() { compile_should_fail_with(r#"error E{} fn a()!{raise E{}} fn b()!{a()!} fn c(){b()!} fn main(){}"#, "unhandled error"); }
+fn propagate_in_binop() {
+    let out = run_chain(
+        "fn b() int {\n    return a()! + a()!\n}\n\nfn main(){\n    print(b() catch e { -2 })\n}",
+    );
+    assert_eq!(out.trim(), "-2");
+}
+
 #[test]
-#[ignore]
-fn propagate_in_enum_variant() { compile_should_fail_with(r#"error E{} enum Opt{Some{v:int}} fn a()int!{raise E{}} fn b(){let x=Opt.Some{v:a()!}} fn main(){}"#, "unhandled error"); }
+fn propagate_in_if_branch() {
+    let out = run_chain(
+        "fn b(flag: bool) int {\n    if flag {\n        return a()!\n    }\n    return 0\n}\n\nfn main(){\n    print(b(false) catch e { -1 })\n    print(b(true) catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "0\n-1");
+}
+
 #[test]
-#[ignore]
-fn propagate_in_match_arm() { compile_should_fail_with(r#"error E{} enum Opt{Some{v:int}None} fn a()!{raise E{}} fn b(){let x=Opt.None match x{Opt.Some{v}=>{a()!}Opt.None=>{}}} fn main(){}"#, "unhandled error"); }
+fn propagate_in_while_body() {
+    let out = run_chain(
+        "fn b() int {\n    while true {\n        a()!\n    }\n    return 0\n}\n\nfn main(){\n    print(b() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "-1");
+}
+
 #[test]
-#[ignore]
-fn propagate_in_string_interpolation() { compile_should_fail_with(r#"error E{} fn a()int!{raise E{}} fn b(){let s="{a()!}"} fn main(){}"#, "unhandled error"); }
+fn propagate_in_for_body() {
+    let out = run_chain(
+        "fn b() int {\n    for i in 0..10 {\n        a()!\n    }\n    return 0\n}\n\nfn main(){\n    print(b() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "-1");
+}
+
 #[test]
-#[ignore]
-fn propagate_chained_calls() { compile_should_fail_with(r#"error E{} fn a()int!{raise E{}} fn c(x:int)int{return x} fn d(x:int)int{return x} fn b(){let x=d(c(a()!))} fn main(){}"#, "unhandled error"); }
+fn propagate_in_array_element() {
+    let out = run_chain(
+        "fn b() int {\n    let arr = [a()!, 2, 3]\n    return arr[0]\n}\n\nfn main(){\n    print(b() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "-1");
+}
+
+#[test]
+fn propagate_in_struct_field() {
+    let out = run_chain(
+        "class C {\n    x: int\n}\n\nfn b() int {\n    let c = C { x: a()! }\n    return c.x\n}\n\nfn main(){\n    print(b() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "-1");
+}
+
+#[test]
+fn propagate_in_enum_variant() {
+    let out = run_chain(
+        "enum Opt {\n    Some { v: int }\n}\n\nfn b() int {\n    let x = Opt.Some { v: a()! }\n    return 0\n}\n\nfn main(){\n    print(b() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "-1");
+}
+
+#[test]
+fn propagate_in_function_arg() {
+    let out = run_chain(
+        "fn double(x: int) int {\n    return x * 2\n}\n\nfn b() int {\n    return double(a()!)\n}\n\nfn main(){\n    print(b() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "-1");
+}
+
+#[test]
+fn propagate_in_method_arg() {
+    let out = run_chain(
+        "class C {\n    fn foo(self, x: int) int {\n        return x\n    }\n}\n\nfn b() int {\n    let c = C {}\n    return c.foo(a()!)\n}\n\nfn main(){\n    print(b() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "-1");
+}
+
+#[test]
+fn propagate_in_match_arm() {
+    let out = run_chain(
+        "enum Opt {\n    Some { v: int }\n    None\n}\n\nfn b() int {\n    let x = Opt.None\n    match x {\n        Opt.Some { v } {\n            print(v)\n        }\n        Opt.None {\n            a()!\n        }\n    }\n    return 0\n}\n\nfn main(){\n    print(b() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "-1");
+}
+
+#[test]
+fn propagate_in_string_interpolation() {
+    let out = run_chain(
+        "fn b() string {\n    return f\"got {a()!}\"\n}\n\nfn main(){\n    print(b() catch e { \"failed\" })\n}",
+    );
+    assert_eq!(out.trim(), "failed");
+}
+
+#[test]
+fn union_errors_in_chain() {
+    // Two error types travel the same chain; typed catch distinguishes them
+    let out = compile_and_run_stdout(
+        "error E1 {}\n\nerror E2 {}\n\nfn a() {\n    raise E1 {}\n}\n\nfn b() {\n    raise E2 {}\n}\n\nfn c(which: bool) {\n    if which {\n        a()!\n    } else {\n        b()!\n    }\n}\n\nfn main(){\n    c(true) catch e1: E1 {\n        print(\"one\")\n    } catch e2: E2 {\n        print(\"two\")\n    }\n    c(false) catch e1: E1 {\n        print(\"one\")\n    } catch e2: E2 {\n        print(\"two\")\n    }\n}",
+    );
+    assert_eq!(out.trim(), "one\ntwo");
+}
+
+// ── The chain must end in handling ───────────────────────────────────────────
+
+#[test]
+fn chain_top_unhandled_rejected() {
+    compile_should_fail_with(
+        "error E {}\n\nfn a() {\n    raise E {}\n}\n\nfn b() {\n    a()!\n}\n\nfn c() {\n    b()\n}\n\nfn main(){}",
+        "must be handled with ! or catch",
+    );
+}
+
+#[test]
+fn nested_call_result_unhandled_rejected() {
+    compile_should_fail_with(
+        "error E {}\n\nfn a() int {\n    raise E {}\n}\n\nfn double(x: int) int {\n    return x * 2\n}\n\nfn b() int {\n    return double(a())\n}\n\nfn main(){}",
+        "must be handled with ! or catch",
+    );
+}
