@@ -1196,6 +1196,99 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
         }
     }
 
+    // Lifecycle inference + startup-seedability enforcement (see
+    // docs/design/rfc-manual-bracket-deps.md). The app's startup graph acts
+    // as the root scope: scoped-effective classes MAY be wired there, but
+    // only if every scoped class in the subtree is auto-creatable (all
+    // fields injected). A scoped class with data fields has no seed at
+    // startup — previously its fields were silently zero/garbage.
+    {
+        use crate::parser::ast::Lifecycle;
+        // Fixpoint: propagate "scoped" through the dependency graph.
+        let mut effective: DMap<String, Lifecycle> = env
+            .classes
+            .iter()
+            .map(|(n, i)| (n.clone(), i.lifecycle))
+            .collect();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (class_name, deps) in &graph {
+                if effective.get(class_name) == Some(&Lifecycle::Scoped) {
+                    continue;
+                }
+                let becomes_scoped = deps
+                    .iter()
+                    .any(|d| effective.get(d) == Some(&Lifecycle::Scoped));
+                if becomes_scoped {
+                    if let Some(e) = effective.get_mut(class_name) {
+                        *e = Lifecycle::Scoped;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        // BFS the app/stage startup graph (bracket deps only — ambient
+        // registrations are wired per use site, and scoped ambients are
+        // seeded by scope blocks).
+        let mut startup: Vec<(String, String)> = Vec::new(); // (class, holder)
+        if let Some(app_spanned) = &program.app {
+            for field in &app_spanned.node.inject_fields {
+                if field.is_remote || field.is_ambient { continue; }
+                if let crate::parser::ast::TypeExpr::Named(ref t) = field.ty.node {
+                    startup.push((t.clone(), app_spanned.node.name.node.clone()));
+                }
+            }
+        }
+        for stage_spanned in &program.stages {
+            for field in &stage_spanned.node.inject_fields {
+                if field.is_remote || field.is_ambient { continue; }
+                if let crate::parser::ast::TypeExpr::Named(ref t) = field.ty.node {
+                    startup.push((t.clone(), stage_spanned.node.name.node.clone()));
+                }
+            }
+        }
+        let mut seen: DSet<String> = DSet::new();
+        let mut bfs: VecDeque<(String, String)> = startup.into_iter().collect();
+        while let Some((c, holder)) = bfs.pop_front() {
+            if !seen.insert(c.clone()) {
+                continue;
+            }
+            let is_scoped = effective.get(&c) == Some(&Lifecycle::Scoped);
+            let has_data_fields = env
+                .classes
+                .get(&c)
+                .map(|i| i.fields.iter().any(|(_, _, inj)| !*inj))
+                .unwrap_or(false);
+            if is_scoped && has_data_fields {
+                let declared_scoped =
+                    env.classes.get(&c).map(|i| i.lifecycle) == Some(Lifecycle::Scoped);
+                let why = if declared_scoped {
+                    format!("scoped class '{c}' has non-injected fields and needs a seed")
+                } else {
+                    format!("'{c}' is scoped (it depends on a scoped class) and has non-injected fields that need a seed")
+                };
+                let span = program
+                    .app
+                    .as_ref()
+                    .map(|a| a.span)
+                    .or_else(|| program.stages.first().map(|s| s.span))
+                    .unwrap_or(crate::span::Span { start: 0, end: 0, file_id: 0 });
+                return Err(CompileError::type_err(
+                    format!(
+                        "captive dependency: {why}, but it is reached from '{holder}' at app startup,                          where no seed exists; create it inside a scope block instead"
+                    ),
+                    span,
+                ));
+            }
+            if let Some(deps) = graph.get(&c) {
+                for d in deps {
+                    bfs.push_back((d.clone(), c.clone()));
+                }
+            }
+        }
+    }
+
     // Topological sort (Kahn's algorithm)
     if !all_di_classes.is_empty() {
         let mut in_degree: DMap<String, usize> = DMap::new();

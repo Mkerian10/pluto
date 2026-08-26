@@ -1915,6 +1915,44 @@ impl<'a> LowerContext<'a> {
             scoped_locals.insert(class_name.clone(), ptr);
         }
 
+        // 2b. Patch injected fields of seed instances. Seed literals only
+        // provide non-injected fields; their dependency slots start zeroed
+        // and are wired here (after creation_order, so scoped deps exist).
+        for (idx, seed_class) in resolution.seed_classes.iter().enumerate() {
+            let Some(wirings) = resolution.field_wirings.get(seed_class) else {
+                continue;
+            };
+            if wirings.is_empty() {
+                continue;
+            }
+            let class_info = self.env.classes.get(seed_class).ok_or_else(|| {
+                CompileError::codegen(format!("scope: unknown seed class '{seed_class}'"))
+            })?.clone();
+            let seed_ptr = seed_vals[idx];
+            for (field_name, wiring) in wirings {
+                let field_idx = class_info.fields.iter()
+                    .position(|(n, _, _)| n == field_name)
+                    .ok_or_else(|| {
+                        CompileError::codegen(format!(
+                            "scope: unknown field '{field_name}' on seed '{seed_class}'"
+                        ))
+                    })?;
+                let offset = field_idx as i32 * POINTER_SIZE;
+                let dep_val = match wiring {
+                    FieldWiring::Seed(dep_idx) => seed_vals[*dep_idx],
+                    FieldWiring::Singleton(name) => self.load_singleton(name)?,
+                    FieldWiring::ScopedInstance(name) => {
+                        *scoped_locals.get(name).ok_or_else(|| {
+                            CompileError::codegen(format!(
+                                "scope: scoped instance '{name}' unavailable for seed wiring"
+                            ))
+                        })?
+                    }
+                };
+                self.builder.ins().store(MemFlags::new(), dep_val, seed_ptr, Offset32::new(offset));
+            }
+        }
+
         // 3. Save current variable bindings and define scope bindings
         let mut saved_vars: Vec<(String, Option<Variable>, Option<PlutoType>)> = Vec::new();
 

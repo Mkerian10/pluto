@@ -1303,37 +1303,64 @@ fn infer_struct_lit(
     };
 
     // Block construction of classes with injected dependencies
-    if class_info.fields.iter().any(|(_, _, inj)| *inj) {
+    // In scope-seed position a literal for a dep-bearing scoped class is
+    // allowed: it provides exactly the non-injected fields, and the scope
+    // machinery wires the injected ones. Everywhere else, classes with
+    // injected dependencies cannot be constructed manually.
+    let in_scope_seed = std::mem::take(&mut env.in_scope_seed);
+    let has_injected = class_info.fields.iter().any(|(_, _, inj)| *inj);
+    if has_injected && !in_scope_seed {
         return Err(CompileError::type_err(
             format!("cannot manually construct class '{}' with injected dependencies", effective_name),
             span,
         ));
     }
 
-    // Check all fields are provided
-    if lit_fields.len() != class_info.fields.len() {
+    // Check all (constructible) fields are provided
+    let expected_fields = class_info.fields.iter().filter(|(_, _, inj)| !*inj).count();
+    if lit_fields.len() != expected_fields {
         return Err(CompileError::type_err(
-            format!(
-                "class '{}' has {} fields, but {} were provided",
-                effective_name,
-                class_info.fields.len(),
-                lit_fields.len()
-            ),
+            if has_injected {
+                format!(
+                    "scope seed for '{}' must provide its {} non-injected field(s), but {} were provided \
+                     (injected dependencies are wired by the scope block)",
+                    effective_name,
+                    expected_fields,
+                    lit_fields.len()
+                )
+            } else {
+                format!(
+                    "class '{}' has {} fields, but {} were provided",
+                    effective_name,
+                    expected_fields,
+                    lit_fields.len()
+                )
+            },
             span,
         ));
     }
 
     // Check each field matches
     for (lit_name, lit_val) in lit_fields {
-        let field_type = class_info.fields.iter()
+        let (field_type, field_injected) = class_info.fields.iter()
             .find(|(n, _, _)| *n == lit_name.node)
-            .map(|(_, t, _)| t.clone())
+            .map(|(_, t, inj)| (t.clone(), *inj))
             .ok_or_else(|| {
                 CompileError::type_err(
                     format!("class '{}' has no field '{}'", effective_name, lit_name.node),
                     lit_name.span,
                 )
             })?;
+        if field_injected {
+            return Err(CompileError::type_err(
+                format!(
+                    "field '{}' of '{}' is an injected dependency and cannot be provided in a literal; \
+                     the scope block wires it",
+                    lit_name.node, effective_name
+                ),
+                lit_name.span,
+            ));
+        }
         let val_type = infer_expr(&lit_val.node, lit_val.span, env, Some(&field_type))?;
 
         // Check type compatibility (==, Class→Trait, T→T?, Class→Trait?, none→T?)

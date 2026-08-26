@@ -325,9 +325,9 @@ fn test_scoped_singleton_injection() {
 }
 
 #[test]
-#[ignore] // Known limitation: Cannot manually provide bracket dependencies at instantiation (Outer[i] {} syntax doesn't exist)
 fn test_scoped_nested_deps() {
-    // Verify nested scoped dependencies
+    // Nested scoped dependencies wire through a scope block: the seed
+    // provides Inner, and Outer is auto-created with it
     let src = r#"
         scoped class Inner {
             value: int
@@ -340,9 +340,9 @@ fn test_scoped_nested_deps() {
         }
 
         fn main() {
-            let i = Inner { value: 99 }
-            let o = Outer[i] {}
-            print(o.get())
+            scope(Inner { value: 99 }) |o: Outer| {
+                print(o.get())
+            }
         }
     "#;
     assert_eq!(compile_and_run_stdout(src).trim(), "99");
@@ -551,7 +551,6 @@ fn test_multiple_app_fields() {
 }
 
 #[test]
-#[ignore] // Known limitation: Cannot manually provide bracket dependencies at instantiation
 fn test_scoped_with_bracket_and_regular_fields() {
     // Verify scoped class with both bracket deps and regular fields
     let src = r#"
@@ -574,8 +573,9 @@ fn test_scoped_with_bracket_and_regular_fields() {
 
         app MyApp[logger: Logger] {
             fn main(self) {
-                let h = Handler[self.logger] { request_id: 100, user_id: 200 }
-                h.process()
+                scope(Handler { request_id: 100, user_id: 200 }) |h: Handler| {
+                    h.process()
+                }
             }
         }
     "#;
