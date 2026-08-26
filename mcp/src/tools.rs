@@ -182,3 +182,6 @@ pub struct PrettyPrintInput {
     #[schemars(description = "Include UUID hints in output (default: false)")]
     pub include_uuid_hints: Option<bool>,
 }
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ServerInfoInput {}
