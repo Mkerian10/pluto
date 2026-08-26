@@ -16,62 +16,62 @@ use common::compile_should_fail_with;
 // ============================================================================
 
 #[test]
-#[ignore]
 fn index_int_literal() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let x = 42[0]
+            let
+x = 42[0]
         }
         "#,
-        "cannot index",
+        "index on non-indexable type",
     );
 }
 
 #[test]
-#[ignore]
 fn index_float_literal() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let x = 3.14[0]
+            let
+x = 3.14[0]
         }
         "#,
-        "cannot index",
+        "index on non-indexable type",
     );
 }
 
 #[test]
-#[ignore]
 fn index_bool() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let x = true[0]
+            let
+x = true[0]
         }
         "#,
-        "cannot index",
+        "index on non-indexable type",
     );
 }
 
 #[test]
-#[ignore]
 fn index_class() {
     compile_should_fail_with(
         r#"
         class Point { x: int, y: int }
 
         fn main() {
-            let p = Point { x: 1, y: 2 }
-            let v = p[0]
+            let
+p = Point { x: 1, y: 2 }
+            let
+v = p[0]
         }
         "#,
-        "cannot index",
+        "index on non-indexable type",
     );
 }
 
 #[test]
-#[ignore]
 fn index_enum() {
     compile_should_fail_with(
         r#"
@@ -82,30 +82,32 @@ fn index_enum() {
         }
 
         fn main() {
-            let c = Color.Red
-            let v = c[0]
+            let
+c = Color.Red
+            let
+v = c[0]
         }
         "#,
-        "cannot index",
+        "index on non-indexable type",
     );
 }
 
 #[test]
-#[ignore]
 fn index_closure() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let f = (x: int) => x + 1
-            let v = f[0]
+            let
+f = (x: int) => x + 1
+            let
+v = f[0]
         }
         "#,
-        "cannot index",
+        "index on non-indexable type",
     );
 }
 
 #[test]
-#[ignore]
 fn index_task() {
     compile_should_fail_with(
         r#"
@@ -114,25 +116,28 @@ fn index_task() {
         }
 
         fn main() {
-            let t = spawn worker()
-            let v = t[0]
+            let
+t = spawn worker()
+            let
+v = t[0]
         }
         "#,
-        "cannot index",
+        "index on non-indexable type",
     );
 }
 
 #[test]
-#[ignore]
 fn index_set() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let s = Set<int> { 1, 2, 3 }
-            let v = s[0]
+            let
+s = Set<int> { 1, 2, 3 }
+            let
+v = s[0]
         }
         "#,
-        "cannot index",
+        "index on non-indexable type",
     );
 }
 
@@ -141,86 +146,90 @@ fn index_set() {
 // ============================================================================
 
 #[test]
-#[ignore]
 fn index_array_with_string() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let arr = [1, 2, 3]
-            let v = arr["0"]
+            let
+arr = [1, 2, 3]
+            let
+v = arr["0"]
         }
         "#,
-        "type mismatch",
+        "must be int",
     );
 }
 
 #[test]
-#[ignore]
 fn index_array_with_float() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let arr = [1, 2, 3]
-            let v = arr[0.5]
+            let
+arr = [1, 2, 3]
+            let
+v = arr[0.5]
         }
         "#,
-        "type mismatch",
+        "must be int",
     );
 }
 
 #[test]
-#[ignore]
 fn index_array_with_bool() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let arr = [1, 2, 3]
-            let v = arr[true]
+            let
+arr = [1, 2, 3]
+            let
+v = arr[true]
         }
         "#,
-        "type mismatch",
+        "must be int",
     );
 }
 
 #[test]
-#[ignore]
 fn index_string_with_string() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let s = "hello"
-            let c = s["0"]
+            let
+s = "hello"
+            let
+c = s["0"]
         }
         "#,
-        "type mismatch",
+        "must be int",
     );
 }
 
 #[test]
-#[ignore]
 fn index_string_with_float() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let s = "hello"
-            let c = s[2.5]
+            let
+s = "hello"
+            let
+c = s[2.5]
         }
         "#,
-        "type mismatch",
+        "must be int",
     );
 }
 
 #[test]
-#[ignore]
 fn index_bytes_with_string() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let b = b"hello"
+            let b = "hello".to_bytes()
             let v = b["0"]
         }
         "#,
-        "type mismatch",
+        "bytes index must be int",
     );
 }
 
@@ -233,7 +242,7 @@ fn index_map_string_int_with_int() {
             let v = m[0]
         }
         "#,
-        "type mismatch",
+        "map key type mismatch",
     );
 }
 
@@ -246,7 +255,7 @@ fn index_map_int_string_with_string() {
             let v = m["key"]
         }
         "#,
-        "type mismatch",
+        "map key type mismatch",
     );
 }
 
@@ -259,7 +268,7 @@ fn index_map_with_wrong_type() {
             let v = m[true]
         }
         "#,
-        "type mismatch",
+        "map key type mismatch",
     );
 }
 
@@ -268,17 +277,18 @@ fn index_map_with_wrong_type() {
 // ============================================================================
 
 #[test]
-#[ignore]
 fn index_array_with_nullable_int() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let arr = [1, 2, 3]
+            let
+arr = [1, 2, 3]
             let idx: int? = 0
-            let v = arr[idx]
+            let
+v = arr[idx]
         }
         "#,
-        "type mismatch",
+        "must be int",
     );
 }
 
@@ -292,22 +302,23 @@ fn index_map_with_nullable_key() {
             let v = m[key]
         }
         "#,
-        "type mismatch",
+        "map key type mismatch",
     );
 }
 
 #[test]
-#[ignore]
 fn index_string_with_nullable_int() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let s = "hello"
+            let
+s = "hello"
             let idx: int? = 0
-            let c = s[idx]
+            let
+c = s[idx]
         }
         "#,
-        "type mismatch",
+        "must be int",
     );
 }
 
@@ -316,7 +327,6 @@ fn index_string_with_nullable_int() {
 // ============================================================================
 
 #[test]
-#[ignore]
 fn index_array_with_generic_param() {
     compile_should_fail_with(
         r#"
@@ -325,11 +335,13 @@ fn index_array_with_generic_param() {
         }
 
         fn main() {
-            let arr = [1, 2, 3]
-            let v = get(arr, 0)
+            let
+arr = [1, 2, 3]
+            let
+v = get(arr, 0)
         }
         "#,
-        "type mismatch",
+        "must be int",
     );
 }
 
@@ -346,7 +358,7 @@ fn index_map_with_generic_param_wrong_bound() {
             let v = lookup(m, "a")
         }
         "#,
-        "type mismatch",
+        "map key type mismatch",
     );
 }
 
@@ -355,30 +367,32 @@ fn index_map_with_generic_param_wrong_bound() {
 // ============================================================================
 
 #[test]
-#[ignore]
 fn double_index_non_nested_array() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let arr = [1, 2, 3]
-            let v = arr[0][0]
+            let
+arr = [1, 2, 3]
+            let
+v = arr[0][0]
         }
         "#,
-        "cannot index",
+        "index on non-indexable type",
     );
 }
 
 #[test]
-#[ignore]
 fn index_array_element_of_wrong_type() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let arr = [[1, 2], [3, 4]]
-            let v = arr[0]["x"]
+            let
+arr = [[1, 2], [3, 4]]
+            let
+v = arr[0]["x"]
         }
         "#,
-        "type mismatch",
+        "must be int",
     );
 }
 
@@ -387,16 +401,16 @@ fn index_array_element_of_wrong_type() {
 // ============================================================================
 
 #[test]
-#[ignore]
 fn assign_wrong_type_to_array_index() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let mut arr = [1, 2, 3]
+            let mut
+arr = [1, 2, 3]
             arr[0] = "hello"
         }
         "#,
-        "type mismatch",
+        "index assignment: expected",
     );
 }
 
@@ -431,16 +445,17 @@ fn assign_to_string_index() {
 // ============================================================================
 
 #[test]
-#[ignore]
 fn index_map_of_arrays_with_wrong_inner_index() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let m = Map<string, [int]> { "nums": [1, 2, 3] }
-            let v = m["nums"]["x"]
+            let
+m = Map<string, [int]> { "nums": [1, 2, 3] }
+            let
+v = m["nums"]["x"]
         }
         "#,
-        "type mismatch",
+        "must be int",
     );
 }
 
@@ -453,21 +468,21 @@ fn index_array_of_maps_with_wrong_map_key() {
             let v = arr[0][42]
         }
         "#,
-        "type mismatch",
+        "map key type mismatch",
     );
 }
 
 #[test]
-#[ignore]
 fn index_nullable_array() {
     compile_should_fail_with(
         r#"
         fn main() {
             let arr: [int]? = [1, 2, 3]
-            let v = arr[0]
+            let
+v = arr[0]
         }
         "#,
-        "cannot index",
+        "index on non-indexable type",
     );
 }
 
