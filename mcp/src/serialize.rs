@@ -770,7 +770,7 @@ pub fn class_detail(cls: &ClassDecl, module: &pluto_sdk::Module) -> ClassDetail 
             })
             .collect(),
         bracket_deps,
-        impl_traits: cls.impl_traits.iter().map(|t| t.node.clone()).collect(),
+        impl_traits: cls.impl_traits.iter().map(|t| t.name.node.clone()).collect(),
         invariant_count: cls.invariants.len(),
         resolved_fields,
         lifecycle,

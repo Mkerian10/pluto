@@ -3298,7 +3298,7 @@ mod tests {
                 is_remote: false,
             }],
             methods: vec![],
-            impl_traits: vec![spanned("Printable".to_string())],
+            impl_traits: vec![ImplTraitRef { name: spanned("Printable".to_string()), type_args: vec![] }],
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
