@@ -338,3 +338,16 @@ the boundary.
 ```bash
 cargo run -- run examples/function-references/main.pt
 ```
+
+## primitive-methods
+
+Methods on primitive values: `x.to_string()`, `x.abs()`, `f.sqrt()`,
+`f.floor()`/`ceil()`/`round()`, `f.to_int()`, `x.to_float()`, and
+`true.to_string()`. They work on literals (`42.to_string()`,
+`1.5.to_string()`) and chain like any other method
+(`(-16.0).abs().sqrt()`). Math methods agree exactly with the free
+builtins (`x.abs() == abs(x)`).
+
+```bash
+cargo run -- run examples/primitive-methods/main.pt
+```
