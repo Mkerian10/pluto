@@ -11,16 +11,21 @@ fn generic_fn_nullable_param() { compile_should_fail_with(r#"fn id<T>(x:T?)T?{re
 fn generic_fn_nullable_return() { compile_should_fail_with(r#"fn wrap<T>(x:T)T?{return x} fn main(){let y:int=wrap(42)}"#, "type mismatch"); }
 // This test already passes - correctly detects type mismatch
 #[test]
-#[ignore]
-fn generic_unwrap_type_mismatch() { compile_should_fail_with(r#"fn unwrap<T>(x:T?)T{return x?} fn main(){let x:int?=42 let y:string=unwrap(x)}"#, "type mismatch"); }
+fn generic_unwrap_type_mismatch() { compile_should_fail_with(r#"fn unwrap<T>(x:T?)T{return x?}
+fn main(){let x:int?=42
+let y:string=unwrap(x)}"#, "type mismatch"); }
 
 // Generic classes with nullable type params
 #[test]
 fn box_nullable_type_param() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b:Box<int?>=Box<int>{value:42}}"#, "type mismatch"); }
 // This test already passes - correctly rejects int? to int assignment
 #[test]
-#[ignore]
-fn box_get_nullable_value() { compile_should_fail_with(r#"class Box<T>{value:T fn get(self)T{return self.value}} fn main(){let b=Box<int?>{value:none} let x:int=b.get()}"#, "type mismatch"); }
+fn box_get_nullable_value() { compile_should_fail_with(r#"class Box<T>{value:T
+fn get(self)T{return
+self.value}}
+fn main(){let
+b=Box<int?>{value:none}
+let x:int=b.get()}"#, "type mismatch"); }
 
 // Generic enums with nullable
 #[test]
@@ -38,8 +43,10 @@ fn bound_on_nullable_type() { compile_should_fail_with(r#"trait T{} fn f<U:T>(x:
 
 // Unification with nullable generics
 #[test]
-#[ignore]
-fn generic_nullable_non_nullable_conflict() { compile_should_fail_with(r#"fn same<T>(x:T,y:T)T{return x} fn main(){let a:int=42 let b:int?=42 same(a,b)}"#, "cannot infer type parameters"); }
+fn generic_nullable_non_nullable_conflict() { compile_should_fail_with(r#"fn same<T>(x:T,y:T)T{return x}
+fn main(){let a:int=42
+let b:int?=42
+same(a,b)}"#, "cannot infer type parameters"); }
 #[test]
 #[ignore] // Compilation succeeds - compiler allows id<int>(42) and id<int?>(42) as separate monomorphizations
 fn generic_infer_nullable_conflict() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn main(){id(42) let x:int?=id(42)}"#, "type mismatch"); }
