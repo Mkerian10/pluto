@@ -1511,6 +1511,30 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                     // Compare non-self params. Static trait methods (no self)
                     // have no receiver to skip — compare all params.
                     let is_static = trait_info.static_methods.contains(method_name);
+                    // Only check receiver-ness for methods the class declares
+                    // itself — default methods injected from the trait aren't
+                    // in the class AST and always match the trait's shape.
+                    let class_method_has_self = c.methods.iter()
+                        .find(|m| m.node.name.node == *method_name)
+                        .map(|m| m.node.params.first().is_some_and(|p| p.name.node == "self"));
+                    if let Some(has_self) = class_method_has_self
+                        && is_static == has_self
+                    {
+                        return Err(CompileError::type_err(
+                            if is_static {
+                                format!(
+                                    "method '{}' of class '{}' must not take self: trait '{}' declares it as a static method",
+                                    method_name, class_name, trait_name
+                                )
+                            } else {
+                                format!(
+                                    "method '{}' of class '{}' must take self to implement trait '{}'",
+                                    method_name, class_name, trait_name
+                                )
+                            },
+                            trait_name_spanned.span,
+                        ));
+                    }
                     let trait_non_self = if is_static {
                         &trait_sig.params[..]
                     } else {
