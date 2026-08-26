@@ -770,8 +770,14 @@ impl PrettyPrinter {
                 self.write("self");
             } else if matches!(&p.ty.node, TypeExpr::Infer) {
                 // Untyped closure param: `(x) => ...`
+                if p.is_mut {
+                    self.write("mut ");
+                }
                 self.write(&p.name.node);
             } else {
+                if p.is_mut {
+                    self.write("mut ");
+                }
                 self.write(&p.name.node);
                 self.write(": ");
                 self.emit_type_expr(&p.ty.node);

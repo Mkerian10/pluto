@@ -318,3 +318,73 @@ fn main() {
     );
     assert_eq!(out, "18\n");
 }
+
+// ── mut parameters (#278) ────────────────────────────────────────────────────
+// Parameters are immutable by default; `mut name: type` opts into
+// reassignment, mirroring `let` vs `let mut`.
+
+#[test]
+fn mut_fn_param_reassignable() {
+    let out = compile_and_run_stdout(
+        r#"
+fn clamp(mut n: int) int {
+    if n > 10 {
+        n = 10
+    }
+    return n
+}
+
+fn main() {
+    print(clamp(15))
+    print(clamp(3))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "10\n3");
+}
+
+#[test]
+fn mut_method_param_reassignable() {
+    let out = compile_and_run_stdout(
+        r#"
+class Adder {
+    base: int
+
+    fn add(self, mut n: int) int {
+        n = n + self.base
+        return n
+    }
+}
+
+fn main() {
+    let a = Adder { base: 10 }
+    print(a.add(5))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "15");
+}
+
+#[test]
+fn mut_closure_param_reassignable() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let f = (mut x: int) => {
+        x = x * 2
+        return x
+    }
+    print(f(21))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn plain_param_still_immutable() {
+    compile_should_fail_with(
+        "fn f(x: int) {\n    x = 2\n}\n\nfn main(){}",
+        "cannot assign to immutable variable",
+    );
+}

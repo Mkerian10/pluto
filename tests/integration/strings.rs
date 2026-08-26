@@ -450,7 +450,7 @@ fn string_unknown_method() {
 #[test]
 fn string_index_assign_rejected() {
     compile_should_fail_with(
-        "fn main() {\n    let s = \"hello\"\n    s[0] = \"x\"\n}",
+        "fn main() {\n    let mut s = \"hello\"\n    s[0] = \"x\"\n}",
         "index assignment on non-indexable type string",
     );
 }

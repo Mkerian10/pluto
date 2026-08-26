@@ -85,7 +85,7 @@ fn empty_array_in_closure() {
 #[test]
 fn assign_empty_to_typed_var() {
     compile_should_fail_with(
-        "fn main() {\n    let x: [string] = []\n    x[0] = 5\n}",
+        "fn main() {\n    let mut x: [string] = []\n    x[0] = 5\n}",
         "index assignment",
     );
 }

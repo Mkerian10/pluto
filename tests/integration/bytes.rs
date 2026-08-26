@@ -269,7 +269,7 @@ fn main() int {
 fn bytes_index_write() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.push(65 as byte)
     buf[0] = 90 as byte
     print(buf[0] as int)
@@ -370,7 +370,7 @@ fn main() int {
 fn byte_as_map_key() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<byte, string> {}
+    let mut m = Map<byte, string> {}
     m[65 as byte] = "A"
     m[66 as byte] = "B"
     print(m[65 as byte])

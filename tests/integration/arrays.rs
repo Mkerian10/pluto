@@ -28,7 +28,7 @@ fn array_push_and_len() {
 #[test]
 fn array_index_assign() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = [10, 20, 30]\n    a[1] = 99\n    print(a[0])\n    print(a[1])\n    print(a[2])\n}",
+        "fn main() {\n    let mut a = [10, 20, 30]\n    a[1] = 99\n    print(a[0])\n    print(a[1])\n    print(a[2])\n}",
     );
     assert_eq!(out, "10\n99\n30\n");
 }

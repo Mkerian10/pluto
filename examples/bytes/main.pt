@@ -31,7 +31,7 @@ fn main() int {
 
     // String to bytes and back
     let original = "Pluto"
-    let raw = original.to_bytes()
+    let mut raw = original.to_bytes()
     print(f"'{original}' is {raw.len()} bytes")
     print(f"First byte: {raw[0] as int}")
 

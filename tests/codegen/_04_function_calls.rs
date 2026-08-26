@@ -806,7 +806,7 @@ fn main() int {
 #[test]
 fn test_pass_by_value_int() {
     let source = r#"
-fn modify(x: int) int {
+fn modify(mut x: int) int {
     x = x + 100
     return x
 }
@@ -823,7 +823,7 @@ fn main() int {
 #[test]
 fn test_pass_by_value_float() {
     let source = r#"
-fn modify(x: float) float {
+fn modify(mut x: float) float {
     x = x + 100.0
     return x
 }
@@ -840,7 +840,7 @@ fn main() int {
 #[test]
 fn test_pass_by_value_bool() {
     let source = r#"
-fn flip(x: bool) bool {
+fn flip(mut x: bool) bool {
     x = !x
     return x
 }
@@ -880,12 +880,12 @@ fn main() int {
 #[test]
 fn test_pass_by_reference_array() {
     let source = r#"
-fn modify_array(arr: [int]) {
+fn modify_array(mut arr: [int]) {
     arr[0] = 42
 }
 
 fn main() int {
-    let arr = [0, 1, 2]
+    let mut arr = [0, 1, 2]
     modify_array(arr)
     return arr[0]
 }

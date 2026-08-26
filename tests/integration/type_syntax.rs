@@ -254,7 +254,7 @@ fn gteq_split_map_nullable_value_no_space() {
     // Map<string,int?>=... with no space — the critical edge case from #170
     let stdout = compile_and_run_stdout(r#"
         fn main() int? {
-            let m:Map<string,int?>=Map<string,int?>{}
+            let mut m:Map<string,int?>=Map<string,int?>{}
             let v: int? = 42
             m["a"] = v
             let r = m["a"]?

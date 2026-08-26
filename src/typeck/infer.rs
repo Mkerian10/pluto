@@ -716,6 +716,8 @@ pub(crate) fn infer_expr(
                     let (var_name, var_span) = opt_rename.as_ref()
                         .map_or((&binding_field.node, binding_field.span), |r| (&r.node, r.span));
                     env.define(var_name.clone(), field.1.clone(), var_span)?;
+                    // Match bindings are views of the matched value, not assignable
+                    env.mark_immutable(var_name);
                 }
 
                 // Infer arm value type

@@ -446,7 +446,7 @@ class Counter {
     value: int
 }
 
-fn increment(c: Counter, n: int) {
+fn increment(mut c: Counter, n: int) {
     let mut i = 0
     while i < n {
         c.value = c.value + 1
@@ -455,7 +455,7 @@ fn increment(c: Counter, n: int) {
 }
 
 fn main() {
-    let c = Counter { value: 0 }
+    let mut c = Counter { value: 0 }
     let t1 = spawn increment(c, 1000)
     let t2 = spawn increment(c, 1000)
     t1.get()
@@ -475,12 +475,12 @@ class Box {
     value: int
 }
 
-fn write_value(b: Box, v: int) {
+fn write_value(mut b: Box, v: int) {
     b.value = v
 }
 
 fn main() {
-    let b = Box { value: 0 }
+    let mut b = Box { value: 0 }
     let t1 = spawn write_value(b, 1)
     let t2 = spawn write_value(b, 2)
     t1.get()
@@ -499,12 +499,12 @@ class Container {
     value: int
 }
 
-fn set_value(c: Container, v: int) {
+fn set_value(mut c: Container, v: int) {
     c.value = v
 }
 
 fn main() {
-    let c = Container { value: 0 }
+    let mut c = Container { value: 0 }
     let t = spawn set_value(c, 42)
     t.get()
     print(c.value)
@@ -564,12 +564,12 @@ fn main() {
 fn spawn_deep_copy_map_isolation() {
     // Task gets a deep copy of a map — parent's map unchanged.
     let out = compile_and_run_stdout(r#"
-fn modify_map(m: Map<string, int>) {
+fn modify_map(mut m: Map<string, int>) {
     m["new_key"] = 999
 }
 
 fn main() {
-    let m = Map<string, int> { "a": 1, "b": 2 }
+    let mut m = Map<string, int> { "a": 1, "b": 2 }
     let t = spawn modify_map(m)
     t.get()
     print(m.len())
@@ -1307,7 +1307,7 @@ class Service {
     }
 }
 
-fn call_process(svc: Service) int {
+fn call_process(mut svc: Service) int {
     return svc.process()!
 }
 
@@ -1386,7 +1386,7 @@ class Counter {
     }
 }
 
-fn do_increments(c: Counter) {
+fn do_increments(mut c: Counter) {
     let mut i = 0
     while i < 500 {
         c.increment()
@@ -1485,7 +1485,7 @@ fn gc_stress_concurrent_maps() {
     // Tasks build maps to stress GC with hash table allocations during concurrent execution
     let out = compile_and_run_stdout(r#"
 fn build_map(n: int) int {
-    let m = Map<int, int> {}
+    let mut m = Map<int, int> {}
     let mut i = 0
     while i < n {
         m[i] = i * 3

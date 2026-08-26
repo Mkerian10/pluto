@@ -405,7 +405,7 @@ fn assign_wrong_type_to_map_value() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let m = Map<string, int> { "a": 1 }
+            let mut m = Map<string, int> { "a": 1 }
             m["a"] = "value"
         }
         "#,
