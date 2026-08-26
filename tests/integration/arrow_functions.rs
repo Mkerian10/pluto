@@ -285,3 +285,84 @@ fn untyped_param_in_generic_call_with_explicit_type_args() {
         }
     "#, "cannot infer");
 }
+
+// ── If-expression arrow bodies (#294) ────────────────────────────────────
+
+#[test]
+fn if_expr_arrow_body_both_arms_return() {
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let f = (x: int) => if x > 0 { return 1 } else { return 0 }
+            print(f(5))
+            print(f(-1))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "1\n0");
+}
+
+#[test]
+fn if_expr_arrow_body_mixed_arms() {
+    // One arm returns, the other is a value — the value arm types the closure
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let f = (x: int) => if x > 0 { return 100 } else { 7 }
+            print(f(5))
+            print(f(-5))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "100\n7");
+}
+
+#[test]
+fn if_expr_arrow_body_nested() {
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let f = (x: int) => if x > 10 { return 2 } else { if x > 0 { return 1 } else { return 0 } }
+            print(f(20))
+            print(f(5))
+            print(f(-5))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "2\n1\n0");
+}
+
+#[test]
+fn if_expr_arrow_body_annotated_return() {
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let f = (x: int) int => if x > 0 { return 5 } else { return 6 }
+            print(f(1))
+            print(f(-1))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "5\n6");
+}
+
+#[test]
+fn if_expr_value_arms_still_work() {
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let f = (x: int) => if x > 0 { 10 } else { 20 }
+            print(f(1))
+            print(f(-1))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "10\n20");
+}
+
+#[test]
+fn if_expr_diverging_arm_in_fn_body() {
+    // A diverging arm contributes the other arm's type to the let binding
+    let stdout = compile_and_run_stdout(r#"
+        fn pick(n: int) int {
+            let v = if n > 0 { return 99 } else { n * 2 }
+            return v
+        }
+
+        fn main() {
+            print(pick(3))
+            print(pick(-3))
+        }
+    "#);
+    assert_eq!(stdout.trim(), "99\n-6");
+}

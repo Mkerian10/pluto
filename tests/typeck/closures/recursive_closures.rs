@@ -2,8 +2,8 @@
 //!
 //! A closure's own name is not in scope inside its body (`let f = ... f(x)`),
 //! and forward references to later closures are equally undefined — recursion
-//! belongs to named functions. The if-expression arrow-body corner is
-//! inconsistent today and stays ignored (see the tracking issue).
+//! belongs to named functions. This holds in every body form, including
+//! if-expression arrow bodies (#294).
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
@@ -75,7 +75,6 @@ fn array_recursive() {
 }
 
 #[test]
-#[ignore] // Inconsistent: if-expression arrow bodies with self-reference (see tracking issue)
 fn if_expr_body_recursive() {
     compile_should_fail_with(
         "fn main(){\n    let f = (x: int) => if x > 0 { return f(x - 1) } else { return 0 }\n}",
