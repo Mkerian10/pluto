@@ -1012,7 +1012,12 @@ impl<'a> Parser<'a> {
                         is_mut: true,
                     });
                 } else {
-                    return Err(CompileError::syntax("expected 'self' after 'mut'", mut_span));
+                    // `mut name: type` — a reassignable parameter
+                    let _ = mut_span;
+                    let pname = self.expect_ident()?;
+                    self.expect(&Token::Colon)?;
+                    let pty = self.parse_type()?;
+                    params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: true });
                 }
             } else if params.is_empty() && self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::SelfVal) {
                 let self_tok = self.advance().expect("token should exist after peek");
@@ -1023,10 +1028,16 @@ impl<'a> Parser<'a> {
                     is_mut: false,
                 });
             } else {
+                let is_mut = if self.peek().is_some_and(|t| matches!(t.node, Token::Mut)) {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let pty = self.parse_type()?;
-                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
+                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut });
             }
         }
         let rparen = self.expect(&Token::RParen)?;
@@ -1197,10 +1208,12 @@ impl<'a> Parser<'a> {
                         is_mut: true,
                     });
                 } else {
-                    return Err(CompileError::syntax(
-                        "expected 'self' after 'mut'",
-                        mut_span,
-                    ));
+                    // `mut name: type` — a reassignable parameter
+                    let _ = mut_span;
+                    let pname = self.expect_ident()?;
+                    self.expect(&Token::Colon)?;
+                    let pty = self.parse_type()?;
+                    params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: true });
                 }
             } else if params.is_empty() && self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::SelfVal) {
                 let self_tok = self.advance().expect("token should exist after peek");
@@ -1211,10 +1224,16 @@ impl<'a> Parser<'a> {
                     is_mut: false,
                 });
             } else {
+                let is_mut = if self.peek().is_some_and(|t| matches!(t.node, Token::Mut)) {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let pty = self.parse_type()?;
-                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
+                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut });
             }
         }
         self.expect(&Token::RParen)?;
@@ -1355,10 +1374,12 @@ impl<'a> Parser<'a> {
                         is_mut: true,
                     });
                 } else {
-                    return Err(CompileError::syntax(
-                        "expected 'self' after 'mut'",
-                        mut_span,
-                    ));
+                    // `mut name: type` — a reassignable parameter
+                    let _ = mut_span;
+                    let pname = self.expect_ident()?;
+                    self.expect(&Token::Colon)?;
+                    let pty = self.parse_type()?;
+                    params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: true });
                 }
             } else if params.is_empty() && self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::SelfVal) {
                 let self_tok = self.advance().expect("token should exist after peek");
@@ -1369,10 +1390,16 @@ impl<'a> Parser<'a> {
                     is_mut: false,
                 });
             } else {
+                let is_mut = if self.peek().is_some_and(|t| matches!(t.node, Token::Mut)) {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let pty = self.parse_type()?;
-                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false });
+                params.push(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut });
             }
         }
         self.expect(&Token::RParen)?;
@@ -1493,10 +1520,16 @@ impl<'a> Parser<'a> {
         let (type_params, type_param_bounds) = self.parse_type_params()?;
         self.expect(&Token::LParen)?;
         let params = self.parse_comma_list(&Token::RParen, true, |p| {
+            let is_mut = if p.peek().is_some_and(|t| matches!(t.node, Token::Mut)) {
+                p.advance();
+                true
+            } else {
+                false
+            };
             let pname = p.expect_ident()?;
             p.expect(&Token::Colon)?;
             let pty = p.parse_type()?;
-            Ok(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false })
+            Ok(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut })
         })?;
         self.expect(&Token::RParen)?;
 
@@ -3592,6 +3625,12 @@ impl<'a> Parser<'a> {
         // Parse params; the type annotation is optional (`(x) => x + 1`)
         // and defaults to Infer, resolved from context during typeck.
         let params = self.parse_comma_list(&Token::RParen, true, |p| {
+            let is_mut = if p.peek().is_some_and(|t| matches!(t.node, Token::Mut)) {
+                p.advance();
+                true
+            } else {
+                false
+            };
             let pname = p.expect_ident()?;
             let pty = if p.peek().is_some_and(|t| matches!(t.node, Token::Colon)) {
                 p.expect(&Token::Colon)?;
@@ -3599,7 +3638,7 @@ impl<'a> Parser<'a> {
             } else {
                 Spanned::new(TypeExpr::Infer, pname.span)
             };
-            Ok(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut: false })
+            Ok(Param { id: Uuid::new_v4(), name: pname, ty: pty, is_mut })
         })?;
         self.expect(&Token::RParen)?;
 

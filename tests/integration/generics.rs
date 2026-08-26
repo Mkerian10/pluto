@@ -824,7 +824,7 @@ fn generic_fn_with_map_lit() {
     // Bug: resolve_generic_te_in_expr had _ => {} catch-all that skipped MapLit
     let out = compile_and_run_stdout(r#"
 fn create_map<T>(default_val: T) Map<string, T> {
-    let m = Map<string, T> {}
+    let mut m = Map<string, T> {}
     m["key"] = default_val
     return m
 }

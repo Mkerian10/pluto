@@ -377,7 +377,7 @@ class Point {
     y: int
 }
 
-fn unmarshal_point(dec: wire.WireValueDecoder) Point {
+fn unmarshal_point(mut dec: wire.WireValueDecoder) Point {
     dec.decode_record_start("Point", 2)!
     dec.decode_field("x", 0)!
     let x = dec.decode_int()!

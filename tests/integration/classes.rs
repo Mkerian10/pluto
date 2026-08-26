@@ -370,7 +370,7 @@ class Counter {
     }
 }
 
-fn bump(c: Counter) {
+fn bump(mut c: Counter) {
     c.val = c.val + 10
     c.inc()
 }

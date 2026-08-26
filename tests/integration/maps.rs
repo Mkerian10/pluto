@@ -97,7 +97,7 @@ fn main() int {
 fn map_index_assign() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<string, int> {}
+    let mut m = Map<string, int> {}
     m["hello"] = 42
     print(m["hello"])
     m["hello"] = 100

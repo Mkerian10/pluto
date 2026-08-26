@@ -297,7 +297,7 @@ fn compound_assign_field() {
 #[test]
 fn compound_assign_index() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = [1, 2, 3]\n    a[1] += 10\n    print(a[1])\n}",
+        "fn main() {\n    let mut a = [1, 2, 3]\n    a[1] += 10\n    print(a[1])\n}",
     );
     assert_eq!(out, "12\n");
 }

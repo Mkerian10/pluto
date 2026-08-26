@@ -9655,19 +9655,19 @@ fn trait_method_modifies_map_param() {
     // Trait method modifies a map passed by reference (heap type)
     let out = compile_and_run_stdout(r#"
 trait Populator {
-    fn populate(self, m: Map<string, int>)
+    fn populate(self, mut m: Map<string, int>)
 }
 
 class Filler impl Populator {
     base: int
-    fn populate(self, m: Map<string, int>) {
+    fn populate(self, mut m: Map<string, int>) {
         m["x"] = self.base
         m["y"] = self.base + 1
     }
 }
 
 fn run(p: Populator) {
-    let m = Map<string, int> {}
+    let mut m = Map<string, int> {}
     p.populate(m)
     print(m["x"])
     print(m["y"])
@@ -10505,7 +10505,7 @@ class LowScorer impl Scorer {
 fn main() {
     let h: Scorer = HighScorer { val: 100 }
     let l: Scorer = LowScorer { val: 10 }
-    let m = Map<string, int> {}
+    let mut m = Map<string, int> {}
     m["high"] = h.score()
     m["low"] = l.score()
     print(m["high"])
@@ -11902,7 +11902,7 @@ class Prefixer impl KeyMaker {
 
 fn main() {
     let k: KeyMaker = Prefixer { prefix: "user" }
-    let m = Map<string, int> {}
+    let mut m = Map<string, int> {}
     m[k.key()] = 100
     print(m["user_key"])
 }
@@ -12249,12 +12249,12 @@ fn trait_method_modifies_map() {
     // Trait method takes a map and modifies it
     let out = compile_and_run_stdout(r#"
 trait MapWriter {
-    fn fill(self, m: Map<string, int>)
+    fn fill(self, mut m: Map<string, int>)
 }
 
 class DefaultWriter impl MapWriter {
     val: int
-    fn fill(self, m: Map<string, int>) {
+    fn fill(self, mut m: Map<string, int>) {
         m["a"] = self.val
         m["b"] = self.val * 2
     }
@@ -12262,7 +12262,7 @@ class DefaultWriter impl MapWriter {
 
 fn main() {
     let w: MapWriter = DefaultWriter { val: 5 }
-    let m = Map<string, int> {}
+    let mut m = Map<string, int> {}
     w.fill(m)
     print(m["a"])
     print(m["b"])
@@ -13111,7 +13111,7 @@ class DefaultReader impl ConfigReader {
 
 fn main() {
     let r: ConfigReader = DefaultReader { default_val: -1 }
-    let m = Map<string, int> {}
+    let mut m = Map<string, int> {}
     m["port"] = 8080
     print(r.read_key(m, "port"))
     print(r.read_key(m, "timeout"))
@@ -14030,7 +14030,7 @@ class PairBuilder_ impl MapBuilder_ {
     key1: string
     val1: int
     fn build(self) Map<string, int> {
-        let m = Map<string, int> {}
+        let mut m = Map<string, int> {}
         m[self.key1] = self.val1
         return m
     }

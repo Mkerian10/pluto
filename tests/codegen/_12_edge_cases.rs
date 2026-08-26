@@ -248,7 +248,7 @@ fn main() {
 fn test_map_1000_entries() {
     let source = r#"
 fn main() {
-    let m = Map<int, int> {}
+    let mut m = Map<int, int> {}
     let mut i = 0
     while i < 1000 {
         m[i] = i * 2

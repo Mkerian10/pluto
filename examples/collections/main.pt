@@ -1,6 +1,6 @@
 fn main() int {
     // Maps: key-value pairs with type-safe access
-    let scores = Map<string, int> { "alice": 95, "bob": 87, "charlie": 92 }
+    let mut scores = Map<string, int> { "alice": 95, "bob": 87, "charlie": 92 }
     print("Scores:")
     for name in scores.keys() {
         print(f"{name}: {scores[name]}")

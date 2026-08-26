@@ -47,7 +47,7 @@ fn generic_map_with_nested_value() {
         }
 
         fn main() {
-            let m = Map<string, Pair<int, int>> {}
+            let mut m = Map<string, Pair<int, int>> {}
             m["key"] = Pair<int, int> { first: 1, second: 2 }
             let p = m["key"]
             print(p.first)

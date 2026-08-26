@@ -88,6 +88,11 @@ fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&s
             resolve_type(&p.ty, env)?
         };
         env.define(p.name.node.clone(), ty, p.name.span)?;
+        // Parameters are immutable unless declared `mut` (like `let`).
+        // `self` mutability is governed by the mut-self method checks.
+        if !p.is_mut && p.name.node != "self" {
+            env.mark_immutable(&p.name.node);
+        }
     }
 
     let lookup_name = if let Some(cn) = class_name {
@@ -425,6 +430,8 @@ fn check_stmt(
             };
             env.push_scope();
             env.define(var.node.clone(), elem_type, var.span)?;
+            // The loop variable is rebound by iteration, never assigned
+            env.mark_immutable(&var.node);
             env.loop_depth += 1;
             check_block(&body.node, env, return_type)?;
             env.loop_depth -= 1;
@@ -992,6 +999,20 @@ fn check_index_assign(
     value: &Spanned<Expr>,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    // Element assignment mutates the container, so the binding it reaches
+    // through must be mutable — same rule as field assignment and mut-self
+    // method calls (`self` is governed by the mut-self checks).
+    if let Some(root) = root_variable(&object.node)
+        && root != "self"
+        && env.is_immutable(root)
+    {
+        return Err(CompileError::type_err(
+            format!(
+                "cannot assign through immutable variable '{root}'; declare with 'let mut' to allow mutation"
+            ),
+            object.span,
+        ));
+    }
     let obj_type = infer_expr(&object.node, object.span, env, None)?;
     match &obj_type {
         PlutoType::Array(elem) => {
@@ -1127,6 +1148,8 @@ fn check_match_stmt(
             let (var_name, var_span) = opt_rename.as_ref()
                 .map_or((&binding_field.node, binding_field.span), |r| (&r.node, r.span));
             env.define(var_name.clone(), field_type, var_span)?;
+            // Match bindings are views of the matched value, not assignable
+            env.mark_immutable(var_name);
         }
         check_block(&arm.body.node, env, return_type)?;
         env.pop_scope();

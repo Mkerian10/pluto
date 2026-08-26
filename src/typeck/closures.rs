@@ -50,6 +50,9 @@ pub(crate) fn infer_closure(
             resolve_type(&p.ty, env)?
         };
         env.define(p.name.node.clone(), ty.clone(), p.name.span)?;
+        if !p.is_mut {
+            env.mark_immutable(&p.name.node);
+        }
         param_types.push(ty);
     }
     env.closure_param_types.insert((span.start, span.end), param_types.clone());

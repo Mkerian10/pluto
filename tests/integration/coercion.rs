@@ -239,7 +239,7 @@ fn main() {
 fn map_index_assign_class_to_trait_dispatch() {
     let out = run(r#"
 fn main() {
-    let m = Map<string, Worker> {}
+    let mut m = Map<string, Worker> {}
     m["v"] = V {}
     print(m["v"].work())
 }
