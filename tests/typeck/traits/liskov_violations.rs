@@ -1,7 +1,14 @@
-//! Liskov substitution principle violation tests - 25 tests
+//! Liskov substitution principle violation tests.
+//!
+//! Pluto has no `ensures` clauses: postconditions were eliminated by design
+//! (docs/design/contracts.md, "Why No `ensures`?") — guarantees are expressed
+//! with class invariants and return types. Tests that use `ensures` pin the
+//! targeted parser rejection; the Liskov checks themselves cover `requires`.
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
+
+const ENSURES_MSG: &str = "'ensures' clauses are not supported";
 
 // Adding requires to implementation (violates LSP)
 #[test]
@@ -17,35 +24,34 @@ requires x>10
 {}}
 fn main(){}"#, "Liskov"); }
 
-// Weakening ensures (violates LSP)
+// `ensures` is rejected outright — on trait signatures and implementations
 #[test]
-#[ignore] // Unsupported syntax: trait signatures do not support ensures clauses
-fn impl_weaker_ensures() { compile_should_fail_with(r#"trait T{fn foo(self)int
+fn trait_sig_ensures_rejected() { compile_should_fail_with(r#"trait T{fn foo(self)int
 ensures result>10} class C impl T
+{fn foo(self)int
+{return 5}}
+fn main(){}"#, ENSURES_MSG); }
+#[test]
+fn impl_ensures_rejected() { compile_should_fail_with(r#"trait T{fn foo(self)int} class C impl T
 {fn foo(self)int
 ensures result>0
 {return 5}}
-fn main(){}"#, "Liskov"); }
-#[test]
-#[ignore] // Unsupported syntax: trait signatures do not support ensures clauses
-fn impl_removes_ensures() { compile_should_fail_with(r#"trait T{fn foo(self)int
-ensures result>0} class C impl T
-{fn foo(self)int{return -1}}
-fn main(){}"#, "Liskov"); }
+fn main(){}"#, ENSURES_MSG); }
 
-// Allowed: weaker requires, stronger ensures
+// Implementations may not declare their own requires at all (the blanket
+// Liskov rule) — even "weaker" ones
 #[test]
-fn impl_weaker_requires_ok() { compile_should_fail_with(r#"trait T{fn foo(self,x:int)
+fn impl_weaker_requires_rejected() { compile_should_fail_with(r#"trait T{fn foo(self,x:int)
 requires x>10} class C impl T
 {fn foo(self,x:int)
 requires x>0
-{}} fn main(){}"#, ""); }
+{}} fn main(){}"#, "Liskov"); }
 #[test]
-fn impl_stronger_ensures_ok() { compile_should_fail_with(r#"trait T{fn foo(self)int
+fn ensures_rejected_everywhere() { compile_should_fail_with(r#"trait T{fn foo(self)int
 ensures result>0} class C impl T
 {fn foo(self)int
 ensures result>10
-{return 11}} fn main(){}"#, ""); }
+{return 11}} fn main(){}"#, ENSURES_MSG); }
 
 // Contract conflicts
 #[test]
@@ -59,7 +65,7 @@ fn impl_contradicts_trait_ensures() { compile_should_fail_with(r#"trait T{fn foo
 ensures result>0} class C impl T
 {fn foo(self)int
 ensures result<0
-{return -1}} fn main(){}"#, ""); }
+{return -1}} fn main(){}"#, ENSURES_MSG); }
 
 // Multiple requires/ensures
 #[test]
@@ -77,14 +83,14 @@ fn trait_method_vs_class_invariant() { compile_should_fail_with(r#"trait T{fn fo
 ensures result>0} class C
 {x:int invariant
 self.x<0} impl T{fn foo(self)int{return
-self.x}} fn main(){}"#, ""); }
+self.x}} fn main(){}"#, ENSURES_MSG); }
 
 // Return type covariance with contracts
 #[test]
 fn subtype_return_with_contract() { compile_should_fail_with(r#"class Base{x:int} class Derived{x:int
 y:int} trait T{fn foo(self)Base ensures
 result.x>0} class C impl T{fn foo(self)Derived ensures
-result.y>0{return Derived{x:-1 y:1}}} fn main(){}"#, ""); }
+result.y>0{return Derived{x:-1 y:1}}} fn main(){}"#, ENSURES_MSG); }
 
 // Parameter type contravariance (not supported in Pluto)
 #[test]
@@ -94,19 +100,17 @@ fn main(){}"#, "type mismatch"); }
 
 // Nullable with contracts
 #[test]
-#[ignore] // Unsupported syntax: trait signatures do not support ensures clauses
 fn nullable_return_with_ensures() { compile_should_fail_with(r#"trait T{fn foo(self)int
 ensures result>0} class C impl T
 {fn foo(self)int?{return none}}
-fn main(){}"#, "type mismatch"); }
+fn main(){}"#, ENSURES_MSG); }
 
 // Error types with contracts
 #[test]
-#[ignore] // Unsupported syntax: trait signatures do not support ensures clauses
 fn error_impl_with_ensures() { compile_should_fail_with(r#"error E{} trait T{fn foo(self)int
 ensures result>0} class C impl T
 {fn foo(self)int!{raise E{}}}
-fn main(){}"#, "type mismatch"); }
+fn main(){}"#, ENSURES_MSG); }
 
 // Contract on self parameter
 #[test]
@@ -137,12 +141,11 @@ fn main(){}"#, "Liskov"); }
 
 // Trait with no contracts, impl adds them
 #[test]
-#[ignore] // Unsupported syntax: parser rejects chained requires+ensures on methods
 fn impl_adds_both_contracts() { compile_should_fail_with(r#"trait T{fn foo(self,x:int)int} class C impl T{fn foo(self,x:int)int
 requires x>0
 ensures result>0
 {return x}}
-fn main(){}"#, "Liskov"); }
+fn main(){}"#, ENSURES_MSG); }
 
 // Multiple traits with conflicting contracts
 #[test]
@@ -150,7 +153,7 @@ fn two_traits_conflicting_ensures() { compile_should_fail_with(r#"trait T1{fn fo
 ensures result>0} trait T2
 {fn foo(self)int
 ensures result<0} class C impl T1
-{fn foo(self)int{return 1}} impl T2{fn foo(self)int{return -1}} fn main(){}"#, ""); }
+{fn foo(self)int{return 1}} impl T2{fn foo(self)int{return -1}} fn main(){}"#, ENSURES_MSG); }
 
 // Trait composition
 #[test]
@@ -175,4 +178,4 @@ fn main(){}"#, "Liskov"); }
 fn void_method_with_ensures() { compile_should_fail_with(r#"trait T{fn foo(self)} class C impl T{x:int
 fn foo(self)
 ensures
-self.x>0{}} fn main(){}"#, ""); }
+self.x>0{}} fn main(){}"#, ENSURES_MSG); }

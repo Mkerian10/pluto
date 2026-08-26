@@ -221,6 +221,18 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// True when the next significant token is the identifier `ensures` —
+    /// not a keyword, but recognized in contract position to reject it with
+    /// a clear message (postconditions were eliminated by design).
+    fn peek_is_ensures(&self) -> bool {
+        match self.peek() {
+            Some(t) if matches!(t.node, Token::Ident) => {
+                &self.source[t.span.start..t.span.end] == "ensures"
+            }
+            _ => false,
+        }
+    }
+
     fn eof_span(&self) -> Span {
         if let Some(last) = self.tokens.last() {
             Span::new(last.span.end, last.span.end)
@@ -1239,8 +1251,12 @@ impl<'a> Parser<'a> {
         self.expect(&Token::RParen)?;
 
         // Check for return type - use peek_raw() to detect newline boundary
-        let return_type = if let Some(next_raw) = self.peek_raw() && matches!(next_raw.node, Token::Newline | Token::RBrace | Token::Requires) {
+        let return_type = if let Some(next_raw) = self.peek_raw()
+            && (matches!(next_raw.node, Token::Newline | Token::RBrace | Token::Requires)
+                || self.peek_is_ensures())
+        {
             // Newline, closing brace, or contract - no return type
+            // ("ensures" included so its rejection reports clearly)
             None
         } else if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace) {
             // Opening brace (method body) - no return type
@@ -1405,7 +1421,10 @@ impl<'a> Parser<'a> {
         }
         self.expect(&Token::RParen)?;
 
-        let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires) {
+        let return_type = if self.peek().is_some()
+            && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires)
+            && !self.peek_is_ensures()
+        {
             Some(self.parse_type()?)
         } else {
             None
@@ -1508,6 +1527,16 @@ impl<'a> Parser<'a> {
                     ));
                     self.consume_statement_end()?;
                 }
+                Token::Ident if &self.source[tok.span.start..tok.span.end] == "ensures" => {
+                    // Deliberately not part of the language: postconditions
+                    // were eliminated by design (docs/design/contracts.md)
+                    return Err(CompileError::syntax(
+                        "'ensures' clauses are not supported: Pluto has no postconditions by design; \
+                         express guarantees with class invariants or return types (see docs/design/contracts.md)"
+                            .to_string(),
+                        tok.span,
+                    ));
+                }
                 _ => break,
             }
         }
@@ -1535,7 +1564,10 @@ impl<'a> Parser<'a> {
         self.expect(&Token::RParen)?;
 
         // Return type: if next non-newline token is not '{' or a contract keyword, it's a return type
-        let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires) {
+        let return_type = if self.peek().is_some()
+            && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires)
+            && !self.peek_is_ensures()
+        {
             Some(self.parse_type()?)
         } else {
             None
