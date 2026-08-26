@@ -799,6 +799,24 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
             Some(t) => resolve_type(t, env)?,
             None => PlutoType::Void,
         };
+        // The entry point's return value becomes the process exit code, so
+        // only exit-code-shaped returns are allowed: void, int, or int?
+        // (none maps to 0). Anything else would truncate a pointer or float
+        // into a garbage exit status.
+        if f.name.node == "main"
+            && !matches!(
+                return_type,
+                PlutoType::Void | PlutoType::Int
+            )
+            && return_type != PlutoType::Nullable(Box::new(PlutoType::Int))
+        {
+            return Err(CompileError::type_err(
+                format!(
+                    "main must return void, int, or int? (the exit code), found {return_type}"
+                ),
+                f.name.span,
+            ));
+        }
         if matches!(&return_type, PlutoType::Stream(_)) {
             env.generators.insert(f.name.node.clone());
         }

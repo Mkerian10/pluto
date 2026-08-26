@@ -602,10 +602,9 @@ fn main() {
 #[test]
 fn string_to_float_basic() {
     let out = compile_and_run_stdout(
-        r#"fn main() float? {
+        r#"fn main() {
     let v = "3.14".to_float()?
     print(v)
-    return none
 }"#,
     );
     assert_eq!(out, "3.14\n");
@@ -614,10 +613,9 @@ fn string_to_float_basic() {
 #[test]
 fn string_to_float_integer_string() {
     let out = compile_and_run_stdout(
-        r#"fn main() float? {
+        r#"fn main() {
     let v = "42".to_float()?
     print(v)
-    return none
 }"#,
     );
     assert_eq!(out, "42\n");
@@ -626,10 +624,9 @@ fn string_to_float_integer_string() {
 #[test]
 fn string_to_float_negative() {
     let out = compile_and_run_stdout(
-        r#"fn main() float? {
+        r#"fn main() {
     let v = "-2.5".to_float()?
     print(v)
-    return none
 }"#,
     );
     assert_eq!(out, "-2.5\n");
@@ -655,10 +652,9 @@ fn main() {
 #[test]
 fn string_to_float_whitespace() {
     let out = compile_and_run_stdout(
-        r#"fn main() float? {
+        r#"fn main() {
     let v = "  1.5  ".to_float()?
     print(v)
-    return none
 }"#,
     );
     assert_eq!(out, "1.5\n");
@@ -667,10 +663,9 @@ fn string_to_float_whitespace() {
 #[test]
 fn string_to_float_scientific() {
     let out = compile_and_run_stdout(
-        r#"fn main() float? {
+        r#"fn main() {
     let v = "1.5e2".to_float()?
     print(v)
-    return none
 }"#,
     );
     assert_eq!(out, "150\n");
@@ -679,11 +674,10 @@ fn string_to_float_scientific() {
 #[test]
 fn string_to_float_bare_call_allowed() {
     let out = compile_and_run_stdout(
-        r#"fn main() float? {
+        r#"fn main() {
     let result = "3.14".to_float()
     let v = result?
     print(v)
-    return none
 }"#,
     );
     assert_eq!(out, "3.14\n");
