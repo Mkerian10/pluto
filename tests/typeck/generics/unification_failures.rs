@@ -106,8 +106,13 @@ fn main() {}
 
 // Closure unification
 #[test]
-#[ignore] // untyped closure params ((x)=>x) are not supported
-fn closure_param_conflict() { compile_should_fail_with(r#"fn apply<T>(f:fn(T)T,x:T)T{return f(x)} fn main(){let f=(x)=>x apply(f,42) apply(f,true)}"#, "type mismatch"); }
+fn closure_param_conflict() {
+    // The same fn(int) int value cannot unify T with both int and bool
+    compile_should_fail_with(
+        "fn apply<T>(f: fn(T) T, x: T) T {\n    return f(x)\n}\n\nfn main(){\n    let f = (x: int) => x\n    apply(f, 42)\n    apply(f, true)\n}",
+        "cannot infer type parameters",
+    );
+}
 #[test]
 #[ignore]
 fn closure_return_conflict() { compile_should_fail_with(r#"fn main(){let f=(b:bool)=>{if b{return 42}return true}}"#, "if-expression branches have incompatible types"); }

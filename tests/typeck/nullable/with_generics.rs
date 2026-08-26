@@ -46,11 +46,19 @@ fn generic_infer_nullable_conflict() { compile_should_fail_with(r#"fn id<T>(x:T)
 
 // Nested generics with nullable
 #[test]
-#[ignore] // #170: parser fails on nullable types in generic type arguments
-fn box_of_nullable_box() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b:Box<Box<int>?>=Box<Box<int>?>{value:none} let x:Box<int>=b.value}"#, "type mismatch"); }
+fn box_of_nullable_box() {
+    compile_should_fail_with(
+        "class Box<T> {\n    value: T\n}\n\nfn main(){\n    let b: Box<Box<int>?> = Box<Box<int>?> { value: none }\n    let x: Box<int> = b.value\n}",
+        "type mismatch",
+    );
+}
 #[test]
-#[ignore] // #170: parser fails on nullable types in generic type arguments
-fn nullable_of_generic_box() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b:Box<int>?=none let x:Box<int>=b}"#, "type mismatch"); }
+fn nullable_of_generic_box() {
+    compile_should_fail_with(
+        "class Box<T> {\n    value: T\n}\n\nfn main(){\n    let b: Box<int>? = none\n    let x: Box<int> = b\n}",
+        "type mismatch",
+    );
+}
 
 // Generic methods with nullable
 #[test]

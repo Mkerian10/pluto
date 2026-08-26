@@ -209,6 +209,22 @@ fn generate_warnings(env: &TypeEnv, program: &Program) -> Vec<CompileWarning> {
         }
     }
 
+    // Closure bodies live inside expressions, which the block walker above
+    // never descends into; sweep them with a visitor.
+    struct ClosureBodyScan<'a> {
+        warnings: &'a mut Vec<CompileWarning>,
+    }
+    impl crate::visit::Visitor for ClosureBodyScan<'_> {
+        fn visit_expr(&mut self, expr: &crate::span::Spanned<crate::parser::ast::Expr>) {
+            if let crate::parser::ast::Expr::Closure { body, .. } = &expr.node {
+                collect_unreachable_warnings(&body.node, self.warnings);
+            }
+            crate::visit::walk_expr(self, expr);
+        }
+    }
+    let mut scan = ClosureBodyScan { warnings: &mut warnings };
+    crate::visit::Visitor::visit_program(&mut scan, program);
+
     // Sort for deterministic output
     warnings.sort_by_key(|w| w.span.start);
     warnings
