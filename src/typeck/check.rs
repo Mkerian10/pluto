@@ -614,7 +614,11 @@ fn check_scope_stmt(
     let mut seed_class_names: DSet<String> = DSet::new();
 
     for (i, seed) in seeds.iter().enumerate() {
+        // Seed literals may name dep-bearing scoped classes; the StructLit
+        // arm consumes this flag and validates non-injected fields only.
+        env.in_scope_seed = true;
         let ty = infer_expr(&seed.node, seed.span, env, None)?;
+        env.in_scope_seed = false;
         match &ty {
             PlutoType::Class(name) => {
                 let info = env.classes.get(name).ok_or_else(|| {
@@ -814,9 +818,16 @@ fn check_scope_stmt(
         ));
     }
 
-    // 6. Compute field wirings for each created class
+    // 6. Compute field wirings for each created class, and for seed classes
+    // whose injected fields must be patched after their literal is evaluated
+    let mut wiring_targets: Vec<String> = creation_order.clone();
+    for (name, _) in &seed_types {
+        if !wiring_targets.contains(name) {
+            wiring_targets.push(name.clone());
+        }
+    }
     let mut field_wirings: DMap<String, Vec<(String, FieldWiring)>> = DMap::new();
-    for class_name in &creation_order {
+    for class_name in &wiring_targets {
         let info = env.classes.get(class_name).unwrap();
         let mut wirings = Vec::new();
         for (field_name, field_ty, is_injected) in &info.fields {
@@ -870,6 +881,7 @@ fn check_scope_stmt(
             creation_order,
             field_wirings,
             binding_sources,
+            seed_classes: seed_types.iter().map(|(n, _)| n.clone()).collect(),
         },
     );
 

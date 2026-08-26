@@ -145,6 +145,9 @@ pub struct ScopeResolution {
     pub field_wirings: HashMap<String, Vec<(String, FieldWiring)>>,
     /// How each binding variable is satisfied
     pub binding_sources: Vec<FieldWiring>,
+    /// Class name each seed expression provides, by seed index — lets codegen
+    /// patch injected fields of seed instances after creation
+    pub seed_classes: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -248,6 +251,10 @@ pub struct TypeEnv {
     /// derive locally (array-literal elements adopting an annotated element
     /// type, yield values adopting the stream element type), keyed by span.
     pub coercion_sites: HashMap<(usize, usize), PlutoType>,
+    /// Set while inferring a scope-block seed expression: permits a struct
+    /// literal of a dep-bearing scoped class (providing only its non-injected
+    /// fields). Consumed (reset) by the StructLit arm.
+    pub in_scope_seed: bool,
     /// Mangled names of methods that declare `mut self`
     pub mut_self_methods: HashSet<String>,
     /// Scope-mirrored: tracks variables declared with `let` (not `let mut`)
@@ -349,6 +356,7 @@ impl TypeEnv {
             narrowed_vars: ScopeTracker::new(),
             narrow_sites: HashMap::new(),
             coercion_sites: HashMap::new(),
+            in_scope_seed: false,
             mut_self_methods: HashSet::new(),
             immutable_vars: ScopeTracker::with_initial_scope(),
             variable_decls: HashMap::new(),
