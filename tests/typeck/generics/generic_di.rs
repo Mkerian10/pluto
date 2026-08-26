@@ -7,8 +7,7 @@ use common::compile_should_fail_with;
 #[test]
 fn generic_class_di_mismatch() { compile_should_fail_with(r#"class Dep{x:int} class Repo<T>[dep:Dep]{value:T} app MyApp{fn main(self){}} fn main(){}"#, ""); }
 #[test]
-#[ignore]
-fn bracket_dep_wrong_type() { compile_should_fail_with(r#"class Dep{x:int} class Repo<T>[dep:UndefinedDep]{value:T} app MyApp{fn main(self){}} fn main(){}"#, "undefined"); }
+fn bracket_dep_wrong_type() { compile_should_fail_with(r#"class Dep{x:int} class Repo<T>[dep:UndefinedDep]{value:T} app MyApp{fn main(self){}}"#, "unknown type 'UndefinedDep'"); }
 
 // Multiple generic classes with DI
 #[test]
@@ -20,8 +19,9 @@ fn generic_di_bound_not_satisfied() { compile_should_fail_with(r#"trait T{} clas
 
 // DI cycle with generics
 #[test]
-#[ignore]
-fn generic_di_cycle() { compile_should_fail_with(r#"class A<T>[b:B<T>]{} class B<U>[a:A<U>]{} app MyApp{fn main(self){}} fn main(){}"#, "cycle"); }
+fn generic_di_cycle() { compile_should_fail_with(r#"class A<T>[b:B<T>]{}
+class B<U>[a:A<U>]{}
+app MyApp[a: A<int>]{fn main(self){}}"#, "circular"); }
 
 // Generic class injected into non-generic
 #[test]
@@ -53,8 +53,8 @@ fn generic_multiple_bracket_deps() { compile_should_fail_with(r#"class Dep1{x:in
 
 // Generic class constructor blocked
 #[test]
-#[ignore]
-fn manual_construct_generic_di() { compile_should_fail_with(r#"class Dep{x:int} class Repo<T>[dep:Dep]{value:T} fn main(){let r=Repo<int>{value:42}}"#, "cannot construct"); }
+fn manual_construct_generic_di() { compile_should_fail_with(r#"class Dep{x:int} class Repo<T>[dep:Dep]{value:T}
+fn main(){let r=Repo<int>{value:42}}"#, "cannot manually construct"); }
 
 // DI with nested generics
 #[test]
@@ -78,8 +78,13 @@ fn self_ref_generic_di() { compile_should_fail_with(r#"class Node<T>[next:Node<T
 
 // DI graph with generic type params
 #[test]
-#[ignore]
-fn di_graph_type_param() { compile_should_fail_with(r#"class Dep{x:int} class Repo<T>[dep:Dep]{value:T} fn use<U>(r:Repo<U>){} fn main(){}"#, ""); }
+fn di_graph_type_param() {
+    // A generic fn over a DI-bearing generic class is fine to declare
+    assert_eq!(common::compile_and_run(r#"class Dep{x:int}
+class Repo<T>[dep:Dep]{value:T}
+fn consume<U>(r:Repo<U>){}
+fn main(){}"#), 0);
+}
 
 // Multiple bracket deps with generics
 #[test]

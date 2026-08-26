@@ -41,8 +41,10 @@ fn multiple_shadow_levels() { compile_should_fail_with("fn main(){\nlet x=1\nif 
 
 // Shadow after scope ends — this is ALLOWED (post-scope reuse)
 #[test]
-#[ignore] // Post-scope reuse is allowed, this should NOT fail
-fn shadow_after_scope() { compile_should_fail_with("fn main(){\nif true{\nlet x=1\n}\nlet x=2\n}", ""); }
+fn shadow_after_scope() {
+    // Post-scope reuse of a name is legal
+    assert_eq!(common::compile_and_run("fn main(){\nif true{\nlet x=1\n}\nlet x=2\nprint(x)\n}"), 0);
+}
 
 // Shadow in different branches
 #[test]
