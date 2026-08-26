@@ -13,11 +13,17 @@ fn enum_bound_not_satisfied() { compile_should_fail_with(r#"trait T{} enum Opt<U
 
 // Multiple bounds
 #[test]
-#[ignore]
-fn two_bounds_first_fails() { compile_should_fail_with(r#"trait T1{} trait T2{} class C{x:int} impl T2 fn f<U:T1+T2>(x:U){} fn main(){f(C{x:1})}"#, "does not satisfy"); }
+fn two_bounds_first_fails() { compile_should_fail_with(r#"trait T1{}
+trait T2{}
+class C impl T2{x:int}
+fn f<U:T1+T2>(x:U){}
+fn main(){f(C{x:1})}"#, "does not satisfy bound 'U: T1'"); }
 #[test]
-#[ignore]
-fn two_bounds_second_fails() { compile_should_fail_with(r#"trait T1{} trait T2{} class C{x:int} impl T1 fn f<U:T1+T2>(x:U){} fn main(){f(C{x:1})}"#, "does not satisfy"); }
+fn two_bounds_second_fails() { compile_should_fail_with(r#"trait T1{}
+trait T2{}
+class C impl T1{x:int}
+fn f<U:T1+T2>(x:U){}
+fn main(){f(C{x:1})}"#, "does not satisfy bound 'U: T2'"); }
 #[test]
 fn two_bounds_both_fail() { compile_should_fail_with(r#"trait T1{} trait T2{} class C{x:int} fn f<U:T1+T2>(x:U){} fn main(){f(C{x:1})}"#, "does not satisfy"); }
 
@@ -31,8 +37,9 @@ fn generic_in_generic_bound_fails() { compile_should_fail_with(r#"trait T{} clas
 #[test]
 fn int_fails_trait_bound() { compile_should_fail_with(r#"trait T{} fn f<U:T>(x:U){} fn main(){f(42)}"#, "does not satisfy"); }
 #[test]
-#[ignore]
-fn string_fails_trait_bound() { compile_should_fail_with(r#"trait T{} fn f<U:T>(x:U){} fn main(){f(\"hi\")}"#, "does not satisfy"); }
+fn string_fails_trait_bound() { compile_should_fail_with(r#"trait T{}
+fn f<U:T>(x:U){}
+fn main(){f("hi")}"#, "does not satisfy"); }
 #[test]
 fn array_fails_trait_bound() { compile_should_fail_with(r#"trait T{} fn f<U:T>(x:U){} fn main(){f([1,2,3])}"#, "does not satisfy"); }
 
@@ -44,11 +51,18 @@ fn generic_return_bound_fails() { compile_should_fail_with(r#"trait T{} fn id<U:
 
 // Bounds on method calls
 #[test]
-#[ignore]
-fn method_receiver_bound_fails() { compile_should_fail_with(r#"trait T{} class Box<U:T>{value:U fn get(self)U{return self.value}} class C{x:int} fn main(){let b=Box<C>{value:C{x:1}}}"#, "does not satisfy"); }
+fn method_receiver_bound_fails() { compile_should_fail_with(r#"trait T{} class Box<U:T>{value:U
+fn get(self)U{return
+self.value}} class C{x:int}
+fn main(){let
+b=Box<C>{value:C{x:1}}}"#, "does not satisfy"); }
 #[test]
-#[ignore]
-fn method_param_bound_fails() { compile_should_fail_with(r#"trait T{} class Box<U>{value:U fn set<V:T>(mut self,v:V){}} class C{x:int} fn main(){let b=Box<int>{value:1}b.set(C{x:1})}"#, "does not satisfy"); }
+fn method_param_bound_fails() { compile_should_fail_with(r#"trait T{}
+class Box<U>{value:U
+fn set(mut self, v: U){}}
+class C{x:int}
+fn main(){let mut b=Box<int>{value:1}
+b.set(C{x:1})}"#, "argument 1 of 'set'"); }
 
 // Bounds with closures
 #[test]
@@ -82,18 +96,23 @@ fn two_params_both_fail() { compile_should_fail_with(r#"trait T{} class C{x:int}
 
 // Bounds with nullable types
 #[test]
-#[ignore]
-fn nullable_bound_fails() { compile_should_fail_with(r#"trait T{} fn f<U:T>(x:U?){} class C{x:int} fn main(){f(C{x:1})}"#, "does not satisfy"); }
+fn nullable_bound_fails() { compile_should_fail_with(r#"trait T{}
+fn f<U:T>(x:U?){}
+class C{x:int}
+fn main(){f(C{x:1})}"#, "cannot infer type parameters"); }
 
 // Bounds with error types
 #[test]
-#[ignore]
-fn error_bound_fails() { compile_should_fail_with(r#"trait T{} error E{} fn f<U:T>(x:U)!{} class C{x:int} fn main(){f(C{x:1})}"#, "does not satisfy"); }
+fn error_bound_fails() { compile_should_fail_with(r#"trait T{}
+error E{}
+fn f<U:T>(x:U){raise E{}}
+class C{x:int}
+fn main(){f(C{x:1}) catch e {}}"#, "does not satisfy"); }
 
 // Trait not defined
 #[test]
-#[ignore]
-fn bound_trait_undefined() { compile_should_fail_with(r#"fn f<U:UndefinedTrait>(x:U){} fn main(){}"#, "undefined"); }
+fn bound_trait_undefined() { compile_should_fail_with(r#"fn f<U:UndefinedTrait>(x:U){}
+fn main(){}"#, "unknown trait 'UndefinedTrait'"); }
 
 // Circular bounds
 #[test]

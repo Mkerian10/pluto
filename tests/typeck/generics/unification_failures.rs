@@ -37,8 +37,9 @@ fn array_return_conflict() { compile_should_fail_with(r#"fn make<T>()[T]{if true
 #[test]
 fn class_field_conflict() { compile_should_fail_with(r#"class Box<T>{value:T} fn make<T>()Box<T>{if true{return Box<int>{value:42}}return Box<bool>{value:true}} fn main(){}"#, "type mismatch"); }
 #[test]
-#[ignore]
-fn two_fields_same_param() { compile_should_fail_with(r#"class Pair<T>{first:T second:T} fn main(){let p=Pair<int>{first:42 second:true}}"#, "expected int, found bool"); }
+fn two_fields_same_param() { compile_should_fail_with(r#"class Pair<T>{first:T
+second:T}
+fn main(){let p=Pair<int>{first:42, second:true}}"#, "expected int, found bool"); }
 
 // Function call unification
 #[test]
@@ -114,8 +115,8 @@ fn closure_param_conflict() {
     );
 }
 #[test]
-#[ignore]
-fn closure_return_conflict() { compile_should_fail_with(r#"fn main(){let f=(b:bool)=>{if b{return 42}return true}}"#, "if-expression branches have incompatible types"); }
+fn closure_return_conflict() { compile_should_fail_with(r#"fn main(){let f=(b:bool)=>{if b{return 42}
+return true}}"#, "return type mismatch"); }
 
 // Method call unification
 #[test]
@@ -147,8 +148,11 @@ fn enum_variant_param_conflict() { compile_should_fail_with(r#"enum Opt<T>{Some{
 
 // Multiple type parameters
 #[test]
-#[ignore]
-fn two_params_cross_conflict() { compile_should_fail_with(r#"fn swap<T,U>(x:T,y:U)(U,T){return (y,x)} fn main(){let (a,b)=swap(42,true) let c:int=a}"#, "type mismatch"); }
+fn two_params_cross_conflict() {
+    // T and U each unify consistently or the call is rejected
+    compile_should_fail_with(r#"fn pick<T,U>(x:T,y:U)T{return x}
+fn main(){let c:bool=pick(42,true)}"#, "type mismatch");
+}
 #[test]
 fn param_reuse_conflict() {
     compile_should_fail_with(

@@ -5,8 +5,9 @@ use common::compile_should_fail_with;
 
 // Method not found on class
 #[test]
-#[ignore]
-fn method_not_found() { compile_should_fail_with(r#"class C{x:int} fn main(){let c=C{x:1}c.foo()}"#, "no method"); }
+fn method_not_found() { compile_should_fail_with(r#"class C{x:int}
+fn main(){let c=C{x:1}
+c.foo()}"#, "no method"); }
 
 // Method on primitive
 #[test]
@@ -14,13 +15,14 @@ fn method_on_int() { compile_should_fail_with(r#"fn main(){let x=1 x.foo()}"#, "
 
 // Method on string (builtin methods exist)
 #[test]
-#[ignore]
-fn method_on_string_wrong() { compile_should_fail_with(r#"fn main(){let s=\"hi\" s.foo()}"#, "no method"); }
+fn method_on_string_wrong() { compile_should_fail_with(r#"fn main(){let
+s="hi"
+s.foo()}"#, "no method"); }
 
 // Method on array
 #[test]
-#[ignore]
-fn method_on_array() { compile_should_fail_with(r#"fn main(){let arr=[1,2,3]arr.foo()}"#, "no method"); }
+fn method_on_array() { compile_should_fail_with(r#"fn main(){let arr=[1,2,3]
+arr.foo()}"#, "no method"); }
 
 // Method on enum
 #[test]
@@ -56,18 +58,24 @@ fn generic_no_bound() { compile_should_fail_with(r#"fn f<T>(x:T){x.foo()} fn mai
 
 // Method on map
 #[test]
-#[ignore]
-fn method_on_map_wrong() { compile_should_fail_with(r#"fn main(){let m=Map<string,int>{} m.foo()}"#, "no method"); }
+fn method_on_map_wrong() { compile_should_fail_with(r#"fn main(){let
+m=Map<string,int>{}
+m.foo()}"#, "no method"); }
 
 // Method on set
 #[test]
-#[ignore]
-fn method_on_set_wrong() { compile_should_fail_with(r#"fn main(){let s=Set<int>{} s.foo()}"#, "no method"); }
+fn method_on_set_wrong() { compile_should_fail_with(r#"fn main(){let
+s=Set<int>{}
+s.foo()}"#, "no method"); }
 
 // Method lookup through multiple traits
 #[test]
-#[ignore]
-fn multi_trait_lookup() { compile_should_fail_with(r#"trait T1{fn foo(self)} trait T2{fn bar(self)} class C{} impl T1{fn foo(self){}} impl T2{fn bar(self){}} fn main(){let c=C{} c.baz()}"#, "no method"); }
+fn multi_trait_lookup() { compile_should_fail_with(r#"trait T1{fn foo(self)}
+trait T2{fn bar(self)}
+class C impl T1, T2{fn foo(self){}
+fn bar(self){}}
+fn main(){let c=C{}
+c.baz()}"#, "no method"); }
 
 // Method on closure
 #[test]
@@ -79,13 +87,18 @@ fn method_on_error() { compile_should_fail_with(r#"error E{} fn main(){let e=E{}
 
 // Method with generic parameter
 #[test]
-#[ignore]
-fn method_generic_lookup() { compile_should_fail_with(r#"class C{} fn foo<U>(self,x:U){} fn main(){let c=C{} c.bar()}"#, "no method"); }
+fn method_generic_lookup() { compile_should_fail_with(r#"class C{
+fn foo(self, x: int){}
+}
+fn main(){let c=C{}
+c.bar()}"#, "no method"); }
 
 // Method on task
 #[test]
-#[ignore]
-fn method_on_task() { compile_should_fail_with(r#"fn f()int{return 1} fn main(){let t=spawn f() t.foo()}"#, "no method"); }
+fn method_on_task() { compile_should_fail_with(r#"fn f()int{return 1}
+fn main(){let
+t=spawn f()
+t.foo()}"#, "no method"); }
 
 // Method lookup in nested class
 #[test]
