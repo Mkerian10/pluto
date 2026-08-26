@@ -5,38 +5,39 @@ use common::compile_should_fail_with;
 
 // Basic nesting
 #[test]
-#[ignore]
-fn box_in_box_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b:Box<Box<int>>=Box<Box<string>>{value:Box<string>{value:\"hi\"}}}"#, "type mismatch"); }
+fn box_in_box_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T}
+fn main(){let b:Box<Box<int>>=Box<Box<string>>{value:Box<string>{value:"hi"}}}"#, "type mismatch"); }
 #[test]
-#[ignore]
-fn array_of_array_mismatch() { compile_should_fail_with(r#"fn main(){let a:[[int]]=[[\"hi\"]]}"#, "type mismatch"); }
+fn array_of_array_mismatch() { compile_should_fail_with(r#"fn main(){let a:[[int]]=[["hi"]]}"#, "type mismatch"); }
 #[test]
-#[ignore]
-fn triple_nesting() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b:Box<Box<Box<int>>>=Box<Box<Box<string>>>{value:Box<Box<string>>{value:Box<string>{value:\"hi\"}}}}"#, "type mismatch"); }
+fn triple_nesting() { compile_should_fail_with(r#"class Box<T>{value:T}
+fn main(){let b:Box<Box<Box<int>>>=Box<Box<Box<string>>>{value:Box<Box<string>>{value:Box<string>{value:"hi"}}}}"#, "type mismatch"); }
 
 // Nested generic functions
 #[test]
-#[ignore]
-fn nested_id_mismatch() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn main(){let x:int=id(id(\"hi\"))}"#, "type mismatch"); }
+fn nested_id_mismatch() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x}
+fn main(){let x:int=id(id("hi"))}"#, "type mismatch"); }
 #[test]
-#[ignore]
-fn triple_id_mismatch() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x} fn main(){let x:int=id(id(id(\"hi\")))}"#, "type mismatch"); }
+fn triple_id_mismatch() { compile_should_fail_with(r#"fn id<T>(x:T)T{return x}
+fn main(){let x:int=id(id(id("hi")))}"#, "type mismatch"); }
 
 // Nested classes
 #[test]
-#[ignore]
-fn pair_of_boxes_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T} class Pair<U,V>{first:U second:V} fn main(){let p:Pair<Box<int>,Box<int>>=Pair<Box<int>,Box<string>>{first:Box<int>{value:42}second:Box<string>{value:\"hi\"}}}"#, "type mismatch"); }
+fn pair_of_boxes_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T} class Pair<U,V>{first:U
+second:V}
+fn main(){let p:Pair<Box<int>,Box<int>>=Pair<Box<int>,Box<string>>{first:Box<int>{value:42}, second:Box<string>{value:"hi"}}}"#, "type mismatch"); }
 #[test]
-#[ignore]
-fn box_of_pair_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T} class Pair<U,V>{first:U second:V} fn main(){let b:Box<Pair<int,int>>=Box<Pair<int,string>>{value:Pair<int,string>{first:42 second:\"hi\"}}}"#, "type mismatch"); }
+fn box_of_pair_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T} class Pair<U,V>{first:U
+second:V}
+fn main(){let b:Box<Pair<int,int>>=Box<Pair<int,string>>{value:Pair<int,string>{first:42, second:"hi"}}}"#, "type mismatch"); }
 
 // Nested enums
 #[test]
-#[ignore]
-fn option_of_option_mismatch() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} fn main(){let o:Opt<Opt<int>>=Opt<Opt<string>>.Some{v:Opt<string>.Some{v:\"hi\"}}}"#, "type mismatch"); }
+fn option_of_option_mismatch() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None}
+fn main(){let o:Opt<Opt<int>>=Opt<Opt<string>>.Some{v:Opt<string>.Some{v:"hi"}}}"#, "type mismatch"); }
 #[test]
-#[ignore]
-fn result_of_option_mismatch() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} enum Result<U,V>{Ok{val:U}Err{err:V}} fn main(){let r:Result<Opt<int>,int>=Result<Opt<string>,int>.Ok{val:Opt<string>.Some{v:\"hi\"}}}"#, "type mismatch"); }
+fn result_of_option_mismatch() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} enum Result<U,V>{Ok{val:U}Err{err:V}}
+fn main(){let r:Result<Opt<int>,int>=Result<Opt<string>,int>.Ok{val:Opt<string>.Some{v:"hi"}}}"#, "type mismatch"); }
 
 // Map/Set nesting
 #[test]
@@ -44,16 +45,17 @@ fn map_of_arrays_mismatch() { compile_should_fail_with(r#"fn main(){let m:Map<st
 #[test]
 fn array_of_maps_mismatch() { compile_should_fail_with(r#"fn main(){let a:[Map<string,int>]=[Map<string,string>{}]}"#, "type mismatch"); }
 #[test]
-#[ignore]
-fn set_of_arrays_mismatch() { compile_should_fail_with(r#"fn main(){let s:Set<[int]>=Set<[string]>{}}"#, "type mismatch"); }
+fn set_of_arrays_mismatch() { compile_should_fail_with(r#"fn main(){let s:Set<[int]>=Set<[string]>{}}"#, "cannot be used as a map/set key"); }
 
 // Function types with nesting
 #[test]
-#[ignore]
-fn fn_returns_generic_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T} fn make()fn()Box<int>{return ()=>Box<string>{value:\"hi\"}} fn main(){}"#, "type mismatch"); }
+fn fn_returns_generic_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T}
+fn make()fn()Box<int>{return ()=>Box<string>{value:"hi"}}
+fn main(){}"#, "type mismatch"); }
 #[test]
-#[ignore]
-fn fn_takes_generic_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T} fn use(f:fn(Box<int>)){} fn main(){use((b:Box<string>)=>{})}}"#, "type mismatch"); }
+fn fn_takes_generic_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T}
+fn consume(f:fn(Box<int>)){}
+fn main(){consume((b:Box<string>)=>{})}"#, "argument 1 of"); }
 
 // Nested with bounds
 #[test]
@@ -63,18 +65,19 @@ fn nested_bound_inner_fails() { compile_should_fail_with(r#"trait T{} class Box<
 
 // Deeply nested access
 #[test]
-#[ignore]
-fn deep_field_access_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b=Box<Box<int>>{value:Box<int>{value:42}} let x:string=b.value.value}"#, "type mismatch"); }
+fn deep_field_access_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T}
+fn main(){let mut b=Box<Box<int>>{value:Box<int>{value:42}}
+let x:string=b.value.value}"#, "type mismatch"); }
 #[test]
-#[ignore]
-fn nested_array_index_mismatch() { compile_should_fail_with(r#"fn main(){let a=[[42]] let x:string=a[0][0]}"#, "type mismatch"); }
+fn nested_array_index_mismatch() { compile_should_fail_with(r#"fn main(){let a=[[42]]
+let x:string=a[0][0]}"#, "type mismatch"); }
 
 // Nested nullable
 #[test]
 fn option_nullable_mismatch() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} fn main(){let o:Opt<int?>=Opt<int>.Some{v:42}}"#, "type mismatch"); }
 #[test]
-#[ignore]
-fn nullable_option_mismatch() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} fn main(){let o:Opt<int>?=Opt<int>.Some{v:none}}"#, "type mismatch"); }
+fn nullable_option_mismatch() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None}
+fn main(){let o:Opt<int>?=Opt<int>.Some{v:none}}"#, "expected int, found void?"); }
 
 // Nested errors
 #[test]
@@ -82,13 +85,19 @@ fn result_error_mismatch() { compile_should_fail_with(r#"error E{} enum Result<T
 
 // Generic methods on nested types
 #[test]
-#[ignore]
-fn nested_method_return_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T fn get(self)T{return self.value}} fn main(){let b=Box<Box<int>>{value:Box<int>{value:42}} let x:string=b.get().get()}"#, "type mismatch"); }
+fn nested_method_return_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T
+fn get(self)T{return
+self.value}}
+fn main(){let mut b=Box<Box<int>>{value:Box<int>{value:42}}
+let x:string=b.get().get()}"#, "type mismatch"); }
 #[test]
-#[ignore]
-fn nested_method_param_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T fn set(mut self,v:T){self.value=v}} fn main(){let b=Box<Box<int>>{value:Box<int>{value:42}} b.set(Box<string>{value:\"hi\"})}"#, "type mismatch"); }
+fn nested_method_param_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T
+fn set(mut self,v:T){self.value=v}}
+fn main(){let mut b=Box<Box<int>>{value:Box<int>{value:42}}
+b.set(Box<string>{value:"hi"})}"#, "argument 1 of"); }
 
 // Recursive nesting edge cases
 #[test]
-#[ignore]
-fn infinite_nesting_simulation() { compile_should_fail_with(r#"class Box<T>{value:T} fn nest()Box<Box<Box<Box<Box<int>>>>>{return Box<Box<Box<Box<Box<string>>>>>{value:Box<Box<Box<Box<string>>>>{value:Box<Box<Box<string>>>{value:Box<Box<string>>{value:Box<string>{value:\"hi\"}}}}}}} fn main(){}"#, "type mismatch"); }
+fn infinite_nesting_simulation() { compile_should_fail_with(r#"class Box<T>{value:T}
+fn nest()Box<Box<Box<Box<Box<int>>>>>{return Box<Box<Box<Box<Box<string>>>>>{value:Box<Box<Box<Box<string>>>>{value:Box<Box<Box<string>>>{value:Box<Box<string>>{value:Box<string>{value:"hi"}}}}}}
+fn main(){}"#, "type mismatch"); }
