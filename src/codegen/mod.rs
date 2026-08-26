@@ -1163,6 +1163,7 @@ mod tests {
             object: Box::new(sp(Expr::Ident("self".to_string()))),
             method: sp("len".to_string()),
             args: vec![],
+            type_args: vec![],
         };
         assert_eq!(format_invariant_expr(&expr), "self.len()");
     }

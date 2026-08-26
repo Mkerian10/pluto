@@ -1407,6 +1407,7 @@ mod tests {
             object: Box::new(dummy(Expr::Ident("obj".to_string()))),
             method: dummy("foo".to_string()),
             args: vec![dummy(Expr::IntLit(42))],
+            type_args: vec![],
         });
 
         let mut collector = ExprCollector::default();

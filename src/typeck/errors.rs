@@ -1629,6 +1629,7 @@ mod tests {
             })),
             method: sp("compute".to_string()),
             args: vec![],
+            type_args: vec![],
         });
         assert!(contains_propagate(&expr));
     }
@@ -1646,6 +1647,7 @@ mod tests {
                     target_id: None,
                 })),
             })],
+            type_args: vec![],
         });
         assert!(contains_propagate(&expr));
     }

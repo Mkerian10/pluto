@@ -2797,6 +2797,7 @@ mod tests {
             })),
             method: spanned("process".to_string()),
             args: vec![spanned(Expr::IntLit(10))],
+            type_args: vec![],
         };
 
         let mut bindings = HashMap::new();

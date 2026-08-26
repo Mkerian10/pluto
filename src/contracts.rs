@@ -294,6 +294,7 @@ mod tests {
             object: Box::new(spanned(Expr::Ident("items".to_string()))),
             method: spanned("len".to_string()),
             args: vec![],
+            type_args: vec![],
         };
         assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
     }
@@ -304,6 +305,7 @@ mod tests {
             object: Box::new(spanned(Expr::Ident("x".to_string()))),
             method: spanned("foo".to_string()),
             args: vec![spanned(Expr::IntLit(1))],
+            type_args: vec![],
         };
         assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_err());
     }
@@ -314,6 +316,7 @@ mod tests {
             object: Box::new(spanned(Expr::Ident("x".to_string()))),
             method: spanned("foo".to_string()),
             args: vec![],
+            type_args: vec![],
         };
         let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
         assert!(result.is_err());
