@@ -422,7 +422,16 @@ impl<'a> LowerContext<'a> {
             return Ok(());
         }
         match stmt {
-            Stmt::Let { name, ty, value, .. } => self.lower_let(name, ty, value),
+            Stmt::Let { name, ty, value, .. } => {
+                if expr_diverges(&value.node) {
+                    // Both arms of the initializer terminate on their own;
+                    // control never reaches the binding (#294)
+                    self.lower_expr(&value.node)?;
+                    *terminated = true;
+                    return Ok(());
+                }
+                self.lower_let(name, ty, value)
+            }
             Stmt::Serve { service, port } => {
                 self.lower_serve(service, port)?;
                 // The accept loop never returns; nothing after it is reachable.
@@ -433,6 +442,12 @@ impl<'a> LowerContext<'a> {
             Stmt::Return(value) => {
                 let target_block = self.exit_block;
                 match value {
+                    Some(expr) if expr_diverges(&expr.node) => {
+                        // `return if c { return a } else { return b }` (the
+                        // arrow-body desugar): both arms already emitted their
+                        // own terminators — there is no value to return (#294)
+                        self.lower_expr(&expr.node)?;
+                    }
                     Some(expr) => {
                         let val = self.lower_expr(&expr.node)?;
                         let val_type = infer_type_for_expr(&expr.node, self.env, &self.var_types);
@@ -470,6 +485,11 @@ impl<'a> LowerContext<'a> {
                 Ok(())
             }
             Stmt::Assign { target, value } => {
+                if expr_diverges(&value.node) {
+                    self.lower_expr(&value.node)?;
+                    *terminated = true;
+                    return Ok(());
+                }
                 let val = self.lower_expr(&value.node)?;
                 let val_type = infer_type_for_expr(&value.node, self.env, &self.var_types);
                 let target_type = self.var_types.get(&target.node).cloned();
@@ -3122,13 +3142,22 @@ impl<'a> LowerContext<'a> {
         let if_type = infer_type_for_expr_if(then_block, else_block, self.env, &self.var_types);
         let cl_type = pluto_to_cranelift(&if_type);
 
+        // Arms that always terminate (return/raise/break/continue) never
+        // reach the merge block — emitting a jump after their terminator
+        // would corrupt control flow (#294)
+        let then_term = crate::typeck::block_always_terminates(&then_block.node);
+        let else_term = crate::typeck::block_always_terminates(&else_block.node);
+
         // Create blocks
         let then_bb = self.builder.create_block();
         let else_bb = self.builder.create_block();
         let merge_bb = self.builder.create_block();
 
-        // Add parameter to merge block to receive result
-        self.builder.append_block_param(merge_bb, cl_type);
+        // Add parameter to merge block to receive result (only when some arm
+        // actually flows into it)
+        if !(then_term && else_term) {
+            self.builder.append_block_param(merge_bb, cl_type);
+        }
 
         // Branch based on condition
         self.builder.ins().brif(cond_val, then_bb, &[], else_bb, &[]);
@@ -3139,7 +3168,9 @@ impl<'a> LowerContext<'a> {
         // Branch coverage: if-expr then path
         self.emit_coverage_hit(then_block.span.file_id, then_block.span.start, 1);
         let then_val = self.lower_block_value(&then_block.node)?;
-        self.builder.ins().jump(merge_bb, &[then_val]);
+        if !then_term {
+            self.builder.ins().jump(merge_bb, &[then_val]);
+        }
 
         // Lower else branch
         self.builder.switch_to_block(else_bb);
@@ -3147,12 +3178,22 @@ impl<'a> LowerContext<'a> {
         // Branch coverage: if-expr else path
         self.emit_coverage_hit(else_block.span.file_id, else_block.span.start, 1);
         let else_val = self.lower_block_value(&else_block.node)?;
-        self.builder.ins().jump(merge_bb, &[else_val]);
+        if !else_term {
+            self.builder.ins().jump(merge_bb, &[else_val]);
+        }
 
         // Switch to merge block and get result from parameter
         self.builder.switch_to_block(merge_bb);
         self.builder.seal_block(merge_bb);
 
+        if then_term && else_term {
+            // Both arms diverge: the merge block is unreachable and the
+            // expression's value is never consulted. Trap-terminate it so
+            // the function builder sees a filled block.
+            let dummy = self.builder.ins().iconst(types::I64, 0);
+            self.builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+            return Ok(dummy);
+        }
         Ok(self.builder.block_params(merge_bb)[0])
     }
 
@@ -3314,7 +3355,20 @@ impl<'a> LowerContext<'a> {
         // Lower all statements except the last
         let mut terminated = false;
         for stmt in &block.stmts[..block.stmts.len() - 1] {
+            if terminated {
+                break;
+            }
             self.lower_stmt_covered(stmt, &mut terminated)?;
+        }
+        if terminated {
+            // A mid-block terminator filled the current block; the rest is
+            // unreachable. Park a dummy value in a trapped dead block (#294).
+            let dead = self.builder.create_block();
+            self.builder.switch_to_block(dead);
+            self.builder.seal_block(dead);
+            let dummy = self.builder.ins().iconst(types::I64, 0);
+            self.builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+            return Ok(dummy);
         }
 
         // Last statement determines the value
@@ -3334,13 +3388,18 @@ impl<'a> LowerContext<'a> {
                 let if_type = infer_type_for_expr_if(then_block, else_block, self.env, &self.var_types);
                 let cl_type = pluto_to_cranelift(&if_type);
 
+                // Terminating arms never reach the merge block (#294)
+                let then_term = crate::typeck::block_always_terminates(&then_block.node);
+                let else_term = crate::typeck::block_always_terminates(&else_block.node);
+
                 // Create blocks
                 let then_bb = self.builder.create_block();
                 let else_bb = self.builder.create_block();
                 let merge_bb = self.builder.create_block();
 
-                // Add parameter to merge block to receive result
-                self.builder.append_block_param(merge_bb, cl_type);
+                if !(then_term && else_term) {
+                    self.builder.append_block_param(merge_bb, cl_type);
+                }
 
                 // Branch based on condition
                 self.builder.ins().brif(cond_val, then_bb, &[], else_bb, &[]);
@@ -3349,24 +3408,36 @@ impl<'a> LowerContext<'a> {
                 self.builder.switch_to_block(then_bb);
                 self.builder.seal_block(then_bb);
                 let then_val = self.lower_block_value(&then_block.node)?;
-                self.builder.ins().jump(merge_bb, &[then_val]);
+                if !then_term {
+                    self.builder.ins().jump(merge_bb, &[then_val]);
+                }
 
                 // Lower else branch
                 self.builder.switch_to_block(else_bb);
                 self.builder.seal_block(else_bb);
                 let else_val = self.lower_block_value(&else_block.node)?;
-                self.builder.ins().jump(merge_bb, &[else_val]);
+                if !else_term {
+                    self.builder.ins().jump(merge_bb, &[else_val]);
+                }
 
                 // Switch to merge block and get result from parameter
                 self.builder.switch_to_block(merge_bb);
                 self.builder.seal_block(merge_bb);
 
+                if then_term && else_term {
+                    let dummy = self.builder.ins().iconst(types::I64, 0);
+                    self.builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+                    return Ok(dummy);
+                }
                 Ok(self.builder.block_params(merge_bb)[0])
             }
             _ => {
-                // Last is a statement → lower it, return void (0)
+                // Last is a statement → lower it, return void (0). Emit the
+                // dummy value first: if the statement terminates the block
+                // (return/raise/...), nothing can be added after it (#294).
+                let dummy = self.builder.ins().iconst(types::I64, 0);
                 self.lower_stmt_covered(last, &mut terminated)?;
-                Ok(self.builder.ins().iconst(types::I64, 0))
+                Ok(dummy)
             }
         }
     }
@@ -4243,6 +4314,18 @@ impl Visitor for SenderVarCollector<'_> {
             }
         }
         walk_stmt(self, stmt);
+    }
+}
+
+/// An if-expression whose arms both always terminate (return/raise/break/
+/// continue) never produces a value: its lowering trap-fills the merge block,
+/// so the enclosing statement must not emit anything after it (#294).
+fn expr_diverges(expr: &Expr) -> bool {
+    if let Expr::If { then_block, else_block, .. } = expr {
+        crate::typeck::block_always_terminates(&then_block.node)
+            && crate::typeck::block_always_terminates(&else_block.node)
+    } else {
+        false
     }
 }
 

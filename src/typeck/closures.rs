@@ -61,8 +61,14 @@ pub(crate) fn infer_closure(
     let final_ret = if let Some(rt) = return_type {
         resolve_type(rt, env)?
     } else {
-        // Infer from first return-with-value in the body (dry run that may add variables to scope)
-        let ret = infer_closure_return_type(&body.node, env)?;
+        // Infer from first return-with-value in the body (dry run that may add
+        // variables to scope). The closure's return type is unknown during
+        // the dry run, so nested returns must not be compared against the
+        // enclosing function's return type.
+        let saved_ret_ctx = env.current_function_return.take();
+        let ret = infer_closure_return_type(&body.node, env);
+        env.current_function_return = saved_ret_ctx;
+        let ret = ret?;
         // Reset closure scope to only contain params, removing any variables added by the dry run.
         // This prevents check_block from seeing the dry-run variables as pre-existing declarations.
         env.pop_scope();
@@ -141,6 +147,22 @@ fn infer_closure_return_type(block: &Block, env: &mut TypeEnv) -> Result<PlutoTy
                 env.define_unchecked(receiver.node.clone(), PlutoType::Receiver(Box::new(resolved)));
             }
             Stmt::Return(Some(expr)) => {
+                // An arrow body `=> if c { return a } else { return b }`
+                // desugars to `return <if-expr>` whose arms both diverge; the
+                // closure's real return type comes from the nested returns.
+                if let Expr::If { then_block, else_block, .. } = &expr.node {
+                    if crate::typeck::block_always_terminates(&then_block.node)
+                        && crate::typeck::block_always_terminates(&else_block.node)
+                    {
+                        // An arm may diverge without a return (raise) — take
+                        // the first arm that yields a concrete return type
+                        let t = infer_closure_return_type(&then_block.node, env)?;
+                        if t != PlutoType::Void {
+                            return Ok(t);
+                        }
+                        return infer_closure_return_type(&else_block.node, env);
+                    }
+                }
                 return infer_expr(&expr.node, expr.span, env, None);
             }
             _ => {}

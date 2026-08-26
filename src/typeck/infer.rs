@@ -598,6 +598,18 @@ pub(crate) fn infer_expr(
             let else_type = infer_block_type(&else_block.node, env)?;
             env.pop_scope();
 
+            // A diverging branch (always returns/raises/breaks) produces no
+            // value: the if-expression takes the other branch's type. Both
+            // diverging means the expression itself is never consulted.
+            let then_div = super::block_always_terminates(&then_block.node);
+            let else_div = super::block_always_terminates(&else_block.node);
+            match (then_div, else_div) {
+                (true, false) => return Ok(else_type),
+                (false, true) => return Ok(then_type),
+                (true, true) => return Ok(expected.cloned().unwrap_or(PlutoType::Void)),
+                (false, false) => {}
+            }
+
             // Unify branch types
             unify_branch_types(
                 &then_type,
@@ -2837,10 +2849,38 @@ fn infer_block_type(
             let else_type = infer_block_type(&else_block.node, env)?;
             env.pop_scope();
 
+            // Diverging branches produce no value (see Expr::If)
+            let then_div = super::block_always_terminates(&then_block.node);
+            let else_div = super::block_always_terminates(&else_block.node);
+            match (then_div, else_div) {
+                (true, false) => return Ok(else_type),
+                (false, true) => return Ok(then_type),
+                (true, true) => return Ok(PlutoType::Void),
+                (false, false) => {}
+            }
+
             // Unify branch types
             unify_branch_types(&then_type, &else_type, then_block.span, else_block.span)
         }
-        Stmt::Return(_) | Stmt::Break | Stmt::Continue | Stmt::Raise { .. } => {
+        Stmt::Return(opt) => {
+            // Diverging arm: the branch never produces a value, but its
+            // returned expression still needs full checking — names resolve
+            // (a closure's own name is undefined here, consistently with
+            // block bodies) and the type must match the enclosing function
+            if let Some(e) = opt {
+                let t = infer_expr(&e.node, e.span, env, env.current_function_return.clone().as_ref())?;
+                if let Some(expected) = env.current_function_return.clone() {
+                    if !super::types_compatible(&t, &expected, env) {
+                        return Err(CompileError::type_err(
+                            format!("return type mismatch: expected {expected}, found {t}"),
+                            e.span,
+                        ));
+                    }
+                }
+            }
+            Ok(PlutoType::Void)
+        }
+        Stmt::Break | Stmt::Continue | Stmt::Raise { .. } => {
             // Diverging statement → never returns
             Ok(PlutoType::Void)
         }

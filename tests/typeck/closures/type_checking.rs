@@ -83,5 +83,4 @@ fn closure_error_type() { compile_should_fail_with(r#"error E{} fn f()!{raise E{
 
 // Recursive closure type (not directly supported)
 #[test]
-#[ignore] // Inconsistent: if-expression arrow bodies with self-reference (#294)
 fn recursive_closure() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>if x==0{return 1}else{return f(x-1)}}"#, "undefined function 'f'"); }
