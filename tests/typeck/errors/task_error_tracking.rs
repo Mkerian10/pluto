@@ -1,65 +1,126 @@
-//! Task error tracking tests - 15 tests
+//! Task error tracking.
+//!
+//! `task.get()`'s fallibility tracks the spawned function: spawning an
+//! infallible function yields a task whose `get()` needs no handling, while
+//! spawning a fallible function makes every bare `get()` an error until
+//! handled with `!` or `catch` — in every expression position.
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run_stdout, compile_should_fail_with};
 
-// Basic task.get() fallibility
-#[test]
-#[ignore]
-fn task_get_no_handler() { compile_should_fail_with(r#"fn work()int{return 42} fn main(){let t=spawn work() t.get()}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn task_get_in_assignment() { compile_should_fail_with(r#"fn work()int{return 42} fn main(){let t=spawn work() let x=t.get()}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn task_get_in_binop() { compile_should_fail_with(r#"fn work()int{return 42} fn main(){let t=spawn work() let x=t.get()+1}"#, "unhandled error"); }
+const MUST_HANDLE: &str = "must be handled";
 
-// Task.get() when spawned function is fallible
-#[test]
-#[ignore]
-fn task_fallible_work_no_handler() { compile_should_fail_with(r#"error E{} fn work()int!{raise E{}} fn main(){let t=spawn work() t.get()}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn task_fallible_get_needs_propagate() { compile_should_fail_with(r#"error E{} fn work()int!{raise E{}} fn f()int{let t=spawn work() return t.get()} fn main(){}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn task_fallible_get_with_propagate() { compile_should_fail_with(r#"error E{} fn work()int!{raise E{}} fn f()int!{let t=spawn work() return t.get()!} fn main(){f()}"#, "unhandled error"); }
+const FWORK: &str = "error E {}\n\nfn work() int {\n    raise E {}\n}\n";
 
-// Multiple tasks
-#[test]
-#[ignore]
-fn two_tasks_both_gets() { compile_should_fail_with(r#"fn work()int{return 42} fn main(){let t1=spawn work() let t2=spawn work() t1.get() t2.get()}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn two_tasks_one_fallible() { compile_should_fail_with(r#"error E{} fn work1()int{return 42} fn work2()int!{raise E{}} fn main(){let t1=spawn work1() let t2=spawn work2() t1.get() t2.get()}"#, "unhandled error"); }
+fn fail_with_fallible_work(body: &str) {
+    compile_should_fail_with(&format!("{FWORK}\n{body}"), MUST_HANDLE);
+}
 
-// Task get in control flow
-#[test]
-#[ignore]
-fn task_get_in_if() { compile_should_fail_with(r#"fn work()int{return 42} fn main(){let t=spawn work() if true{t.get()}}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn task_get_in_while() { compile_should_fail_with(r#"fn work()int{return 42} fn main(){let t=spawn work() while false{t.get()}}"#, "unhandled error"); }
-#[test]
-#[ignore]
-fn task_get_in_for() { compile_should_fail_with(r#"fn work()int{return 42} fn main(){let t=spawn work() for i in 0..1{t.get()}}"#, "unhandled error"); }
+// ── Fallible work: bare get() rejected in every position ─────────────────────
 
-// Task with generic return type
 #[test]
-#[ignore]
-fn generic_task_get() { compile_should_fail_with(r#"fn work<T>(x:T)T{return x} fn main(){let t=spawn work(42) t.get()}"#, "unhandled error"); }
+fn task_get_no_handler() {
+    fail_with_fallible_work("fn main(){\n    let t = spawn work()\n    t.get()\n}");
+}
 
-// Task assigned to variable before get
 #[test]
-#[ignore]
-fn task_stored_then_get() { compile_should_fail_with(r#"fn work()int{return 42} fn main(){let t=spawn work() let x=t let y=x.get()}"#, "unhandled error"); }
+fn task_get_in_assignment() {
+    fail_with_fallible_work("fn main(){\n    let t = spawn work()\n    let x = t.get()\n}");
+}
 
-// Task get in function call arg
 #[test]
-#[ignore]
-fn task_get_as_arg() { compile_should_fail_with(r#"fn work()int{return 42} fn consume(x:int){} fn main(){let t=spawn work() consume(t.get())}"#, "unhandled error"); }
+fn task_get_in_binop() {
+    fail_with_fallible_work("fn main(){\n    let t = spawn work()\n    let x = t.get() + 1\n}");
+}
 
-// Task get in struct field
 #[test]
-#[ignore]
-fn task_get_in_struct_field() { compile_should_fail_with(r#"fn work()int{return 42} class C{x:int} fn main(){let t=spawn work() let c=C{x:t.get()}}"#, "unhandled error"); }
+fn task_get_in_if() {
+    fail_with_fallible_work("fn main(){\n    let t = spawn work()\n    if true {\n        t.get()\n    }\n}");
+}
+
+#[test]
+fn task_get_in_while() {
+    fail_with_fallible_work("fn main(){\n    let t = spawn work()\n    while false {\n        t.get()\n    }\n}");
+}
+
+#[test]
+fn task_get_in_for() {
+    fail_with_fallible_work("fn main(){\n    let t = spawn work()\n    for i in 0..1 {\n        t.get()\n    }\n}");
+}
+
+#[test]
+fn task_get_as_arg() {
+    fail_with_fallible_work("fn consume(x: int) {\n    print(x)\n}\n\nfn main(){\n    let t = spawn work()\n    consume(t.get())\n}");
+}
+
+#[test]
+fn task_get_in_struct_field() {
+    fail_with_fallible_work("class C {\n    x: int\n}\n\nfn main(){\n    let t = spawn work()\n    let c = C { x: t.get() }\n}");
+}
+
+#[test]
+fn task_stored_then_get() {
+    // Fallibility follows the task through reassignment to another variable
+    fail_with_fallible_work("fn main(){\n    let t = spawn work()\n    let x = t\n    let y = x.get()\n}");
+}
+
+#[test]
+fn two_tasks_one_fallible() {
+    // Only the fallible task's get needs handling; t1.get() alone is fine
+    compile_should_fail_with(
+        "error E {}\n\nfn work1() int {\n    return 42\n}\n\nfn work2() int {\n    raise E {}\n}\n\nfn main(){\n    let t1 = spawn work1()\n    let t2 = spawn work2()\n    print(t1.get())\n    t2.get()\n}",
+        MUST_HANDLE,
+    );
+}
+
+#[test]
+fn task_get_needs_handling_outside_main_too() {
+    compile_should_fail_with(
+        "error E {}\n\nfn work() int {\n    raise E {}\n}\n\nfn f() int {\n    let t = spawn work()\n    return t.get()\n}\n\nfn main(){}",
+        MUST_HANDLE,
+    );
+}
+
+// ── Infallible work: bare get() is fine ──────────────────────────────────────
+
+#[test]
+fn infallible_task_get_no_handling_needed() {
+    let out = compile_and_run_stdout(
+        "fn work() int {\n    return 42\n}\n\nfn main(){\n    let t = spawn work()\n    print(t.get())\n}",
+    );
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn generic_task_get() {
+    let out = compile_and_run_stdout(
+        "fn work<T>(x: T) T {\n    return x\n}\n\nfn main(){\n    let t = spawn work(42)\n    print(t.get())\n}",
+    );
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn bang_on_infallible_task_get_rejected() {
+    compile_should_fail_with(
+        "fn work() int {\n    return 42\n}\n\nfn main(){\n    let t = spawn work()\n    let x = t.get()!\n}",
+        "'!' applied to infallible method 'get'",
+    );
+}
+
+// ── Handled fallible get() works end to end ──────────────────────────────────
+
+#[test]
+fn fallible_work_error_travels_through_get() {
+    let out = compile_and_run_stdout(
+        "error E {}\n\nfn work() int {\n    raise E {}\n}\n\nfn main(){\n    let t = spawn work()\n    print(t.get() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "-1");
+}
+
+#[test]
+fn task_get_with_propagate() {
+    let out = compile_and_run_stdout(
+        "error E {}\n\nfn work(fail: bool) int {\n    if fail {\n        raise E {}\n    }\n    return 42\n}\n\nfn f() int {\n    let t = spawn work(false)\n    return t.get()!\n}\n\nfn main(){\n    print(f() catch e { -1 })\n}",
+    );
+    assert_eq!(out.trim(), "42");
+}

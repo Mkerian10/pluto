@@ -1,60 +1,85 @@
-//! Propagate on infallible tests - 15 tests
+//! `!` on infallible expressions.
+//!
+//! `!` propagates a callee's error to the caller, so it is only meaningful
+//! on calls to fallible functions/methods. Applying it to an infallible
+//! call is rejected with "'!' applied to infallible ...", and applying it
+//! to a non-call expression is rejected outright.
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 
-// Basic invalid propagation
-#[test]
-#[ignore]
-fn propagate_on_safe_call() { compile_should_fail_with(r#"fn f()int{return 1} fn main(){let x=f()!}"#, "cannot propagate"); }
-#[test]
-#[ignore]
-fn propagate_on_literal() { compile_should_fail_with(r#"fn main(){let x=42!}"#, "cannot propagate"); }
-#[test]
-#[ignore]
-fn propagate_on_binop() { compile_should_fail_with(r#"fn main(){let x=(1+2)!}"#, "cannot propagate"); }
-#[test]
-#[ignore]
-fn propagate_on_string() { compile_should_fail_with(r#"fn main(){let s=\"hi\"!}"#, "cannot propagate"); }
-#[test]
-#[ignore]
-fn propagate_on_array() { compile_should_fail_with(r#"fn main(){let arr=[1,2,3]!}"#, "cannot propagate"); }
+// ── Infallible calls ─────────────────────────────────────────────────────────
 
-// Propagate on safe method calls
 #[test]
-#[ignore]
-fn propagate_on_safe_method() { compile_should_fail_with(r#"class C{x:int fn foo(self)int{return 1}} fn main(){let c=C{x:1}let x=c.foo()!}"#, "cannot propagate"); }
-#[test]
-#[ignore]
-fn propagate_on_builtin_method() { compile_should_fail_with(r#"fn main(){let s=\"hi\" let x=s.len()!}"#, "cannot propagate"); }
-#[test]
-#[ignore]
-fn propagate_on_array_method() { compile_should_fail_with(r#"fn main(){let arr=[1,2,3] let x=arr.len()!}"#, "cannot propagate"); }
+fn propagate_on_safe_call() {
+    compile_should_fail_with(
+        "fn f() int {\n    return 1\n}\n\nfn main(){\n    let x = f()!\n}",
+        "'!' applied to infallible function 'f'",
+    );
+}
 
-// Propagate on safe builtin functions
 #[test]
-#[ignore]
-fn propagate_on_print() { compile_should_fail_with(r#"fn main(){print(\"hi\")!}"#, "cannot propagate"); }
-#[test]
-#[ignore]
-fn propagate_on_abs() { compile_should_fail_with(r#"fn main(){let x=abs(-5)!}"#, "cannot propagate"); }
-#[test]
-#[ignore]
-fn propagate_on_min() { compile_should_fail_with(r#"fn main(){let x=min(1,2)!}"#, "cannot propagate"); }
+fn propagate_on_safe_method() {
+    compile_should_fail_with(
+        "class C {\n    x: int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){\n    let c = C { x: 1 }\n    let x = c.foo()!\n}",
+        "'!' applied to infallible method 'foo'",
+    );
+}
 
-// Propagate in expressions
 #[test]
-#[ignore]
-fn propagate_on_field_access() { compile_should_fail_with(r#"class C{x:int} fn main(){let c=C{x:1}let x=c.x!}"#, "cannot propagate"); }
-#[test]
-#[ignore]
-fn propagate_on_index() { compile_should_fail_with(r#"fn main(){let arr=[1,2,3] let x=arr[0]!}"#, "cannot propagate"); }
-#[test]
-fn propagate_on_closure_call() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x+1
-let y=f(5)!
-print(y)}"#, "'!' applied to infallible function"); }
+fn propagate_on_builtin_method() {
+    compile_should_fail_with(
+        "fn main(){\n    let s = \"hi\"\n    let x = s.len()!\n}",
+        "'!' applied to infallible method 'len'",
+    );
+}
 
-// Propagate on control flow that doesn't raise
 #[test]
-#[ignore]
-fn propagate_on_if_expr() { compile_should_fail_with(r#"fn main(){let x=(if true{1}else{2})!}"#, "cannot propagate"); }
+fn propagate_on_safe_closure() {
+    compile_should_fail_with(
+        "fn main(){\n    let f = (x: int) => x + 1\n    let y = f(1)!\n}",
+        "'!' applied to infallible",
+    );
+}
+
+// ── Non-call expressions ─────────────────────────────────────────────────────
+
+#[test]
+fn propagate_on_literal() {
+    compile_should_fail_with(
+        "fn main(){\n    let x = 42!\n}",
+        "! can only be applied to function calls",
+    );
+}
+
+#[test]
+fn propagate_on_binop() {
+    compile_should_fail_with(
+        "fn main(){\n    let x = (1 + 2)!\n}",
+        "! can only be applied to function calls",
+    );
+}
+
+#[test]
+fn propagate_on_string() {
+    compile_should_fail_with(
+        "fn main(){\n    let s = \"hi\"!\n}",
+        "! can only be applied to function calls",
+    );
+}
+
+#[test]
+fn propagate_on_array() {
+    compile_should_fail_with(
+        "fn main(){\n    let arr = [1, 2, 3]!\n}",
+        "! can only be applied to function calls",
+    );
+}
+
+#[test]
+fn propagate_on_variable() {
+    compile_should_fail_with(
+        "fn main(){\n    let x = 1\n    let y = x!\n}",
+        "! can only be applied to function calls",
+    );
+}
