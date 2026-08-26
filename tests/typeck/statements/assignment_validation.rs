@@ -94,10 +94,14 @@ fn assign_in_expr() { compile_should_fail_with(r#"fn main(){let x=1 let y=(x=2)}
 #[test]
 fn compound_assign_undefined() { compile_should_fail_with(r#"fn main(){x+=1}"#, ""); }
 
-// Array element assign out of bounds (runtime check, not typeck)
+// Array element assign out of bounds aborts at runtime (not a typeck error)
 #[test]
-#[ignore] // Compiler limitation: array bounds checking is runtime, not compile-time
-fn array_assign_bounds() { compile_should_fail_with(r#"fn main(){let arr=[1,2,3]arr[10]=5}"#, ""); }
+fn array_assign_bounds() {
+    let code = compile_and_run(
+        "fn main(){\n    let mut arr = [1, 2, 3]\n    arr[10] = 5\n}",
+    );
+    assert_ne!(code, 0, "out-of-bounds index assignment should abort at runtime");
+}
 
 // Assign to string index (strings are immutable)
 #[test]

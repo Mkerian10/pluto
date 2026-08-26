@@ -64,7 +64,6 @@ fn array_of_generic_type() {
 }
 
 #[test]
-#[ignore] // Compiler limitation: function type annotations in let bindings not fully supported
 fn function_type_with_multiple_params() {
     // fn(int, float, string, bool) int
     let stdout = compile_and_run_stdout(r#"
@@ -86,7 +85,6 @@ fn function_type_with_multiple_params() {
 }
 
 #[test]
-#[ignore] // Compiler limitation: function types returning function types not fully supported
 fn function_type_returning_function() {
     // fn(int) fn(int) int
     let stdout = compile_and_run_stdout(r#"
@@ -197,7 +195,6 @@ fn nullable_array_type() {
 }
 
 #[test]
-#[ignore] // Compiler limitation: none literal not coerced to int? in array literal context
 fn array_of_nullable_type() {
     // [int?]
     let stdout = compile_and_run_stdout(r#"
@@ -376,7 +373,6 @@ fn closure_type_in_array() {
 }
 
 #[test]
-#[ignore] // Compiler limitation: self-referential generic types not supported (forward reference issue)
 fn self_referential_generic_type() {
     // class Node<T> { next: Node<T>? }
     let stdout = compile_and_run_stdout(r#"

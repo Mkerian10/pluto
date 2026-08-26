@@ -40,7 +40,6 @@ fn result_of_option_mismatch() { compile_should_fail_with(r#"enum Opt<T>{Some{v:
 
 // Map/Set nesting
 #[test]
-#[ignore]
 fn map_of_arrays_mismatch() { compile_should_fail_with(r#"fn main(){let m:Map<string,[int]>=Map<string,[string]>{}}"#, "type mismatch"); }
 #[test]
 fn array_of_maps_mismatch() { compile_should_fail_with(r#"fn main(){let a:[Map<string,int>]=[Map<string,string>{}]}"#, "type mismatch"); }
@@ -58,7 +57,6 @@ fn fn_takes_generic_mismatch() { compile_should_fail_with(r#"class Box<T>{value:
 
 // Nested with bounds
 #[test]
-#[ignore]
 fn nested_bound_outer_fails() { compile_should_fail_with(r#"trait T{} class Box<U>{value:U} fn f<V:T>(b:Box<V>){} class C{x:int} fn main(){f(Box<C>{value:C{x:1}})}"#, "does not satisfy"); }
 #[test]
 fn nested_bound_inner_fails() { compile_should_fail_with(r#"trait T{} class Box<U:T>{value:U} fn f<V>(b:Box<V>){} class C{x:int} fn main(){f(Box<C>{value:C{x:1}})}"#, "does not satisfy"); }
@@ -73,7 +71,6 @@ fn nested_array_index_mismatch() { compile_should_fail_with(r#"fn main(){let a=[
 
 // Nested nullable
 #[test]
-#[ignore]
 fn option_nullable_mismatch() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} fn main(){let o:Opt<int?>=Opt<int>.Some{v:42}}"#, "type mismatch"); }
 #[test]
 #[ignore]

@@ -34,7 +34,6 @@ fn static_method_on_instance() { compile_should_fail_with(r#"class C{x:int} fn C
 #[ignore]
 fn method_on_nullable() { compile_should_fail_with(r#"class C{x:int fn foo(self)int{return 1}} fn main(){let c:C?=none c.foo()}"#, "no method"); }
 #[test]
-#[ignore]
 fn method_on_generic_param() { compile_should_fail_with(r#"fn call<T>(x:T){x.foo()} fn main(){call(42)}"#, "no method"); }
 #[test]
 #[ignore]

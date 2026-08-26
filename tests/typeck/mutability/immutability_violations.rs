@@ -1,98 +1,197 @@
-//! Immutability violation tests - 20 tests
+//! Immutability violation tests.
+//!
+//! Variables declared with plain `let` cannot be reassigned, and fields
+//! cannot be assigned through an immutable binding. Known enforcement gaps
+//! (container element assignment, loop variables, match bindings, parameter
+//! reassignment) are kept as ignored tests with accurate reasons.
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 
+const IMMUT: &str = "cannot assign to immutable variable";
+
 // Reassign immutable variable
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn reassign_immutable() { compile_should_fail_with(r#"fn main(){let x=1 x=2}"#, ""); }
+fn reassign_immutable() {
+    compile_should_fail_with(
+        "fn main(){\n    let x = 1\n    x = 2\n}",
+        IMMUT,
+    );
+}
 
 // Reassign parameter
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn reassign_param() { compile_should_fail_with(r#"fn f(x:int){x=2} fn main(){}"#, ""); }
+#[ignore] // #278 enforcement gap: parameter reassignment (fn f(x: int) { x = 2 }) is not rejected
+fn reassign_param() {
+    compile_should_fail_with(
+        "fn f(x: int) {\n    x = 2\n}\n\nfn main(){}",
+        IMMUT,
+    );
+}
 
-// Reassign in loop
+// Reassign in loop body
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn reassign_in_loop() { compile_should_fail_with(r#"fn main(){let x=1 for i in 0..10{x=i}}"#, ""); }
+fn reassign_in_loop() {
+    compile_should_fail_with(
+        "fn main(){\n    let x = 1\n    for i in 0..10 {\n        x = i\n    }\n}",
+        IMMUT,
+    );
+}
 
 // Reassign in if branch
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn reassign_in_if() { compile_should_fail_with(r#"fn main(){let x=1 if true{x=2}}"#, ""); }
+fn reassign_in_if() {
+    compile_should_fail_with(
+        "fn main(){\n    let x = 1\n    if true {\n        x = 2\n    }\n}",
+        IMMUT,
+    );
+}
 
-// Reassign captured variable
+// Reassign captured variable inside a closure
 #[test]
-fn reassign_captured() { compile_should_fail_with(r#"fn main(){let x=1 let f=()=>{x=2}}"#, ""); }
+fn reassign_captured() {
+    compile_should_fail_with(
+        "fn main(){\n    let x = 1\n    let f = () => {\n        x = 2\n    }\n    f()\n}",
+        IMMUT,
+    );
+}
 
 // Reassign field of immutable instance
 #[test]
-fn reassign_immut_field() { compile_should_fail_with(r#"class C{x:int} fn main(){let c=C{x:1} c.x=2}"#, ""); }
+fn reassign_immut_field() {
+    compile_should_fail_with(
+        "class C {\n    x: int\n}\n\nfn main(){\n    let c = C { x: 1 }\n    c.x = 2\n}",
+        "cannot assign to field of immutable variable",
+    );
+}
 
-// Reassign array element
+// Reassign array element through immutable binding
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn reassign_array_elem() { compile_should_fail_with(r#"fn main(){let arr=[1,2,3] arr[0]=5}"#, ""); }
+#[ignore] // #278 enforcement gap: index assignment (arr[0] = 5) through an immutable binding is not rejected
+fn reassign_array_elem() {
+    compile_should_fail_with(
+        "fn main(){\n    let arr = [1, 2, 3]\n    arr[0] = 5\n}",
+        "",
+    );
+}
 
-// Reassign map value
+// Reassign map value through immutable binding
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn reassign_map_value() { compile_should_fail_with(r#"fn main(){let m=Map<string,int>{"a":1} m["a"]=2}"#, ""); }
+#[ignore] // #278 enforcement gap: map insertion (m[\"a\"] = 2) through an immutable binding is not rejected
+fn reassign_map_value() {
+    compile_should_fail_with(
+        "fn main(){\n    let m = Map<string, int> { \"a\": 1 }\n    m[\"a\"] = 2\n}",
+        "",
+    );
+}
 
-// Mutate immutable in match
+// Mutate outer variable inside a match arm
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn mutate_in_match() { compile_should_fail_with(r#"enum E{A B} fn main(){let x=1 match E.A{E.A{x=2}E.B{x=3}}}"#, ""); }
+fn mutate_in_match() {
+    compile_should_fail_with(
+        "enum E {\n    A\n    B\n}\n\nfn main(){\n    let x = 1\n    match E.A {\n        E.A {\n            x = 2\n        }\n        E.B {\n            x = 3\n        }\n    }\n}",
+        IMMUT,
+    );
+}
 
 // Mutate loop variable
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn mutate_loop_var() { compile_should_fail_with(r#"fn main(){for i in 0..10{i=i+1}}"#, ""); }
+#[ignore] // #278 enforcement gap: loop variables (for i in .. { i = i + 1 }) are reassignable
+fn mutate_loop_var() {
+    compile_should_fail_with(
+        "fn main(){\n    for i in 0..10 {\n        i = i + 1\n    }\n}",
+        IMMUT,
+    );
+}
 
 // Mutate match binding
 #[test]
-fn mutate_match_binding() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match E.A{x:1}{E.A{x}{x=2}}}"#, ""); }
+#[ignore] // #278 enforcement gap: match bindings (E.A { x } { x = 2 }) are reassignable
+fn mutate_match_binding() {
+    compile_should_fail_with(
+        "enum E {\n    A { x: int }\n}\n\nfn main(){\n    match (E.A { x: 1 }) {\n        E.A { x } {\n            x = 2\n        }\n    }\n}",
+        IMMUT,
+    );
+}
 
-// Mutate through closure
+// Reassign after the variable was captured by a closure
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn mutate_through_closure() { compile_should_fail_with(r#"fn main(){let x=1 let f=()=>x let y=f() x=2}"#, ""); }
+fn mutate_through_closure() {
+    compile_should_fail_with(
+        "fn main(){\n    let x = 1\n    let f = () => x\n    let y = f()\n    x = 2\n}",
+        IMMUT,
+    );
+}
 
-// Mutate spawn argument
+// Reassign after passing to spawn
 #[test]
-fn mutate_spawn_arg() { compile_should_fail_with(r#"fn task(x:int)int{return x} fn main(){let x=1 spawn task(x) x=2}"#, ""); }
+fn mutate_spawn_arg() {
+    compile_should_fail_with(
+        "fn task(x: int) int {\n    return x\n}\n\nfn main(){\n    let x = 1\n    let t = spawn task(x)\n    x = 2\n}",
+        IMMUT,
+    );
+}
 
-// Reassign after catch
+// Reassign after a catch expression
 #[test]
-fn reassign_after_catch() { compile_should_fail_with(r#"error E{} fn f()!{raise E{}} fn main(){let x=1 f() catch{x=2}}"#, ""); }
+fn reassign_after_catch() {
+    compile_should_fail_with(
+        "error E {\n    msg: string\n}\n\nfn f() int {\n    raise E { msg: \"x\" }\n}\n\nfn main(){\n    let x = 1\n    let y = f() catch e { 0 }\n    x = 2\n}",
+        IMMUT,
+    );
+}
 
-// Mutate through nullable
+// Mutate a field through a narrowed nullable binding
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn mutate_through_nullable() { compile_should_fail_with(r#"class C{x:int} fn main(){let c:C?=C{x:1} c?.x=2}"#, ""); }
+fn mutate_through_nullable() {
+    compile_should_fail_with(
+        "class C {\n    x: int\n}\n\nfn main(){\n    let c: C? = C { x: 1 }\n    if c != none {\n        c.x = 2\n    }\n}",
+        "cannot assign to field of immutable variable",
+    );
+}
 
-// Reassign in while
+// Reassign in while body
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn reassign_in_while() { compile_should_fail_with(r#"fn main(){let x=1 while x<10{x=x+1}}"#, ""); }
+fn reassign_in_while() {
+    compile_should_fail_with(
+        "fn main(){\n    let x = 1\n    while x < 10 {\n        x = x + 1\n    }\n}",
+        IMMUT,
+    );
+}
 
-// Reassign const variable
+// Reassign with self-referencing value
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn reassign_const() { compile_should_fail_with(r#"fn main(){let x=1 x=x*2}"#, ""); }
+fn reassign_const() {
+    compile_should_fail_with(
+        "fn main(){\n    let x = 1\n    x = x * 2\n}",
+        IMMUT,
+    );
+}
 
-// Mutate through array iteration
+// Mutate iteration variable over an array
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn mutate_array_iter() { compile_should_fail_with(r#"fn main(){let arr=[1,2,3] for x in arr{x=x+1}}"#, ""); }
+#[ignore] // #278 enforcement gap: loop variables (for x in arr { x = x + 1 }) are reassignable
+fn mutate_array_iter() {
+    compile_should_fail_with(
+        "fn main(){\n    let arr = [1, 2, 3]\n    for x in arr {\n        x = x + 1\n    }\n}",
+        IMMUT,
+    );
+}
 
 // Reassign in nested scope
 #[test]
-#[ignore] // Compiler bug: doesn\'t enforce immutability
-fn reassign_nested() { compile_should_fail_with(r#"fn main(){let x=1 if true{if true{x=2}}}"#, ""); }
+fn reassign_nested() {
+    compile_should_fail_with(
+        "fn main(){\n    let x = 1\n    if true {\n        if true {\n            x = 2\n        }\n    }\n}",
+        IMMUT,
+    );
+}
 
-// Mutate self in non-mut method
+// Mutate self field in a non-mut method
 #[test]
-fn mutate_self_non_mut() { compile_should_fail_with(r#"class C{x:int} fn update(self){self.x=self.x+1} fn main(){}"#, ""); }
+fn mutate_self_non_mut() {
+    compile_should_fail_with(
+        "class C {\n    x: int\n\n    fn update(self) {\n        self.x = self.x + 1\n    }\n}\n\nfn main(){}",
+        "non-mut method",
+    );
+}

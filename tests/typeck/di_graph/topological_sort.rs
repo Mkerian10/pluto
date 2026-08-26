@@ -23,7 +23,6 @@ fn three_way_circular_di() { compile_should_fail_with(r#"class A[b:B]{} class B[
 
 // Self-dependency
 #[test]
-#[ignore] // Compiler limitation: doesn't detect DI cycles
 fn self_dependency() { compile_should_fail_with(r#"class A[a:A]{} app MyApp{fn main(self){}}"#, "circular"); }
 
 // Dependency on non-class

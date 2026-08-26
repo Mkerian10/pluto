@@ -208,7 +208,6 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // #229: needs mut enforcement fixes in stdlib
 fn http_request_header() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
@@ -327,7 +326,6 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // #229: needs mut enforcement fixes in stdlib
 fn http_url_decode() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
@@ -351,7 +349,6 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // #229: needs mut enforcement fixes in stdlib
 fn http_multiple_requests() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",

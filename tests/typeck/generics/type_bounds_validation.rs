@@ -23,7 +23,6 @@ fn two_bounds_both_fail() { compile_should_fail_with(r#"trait T1{} trait T2{} cl
 
 // Bounds on nested generics
 #[test]
-#[ignore]
 fn nested_generic_bound_fails() { compile_should_fail_with(r#"trait T{} class Box<U>{value:U} fn f<U:T>(b:Box<U>){} class C{x:int} fn main(){f(Box<C>{value:C{x:1}})}"#, "does not satisfy"); }
 #[test]
 fn generic_in_generic_bound_fails() { compile_should_fail_with(r#"trait T{} class Box<U:T>{value:U} class Wrapper<V>{inner:Box<V>} class C{x:int} fn main(){let w=Wrapper<C>{inner:Box<C>{value:C{x:1}}}}"#, "does not satisfy"); }
@@ -39,7 +38,6 @@ fn array_fails_trait_bound() { compile_should_fail_with(r#"trait T{} fn f<U:T>(x
 
 // Bounds with return types
 #[test]
-#[ignore]
 fn return_type_bound_fails() { compile_should_fail_with(r#"trait T{} class C{x:int} fn make<U:T>()U{return C{x:1}} fn main(){}"#, "type mismatch"); }
 #[test]
 fn generic_return_bound_fails() { compile_should_fail_with(r#"trait T{} fn id<U:T>(x:U)U{return x} class C{x:int} fn main(){id(C{x:1})}"#, "does not satisfy"); }

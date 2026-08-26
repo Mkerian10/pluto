@@ -85,8 +85,7 @@ fn map_of_self() {
 
 // Generic with expanding params
 #[test]
-#[ignore]
-fn expanding_type_params() { compile_should_fail_with(r#"class Box<T>{value:T} fn expand<U>()Box<Box<U>>{return Box<Box<U>>{value:expand()}} fn main(){}"#, ""); }
+fn expanding_type_params() { compile_should_fail_with(r#"class Box<T>{value:T} fn expand<U>()Box<Box<U>>{return Box<Box<U>>{value:expand()}} fn main(){}"#, "cannot infer type parameter"); }
 
 // Mutually recursive with type change
 #[test]

@@ -334,7 +334,6 @@ fn index_array_with_generic_param() {
 }
 
 #[test]
-#[ignore]
 fn index_map_with_generic_param_wrong_bound() {
     compile_should_fail_with(
         r#"

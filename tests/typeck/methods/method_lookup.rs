@@ -52,8 +52,7 @@ fn method_on_nullable() { compile_should_fail_with(r#"class C{} fn foo(self){} f
 
 // Method on generic without bound
 #[test]
-#[ignore]
-fn generic_no_bound() { compile_should_fail_with(r#"fn f<T>(x:T){x.foo()} fn main(){}"#, ""); }
+fn generic_no_bound() { compile_should_fail_with(r#"fn f<T>(x:T){x.foo()} fn main(){}"#, "no method 'foo'"); }
 
 // Method on map
 #[test]

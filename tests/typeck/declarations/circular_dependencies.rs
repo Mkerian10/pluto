@@ -1,104 +1,175 @@
-//! Circular dependency errors - 20 tests
+//! Circular references between declarations.
+//!
+//! Since #175, mutually recursive classes, enums, generics, traits, and
+//! functions are legal (heap references make the layouts finite); the only
+//! rejected type cycle is an *expanding* recursive instantiation. DI bracket
+//! dependencies must still form a DAG, and module import cycles are rejected
+//! (covered in tests/integration/modules.rs::circular_import_rejected).
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run_stdout, compile_should_fail_with};
 
-// Simple circular class dependency
-#[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_classes() { compile_should_fail_with(r#"class A{b:B} class B{a:A} fn main(){}"#, ""); }
+// ── Legal cycles ─────────────────────────────────────────────────────────────
 
-// Three-way circular dependency
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn three_way_circular() { compile_should_fail_with(r#"class A{b:B} class B{c:C} class C{a:A} fn main(){}"#, ""); }
+fn circular_classes() {
+    let out = compile_and_run_stdout(
+        "class A {\n    b: B\n}\n\nclass B {\n    a: A\n}\n\nfn main(){\n    print(1)\n}",
+    );
+    assert_eq!(out.trim(), "1");
+}
 
-// Circular trait dependency
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_traits() { compile_should_fail_with(r#"trait T1{fn foo(self)T2} trait T2{fn bar(self)T1} fn main(){}"#, ""); }
+fn three_way_circular() {
+    let out = compile_and_run_stdout(
+        "class A {\n    b: B\n}\n\nclass B {\n    c: C\n}\n\nclass C {\n    a: A\n}\n\nfn main(){\n    print(1)\n}",
+    );
+    assert_eq!(out.trim(), "1");
+}
 
-// Circular enum dependency
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_enums() { compile_should_fail_with(r#"enum E1{A{e:E2}} enum E2{B{e:E1}} fn main(){}"#, ""); }
+fn circular_traits() {
+    let out = compile_and_run_stdout(
+        "trait T1 {\n    fn foo(self) T2\n}\n\ntrait T2 {\n    fn bar(self) T1\n}\n\nfn main(){\n    print(1)\n}",
+    );
+    assert_eq!(out.trim(), "1");
+}
 
-// Circular generic dependency
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_generics() { compile_should_fail_with(r#"class A<T>{value:B<T>} class B<U>{value:A<U>} fn main(){}"#, ""); }
+fn circular_enums() {
+    let out = compile_and_run_stdout(
+        "enum E1 {\n    A { e: E2? }\n}\n\nenum E2 {\n    B { e: E1? }\n}\n\nfn main(){\n    print(1)\n}",
+    );
+    assert_eq!(out.trim(), "1");
+}
 
-// Circular DI dependency
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_di() { compile_should_fail_with(r#"class A[b:B]{x:int} class B[a:A]{y:int} fn main(){}"#, "circular"); }
+fn circular_generics() {
+    // Non-expanding mutual recursion between generics is legal
+    let out = compile_and_run_stdout(
+        "class A<T> {\n    value: B<T>?\n}\n\nclass B<U> {\n    value: A<U>?\n}\n\nfn main(){\n    let b = B<int> { value: none }\n    print(b.value == none)\n}",
+    );
+    assert_eq!(out.trim(), "true");
+}
 
-// Self-referential class (valid with pointer)
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn self_referential_class() { compile_should_fail_with(r#"class Node{next:Node?} fn main(){}"#, ""); }
+fn self_referential_class() {
+    let out = compile_and_run_stdout(
+        "class Node {\n    next: Node?\n}\n\nfn main(){\n    let n = Node { next: none }\n    print(n.next == none)\n}",
+    );
+    assert_eq!(out.trim(), "true");
+}
 
-// Circular function dependency
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_functions() { compile_should_fail_with(r#"fn f()int{return g()} fn g()int{return f()} fn main(){}"#, ""); }
+fn circular_functions() {
+    let out = compile_and_run_stdout(
+        "fn is_even(n: int) bool {\n    if n == 0 {\n        return true\n    }\n    return is_odd(n - 1)\n}\n\nfn is_odd(n: int) bool {\n    if n == 0 {\n        return false\n    }\n    return is_even(n - 1)\n}\n\nfn main(){\n    print(is_even(4))\n}",
+    );
+    assert_eq!(out.trim(), "true");
+}
 
-// Circular type alias (if supported)
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_type_alias() { compile_should_fail_with(r#"type A=B type B=A fn main(){}"#, "circular"); }
+fn mutual_recursion_methods() {
+    let out = compile_and_run_stdout(
+        "class C {\n    fn foo(self, n: int) int {\n        if n <= 0 {\n            return 0\n        }\n        return self.bar(n - 1)\n    }\n\n    fn bar(self, n: int) int {\n        return self.foo(n - 1)\n    }\n}\n\nfn main(){\n    let c = C {}\n    print(c.foo(4))\n}",
+    );
+    assert_eq!(out.trim(), "0");
+}
 
-// Circular trait bound
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_trait_bound() { compile_should_fail_with(r#"trait T1:T2{} trait T2:T1{} fn main(){}"#, ""); }
+fn indirect_circular() {
+    let out = compile_and_run_stdout(
+        "class A {\n    b: B?\n}\n\nclass B {\n    c: C?\n}\n\nclass C {\n    d: D?\n}\n\nclass D {\n    a: A?\n}\n\nfn main(){\n    print(1)\n}",
+    );
+    assert_eq!(out.trim(), "1");
+}
 
-// Indirect circular dependency
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn indirect_circular() { compile_should_fail_with(r#"class A{b:B} class B{c:C} class C{d:D} class D{a:A} fn main(){}"#, ""); }
+fn circular_nullable() {
+    let out = compile_and_run_stdout(
+        "class A {\n    b: B?\n}\n\nclass B {\n    a: A?\n}\n\nfn main(){\n    print(1)\n}",
+    );
+    assert_eq!(out.trim(), "1");
+}
 
-// Circular error dependency
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_errors() { compile_should_fail_with(r#"error E1{e:E2} error E2{e:E1} fn main(){}"#, ""); }
+fn circular_array() {
+    let out = compile_and_run_stdout(
+        "class A {\n    b: [B]\n}\n\nclass B {\n    a: [A]\n}\n\nfn main(){\n    print(1)\n}",
+    );
+    assert_eq!(out.trim(), "1");
+}
 
-// Circular module dependency
-#[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_modules() { compile_should_fail_with(r#"import mod1 fn main(){}"#, "circular"); }
+// ── Rejected: expanding recursive instantiation ──────────────────────────────
 
-// Circular bracket deps chain
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_bracket_deps_chain() { compile_should_fail_with(r#"class A[b:B]{} class B[c:C]{} class C[a:A]{} fn main(){}"#, "circular"); }
+fn expanding_recursive_instantiation_rejected() {
+    compile_should_fail_with(
+        "class Box<T> {\n    inner: Box<Box<T>>?\n}\n\nfn main(){}",
+        "expanding recursive reference",
+    );
+}
 
-// Self-dependency in DI
-#[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn self_di_dependency() { compile_should_fail_with(r#"class A[a:A]{} fn main(){}"#, "circular"); }
+// ── Rejected: DI cycles ──────────────────────────────────────────────────────
 
-// Circular with nullable (still circular)
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_nullable() { compile_should_fail_with(r#"class A{b:B?} class B{a:A?} fn main(){}"#, ""); }
+fn circular_di() {
+    compile_should_fail_with(
+        "class A[b: B] {\n    x: int\n}\n\nclass B[a: A] {\n    y: int\n}\n\nfn main(){}",
+        "circular",
+    );
+}
 
-// Circular with array
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_array() { compile_should_fail_with(r#"class A{b:[B]} class B{a:[A]} fn main(){}"#, ""); }
+fn circular_bracket_deps_chain() {
+    compile_should_fail_with(
+        "class A[b: B] {}\n\nclass B[c: C] {}\n\nclass C[a: A] {}\n\nfn main(){}",
+        "circular",
+    );
+}
 
-// Circular trait implementation
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_trait_impl() { compile_should_fail_with(r#"trait T1{} trait T2{} class C impl T1 impl T2 fn main(){}"#, ""); }
+fn self_di_dependency() {
+    compile_should_fail_with(
+        "class A[a: A] {}\n\nfn main(){}",
+        "circular",
+    );
+}
 
-// Mutual recursion in methods
-#[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn mutual_recursion_methods() { compile_should_fail_with(r#"class C{} fn foo(self){self.bar()} fn bar(self){self.foo()} fn main(){}"#, ""); }
+// ── Rejected: unsupported reference shapes ───────────────────────────────────
 
-// Circular generic bounds
 #[test]
-#[ignore] // #157: compiler doesn't detect recursive types
-fn circular_generic_bounds() { compile_should_fail_with(r#"fn f<T:U,U:T>(x:T){} fn main(){}"#, ""); }
+fn error_field_referencing_error_rejected() {
+    // Error fields cannot reference other error declarations
+    compile_should_fail_with(
+        "error E1 {\n    e: E2\n}\n\nerror E2 {\n    e: E1\n}\n\nfn main(){}",
+        "unknown type 'E2'",
+    );
+}
+
+#[test]
+fn trait_inheritance_syntax_rejected() {
+    // Pluto has no trait inheritance; `trait T1: T2` is a syntax error
+    compile_should_fail_with(
+        "trait T1: T2 {}\n\ntrait T2: T1 {}\n\nfn main(){}",
+        "expected {",
+    );
+}
+
+#[test]
+fn double_impl_clause_rejected() {
+    // Multiple traits use `impl T1, T2`, not repeated impl clauses
+    compile_should_fail_with(
+        "trait T1 {}\n\ntrait T2 {}\n\nclass C impl T1 impl T2 {}\n\nfn main(){}",
+        "expected {",
+    );
+}
+
+#[test]
+fn circular_generic_bounds() {
+    // Bounds must name traits; a type parameter is not a trait
+    compile_should_fail_with(
+        "fn f<T: U, U: T>(x: T) {}\n\nfn main(){}",
+        "unknown trait",
+    );
+}
