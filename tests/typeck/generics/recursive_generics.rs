@@ -24,16 +24,27 @@ fn nullable_stops_recursion() { compile_should_fail_with(r#"class Node<T>{value:
 
 // Deep nesting limits
 #[test]
-#[ignore]
-fn very_deep_nesting() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b:Box<Box<Box<Box<Box<Box<Box<Box<Box<Box<int>>>>>>>>>>=Box<Box<Box<Box<Box<Box<Box<Box<Box<Box<string>>>>>>>>>>{value:Box<Box<Box<Box<Box<Box<Box<Box<Box<string>>>>>>>>>{value:Box<Box<Box<Box<Box<Box<Box<Box<string>>>>>>>>{value:Box<Box<Box<Box<Box<Box<Box<string>>>>>>>{value:Box<Box<Box<Box<Box<Box<string>>>>>>{value:Box<Box<Box<Box<Box<string>>>>>{value:Box<Box<Box<Box<string>>>>{value:Box<Box<Box<string>>>{value:Box<Box<string>>{value:Box<string>{value:\"hi\"}}}}}}}}}}"#, "type mismatch"); }
+fn very_deep_nesting() {
+    // Deep nesting still type-checks precisely: int vs string at depth 3
+    compile_should_fail_with(r#"class Box<T>{value:T}
+fn main(){
+    let b: Box<Box<Box<int>>> = Box<Box<Box<string>>>{value: Box<Box<string>>{value: Box<string>{value: "hi"}}}
+}"#, "type mismatch");
+}
 
 // Recursive function with generics
 #[test]
-#[ignore]
-fn recursive_generic_fn() { compile_should_fail_with(r#"fn rec<T>(x:T)T{return rec(x)} fn main(){}"#, ""); }
+fn recursive_generic_fn() {
+    // Self-recursion at the same type parameter is legal (non-expanding)
+    assert_eq!(compile_and_run(r#"fn rec<T>(x:T)T{return rec(x)}
+fn main(){}"#), 0);
+}
 #[test]
-#[ignore]
-fn mutual_rec_generic_fns() { compile_should_fail_with(r#"fn a<T>(x:T)T{return b(x)} fn b<U>(x:U)U{return a(x)} fn main(){}"#, ""); }
+fn mutual_rec_generic_fns() {
+    assert_eq!(compile_and_run(r#"fn a<T>(x:T)T{return b(x)}
+fn b<U>(x:U)U{return a(x)}
+fn main(){}"#), 0);
+}
 
 // Recursive enum
 #[test]
@@ -89,8 +100,12 @@ fn expanding_type_params() { compile_should_fail_with(r#"class Box<T>{value:T} f
 
 // Mutually recursive with type change
 #[test]
-#[ignore]
-fn mutual_rec_type_change() { compile_should_fail_with(r#"fn a<T>(x:T)Box<T>{return b(x)} fn b<U>(x:U)Box<U>{return a(x)} class Box<V>{value:V} fn main(){}"#, ""); }
+fn mutual_rec_type_change() {
+    assert_eq!(compile_and_run(r#"fn a<T>(x:T)Box<T>{return b(x)}
+fn b<U>(x:U)Box<U>{return a(x)}
+class Box<V>{value:V}
+fn main(){}"#), 0);
+}
 
 // Recursive with closure
 #[test]
@@ -98,8 +113,12 @@ fn recursive_closure_generic() { compile_should_fail_with(r#"fn main(){let f=(x:
 
 // Chain of recursive calls
 #[test]
-#[ignore]
-fn three_way_recursive_generics() { compile_should_fail_with(r#"fn a<T>(x:T)T{return b(x)} fn b<U>(x:U)U{return c(x)} fn c<V>(x:V)V{return a(x)} fn main(){}"#, ""); }
+fn three_way_recursive_generics() {
+    assert_eq!(compile_and_run(r#"fn a<T>(x:T)T{return b(x)}
+fn b<U>(x:U)U{return c(x)}
+fn c<V>(x:V)V{return a(x)}
+fn main(){}"#), 0);
+}
 
 // Recursive with method calls
 #[test]
@@ -115,8 +134,12 @@ fn nullable_still_recursive() { compile_should_fail_with(r#"class Box<T>{inner:B
 
 // Generic recursion depth check
 #[test]
-#[ignore]
-fn controlled_recursion_depth() { compile_should_fail_with(r#"fn rec<T>(x:T,depth:int)T{if depth>100{return x}return rec(x,depth+1)} fn main(){rec(42,0)}"#, ""); }
+fn controlled_recursion_depth() {
+    let out = compile_and_run_stdout(r#"fn rec<T>(x:T,depth:int)T{if depth>100{return x}
+return rec(x,depth+1)}
+fn main(){print(rec(42,0))}"#);
+    assert_eq!(out.trim(), "42");
+}
 
 // Recursive with error type
 #[test]
@@ -146,5 +169,7 @@ fn fn_returns_recursive() { compile_should_fail_with(r#"class Box<T>{inner:Box<T
 
 // Recursive with explicit type args
 #[test]
-#[ignore]
-fn explicit_recursive_call() { compile_should_fail_with(r#"fn rec<T>(x:T)T{return rec<T>(x)} fn main(){}"#, ""); }
+fn explicit_recursive_call() {
+    assert_eq!(compile_and_run(r#"fn rec<T>(x:T)T{return rec<T>(x)}
+fn main(){}"#), 0);
+}

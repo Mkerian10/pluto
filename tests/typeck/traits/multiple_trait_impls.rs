@@ -5,22 +5,32 @@ use common::compile_should_fail_with;
 
 // Conflicting method signatures
 #[test]
-fn two_traits_same_method_diff_sig() { compile_should_fail_with(r#"trait T1{fn foo(self)int} trait T2{fn foo(self)string} class C{} impl T1{fn foo(self)int{return 1}} impl T2{fn foo(self)string{return "hi"}} fn main(){}"#, ""); }
+fn two_traits_same_method_diff_sig() { compile_should_fail_with(r#"trait T1{fn foo(self)int} trait T2{fn foo(self)string} class C impl T1, T2{
+fn foo(self)int{return 1}
+fn foo(self)string{return "hi"}} fn main(){}"#, ""); }
 #[test]
-fn two_traits_same_method_diff_params() { compile_should_fail_with(r#"trait T1{fn foo(self,x:int)} trait T2{fn foo(self,x:string)} class C{} impl T1{fn foo(self,x:int){}} impl T2{fn foo(self,x:string){}} fn main(){}"#, ""); }
+fn two_traits_same_method_diff_params() { compile_should_fail_with(r#"trait T1{fn foo(self,x:int)} trait T2{fn foo(self,x:string)} class C impl T1, T2{
+fn foo(self,x:int){}
+fn foo(self,x:string){}} fn main(){}"#, ""); }
 
 // Conflicting method names
 #[test]
-fn three_traits_name_collision() { compile_should_fail_with(r#"trait T1{fn foo(self)} trait T2{fn foo(self)} trait T3{fn foo(self)} class C{} impl T1{fn foo(self){}} impl T2{fn foo(self){}} impl T3{fn foo(self){}} fn main(){}"#, ""); }
+fn three_traits_name_collision() { compile_should_fail_with(r#"trait T1{fn foo(self)} trait T2{fn foo(self)} trait T3{fn foo(self)} class C impl T1, T2{
+fn foo(self){}
+fn foo(self){}} impl T3{fn foo(self){}} fn main(){}"#, ""); }
 
 // One impl missing from multiple
 #[test]
-#[ignore]
-fn two_traits_one_incomplete() { compile_should_fail_with(r#"trait T1{fn foo(self)} trait T2{fn bar(self)} class C{} impl T1{fn foo(self){}} impl T2{} fn main(){}"#, "missing method"); }
+fn two_traits_one_incomplete() { compile_should_fail_with(r#"trait T1{fn foo(self)}
+trait T2{fn bar(self)}
+class C impl T1, T2{fn foo(self){}}
+fn main(){}"#, "does not implement required method"); }
 
 // Overlapping method requirements
 #[test]
-fn two_traits_compatible_methods() { compile_should_fail_with(r#"trait T1{fn foo(self)int} trait T2{fn foo(self)int} class C{} impl T1{fn foo(self)int{return 1}} impl T2{fn foo(self)int{return 2}} fn main(){}"#, ""); }
+fn two_traits_compatible_methods() { compile_should_fail_with(r#"trait T1{fn foo(self)int} trait T2{fn foo(self)int} class C impl T1, T2{
+fn foo(self)int{return 1}
+fn foo(self)int{return 2}} fn main(){}"#, ""); }
 
 // Generic traits with same method
 #[test]
@@ -28,42 +38,64 @@ fn two_generic_traits_conflict() { compile_should_fail_with(r#"trait T1<U>{fn fo
 
 // Contract conflicts between traits
 #[test]
-fn two_traits_conflicting_contracts() { compile_should_fail_with(r#"trait T1{fn foo(self)int requires true} trait T2{fn foo(self)int requires false} class C{} impl T1{fn foo(self)int{return 1}} impl T2{fn foo(self)int{return 1}} fn main(){}"#, ""); }
+fn two_traits_conflicting_contracts() { compile_should_fail_with(r#"trait T1{fn foo(self)int requires true} trait T2{fn foo(self)int requires false} class C impl T1, T2{
+fn foo(self)int{return 1}
+fn foo(self)int{return 1}} fn main(){}"#, ""); }
 
 // Method from one trait, wrong impl
 #[test]
-#[ignore]
-fn impl_t1_method_for_t2() { compile_should_fail_with(r#"trait T1{fn foo(self)} trait T2{fn bar(self)} class C{} impl T1{fn bar(self){}} impl T2{fn foo(self){}} fn main(){}"#, "missing method"); }
+fn impl_t1_method_for_t2() { compile_should_fail_with(r#"trait T1{fn foo(self)}
+trait T2{fn bar(self)}
+class C impl T1, T2{fn bar2(self){}
+fn foo(self){}}
+fn main(){}"#, "does not implement required method"); }
 
 // Diamond problem (if traits could extend)
 #[test]
-fn diamond_trait_hierarchy() { compile_should_fail_with(r#"trait Base{fn foo(self)} trait Left{fn foo(self)} trait Right{fn foo(self)} class C{} impl Base{fn foo(self){}} impl Left{fn foo(self){}} impl Right{fn foo(self){}} fn main(){}"#, ""); }
+fn diamond_trait_hierarchy() { compile_should_fail_with(r#"trait Base{fn foo(self)} trait Left{fn foo(self)} trait Right{fn foo(self)} class C impl Base, Left{
+fn foo(self){}
+fn foo(self){}} impl Right{fn foo(self){}} fn main(){}"#, ""); }
 
 // Trait implemented twice
 #[test]
-fn duplicate_trait_impl() { compile_should_fail_with(r#"trait T{fn foo(self)} class C{} impl T{fn foo(self){}} impl T{fn foo(self){}} fn main(){}"#, ""); }
+fn duplicate_trait_impl() { compile_should_fail_with(r#"trait T{fn foo(self)} class C impl T, T{
+fn foo(self){}
+fn foo(self){}} fn main(){}"#, ""); }
 
 // Generic class with multiple traits
 #[test]
-#[ignore]
-fn generic_class_two_traits() { compile_should_fail_with(r#"trait T1{fn foo(self)} trait T2{fn bar(self)} class Box<U>{value:U} impl T1{fn foo(self){}} impl T2{} fn main(){}"#, "missing method"); }
+fn generic_class_two_traits() { compile_should_fail_with(r#"trait T1{fn foo(self)}
+trait T2{fn bar(self)}
+class Box<U> impl T1, T2{value:U
+fn foo(self){}}
+fn main(){let b = Box<int>{value:1}}"#, "does not implement required method"); }
 
 // Trait with contract, impl for multiple classes
 #[test]
-fn contract_trait_two_classes() { compile_should_fail_with(r#"trait T{fn foo(self)int ensures result>0} class C1{} impl T{fn foo(self)int{return -1}} class C2{} impl T{fn foo(self)int{return 1}} fn main(){}"#, ""); }
+fn contract_trait_two_classes() { compile_should_fail_with(r#"trait T{fn foo(self)int ensures result>0} class C1 impl T{
+fn foo(self)int{return -1}} class C2 impl T{
+fn foo(self)int{return 1}} fn main(){}"#, ""); }
 
 // Multiple traits, some missing methods
 #[test]
-#[ignore]
-fn three_traits_partial_impl() { compile_should_fail_with(r#"trait T1{fn a(self)} trait T2{fn b(self)} trait T3{fn c(self)} class C{} impl T1{fn a(self){}} impl T2{fn b(self){}} impl T3{} fn main(){}"#, "missing method"); }
+fn three_traits_partial_impl() { compile_should_fail_with(r#"trait T1{fn a(self)}
+trait T2{fn b(self)}
+trait T3{fn c(self)}
+class C impl T1, T2, T3{fn a(self){}
+fn b(self){}}
+fn main(){}"#, "does not implement required method"); }
 
 // Trait composition with method overlap
 #[test]
-fn composed_traits_overlap() { compile_should_fail_with(r#"trait T1{fn foo(self) fn bar(self)} trait T2{fn bar(self) fn baz(self)} class C{} impl T1{fn foo(self){} fn bar(self){}} impl T2{fn bar(self){} fn baz(self){}} fn main(){}"#, ""); }
+fn composed_traits_overlap() { compile_should_fail_with(r#"trait T1{fn foo(self) fn bar(self)} trait T2{fn bar(self) fn baz(self)} class C impl T1, T2{
+fn foo(self){} fn bar(self){}
+fn bar(self){} fn baz(self){}} fn main(){}"#, ""); }
 
 // Nullable method in one trait, non-nullable in another
 #[test]
-fn nullable_conflict() { compile_should_fail_with(r#"trait T1{fn foo(self)int?} trait T2{fn foo(self)int} class C{} impl T1{fn foo(self)int?{return none}} impl T2{fn foo(self)int{return 1}} fn main(){}"#, ""); }
+fn nullable_conflict() { compile_should_fail_with(r#"trait T1{fn foo(self)int?} trait T2{fn foo(self)int} class C impl T1, T2{
+fn foo(self)int?{return none}
+fn foo(self)int{return 1}} fn main(){}"#, ""); }
 
 // Error method in one trait, infallible in another
 #[test]
@@ -71,11 +103,15 @@ fn error_conflict() { compile_should_fail_with(r#"error E{} trait T1{fn foo(self
 
 // Generic method in both traits
 #[test]
-fn two_traits_generic_methods() { compile_should_fail_with(r#"trait T1{fn foo<U>(self,x:U)U} trait T2{fn foo<V>(self,x:V)V} class C{} impl T1{fn foo<U>(self,x:U)U{return x}} impl T2{fn foo<V>(self,x:V)V{return x}} fn main(){}"#, ""); }
+fn two_traits_generic_methods() { compile_should_fail_with(r#"trait T1{fn foo<U>(self,x:U)U} trait T2{fn foo<V>(self,x:V)V} class C impl T1, T2{
+fn foo<U>(self,x:U)U{return x}
+fn foo<V>(self,x:V)V{return x}} fn main(){}"#, ""); }
 
 // Mut self in one, non-mut in another
 #[test]
-fn mut_self_conflict() { compile_should_fail_with(r#"trait T1{fn foo(mut self)} trait T2{fn foo(self)} class C{} impl T1{fn foo(mut self){}} impl T2{fn foo(self){}} fn main(){}"#, ""); }
+fn mut_self_conflict() { compile_should_fail_with(r#"trait T1{fn foo(mut self)} trait T2{fn foo(self)} class C impl T1, T2{
+fn foo(mut self){}
+fn foo(self){}} fn main(){}"#, ""); }
 
 // Static method collision (if supported)
 #[test]
@@ -83,16 +119,18 @@ fn static_method_conflict() { compile_should_fail_with(r#"trait T1{fn create()C}
 
 // Trait with same name, different packages (if supported)
 #[test]
-fn same_trait_name_collision() { compile_should_fail_with(r#"trait T{fn foo(self)} trait T{fn bar(self)} class C{} impl T{fn foo(self){}} fn main(){}"#, ""); }
+fn same_trait_name_collision() { compile_should_fail_with(r#"trait T{fn foo(self)} trait T{fn bar(self)} class C impl T{
+fn foo(self){}} fn main(){}"#, ""); }
 
 // Multiple traits on multiple classes
 #[test]
-#[ignore]
-fn cross_class_trait_error() { compile_should_fail_with(r#"trait T1{fn foo(self)} trait T2{fn bar(self)} class C1{} impl T1{fn foo(self){}} class C2{} impl T2{} fn main(){}"#, "missing method"); }
+fn cross_class_trait_error() { compile_should_fail_with(r#"trait T1{fn foo(self)} trait T2{fn bar(self)} class C1 impl T1{fn foo(self){}} class C2 impl T2{}
+fn main(){}"#, "does not implement required method"); }
 
 // Trait method overloading (not supported)
 #[test]
-fn trait_method_overload() { compile_should_fail_with(r#"trait T{fn foo(self) fn foo(self,x:int)} class C{} impl T{fn foo(self){} fn foo(self,x:int){}} fn main(){}"#, ""); }
+fn trait_method_overload() { compile_should_fail_with(r#"trait T{fn foo(self) fn foo(self,x:int)} class C impl T{
+fn foo(self){} fn foo(self,x:int){}} fn main(){}"#, ""); }
 
 // Trait impl on enum
 #[test]
@@ -100,9 +138,15 @@ fn multiple_traits_on_enum() { compile_should_fail_with(r#"trait T1{fn foo(self)
 
 // Trait with invariant vs impl method
 #[test]
-fn trait_method_violates_invariant() { compile_should_fail_with(r#"trait T{fn foo(self)int ensures result>0} class C{x:int invariant self.x<0} impl T{fn foo(self)int{return self.x}} fn main(){}"#, ""); }
+fn trait_method_violates_invariant() { compile_should_fail_with(r#"trait T{fn foo(self)int ensures result>0} class C impl T{x:int invariant self.x<0
+fn foo(self)int{return self.x}} fn main(){}"#, ""); }
 
 // Partial overlap in method sets
 #[test]
-#[ignore]
-fn traits_partial_overlap() { compile_should_fail_with(r#"trait T1{fn foo(self) fn bar(self)} trait T2{fn bar(self) fn baz(self)} class C{} impl T1{fn foo(self){}} impl T2{fn baz(self){}} fn main(){}"#, "missing method"); }
+fn traits_partial_overlap() { compile_should_fail_with(r#"trait T1{fn foo(self)
+fn bar(self)}
+trait T2{fn bar(self)
+fn baz(self)}
+class C impl T1, T2{fn foo(self){}
+fn baz(self){}}
+fn main(){}"#, "does not implement required method"); }

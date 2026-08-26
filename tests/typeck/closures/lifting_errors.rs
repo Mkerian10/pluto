@@ -5,13 +5,17 @@ use common::{compile_should_fail_with, compile_and_run};
 
 // Closure captures variable used after closure creation
 #[test]
-#[ignore]
-fn capture_used_after() { compile_and_run(r#"fn main(){let x=1 let f=()=>x let y=x}"#); }
+fn capture_used_after() { compile_and_run(r#"fn main(){let x=1
+let f=()=>x
+let y=x}"#); }
 
 // Multiple closures with conflicting captures
 #[test]
-#[ignore]
-fn conflicting_captures() { compile_and_run(r#"fn main(){let x=1 let f=()=>x let g=()=>x x=2}"#); }
+fn conflicting_captures() { compile_and_run(r#"fn main(){let mut x=1
+let f=()=>x
+let g=()=>x
+x=2
+print(f()+g())}"#); }
 
 // Closure in match arm captures match binding
 #[test]
@@ -19,13 +23,19 @@ fn capture_match_arm_binding() { compile_should_fail_with(r#"enum E{A{x:int}} fn
 
 // Closure parameter shadows capture
 #[test]
-#[ignore]
-fn param_shadows_capture() { compile_and_run(r#"fn main(){let x=1 let f=(x:int)=>x+1}"#); }
+fn param_shadows_capture() {
+    // A closure parameter may not shadow an in-scope variable (#160)
+    compile_should_fail_with(r#"fn main(){let x=1
+let f=(x:int)=>x+1
+print(f(x))}"#, "shadows an existing variable");
+}
 
 // Nested closure captures from multiple levels
 #[test]
-#[ignore]
-fn nested_multi_level_capture() { compile_and_run(r#"fn main(){let x=1 let f=()=>{let y=2 let g=()=>x+y return g}}"#); }
+fn nested_multi_level_capture() { compile_and_run(r#"fn main(){let x=1
+let f=()=>{let y=2
+let g=()=>x+y
+return g}}"#); }
 
 // Closure lifts with generic capture
 #[test]
