@@ -333,6 +333,7 @@ pub enum Expr {
         object: Box<Spanned<Expr>>,
         method: Spanned<String>,
         args: Vec<Spanned<Expr>>,
+        type_args: Vec<Spanned<TypeExpr>>,
     },
     StructLit {
         name: Spanned<String>,

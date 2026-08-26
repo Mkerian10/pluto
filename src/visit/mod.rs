@@ -576,8 +576,11 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
                 v.visit_expr(arg);
             }
         }
-        Expr::MethodCall { object, args, .. } => {
+        Expr::MethodCall { object, args, type_args, .. } => {
             v.visit_expr(object);
+            for te in type_args {
+                v.visit_type_expr(te);
+            }
             for arg in args {
                 v.visit_expr(arg);
             }
@@ -1096,8 +1099,11 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, expr: &mut Spanned<Expr>) {
                 v.visit_expr_mut(arg);
             }
         }
-        Expr::MethodCall { object, args, .. } => {
+        Expr::MethodCall { object, args, type_args, .. } => {
             v.visit_expr_mut(object);
+            for te in type_args {
+                v.visit_type_expr_mut(te);
+            }
             for arg in args {
                 v.visit_expr_mut(arg);
             }
@@ -1401,6 +1407,7 @@ mod tests {
             object: Box::new(dummy(Expr::Ident("obj".to_string()))),
             method: dummy("foo".to_string()),
             args: vec![dummy(Expr::IntLit(42))],
+            type_args: vec![],
         });
 
         let mut collector = ExprCollector::default();

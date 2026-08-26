@@ -989,6 +989,7 @@ mod tests {
             })),
             method: spanned("foo".to_string()),
             args: vec![],
+            type_args: vec![],
         };
 
         lift_in_expr(&mut expr, dummy_span(), &mut env, &mut counter, &mut new_fns).unwrap();

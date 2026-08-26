@@ -67,10 +67,10 @@ fn nullable_of_generic_box() {
     );
 }
 
-// Generic methods with nullable
+// Generic methods with nullable (#293). Inference from a T? parameter is
+// "cannot infer" (same as free functions); explicit args reach the mismatch.
 #[test]
-#[ignore] // Parser error: "expected (, found <" - parser issue with generic methods
-fn generic_method_nullable_self() { compile_should_fail_with(r#"class C{fn foo<T>(self,x:T?)T?{return x}} fn main(){let c=C{} let x:int=c.foo(42)}"#, "type mismatch"); }
+fn generic_method_nullable_self() { compile_should_fail_with("class C{\n    fn foo<T>(self,x:T?)T?{return x}\n}\n\nfn main(){\n    let c=C{}\n    let x:int=c.foo<int>(42)\n}", "type mismatch"); }
 
 // Explicit type args with nullable
 #[test]

@@ -24,6 +24,7 @@ pub mod xref;
 pub mod sync;
 pub mod plto_store;
 pub mod stages;
+pub mod generic_methods;
 pub mod cache;
 pub mod watch;
 pub mod coverage;
@@ -55,6 +56,7 @@ fn run_frontend_for_editing(program: &mut Program) -> Result<FrontendResult, Com
     prelude::inject_prelude(program)?;
     stages::flatten_stage_hierarchy(program)?;
     ambient::desugar_ambient(program)?;
+    generic_methods::hoist_generic_methods(program)?;
     contracts::validate_contracts(program)?;
     let (env, warnings) = typeck::type_check(program)?;
     Ok(FrontendResult { env, warnings })
@@ -66,6 +68,7 @@ fn run_frontend(program: &mut Program, test_mode: bool) -> Result<FrontendResult
     prelude::inject_prelude(program)?;
     stages::flatten_stage_hierarchy(program)?;
     ambient::desugar_ambient(program)?;
+    generic_methods::hoist_generic_methods(program)?;
     spawn::desugar_spawn(program)?;
     if !test_mode {
         let test_fn_names: std::collections::HashSet<String> = program.test_info.iter()

@@ -574,10 +574,13 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
         Expr::FieldAccess { object, .. } => {
             substitute_in_expr(&mut object.node, bindings);
         }
-        Expr::MethodCall { object, args, .. } => {
+        Expr::MethodCall { object, args, type_args, .. } => {
             substitute_in_expr(&mut object.node, bindings);
             for arg in args.iter_mut() {
                 substitute_in_expr(&mut arg.node, bindings);
+            }
+            for ta in type_args.iter_mut() {
+                substitute_in_type_expr(&mut ta.node, bindings);
             }
         }
         Expr::StructLit { type_args, fields, .. } => {
@@ -787,6 +790,18 @@ impl VisitMut for MonomorphizeRewriter<'_> {
                 // Check if this call site should be rewritten
                 if let Some(mangled) = self.rewrites.get(&span_key) {
                     name.node = mangled.clone();
+                    type_args.clear();
+                }
+            }
+            Expr::MethodCall { method, type_args, .. } => {
+                // Generic method call: the rewrite holds the instantiated
+                // function name ("C$foo$$int"); the method name becomes the
+                // part after the class ("foo$$int") so codegen's
+                // mangle_method(class, method) reconstructs the full name
+                if let Some(mangled) = self.rewrites.get(&span_key) {
+                    if let Some(idx) = mangled.find('$') {
+                        method.node = mangled[idx + 1..].to_string();
+                    }
                     type_args.clear();
                 }
             }
@@ -2782,6 +2797,7 @@ mod tests {
             })),
             method: spanned("process".to_string()),
             args: vec![spanned(Expr::IntLit(10))],
+            type_args: vec![],
         };
 
         let mut bindings = HashMap::new();

@@ -1051,7 +1051,7 @@ pub(super) fn format_invariant_expr(expr: &Expr) -> String {
         Expr::FieldAccess { object, field } => {
             format!("{}.{}", format_invariant_expr(&object.node), field.node)
         }
-        Expr::MethodCall { object, method, args } => {
+        Expr::MethodCall { object, method, args, .. } => {
             let arg_strs: Vec<String> = args.iter().map(|a| format_invariant_expr(&a.node)).collect();
             format!("{}.{}({})", format_invariant_expr(&object.node), method.node, arg_strs.join(", "))
         }
@@ -1163,6 +1163,7 @@ mod tests {
             object: Box::new(sp(Expr::Ident("self".to_string()))),
             method: sp("len".to_string()),
             args: vec![],
+            type_args: vec![],
         };
         assert_eq!(format_invariant_expr(&expr), "self.len()");
     }

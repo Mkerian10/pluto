@@ -788,6 +788,11 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
                 params: param_types,
                 return_type,
             });
+            // Hoisted generic methods keep their receiver as params[0];
+            // callers check mutability against the base mangled name
+            if !f.params.is_empty() && f.params[0].name.node == "self" && f.params[0].is_mut {
+                env.mut_self_methods.insert(f.name.node.clone());
+            }
             continue;
         }
 

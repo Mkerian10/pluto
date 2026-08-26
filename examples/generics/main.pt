@@ -54,6 +54,17 @@ class UserService[repo: Repository<int>] {
     }
 }
 
+// Generic methods: a method may declare its own type parameters,
+// inferred from arguments or given explicitly at the call site
+class Formatter {
+    prefix: string
+
+    fn wrap<T>(self, val: T) T {
+        print(self.prefix)
+        return val
+    }
+}
+
 app Main[svc: UserService] {
     fn main(self) {
         // Generic class with trait impl
@@ -76,5 +87,10 @@ app Main[svc: UserService] {
 
         // Generic DI: Repository<int> injected into UserService
         print(self.svc.get_user())
+
+        // Generic methods: inferred and explicit type arguments
+        let fmt = Formatter { prefix: "value: " }
+        print(fmt.wrap(42))
+        print(fmt.wrap<string>("direct"))
     }
 }

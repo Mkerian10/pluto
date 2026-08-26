@@ -16,7 +16,7 @@ use crate::parser::ast::Program;
 const MAGIC: &[u8; 4] = b"PLTO";
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;
@@ -105,7 +105,7 @@ pub fn is_binary_format(data: &[u8]) -> bool {
         return false;
     }
     let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
-    version == 2 || version == 3
+    (2..=SCHEMA_VERSION).contains(&version)
 }
 
 /// Read only the source text from a binary container, without deserializing the AST.
@@ -128,8 +128,10 @@ fn validate_header(data: &[u8]) -> Result<u32, BinaryError> {
     }
     let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
 
-    // Accept v2 and v3
-    if version != 2 && version != 3 {
+    // Accept v2 through the current version. Sections added since v2 are
+    // handled by serde defaults; bincode is positional, so files whose
+    // payload predates an AST shape change fail at decode, not here.
+    if !(2..=SCHEMA_VERSION).contains(&version) {
         return Err(BinaryError::UnsupportedVersion(version));
     }
 
@@ -502,14 +504,14 @@ fn main() {
         let program = parse(source);
         let mut derived = empty_derived();
 
-        // Write v3 with fresh metadata
+        // Write the current version with fresh metadata
         derived.source_hash = DerivedInfo::compute_source_hash(source);
         let v3_bytes = serialize_program(&program, source, &derived).unwrap();
 
-        // Check that version is 3
+        // Check that the current schema version is stamped
         assert_eq!(&v3_bytes[..4], b"PLTO");
         let version = u32::from_le_bytes([v3_bytes[4], v3_bytes[5], v3_bytes[6], v3_bytes[7]]);
-        assert_eq!(version, 3);
+        assert_eq!(version, SCHEMA_VERSION);
 
         // Read v3
         let (_prog, src, deriv) = deserialize_program(&v3_bytes).unwrap();

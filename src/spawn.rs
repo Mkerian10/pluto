@@ -133,6 +133,7 @@ mod tests {
                 object: Box::new(spanned(Expr::Ident("obj".to_string()))),
                 method: spanned("bar".to_string()),
                 args: vec![],
+                type_args: vec![],
             })),
         };
 
