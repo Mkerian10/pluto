@@ -466,7 +466,7 @@ pub(crate) fn register_class_names(program: &Program, env: &mut TypeEnv) -> Resu
                 fields: Vec::new(),
                 methods: Vec::new(),
                 method_sigs: HashMap::new(),
-                impl_traits: c.impl_traits.iter().map(|t| t.node.clone()).collect(),
+                impl_traits: c.impl_traits.iter().map(|t| t.name.node.clone()).collect(),
                 mut_self_methods: HashSet::new(),
                 lifecycle: c.lifecycle,
             });
@@ -495,10 +495,10 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
 
             // Validate trait names for generic classes
             for trait_name in &c.impl_traits {
-                if !env.traits.contains_key(&trait_name.node) {
+                if !env.traits.contains_key(&trait_name.name.node) {
                     return Err(CompileError::type_err(
-                        format!("unknown trait '{}'", trait_name.node),
-                        trait_name.span,
+                        format!("unknown trait '{}'", trait_name.name.node),
+                        trait_name.name.span,
                     ));
                 }
             }
@@ -581,7 +581,7 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                 fields,
                 methods: method_names,
                 method_sigs,
-                impl_traits: c.impl_traits.iter().map(|t| t.node.clone()).collect(),
+                impl_traits: c.impl_traits.iter().map(|t| t.name.node.clone()).collect(),
                 mut_self_methods: generic_mut_self,
                 lifecycle: c.lifecycle,
             });
@@ -616,13 +616,13 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
         // Validate trait names
         let mut impl_trait_names = Vec::new();
         for trait_name in &c.impl_traits {
-            if !env.traits.contains_key(&trait_name.node) {
+            if !env.traits.contains_key(&trait_name.name.node) {
                 return Err(CompileError::type_err(
-                    format!("unknown trait '{}'", trait_name.node),
-                    trait_name.span,
+                    format!("unknown trait '{}'", trait_name.name.node),
+                    trait_name.name.span,
                 ));
             }
-            impl_trait_names.push(trait_name.node.clone());
+            impl_trait_names.push(trait_name.name.node.clone());
         }
 
         if let Some(info) = env.classes.get_mut(&c.name.node) {
@@ -1563,11 +1563,11 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
         {
             let mut seen_traits = HashSet::new();
             for trait_name_spanned in &c.impl_traits {
-                let trait_name = &trait_name_spanned.node;
+                let trait_name = &trait_name_spanned.name.node;
                 if !seen_traits.insert(trait_name.clone()) {
                     return Err(CompileError::type_err(
                         format!("trait '{}' appears multiple times in impl list for class '{}'", trait_name, class_name),
-                        trait_name_spanned.span,
+                        trait_name_spanned.name.span,
                     ));
                 }
             }
@@ -1578,7 +1578,7 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
         {
             let mut method_contract_traits: HashMap<String, Vec<String>> = HashMap::new();
             for trait_name_spanned in &c.impl_traits {
-                let trait_name = &trait_name_spanned.node;
+                let trait_name = &trait_name_spanned.name.node;
                 if let Some(trait_info) = env.traits.get(trait_name) {
                     for (method_name, _) in &trait_info.methods {
                         if trait_info.method_contracts.contains_key(method_name) {
@@ -1605,11 +1605,11 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
         }
 
         for trait_name_spanned in &c.impl_traits {
-            let trait_name = &trait_name_spanned.node;
+            let trait_name = &trait_name_spanned.name.node;
             let trait_info = env.traits.get(trait_name).ok_or_else(|| {
                 CompileError::type_err(
                     format!("unknown trait '{}'", trait_name),
-                    trait_name_spanned.span,
+                    trait_name_spanned.name.span,
                 )
             })?.clone();
 
@@ -1621,7 +1621,7 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                     let class_sig = env.functions.get(&mangled).ok_or_else(|| {
                         CompileError::type_err(
                             format!("missing method signature for '{}.{}'", class_name, method_name),
-                            trait_name_spanned.span,
+                            trait_name_spanned.name.span,
                         )
                     })?;
                     // Compare non-self params. Static trait methods (no self)
@@ -1648,7 +1648,7 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                                     method_name, class_name, trait_name
                                 )
                             },
-                            trait_name_spanned.span,
+                            trait_name_spanned.name.span,
                         ));
                     }
                     let trait_non_self = if is_static {
@@ -1667,7 +1667,7 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                                 "method '{}' of class '{}' has wrong number of parameters for trait '{}'",
                                 method_name, class_name, trait_name
                             ),
-                            trait_name_spanned.span,
+                            trait_name_spanned.name.span,
                         ));
                     }
                     for (i, (tp, cp)) in trait_non_self.iter().zip(class_non_self).enumerate() {
@@ -1677,7 +1677,7 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                                     "method '{}' parameter {} type mismatch: trait '{}' expects {}, class '{}' has {}",
                                     method_name, i + 1, trait_name, tp, class_name, cp
                                 ),
-                                trait_name_spanned.span,
+                                trait_name_spanned.name.span,
                             ));
                         }
                     }
@@ -1687,7 +1687,7 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                                 "method '{}' return type mismatch: trait '{}' expects {}, class '{}' returns {}",
                                 method_name, trait_name, trait_sig.return_type, class_name, class_sig.return_type
                             ),
-                            trait_name_spanned.span,
+                            trait_name_spanned.name.span,
                         ));
                     }
                     // Check mut self conformance
@@ -1699,7 +1699,7 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                                 "method '{}' in trait '{}' declares 'mut self', but class '{}' does not",
                                 method_name, trait_name, class_name
                             ),
-                            trait_name_spanned.span,
+                            trait_name_spanned.name.span,
                         ));
                     }
                     if !trait_mut && class_mut {
@@ -1708,7 +1708,7 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                                 "method '{}' in trait '{}' declares 'self', but class '{}' declares 'mut self'",
                                 method_name, trait_name, class_name
                             ),
-                            trait_name_spanned.span,
+                            trait_name_spanned.name.span,
                         ));
                     }
                     // Liskov: class methods implementing a trait MUST NOT add requires clauses
@@ -1758,7 +1758,7 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                             "class '{}' does not implement required method '{}' from trait '{}'",
                             class_name, method_name, trait_name
                         ),
-                        trait_name_spanned.span,
+                        trait_name_spanned.name.span,
                     ));
                 }
             }
@@ -2049,7 +2049,7 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
         let class_method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
 
         for trait_name_spanned in &c.impl_traits {
-            let trait_name = &trait_name_spanned.node;
+            let trait_name = &trait_name_spanned.name.node;
             // Find the trait's default methods in the AST
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == *trait_name {

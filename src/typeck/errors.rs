@@ -40,7 +40,7 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
             class.node.methods.iter().map(|m| m.node.name.node.clone()).collect();
         for trait_name in &class.node.impl_traits {
             for trait_decl in &program.traits {
-                if trait_decl.node.name.node == trait_name.node {
+                if trait_decl.node.name.node == trait_name.name.node {
                     for tm in &trait_decl.node.methods {
                         if let Some(body) = &tm.body && !class_method_names.contains(&tm.name.node) {
                             let mangled = mangle_method(class_name, &tm.name.node);
@@ -160,7 +160,7 @@ pub(crate) fn copy_class_method_error_sets(
         class.node.methods.iter().map(|m| m.node.name.node.as_str()).collect();
     let mut inherited: Vec<String> = Vec::new();
     for trait_name in &class.node.impl_traits {
-        if let Some(trait_info) = env.traits.get(&trait_name.node) {
+        if let Some(trait_info) = env.traits.get(&trait_name.name.node) {
             inherited.extend(
                 trait_info
                     .default_methods
@@ -774,7 +774,7 @@ pub(crate) fn enforce_error_handling(program: &Program, env: &TypeEnv) -> Result
             class.node.methods.iter().map(|m| m.node.name.node.clone()).collect();
         for trait_name in &class.node.impl_traits {
             for trait_decl in &program.traits {
-                if trait_decl.node.name.node == trait_name.node {
+                if trait_decl.node.name.node == trait_name.name.node {
                     for tm in &trait_decl.node.methods {
                         if let Some(body) = &tm.body && !class_method_names.contains(&tm.name.node) {
                             let current_fn = mangle_method(class_name, &tm.name.node);

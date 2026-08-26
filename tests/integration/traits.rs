@@ -15280,3 +15280,178 @@ fn main() {
 }
 "#, "expected trait Worker");
 }
+
+// ── Generic traits (#291) ────────────────────────────────────────────────
+
+#[test]
+fn generic_trait_basic() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Convert<U> {
+            fn convert(self) U
+        }
+        class Meters impl Convert<int> {
+            v: int
+
+            fn convert(self) int {
+                return self.v * 100
+            }
+        }
+        fn main() {
+            let m = Meters { v: 3 }
+            print(m.convert())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "300");
+}
+
+#[test]
+fn generic_trait_object_param() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Convert<U> {
+            fn convert(self) U
+        }
+        class Meters impl Convert<int> {
+            v: int
+
+            fn convert(self) int {
+                return self.v
+            }
+        }
+        fn use_it(c: Convert<int>) int {
+            return c.convert()
+        }
+        fn main() {
+            print(use_it(Meters { v: 7 }))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "7");
+}
+
+#[test]
+fn generic_trait_two_type_params() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Pair<K, V> {
+            fn key(self) K
+            fn val(self) V
+        }
+        class Entry impl Pair<string, int> {
+            k: string
+            v: int
+
+            fn key(self) string {
+                return self.k
+            }
+
+            fn val(self) int {
+                return self.v
+            }
+        }
+        fn main() {
+            let e = Entry { k: "a", v: 5 }
+            print(e.key())
+            print(e.val())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "a\n5");
+}
+
+#[test]
+fn generic_trait_distinct_instantiations() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Conv<U> {
+            fn conv(self) U
+        }
+        class A impl Conv<int> {
+            x: int
+
+            fn conv(self) int {
+                return self.x
+            }
+        }
+        class B impl Conv<string> {
+            s: string
+
+            fn conv(self) string {
+                return self.s
+            }
+        }
+        fn main() {
+            print(A { x: 1 }.conv())
+            print(B { s: "z" }.conv())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "1\nz");
+}
+
+#[test]
+fn generic_trait_dynamic_dispatch() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Conv<U> {
+            fn conv(self) U
+        }
+        class A impl Conv<int> {
+            x: int
+
+            fn conv(self) int {
+                return self.x * 2
+            }
+        }
+        class B impl Conv<int> {
+            y: int
+
+            fn conv(self) int {
+                return self.y + 10
+            }
+        }
+        fn main() {
+            let items: [Conv<int>] = [A { x: 3 }, B { y: 5 }]
+            for it in items {
+                print(it.conv())
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "6\n15");
+}
+
+#[test]
+fn generic_trait_bound_satisfied() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Printable {
+            fn show(self) string
+        }
+        class Item impl Printable {
+            n: string
+
+            fn show(self) string {
+                return self.n
+            }
+        }
+        trait Holder<U: Printable> {
+            fn get(self) U
+        }
+        class Box impl Holder<Item> {
+            item: Item
+
+            fn get(self) Item {
+                return self.item
+            }
+        }
+        fn main() {
+            let b = Box { item: Item { n: "w" } }
+            print(b.get().show())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "w");
+}

@@ -241,7 +241,7 @@ fn instantiate_class(
     // Register default trait methods for monomorphized classes with impl_traits
     let class_method_names: Vec<String> = class.methods.iter().map(|m| m.node.name.node.clone()).collect();
     for trait_name_spanned in &class.impl_traits {
-        let trait_name = &trait_name_spanned.node;
+        let trait_name = &trait_name_spanned.name.node;
         if let Some(trait_info) = env.traits.get(trait_name).cloned() {
             for (method_name, trait_sig) in &trait_info.methods {
                 if !class_method_names.contains(method_name) && trait_info.default_methods.contains(method_name) {

@@ -1,117 +1,149 @@
-//! Generic trait implementation errors - 25 tests
+//! Generic trait errors (#291).
+//!
+//! Generic traits are templates: `impl T<int>` (or a `T<int>` type mention)
+//! stamps out a concrete trait with the type parameters substituted, and
+//! conformance/dispatch run against the instantiation. These tests pin the
+//! error surface; positive coverage lives in tests/integration/traits.rs.
 #[path = "../common.rs"]
 mod common;
 use common::compile_should_fail_with;
 
 // Basic generic trait errors
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_wrong_type_arg() { compile_should_fail_with(r#"trait T<U>{fn foo(self)U} class C{} impl T<int>{fn foo(self)string{return "hi"}}
-fn main(){}"#, "type mismatch"); }
+fn generic_trait_wrong_type_arg() {
+    compile_should_fail_with(
+        "trait T<U>{\n    fn foo(self) U\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) string {\n        return \"hi\"\n    }\n}\n\nfn main(){}",
+        "return type mismatch",
+    );
+}
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_missing_type_arg() { compile_should_fail_with(r#"trait T<U>{fn foo(self)U} class C{} impl T{fn foo(self)int{return 1}} fn main(){}"#, ""); }
+fn generic_trait_missing_type_arg() {
+    compile_should_fail_with(
+        "trait T<U>{\n    fn foo(self) U\n}\n\nclass C impl T {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){}",
+        "expects 1 type arguments, got 0",
+    );
+}
 
 // Multiple type parameters
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_two_params_wrong() { compile_should_fail_with(r#"trait T<U,V>{fn foo(self,x:U)V} class C{} impl T<int,string>{fn foo(self,x:string)int{return 1}}
-fn main(){}"#, "type mismatch"); }
+fn generic_trait_two_params_wrong() {
+    compile_should_fail_with(
+        "trait T<U,V>{\n    fn foo(self, x: U) V\n}\n\nclass C impl T<int,string> {\n    a:int\n\n    fn foo(self, x: string) int {\n        return 1\n    }\n}\n\nfn main(){}",
+        "type mismatch",
+    );
+}
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_wrong_param_count() { compile_should_fail_with(r#"trait T<U>{fn foo(self)U} class C{} impl T<int,string>{fn foo(self)int{return 1}} fn main(){}"#, ""); }
+fn generic_trait_wrong_param_count() {
+    compile_should_fail_with(
+        "trait T<U>{\n    fn foo(self) U\n}\n\nclass C impl T<int,string> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){}",
+        "expects 1 type arguments, got 2",
+    );
+}
 
-// Generic class implementing generic trait
+// Type args on a non-generic trait
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_class_generic_trait_mismatch() { compile_should_fail_with(r#"trait T<U>{fn foo(self)U} class Box<V>{value:V} impl T<int>{fn foo(self)string{return "hi"}}
-fn main(){}"#, "type mismatch"); }
+fn non_generic_trait_with_args() {
+    compile_should_fail_with(
+        "trait T{\n    fn foo(self) int\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){}",
+        "not generic and does not accept type arguments",
+    );
+}
+
+// Generic class implementing a generic trait with its own type parameter
 #[test]
-fn generic_class_trait_wrong_arg() { compile_should_fail_with(r#"trait T<U>{fn foo(self)U} class Box<V>{value:V} impl T<V>{fn foo(self)int{return 1}} fn main(){}"#, ""); }
+fn generic_class_trait_class_param() {
+    compile_should_fail_with(
+        "trait T<U>{\n    fn foo(self) U\n}\n\nclass Box<V> impl T<V> {\n    value:V\n\n    fn foo(self) V {\n        return self.value\n    }\n}\n\nfn main(){}",
+        "not supported yet",
+    );
+}
 
 // Type bounds on generic traits
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_bound_not_satisfied() { compile_should_fail_with(r#"trait Printable{} trait T<U:Printable>{fn foo(self)U} class C{x:int} impl T<int>{fn foo(self)int{return 1}}
-fn main(){}"#, "does not satisfy"); }
+fn generic_trait_bound_not_satisfied() {
+    compile_should_fail_with(
+        "trait Printable{\n    fn show(self) string\n}\n\ntrait T<U: Printable>{\n    fn foo(self) U\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){}",
+        "does not satisfy trait bound 'Printable'",
+    );
+}
 
-// Multiple impls of same generic trait
+// Default methods in generic traits are not supported
 #[test]
-fn two_impls_same_generic_trait() { compile_should_fail_with(r#"trait T<U>{fn foo(self)U} class C{} impl T<int>{fn foo(self)int{return 1}} impl T<string>{fn foo(self)string{return "hi"}} fn main(){}"#, ""); }
-
-// Generic trait with generic methods
-#[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_generic_method() { compile_should_fail_with(r#"trait T<U>{fn foo<V>(self,x:V)U} class C{} impl T<int>{fn foo<V>(self,x:V)string{return "hi"}}
-fn main(){}"#, "type mismatch"); }
-
-// Conflicting generic trait impls
-#[test]
-fn overlapping_generic_trait_impls() { compile_should_fail_with(r#"trait T<U>{fn foo(self)U} class Box<V>{value:V} impl T<int>{fn foo(self)int{return 1}} impl T<V>{fn foo(self)V{return self.value}} fn main(){}"#, ""); }
+fn generic_trait_default_method() {
+    compile_should_fail_with(
+        "trait T<U>{\n    fn foo(self) U\n\n    fn bar(self) int {\n        return 1\n    }\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){}",
+        "default method 'bar' in generic trait 'T' is not supported",
+    );
+}
 
 // Missing method in generic trait impl
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_missing_method() { compile_should_fail_with(r#"trait T<U>{fn foo(self)U
-fn bar(self)U} class C{} impl T<int>{fn foo(self)int{return 1}}
-fn main(){}"#, "missing method"); }
+fn generic_trait_missing_method() {
+    compile_should_fail_with(
+        "trait T<U>{\n    fn foo(self) U\n    fn bar(self) U\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){}",
+        "does not implement required method 'bar'",
+    );
+}
 
 // Wrong type param in method signature
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_method_uses_wrong_param() { compile_should_fail_with(r#"trait T<U>{fn foo(self,x:U)U} class C{} impl T<int>{fn foo(self,x:string)int{return 1}}
-fn main(){}"#, "type mismatch"); }
+fn generic_trait_method_uses_wrong_param() {
+    compile_should_fail_with(
+        "trait T<U>{\n    fn foo(self, x: U) U\n}\n\nclass C impl T<int> {\n    a:int\n\n    fn foo(self, x: string) int {\n        return 1\n    }\n}\n\nfn main(){}",
+        "type mismatch",
+    );
+}
 
-// Trait object from generic trait
+// Trait object with the wrong instantiation
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_object() { compile_should_fail_with(r#"trait T<U>{fn foo(self)U} class C{} impl T<int>{fn foo(self)int{return 1}} fn main(){let t:T<int>=C{}}"#, ""); }
+fn generic_trait_object_wrong_args() {
+    compile_should_fail_with(
+        "trait T<U>{\n    fn foo(self) U\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){\n    let t: T<string> = C{x:1}\n}",
+        "",
+    );
+}
 
-// Associated type conflicts (if supported)
+// Bare template name as a type
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_associated_type() { compile_should_fail_with(r#"trait T<U>{type Output fn foo(self)Output} class C{} impl T<int>{type Output=string fn foo(self)int{return 1}} fn main(){}"#, ""); }
+fn generic_trait_bare_type_mention() {
+    compile_should_fail_with(
+        "trait T<U>{\n    fn foo(self) U\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){\n    let t: T = C{x:1}\n}",
+        "",
+    );
+}
 
-// Default type parameters (if supported)
+// Duplicate type parameters in a trait declaration
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_default_param() { compile_should_fail_with(r#"trait T<U=int>{fn foo(self)U} class C{} impl T{fn foo(self)string{return "hi"}} fn main(){}"#, ""); }
+fn generic_trait_duplicate_params() {
+    compile_should_fail_with(
+        "trait T<U, U>{\n    fn foo(self) U\n}\n\nfn main(){}",
+        "already declared",
+    );
+}
 
-// Variance issues
+// Speculative syntax that is not part of Pluto — pinned as parse failures
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_covariance() { compile_should_fail_with(r#"class Base{} class Derived{} trait T<U>{fn foo(self)U} class C{} impl T<Base>{fn foo(self)Derived{return Derived{}}} fn main(){}"#, ""); }
-
-// Generic trait with self type
+fn generic_trait_associated_type() {
+    compile_should_fail_with(
+        "trait T<U>{\n    type Output\n    fn foo(self) Output\n}\n\nfn main(){}",
+        "",
+    );
+}
 #[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_self_type() { compile_should_fail_with(r#"trait T<U>{fn foo(self)Self} class C{} impl T<int>{fn foo(self)int{return 1}} fn main(){}"#, ""); }
-
-// Circular generic trait impls
+fn generic_trait_default_param() {
+    compile_should_fail_with("trait T<U=int>{\n    fn foo(self) U\n}\n\nfn main(){}", "");
+}
 #[test]
-fn circular_generic_trait() { compile_should_fail_with(r#"trait T<U>{fn foo(self)U} class A{} impl T<B>{fn foo(self)B{return B{}}} class B{} impl T<A>{fn foo(self)A{return A{}}} fn main(){}"#, ""); }
-
-// Generic trait with const generics (if supported)
+fn generic_trait_where_clause() {
+    compile_should_fail_with(
+        "trait Printable{\n    fn show(self) string\n}\n\ntrait T<U> where U: Printable {\n    fn foo(self) U\n}\n\nfn main(){}",
+        "",
+    );
+}
 #[test]
-fn trait_const_generic() { compile_should_fail_with(r#"trait T<const N:int>{fn foo(self)[int;N]} class C{} impl T<5>{fn foo(self)[int;10]{return [0;10]}} fn main(){}"#, ""); }
-
-// Higher-kinded types (if supported)
-#[test]
-fn trait_hkt() { compile_should_fail_with(r#"trait T<F<_>>{fn foo<U>(self,x:F<U>)F<U>} class C{} impl T<Box>{fn foo<U>(self,x:Box<U>)Box<U>{return x}} fn main(){}"#, ""); }
-
-// Generic trait with where clause
-#[test]
-#[ignore] // Unsupported syntax: generic traits (trait T<U>) do not parse
-fn generic_trait_where_clause() { compile_should_fail_with(r#"trait T<U> where U:Printable{fn foo(self)U} trait Printable{} class C{} impl T<int>{fn foo(self)int{return 1}} fn main(){}"#, ""); }
-
-// Generic trait implemented for generic type
-#[test]
-fn generic_for_generic() { compile_should_fail_with(r#"trait T<U>{fn foo(self)U} class Box<V>{value:V} impl T<V>{fn foo(self)V{return self.value}} fn main(){let b=Box<int>{value:1}}"#, ""); }
-
-// Phantom type parameters
-#[test]
-fn trait_phantom_param() { compile_should_fail_with(r#"trait T<U>{fn foo(self)int} class C{} impl T<string>{fn foo(self)int{return 1}} fn main(){}"#, ""); }
-
-// Generic trait with lifetime bounds (if supported)
-#[test]
-fn trait_lifetime_bound() { compile_should_fail_with(r#"trait T<'a,U>{fn foo(self,x:&'a U)U} class C{} impl T<'static,int>{fn foo(self,x:&int)int{return *x}} fn main(){}"#, ""); }
+fn trait_const_generic() {
+    compile_should_fail_with(
+        "trait T<const N: int>{\n    fn foo(self) int\n}\n\nfn main(){}",
+        "",
+    );
+}

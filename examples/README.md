@@ -231,6 +231,14 @@ Demonstrates advanced generics: generic classes implementing traits (`class Box<
 cargo run -- run examples/generics/main.pt
 ```
 
+## traits
+
+Demonstrates traits: structural interfaces (`trait HasArea`), classes implementing multiple traits (`class Rect impl HasArea, Describable`), trait objects with dynamic dispatch (`fn print_area(shape: HasArea)`), and generic traits instantiated with concrete type arguments (`trait Producer<U>`, `class Doubler impl Producer<int>`, `Producer<int>` trait objects).
+
+```bash
+cargo run -- run examples/traits/main.pt
+```
+
 ## stages
 
 Demonstrates the `stage` language construct — a deployable unit for distributed systems. A stage is like `app` but designed as a future RPC boundary. Shows DI with bracket deps (`stage Api[users: UserService]`), `pub` methods (marking future RPC endpoints), private helper methods, and a `main` entry point.

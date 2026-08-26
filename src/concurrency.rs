@@ -58,7 +58,7 @@ pub fn infer_synchronization(program: &Program, env: &mut TypeEnv) {
             class.node.methods.iter().map(|m| m.node.name.node.clone()).collect();
         for trait_name in &class.node.impl_traits {
             for trait_decl in &program.traits {
-                if trait_decl.node.name.node == trait_name.node {
+                if trait_decl.node.name.node == trait_name.name.node {
                     for tm in &trait_decl.node.methods {
                         if let Some(body) = &tm.body && !class_method_names.contains(&tm.name.node) {
                             let mangled = mangle_method(class_name, &tm.name.node);
