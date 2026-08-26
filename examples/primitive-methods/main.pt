@@ -1,0 +1,22 @@
+fn main() {
+    // int methods
+    let x = -42
+    print(x.abs())
+    print(x.to_string() + " squared is " + (x * x).to_string())
+    print(x.to_float() / 4.0)
+
+    // float methods
+    let f = 2.25
+    print(f.sqrt())
+    print(3.7.floor())
+    print(3.2.ceil())
+    print(2.5.round())
+    print(9.9.to_int())
+
+    // bool methods
+    print(true.to_string())
+
+    // methods chain like any other call
+    print((-16.0).abs().sqrt().to_string())
+    print(f"|{x}| = {x.abs()}")
+}

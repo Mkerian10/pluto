@@ -266,13 +266,17 @@ pub fn lex(source: &str) -> Result<Vec<Spanned<Token>>, CompileError> {
         }
     }
 
-    // Validate no float immediately followed by dot (e.g., 1.2.3)
-    // This catches invalid number formats like 1.2.3 which would otherwise
-    // lex as FloatLit(1.2) + Dot + IntLit(3)
+    // Validate no float immediately followed by a dot and another number
+    // (e.g. 1.2.3, which would otherwise lex as FloatLit(1.2) + Dot + IntLit(3)).
+    // A dot followed by an identifier is a method call (1.5.to_string()).
     for i in 0..tokens.len().saturating_sub(1) {
         if matches!(tokens[i].node, Token::FloatLit(_)) && matches!(tokens[i+1].node, Token::Dot) {
             // Check if they're adjacent (no gap)
-            if tokens[i].span.end == tokens[i+1].span.start {
+            if tokens[i].span.end == tokens[i+1].span.start
+                && tokens
+                    .get(i + 2)
+                    .is_some_and(|t| matches!(t.node, Token::IntLit(_) | Token::FloatLit(_)))
+            {
                 return Err(CompileError::syntax(
                     "invalid number format: multiple decimal points".to_string(),
                     Span::new(tokens[i].span.start, tokens[i+1].span.end),

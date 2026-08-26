@@ -2333,6 +2333,51 @@ fn infer_method_call(
             }
         }
     }
+    // Primitive value methods (#128): a small built-in set on int/float/bool,
+    // dispatched like the string builtins below.
+    if matches!(obj_type, PlutoType::Int | PlutoType::Float | PlutoType::Bool) {
+        let builtin = |env: &mut TypeEnv, method: &Spanned<String>| {
+            if let Some(ref current) = env.current_fn {
+                env.method_resolutions.insert(
+                    (current.clone(), method.span.start),
+                    super::env::MethodResolution::Builtin,
+                );
+            }
+        };
+        let known: &[(&str, PlutoType)] = match obj_type {
+            PlutoType::Int => &[
+                ("to_string", PlutoType::String),
+                ("to_float", PlutoType::Float),
+                ("abs", PlutoType::Int),
+            ],
+            PlutoType::Float => &[
+                ("to_string", PlutoType::String),
+                ("to_int", PlutoType::Int),
+                ("abs", PlutoType::Float),
+                ("sqrt", PlutoType::Float),
+                ("floor", PlutoType::Float),
+                ("ceil", PlutoType::Float),
+                ("round", PlutoType::Float),
+            ],
+            PlutoType::Bool => &[("to_string", PlutoType::String)],
+            _ => unreachable!(),
+        };
+        if let Some((_, ret)) = known.iter().find(|(name, _)| *name == method.node) {
+            if !args.is_empty() {
+                return Err(CompileError::type_err(
+                    format!("{}() expects 0 arguments, got {}", method.node, args.len()),
+                    span,
+                ));
+            }
+            builtin(env, method);
+            return Ok(ret.clone());
+        }
+        return Err(CompileError::type_err(
+            format!("{obj_type} has no method '{}'", method.node),
+            method.span,
+        ));
+    }
+
     if obj_type == PlutoType::String {
         let builtin = |env: &mut TypeEnv, method: &Spanned<String>| {
             if let Some(ref current) = env.current_fn {

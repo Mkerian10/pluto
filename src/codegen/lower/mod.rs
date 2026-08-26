@@ -3762,6 +3762,39 @@ impl<'a> LowerContext<'a> {
             };
         }
 
+        // Primitive value methods (int/float/bool). The math methods call the
+        // same runtime functions as the free builtins (abs, sqrt, ...) so
+        // method and function forms agree exactly.
+        if obj_type == PlutoType::Int {
+            return match method.node.as_str() {
+                "to_string" => Ok(self.call_runtime("__pluto_int_to_string", &[obj_ptr])),
+                "to_float" => Ok(self.builder.ins().fcvt_from_sint(types::F64, obj_ptr)),
+                "abs" => Ok(self.call_runtime("__pluto_abs_int", &[obj_ptr])),
+                _ => Err(CompileError::codegen(format!("int has no method '{}'", method.node))),
+            };
+        }
+        if obj_type == PlutoType::Float {
+            return match method.node.as_str() {
+                "to_string" => Ok(self.call_runtime("__pluto_float_to_string", &[obj_ptr])),
+                "to_int" => Ok(self.builder.ins().fcvt_to_sint_sat(types::I64, obj_ptr)),
+                "abs" => Ok(self.call_runtime("__pluto_abs_float", &[obj_ptr])),
+                "sqrt" => Ok(self.call_runtime("__pluto_sqrt", &[obj_ptr])),
+                "floor" => Ok(self.call_runtime("__pluto_floor", &[obj_ptr])),
+                "ceil" => Ok(self.call_runtime("__pluto_ceil", &[obj_ptr])),
+                "round" => Ok(self.call_runtime("__pluto_round", &[obj_ptr])),
+                _ => Err(CompileError::codegen(format!("float has no method '{}'", method.node))),
+            };
+        }
+        if obj_type == PlutoType::Bool {
+            return match method.node.as_str() {
+                "to_string" => {
+                    let widened = self.builder.ins().uextend(types::I32, obj_ptr);
+                    Ok(self.call_runtime("__pluto_bool_to_string", &[widened]))
+                }
+                _ => Err(CompileError::codegen(format!("bool has no method '{}'", method.node))),
+            };
+        }
+
         // String methods
         if obj_type == PlutoType::String {
             return match method.node.as_str() {
@@ -5631,6 +5664,26 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 return match method.node.as_str() {
                     "recv" | "try_recv" => *inner.clone(),
                     _ => PlutoType::Void,
+                };
+            }
+            if obj_type == PlutoType::Int {
+                return match method.node.as_str() {
+                    "to_string" => PlutoType::String,
+                    "to_float" => PlutoType::Float,
+                    _ => PlutoType::Int,
+                };
+            }
+            if obj_type == PlutoType::Float {
+                return match method.node.as_str() {
+                    "to_string" => PlutoType::String,
+                    "to_int" => PlutoType::Int,
+                    _ => PlutoType::Float,
+                };
+            }
+            if obj_type == PlutoType::Bool {
+                return match method.node.as_str() {
+                    "to_string" => PlutoType::String,
+                    _ => PlutoType::Bool,
                 };
             }
             if obj_type == PlutoType::String {

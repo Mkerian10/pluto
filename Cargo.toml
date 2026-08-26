@@ -181,6 +181,10 @@ name = "coercion"
 path = "tests/integration/coercion.rs"
 
 [[test]]
+name = "primitive_methods"
+path = "tests/integration/primitive_methods.rs"
+
+[[test]]
 name = "io"
 path = "tests/integration/io.rs"
 
