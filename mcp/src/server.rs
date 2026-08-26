@@ -113,9 +113,21 @@ fn ensure_within_project(canonical: &str, project_root: &Option<String>) -> Resu
     Ok(())
 }
 
+/// The binary's mtime captured at process start, for staleness reporting.
+static STARTUP_BINARY_MTIME: std::sync::LazyLock<Option<SystemTime>> =
+    std::sync::LazyLock::new(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok())
+    });
+
 #[tool_router]
 impl PlutoMcp {
     pub fn new() -> Self {
+        // Capture the startup mtime eagerly so later staleness checks
+        // compare against launch time, not first-query time.
+        let _ = *STARTUP_BINARY_MTIME;
         Self {
             service: Arc::new(RwLock::new(InProcessServer::new())),
             modules: Arc::new(RwLock::new(HashMap::new())),
@@ -1018,6 +1030,36 @@ impl PlutoMcp {
         let text = service.stdlib_docs(input.module.as_deref())
             .map_err(|e| mcp_internal(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    // --- server_info ---
+    #[tool(description = "Server build info and staleness: binary path, package version, binary mtime, process start time, and whether the binary on disk is newer than this process (stale). Under the default hot-reload supervisor a stale server is replaced automatically once idle.")]
+    async fn server_info(
+        &self,
+        Parameters(_input): Parameters<ServerInfoInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let exe = std::env::current_exe()
+            .map_err(|e| mcp_internal(format!("cannot resolve current exe: {e}")))?;
+        let disk_mtime = std::fs::metadata(&exe).and_then(|m| m.modified()).ok();
+        let stale = match (disk_mtime, *STARTUP_BINARY_MTIME) {
+            (Some(disk), Some(startup)) => disk != startup,
+            _ => false,
+        };
+        let fmt = |t: Option<SystemTime>| {
+            t.and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs().to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        };
+        let info = serde_json::json!({
+            "binary": exe.display().to_string(),
+            "version": env!("CARGO_PKG_VERSION"),
+            "binary_mtime_at_startup_unix": fmt(*STARTUP_BINARY_MTIME),
+            "binary_mtime_on_disk_unix": fmt(disk_mtime),
+            "stale": stale,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&info).unwrap_or_default(),
+        )]))
     }
 
     // --- Tool 22: reload_module ---
