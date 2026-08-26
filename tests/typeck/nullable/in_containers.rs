@@ -57,8 +57,12 @@ fn map_of_nullable_maps() { compile_should_fail_with(r#"fn main(){let m:Map<stri
 
 // Generic containers with nullable
 #[test]
-#[ignore] // #170: parser fails on nullable types in generic type arguments
-fn generic_box_nullable() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b:Box<int?>=Box<int?>{value:none} let x:int=b.value}"#, "type mismatch"); }
+fn generic_box_nullable() {
+    compile_should_fail_with(
+        "class Box<T> {\n    value: T\n}\n\nfn main(){\n    let b: Box<int?> = Box<int?> { value: none }\n    let x: int = b.value\n}",
+        "type mismatch",
+    );
+}
 // This test already passes - correctly rejects int? to int assignment
 #[test]
 #[ignore]

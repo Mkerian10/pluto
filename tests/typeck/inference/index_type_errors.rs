@@ -414,16 +414,15 @@ fn assign_wrong_type_to_map_value() {
 }
 
 #[test]
-#[ignore]
 fn assign_to_string_index() {
     compile_should_fail_with(
         r#"
         fn main() {
-            let s = "hello"
+            let mut s = "hello"
             s[0] = "H"
         }
         "#,
-        "cannot assign",
+        "index assignment on non-indexable type string",
     );
 }
 

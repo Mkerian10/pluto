@@ -53,7 +53,6 @@ fn run_project_with_stdlib(files: &[(&str, &str)]) -> String {
 // ============================================================
 
 #[test]
-#[ignore] // #229: needs mut enforcement fixes in stdlib
 fn http_response_ok() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
@@ -77,7 +76,6 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // #229: needs mut enforcement fixes in stdlib
 fn http_response_not_found() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
@@ -100,7 +98,6 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // #229: needs mut enforcement fixes in stdlib
 fn http_response_bad_request() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
@@ -122,7 +119,6 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // stdlib bug: json.object().set() needs mut self declaration
 fn http_response_ok_json() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
@@ -131,7 +127,7 @@ import std.json
 import std.strings
 
 fn main() {
-    let obj = json.object()
+    let mut obj = json.object()
     obj.set("status", json.string("ok"))
     let resp = http.ok_json(obj.to_string())
     let s = resp.to_string()
@@ -148,7 +144,6 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // #229: needs mut enforcement fixes in stdlib
 fn http_response_custom() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
@@ -171,7 +166,6 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // #229: needs mut enforcement fixes in stdlib
 fn http_request_parse() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
@@ -241,7 +235,6 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // #229: needs mut enforcement fixes in stdlib
 fn http_request_with_body() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
@@ -252,9 +245,9 @@ fn main() {
     let server = http.listen("127.0.0.1", 0)!
     let port = server.port()
 
-    let body = "{{\"key\":\"value\"}}"
+    let body = "{\"key\":\"value\"}"
     let blen = body.len()
-    let req_str = "POST /api HTTP/1.1\r\nContent-Length: {blen}\r\n\r\n" + body
+    let req_str = f"POST /api HTTP/1.1\r\nContent-Length: {blen}\r\n\r\n" + body
 
     let client = net.connect("127.0.0.1", port)
     client.write(req_str)
@@ -279,7 +272,6 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // stdlib bug: json.object().set() needs mut self declaration
 fn http_json_api_roundtrip() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
@@ -292,9 +284,9 @@ fn main() {
     let server = http.listen("127.0.0.1", 0)!
     let port = server.port()
 
-    let body = "{{\"name\":\"Alice\"}}"
+    let body = "{\"name\":\"Alice\"}"
     let blen = body.len()
-    let req_str = "POST /greet HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: {blen}\r\n\r\n" + body
+    let req_str = f"POST /greet HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: {blen}\r\n\r\n" + body
 
     let client = net.connect("127.0.0.1", port)
     client.write(req_str)
@@ -305,7 +297,7 @@ fn main() {
     let input = json.parse(req.body)!
     let name = input.get("name").get_string()
 
-    let resp_json = json.object()
+    let mut resp_json = json.object()
     resp_json.set("greeting", json.string("Hello, " + name + "!"))
     conn.send_response(http.ok_json(resp_json.to_string()))
     conn.close()

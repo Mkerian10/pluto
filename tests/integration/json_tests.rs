@@ -224,14 +224,13 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // stdlib bug: json mutation methods need mut self
 fn json_parse_object() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
         r#"import std.json
 
 fn main() {
-    let j = json.parse("{{\"name\": \"Alice\", \"age\": 30}}")!
+    let j = json.parse("{\"name\": \"Alice\", \"age\": 30}")!
     print(j.is_object())
     print(j.get("name").get_string())
     print(j.get("age").get_int())
@@ -246,14 +245,13 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // stdlib bug: json mutation methods need mut self
 fn json_parse_empty_object() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
         r#"import std.json
 
 fn main() {
-    let j = json.parse("{{}}")!
+    let j = json.parse("{}")!
     print(j.is_object())
     print(j.len())
 }
@@ -267,14 +265,13 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // stdlib bug: json mutation methods need mut self
 fn json_parse_nested() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
         r#"import std.json
 
 fn main() {
-    let j = json.parse("{{\"user\": {{\"name\": \"Bob\", \"scores\": [10, 20]}}}}")!
+    let j = json.parse("{\"user\": {\"name\": \"Bob\", \"scores\": [10, 20]}}")!
     let user = j.get("user")
     print(user.get("name").get_string())
     let scores = user.get("scores")
@@ -298,7 +295,7 @@ fn json_parse_error() {
         r#"import std.json
 
 fn main() {
-    let j = json.parse("{{invalid}}") catch json.null()
+    let j = json.parse("{invalid}") catch json.null()
     print("caught")
 }
 "#,
@@ -351,14 +348,13 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // stdlib bug: json mutation methods need mut self
 fn json_construct_object() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
         r#"import std.json
 
 fn main() {
-    let obj = json.object()
+    let mut obj = json.object()
     obj.set("name", json.string("Alice"))
     obj.set("age", json.int(30))
     obj.set("active", json.bool(true))
@@ -379,14 +375,13 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // stdlib bug: json mutation methods need mut self
 fn json_construct_array() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
         r#"import std.json
 
 fn main() {
-    let arr = json.array()
+    let mut arr = json.array()
     arr.push(json.int(1))
     arr.push(json.int(2))
     arr.push(json.string("three"))
@@ -403,14 +398,13 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // stdlib bug: json mutation methods need mut self
 fn json_roundtrip() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
         r#"import std.json
 
 fn main() {
-    let original = "{{\"a\":1,\"b\":[true,null,\"hello\"]}}"
+    let original = "{\"a\":1,\"b\":[true,null,\"hello\"]}"
     let j = json.parse(original)!
     let s = j.to_string()
     let j2 = json.parse(s)!
@@ -430,14 +424,13 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // stdlib bug: json mutation methods need mut self
 fn json_type_checks() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
         r#"import std.json
 
 fn main() {
-    let j = json.parse("[null, true, 42, 3.14, \"hi\", [], {{}}]")!
+    let j = json.parse("[null, true, 42, 3.14, \"hi\", [], {}]")!
     print(j.at(0).is_null())
     print(j.at(1).is_bool())
     print(j.at(2).is_int())
@@ -456,14 +449,13 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // stdlib bug: json mutation methods need mut self
 fn json_chained_access() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
         r#"import std.json
 
 fn main() {
-    let j = json.parse("{{\"a\": {{\"b\": {{\"c\": 99}}}}}}")!
+    let j = json.parse("{\"a\": {\"b\": {\"c\": 99}}}")!
     print(j.get("a").get("b").get("c").get_int())
 }
 "#,
@@ -476,14 +468,13 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // stdlib bug: json mutation methods need mut self
 fn json_missing_key_returns_null() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
         r#"import std.json
 
 fn main() {
-    let j = json.parse("{{\"a\": 1}}")!
+    let j = json.parse("{\"a\": 1}")!
     let missing = j.get("b")
     print(missing.is_null())
 }
@@ -497,14 +488,13 @@ fn main() {
 // ============================================================
 
 #[test]
-#[ignore] // stdlib bug: json mutation methods need mut self
 fn json_object_overwrite() {
     let out = run_project_with_stdlib(&[(
         "main.pluto",
         r#"import std.json
 
 fn main() {
-    let obj = json.object()
+    let mut obj = json.object()
     obj.set("x", json.int(1))
     obj.set("x", json.int(2))
     print(obj.get("x").get_int())
