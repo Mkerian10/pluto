@@ -302,8 +302,8 @@ pub(crate) fn infer_expr(
             Ok(inner_type)
         }
         Expr::Catch { expr, handlers } => infer_catch(expr, handlers, span, env),
-        Expr::MethodCall { object, method, args } => {
-            infer_method_call(object, method, args, span, env)
+        Expr::MethodCall { object, method, args, type_args } => {
+            infer_method_call(object, method, args, type_args, span, env)
         }
         Expr::Closure { params, return_type, body } => {
             infer_closure(params, return_type, body, span, env, expected)
@@ -1756,6 +1756,7 @@ fn infer_method_call(
     object: &Spanned<Expr>,
     method: &Spanned<String>,
     args: &[Spanned<Expr>],
+    call_type_args: &[Spanned<TypeExpr>],
     span: crate::span::Span,
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
@@ -1817,6 +1818,12 @@ fn infer_method_call(
     }
 
     let obj_type = infer_expr(&object.node, object.span, env, None)?;
+    if !call_type_args.is_empty() && !matches!(obj_type, PlutoType::Class(_)) {
+        return Err(CompileError::type_err(
+            format!("method '{}' does not accept type arguments", method.node),
+            span,
+        ));
+    }
     if let PlutoType::Array(elem) = &obj_type {
         match method.node.as_str() {
             "len" => {
@@ -2766,6 +2773,107 @@ fn infer_method_call(
             method.span,
         ));
     }
+    // Generic method (hoisted to a top-level generic function under the
+    // mangled base name): infer or consume explicit type args, instantiate,
+    // and validate the call against the concrete signature (#293)
+    if let Some(gen_sig) = env.generic_functions.get(&mangled).cloned() {
+        let expected_n = gen_sig.params.len() - 1;
+        if args.len() != expected_n {
+            return Err(CompileError::type_err(
+                format!(
+                    "method '{}' expects {} arguments, got {}",
+                    method.node, expected_n, args.len()
+                ),
+                span,
+            ));
+        }
+        let mut explicit_arg_types: Vec<PlutoType> = Vec::new();
+        let type_args_resolved: Vec<PlutoType> = if !call_type_args.is_empty() {
+            if call_type_args.len() != gen_sig.type_params.len() {
+                return Err(CompileError::type_err(
+                    format!(
+                        "method '{}' expects {} type arguments, got {}",
+                        method.node, gen_sig.type_params.len(), call_type_args.len()
+                    ),
+                    span,
+                ));
+            }
+            // Arguments are validated against the substituted parameter
+            // types after instantiation, below
+            for arg in args {
+                explicit_arg_types.push(infer_expr(&arg.node, arg.span, env, None)?);
+            }
+            call_type_args.iter()
+                .map(|a| resolve_type(a, env))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            // Infer type args from the arguments (params[0] is self)
+            let mut arg_types = Vec::new();
+            for arg in args {
+                arg_types.push(infer_expr(&arg.node, arg.span, env, None)?);
+            }
+            let mut bindings = HashMap::new();
+            for (param_ty, arg_ty) in gen_sig.params[1..].iter().zip(&arg_types) {
+                if !unify(param_ty, arg_ty, &mut bindings, env) {
+                    return Err(CompileError::type_err(
+                        format!("cannot infer type parameters for '{}'", method.node),
+                        span,
+                    ));
+                }
+            }
+            for tp in &gen_sig.type_params {
+                if !bindings.contains_key(tp) {
+                    return Err(CompileError::type_err(
+                        format!("cannot infer type parameter '{}' for '{}'", tp, method.node),
+                        span,
+                    ));
+                }
+            }
+            gen_sig.type_params.iter().map(|tp| bindings[tp].clone()).collect()
+        };
+        validate_type_bounds(&gen_sig.type_params, &type_args_resolved, &gen_sig.type_param_bounds, env, span, &method.node)?;
+        let inst = ensure_generic_func_instantiated(&mangled, &type_args_resolved, env);
+        if let Some(concrete_sig) = env.functions.get(&inst).cloned() {
+            if !call_type_args.is_empty() {
+                for (i, (actual, expected_param)) in
+                    explicit_arg_types.iter().zip(&concrete_sig.params[1..]).enumerate()
+                {
+                    if !types_compatible(actual, expected_param, env) {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "argument {} of '{}': expected {expected_param}, found {actual}",
+                                i + 1,
+                                method.node
+                            ),
+                            args[i].span,
+                        ));
+                    }
+                }
+            }
+            for (arg, expected_param) in args.iter().zip(&concrete_sig.params[1..]) {
+                record_fn_value_boundary(arg, expected_param, env);
+            }
+        }
+        // Monomorphize rewrites the call site's method name to the
+        // instantiated suffix so codegen's mangle_method lookup resolves
+        env.generic_rewrites.insert((span.start, span.end), inst.clone());
+        let concrete_ret = env.functions.get(&inst)
+            .expect("generic method should be registered after instantiation")
+            .return_type.clone();
+        return Ok(concrete_ret);
+    }
+
+    // Reject explicit type args on non-generic methods
+    if !call_type_args.is_empty() {
+        return Err(CompileError::type_err(
+            format!(
+                "method '{}' of class '{class_name}' is not generic and does not accept type arguments",
+                method.node
+            ),
+            span,
+        ));
+    }
+
     let sig = env.functions.get(&mangled).ok_or_else(|| {
         CompileError::type_err(
             format!("class '{class_name}' has no method '{}'", method.node),

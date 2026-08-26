@@ -225,7 +225,7 @@ cargo run -- compile examples/system/main.pt -o /tmp/system_build
 
 ## generics
 
-Demonstrates advanced generics: generic classes implementing traits (`class Box<T: Printable> impl Printable`), type bounds on generic parameters (`<T: Trait1 + Trait2>`), explicit type arguments on function calls (`make_pair<string, int>(...)`), and dependency injection on generic classes (`class Repository<T>[db: Database]`).
+Demonstrates advanced generics: generic classes implementing traits (`class Box<T: Printable> impl Printable`), type bounds on generic parameters (`<T: Trait1 + Trait2>`), explicit type arguments on function calls (`make_pair<string, int>(...)`), generic methods with inferred or explicit type arguments (`fmt.wrap<string>(...)`), and dependency injection on generic classes (`class Repository<T>[db: Database]`).
 
 ```bash
 cargo run -- run examples/generics/main.pt

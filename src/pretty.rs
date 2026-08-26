@@ -1134,10 +1134,21 @@ impl PrettyPrinter {
                 object,
                 method,
                 args,
+                type_args,
             } => {
                 self.emit_expr(&object.node, 25);
                 self.write(".");
                 self.write(&method.node);
+                if !type_args.is_empty() {
+                    self.write("<");
+                    for (i, ta) in type_args.iter().enumerate() {
+                        if i > 0 {
+                            self.write(", ");
+                        }
+                        self.emit_type_expr(&ta.node);
+                    }
+                    self.write(">");
+                }
                 self.write("(");
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {

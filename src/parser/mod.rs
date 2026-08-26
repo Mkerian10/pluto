@@ -1351,6 +1351,7 @@ impl<'a> Parser<'a> {
         let fn_tok = self.expect(&Token::Fn)?;
         let start = fn_tok.span.start;
         let name = self.expect_ident()?;
+        let (type_params, type_param_bounds) = self.parse_type_params()?;
         self.expect(&Token::LParen)?;
 
         let mut params = Vec::new();
@@ -1424,7 +1425,7 @@ impl<'a> Parser<'a> {
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { id: Uuid::new_v4(), name, type_params: vec![], type_param_bounds: HashMap::new(), params, return_type, contracts, body, is_pub: false, is_override: false, is_generator: false },
+            Function { id: Uuid::new_v4(), name, type_params, type_param_bounds, params, return_type, contracts, body, is_pub: false, is_override: false, is_generator: false },
             Span::new(start, end),
         ))
     }
@@ -2414,7 +2415,7 @@ impl<'a> Parser<'a> {
                 // The expr should end with a .recv() method call — validate structure
                 // We parse the entire `rx.recv()` as an expression, then unwrap
                 match &channel.node {
-                    Expr::MethodCall { object, method, args } if method.node == "recv" && args.is_empty() => {
+                    Expr::MethodCall { object, method, args, .. } if method.node == "recv" && args.is_empty() => {
                         let channel_expr = (**object).clone();
                         let body = self.parse_block()?;
                         arms.push(SelectArm {
@@ -2433,7 +2434,7 @@ impl<'a> Parser<'a> {
                 // Send arm: `expr.send(value) { body }`
                 let expr = self.parse_expr(0)?;
                 match &expr.node {
-                    Expr::MethodCall { object, method, args } if method.node == "send" && args.len() == 1 => {
+                    Expr::MethodCall { object, method, args, .. } if method.node == "send" && args.len() == 1 => {
                         let channel_expr = (**object).clone();
                         let value_expr = args[0].clone();
                         let body = self.parse_block()?;
@@ -2705,9 +2706,21 @@ impl<'a> Parser<'a> {
                 self.advance(); // consume '.'
                 let field_name = self.expect_ident()?;
 
-                // Check if it's a method call
-                if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LParen) {
-                    self.advance(); // consume '('
+                // Check if it's a method call — with the same generic-args
+                // lookahead free calls use, so `c.foo<int>(x)` parses while
+                // comparison chains like `a.b < c` stay comparisons (#293)
+                let has_type_args = self.peek().is_some()
+                    && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt)
+                    && self.is_generic_call_ahead();
+                if has_type_args
+                    || (self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LParen))
+                {
+                    let type_args = if has_type_args {
+                        self.parse_type_arg_list()?
+                    } else {
+                        vec![]
+                    };
+                    self.expect(&Token::LParen)?;
                     self.skip_newlines();
                     let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
                     let close = self.expect(&Token::RParen)?;
@@ -2717,6 +2730,7 @@ impl<'a> Parser<'a> {
                             object: Box::new(lhs),
                             method: field_name,
                             args,
+                            type_args,
                         },
                         span,
                     );
@@ -3256,6 +3270,7 @@ impl<'a> Parser<'a> {
                                         object: Box::new(object),
                                         method: member,
                                         args,
+                                        type_args: vec![],
                                     };
                                     return Ok(Spanned::new(
                                         Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },

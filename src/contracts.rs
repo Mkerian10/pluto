@@ -81,7 +81,7 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
         }
 
         // Method call — only .len() with no args
-        Expr::MethodCall { object, method, args } => {
+        Expr::MethodCall { object, method, args, .. } => {
             if method.node == "len" && args.is_empty() {
                 validate_decidable_fragment(&object.node, object.span, kind)
             } else {

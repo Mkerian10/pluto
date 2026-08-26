@@ -1394,7 +1394,7 @@ impl VisitMut for QualifiedAccessRewriter<'_> {
     fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
         // Handle expressions that need qualification rewriting
         match &mut expr.node {
-            Expr::MethodCall { object, method, args } => {
+            Expr::MethodCall { object, method, args, type_args, .. } => {
                 // Check if object is Ident matching an import name → convert to qualified call
                 if let Expr::Ident(name) = &object.node
                     && self.import_names.contains(name.as_str())
@@ -1408,7 +1408,7 @@ impl VisitMut for QualifiedAccessRewriter<'_> {
                     expr.node = Expr::Call {
                         name: Spanned::new(qualified_name, name_span),
                         args: std::mem::take(args),
-                        type_args: vec![],
+                        type_args: std::mem::take(type_args),
                         target_id: None,
                     };
                     return;

@@ -916,3 +916,157 @@ fn if_expr_type_parameter_unification() {
     );
     assert_eq!(out.trim(), "42");
 }
+
+// ── Generic methods (#293) ───────────────────────────────────────────────
+
+#[test]
+fn generic_method_inferred() {
+    let out = compile_and_run_stdout(
+        r#"
+        class C {
+            x: int
+
+            fn echo<T>(self, val: T) T {
+                return val
+            }
+        }
+        fn main() {
+            let c = C { x: 1 }
+            print(c.echo(42))
+            print(c.echo("hi"))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "42\nhi");
+}
+
+#[test]
+fn generic_method_explicit_type_args() {
+    let out = compile_and_run_stdout(
+        r#"
+        class C {
+            x: int
+
+            fn echo<T>(self, val: T) T {
+                return val
+            }
+        }
+        fn main() {
+            let c = C { x: 1 }
+            print(c.echo<int>(42))
+            print(c.echo<string>("hi"))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "42\nhi");
+}
+
+#[test]
+fn generic_method_reads_self() {
+    let out = compile_and_run_stdout(
+        r#"
+        class C {
+            x: int
+
+            fn tagged<T>(self, val: T) int {
+                return self.x
+            }
+        }
+        fn main() {
+            let c = C { x: 7 }
+            print(c.tagged(true))
+            print(c.tagged<string>("z"))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "7\n7");
+}
+
+#[test]
+fn generic_method_mut_self() {
+    let out = compile_and_run_stdout(
+        r#"
+        class Counter {
+            n: int
+
+            fn bump<T>(mut self, val: T) {
+                self.n = self.n + 1
+            }
+        }
+        fn main() {
+            let mut c = Counter { n: 0 }
+            c.bump(1)
+            c.bump<string>("x")
+            print(c.n)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "2");
+}
+
+#[test]
+fn generic_method_two_type_params() {
+    let out = compile_and_run_stdout(
+        r#"
+        class P {
+            a: int
+
+            fn second<T, U>(self, x: T, y: U) U {
+                return y
+            }
+        }
+        fn main() {
+            let p = P { a: 1 }
+            print(p.second(1, "s"))
+            print(p.second<string, int>("s", 9))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "s\n9");
+}
+
+#[test]
+fn generic_method_error_handling() {
+    let out = compile_and_run_stdout(
+        r#"
+        error Boom {}
+        class C {
+            x: int
+
+            fn risky<T>(self, val: T) T {
+                if self.x < 0 {
+                    raise Boom {}
+                }
+                return val
+            }
+        }
+        fn main() {
+            let bad = C { x: -1 }
+            print(bad.risky(5) catch e { -1 })
+            let good = C { x: 1 }
+            print(good.risky<int>(6) catch e { -1 })
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "-1\n6");
+}
+
+#[test]
+fn generic_method_comparison_still_parses() {
+    // `c.x < d` must stay a comparison, not a generic-call prefix
+    let out = compile_and_run_stdout(
+        r#"
+        class C {
+            x: int
+        }
+        fn main() {
+            let c = C { x: 3 }
+            let d = 5
+            if c.x < d {
+                print(1)
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "1");
+}

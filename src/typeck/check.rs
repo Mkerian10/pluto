@@ -78,6 +78,10 @@ fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&s
         let ty = if p.name.node == "self" {
             if let Some(cn) = class_name {
                 PlutoType::Class(cn.to_string())
+            } else if matches!(&p.ty.node, crate::parser::ast::TypeExpr::Named(n) if n != "Self") {
+                // Hoisted generic method: the receiver carries a concrete
+                // class annotation (see generic_methods.rs)
+                resolve_type(&p.ty, env)?
             } else {
                 return Err(CompileError::type_err(
                     "'self' used outside of class method",

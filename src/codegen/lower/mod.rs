@@ -2557,7 +2557,7 @@ impl<'a> LowerContext<'a> {
                 Ok(val)
             }
             Expr::Catch { expr: inner, handlers } => self.lower_catch(inner, handlers),
-            Expr::MethodCall { object, method, args } => {
+            Expr::MethodCall { object, method, args, .. } => {
                 self.lower_method_call(object, method, args)
             }
             Expr::Closure { .. } => {
@@ -4377,7 +4377,9 @@ pub fn lower_function(
             if let Some(cn) = class_name {
                 PlutoType::Class(cn.to_string())
             } else {
-                PlutoType::Void
+                // Hoisted generic method instances carry a concrete class
+                // annotation on their receiver (see generic_methods.rs)
+                resolve_param_type(param, env)
             }
         } else {
             resolve_param_type(param, env)

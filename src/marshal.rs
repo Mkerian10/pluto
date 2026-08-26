@@ -1058,6 +1058,7 @@ fn mk_call(name: &str, args: Vec<Expr>) -> Expr {
                 span: mk_span(),
             },
             args: args.into_iter().map(|e| Spanned { node: e, span: mk_span() }).collect(),
+            type_args: vec![],
         }
     } else {
         Expr::Call {
@@ -1178,6 +1179,7 @@ fn mk_method_call(object_name: &str, method: &str, args: Vec<Expr>) -> Expr {
         object: Box::new(Spanned { node: mk_var(object_name), span: mk_span() }),
         method: Spanned { node: method.to_string(), span: mk_span() },
         args: args.into_iter().map(|e| Spanned { node: e, span: mk_span() }).collect(),
+        type_args: vec![],
     }
 }
 
@@ -1186,6 +1188,7 @@ fn mk_method_call_on_expr(object_expr: Expr, method: &str, args: Vec<Expr>) -> E
         object: Box::new(Spanned { node: object_expr, span: mk_span() }),
         method: Spanned { node: method.to_string(), span: mk_span() },
         args: args.into_iter().map(|e| Spanned { node: e, span: mk_span() }).collect(),
+        type_args: vec![],
     }
 }
 
@@ -2436,7 +2439,7 @@ mod tests {
     fn test_mk_method_call() {
         let expr = mk_method_call("obj", "method", vec![mk_int_lit(42)]);
         match expr {
-            Expr::MethodCall { object, method, args } => {
+            Expr::MethodCall { object, method, args, .. } => {
                 match object.node {
                     Expr::Ident(name) => assert_eq!(name, "obj"),
                     _ => panic!("Expected Ident for object"),
@@ -2466,7 +2469,7 @@ mod tests {
         let inner_expr = mk_var("x");
         let expr = mk_method_call_on_expr(inner_expr, "foo", vec![mk_string_lit("test")]);
         match expr {
-            Expr::MethodCall { object, method, args } => {
+            Expr::MethodCall { object, method, args, .. } => {
                 match object.node {
                     Expr::Ident(name) => assert_eq!(name, "x"),
                     _ => panic!("Expected Ident for object"),
@@ -2536,7 +2539,7 @@ mod tests {
     fn test_mk_call_method_with_dot() {
         let expr = mk_call("obj.method", vec![mk_int_lit(42)]);
         match expr {
-            Expr::MethodCall { object, method, args } => {
+            Expr::MethodCall { object, method, args, .. } => {
                 match object.node {
                     Expr::Ident(name) => assert_eq!(name, "obj"),
                     _ => panic!("Expected Ident for object"),
@@ -3118,7 +3121,7 @@ mod tests {
         assert_eq!(stmts.len(), 1);
         match &stmts[0].node {
             Stmt::Expr(e) => match &e.node {
-                Expr::MethodCall { object, method, args } => {
+                Expr::MethodCall { object, method, args, .. } => {
                     assert!(matches!(&object.node, Expr::Ident(n) if n == "enc"));
                     assert_eq!(method.node, "encode_int");
                     assert_eq!(args.len(), 1);

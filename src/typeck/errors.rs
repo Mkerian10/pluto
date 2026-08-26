@@ -480,7 +480,7 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
                         collect_expr_effects(arg, ctx);
                     }
                 }
-                Expr::MethodCall { object, method, args } => {
+                Expr::MethodCall { object, method, args, .. } => {
                     collect_expr_effects(object, ctx);
                     for arg in args {
                         collect_expr_effects(arg, ctx);
@@ -962,7 +962,7 @@ fn enforce_expr(
             }
             Ok(())
         }
-        Expr::MethodCall { object, method, args } => {
+        Expr::MethodCall { object, method, args, .. } => {
             enforce_expr(&object.node, object.span, current_fn, env, lenient)?;
             for arg in args {
                 enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
@@ -1008,7 +1008,7 @@ fn enforce_expr(
                 }
                 Ok(())
             }
-            Expr::MethodCall { object, method, args } => {
+            Expr::MethodCall { object, method, args, .. } => {
                 enforce_expr(&object.node, object.span, current_fn, env, lenient)?;
                 for arg in args {
                     enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
@@ -1056,7 +1056,7 @@ fn enforce_expr(
                         ));
                     }
                 }
-                Expr::MethodCall { object, method, args } => {
+                Expr::MethodCall { object, method, args, .. } => {
                     enforce_expr(&object.node, object.span, current_fn, env, lenient)?;
                     for arg in args {
                         enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;

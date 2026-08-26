@@ -49,13 +49,19 @@ fn explicit_conflicts_inferred() { compile_should_fail_with(r#"fn id<T>(x:T)T{re
 #[test]
 fn partial_inference_conflict() { compile_should_fail_with(r#"fn pair<T,U>(x:T,y:U)T{return x} fn main(){pair<int>(true,42)}"#, "expects 2 type arguments, got 1"); }
 
-// Explicit args on methods
+// Explicit args on methods (#293)
 #[test]
-#[ignore] // Unsupported syntax: explicit type args on method calls (c.foo<int>(..)) do not parse
-fn method_explicit_too_many() { compile_should_fail_with(r#"class C{x:int fn foo<T>(self,val:T)T{return val}} fn main(){let c=C{x:1}c.foo<int,string>(42)}"#, "wrong number"); }
+fn method_explicit_too_many() { compile_should_fail_with("class C{\n    x:int\n\n    fn foo<T>(self,val:T)T{return val}\n}\n\nfn main(){\n    let c=C{x:1}\n    c.foo<int,string>(42)\n}", "expects 1 type arguments, got 2"); }
 #[test]
-#[ignore] // Unsupported syntax: explicit type args on method calls (c.foo<int>(..)) do not parse
-fn method_explicit_arg_mismatch() { compile_should_fail_with(r#"class C{x:int fn foo<T>(self,val:T)T{return val}} fn main(){let c=C{x:1}c.foo<int>(true)}"#, "type mismatch"); }
+fn method_explicit_arg_mismatch() { compile_should_fail_with("class C{\n    x:int\n\n    fn foo<T>(self,val:T)T{return val}\n}\n\nfn main(){\n    let c=C{x:1}\n    c.foo<int>(true)\n}", "argument 1 of 'foo': expected int, found bool"); }
+#[test]
+fn method_type_args_on_non_generic() { compile_should_fail_with("class C{\n    x:int\n\n    fn bar(self)int{return self.x}\n}\n\nfn main(){\n    let c=C{x:1}\n    c.bar<int>()\n}", "not generic"); }
+#[test]
+fn method_type_args_on_builtin() { compile_should_fail_with("fn main(){\n    let a=[1,2]\n    a.len<int>()\n}", "does not accept type arguments"); }
+#[test]
+fn method_cannot_infer() { compile_should_fail_with("class C{\n    x:int\n\n    fn zero<T>(self)T{\n        return self.zero<T>()\n    }\n}\n\nfn main(){\n    let c=C{x:1}\n    c.zero()\n}", "cannot infer"); }
+#[test]
+fn generic_method_on_generic_class_rejected() { compile_should_fail_with("class Box<T>{\n    value:T\n\n    fn map<U>(self,f:fn(T) U)U{\n        return f(self.value)\n    }\n}\n\nfn main(){\n    let b=Box<int>{value:1}\n}", "generic method 'map' on generic class 'Box' is not supported"); }
 
 // Nested explicit args
 #[test]
