@@ -1508,9 +1508,19 @@ pub(crate) fn check_trait_conformance(program: &Program, env: &mut TypeEnv) -> R
                             trait_name_spanned.span,
                         )
                     })?;
-                    // Compare non-self params
-                    let trait_non_self = &trait_sig.params[1..];
-                    let class_non_self = &class_sig.params[1..];
+                    // Compare non-self params. Static trait methods (no self)
+                    // have no receiver to skip — compare all params.
+                    let is_static = trait_info.static_methods.contains(method_name);
+                    let trait_non_self = if is_static {
+                        &trait_sig.params[..]
+                    } else {
+                        trait_sig.params.get(1..).unwrap_or(&[])
+                    };
+                    let class_non_self = if is_static {
+                        &class_sig.params[..]
+                    } else {
+                        class_sig.params.get(1..).unwrap_or(&[])
+                    };
                     if trait_non_self.len() != class_non_self.len() {
                         return Err(CompileError::type_err(
                             format!(

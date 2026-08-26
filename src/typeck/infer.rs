@@ -2600,8 +2600,20 @@ fn infer_method_call(
                 )
             })?;
 
+        // Static trait methods have no receiver; calling one through an
+        // instance is a category error, not a slicing panic.
+        if trait_info.static_methods.contains(&method.node) {
+            return Err(CompileError::type_err(
+                format!(
+                    "static method '{}' of trait '{trait_name}' cannot be called on an instance; call it as {trait_name}.{}(...)",
+                    method.node, method.node
+                ),
+                method.span,
+            ));
+        }
+
         // Check non-self args
-        let expected_args = method_sig.params[1..].to_vec();
+        let expected_args = method_sig.params.get(1..).unwrap_or(&[]).to_vec();
         if args.len() != expected_args.len() {
             return Err(CompileError::type_err(
                 format!(

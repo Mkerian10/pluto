@@ -116,10 +116,9 @@ fn trait_method_on_call_result() {
 }
 
 #[test]
-#[ignore]
 fn trait_local_reassignment() {
     let out = compile_and_run_stdout(
-        "trait HasVal {\n    fn get(self) int\n}\n\nclass A impl HasVal {\n    x: int\n\n    fn get(self) int {\n        return self.x\n    }\n}\n\nclass B impl HasVal {\n    y: int\n\n    fn get(self) int {\n        return self.y * 2\n    }\n}\n\nfn main() {\n    let v: HasVal = A { x: 10 }\n    print(v.get())\n    v = B { y: 20 }\n    print(v.get())\n}",
+        "trait HasVal {\n    fn get(self) int\n}\n\nclass A impl HasVal {\n    x: int\n\n    fn get(self) int {\n        return self.x\n    }\n}\n\nclass B impl HasVal {\n    y: int\n\n    fn get(self) int {\n        return self.y * 2\n    }\n}\n\nfn main() {\n    let mut v: HasVal = A { x: 10 }\n    print(v.get())\n    v = B { y: 20 }\n    print(v.get())\n}",
     );
     assert_eq!(out, "10\n40\n");
 }
@@ -1131,7 +1130,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_returning_array() {
     // Trait method returns an array through dispatch
     let out = compile_and_run_stdout(r#"
@@ -1144,7 +1142,7 @@ class Range impl Lister {
 
     fn items(self) [int] {
         let result: [int] = []
-        let i = 0
+        let mut i = 0
         while i < self.n {
             result.push(i)
             i = i + 1
@@ -1426,7 +1424,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_loop_stress() {
     // Dispatch in a tight loop — verify no memory leak/corruption
     let out = compile_and_run_stdout(r#"
@@ -1444,7 +1441,7 @@ class C impl Counter {
 
 fn sum_n(c: Counter, n: int) int {
     let mut total = 0
-    let i = 0
+    let mut i = 0
     while i < n {
         total = total + c.count()
         i = i + 1
@@ -1543,7 +1540,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_default_with_loop() {
     // Default method body contains a loop
     let out = compile_and_run_stdout(r#"
@@ -1552,7 +1548,7 @@ trait Summer {
 
     fn sum(self) int {
         let mut total = 0
-        let i = 1
+        let mut i = 1
         while i <= self.limit() {
             total = total + i
             i = i + 1
@@ -2466,7 +2462,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_array_param() {
     // Trait method takes an array parameter
     let out = compile_and_run_stdout(r#"
@@ -2478,8 +2473,8 @@ class Adder impl Summable {
     base: int
 
     fn sum(self, values: [int]) int {
-        let total = self.base
-        let i = 0
+        let mut total = self.base
+        let mut i = 0
         while i < values.len() {
             total = total + values[i]
             i = i + 1
@@ -2568,7 +2563,6 @@ fn main() {
 // ===== Batch 5: Complex dispatch patterns, reassignment, nesting =====
 
 #[test]
-#[ignore]
 fn trait_reassign_trait_variable() {
     // Assign different concrete classes to the same trait-typed variable
     let out = compile_and_run_stdout(r#"
@@ -2587,7 +2581,7 @@ class Cat impl Speaker {
 }
 
 fn main() {
-    let s: Speaker = Dog { val: 0 }
+    let mut s: Speaker = Dog { val: 0 }
     print(s.speak())
     s = Cat { val: 0 }
     print(s.speak())
@@ -2629,7 +2623,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_in_while_condition() {
     // Trait method call used in while loop condition (read-only dispatch)
     let out = compile_and_run_stdout(r#"
@@ -2643,7 +2636,7 @@ class MaxLimiter impl Limiter {
 }
 
 fn count_up(l: Limiter) {
-    let i = 0
+    let mut i = 0
     while i < l.limit() {
         i = i + 1
     }
@@ -2951,7 +2944,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_body_with_while_loop() {
     // Trait method implementation contains a while loop
     let out = compile_and_run_stdout(r#"
@@ -2963,8 +2955,8 @@ class Adder impl Summer {
     base: int
 
     fn sum_to(self, n: int) int {
-        let total = self.base
-        let i = 1
+        let mut total = self.base
+        let mut i = 1
         while i <= n {
             total = total + i
             i = i + 1
@@ -3049,7 +3041,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_body_with_array_operations() {
     // Trait method creates and manipulates arrays
     let out = compile_and_run_stdout(r#"
@@ -3062,13 +3053,13 @@ class SumCollector impl Collector {
 
     fn collect(self, n: int) int {
         let arr: [int] = []
-        let i = 0
+        let mut i = 0
         while i < n {
             arr.push(i + self.base)
             i = i + 1
         }
         let mut total = 0
-        let j = 0
+        let mut j = 0
         while j < arr.len() {
             total = total + arr[j]
             j = j + 1
@@ -3199,38 +3190,29 @@ fn main() {
 // ===== Batch 6: Negative tests, naming edge cases, DI interaction =====
 
 #[test]
-#[ignore]
-fn trait_same_name_as_class_allowed() {
-    // COMPILER GAP: Trait and class can have the same name — compiler doesn't reject it
-    // This documents current behavior; may want to reject in the future
-    let out = compile_and_run_stdout(r#"
+fn trait_same_name_as_class_rejected() {
+    // A class may not reuse a trait's name (name collision, #160)
+    compile_should_fail_with(r#"
 trait Foo {
     fn work(self) int
 }
 
 class Foo impl Foo {
     val: int
-    fn work(self) int { return self.val }
+
+    fn work(self) int {
+        return self.val
+    }
 }
 
-fn run(f: Foo) {
-    print(f.work())
-}
-
-fn main() {
-    let f = Foo { val: 42 }
-    run(f)
-}
-"#);
-    assert_eq!(out, "42\n");
+fn main() {}
+"#, "already declared");
 }
 
 #[test]
-#[ignore]
-fn trait_two_traits_same_name_allowed() {
-    // COMPILER GAP: Two traits with the same name — compiler doesn't reject it
-    // The second definition silently overwrites the first
-    let out = compile_and_run_stdout(r#"
+fn trait_two_traits_same_name_rejected() {
+    // Duplicate trait names are a collision, not a silent overwrite (#160)
+    compile_should_fail_with(r#"
 trait Foo {
     fn a(self) int
 }
@@ -3239,20 +3221,8 @@ trait Foo {
     fn b(self) int
 }
 
-class X impl Foo {
-    val: int
-    fn b(self) int { return self.val }
-}
-
-fn run(f: Foo) {
-    print(f.b())
-}
-
-fn main() {
-    run(X { val: 99 })
-}
-"#);
-    assert_eq!(out, "99\n");
+fn main() {}
+"#, "already declared");
 }
 
 #[test]
@@ -3704,7 +3674,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_modifies_array_param() {
     // Trait method receives array and modifies it (arrays are heap, passed by reference)
     let out = compile_and_run_stdout(r#"
@@ -3716,7 +3685,7 @@ class ConstFiller impl Filler {
     value: int
 
     fn fill(self, arr: [int]) {
-        let i = 0
+        let mut i = 0
         while i < 3 {
             arr.push(self.value)
             i = i + 1
@@ -3740,7 +3709,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_six_classes_same_trait_dispatch() {
     // 6 classes implementing same trait — stress test vtable generation
     let out = compile_and_run_stdout(r#"
@@ -3748,12 +3716,48 @@ trait Id {
     fn id(self) int
 }
 
-class C1 impl Id { val: int  fn id(self) int { return 1 } }
-class C2 impl Id { val: int  fn id(self) int { return 2 } }
-class C3 impl Id { val: int  fn id(self) int { return 3 } }
-class C4 impl Id { val: int  fn id(self) int { return 4 } }
-class C5 impl Id { val: int  fn id(self) int { return 5 } }
-class C6 impl Id { val: int  fn id(self) int { return 6 } }
+class C1 impl Id {
+    val: int
+
+    fn id(self) int {
+        return 1
+    }
+}
+class C2 impl Id {
+    val: int
+
+    fn id(self) int {
+        return 2
+    }
+}
+class C3 impl Id {
+    val: int
+
+    fn id(self) int {
+        return 3
+    }
+}
+class C4 impl Id {
+    val: int
+
+    fn id(self) int {
+        return 4
+    }
+}
+class C5 impl Id {
+    val: int
+
+    fn id(self) int {
+        return 5
+    }
+}
+class C6 impl Id {
+    val: int
+
+    fn id(self) int {
+        return 6
+    }
+}
 
 fn show(i: Id) {
     print(i.id())
@@ -4659,7 +4663,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_returning_large_computation() {
     // Method does substantial work before returning through dispatch
     let out = compile_and_run_stdout(r#"
@@ -4674,9 +4677,9 @@ class FibCalc impl Fibonacci {
         if n <= 1 {
             return n
         }
-        let a = 0
-        let b = 1
-        let i = 2
+        let mut a = 0
+        let mut b = 1
+        let mut i = 2
         while i <= n {
             let temp = a + b
             a = b
@@ -4772,7 +4775,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_many_times_in_loop() {
     // Dispatch same trait handle many times in a loop (100 iterations)
     let out = compile_and_run_stdout(r#"
@@ -4787,7 +4789,7 @@ class X impl Valued {
 
 fn sum_dispatches(v: Valued, count: int) {
     let mut total = 0
-    let i = 0
+    let mut i = 0
     while i < count {
         total = total + v.val()
         i = i + 1
@@ -4803,12 +4805,10 @@ fn main() {
 }
 
 #[test]
-#[should_panic]
-fn crash_trait_method_without_self() {
-    // COMPILER BUG: Trait method without self parameter causes compiler panic
-    // (range start index 1 out of range for slice of length 0)
-    // Should produce a graceful error instead of crashing
-    compile_and_run_stdout(r#"
+fn static_trait_method_with_default_body() {
+    // A trait method without self is a static trait method; a default body
+    // means implementors need not override it (previously a compiler panic)
+    let out = compile_and_run_stdout(r#"
 trait Foo {
     fn work() int {
         return 42
@@ -4823,12 +4823,12 @@ fn main() {
     print(42)
 }
 "#);
+    assert_eq!(out, "42\n");
 }
 
 #[test]
-#[ignore] // Compiler bug: panic in typeck/register.rs:1326:59 - range start index 1 out of range
-fn trait_method_without_self_shows_error() {
-    // Trait methods must have self parameter - should show helpful error, not panic
+fn static_trait_method_instance_call_shows_error() {
+    // Self-less trait methods are static; instance calls get guidance, not a panic
     compile_should_fail_with(r#"
 trait Compute {
     fn calculate() int
@@ -4836,14 +4836,17 @@ trait Compute {
 
 class Calculator impl Compute {
     value: int
-    fn calculate() int { return 42 }
+
+    fn calculate() int {
+        return 42
+    }
 }
 
 fn main() {
     let c: Compute = Calculator { value: 0 }
     print(c.calculate())
 }
-"#, "trait method 'calculate' must have a 'self' parameter");
+"#, "static method 'calculate' of trait 'Compute' cannot be called on an instance");
 }
 
 #[test]
@@ -4913,7 +4916,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_eight_classes_vtable_stress() {
     // 8 classes implementing same trait — thorough vtable stress
     let out = compile_and_run_stdout(r#"
@@ -4921,14 +4923,62 @@ trait Id {
     fn id(self) int
 }
 
-class A impl Id { val: int  fn id(self) int { return 10 } }
-class B impl Id { val: int  fn id(self) int { return 20 } }
-class C impl Id { val: int  fn id(self) int { return 30 } }
-class D impl Id { val: int  fn id(self) int { return 40 } }
-class E impl Id { val: int  fn id(self) int { return 50 } }
-class F impl Id { val: int  fn id(self) int { return 60 } }
-class G impl Id { val: int  fn id(self) int { return 70 } }
-class H impl Id { val: int  fn id(self) int { return 80 } }
+class A impl Id {
+    val: int
+
+    fn id(self) int {
+        return 10
+    }
+}
+class B impl Id {
+    val: int
+
+    fn id(self) int {
+        return 20
+    }
+}
+class C impl Id {
+    val: int
+
+    fn id(self) int {
+        return 30
+    }
+}
+class D impl Id {
+    val: int
+
+    fn id(self) int {
+        return 40
+    }
+}
+class E impl Id {
+    val: int
+
+    fn id(self) int {
+        return 50
+    }
+}
+class F impl Id {
+    val: int
+
+    fn id(self) int {
+        return 60
+    }
+}
+class G impl Id {
+    val: int
+
+    fn id(self) int {
+        return 70
+    }
+}
+class H impl Id {
+    val: int
+
+    fn id(self) int {
+        return 80
+    }
+}
 
 fn show(i: Id) { print(i.id()) }
 
@@ -5013,7 +5063,6 @@ fn main() {
 // ===== Batch 9: Corner cases, unusual patterns, more negative tests =====
 
 #[test]
-#[ignore]
 fn trait_same_trait_variable_reassigned_three_times() {
     // Reassign trait variable to three different concrete types
     let out = compile_and_run_stdout(r#"
@@ -5021,12 +5070,30 @@ trait Id {
     fn id(self) int
 }
 
-class A impl Id { val: int  fn id(self) int { return 1 } }
-class B impl Id { val: int  fn id(self) int { return 2 } }
-class C impl Id { val: int  fn id(self) int { return 3 } }
+class A impl Id {
+    val: int
+
+    fn id(self) int {
+        return 1
+    }
+}
+class B impl Id {
+    val: int
+
+    fn id(self) int {
+        return 2
+    }
+}
+class C impl Id {
+    val: int
+
+    fn id(self) int {
+        return 3
+    }
+}
 
 fn main() {
-    let x: Id = A { val: 0 }
+    let mut x: Id = A { val: 0 }
     print(x.id())
     x = B { val: 0 }
     print(x.id())
@@ -5502,7 +5569,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_body_with_break() {
     // Trait method body uses break in a while loop
     let out = compile_and_run_stdout(r#"
@@ -5514,7 +5580,7 @@ class LinearFinder impl Finder {
     default_val: int
 
     fn find_first_gt(self, arr: [int], threshold: int) int {
-        let i = 0
+        let mut i = 0
         while i < arr.len() {
             if arr[i] > threshold {
                 return arr[i]
@@ -5853,7 +5919,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_result_as_while_bound() {
     // Trait dispatch result used as upper bound in while loop
     let out = compile_and_run_stdout(r#"
@@ -5867,7 +5932,7 @@ class Fixed impl Limiter {
 }
 
 fn count_to(l: Limiter) {
-    let i = 0
+    let mut i = 0
     while i < l.limit() {
         i = i + 1
     }
@@ -6044,7 +6109,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_many_small_classes() {
     // 6 small classes, each 1 field 1 method, all dispatched
     let out = compile_and_run_stdout(r#"
@@ -6052,12 +6116,48 @@ trait Num {
     fn num(self) int
 }
 
-class N1 impl Num { x: int  fn num(self) int { return 1 } }
-class N2 impl Num { x: int  fn num(self) int { return 2 } }
-class N3 impl Num { x: int  fn num(self) int { return 3 } }
-class N4 impl Num { x: int  fn num(self) int { return 4 } }
-class N5 impl Num { x: int  fn num(self) int { return 5 } }
-class N6 impl Num { x: int  fn num(self) int { return 6 } }
+class N1 impl Num {
+    x: int
+
+    fn num(self) int {
+        return 1
+    }
+}
+class N2 impl Num {
+    x: int
+
+    fn num(self) int {
+        return 2
+    }
+}
+class N3 impl Num {
+    x: int
+
+    fn num(self) int {
+        return 3
+    }
+}
+class N4 impl Num {
+    x: int
+
+    fn num(self) int {
+        return 4
+    }
+}
+class N5 impl Num {
+    x: int
+
+    fn num(self) int {
+        return 5
+    }
+}
+class N6 impl Num {
+    x: int
+
+    fn num(self) int {
+        return 6
+    }
+}
 
 fn sum_all(a: Num, b: Num, c: Num, d: Num, e: Num, f: Num) {
     print(a.num() + b.num() + c.num() + d.num() + e.num() + f.num())
@@ -6475,7 +6575,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_array_param_and_base() {
     // Trait method takes an array parameter and adds to base
     let out = compile_and_run_stdout(r#"
@@ -6487,8 +6586,8 @@ class Adder impl Summable {
     base: int
 
     fn sum(self, arr: [int]) int {
-        let total = self.base
-        let i = 0
+        let mut total = self.base
+        let mut i = 0
         while i < arr.len() {
             total = total + arr[i]
             i = i + 1
@@ -6510,7 +6609,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_returns_array() {
     // Trait method returns an array
     let out = compile_and_run_stdout(r#"
@@ -6523,7 +6621,7 @@ class Counter impl Generator {
 
     fn generate(self, count: int) [int] {
         let result: [int] = []
-        let i = 0
+        let mut i = 0
         while i < count {
             result.push(self.start + i)
             i = i + 1
@@ -6534,7 +6632,7 @@ class Counter impl Generator {
 
 fn show(g: Generator) {
     let arr = g.generate(3)
-    let i = 0
+    let mut i = 0
     while i < arr.len() {
         print(arr[i])
         i = i + 1
@@ -6549,7 +6647,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_appends_to_array() {
     // Trait method receives array and adds to it (heap shared)
     let out = compile_and_run_stdout(r#"
@@ -6569,7 +6666,7 @@ class DoubleAppender impl Appender {
 fn run(a: Appender) {
     let arr: [int] = [1]
     a.append(arr)
-    let i = 0
+    let mut i = 0
     while i < arr.len() {
         print(arr[i])
         i = i + 1
@@ -6584,7 +6681,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_result_stored_in_array() {
     // Store multiple trait dispatch results in an array
     let out = compile_and_run_stdout(r#"
@@ -6592,8 +6688,20 @@ trait Valued {
     fn val(self) int
 }
 
-class A impl Valued { n: int  fn val(self) int { return self.n } }
-class B impl Valued { n: int  fn val(self) int { return self.n * 2 } }
+class A impl Valued {
+    n: int
+
+    fn val(self) int {
+        return self.n
+    }
+}
+class B impl Valued {
+    n: int
+
+    fn val(self) int {
+        return self.n * 2
+    }
+}
 
 fn main() {
     let a: Valued = A { n: 3 }
@@ -6602,7 +6710,7 @@ fn main() {
     results.push(a.val())
     results.push(b.val())
     results.push(a.val() + b.val())
-    let i = 0
+    let mut i = 0
     while i < results.len() {
         print(results[i])
         i = i + 1
@@ -7514,7 +7622,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_while_and_early_return() {
     // Trait method with while loop and early return
     let out = compile_and_run_stdout(r#"
@@ -7526,7 +7633,7 @@ class ArraySearcher impl Searcher {
     data: [int]
 
     fn find(self, target: int) int {
-        let i = 0
+        let mut i = 0
         while i < self.data.len() {
             if self.data[i] == target {
                 return i
@@ -7640,7 +7747,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_builds_array() {
     // Trait method builds and returns an array
     let out = compile_and_run_stdout(r#"
@@ -7653,7 +7759,7 @@ class RangeBuilder impl Builder {
 
     fn build(self, n: int) [int] {
         let arr: [int] = []
-        let i = 0
+        let mut i = 0
         while i < n {
             arr.push(self.start + i)
             i = i + 1
@@ -7664,7 +7770,7 @@ class RangeBuilder impl Builder {
 
 fn show(b: Builder) {
     let arr = b.build(4)
-    let i = 0
+    let mut i = 0
     while i < arr.len() {
         print(arr[i])
         i = i + 1
@@ -7702,7 +7808,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_for_range_inside() {
     // Trait method body contains a for-range loop
     let out = compile_and_run_stdout(r#"
@@ -7714,7 +7819,7 @@ class Adder impl Summer {
     base: int
 
     fn sum_to(self, n: int) int {
-        let total = self.base
+        let mut total = self.base
         for i in 0..n {
             total = total + i
         }
@@ -8180,7 +8285,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_for_loop_accumulation() {
     // Trait method uses for-range to accumulate result
     let out = compile_and_run_stdout(r#"
@@ -8192,7 +8296,7 @@ class Triangular impl Accumulator {
     offset: int
 
     fn accumulate(self, n: int) int {
-        let total = self.offset
+        let mut total = self.offset
         for i in 1..n+1 {
             total = total + i
         }
@@ -8462,7 +8566,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_in_while_condition_counter() {
     // Trait method result used as while loop bound
     let out = compile_and_run_stdout(r#"
@@ -8476,7 +8579,7 @@ class FixedCount impl Counter {
 }
 
 fn run(c: Counter) {
-    let i = 0
+    let mut i = 0
     while i < c.count() {
         print(i)
         i = i + 1
@@ -8604,7 +8707,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_multiple_dispatch_calls_same_object() {
     // Same object dispatched through same trait multiple times
     let out = compile_and_run_stdout(r#"
@@ -8618,7 +8720,7 @@ class PlusOne impl Incrementer {
 }
 
 fn chain(inc: Incrementer) int {
-    let v = 0
+    let mut v = 0
     v = inc.next(v)
     v = inc.next(v)
     v = inc.next(v)
@@ -8695,7 +8797,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_array_collect_results() {
     // Multiple dispatched calls collected into an array
     let out = compile_and_run_stdout(r#"
@@ -8722,7 +8823,7 @@ fn main() {
     results.push(collect_score(High { s: 100 }))
     results.push(collect_score(Low { s: 10 }))
     results.push(collect_score(High { s: 50 }))
-    let i = 0
+    let mut i = 0
     while i < results.len() {
         print(results[i])
         i = i + 1
@@ -9246,7 +9347,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_builds_set_in_loop() {
     // Trait method builds a set from array
     let out = compile_and_run_stdout(r#"
@@ -9258,7 +9358,7 @@ class SetDeduper impl Deduper {
     tag: int
     fn dedup_count(self, arr: [int]) int {
         let s = Set<int> {}
-        let i = 0
+        let mut i = 0
         while i < arr.len() {
             s.insert(arr[i])
             i = i + 1
@@ -9520,7 +9620,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_in_spawn_with_computation() {
     // Trait dispatch inside spawned task with heavy computation
     let out = compile_and_run_stdout(r#"
@@ -9532,7 +9631,7 @@ class Heavy impl Computer {
     n: int
     fn compute(self) int {
         let mut sum = 0
-        let i = 0
+        let mut i = 0
         while i < self.n {
             sum = sum + i
             i = i + 1
@@ -9613,7 +9712,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_array_return_through_dispatch() {
     // Trait method returns [int] array, accessed through dispatch
     let out = compile_and_run_stdout(r#"
@@ -9625,7 +9723,7 @@ class RangeGen impl Generator {
     start: int
     fn generate(self, n: int) [int] {
         let result: [int] = []
-        let i = 0
+        let mut i = 0
         while i < n {
             result.push(self.start + i)
             i = i + 1
@@ -9636,7 +9734,7 @@ class RangeGen impl Generator {
 
 fn run(g: Generator) {
     let arr = g.generate(3)
-    let i = 0
+    let mut i = 0
     while i < arr.len() {
         print(arr[i])
         i = i + 1
@@ -9712,7 +9810,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_for_range_body() {
     // Trait method body uses for-range loop
     let out = compile_and_run_stdout(r#"
@@ -9723,7 +9820,7 @@ trait Summer {
 class SimpleSummer impl Summer {
     offset: int
     fn sum_range(self, n: int) int {
-        let total = self.offset
+        let mut total = self.offset
         for i in 0..n {
             total = total + i
         }
@@ -9743,7 +9840,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_for_array_body() {
     // Trait method body iterates array with for loop
     let out = compile_and_run_stdout(r#"
@@ -9754,7 +9850,7 @@ trait Processor {
 class MaxFinder impl Processor {
     tag: int
     fn process(self, arr: [int]) int {
-        let best = arr[0]
+        let mut best = arr[0]
         for v in arr {
             if v > best {
                 best = v
@@ -10010,7 +10106,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_accumulates_string() {
     // Trait method builds up a string through iteration
     let out = compile_and_run_stdout(r#"
@@ -10021,8 +10116,8 @@ trait Joiner {
 class SimpleJoiner impl Joiner {
     tag: int
     fn join(self, parts: [string], sep: string) string {
-        let result = ""
-        let i = 0
+        let mut result = ""
+        let mut i = 0
         while i < parts.len() {
             if i > 0 {
                 result = result + sep
@@ -10075,7 +10170,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_two_methods_called_in_sequence() {
     // Trait with two methods, both called in sequence
     let out = compile_and_run_stdout(r#"
@@ -10091,7 +10185,7 @@ class Pipeline impl Transformer {
 }
 
 fn run(t: Transformer) {
-    let v = 5
+    let mut v = 5
     v = t.first(v)
     v = t.second(v)
     print(v)
@@ -10231,7 +10325,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_boolean_and_logic() {
     // Trait method with complex boolean logic
     let out = compile_and_run_stdout(r#"
@@ -10249,7 +10342,7 @@ class RangeFilter impl Filter {
 
 fn count_accepted(f: Filter, arr: [int]) int {
     let mut count = 0
-    let i = 0
+    let mut i = 0
     while i < arr.len() {
         if f.accepts(arr[i]) {
             count = count + 1
@@ -10579,7 +10672,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_takes_array_returns_int() {
     // Trait method takes array param and computes a value
     let out = compile_and_run_stdout(r#"
@@ -10591,7 +10683,7 @@ class SumAggregator impl Aggregator {
     tag: int
     fn aggregate(self, vals: [int]) int {
         let mut total = 0
-        let i = 0
+        let mut i = 0
         while i < vals.len() {
             total = total + vals[i]
             i = i + 1
@@ -10603,8 +10695,8 @@ class SumAggregator impl Aggregator {
 class MaxAggregator impl Aggregator {
     tag: int
     fn aggregate(self, vals: [int]) int {
-        let best = vals[0]
-        let i = 1
+        let mut best = vals[0]
+        let mut i = 1
         while i < vals.len() {
             if vals[i] > best {
                 best = vals[i]
@@ -10629,7 +10721,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_in_while_loop_body() {
     // Trait method called repeatedly in while loop
     let out = compile_and_run_stdout(r#"
@@ -10643,7 +10734,7 @@ class Incrementer impl Counter {
 }
 
 fn count_to(c: Counter, limit: int) {
-    let v = 0
+    let mut v = 0
     while v < limit {
         v = c.next_val(v)
         print(v)
@@ -10658,7 +10749,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_returns_bool_predicate_filter() {
     // Trait method returning bool, used to filter array elements
     let out = compile_and_run_stdout(r#"
@@ -10678,7 +10768,7 @@ class PositiveChecker impl Predicate {
 
 fn count_matching(p: Predicate, vals: [int]) int {
     let mut count = 0
-    let i = 0
+    let mut i = 0
     while i < vals.len() {
         if p.check(vals[i]) {
             count = count + 1
@@ -10995,7 +11085,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_modifies_array_through_dispatch() {
     // Trait method takes mutable array and modifies it
     let out = compile_and_run_stdout(r#"
@@ -11006,7 +11095,7 @@ trait Filler {
 class ZeroFiller impl Filler {
     tag: int
     fn fill(self, arr: [int], count: int) {
-        let i = 0
+        let mut i = 0
         while i < count {
             arr.push(0)
             i = i + 1
@@ -11017,7 +11106,7 @@ class ZeroFiller impl Filler {
 class SeqFiller impl Filler {
     start: int
     fn fill(self, arr: [int], count: int) {
-        let i = 0
+        let mut i = 0
         while i < count {
             arr.push(self.start + i)
             i = i + 1
@@ -11029,7 +11118,7 @@ fn main() {
     let arr: [int] = []
     let f: Filler = SeqFiller { start: 10 }
     f.fill(arr, 3)
-    let i = 0
+    let mut i = 0
     while i < arr.len() {
         print(arr[i])
         i = i + 1
@@ -11499,7 +11588,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_assigns_to_existing_variable() {
     // Trait method result assigned to a pre-existing variable
     let out = compile_and_run_stdout(r#"
@@ -11514,7 +11602,7 @@ class Counter_ impl Source_ {
 
 fn main() {
     let s: Source_ = Counter_ { start: 0 }
-    let val = 0
+    let mut val = 0
     val = s.next()
     print(val)
     val = val + s.next()
@@ -11525,7 +11613,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_while_and_break() {
     // Trait method body uses while loop with break
     let out = compile_and_run_stdout(r#"
@@ -11536,7 +11623,7 @@ trait Searcher {
 class LinearSearcher impl Searcher {
     tag: int
     fn find_first_gt(self, arr: [int], threshold: int) int {
-        let i = 0
+        let mut i = 0
         while i < arr.len() {
             if arr[i] > threshold {
                 return arr[i]
@@ -11595,15 +11682,14 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_default_method_with_loop() {
     // Default method body contains a while loop
     let out = compile_and_run_stdout(r#"
 trait Repeater {
     fn base(self) string
     fn repeat(self, n: int) string {
-        let result = ""
-        let i = 0
+        let mut result = ""
+        let mut i = 0
         while i < n {
             result = result + self.base()
             i = i + 1
@@ -11671,7 +11757,6 @@ fn main() {
 // ===== Batch 21: Reassignment, contracts, error combos, default-only, nested dispatch =====
 
 #[test]
-#[ignore]
 fn trait_handle_reassigned_to_different_implementor() {
     // Variable holding trait handle reassigned to a different class
     let out = compile_and_run_stdout(r#"
@@ -11690,7 +11775,7 @@ class Cat impl Speaker {
 }
 
 fn main() {
-    let s: Speaker = Dog { tag: 0 }
+    let mut s: Speaker = Dog { tag: 0 }
     print(s.speak())
     s = Cat { tag: 0 }
     print(s.speak())
@@ -11758,7 +11843,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_builds_and_returns_array() {
     // Trait method creates and returns an array
     let out = compile_and_run_stdout(r#"
@@ -11770,7 +11854,7 @@ class RangeList impl Lister_ {
     count: int
     fn items(self) [int] {
         let arr: [int] = []
-        let i = 0
+        let mut i = 0
         while i < self.count {
             arr.push(i)
             i = i + 1
@@ -11782,7 +11866,7 @@ class RangeList impl Lister_ {
 fn run(l: Lister_) {
     let arr = l.items()
     print(arr.len())
-    let i = 0
+    let mut i = 0
     while i < arr.len() {
         print(arr[i])
         i = i + 1
@@ -12023,7 +12107,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_handle_in_array_iteration() {
     // Array of trait handles, iterate and call method on each
     let out = compile_and_run_stdout(r#"
@@ -12051,7 +12134,7 @@ fn main() {
     add_item(items, B_ { n: 2 })
     add_item(items, A_ { n: 3 })
     let mut total = 0
-    let i = 0
+    let mut i = 0
     while i < items.len() {
         total = total + items[i].val()
         i = i + 1
@@ -12501,7 +12584,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_handle_stored_in_array_then_dispatched() {
     // Build array of trait handles via helper, then dispatch on each
     let out = compile_and_run_stdout(r#"
@@ -12522,7 +12604,7 @@ fn main() {
     let greeters: [Greeter_] = []
     add(greeters, Hello_ { name: "alice" })
     add(greeters, Hello_ { name: "bob" })
-    let i = 0
+    let mut i = 0
     while i < greeters.len() {
         print(greeters[i].greet())
         i = i + 1
@@ -12642,7 +12724,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_four_classes_round_robin_dispatch() {
     // Four different classes implementing same trait, dispatched in round-robin
     let out = compile_and_run_stdout(r#"
@@ -12650,10 +12731,34 @@ trait Ident {
     fn id(self) int
 }
 
-class C1 impl Ident { tag: int fn id(self) int { return 1 } }
-class C2 impl Ident { tag: int fn id(self) int { return 2 } }
-class C3 impl Ident { tag: int fn id(self) int { return 3 } }
-class C4 impl Ident { tag: int fn id(self) int { return 4 } }
+class C1 impl Ident {
+    tag: int
+
+    fn id(self) int {
+        return 1
+    }
+}
+class C2 impl Ident {
+    tag: int
+
+    fn id(self) int {
+        return 2
+    }
+}
+class C3 impl Ident {
+    tag: int
+
+    fn id(self) int {
+        return 3
+    }
+}
+class C4 impl Ident {
+    tag: int
+
+    fn id(self) int {
+        return 4
+    }
+}
 
 fn add_ident(arr: [Ident], item: Ident) {
     arr.push(item)
@@ -12665,7 +12770,7 @@ fn main() {
     add_ident(items, C2 { tag: 0 })
     add_ident(items, C3 { tag: 0 })
     add_ident(items, C4 { tag: 0 })
-    let i = 0
+    let mut i = 0
     while i < items.len() {
         print(items[i].id())
         i = i + 1
@@ -13011,7 +13116,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_while_loop_counter() {
     // Trait method implements counting logic with while loop
     let out = compile_and_run_stdout(r#"
@@ -13025,9 +13129,9 @@ class IterFib impl Fibonacci {
         if n <= 1 {
             return n
         }
-        let a = 0
-        let b = 1
-        let i = 2
+        let mut a = 0
+        let mut b = 1
+        let mut i = 2
         while i <= n {
             let temp = a + b
             a = b
@@ -13180,7 +13284,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_nested_closures() {
     // Trait method uses a closure that captures a local variable
     let out = compile_and_run_stdout(r#"
@@ -13192,7 +13295,7 @@ class Doubler_ impl ArrayProcessor {
     tag: int
     fn process(self, arr: [int]) [int] {
         let result: [int] = []
-        let i = 0
+        let mut i = 0
         while i < arr.len() {
             result.push(arr[i] * 2)
             i = i + 1
@@ -13204,7 +13307,7 @@ class Doubler_ impl ArrayProcessor {
 fn run(p: ArrayProcessor) {
     let data: [int] = [1, 2, 3]
     let out = p.process(data)
-    let i = 0
+    let mut i = 0
     while i < out.len() {
         print(out[i])
         i = i + 1
@@ -13219,7 +13322,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_with_break_in_while() {
     // Trait method uses break to exit loop early
     let out = compile_and_run_stdout(r#"
@@ -13230,7 +13332,7 @@ trait SearchAlgo {
 class LinearSearch impl SearchAlgo {
     tag: int
     fn find(self, arr: [int], target: int) int {
-        let i = 0
+        let mut i = 0
         while i < arr.len() {
             if arr[i] == target {
                 return i
@@ -13277,7 +13379,6 @@ fn main() {
 // ===== Batch 24: Array-of-traits deep, dispatch argument chains, void ordering, boundary =====
 
 #[test]
-#[ignore]
 fn trait_array_dispatch_all_elements() {
     // Array of trait handles, dispatch on each via for loop with index
     let out = compile_and_run_stdout(r#"
@@ -13305,7 +13406,7 @@ fn main() {
     add_item(items, B { x: 2 })
     add_item(items, A { x: 3 })
     let mut total = 0
-    let i = 0
+    let mut i = 0
     while i < items.len() {
         total = total + items[i].val()
         i = i + 1
@@ -13499,7 +13600,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_in_while_with_state_update() {
     // Dispatch inside while loop where result updates loop variable
     let out = compile_and_run_stdout(r#"
@@ -13513,7 +13613,7 @@ class DoubleStepper impl Stepper {
 }
 
 fn run(s: Stepper) {
-    let val = 1
+    let mut val = 1
     while val < 100 {
         val = s.step(val)
     }
@@ -13594,7 +13694,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_method_returns_bool_used_in_while_condition() {
     // Dispatch result (bool) used directly as while loop condition
     let out = compile_and_run_stdout(r#"
@@ -13610,7 +13709,7 @@ class ThresholdGate impl Gate {
 }
 
 fn count_through(g: Gate) {
-    let i = 0
+    let mut i = 0
     while g.is_open(i) {
         i = i + 1
     }
@@ -13711,9 +13810,9 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Compiler bug: panic in typeck/register.rs:1326:59 - range start index 1 out of range
-fn crash_trait_method_missing_self_with_impl() {
-    // FIXED: Trait method without self now shows proper error instead of panicking
+fn static_trait_method_called_on_instance_rejected() {
+    // A static trait method (no self) has no receiver; instance calls are
+    // rejected with guidance (previously a compiler panic)
     compile_should_fail_with(r#"
 trait Bad {
     fn compute() int
@@ -13728,7 +13827,7 @@ fn main() {
     let b: Bad = Impl { tag: 0 }
     print(b.compute())
 }
-"#, "trait method 'compute' must have a 'self' parameter");
+"#, "static method 'compute' of trait 'Bad' cannot be called on an instance");
 }
 
 #[test]
@@ -13817,7 +13916,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_alternating_three_classes_in_loop() {
     // Array of 3 different implementations, dispatched in loop
     let out = compile_and_run_stdout(r#"
@@ -13850,7 +13948,7 @@ fn main() {
     add_item(items, Two { tag: 0 })
     add_item(items, Three { tag: 0 })
     let mut sum = 0
-    let i = 0
+    let mut i = 0
     while i < items.len() {
         sum = sum + items[i].num()
         i = i + 1
@@ -14311,14 +14409,13 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_default_method_with_for_range_loop() {
     // Default method contains a for range loop
     let out = compile_and_run_stdout(r#"
 trait TextRepeater {
     fn text(self) string
     fn repeat(self, n: int) string {
-        let result = ""
+        let mut result = ""
         for i in 0..n {
             result = result + self.text()
         }
@@ -14391,7 +14488,6 @@ fn main() {}
 }
 
 #[test]
-#[ignore]
 fn trait_handle_survives_triple_reassignment() {
     // Create handle, reassign to different impl multiple times, dispatch after each
     let out = compile_and_run_stdout(r#"
@@ -14410,7 +14506,7 @@ class GB impl Getter_ {
 }
 
 fn main() {
-    let g: Getter_ = GA { n: 5 }
+    let mut g: Getter_ = GA { n: 5 }
     print(g.get())
     g = GB { n: 3 }
     print(g.get())
@@ -14711,7 +14807,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_handle_array_filter_pattern() {
     // Array of trait handles, filter and process
     let out = compile_and_run_stdout(r#"
@@ -14739,7 +14834,7 @@ fn main() {
     add_valued(items, Neg { n: 5 })
     add_valued(items, Pos { n: 3 })
     let mut sum = 0
-    let i = 0
+    let mut i = 0
     while i < items.len() {
         let val = items[i].val()
         if val > 0 {
@@ -14929,7 +15024,6 @@ fn main() {
 }
 
 #[test]
-#[ignore]
 fn trait_dispatch_in_array_map_pattern() {
     // Simulate map pattern: iterate trait array, dispatch, collect results
     let out = compile_and_run_stdout(r#"
@@ -14952,7 +15046,7 @@ fn main() {
     add_doubler(items, Val { n: 2 })
     add_doubler(items, Val { n: 3 })
     let results: [int] = []
-    let i = 0
+    let mut i = 0
     while i < items.len() {
         results.push(items[i].double())
         i = i + 1
