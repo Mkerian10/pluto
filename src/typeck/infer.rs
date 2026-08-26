@@ -1116,6 +1116,7 @@ fn infer_call(
                 span,
             ));
         }
+        let mut explicit_arg_types: Vec<PlutoType> = Vec::new();
         let type_args: Vec<PlutoType> = if !call_type_args.is_empty() {
             // Explicit type args provided: resolve and validate count
             if call_type_args.len() != gen_sig.type_params.len() {
@@ -1127,9 +1128,10 @@ fn infer_call(
                     span,
                 ));
             }
-            // Still need to type-check the arguments
+            // Still need to type-check the arguments (validated against the
+            // substituted parameter types after instantiation, below)
             for arg in args {
-                infer_expr(&arg.node, arg.span, env, None)?;
+                explicit_arg_types.push(infer_expr(&arg.node, arg.span, env, None)?);
             }
             call_type_args.iter()
                 .map(|a| resolve_type(a, env))
@@ -1167,6 +1169,36 @@ fn infer_call(
         let mangled = ensure_generic_func_instantiated(&name.node, &type_args, env);
         // Record fn-value boundaries against the instantiated (concrete) params
         if let Some(concrete_sig) = env.functions.get(&mangled).cloned() {
+            // With explicit type args the argument types were never unified
+            // against the parameters — validate them against the substituted
+            // signature so `wrap<int>(true)` fails here, not in codegen.
+            if !call_type_args.is_empty() {
+                if explicit_arg_types.len() != concrete_sig.params.len() {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "function '{}' expects {} arguments, got {}",
+                            name.node,
+                            concrete_sig.params.len(),
+                            explicit_arg_types.len()
+                        ),
+                        span,
+                    ));
+                }
+                for (i, (actual, expected_param)) in
+                    explicit_arg_types.iter().zip(&concrete_sig.params).enumerate()
+                {
+                    if !types_compatible(actual, expected_param, env) {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "argument {} of '{}': expected {expected_param}, found {actual}",
+                                i + 1,
+                                name.node
+                            ),
+                            args[i].span,
+                        ));
+                    }
+                }
+            }
             for (arg, expected_param) in args.iter().zip(&concrete_sig.params) {
                 record_fn_value_boundary(arg, expected_param, env);
             }

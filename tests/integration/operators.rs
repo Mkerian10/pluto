@@ -4,7 +4,7 @@ use common::{compile_and_run_stdout, compile_should_fail_with};
 #[test]
 fn arithmetic_operations() {
     let code = common::compile_and_run(
-        "fn main() {\n    let a = 10\n    let b = 3\n    let sum = a + b\n    let diff = a - b\n    let prod = a * b\n    let quot = a / b\n    let rem = a % b\n}",
+        "fn main() {\n    let mut a = 10\n    let mut b = 3\n    let mut sum = a + b\n    let mut diff = a - b\n    let mut prod = a * b\n    let mut quot = a / b\n    let mut rem = a % b\n}",
     );
     assert_eq!(code, 0);
 }
@@ -12,7 +12,7 @@ fn arithmetic_operations() {
 #[test]
 fn boolean_operations() {
     let code = common::compile_and_run(
-        "fn main() {\n    let a = true\n    let b = false\n    let c = 1 < 2\n    let d = 3 == 3\n}",
+        "fn main() {\n    let mut a = true\n    let mut b = false\n    let mut c = 1 < 2\n    let mut d = 3 == 3\n}",
     );
     assert_eq!(code, 0);
 }
@@ -106,7 +106,7 @@ fn logical_or() {
 #[test]
 fn unary_negation() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let x = 5\n    print(-x)\n    print(-10)\n}",
+        "fn main() {\n    let mut x = 5\n    print(-x)\n    print(-10)\n}",
     );
     assert_eq!(out, "-5\n-10\n");
 }
@@ -210,7 +210,7 @@ fn bitwise_not_with_or() {
 #[test]
 fn bitwise_on_float_rejected() {
     compile_should_fail_with(
-        "fn main() {\n    let x = 1.0 & 2.0\n}",
+        "fn main() {\n    let mut x = 1.0 & 2.0\n}",
         "bitwise operators require int",
     );
 }
@@ -218,7 +218,7 @@ fn bitwise_on_float_rejected() {
 #[test]
 fn bitwise_not_on_bool_rejected() {
     compile_should_fail_with(
-        "fn main() {\n    let x = ~true\n}",
+        "fn main() {\n    let mut x = ~true\n}",
         "cannot apply '~'",
     );
 }
@@ -226,46 +226,41 @@ fn bitwise_not_on_bool_rejected() {
 // ── compound assignment tests ──
 
 #[test]
-#[ignore]
 fn plus_equals() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let x = 10\n    x += 5\n    print(x)\n}",
+        "fn main() {\n    let mut x = 10\n    x += 5\n    print(x)\n}",
     );
     assert_eq!(out, "15\n");
 }
 
 #[test]
-#[ignore]
 fn minus_equals() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let x = 10\n    x -= 3\n    print(x)\n}",
+        "fn main() {\n    let mut x = 10\n    x -= 3\n    print(x)\n}",
     );
     assert_eq!(out, "7\n");
 }
 
 #[test]
-#[ignore]
 fn star_equals() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let x = 4\n    x *= 3\n    print(x)\n}",
+        "fn main() {\n    let mut x = 4\n    x *= 3\n    print(x)\n}",
     );
     assert_eq!(out, "12\n");
 }
 
 #[test]
-#[ignore]
 fn slash_equals() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let x = 20\n    x /= 4\n    print(x)\n}",
+        "fn main() {\n    let mut x = 20\n    x /= 4\n    print(x)\n}",
     );
     assert_eq!(out, "5\n");
 }
 
 #[test]
-#[ignore]
 fn percent_equals() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let x = 17\n    x %= 5\n    print(x)\n}",
+        "fn main() {\n    let mut x = 17\n    x %= 5\n    print(x)\n}",
     );
     assert_eq!(out, "2\n");
 }
@@ -305,37 +300,33 @@ fn compound_assign_index() {
 // ── increment / decrement tests ──
 
 #[test]
-#[ignore]
 fn increment() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let x = 5\n    x++\n    print(x)\n}",
+        "fn main() {\n    let mut x = 5\n    x++\n    print(x)\n}",
     );
     assert_eq!(out, "6\n");
 }
 
 #[test]
-#[ignore]
 fn decrement() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let x = 5\n    x--\n    print(x)\n}",
+        "fn main() {\n    let mut x = 5\n    x--\n    print(x)\n}",
     );
     assert_eq!(out, "4\n");
 }
 
 #[test]
-#[ignore]
 fn increment_in_while_loop() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let i = 0\n    while i < 5 {\n        print(i)\n        i++\n    }\n}",
+        "fn main() {\n    let mut i = 0\n    while i < 5 {\n        print(i)\n        i++\n    }\n}",
     );
     assert_eq!(out, "0\n1\n2\n3\n4\n");
 }
 
 #[test]
-#[ignore]
 fn decrement_countdown() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let i = 3\n    while i > 0 {\n        print(i)\n        i--\n    }\n}",
+        "fn main() {\n    let mut i = 3\n    while i > 0 {\n        print(i)\n        i--\n    }\n}",
     );
     assert_eq!(out, "3\n2\n1\n");
 }
