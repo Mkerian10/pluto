@@ -87,7 +87,7 @@ pub struct ClassDecl {
     pub fields: Vec<Field>,
     pub methods: Vec<Spanned<Function>>,
     pub invariants: Vec<Spanned<ContractClause>>,
-    pub impl_traits: Vec<Spanned<String>>,
+    pub impl_traits: Vec<ImplTraitRef>,
     pub uses: Vec<Spanned<String>>,
     pub is_pub: bool,
     pub lifecycle: Lifecycle,
@@ -488,10 +488,21 @@ pub enum ContractKind {
     Invariant,
 }
 
+/// A trait named in a class's `impl` list; generic traits carry type
+/// arguments (`impl Convert<int>`), erased to a concrete instantiated trait
+/// name by the generic-traits pass before type checking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImplTraitRef {
+    pub name: Spanned<String>,
+    pub type_args: Vec<Spanned<TypeExpr>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraitDecl {
     pub id: Uuid,
     pub name: Spanned<String>,
+    pub type_params: Vec<Spanned<String>>,
+    pub type_param_bounds: HashMap<String, Vec<Spanned<String>>>,
     pub methods: Vec<TraitMethod>,
     pub is_pub: bool,
 }

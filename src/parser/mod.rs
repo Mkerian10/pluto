@@ -1176,10 +1176,23 @@ impl<'a> Parser<'a> {
         Ok(Spanned::new(ErrorDecl { id: Uuid::new_v4(), name, fields, is_pub: false }, Span::new(start, end)))
     }
 
+    fn parse_impl_trait_ref(&mut self) -> Result<ImplTraitRef, CompileError> {
+        let name = self.expect_ident()?;
+        let type_args = if self.peek().is_some()
+            && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt)
+        {
+            self.parse_type_arg_list()?
+        } else {
+            Vec::new()
+        };
+        Ok(ImplTraitRef { name, type_args })
+    }
+
     fn parse_trait(&mut self) -> Result<Spanned<TraitDecl>, CompileError> {
         let trait_tok = self.expect(&Token::Trait)?;
         let start = trait_tok.span.start;
         let name = self.expect_ident()?;
+        let (type_params, type_param_bounds) = self.parse_type_params()?;
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
@@ -1192,7 +1205,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(TraitDecl { id: Uuid::new_v4(), name, methods, is_pub: false }, Span::new(start, end)))
+        Ok(Spanned::new(TraitDecl { id: Uuid::new_v4(), name, type_params, type_param_bounds, methods, is_pub: false }, Span::new(start, end)))
     }
 
     fn parse_trait_method(&mut self) -> Result<TraitMethod, CompileError> {
@@ -1307,14 +1320,14 @@ impl<'a> Parser<'a> {
         // Parse optional bracket deps: class Foo[dep: Type]
         let inject_fields = self.parse_bracket_deps()?;
 
-        // Check for `impl Trait1, Trait2`
+        // Check for `impl Trait1, Trait2<int>`
         let impl_traits = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Impl) {
             self.advance(); // consume 'impl'
             let mut traits = Vec::new();
-            traits.push(self.expect_ident()?);
+            traits.push(self.parse_impl_trait_ref()?);
             while self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
                 self.advance(); // consume ','
-                traits.push(self.expect_ident()?);
+                traits.push(self.parse_impl_trait_ref()?);
             }
             traits
         } else {

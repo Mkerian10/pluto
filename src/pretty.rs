@@ -288,6 +288,7 @@ impl PrettyPrinter {
         }
         self.write("trait ");
         self.write(&tr.name.node);
+        self.emit_type_params(&tr.type_params);
         self.write(" {");
         self.newline();
         self.indent();
@@ -403,7 +404,17 @@ impl PrettyPrinter {
                 if i > 0 {
                     self.write(", ");
                 }
-                self.write(&t.node);
+                self.write(&t.name.node);
+                if !t.type_args.is_empty() {
+                    self.write("<");
+                    for (j, ta) in t.type_args.iter().enumerate() {
+                        if j > 0 {
+                            self.write(", ");
+                        }
+                        self.emit_type_expr(&ta.node);
+                    }
+                    self.write(">");
+                }
             }
         }
 

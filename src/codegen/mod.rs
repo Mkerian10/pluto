@@ -186,7 +186,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
         let class_method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
 
         for trait_name_spanned in &c.impl_traits {
-            let trait_name = &trait_name_spanned.node;
+            let trait_name = &trait_name_spanned.name.node;
             if let Some(trait_info) = env.traits.get(trait_name) {
                 for (method_name, _) in &trait_info.methods {
                     if !class_method_names.contains(method_name) && trait_info.default_methods.contains(method_name) {
@@ -221,7 +221,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
         let class_name = &c.name.node;
 
         for trait_name_spanned in &c.impl_traits {
-            let trait_name = &trait_name_spanned.node;
+            let trait_name = &trait_name_spanned.name.node;
             if let Some(trait_info) = env.traits.get(trait_name) {
                 let num_methods = trait_info.methods.len();
                 let mut data_desc = DataDescription::new();
@@ -296,7 +296,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
         let c = &class.node;
         let class_method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
         for trait_name_spanned in &c.impl_traits {
-            let trait_name = &trait_name_spanned.node;
+            let trait_name = &trait_name_spanned.name.node;
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == *trait_name {
                     for trait_method in &trait_decl.node.methods {
@@ -315,7 +315,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
     for class in &program.classes {
         let c = &class.node;
         for trait_name_spanned in &c.impl_traits {
-            let trait_name = &trait_name_spanned.node;
+            let trait_name = &trait_name_spanned.name.node;
             if let Some(trait_info) = env.traits.get(trait_name) {
                 for (method_name, contracts) in &trait_info.method_contracts {
                     let mangled = mangle_method(&c.name.node, method_name);
@@ -428,7 +428,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
         let class_method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
 
         for trait_name_spanned in &c.impl_traits {
-            let trait_name = &trait_name_spanned.node;
+            let trait_name = &trait_name_spanned.name.node;
             // Find the trait AST to get default method bodies
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == *trait_name {

@@ -834,8 +834,8 @@ fn rename_references(
         // Walk impl_traits
         if kind == DeclKindSimple::Trait {
             for trait_name in &mut c.node.impl_traits {
-                if trait_name.node == old_name {
-                    trait_name.node = new_name.to_string();
+                if trait_name.name.node == old_name {
+                    trait_name.name.node = new_name.to_string();
                 }
             }
         }

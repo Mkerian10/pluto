@@ -557,8 +557,8 @@ fn add_prefixed_items(
             prefix_function_types(&mut method.node, module_name, module_prog);
         }
         for trait_name in &mut prefixed_class.node.impl_traits {
-            if module_prog.traits.iter().any(|t| t.node.name.node == trait_name.node) {
-                trait_name.node = prefix_name(module_name, &trait_name.node);
+            if module_prog.traits.iter().any(|t| t.node.name.node == trait_name.name.node) {
+                trait_name.name.node = prefix_name(module_name, &trait_name.name.node);
             }
         }
         target.classes.push(prefixed_class);
