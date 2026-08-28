@@ -118,12 +118,12 @@ fn stray_closing_brace() {
 #[test]
 fn double_operator() {
     // ++ is not supported in Pluto (not increment operator)
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
         fn main() {
             let x = 5
             x++
         }
-    "#);
+    "#, "cannot assign to immutable variable 'x'");
 }
 
 // ============================================================

@@ -113,14 +113,14 @@ fn generic_explicit_call_with_expr() {
 fn generic_comparison_ambiguity() {
     // x < y > z should parse as (x < y) > z (comparison), NOT as generic type args
     // This should fail because you can't compare bool > int
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
         fn main() {
             let x = 1
             let y = 2
             let z = 3
             let result = x < y > z
         }
-    "#);
+    "#, "cannot compare bool with int");
 }
 
 #[test]
@@ -160,13 +160,13 @@ fn generic_trailing_comma_rejected() {
 #[test]
 fn generic_empty_type_args_rejected() {
     // Box<> → empty type args should be rejected
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
         class Box<T> { value: T }
 
         fn main() {
             let x = Box<> { value: 42 }
         }
-    "#);
+    "#, "unknown class 'Box'");
 }
 
 #[test]

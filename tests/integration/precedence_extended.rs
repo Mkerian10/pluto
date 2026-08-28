@@ -182,11 +182,11 @@ fn precedence_arithmetic_comparison_logical_complex() {
 #[test]
 fn precedence_bitwise_shift_comparison_complex() {
     // 8 >> 1 & 3 < 2 | 1 (type error expected - can't compare int with bool)
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
         fn main() {
             let result = 8 >> 1 & 3 < 2 | 1
         }
-    "#);
+    "#, "bitwise operators require int operands, found int and bool");
 }
 
 #[test]
@@ -217,11 +217,11 @@ fn precedence_not_and_or_chain() {
 #[test]
 fn precedence_comparison_chain() {
     // 1 < 2 < 3 → (1 < 2) < 3 → true < 3 (type error)
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
         fn main() {
             let result = 1 < 2 < 3
         }
-    "#);
+    "#, "cannot compare bool with int");
 }
 
 #[test]

@@ -203,13 +203,11 @@ fn if_expr_nullable_wrong_base_type() {
 #[test]
 fn if_expr_nested_nullable() {
     // No nested nullable support (int?? not allowed)
-    compile_should_fail(
-        r#"
+    compile_should_fail_with(r#"
         fn main() {
             let x: int?? = if true { none } else { none }
         }
-        "#
-    );
+        "#, "expected =, found ??");
 }
 
 #[test]
@@ -232,25 +230,21 @@ fn if_expr_nullable_enum_mismatch() {
 
 #[test]
 fn if_expr_missing_else_in_let() {
-    compile_should_fail(
-        r#"
+    compile_should_fail_with(r#"
         fn main() {
             let x = if true { 1 }
         }
-        "#
-    );
+        "#, "expected else, found }");
 }
 
 #[test]
 fn if_expr_missing_else_in_return() {
-    compile_should_fail(
-        r#"
+    compile_should_fail_with(r#"
         fn foo() int {
             return if true { 1 }
         }
         fn main() {}
-        "#
-    );
+        "#, "expected else, found }");
 }
 
 // ============================================================
