@@ -122,7 +122,7 @@ pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<
             } else if env.generic_classes.contains_key(name.as_str()) {
                 let gen_info = env.generic_classes.get(name.as_str()).unwrap().clone();
                 validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, ty.span, name)?;
-                let m = ensure_generic_class_instantiated(name, &resolved_args, env);
+                let m = ensure_generic_class_instantiated(name, &resolved_args, env)?;
                 Ok(PlutoType::Class(m))
             } else if env.generic_enums.contains_key(name.as_str()) {
                 let gen_info = env.generic_enums.get(name.as_str()).unwrap().clone();
@@ -227,7 +227,7 @@ pub(crate) fn resolve_type_with_params(
                 } else if env.generic_classes.contains_key(name.as_str()) {
                     let gen_info = env.generic_classes.get(name.as_str()).unwrap().clone();
                     validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, ty.span, name)?;
-                    let m = ensure_generic_class_instantiated(name, &resolved_args, env);
+                    let m = ensure_generic_class_instantiated(name, &resolved_args, env)?;
                     Ok(PlutoType::Class(m))
                 } else if env.generic_enums.contains_key(name.as_str()) {
                     let gen_info = env.generic_enums.get(name.as_str()).unwrap().clone();
@@ -415,8 +415,15 @@ pub(crate) fn resolve_generic_instances(ty: &PlutoType, env: &mut TypeEnv) -> Pl
             } else {
                 match kind {
                     GenericKind::Class => {
-                        let m = ensure_generic_class_instantiated(name, &resolved_args, env);
-                        PlutoType::Class(m)
+                        match ensure_generic_class_instantiated(name, &resolved_args, env) {
+                            Ok(m) => PlutoType::Class(m),
+                            Err(e) => {
+                                // Infallible resolution path — surface at the
+                                // end of type checking
+                                env.pending_errors.push(e);
+                                PlutoType::Class(env::mangle_name(name, &resolved_args))
+                            }
+                        }
                     }
                     GenericKind::Enum => {
                         let m = ensure_generic_enum_instantiated(name, &resolved_args, env);
@@ -513,10 +520,10 @@ pub(crate) fn ensure_generic_class_instantiated(
     base_name: &str,
     type_args: &[PlutoType],
     env: &mut TypeEnv,
-) -> String {
+) -> Result<String, CompileError> {
     let mangled = env::mangle_name(base_name, type_args);
     if env.classes.contains_key(&mangled) {
-        return mangled;
+        return Ok(mangled);
     }
     let gen_info = env.generic_classes.get(base_name)
         .unwrap_or_else(|| panic!("ICE: unknown generic class '{base_name}'"))
@@ -541,6 +548,31 @@ pub(crate) fn ensure_generic_class_instantiated(
         .collect();
     if let Some(info) = env.classes.get_mut(&mangled) {
         info.fields = concrete_fields;
+    }
+    // Resolve generic-trait impl clauses (`class Box<V> impl T<V>`) for this
+    // instantiation: substitute the class's type arguments into the clause's
+    // type args and stamp/register the concrete trait
+    let mut all_impl_traits = gen_info.impl_traits.clone();
+    if !gen_info.generic_impl_traits.is_empty() {
+        let te_bindings: Vec<(String, crate::parser::ast::TypeExpr)> = bindings
+            .iter()
+            .filter_map(|(k, v)| {
+                crate::generic_traits::pluto_type_to_type_expr(v).map(|te| (k.clone(), te))
+            })
+            .collect();
+        let b: HashMap<&str, &crate::parser::ast::TypeExpr> =
+            te_bindings.iter().map(|(k, v)| (k.as_str(), v)).collect();
+        for (base, te_args) in &gen_info.generic_impl_traits {
+            let mut args = te_args.clone();
+            for a in &mut args {
+                crate::generic_traits::subst_te(a, &b);
+            }
+            let trait_mangled = ensure_generic_trait_instantiated(base, &args, env)?;
+            all_impl_traits.push(trait_mangled);
+        }
+        if let Some(info) = env.classes.get_mut(&mangled) {
+            info.impl_traits = all_impl_traits.clone();
+        }
     }
     // Also register concrete method signatures
     // Need to substitute self type as well (it references the base class name)
@@ -570,7 +602,7 @@ pub(crate) fn ensure_generic_class_instantiated(
         });
     }
     // Register default trait methods for the concrete class
-    for trait_name in &gen_info.impl_traits {
+    for trait_name in &all_impl_traits {
         if let Some(trait_info) = env.traits.get(trait_name).cloned() {
             for (method_name, trait_sig) in &trait_info.methods {
                 if !gen_info.methods.contains(method_name) && trait_info.default_methods.contains(method_name) {
@@ -606,7 +638,7 @@ pub(crate) fn ensure_generic_class_instantiated(
         kind: InstKind::Class(base_name.to_string()),
         type_args: type_args.to_vec(),
     });
-    mangled
+    Ok(mangled)
 }
 
 pub(crate) fn ensure_generic_enum_instantiated(
@@ -654,4 +686,75 @@ pub(crate) fn ensure_generic_enum_instantiated(
         type_args: type_args.to_vec(),
     });
     mangled
+}
+
+/// Instantiate a generic trait template with concrete type-argument
+/// expressions, registering the stamped trait in the env and queueing its
+/// AST decl for monomorphize to add to the program.
+pub(crate) fn ensure_generic_trait_instantiated(
+    base: &str,
+    type_args: &[crate::span::Spanned<crate::parser::ast::TypeExpr>],
+    env: &mut TypeEnv,
+) -> Result<String, CompileError> {
+    use crate::parser::ast::TypeExpr;
+
+    let template = env.generic_trait_decls.get(base).cloned().ok_or_else(|| {
+        CompileError::type_err(
+            format!("unknown generic trait '{base}'"),
+            crate::span::Span::dummy(),
+        )
+    })?;
+    if type_args.len() != template.type_params.len() {
+        return Err(CompileError::type_err(
+            format!(
+                "trait '{}' expects {} type arguments, got {}",
+                base,
+                template.type_params.len(),
+                type_args.len()
+            ),
+            type_args.first().map(|a| a.span).unwrap_or_else(crate::span::Span::dummy),
+        ));
+    }
+    // Bounds: the argument must name a type that implements the bound trait
+    for (param, bounds) in &template.type_param_bounds {
+        let Some(idx) = template.type_params.iter().position(|tp| &tp.node == param) else {
+            continue;
+        };
+        let arg = &type_args[idx];
+        for bound in bounds {
+            let satisfied = match &arg.node {
+                TypeExpr::Named(n) => {
+                    env.class_implements_trait(n, &bound.node)
+                        || env
+                            .generic_classes
+                            .get(n)
+                            .is_some_and(|g| g.impl_traits.iter().any(|t| t == &bound.node))
+                }
+                TypeExpr::Generic { name, .. } => env
+                    .generic_classes
+                    .get(name)
+                    .is_some_and(|g| g.impl_traits.iter().any(|t| t == &bound.node)),
+                _ => false,
+            };
+            if !satisfied {
+                return Err(CompileError::type_err(
+                    format!(
+                        "type argument for '{}' of trait '{}' does not satisfy trait bound '{}'",
+                        param, base, bound.node
+                    ),
+                    arg.span,
+                ));
+            }
+        }
+    }
+
+    let (decl, mangled) = crate::generic_traits::stamp(&template, type_args)?;
+    if env.traits.contains_key(&mangled) {
+        return Ok(mangled);
+    }
+    super::register::register_trait_skeleton(&decl, env)?;
+    super::register::resolve_trait_signatures_for(&decl, env)?;
+    env.pending_trait_decls
+        .push(crate::span::Spanned::new(decl, crate::span::Span::dummy()));
+    Ok(mangled)
 }

@@ -1298,7 +1298,7 @@ fn infer_struct_lit(
             .collect::<Result<Vec<_>, _>>()?;
         // Validate type bounds
         validate_type_bounds(&gen_info.type_params, &resolved_args, &gen_info.type_param_bounds, env, span, &name.node)?;
-        let mangled = ensure_generic_class_instantiated(&name.node, &resolved_args, env);
+        let mangled = ensure_generic_class_instantiated(&name.node, &resolved_args, env)?;
         env.generic_rewrites.insert((span.start, span.end), mangled.clone());
         let ci = env.classes.get(&mangled)
             .expect("generic class should be registered after instantiation")

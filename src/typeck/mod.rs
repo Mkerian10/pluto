@@ -13,6 +13,7 @@ mod templates;
 pub(crate) use check::check_function;
 pub(crate) use register::check_trait_conformance;
 pub(crate) use resolve::resolve_type_for_monomorphize;
+pub(crate) use resolve::ensure_generic_trait_instantiated;
 
 use crate::diagnostics::{CompileError, CompileWarning, WarningKind};
 use crate::parser::ast::Program;
@@ -131,6 +132,11 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     crate::concurrency::infer_synchronization(program, &mut env);
 
     let warnings = generate_warnings(&env, program);
+    // Errors deferred from infallible resolution paths
+    if !env.pending_errors.is_empty() {
+        return Err(env.pending_errors.remove(0));
+    }
+
     Ok((env, warnings))
 }
 

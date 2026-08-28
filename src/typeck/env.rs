@@ -60,6 +60,9 @@ pub struct GenericClassInfo {
     pub methods: Vec<String>,
     pub method_sigs: HashMap<String, FuncSig>,  // method_name → sig (may contain TypeParam)
     pub impl_traits: Vec<String>,
+    /// Generic-trait impl clauses (`class Box<V> impl T<V>`): base trait name
+    /// plus raw type-argument expressions, resolved per class instantiation.
+    pub generic_impl_traits: Vec<(String, Vec<crate::span::Spanned<crate::parser::ast::TypeExpr>>)>,
     pub mut_self_methods: HashSet<String>,
     pub lifecycle: Lifecycle,
 }
@@ -158,6 +161,15 @@ pub struct TypeEnv {
     pub builtins: HashSet<String>,
     pub classes: HashMap<String, ClassInfo>,
     pub traits: HashMap<String, TraitInfo>,
+    /// Generic trait templates (AST), instantiated on demand by
+    /// class-instantiation-time impl resolution (see generic_traits.rs).
+    pub generic_trait_decls: HashMap<String, crate::parser::ast::TraitDecl>,
+    /// Trait decls stamped during type checking that monomorphize must add
+    /// to the program AST (conformance and codegen read them there).
+    pub pending_trait_decls: Vec<crate::span::Spanned<crate::parser::ast::TraitDecl>>,
+    /// Errors raised on infallible resolution paths (resolve_generic_instances),
+    /// surfaced at the end of type checking.
+    pub pending_errors: Vec<crate::diagnostics::CompileError>,
     pub enums: HashMap<String, EnumInfo>,
     pub errors: HashMap<String, ErrorInfo>,
     pub extern_fns: HashSet<String>,
@@ -320,6 +332,9 @@ impl TypeEnv {
             builtins,
             classes: HashMap::new(),
             traits: HashMap::new(),
+            generic_trait_decls: HashMap::new(),
+            pending_trait_decls: Vec::new(),
+            pending_errors: Vec::new(),
             enums: HashMap::new(),
             errors: HashMap::new(),
             extern_fns: HashSet::new(),

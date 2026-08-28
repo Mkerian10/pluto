@@ -67,6 +67,14 @@ impl VisitMut for SpanOffsetter {
 /// Monomorphize generic items: instantiate concrete copies, type-check their bodies,
 /// rewrite call sites via the rewrite map, then remove generic templates.
 pub fn monomorphize(program: &mut Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    // Traits stamped during type checking (generic-class impls of generic
+    // traits) join the program so conformance and codegen can see them
+    for decl in std::mem::take(&mut env.pending_trait_decls) {
+        if !program.traits.iter().any(|t| t.node.name.node == decl.node.name.node) {
+            program.traits.push(decl);
+        }
+    }
+
     // Phase 1: Instantiate generic bodies (fixed-point loop)
     let mut processed: HashSet<Instantiation> = HashSet::new();
     let mut iteration = 0;
@@ -119,6 +127,7 @@ pub fn monomorphize(program: &mut Program, env: &mut TypeEnv) -> Result<(), Comp
     program.functions.retain(|f| f.node.type_params.is_empty());
     program.classes.retain(|c| c.node.type_params.is_empty());
     program.enums.retain(|e| e.node.type_params.is_empty());
+    program.traits.retain(|t| t.node.type_params.is_empty());
 
     Ok(())
 }
@@ -196,6 +205,25 @@ fn instantiate_class(
     class.type_params.clear();
     substitute_in_class(&mut class, &bindings);
     offset_class_spans(&mut class, span_offset);
+
+    // Generic-trait impl clauses now have concrete arguments — rewrite each
+    // to its instantiated trait, stamping the decl if this is the first use
+    for r in &mut class.impl_traits {
+        if r.type_args.is_empty() {
+            continue;
+        }
+        let trait_mangled =
+            crate::typeck::ensure_generic_trait_instantiated(&r.name.node, &r.type_args, env)?;
+        if !program.traits.iter().any(|t| t.node.name.node == trait_mangled) {
+            for decl in std::mem::take(&mut env.pending_trait_decls) {
+                if !program.traits.iter().any(|t| t.node.name.node == decl.node.name.node) {
+                    program.traits.push(decl);
+                }
+            }
+        }
+        r.name.node = trait_mangled;
+        r.type_args.clear();
+    }
 
     // Add to program (preserve template's file_id for DeclKeyMap)
     let spanned_class = Spanned::new(class.clone(), Span::with_file(
@@ -414,6 +442,12 @@ fn substitute_in_class(class: &mut ClassDecl, bindings: &HashMap<String, TypeExp
     }
     for method in &mut class.methods {
         substitute_in_function(&mut method.node, bindings);
+    }
+    // Generic-trait impl clauses (`impl T<V>`) substitute their arguments too
+    for r in &mut class.impl_traits {
+        for ta in &mut r.type_args {
+            substitute_in_type_expr(&mut ta.node, bindings);
+        }
     }
 }
 

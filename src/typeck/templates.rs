@@ -179,7 +179,7 @@ fn check_class_template(class: &ClassDecl, env: &mut TypeEnv) -> Result<(), Comp
     // through the ordinary eager-instantiation path. Self-referencing types in
     // method bodies (`Box<T>` inside `class Box<T>`) substitute to `Box<%T>`
     // and resolve to this same instance, so they unify with `self` naturally.
-    let mangled = ensure_generic_class_instantiated(name, &skolem_args, env);
+    let mangled = ensure_generic_class_instantiated(name, &skolem_args, env)?;
     let bindings = build_type_expr_bindings(&type_params, &skolem_args);
 
     let mut result = Ok(());
