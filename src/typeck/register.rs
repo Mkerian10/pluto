@@ -987,6 +987,15 @@ pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeE
                         m.name.span,
                     ));
                 }
+                // Verify main takes no parameters beyond self — the synthetic
+                // entry point has nothing to pass (previously reached codegen
+                // and died in the Cranelift verifier)
+                if m.params.len() > 1 {
+                    return Err(CompileError::type_err(
+                        "app main method must not take parameters beyond 'self'".to_string(),
+                        m.params[1].name.span,
+                    ));
+                }
             }
 
             let mut param_types = Vec::new();
@@ -1166,6 +1175,51 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
     }
     for stage_spanned in &program.stages {
         excluded_names.insert(stage_spanned.node.name.node.clone());
+    }
+
+    // Injected dependencies must be class types: DI wires class singletons,
+    // and anything else was previously dropped from the graph and zero-filled
+    // at runtime (an int dep read 0, an enum dep held an invalid value)
+    for (class_name, class_info) in &env.classes {
+        if excluded_names.contains(class_name) {
+            continue;
+        }
+        for (fname, ty, inj) in &class_info.fields {
+            if *inj && !matches!(ty, PlutoType::Class(_)) {
+                let span = program
+                    .classes
+                    .iter()
+                    .find(|c| &c.node.name.node == class_name)
+                    .and_then(|c| {
+                        c.node.fields.iter().find(|f| &f.name.node == fname).map(|f| f.name.span)
+                    })
+                    .unwrap_or_else(crate::span::Span::dummy);
+                return Err(CompileError::type_err(
+                    format!(
+                        "injected dependency '{}' of class '{}' must be a class type, found {}",
+                        fname, class_name, ty
+                    ),
+                    span,
+                ));
+            }
+        }
+    }
+    if let Some(app_spanned) = &program.app {
+        for field in &app_spanned.node.inject_fields {
+            if field.is_remote || field.is_ambient {
+                continue;
+            }
+            let ty = resolve_type(&field.ty, env)?;
+            if !matches!(ty, PlutoType::Class(_)) {
+                return Err(CompileError::type_err(
+                    format!(
+                        "injected dependency '{}' of app '{}' must be a class type, found {}",
+                        field.name.node, app_spanned.node.name.node, ty
+                    ),
+                    field.name.span,
+                ));
+            }
+        }
     }
 
     for (class_name, class_info) in &env.classes {
@@ -1378,9 +1432,12 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
         while let Some(node) = queue.pop_front() {
             order.push(node.clone());
             // For each class that depends on `node`, decrement its in_degree
+            // once per edge — two deps of the same type are two edges, and
+            // decrementing once left the degree stuck (false cycle report)
             for (class, deps) in &graph {
-                if deps.contains(&node) && let Some(deg) = in_degree2.get_mut(class) {
-                    *deg -= 1;
+                let edges = deps.iter().filter(|d| **d == node).count();
+                if edges > 0 && let Some(deg) = in_degree2.get_mut(class) {
+                    *deg -= edges;
                     if *deg == 0 {
                         queue.push_back(class.clone());
                     }

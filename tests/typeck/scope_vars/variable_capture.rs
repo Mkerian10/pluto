@@ -29,15 +29,15 @@ fn nested_capture() { compile_should_fail_with(r#"fn main(){let f=()=>{let x=1 l
 
 // Capture self outside method
 #[test]
-fn capture_self() { compile_should_fail_with(r#"fn main(){let f=()=>self.x}"#, ""); }
+fn capture_self() { compile_should_fail_with(r#"fn main(){let f=()=>self.x}"#, "undefined variable 'self'"); }
 
 // Capture parameter
 #[test]
-fn capture_param() { compile_should_fail_with(r#"fn f(x:int){let g=()=>y} fn main(){}"#, ""); }
+fn capture_param() { compile_should_fail_with(r#"fn f(x:int){let g=()=>y} fn main(){}"#, "undefined variable 'y'"); }
 
 // Capture across functions
 #[test]
-fn capture_cross_function() { compile_should_fail_with(r#"fn f(){let x=1} fn g(){let h=()=>x} fn main(){}"#, ""); }
+fn capture_cross_function() { compile_should_fail_with(r#"fn f(){let x=1} fn g(){let h=()=>x} fn main(){}"#, "undefined variable 'x'"); }
 
 // Capture with type error
 #[test]

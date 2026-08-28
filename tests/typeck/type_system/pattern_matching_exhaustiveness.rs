@@ -5,19 +5,19 @@ use common::compile_should_fail_with;
 
 // Missing enum variant
 #[test]
-fn missing_enum_variant() { compile_should_fail_with(r#"enum E{A B C} fn main(){match E.A{E.A{}E.B{}}}"#, ""); }
+fn missing_enum_variant() { compile_should_fail_with(r#"enum E{A B C} fn main(){match E.A{E.A{}E.B{}}}"#, "non-exhaustive match: missing variant 'C'"); }
 
 // Duplicate match arms
 #[test]
-fn duplicate_match_arms() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{E.A{}E.A{}E.B{}}}"#, ""); }
+fn duplicate_match_arms() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{E.A{}E.A{}E.B{}}}"#, "duplicate match arm for variant 'A'"); }
 
 // Match on wrong type
 #[test]
-fn match_wrong_type() { compile_should_fail_with(r#"enum E{A B} fn main(){match 1{E.A{}E.B{}}}"#, ""); }
+fn match_wrong_type() { compile_should_fail_with(r#"enum E{A B} fn main(){match 1{E.A{}E.B{}}}"#, "match requires enum type, found int"); }
 
 // Match arm type mismatch
 #[test]
-fn match_arm_type_mismatch() { compile_should_fail_with(r#"enum E{A B} fn f()int{match E.A{E.A{return 1}E.B{return "hi"}}} fn main(){}"#, ""); }
+fn match_arm_type_mismatch() { compile_should_fail_with(r#"enum E{A B} fn f()int{match E.A{E.A{return 1}E.B{return "hi"}}} fn main(){}"#, "return type mismatch: expected int, found string"); }
 
 // Match binding type error
 #[test]
@@ -29,7 +29,7 @@ fn match_generic_wrong_type() { compile_should_fail_with(r#"enum Opt<T>{Some{val
 
 // Nested match exhaustiveness
 #[test]
-fn nested_match_exhaust() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{E.A{match E.B{E.A{}}}E.B{}}}"#, ""); }
+fn nested_match_exhaust() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{E.A{match E.B{E.A{}}}E.B{}}}"#, "non-exhaustive match: missing variant 'B'"); }
 
 // Match arm shadowing
 #[test]
@@ -41,4 +41,4 @@ fn match_non_enum() { compile_should_fail_with(r#"class C{x:int} fn main(){match
 
 // Match unreachable arm
 #[test]
-fn match_unreachable_arm() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{E.A{}E.B{}E.A{}}}"#, ""); }
+fn match_unreachable_arm() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{E.A{}E.B{}E.A{}}}"#, "duplicate match arm for variant 'A'"); }

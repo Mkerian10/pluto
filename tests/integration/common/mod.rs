@@ -61,6 +61,13 @@ pub fn compile_should_fail_with(source: &str, expected_msg: &str) {
         Ok(_) => panic!("Compilation should have failed"),
         Err(e) => {
             let msg = e.to_string();
+            // Audit mode: an empty expectation asserts nothing beyond
+            // "some error occurred" — run with PLUTO_AUDIT_VACUOUS=1 to
+            // fail such tests with the actual error, exposing tests that
+            // pass for the wrong reason (see the vacuous-test audit).
+            if expected_msg.is_empty() && std::env::var("PLUTO_AUDIT_VACUOUS").is_ok() {
+                panic!("VACUOUS-AUDIT: {}", msg);
+            }
             assert!(
                 msg.contains(expected_msg),
                 "Expected error containing '{}', got: {}",

@@ -18,7 +18,7 @@ fn app_no_main() { compile_should_fail_with(r#"app MyApp{fn helper(self){}}"#, "
 
 // App main wrong return type
 #[test]
-fn app_main_wrong_return() { compile_should_fail_with(r#"app MyApp{fn main(self)int{return 1}}"#, ""); }
+fn app_main_wrong_return() { compile_should_fail_with(r#"app MyApp{fn main(self)int{return 1}}"#, "app main method must not have a return type"); }
 
 // App main with parameters
 #[test]
@@ -26,7 +26,7 @@ fn app_main_with_params() { compile_should_fail_with(r#"app MyApp{fn main(self,x
 
 // App main missing self
 #[test]
-fn app_main_no_self() { compile_should_fail_with(r#"app MyApp{fn main(){}}"#, ""); }
+fn app_main_no_self() { compile_should_fail_with(r#"app MyApp{fn main(){}}"#, "app main method must take 'self' as first parameter"); }
 
 // App with fields (not allowed)
 #[test]

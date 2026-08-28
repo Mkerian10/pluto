@@ -45,7 +45,11 @@ fn concurrent_method_mut() { compile_should_fail_with(r#"class C{x:int} fn inc(m
 
 // Task with mutable parameter
 #[test]
-fn task_mut_param() { compile_should_fail_with(r#"fn task(mut x:int){x=x+1} fn main(){spawn task(0)}"#, ""); }
+fn task_mut_param() {
+    // Spawning a fn with a mut param is legal (capture by value);
+    // discarding the handle is the error
+    compile_should_fail_with(r#"fn task(mut x:int){x=x+1} fn main(){spawn task(0)}"#, "Task handle must be used");
+}
 
 // Concurrent channel send/receive
 #[test]

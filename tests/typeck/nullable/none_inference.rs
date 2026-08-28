@@ -77,7 +77,7 @@ fn map_value_none_no_type() {
 // None in ternary-like
 // This test already passes - correctly accepts none in else branch
 #[test]
-fn none_ternary_mismatch() { compile_should_fail_with(r#"fn main(){let x=if true{42}else{none}}"#, ""); }
+fn none_ternary_mismatch() { compile_should_fail_with(r#"fn main(){let x=if true{42}else{none}}"#, "if-expression branches have incompatible types: then-branch has type int, else-branch has type void?"); }
 
 // Multiple nones
 #[test]

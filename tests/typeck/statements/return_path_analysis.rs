@@ -21,7 +21,7 @@ fn if_only_one_branch_returns() { compile_should_fail_with(r#"fn f()int{if true{
 #[test]
 fn match_not_all_return() { compile_should_fail_with(r#"enum E{A B} fn f()int{match E.A{E.A{return 1}E.B{let x=2}}}"#, "missing return"); }
 #[test]
-fn match_missing_arm() { compile_should_fail_with(r#"enum E{A B} fn f()int{match E.A{E.A{return 1}}}"#, ""); }
+fn match_missing_arm() { compile_should_fail_with(r#"enum E{A B} fn f()int{match E.A{E.A{return 1}}}"#, "non-exhaustive match: missing variant 'B'"); }
 
 // While loop doesn't guarantee return
 #[test]

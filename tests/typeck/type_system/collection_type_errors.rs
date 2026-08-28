@@ -5,7 +5,7 @@ use common::compile_should_fail_with;
 
 // Array element type mismatch
 #[test]
-fn array_elem_type_mismatch() { compile_should_fail_with(r#"fn main(){let arr:Array<int>=[1,2,"hi"]}"#, ""); }
+fn array_elem_type_mismatch() { compile_should_fail_with(r#"fn main(){let arr:[int]=[1,2,"hi"]}"#, "array element type mismatch"); }
 
 // Map key type mismatch
 #[test]
@@ -21,19 +21,19 @@ fn set_elem_type_mismatch() { compile_should_fail_with(r#"fn main(){let s:Set<in
 
 // Array generic wrong type arg
 #[test]
-fn array_generic_wrong() { compile_should_fail_with(r#"fn main(){let arr:Array<string>=[1,2,3]}"#, ""); }
+fn array_generic_wrong() { compile_should_fail_with(r#"fn main(){let arr:[string]=[1,2,3]}"#, "type mismatch"); }
 
 // Map with non-hashable key
 #[test]
-fn map_non_hashable_key() { compile_should_fail_with(r#"class C{x:int} fn main(){let m=Map<C,int>{}}"#, ""); }
+fn map_non_hashable_key() { compile_should_fail_with(r#"class C{x:int} fn main(){let m=Map<C,int>{}}"#, "type C cannot be used as a map/set key (must be int, float, bool, string, byte, or enum)"); }
 
 // Set with non-hashable element
 #[test]
-fn set_non_hashable_elem() { compile_should_fail_with(r#"class C{x:int} fn main(){let s=Set<C>{}}"#, ""); }
+fn set_non_hashable_elem() { compile_should_fail_with(r#"class C{x:int} fn main(){let s=Set<C>{}}"#, "type C cannot be used as a map/set key (must be int, float, bool, string, byte, or enum)"); }
 
 // Nested array type mismatch
 #[test]
-fn nested_array_mismatch() { compile_should_fail_with(r#"fn main(){let arr:Array<Array<int>>=[[1,2],[3,"hi"]]}"#, ""); }
+fn nested_array_mismatch() { compile_should_fail_with(r#"fn main(){let arr:[[int]]=[[1,2],[3,"hi"]]}"#, "array element type mismatch"); }
 
 // Map with array values wrong type
 #[test]
@@ -61,4 +61,4 @@ fn array_concat_mismatch() { compile_should_fail_with(r#"fn main(){let a1=[1,2] 
 
 // Collection in generic wrong type
 #[test]
-fn collection_generic_mismatch() { compile_should_fail_with(r#"class Box<T>{val:T} fn main(){let b:Box<Array<int>>=Box{val:["hi"]}}"#, ""); }
+fn collection_generic_mismatch() { compile_should_fail_with(r#"class Box<T>{val:T} fn main(){let b:Box<[int]>=Box<[int]>{val:["hi"]}}"#, "type mismatch"); }

@@ -89,7 +89,7 @@ fn double<T>(x: T) T {
 }
 fn main() {}
 "#,
-        "",
+        "operator not supported for type T",
     );
 }
 
@@ -102,7 +102,7 @@ fn shout<T>(x: T) string {
 }
 fn main() {}
 "#,
-        "",
+        "class '%T' has no method 'to_string'",
     );
 }
 
@@ -154,7 +154,7 @@ fn loose<T>(x: T) T {
 }
 fn main() {}
 "#,
-        "",
+        "type T does not satisfy bound 'U: Marker' required by 'strict'",
     );
 }
 

@@ -528,6 +528,17 @@ pub(crate) fn ensure_generic_class_instantiated(
     let gen_info = env.generic_classes.get(base_name)
         .unwrap_or_else(|| panic!("ICE: unknown generic class '{base_name}'"))
         .clone();
+    // Central bound check: type mentions in field and bracket-dep positions
+    // reach here without a caller-side validation (skolem classes implement
+    // their declared bounds, so template checking passes this too)
+    validate_type_bounds(
+        &gen_info.type_params,
+        type_args,
+        &gen_info.type_param_bounds,
+        env,
+        crate::span::Span::dummy(),
+        base_name,
+    )?;
     let bindings: HashMap<String, PlutoType> = gen_info.type_params.iter()
         .zip(type_args.iter())
         .map(|(k, v)| (k.clone(), v.clone()))

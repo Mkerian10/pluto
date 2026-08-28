@@ -29,11 +29,11 @@ fn function_shadows_global() { compile_should_fail_with("fn x() int{\nreturn 1\n
 
 // Class shadows function (declaration-vs-declaration, #174)
 #[test]
-fn class_shadows_function() { compile_should_fail_with("fn C(){}\nclass C{\nv:int\n}\nfn main(){}", ""); }
+fn class_shadows_function() { compile_should_fail_with("fn C(){}\nclass C{\nv:int\n}\nfn main(){}", "function 'C' is already declared as a class"); }
 
 // Type param shadows class (declaration-vs-declaration, #174)
 #[test]
-fn type_param_shadows_class() { compile_should_fail_with("class T{\nv:int\n}\nfn f<T>(x:T){}\nfn main(){}", ""); }
+fn type_param_shadows_class() { compile_should_fail_with("class T{\nv:int\n}\nfn f<T>(x:T){}\nfn main(){}", "shadows class"); }
 
 // Multiple shadow levels
 #[test]
@@ -75,11 +75,11 @@ fn variant_shadows_var() { compile_should_fail_with("enum E{\nA\n}\nfn main(){\n
 
 // Error type shadows class (declaration-vs-declaration, #174)
 #[test]
-fn error_shadows_class() { compile_should_fail_with("class E{\nv:int\n}\nerror E{}\nfn main(){}", ""); }
+fn error_shadows_class() { compile_should_fail_with("class E{\nv:int\n}\nerror E{}\nfn main(){}", "class 'E' is already declared as an error"); }
 
 // Trait shadows enum (declaration-vs-declaration, #174)
 #[test]
-fn trait_shadows_enum() { compile_should_fail_with("enum T{\nA\n}\ntrait T{\nfn foo(self)\n}\nfn main(){}", ""); }
+fn trait_shadows_enum() { compile_should_fail_with("enum T{\nA\n}\ntrait T{\nfn foo(self)\n}\nfn main(){}", "enum 'T' is already declared as a trait"); }
 
 // Generic shadow in nested function (declaration-vs-declaration, #174)
 #[test]

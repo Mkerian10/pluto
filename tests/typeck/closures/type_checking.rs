@@ -50,7 +50,7 @@ fn body_type_error() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x+"h
 
 // Closure parameter used incorrectly
 #[test]
-fn param_used_wrong() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x.len()}"#, ""); }
+fn param_used_wrong() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x.len()}"#, "int has no method 'len'"); }
 
 // Nested closure type mismatch
 #[test]

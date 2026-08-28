@@ -260,7 +260,7 @@ fn main() {
     }
 }
 "#,
-        "",
+        "operand type mismatch: int? vs int",
     );
 }
 
@@ -295,6 +295,6 @@ fn main() {
     print(x + 1)
 }
 "#,
-        "",
+        "operand type mismatch: int? vs int",
     );
 }

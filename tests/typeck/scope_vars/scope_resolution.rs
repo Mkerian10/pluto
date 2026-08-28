@@ -5,7 +5,7 @@ use common::compile_should_fail_with;
 
 // Ambiguous name resolution
 #[test]
-fn ambiguous_name() { compile_should_fail_with(r#"class A{} fn A(){} fn main(){A}"#, ""); }
+fn ambiguous_name() { compile_should_fail_with(r#"class A{} fn A(){} fn main(){A}"#, "function 'A' is already declared as a class"); }
 
 // Cross-scope reference
 #[test]
@@ -30,7 +30,7 @@ fn nested_scope_lookup() {
 
 // Function scope vs class scope
 #[test]
-fn function_class_scope() { compile_should_fail_with(r#"class C{x:int} fn foo(){let y=x} fn main(){}"#, ""); }
+fn function_class_scope() { compile_should_fail_with(r#"class C{x:int} fn foo(){let y=x} fn main(){}"#, "undefined variable 'x'"); }
 
 // Trait method scope
 #[test]
@@ -56,7 +56,7 @@ fn block_scope_lookup() { compile_should_fail_with(r#"fn main(){{let x=1}{let y=
 
 // Method self scope
 #[test]
-fn method_self_scope() { compile_should_fail_with(r#"class C{x:int} fn foo(){let y=self.x} fn main(){}"#, ""); }
+fn method_self_scope() { compile_should_fail_with(r#"class C{x:int} fn foo(){let y=self.x} fn main(){}"#, "undefined variable 'self'"); }
 
 // App scope isolation
 #[test]

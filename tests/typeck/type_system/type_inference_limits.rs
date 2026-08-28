@@ -9,15 +9,15 @@ fn ambiguous_inference() { compile_should_fail_with(r#"fn main(){let x=none}"#, 
 
 // Cannot infer from empty array
 #[test]
-fn empty_array_no_inference() { compile_should_fail_with(r#"fn main(){let arr=[]}"#, ""); }
+fn empty_array_no_inference() { compile_should_fail_with(r#"fn main(){let arr=[]}"#, "cannot infer type of empty array literal; add a type annotation"); }
 
 // Cannot infer from empty map
 #[test]
-fn empty_map_no_inference() { compile_should_fail_with(r#"fn main(){let m=Map{}}"#, ""); }
+fn empty_map_no_inference() { compile_should_fail_with(r#"fn main(){let m=Map{}}"#, "unknown class 'Map'"); }
 
 // Cannot infer from empty set
 #[test]
-fn empty_set_no_inference() { compile_should_fail_with(r#"fn main(){let s=Set{}}"#, ""); }
+fn empty_set_no_inference() { compile_should_fail_with(r#"fn main(){let s=Set{}}"#, "unknown class 'Set'"); }
 
 // Conflicting type inference
 #[test]
@@ -34,7 +34,7 @@ fn generic_inference_ambig() { compile_should_fail_with(r#"fn id<T>(x:T)T{return
 
 // Inference with multiple constraints
 #[test]
-fn multi_constraint_inference() { compile_should_fail_with(r#"fn f<T>(x:T,y:T)T{return x} fn main(){let x=f(1,"hi")}"#, ""); }
+fn multi_constraint_inference() { compile_should_fail_with(r#"fn f<T>(x:T,y:T)T{return x} fn main(){let x=f(1,"hi")}"#, "cannot infer type parameters for 'f'"); }
 
 // Inference through trait method
 #[test]
@@ -59,7 +59,7 @@ fn error_inference_ambig() { compile_should_fail_with(r#"error E1{} error E2{} f
 
 // Inference through spawn
 #[test]
-fn spawn_inference() { compile_should_fail_with(r#"fn task<T>(x:T)T{return x} fn main(){let t=spawn task()}"#, ""); }
+fn spawn_inference() { compile_should_fail_with(r#"fn task<T>(x:T)T{return x} fn main(){let t=spawn task()}"#, "function 'task' expects 1 arguments, got 0"); }
 
 // Inference with circular dependency
 #[test]
