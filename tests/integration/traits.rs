@@ -15455,3 +15455,127 @@ fn generic_trait_bound_satisfied() {
     );
     assert_eq!(out.trim(), "w");
 }
+
+// ── Default methods in generic traits ────────────────────────────────────
+
+#[test]
+fn generic_trait_default_method_inherited() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Conv<U> {
+            fn base(self) U
+
+            fn twice(self) U {
+                return self.base()
+            }
+        }
+        class A impl Conv<int> {
+            x: int
+
+            fn base(self) int {
+                return self.x
+            }
+        }
+        fn main() {
+            print(A { x: 4 }.twice())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "4");
+}
+
+#[test]
+fn generic_trait_default_method_overridden() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Conv<U> {
+            fn base(self) U
+
+            fn label(self) string {
+                return "default"
+            }
+        }
+        class A impl Conv<int> {
+            x: int
+
+            fn base(self) int {
+                return self.x
+            }
+
+            fn label(self) string {
+                return "custom"
+            }
+        }
+        class B impl Conv<int> {
+            y: int
+
+            fn base(self) int {
+                return self.y
+            }
+        }
+        fn main() {
+            print(A { x: 1 }.label())
+            print(B { y: 2 }.label())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "custom\ndefault");
+}
+
+#[test]
+fn generic_trait_default_method_uses_type_param() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Maker<U> {
+            fn one(self) U
+
+            fn pair(self) [U] {
+                let arr: [U] = [self.one(), self.one()]
+                return arr
+            }
+        }
+        class A impl Maker<int> {
+            x: int
+
+            fn one(self) int {
+                return self.x
+            }
+        }
+        fn main() {
+            let p = A { x: 9 }.pair()
+            print(p[0])
+            print(p[1])
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "9\n9");
+}
+
+#[test]
+fn generic_trait_default_method_via_trait_object() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Conv<U> {
+            fn base(self) U
+
+            fn twice(self) U {
+                return self.base()
+            }
+        }
+        class A impl Conv<int> {
+            x: int
+
+            fn base(self) int {
+                return self.x
+            }
+        }
+        fn go(c: Conv<int>) int {
+            return c.twice()
+        }
+        fn main() {
+            print(go(A { x: 6 }))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "6");
+}

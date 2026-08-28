@@ -9,8 +9,10 @@
 //! downstream (registration, conformance, vtables, dispatch) sees ordinary
 //! traits.
 //!
+//! Default method bodies are substituted along with the signatures, so a
+//! stamped trait's defaults behave like any concrete trait's.
+//!
 //! MVP limits (each rejected with a targeted error):
-//! - default method bodies in generic traits
 //! - instantiating with a class's own type parameters (`class Box<V> impl T<V>`)
 //! - type arguments other than named types and generic instances
 
@@ -121,17 +123,6 @@ fn validate_template(tr: &TraitDecl) -> Result<(), CompileError> {
             return Err(CompileError::type_err(
                 format!("type parameter '{}' is already declared in trait '{}'", tp.node, tr.name.node),
                 tp.span,
-            ));
-        }
-    }
-    for m in &tr.methods {
-        if m.body.is_some() {
-            return Err(CompileError::type_err(
-                format!(
-                    "default method '{}' in generic trait '{}' is not supported; implement it in each class",
-                    m.name.node, tr.name.node
-                ),
-                m.name.span,
             ));
         }
     }
@@ -297,12 +288,21 @@ fn instantiate(
     decl.name = Spanned::new(mangled.clone(), template.name.span);
     decl.type_params.clear();
     decl.type_param_bounds.clear();
+    let mut body_subst = BodySubst { bindings: &bindings };
     for m in &mut decl.methods {
         for p in &mut m.params {
             subst_te(&mut p.ty, &bindings);
         }
         if let Some(rt) = &mut m.return_type {
             subst_te(rt, &bindings);
+        }
+        // Default method bodies may mention type parameters in type
+        // positions (casts, literals, explicit call type args)
+        if let Some(body) = &mut m.body {
+            body_subst.visit_block_mut(body);
+        }
+        for contract in &mut m.contracts {
+            body_subst.visit_expr_mut(&mut contract.node.expr);
         }
     }
     let span = Span::new(template.name.span.start, template.name.span.end);
@@ -333,6 +333,17 @@ fn subst_te(te: &mut Spanned<TypeExpr>, bindings: &HashMap<&str, &TypeExpr>) {
             subst_te(return_type, bindings);
         }
         TypeExpr::Named(_) | TypeExpr::Qualified { .. } | TypeExpr::Infer => {}
+    }
+}
+
+/// Substitutes trait type parameters through a default method body.
+struct BodySubst<'a> {
+    bindings: &'a HashMap<&'a str, &'a TypeExpr>,
+}
+
+impl VisitMut for BodySubst<'_> {
+    fn visit_type_expr_mut(&mut self, te: &mut Spanned<TypeExpr>) {
+        subst_te(te, self.bindings);
     }
 }
 
