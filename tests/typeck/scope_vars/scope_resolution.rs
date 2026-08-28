@@ -13,11 +13,11 @@ fn cross_scope_ref() { compile_should_fail_with(r#"fn main(){if true{let x=1}els
 
 // Unqualified import
 #[test]
-fn unqualified_import() { compile_should_fail_with(r#"import math fn main(){let x=add(1,2)}"#, ""); }
+fn unqualified_import() { compile_should_fail_with(r#"import math fn main(){let x=add(1,2)}"#, "expected newline after statement"); }
 
 // Module scope confusion
 #[test]
-fn module_scope_confusion() { compile_should_fail_with(r#"import mod1 class C{} fn main(){let c=C{} let m=mod1.C{}}"#, ""); }
+fn module_scope_confusion() { compile_should_fail_with(r#"import mod1 class C{} fn main(){let c=C{} let m=mod1.C{}}"#, "expected newline after statement"); }
 
 // Nested scope lookup of an undefined name still errors at depth
 #[test]
@@ -34,11 +34,14 @@ fn function_class_scope() { compile_should_fail_with(r#"class C{x:int} fn foo(){
 
 // Trait method scope
 #[test]
-fn trait_method_scope() { compile_should_fail_with(r#"trait T{fn foo(self)int} class C{x:int} impl T{fn foo(self)int{return y}} fn main(){}"#, ""); }
+fn trait_method_scope() { compile_should_fail_with(r#"trait T{fn foo(self)int}
+class C impl T {x:int
+fn foo(self)int{return y}}
+fn main(){}"#, "undefined variable 'y'"); }
 
 // Generic scope resolution
 #[test]
-fn generic_scope() { compile_should_fail_with(r#"fn f<T>(x:T){let y:T} fn g(){let z:T} fn main(){}"#, ""); }
+fn generic_scope() { compile_should_fail_with(r#"fn f<T>(x:T){let y:T} fn g(){let z:T} fn main(){}"#, "expected =, found }"); }
 
 // Closure scope vs outer scope
 #[test]
@@ -64,8 +67,12 @@ fn app_scope() { compile_should_fail_with(r#"app MyApp{fn helper(self){let x=1} 
 
 // Enum variant scope
 #[test]
-fn enum_variant_scope() { compile_should_fail_with(r#"enum E{A{x:int}B{y:int}} fn main(){let a=E.A{x:1} let b=a.y}"#, ""); }
+fn enum_variant_scope() { compile_should_fail_with(r#"enum E{A{x:int}B{y:int}}
+fn main(){let a=E.A{x:1}
+let b=a.y}"#, "field access on non-class type E"); }
 
 // Contract scope
 #[test]
-fn contract_scope() { compile_should_fail_with(r#"class C{x:int invariant y>0} fn main(){}"#, ""); }
+fn contract_scope() { compile_should_fail_with(r#"class C{x:int
+invariant y>0}
+fn main(){}"#, "undefined variable 'y'"); }

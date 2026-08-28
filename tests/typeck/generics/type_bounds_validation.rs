@@ -116,4 +116,4 @@ fn main(){}"#, "unknown trait 'UndefinedTrait'"); }
 
 // Circular bounds
 #[test]
-fn self_referential_bound() { compile_should_fail_with(r#"trait T{} fn f<U:T>(x:U)U where U:T{return x} fn main(){}"#, ""); }
+fn self_referential_bound() { compile_should_fail_with(r#"trait T{} fn f<U:T>(x:U)U where U:T{return x} fn main(){}"#, "expected {, found identifier"); }

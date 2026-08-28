@@ -40,15 +40,15 @@ fn for_var_reassignment() {
 
 // Assign to literal
 #[test]
-fn assign_to_literal() { compile_should_fail_with(r#"fn main(){1=2}"#, ""); }
+fn assign_to_literal() { compile_should_fail_with(r#"fn main(){1=2}"#, "invalid assignment target"); }
 
 // Assign to function call result
 #[test]
-fn assign_to_call() { compile_should_fail_with(r#"fn f()int{return 1} fn main(){f()=2}"#, ""); }
+fn assign_to_call() { compile_should_fail_with(r#"fn f()int{return 1} fn main(){f()=2}"#, "invalid assignment target"); }
 
 // Assign to binary expression
 #[test]
-fn assign_to_binop() { compile_should_fail_with(r#"fn main(){let x=1 let y=2 (x+y)=3}"#, ""); }
+fn assign_to_binop() { compile_should_fail_with(r#"fn main(){let x=1 let y=2 (x+y)=3}"#, "expected newline after statement"); }
 
 // Array index assignment type mismatch
 #[test]
@@ -62,24 +62,31 @@ m["a"]="hi"}"#, "type mismatch"); }
 
 // Assign to method call result
 #[test]
-fn assign_to_method_call() { compile_should_fail_with(r#"class C{} fn foo(self)int{return 1} fn main(){let c=C{} c.foo()=2}"#, ""); }
+fn assign_to_method_call() { compile_should_fail_with(r#"class C{
+fn foo(self)int{return 1}
+}
+fn main(){let c=C{} c.foo()=2}"#, "expected newline after statement"); }
 
 // Assign to enum variant
 #[test]
-fn assign_to_enum() { compile_should_fail_with(r#"enum E{A} fn main(){E.A=2}"#, ""); }
+fn assign_to_enum() { compile_should_fail_with(r#"enum E{A} fn main(){E.A=2}"#, "invalid assignment target"); }
 
 // Assign to trait object field
 #[test]
 fn assign_trait_object_field() { compile_should_fail_with(r#"trait T{} class C{x:int} impl T fn main(){let t:T=C{x:1}
-t.x=2}"#, ""); }
+t.x=2}"#, "expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'stage', 'system', 'test', 'tests', 'extern fn', or 'extern rust', found impl"); }
 
 // Assign to self in non-mut method
 #[test]
-fn assign_self_non_mut() { compile_should_fail_with(r#"class C{x:int} fn foo(self){self.x=2} fn main(){}"#, ""); }
+fn assign_self_non_mut() { compile_should_fail_with(r#"class C{x:int
+fn foo(self){self.x=2}
+}
+fn main(){}"#, "cannot assign to 'self.x' in a non-mut method; declare 'mut self' to modify fields"); }
 
 // Assign to closure capture
 #[test]
-fn assign_capture() { compile_should_fail_with(r#"fn main(){let x=1 let f=()=>{x=2}}"#, ""); }
+fn assign_capture() { compile_should_fail_with(r#"fn main(){let x=1
+let f=()=>{x=2}}"#, "cannot assign to immutable variable 'x'"); }
 
 // Assign nullable to non-nullable
 #[test]
@@ -88,7 +95,7 @@ let y:int=x}"#, "type mismatch"); }
 
 // Assign in expression position (not statement)
 #[test]
-fn assign_in_expr() { compile_should_fail_with(r#"fn main(){let x=1 let y=(x=2)}"#, ""); }
+fn assign_in_expr() { compile_should_fail_with(r#"fn main(){let x=1 let y=(x=2)}"#, "expected newline after statement"); }
 
 // Compound assignment on undefined
 #[test]
@@ -105,7 +112,7 @@ fn array_assign_bounds() {
 
 // Assign to string index (strings are immutable)
 #[test]
-fn assign_string_index() { compile_should_fail_with(r#"fn main(){let s=\"hi\"s[0]=\"x\"}"#, ""); }
+fn assign_string_index() { compile_should_fail_with(r#"fn main(){let s="hi"s[0]="x"}"#, "expected newline after statement"); }
 
 // Assign generic type mismatch
 #[test]
@@ -115,4 +122,4 @@ b.value="hi"}"#, "expected int, found string"); }
 
 // Assign to spawn result
 #[test]
-fn assign_spawn_result() { compile_should_fail_with(r#"fn f()int{return 1} fn main(){spawn f()=2}"#, ""); }
+fn assign_spawn_result() { compile_should_fail_with(r#"fn f()int{return 1} fn main(){spawn f()=2}"#, "invalid assignment target"); }

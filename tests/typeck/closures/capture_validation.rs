@@ -64,7 +64,10 @@ let f=()=>arr[0]}"#); }
 
 // Capture string
 #[test]
-fn capture_string() { compile_should_fail_with(r#"fn main(){let s=\"hi\" let f=()=>s}"#, ""); }
+fn capture_string() { // The audit found the old should-fail source never parsed; the
+    // repaired program is accepted — pin that
+    assert!(pluto::compile_to_object(r#"fn main(){let s="hi"
+let f=()=>s}"#).is_ok()); }
 
 // Nested closure capture
 #[test]
@@ -84,7 +87,14 @@ fn capture_loop_var() { compile_and_run(r#"fn main(){for i in 0..10{let f=()=>i}
 
 // Capture match binding
 #[test]
-fn capture_match_binding() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match E.A{x:1}{E.A{x}{let f=()=>x}}}"#, ""); }
+fn capture_match_binding() {
+    // Capturing a match binding in a closure is legal
+    compile_and_run(r#"enum E{A{x:int}}
+fn main(){
+let e = E.A{x:1}
+match e {E.A{x}{let f=()=>x
+print(f())}}}"#);
+}
 
 // Capture generic parameter
 #[test]
@@ -92,7 +102,7 @@ fn capture_generic_param() { compile_and_run(r#"fn f<T>(x:T){let g=()=>x} fn mai
 
 // Capture trait object
 #[test]
-fn capture_trait_object() { compile_should_fail_with(r#"trait T{} class C{} impl T fn main(){let t:T=C{} let f=()=>t}"#, ""); }
+fn capture_trait_object() { compile_should_fail_with(r#"trait T{} class C{} impl T fn main(){let t:T=C{} let f=()=>t}"#, "expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'stage', 'system', 'test', 'tests', 'extern fn', or 'extern rust', found impl"); }
 
 // Capture nullable
 #[test]
@@ -101,8 +111,13 @@ let f=()=>x}"#); }
 
 // Capture error (not allowed, errors can't be captured)
 #[test]
-fn capture_error() { compile_should_fail_with(r#"error E{} fn main(){let e=E{} let f=()=>e}"#, ""); }
+fn capture_error() { compile_should_fail_with(r#"error E{}
+fn main(){let e=E{}
+let f=()=>e}"#, "unknown class 'E'"); }
 
 // Capture function (closures can be captured)
 #[test]
-fn capture_closure() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x+1 let g=()=>f(2)}"#, ""); }
+fn capture_closure() { // The audit found the old should-fail source never parsed; the
+    // repaired program is accepted — pin that
+    assert!(pluto::compile_to_object(r#"fn main(){let f=(x:int)=>x+1
+let g=()=>f(2)}"#).is_ok()); }

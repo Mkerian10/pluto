@@ -11,7 +11,7 @@ use common::compile_should_fail_with;
 
 // Nested empty blocks
 #[test]
-fn nested_empty_blocks() { compile_should_fail_with(r#"fn main(){{{{}}}}}"#, ""); }
+fn nested_empty_blocks() { compile_should_fail_with(r#"fn main(){{{{}}}}}"#, "unexpected token { in expression"); }
 
 // REMOVED: while_false - unreachable code is allowed
 // REMOVED: if_false - unreachable code is allowed
@@ -26,7 +26,7 @@ fn match_single_arm() { compile_should_fail_with(r#"enum E{A B} fn main(){match 
 
 // Match with wildcard only
 #[test]
-fn match_wildcard_only() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{_={}}}"#, ""); }
+fn match_wildcard_only() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{_={}}}"#, "expected ., found ="); }
 
 // REMOVED: nested_loops_breaks - nested loops with breaks are valid
 // REMOVED: empty_void_function - empty void functions are valid

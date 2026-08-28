@@ -21,11 +21,11 @@ fn empty_set_no_inference() { compile_should_fail_with(r#"fn main(){let s=Set{}}
 
 // Conflicting type inference
 #[test]
-fn conflicting_inference() { compile_should_fail_with(r#"fn main(){let x if true{x=1}else{x="hi"}}"#, ""); }
+fn conflicting_inference() { compile_should_fail_with(r#"fn main(){let x if true{x=1}else{x="hi"}}"#, "expected =, found if"); }
 
 // Inference through nested closures
 #[test]
-fn nested_closure_inference() { compile_should_fail_with(r#"fn main(){let f=()=>()=>()=>1 let x:string=f()()()}"#, ""); }
+fn nested_closure_inference() { compile_should_fail_with(r#"fn main(){let f=()=>()=>()=>1 let x:string=f()()()}"#, "expected newline after statement"); }
 
 // Generic inference ambiguity
 #[test]
@@ -38,7 +38,7 @@ fn multi_constraint_inference() { compile_should_fail_with(r#"fn f<T>(x:T,y:T)T{
 
 // Inference through trait method
 #[test]
-fn trait_method_inference() { compile_should_fail_with(r#"trait T{fn f<U>(self,x:U)U} class C{} impl T{fn f<U>(self,x:U)U{return x}} fn main(){let c=C{} let x=c.f()}"#, ""); }
+fn trait_method_inference() { compile_should_fail_with(r#"trait T{fn f<U>(self,x:U)U} class C{} impl T{fn f<U>(self,x:U)U{return x}} fn main(){let c=C{} let x=c.f()}"#, "expected (, found <"); }
 
 // Inference limit in deep nesting
 #[test]
@@ -47,15 +47,19 @@ fn deep_nesting_inference() { compile_should_fail_with(r#"fn main(){let x=[[[[[[
 
 // Cannot infer from if without else
 #[test]
-fn if_no_else_inference() { compile_should_fail_with(r#"fn main(){let x=if true{1}}"#, ""); }
+fn if_no_else_inference() { compile_should_fail_with(r#"fn main(){let x=if true{1}}"#, "expected else, found }"); }
 
 // Inference with nullable ambiguity
 #[test]
-fn nullable_inference_ambig() { compile_should_fail_with(r#"fn main(){let x:int?=none let y:string?=x}"#, ""); }
+fn nullable_inference_ambig() { compile_should_fail_with(r#"fn main(){let x:int?=none
+let y:string?=x}"#, "type mismatch: expected string?, found int?"); }
 
 // Inference with error type ambiguity
 #[test]
-fn error_inference_ambig() { compile_should_fail_with(r#"error E1{} error E2{} fn f()!E1 int{raise E1{}} fn main(){let x:!E2 int=f()}"#, ""); }
+fn error_inference_ambig() { compile_should_fail_with(r#"error E1{}
+error E2{}
+fn f()E1 int{raise E1{}}
+fn main(){let x:!E2 int=f()}"#, "expected {, found identifier"); }
 
 // Inference through spawn
 #[test]
@@ -63,4 +67,5 @@ fn spawn_inference() { compile_should_fail_with(r#"fn task<T>(x:T)T{return x} fn
 
 // Inference with circular dependency
 #[test]
-fn circular_inference() { compile_should_fail_with(r#"fn main(){let x=y let y=x}"#, ""); }
+fn circular_inference() { compile_should_fail_with(r#"fn main(){let x=y
+let y=x}"#, "undefined variable 'y'"); }

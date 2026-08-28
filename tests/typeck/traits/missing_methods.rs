@@ -125,8 +125,10 @@ fn main(){}"#, "does not implement required method"); }
 
 // Missing static method (if supported)
 #[test]
-fn missing_static_method() { compile_should_fail_with(r#"trait T{fn create()C} class C{} impl T{}
-fn main(){}"#, ""); }
+fn missing_static_method() { compile_should_fail_with(r#"trait T{fn create()C}
+class C impl T {
+}
+fn main(){}"#, "class 'C' does not implement required method 'create' from trait 'T'"); }
 
 // Multiple classes implementing same trait, one missing
 #[test]

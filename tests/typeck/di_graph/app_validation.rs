@@ -10,7 +10,7 @@ fn no_app() { compile_should_fail_with(r#"fn main(){}"#, ""); }
 
 // Multiple apps
 #[test]
-fn multiple_apps() { compile_should_fail_with(r#"app A{fn main(self){}} app B{fn main(self){}}"#, ""); }
+fn multiple_apps() { compile_should_fail_with(r#"app A{fn main(self){}} app B{fn main(self){}}"#, "duplicate app declaration"); }
 
 // App without main
 #[test]
@@ -22,7 +22,7 @@ fn app_main_wrong_return() { compile_should_fail_with(r#"app MyApp{fn main(self)
 
 // App main with parameters
 #[test]
-fn app_main_with_params() { compile_should_fail_with(r#"app MyApp{fn main(self,x:int){}}"#, ""); }
+fn app_main_with_params() { compile_should_fail_with(r#"app MyApp{fn main(self,x:int){}}"#, "app main method must not take parameters beyond 'self'"); }
 
 // App main missing self
 #[test]
@@ -30,15 +30,15 @@ fn app_main_no_self() { compile_should_fail_with(r#"app MyApp{fn main(){}}"#, "a
 
 // App with fields (not allowed)
 #[test]
-fn app_with_fields() { compile_should_fail_with(r#"app MyApp{x:int fn main(self){}}"#, ""); }
+fn app_with_fields() { compile_should_fail_with(r#"app MyApp{x:int fn main(self){}}"#, "expected fn, found identifier"); }
 
 // App implements trait (not allowed)
 #[test]
-fn app_impl_trait() { compile_should_fail_with(r#"trait T{} app MyApp impl T{fn main(self){}}"#, ""); }
+fn app_impl_trait() { compile_should_fail_with(r#"trait T{} app MyApp impl T{fn main(self){}}"#, "expected {, found impl"); }
 
 // Generic app (not allowed)
 #[test]
-fn generic_app() { compile_should_fail_with(r#"app MyApp<T>{fn main(self){}}"#, ""); }
+fn generic_app() { compile_should_fail_with(r#"app MyApp<T>{fn main(self){}}"#, "expected {, found <"); }
 
 // App name collision
 #[test]

@@ -92,7 +92,7 @@ fn assign_empty_to_typed_var() {
 
 #[test]
 fn empty_array_spread_attempt() {
-    compile_should_fail_with(r#"fn main() { let x = [1, ...[]]} }"#, "");
+    compile_should_fail_with(r#"fn main() { let x = [1, ...[]]} }"#, "unexpected token .. in expression");
 }
 
 #[test]

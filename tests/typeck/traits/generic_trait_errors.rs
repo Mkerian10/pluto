@@ -146,24 +146,24 @@ fn generic_trait_duplicate_params() {
 fn generic_trait_associated_type() {
     compile_should_fail_with(
         "trait T<U>{\n    type Output\n    fn foo(self) Output\n}\n\nfn main(){}",
-        "",
+        "expected fn, found identifier",
     );
 }
 #[test]
 fn generic_trait_default_param() {
-    compile_should_fail_with("trait T<U=int>{\n    fn foo(self) U\n}\n\nfn main(){}", "");
+    compile_should_fail_with("trait T<U=int>{\n    fn foo(self) U\n}\n\nfn main(){}", "expected ,, found =");
 }
 #[test]
 fn generic_trait_where_clause() {
     compile_should_fail_with(
         "trait Printable{\n    fn show(self) string\n}\n\ntrait T<U> where U: Printable {\n    fn foo(self) U\n}\n\nfn main(){}",
-        "",
+        "expected {, found identifier",
     );
 }
 #[test]
 fn trait_const_generic() {
     compile_should_fail_with(
         "trait T<const N: int>{\n    fn foo(self) int\n}\n\nfn main(){}",
-        "",
+        "expected ,, found identifier",
     );
 }

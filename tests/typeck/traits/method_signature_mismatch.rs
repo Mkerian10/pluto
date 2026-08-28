@@ -38,11 +38,15 @@ fn main(){}"#, "type mismatch"); }
 
 // Self parameter variations
 #[test]
-fn trait_method_mut_self_mismatch() { compile_should_fail_with(r#"trait T{fn foo(mut self)} class C{} impl T{fn foo(self){}}
-fn main(){}"#, ""); }
+fn trait_method_mut_self_mismatch() { compile_should_fail_with(r#"trait T{fn foo(mut self)}
+class C impl T {
+fn foo(self){}}
+fn main(){}"#, "method 'foo' in trait 'T' declares 'mut self', but class 'C' does not"); }
 #[test]
-fn trait_method_self_vs_mut_self() { compile_should_fail_with(r#"trait T{fn foo(self)} class C{} impl T{fn foo(mut self){}}
-fn main(){}"#, ""); }
+fn trait_method_self_vs_mut_self() { compile_should_fail_with(r#"trait T{fn foo(self)}
+class C impl T {
+fn foo(mut self){}}
+fn main(){}"#, "method 'foo' in trait 'T' declares 'self', but class 'C' declares 'mut self'"); }
 
 // Method name mismatches
 #[test]
@@ -87,10 +91,10 @@ fn main(){}"#, "expected");
 // Generic method mismatches
 #[test]
 fn trait_generic_method_missing_param() { compile_should_fail_with(r#"trait T{fn foo<U>(self,x:U)U} class C{} impl T{fn foo(self,x:int)int{return x}}
-fn main(){}"#, ""); }
+fn main(){}"#, "expected (, found <"); }
 #[test]
 fn trait_method_wrong_generic_count() { compile_should_fail_with(r#"trait T{fn foo<U>(self,x:U)U} class C{} impl T{fn foo<U,V>(self,x:U)U{return x}}
-fn main(){}"#, ""); }
+fn main(){}"#, "expected (, found <"); }
 
 // Array/collection parameter mismatches
 #[test]
@@ -120,9 +124,13 @@ fn main(){}"#, "type mismatch"); }
 
 // Extra methods in impl (should be allowed)
 #[test]
-fn impl_extra_methods_ok() { compile_should_fail_with(r#"trait T{fn foo(self)} class C{} impl T{fn foo(self){}
+fn impl_extra_methods_ok() { // The audit found the old should-fail source never parsed; the
+    // repaired program is accepted — pin that
+    assert!(pluto::compile_to_object(r#"trait T{fn foo(self)}
+class C impl T {
+fn foo(self){}
 fn bar(self){}}
-fn main(){}"#, ""); }
+fn main(){}"#).is_ok()); }
 
 // Multiple trait methods
 #[test]
@@ -151,5 +159,10 @@ fn main(){}"#, "type mismatch"); }
 
 // Trait method with contracts (if contracts affect signature)
 #[test]
-fn trait_method_contract_mismatch() { compile_should_fail_with(r#"trait T{fn foo(self)int requires true} class C{} impl T{fn foo(self)int{return 1}}
-fn main(){}"#, ""); }
+fn trait_method_contract_mismatch() { // The audit found the old should-fail source never parsed; the
+    // repaired program is accepted — pin that
+    assert!(pluto::compile_to_object(r#"trait T{fn foo(self)int
+requires true}
+class C impl T {
+fn foo(self)int{return 1}}
+fn main(){}"#).is_ok()); }

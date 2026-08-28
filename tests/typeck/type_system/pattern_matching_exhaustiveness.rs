@@ -21,11 +21,11 @@ fn match_arm_type_mismatch() { compile_should_fail_with(r#"enum E{A B} fn f()int
 
 // Match binding type error
 #[test]
-fn match_binding_type_error() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match E.A{x:1}{E.A{x}{let y:string=x}}}"#, ""); }
+fn match_binding_type_error() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match E.A{x:1}{E.A{x}{let y:string=x}}}"#, "expected ., found :"); }
 
 // Match with generic enum wrong type
 #[test]
-fn match_generic_wrong_type() { compile_should_fail_with(r#"enum Opt<T>{Some{val:T}None} fn main(){match Opt<int>.Some{val:1}{Opt<string>.Some{val}{}Opt<int>.None{}}}"#, ""); }
+fn match_generic_wrong_type() { compile_should_fail_with(r#"enum Opt<T>{Some{val:T}None} fn main(){match Opt<int>.Some{val:1}{Opt<string>.Some{val}{}Opt<int>.None{}}}"#, "expected ., found :"); }
 
 // Nested match exhaustiveness
 #[test]
@@ -33,11 +33,11 @@ fn nested_match_exhaust() { compile_should_fail_with(r#"enum E{A B} fn main(){ma
 
 // Match arm shadowing
 #[test]
-fn match_arm_shadowing() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){let x=1 match E.A{x:2}{E.A{x}{let y=x}}}"#, ""); }
+fn match_arm_shadowing() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){let x=1 match E.A{x:2}{E.A{x}{let y=x}}}"#, "expected newline after statement"); }
 
 // Match with non-enum type
 #[test]
-fn match_non_enum() { compile_should_fail_with(r#"class C{x:int} fn main(){match C{x:1}{C{x}{}}}"#, ""); }
+fn match_non_enum() { compile_should_fail_with(r#"class C{x:int} fn main(){match C{x:1}{C{x}{}}}"#, "expected ., found :"); }
 
 // Match unreachable arm
 #[test]

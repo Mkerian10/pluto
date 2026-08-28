@@ -9,7 +9,9 @@ fn empty_closure() { compile_and_run(r#"fn main(){let f=()=>{}}"#); }
 
 // Closure with only side effect
 #[test]
-fn side_effect_closure() { compile_should_fail_with(r#"fn main(){let f=()=>{print(\"hi\")}}"#, ""); }
+fn side_effect_closure() { // The audit found the old should-fail source never parsed; the
+    // repaired program is accepted — pin that
+    assert!(pluto::compile_to_object(r#"fn main(){let f=()=>{print("hi")}}"#).is_ok()); }
 
 // Closure parameter name collision with builtin
 #[test]
@@ -17,7 +19,9 @@ fn param_builtin_name() { compile_and_run(r#"fn main(){let f=(print:int)=>print+
 
 // Closure captures builtin function
 #[test]
-fn capture_builtin() { compile_should_fail_with(r#"fn main(){let f=()=>print(\"hi\")}"#, ""); }
+fn capture_builtin() { // The audit found the old should-fail source never parsed; the
+    // repaired program is accepted — pin that
+    assert!(pluto::compile_to_object(r#"fn main(){let f=()=>print("hi")}"#).is_ok()); }
 
 // Closure with very long body
 #[test]
@@ -35,11 +39,11 @@ fn many_captures() { compile_and_run(r#"fn main(){let a=1 let b=2 let c=3 let d=
 
 // Closure in error context
 #[test]
-fn closure_in_error() { compile_should_fail_with(r#"error E{f:(int)int} fn main(){let e=E{f:(x:int)=>x+1}}"#, ""); }
+fn closure_in_error() { compile_should_fail_with(r#"error E{f:(int)int} fn main(){let e=E{f:(x:int)=>x+1}}"#, "expected identifier, found ("); }
 
 // Closure in enum variant
 #[test]
-fn closure_in_enum() { compile_should_fail_with(r#"enum E{A{f:(int)int}} fn main(){let e=E.A{f:(x:int)=>x+1}}"#, ""); }
+fn closure_in_enum() { compile_should_fail_with(r#"enum E{A{f:(int)int}} fn main(){let e=E.A{f:(x:int)=>x+1}}"#, "expected identifier, found ("); }
 
 // Closure with nullable parameter
 #[test]
@@ -47,15 +51,15 @@ fn nullable_param() { compile_and_run(r#"fn main(){let f=(x:int?)=>x}"#); }
 
 // Closure with nullable return
 #[test]
-fn nullable_return() { compile_should_fail_with(r#"fn main(){let f:(int)int?=(x:int)=>none}"#, ""); }
+fn nullable_return() { compile_should_fail_with(r#"fn main(){let f:(int)int?=(x:int)=>none}"#, "expected identifier, found ("); }
 
 // Closure with error return
 #[test]
-fn error_return() { compile_should_fail_with(r#"error E{} fn main(){let f:(int)int!=(x:int)=>raise E{}}"#, ""); }
+fn error_return() { compile_should_fail_with(r#"error E{} fn main(){let f:(int)int!=(x:int)=>raise E{}}"#, "expected identifier, found ("); }
 
 // Closure in generic container
 #[test]
-fn closure_in_generic() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b=Box<(int)int>{value:(x:int)=>x+1}}"#, ""); }
+fn closure_in_generic() { compile_should_fail_with(r#"class Box<T>{value:T} fn main(){let b=Box<(int)int>{value:(x:int)=>x+1}}"#, "expected identifier, found ("); }
 
 // Closure captures from multiple scopes
 #[test]
@@ -64,4 +68,4 @@ fn multi_scope_capture() { compile_and_run(r#"fn main(){let x=1 if true{let y=2 
 
 // Closure with contracts (requires/ensures not on closures)
 #[test]
-fn closure_with_contract() { compile_should_fail_with(r#"fn main(){let f=(x:int)int requires x>0{return x}}"#, ""); }
+fn closure_with_contract() { compile_should_fail_with(r#"fn main(){let f=(x:int)int requires x>0{return x}}"#, "expected ), found :"); }

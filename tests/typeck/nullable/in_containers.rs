@@ -17,7 +17,7 @@ let x:int=a[0]}"#, "type mismatch"); }
 // Maps with nullable keys/values
 // This test already passes - compiles successfully (nullable keys are allowed)
 #[test]
-fn map_nullable_key() { compile_should_fail_with(r#"fn main(){let m=Map<int?,string>{} m[42]=\"hi\"}"#, ""); }
+fn map_nullable_key() { compile_should_fail_with(r#"fn main(){let m=Map<int?,string>{} m[42]="hi"}"#, "expected newline after statement"); }
 #[test]
 fn map_nullable_value_access() { compile_should_fail_with(r#"fn main(){let mut m=Map<int,int?>{}
 m[1]=42
@@ -30,10 +30,11 @@ let x:int=m[1]}"#, "type mismatch"); }
 // Sets with nullable elements
 // This test already passes - compiles successfully (nullable sets work)
 #[test]
-fn set_nullable_element() { compile_should_fail_with(r#"fn main(){let s=Set<int?>{} s.insert(42) s.insert(none)}"#, ""); }
+fn set_nullable_element() { compile_should_fail_with(r#"fn main(){let s=Set<int?>{} s.insert(42) s.insert(none)}"#, "expected newline after statement"); }
 // This test already passes - compiles successfully (nullable set operations work)
 #[test]
-fn set_nullable_contains() { compile_should_fail_with(r#"fn main(){let s=Set<int?>{42,none} let b=s.contains(none)}"#, ""); }
+fn set_nullable_contains() { compile_should_fail_with(r#"fn main(){let s=Set<int?>{42,none}
+let b=s.contains(none)}"#, "type int? cannot be used as a map/set key (must be int, float, bool, string, byte, or enum)"); }
 
 // Nested containers with nullable
 #[test]
@@ -55,7 +56,7 @@ fn main() {
 }
 // This test already passes - compiles successfully (nested nullable maps work)
 #[test]
-fn map_of_nullable_maps() { compile_should_fail_with(r#"fn main(){let m:Map<string,Map<string,int>?>=Map<string,Map<string,int>?>{} m[\"a\"]=none}"#, ""); }
+fn map_of_nullable_maps() { compile_should_fail_with(r#"fn main(){let m:Map<string,Map<string,int>?>=Map<string,Map<string,int>?>{} m["a"]=none}"#, "expected newline after statement"); }
 
 // Generic containers with nullable
 #[test]

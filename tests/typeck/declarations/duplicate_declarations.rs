@@ -25,7 +25,7 @@ fn duplicate_error() { compile_should_fail_with(r#"error E{} error E{} fn main()
 
 // Duplicate app - correctly detects duplicate apps
 #[test]
-fn duplicate_app() { compile_should_fail_with(r#"app A1{fn main(self){}} app A2{fn main(self){}}"#, ""); }
+fn duplicate_app() { compile_should_fail_with(r#"app A1{fn main(self){}} app A2{fn main(self){}}"#, "duplicate app declaration"); }
 
 // Duplicate method - syntax error from invalid free function with self parameter
 #[test]
@@ -73,7 +73,11 @@ fn error_class_collision() { compile_should_fail_with(r#"error E{} class E{} fn 
 
 // Duplicate impl - correctly detects duplicate impls
 #[test]
-fn duplicate_impl() { compile_should_fail_with(r#"trait T{} class C{} impl T{} impl T{} fn main(){}"#, ""); }
+fn duplicate_impl() { compile_should_fail_with(r#"trait T{}
+class C impl T, T {
+
+}
+fn main(){}"#, "trait 'T' appears multiple times in impl list for class 'C'"); }
 
 // Duplicate generic class
 #[test]
