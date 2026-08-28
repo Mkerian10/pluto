@@ -81,7 +81,7 @@ fn main(){let o:Opt<int>?=Opt<int>.Some{v:none}}"#, "expected int, found void?")
 
 // Nested errors
 #[test]
-fn result_error_mismatch() { compile_should_fail_with(r#"error E{} enum Result<T,U>{Ok{val:T}Err{err:U}} fn f()Result<int,E>!{raise E{}} fn main(){}"#, ""); }
+fn result_error_mismatch() { compile_should_fail_with(r#"error E{} enum Result<T,U>{Ok{val:T}Err{err:U}} fn f()Result<int,E>!{raise E{}} fn main(){}"#, "expected {, found !"); }
 
 // Generic methods on nested types
 #[test]

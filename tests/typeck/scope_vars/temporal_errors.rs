@@ -14,15 +14,15 @@ fn forward_ref_init() { compile_should_fail_with(r#"fn main(){let x=x+1}"#, "und
 
 // Use uninitialized variable
 #[test]
-fn use_uninitialized() { compile_should_fail_with(r#"fn main(){let x:int let y=x+1}"#, ""); }
+fn use_uninitialized() { compile_should_fail_with(r#"fn main(){let x:int let y=x+1}"#, "expected =, found let"); }
 
 // Conditional initialization use
 #[test]
-fn cond_init_use() { compile_should_fail_with(r#"fn main(){let x:int if true{x=1}let y=x}"#, ""); }
+fn cond_init_use() { compile_should_fail_with(r#"fn main(){let x:int if true{x=1}let y=x}"#, "expected =, found if"); }
 
 // Partial initialization
 #[test]
-fn partial_init() { compile_should_fail_with(r#"fn main(){let x:int if true{x=1}else{}let y=x}"#, ""); }
+fn partial_init() { compile_should_fail_with(r#"fn main(){let x:int if true{x=1}else{}let y=x}"#, "expected =, found if"); }
 
 // Initialization in wrong order
 #[test]
@@ -31,15 +31,16 @@ fn init_wrong_order() { compile_should_fail_with(r#"fn f()int{return g()} fn g()
 
 // Use in own initializer
 #[test]
-fn self_init() { compile_should_fail_with(r#"class C{x:int y:int=x} fn main(){}"#, ""); }
+fn self_init() { compile_should_fail_with(r#"class C{x:int y:int=x} fn main(){}"#, "expected newline after statement"); }
 
 // Forward field reference
 #[test]
-fn forward_field_ref() { compile_should_fail_with(r#"class C{x:int=y y:int} fn main(){}"#, ""); }
+fn forward_field_ref() { compile_should_fail_with(r#"class C{x:int=y y:int} fn main(){}"#, "expected newline after statement"); }
 
 // Temporal paradox in closure
 #[test]
-fn closure_temporal() { compile_should_fail_with(r#"fn main(){let f=()=>x let x=1}"#, ""); }
+fn closure_temporal() { compile_should_fail_with(r#"fn main(){let f=()=>x
+let x=1}"#, "undefined variable 'x'"); }
 
 // Declaration after use in block
 #[test]

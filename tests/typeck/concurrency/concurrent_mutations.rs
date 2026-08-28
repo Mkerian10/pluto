@@ -5,40 +5,48 @@ use common::compile_should_fail_with;
 
 // Mutation while task holds reference
 #[test]
-fn mutate_while_task_holds() { compile_should_fail_with(r#"class C{x:int} fn task(c:C)int{return c.x} fn main(){let c=C{x:0} let t=spawn task(c) c.x=1}"#, ""); }
+fn mutate_while_task_holds() { compile_should_fail_with(r#"class C{x:int} fn task(c:C)int{return c.x} fn main(){let c=C{x:0} let t=spawn task(c) c.x=1}"#, "expected newline after statement"); }
 
 // Multiple mutations from tasks
 #[test]
-fn multi_task_mutations() { compile_should_fail_with(r#"class C{x:int} fn task1(c:C){c.x=1} fn task2(c:C){c.x=2} fn main(){let c=C{x:0} spawn task1(c) spawn task2(c)}"#, ""); }
+fn multi_task_mutations() { compile_should_fail_with(r#"class C{x:int} fn task1(c:C){c.x=1} fn task2(c:C){c.x=2} fn main(){let c=C{x:0} spawn task1(c) spawn task2(c)}"#, "expected newline after statement"); }
 
 // Mutation in task args
 #[test]
-fn mutate_task_args() { compile_should_fail_with(r#"class C{x:int} fn task(v:int)int{return v} fn main(){let c=C{x:0} spawn task(c.x) c.x=1}"#, ""); }
+fn mutate_task_args() { compile_should_fail_with(r#"class C{x:int} fn task(v:int)int{return v} fn main(){let c=C{x:0} spawn task(c.x) c.x=1}"#, "expected newline after statement"); }
 
 // Concurrent bracket dep mutation
 #[test]
-fn concurrent_bracket_dep() { compile_should_fail_with(r#"class Dep{x:int} class C[d:Dep]{} fn task(d:Dep){d.x=1} fn main(){let d=Dep{x:0} spawn task(d) d.x=5}"#, ""); }
+fn concurrent_bracket_dep() { compile_should_fail_with(r#"class Dep{x:int} class C[d:Dep]{} fn task(d:Dep){d.x=1} fn main(){let d=Dep{x:0} spawn task(d) d.x=5}"#, "expected newline after statement"); }
 
 // Mutation through multiple paths
 #[test]
-fn mutate_multi_path() { compile_should_fail_with(r#"class C{x:int} fn task(c:C){c.x=1} fn main(){let c=C{x:0} let d=c spawn task(d) c.x=5}"#, ""); }
+fn mutate_multi_path() { compile_should_fail_with(r#"class C{x:int} fn task(c:C){c.x=1} fn main(){let c=C{x:0} let d=c spawn task(d) c.x=5}"#, "expected newline after statement"); }
 
 // Mutation in nested task
 #[test]
-fn mutate_nested_task() { compile_should_fail_with(r#"class C{x:int} fn inner(c:C){c.x=1} fn outer(c:C){spawn inner(c)} fn main(){let c=C{x:0} spawn outer(c) c.x=5}"#, ""); }
+fn mutate_nested_task() { compile_should_fail_with(r#"class C{x:int} fn inner(c:C){c.x=1} fn outer(c:C){spawn inner(c)} fn main(){let c=C{x:0} spawn outer(c) c.x=5}"#, "expected newline after statement"); }
 
 // Mutation through trait method in task
 #[test]
-fn mutate_trait_method_task() { compile_should_fail_with(r#"trait T{fn set(mut self)} class C{x:int} impl T{fn set(mut self){self.x=1}} fn task(c:C){c.set()} fn main(){let c=C{x:0} spawn task(c)}"#, ""); }
+fn mutate_trait_method_task() { compile_should_fail_with(r#"trait T{fn set(mut self)}
+class C impl T {x:int
+fn set(mut self){self.x=1}}
+fn task(c:C){c.set()}
+fn main(){let c=C{x:0}
+spawn task(c)}"#, "cannot call mutating method 'set' on immutable variable 'c'; declare with 'let mut' to allow mutation"); }
 
 // Concurrent mutation in loop
 #[test]
-fn concurrent_mut_loop() { compile_should_fail_with(r#"class C{x:int} fn task(c:C){c.x=1} fn main(){let c=C{x:0} for i in 0..10{spawn task(c)}}"#, ""); }
+fn concurrent_mut_loop() { compile_should_fail_with(r#"class C{x:int}
+fn task(c:C){c.x=1}
+fn main(){let c=C{x:0}
+for i in 0..10{spawn task(c)}}"#, "cannot assign to field of immutable variable 'c'; declare with 'let mut' to allow mutation"); }
 
 // Mutation after task spawn
 #[test]
-fn mutate_after_spawn() { compile_should_fail_with(r#"class C{x:int} fn task(c:C)int{return c.x} fn main(){let c=C{x:0} let t=spawn task(c) c.x=1 let y=t.get()}"#, ""); }
+fn mutate_after_spawn() { compile_should_fail_with(r#"class C{x:int} fn task(c:C)int{return c.x} fn main(){let c=C{x:0} let t=spawn task(c) c.x=1 let y=t.get()}"#, "expected newline after statement"); }
 
 // Concurrent mutation through generic
 #[test]
-fn concurrent_mut_generic() { compile_should_fail_with(r#"class Box<T>{val:T} fn task<T>(b:Box<T>){b.val=b.val} fn main(){let b=Box<int>{val:0} spawn task<int>(b) b.val=1}"#, ""); }
+fn concurrent_mut_generic() { compile_should_fail_with(r#"class Box<T>{val:T} fn task<T>(b:Box<T>){b.val=b.val} fn main(){let b=Box<int>{val:0} spawn task<int>(b) b.val=1}"#, "expected newline after statement"); }

@@ -1565,6 +1565,19 @@ fn resolve_qualified_access_in_program(program: &mut Program, module_names: &Has
             resolve_qualified_access_in_block(&mut method.node.body.node, module_names, &enum_name_map);
         }
     }
+    // Trait method contracts and default bodies were previously skipped —
+    // `requires self.y > 0` on a trait signature reached the contract
+    // validator as an unresolved QualifiedAccess and panicked
+    for tr in &mut program.traits {
+        for method in &mut tr.node.methods {
+            for contract in &mut method.contracts {
+                resolve_qualified_access_in_expr(&mut contract.node.expr.node, contract.node.expr.span, module_names, &enum_name_map);
+            }
+            if let Some(body) = &mut method.body {
+                resolve_qualified_access_in_block(&mut body.node, module_names, &enum_name_map);
+            }
+        }
+    }
 }
 
 fn resolve_qualified_access_in_block(block: &mut Block, module_names: &HashSet<String>, enum_name_map: &HashMap<String, String>) {

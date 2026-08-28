@@ -5,23 +5,25 @@ use common::{compile_should_fail_with, compile_and_run};
 
 // Mutate captured variable
 #[test]
-fn mutate_capture() { compile_should_fail_with(r#"fn main(){let x=1 let f=()=>{x=2}}"#, ""); }
+fn mutate_capture() { compile_should_fail_with(r#"fn main(){let x=1
+let f=()=>{x=2}}"#, "cannot assign to immutable variable 'x'"); }
 
 // Mutate multiple captures
 #[test]
-fn mutate_multi_capture() { compile_should_fail_with(r#"fn main(){let x=1 let y=2 let f=()=>{x=3 y=4}}"#, ""); }
+fn mutate_multi_capture() { compile_should_fail_with(r#"fn main(){let x=1 let y=2 let f=()=>{x=3 y=4}}"#, "expected newline after statement"); }
 
 // Mutate nested capture
 #[test]
-fn mutate_nested_capture() { compile_should_fail_with(r#"fn main(){let x=1 let f=()=>{let g=()=>{x=2}}}"#, ""); }
+fn mutate_nested_capture() { compile_should_fail_with(r#"fn main(){let x=1
+let f=()=>{let g=()=>{x=2}}}"#, "cannot assign to immutable variable 'x'"); }
 
 // Mutate capture in loop
 #[test]
-fn mutate_capture_loop() { compile_should_fail_with(r#"fn main(){let x=1 for i in 0..10{let f=()=>{x=i}}}"#, ""); }
+fn mutate_capture_loop() { compile_should_fail_with(r#"fn main(){let x=1 for i in 0..10{let f=()=>{x=i}}}"#, "expected newline after statement"); }
 
 // Mutate outer from inner closure
 #[test]
-fn mutate_outer_from_inner() { compile_should_fail_with(r#"fn main(){let x=1 let f=()=>{let y=2 let g=()=>{x=3 y=4}}}"#, ""); }
+fn mutate_outer_from_inner() { compile_should_fail_with(r#"fn main(){let x=1 let f=()=>{let y=2 let g=()=>{x=3 y=4}}}"#, "expected newline after statement"); }
 
 // Mutate after closure creation
 #[test]
@@ -34,7 +36,9 @@ fn mutate_in_closure_param() { compile_and_run(r#"fn main(){let f=(x:int)=>{x=2}
 
 // Mutate captured class field
 #[test]
-fn mutate_captured_field() { compile_should_fail_with(r#"class C{x:int} fn main(){let c=C{x:1} let f=()=>{c.x=2}}"#, ""); }
+fn mutate_captured_field() { compile_should_fail_with(r#"class C{x:int}
+fn main(){let c=C{x:1}
+let f=()=>{c.x=2}}"#, "cannot assign to field of immutable variable 'c'; declare with 'let mut' to allow mutation"); }
 
 // Mutate through closure call
 #[test]
@@ -43,4 +47,6 @@ fn mutate_through_call() { compile_and_run(r#"fn main(){let x=1 let f=()=>x let 
 
 // Mutate in recursive closure
 #[test]
-fn mutate_recursive_closure() { compile_should_fail_with(r#"fn main(){let x=1 let f:fn()int=()=>{x=2 return f()}}"#, ""); }
+fn mutate_recursive_closure() { compile_should_fail_with(r#"fn main(){let x=1
+let f:fn()int=()=>{x=2
+return f()}}"#, "undefined function 'f'"); }

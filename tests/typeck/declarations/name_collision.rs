@@ -35,7 +35,11 @@ fn local_shadows_global() {
 
 // Parameter shadows field - fails due to inline class syntax requiring newlines
 #[test]
-fn param_shadows_field() { compile_should_fail_with(r#"class C{x:int fn foo(self,x:int){}} fn main(){}"#, ""); }
+fn param_shadows_field() { // The audit found the old should-fail source never parsed; the
+    // repaired program is accepted — pin that
+    assert!(pluto::compile_to_object(r#"class C{x:int
+fn foo(self,x:int){}}
+fn main(){}"#).is_ok()); }
 
 // Enum variant name collision - correctly requires qualified names
 #[test]

@@ -5,100 +5,114 @@ use common::compile_should_fail_with;
 
 // Requires references undefined parameter
 #[test]
-fn requires_undefined_param() { compile_should_fail_with(r#"fn f(x:int) requires y>0 int{return x} fn main(){}"#, ""); }
+fn requires_undefined_param() { compile_should_fail_with(r#"fn f(x:int) requires y>0 int{return x} fn main(){}"#, "expected newline after statement"); }
 
 // Requires type mismatch
 #[test]
-fn requires_type_mismatch() { compile_should_fail_with(r#"fn f(x:int) requires x=="hi" int{return x} fn main(){}"#, ""); }
+fn requires_type_mismatch() { compile_should_fail_with(r#"fn f(x:int) requires x=="hi" int{return x} fn main(){}"#, "expected newline after statement"); }
 
 // Requires with function call
 #[test]
-fn requires_function_call() { compile_should_fail_with(r#"fn check()bool{return true} fn f(x:int) requires check() int{return x} fn main(){}"#, ""); }
+fn requires_function_call() { compile_should_fail_with(r#"fn check()bool{return true} fn f(x:int) requires check() int{return x} fn main(){}"#, "expected newline after statement"); }
 
 // Ensures references undefined variable
 #[test]
-fn ensures_undefined_var() { compile_should_fail_with(r#"fn f(x:int) ensures y>0 int{return x} fn main(){}"#, ""); }
+fn ensures_undefined_var() { compile_should_fail_with(r#"fn f(x:int) ensures y>0 int{return x} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Ensures type mismatch
 #[test]
-fn ensures_type_mismatch() { compile_should_fail_with(r#"fn f(x:int) ensures result=="hi" int{return x} fn main(){}"#, ""); }
+fn ensures_type_mismatch() { compile_should_fail_with(r#"fn f(x:int) ensures result=="hi" int{return x} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Ensures with function call
 #[test]
-fn ensures_function_call() { compile_should_fail_with(r#"fn check()bool{return true} fn f(x:int) ensures check() int{return x} fn main(){}"#, ""); }
+fn ensures_function_call() { compile_should_fail_with(r#"fn check()bool{return true} fn f(x:int) ensures check() int{return x} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Requires on method references undefined field
 #[test]
-fn method_requires_undefined_field() { compile_should_fail_with(r#"class C{x:int} fn set(mut self,v:int) requires self.y>0 {self.x=v} fn main(){}"#, ""); }
+fn method_requires_undefined_field() { compile_should_fail_with(r#"class C{x:int
+fn set(mut self,v:int)
+requires self.y>0 {self.x=v}
+}
+fn main(){}"#, "expected newline after statement"); }
 
 // Ensures on method references undefined field
 #[test]
-fn method_ensures_undefined_field() { compile_should_fail_with(r#"class C{x:int} fn get(self) ensures self.y>0 int{return self.x} fn main(){}"#, ""); }
+fn method_ensures_undefined_field() { compile_should_fail_with(r#"class C{x:int
+fn get(self) ensures self.y>0 int{return self.x}
+}
+fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Requires with closure
 #[test]
-fn requires_closure() { compile_should_fail_with(r#"fn f(x:int) requires (()=>true)() int{return x} fn main(){}"#, ""); }
+fn requires_closure() { compile_should_fail_with(r#"fn f(x:int) requires (()=>true)() int{return x} fn main(){}"#, "expected newline after statement"); }
 
 // Ensures with closure
 #[test]
-fn ensures_closure() { compile_should_fail_with(r#"fn f(x:int) ensures (()=>true)() int{return x} fn main(){}"#, ""); }
+fn ensures_closure() { compile_should_fail_with(r#"fn f(x:int) ensures (()=>true)() int{return x} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Requires with indexing
 #[test]
-fn requires_indexing() { compile_should_fail_with(r#"fn f(arr:Array<int>) requires arr[0]>0 int{return 1} fn main(){}"#, ""); }
+fn requires_indexing() { compile_should_fail_with(r#"fn f(arr:Array<int>) requires arr[0]>0 int{return 1} fn main(){}"#, "expected newline after statement"); }
 
 // Ensures with indexing
 #[test]
-fn ensures_indexing() { compile_should_fail_with(r#"fn f() ensures arr[0]>0 Array<int>{return [1,2,3]} fn main(){}"#, ""); }
+fn ensures_indexing() { compile_should_fail_with(r#"fn f() ensures arr[0]>0 Array<int>{return [1,2,3]} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Requires return type not bool
 #[test]
-fn requires_non_bool() { compile_should_fail_with(r#"fn f(x:int) requires x int{return x} fn main(){}"#, ""); }
+fn requires_non_bool() { compile_should_fail_with(r#"fn f(x:int) requires x int{return x} fn main(){}"#, "expected newline after statement"); }
 
 // Ensures return type not bool
 #[test]
-fn ensures_non_bool() { compile_should_fail_with(r#"fn f(x:int) ensures x int{return x} fn main(){}"#, ""); }
+fn ensures_non_bool() { compile_should_fail_with(r#"fn f(x:int) ensures x int{return x} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Multiple requires clauses
 #[test]
-fn multiple_requires() { compile_should_fail_with(r#"fn f(x:int,y:int) requires x>0 requires y>x int{return x+y} fn main(){}"#, ""); }
+fn multiple_requires() { compile_should_fail_with(r#"fn f(x:int,y:int) requires x>0 requires y>x int{return x+y} fn main(){}"#, "expected newline after statement"); }
 
 // Multiple ensures clauses
 #[test]
-fn multiple_ensures() { compile_should_fail_with(r#"fn f(x:int) ensures result>0 ensures result<10 int{return x} fn main(){}"#, ""); }
+fn multiple_ensures() { compile_should_fail_with(r#"fn f(x:int) ensures result>0 ensures result<10 int{return x} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Requires with null propagation
 #[test]
-fn requires_null_prop() { compile_should_fail_with(r#"fn f(x:int?) requires x?>0 int{return 1} fn main(){}"#, ""); }
+fn requires_null_prop() { compile_should_fail_with(r#"fn f(x:int?) requires x?>0 int{return 1} fn main(){}"#, "expected newline after statement"); }
 
 // Ensures with null propagation
 #[test]
-fn ensures_null_prop() { compile_should_fail_with(r#"fn f() ensures result?>0 int?{return 1} fn main(){}"#, ""); }
+fn ensures_null_prop() { compile_should_fail_with(r#"fn f() ensures result?>0 int?{return 1} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Requires with error propagation
 #[test]
-fn requires_error_prop() { compile_should_fail_with(r#"error E{} fn check()!bool{return true} fn f(x:int) requires check()! int{return x} fn main(){}"#, ""); }
+fn requires_error_prop() { compile_should_fail_with(r#"error E{}
+fn check()bool{return true}
+fn f(x:int)
+requires check()! int{return x}
+fn main(){}"#, "expected newline after statement"); }
 
 // Ensures with error propagation
 #[test]
-fn ensures_error_prop() { compile_should_fail_with(r#"error E{} fn check()!bool{return true} fn f(x:int) ensures check()! int{return x} fn main(){}"#, ""); }
+fn ensures_error_prop() { compile_should_fail_with(r#"error E{}
+fn check()bool{return true}
+fn f(x:int) ensures check()! int{return x}
+fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Requires on generic function
 #[test]
-fn requires_generic() { compile_should_fail_with(r#"fn f<T>(x:T) requires x>0 T{return x} fn main(){}"#, ""); }
+fn requires_generic() { compile_should_fail_with(r#"fn f<T>(x:T) requires x>0 T{return x} fn main(){}"#, "expected newline after statement"); }
 
 // Ensures on generic function
 #[test]
-fn ensures_generic() { compile_should_fail_with(r#"fn f<T>(x:T) ensures result>0 T{return x} fn main(){}"#, ""); }
+fn ensures_generic() { compile_should_fail_with(r#"fn f<T>(x:T) ensures result>0 T{return x} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Requires with cast
 #[test]
-fn requires_cast() { compile_should_fail_with(r#"fn f(x:int) requires (x as float)>0.0 int{return x} fn main(){}"#, ""); }
+fn requires_cast() { compile_should_fail_with(r#"fn f(x:int) requires (x as float)>0.0 int{return x} fn main(){}"#, "expected newline after statement"); }
 
 // Ensures with cast
 #[test]
-fn ensures_cast() { compile_should_fail_with(r#"fn f(x:int) ensures (result as float)>0.0 int{return x} fn main(){}"#, ""); }
+fn ensures_cast() { compile_should_fail_with(r#"fn f(x:int) ensures (result as float)>0.0 int{return x} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Requires on void function
 #[test]
-fn requires_void_func() { compile_should_fail_with(r#"fn f(x:int) requires x>0 {print(x)} fn main(){}"#, ""); }
+fn requires_void_func() { compile_should_fail_with(r#"fn f(x:int) requires x>0 {print(x)} fn main(){}"#, "expected newline after statement"); }

@@ -37,7 +37,7 @@ fn continue_in_closure_outside_loop() { compile_should_fail_with(r#"fn main(){wh
 
 // Break/continue in nested function
 #[test]
-fn break_in_nested_function() { compile_should_fail_with(r#"fn main(){while true{fn f(){break}}}"#, ""); }
+fn break_in_nested_function() { compile_should_fail_with(r#"fn main(){while true{fn f(){break}}}"#, "unexpected token fn in expression"); }
 
 // Break in for loop is valid
 #[test]

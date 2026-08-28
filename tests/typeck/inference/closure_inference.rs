@@ -170,4 +170,5 @@ fn main() {
 }
 
 #[test]
-fn closure_mut_capture() { compile_should_fail_with(r#"fn main(){let x=1 let f=()=>{x=2}}"#, ""); }
+fn closure_mut_capture() { compile_should_fail_with(r#"fn main(){let x=1
+let f=()=>{x=2}}"#, "cannot assign to immutable variable 'x'"); }

@@ -5,31 +5,32 @@ use common::compile_should_fail_with;
 
 // Send wrong type
 #[test]
-fn send_wrong_type() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() ch.0.send("hi")}"#, ""); }
+fn send_wrong_type() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() ch.0.send("hi")}"#, "expected newline after statement"); }
 
 // Receive wrong type
 #[test]
-fn receive_wrong_type() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() let x:string=ch.1.recv()}"#, ""); }
+fn receive_wrong_type() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() let x:string=ch.1.recv()}"#, "expected newline after statement"); }
 
 // Channel type mismatch
 #[test]
-fn channel_type_mismatch() { compile_should_fail_with(r#"fn main(){let ch1=chan<int>() let ch2:Channel<string,string>=ch1}"#, ""); }
+fn channel_type_mismatch() { compile_should_fail_with(r#"fn main(){let ch1=chan<int>()
+let ch2:Channel<string,string>=ch1}"#, "function 'chan' is not generic and does not accept type arguments"); }
 
 // Sender wrong type param
 #[test]
-fn sender_wrong_type() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() let s:Sender<string>=ch.0}"#, ""); }
+fn sender_wrong_type() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() let s:Sender<string>=ch.0}"#, "expected newline after statement"); }
 
 // Receiver wrong type param
 #[test]
-fn receiver_wrong_type() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() let r:Receiver<string>=ch.1}"#, ""); }
+fn receiver_wrong_type() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() let r:Receiver<string>=ch.1}"#, "expected newline after statement"); }
 
 // Send on receiver
 #[test]
-fn send_on_receiver() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() ch.1.send(1)}"#, ""); }
+fn send_on_receiver() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() ch.1.send(1)}"#, "expected newline after statement"); }
 
 // Receive on sender
 #[test]
-fn receive_on_sender() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() let x=ch.0.recv()}"#, ""); }
+fn receive_on_sender() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() let x=ch.0.recv()}"#, "expected newline after statement"); }
 
 // Channel generic wrong instantiation
 #[test]
@@ -37,28 +38,28 @@ fn channel_generic_wrong() { compile_should_fail_with(r#"fn make<T>()Channel<T,T
 
 // Send nullable to non-nullable channel
 #[test]
-fn send_nullable_mismatch() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() let x:int?=none ch.0.send(x)}"#, ""); }
+fn send_nullable_mismatch() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() let x:int?=none ch.0.send(x)}"#, "expected newline after statement"); }
 
 // Receive from closed channel without error handling
 #[test]
-fn recv_closed_no_error() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() ch.0.close() let x=ch.1.recv()}"#, ""); }
+fn recv_closed_no_error() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() ch.0.close() let x=ch.1.recv()}"#, "expected newline after statement"); }
 
 // Try_send wrong type
 #[test]
-fn try_send_wrong_type() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() ch.0.try_send("hi")}"#, ""); }
+fn try_send_wrong_type() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() ch.0.try_send("hi")}"#, "expected newline after statement"); }
 
 // Try_recv wrong type
 #[test]
-fn try_recv_wrong_type() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() let x:string?=ch.1.try_recv()}"#, ""); }
+fn try_recv_wrong_type() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() let x:string?=ch.1.try_recv()}"#, "expected newline after statement"); }
 
 // Channel in task wrong type
 #[test]
-fn channel_task_wrong_type() { compile_should_fail_with(r#"fn task(s:Sender<int>){s.send(1)} fn main(){let ch=chan<string>() spawn task(ch.0)}"#, ""); }
+fn channel_task_wrong_type() { compile_should_fail_with(r#"fn task(s:Sender<int>){s.send(1)} fn main(){let ch=chan<string>() spawn task(ch.0)}"#, "expected newline after statement"); }
 
 // Iterate over sender
 #[test]
-fn iterate_sender() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() for x in ch.0{}}"#, ""); }
+fn iterate_sender() { compile_should_fail_with(r#"fn main(){let ch=chan<int>() for x in ch.0{}}"#, "expected newline after statement"); }
 
 // Channel select wrong types
 #[test]
-fn select_wrong_types() { compile_should_fail_with(r#"fn main(){let ch1=chan<int>() let ch2=chan<string>() select{ch1.1{x}=>print(x) ch2.1{y}=>print(y)}}"#, ""); }
+fn select_wrong_types() { compile_should_fail_with(r#"fn main(){let ch1=chan<int>() let ch2=chan<string>() select{ch1.1{x}=>print(x) ch2.1{y}=>print(y)}}"#, "expected newline after statement"); }

@@ -5,7 +5,7 @@ use common::compile_should_fail_with;
 
 // Closure in binary expression
 #[test]
-fn closure_in_binop() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x+1 let y=f+2}"#, ""); }
+fn closure_in_binop() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x+1 let y=f+2}"#, "expected newline after statement"); }
 
 // REMOVED: closure_in_comparison - closure comparison actually works
 // REMOVED: closure_in_array - closures in arrays actually work
@@ -38,12 +38,12 @@ fn closure_in_set() { compile_should_fail_with(r#"fn main(){let s=Set<fn(int) in
 
 // Closure in spawn (invalid, spawn takes direct calls)
 #[test]
-fn closure_in_spawn() { compile_should_fail_with(r#"fn main(){spawn ((x:int)=>x+1)(2)}"#, ""); }
+fn closure_in_spawn() { compile_should_fail_with(r#"fn main(){spawn ((x:int)=>x+1)(2)}"#, "expected identifier, found ("); }
 
 // Closure in assignment
 #[test]
-fn closure_assign() { compile_should_fail_with(r#"fn main(){let f:fn(int) int f=(x:int)=>x+1}"#, ""); }
+fn closure_assign() { compile_should_fail_with(r#"fn main(){let f:fn(int) int f=(x:int)=>x+1}"#, "expected =, found identifier"); }
 
 // Closure in nullable type
 #[test]
-fn closure_nullable() { compile_should_fail_with(r#"fn main(){let f:(fn(int) int)?=none}"#, ""); }
+fn closure_nullable() { compile_should_fail_with(r#"fn main(){let f:(fn(int) int)?=none}"#, "expected identifier, found ("); }

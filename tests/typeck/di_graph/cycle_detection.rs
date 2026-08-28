@@ -65,7 +65,7 @@ fn deep_nested_cycle() { compile_should_fail_with(r#"class A[b:B]{x:int} class B
 
 // App self-dependency
 #[test]
-fn app_self_dep() { compile_should_fail_with(r#"app MyApp[app:MyApp]{fn main(self){}}"#, ""); }
+fn app_self_dep() { compile_should_fail_with(r#"app MyApp[app:MyApp]{fn main(self){}}"#, "expected identifier, found app"); }
 
 // Cycle with conditional deps
 #[test]

@@ -50,11 +50,11 @@ fn propagate_in_struct() {
 // Mixed error and nullable propagation
 #[test]
 fn nullable_and_error_propagate() {
-    compile_should_fail_with("error E {}\nfn f() int! {\nraise E {}\n}\nfn g() int? {\nreturn f()!?\n}\nfn main() {}\n", "");
+    compile_should_fail_with("error E {}\nfn f() int! {\nraise E {}\n}\nfn g() int? {\nreturn f()!?\n}\nfn main() {}\n", "expected {, found !");
 }
 #[test]
 fn error_and_nullable_propagate() {
-    compile_should_fail_with("fn f() int? {\nreturn none\n}\nfn g() int! {\nreturn f()?!\n}\nfn main() {}\n", "");
+    compile_should_fail_with("fn f() int? {\nreturn none\n}\nfn g() int! {\nreturn f()?!\n}\nfn main() {}\n", "expected {, found !");
 }
 
 // Propagate wrong type
@@ -76,5 +76,5 @@ fn propagate_in_if_early_return() {
 }
 #[test]
 fn propagate_in_match() {
-    compile_should_fail_with("enum E {\nA\nB\n}\nfn f(e: E, x: int?) int? {\nmatch e {\nE.A => {\nreturn x?\n}\nE.B => {\nreturn 0\n}\n}\n}\nfn main() {}\n", "");
+    compile_should_fail_with("enum E {\nA\nB\n}\nfn f(e: E, x: int?) int? {\nmatch e {\nE.A => {\nreturn x?\n}\nE.B => {\nreturn 0\n}\n}\n}\nfn main() {}\n", "expected {, found =>");
 }

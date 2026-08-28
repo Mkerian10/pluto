@@ -49,7 +49,7 @@ fn nullable_error_nullable() { compile_should_fail_with(r#"error E{} fn f()(E?)?
 // Through type alias
 // This test already passes - typedef syntax is not supported in Pluto
 #[test]
-fn typedef_hides_nullable() { compile_should_fail_with(r#"fn f()int?{return 42} fn g(){let x:f()??=none} fn main(){}"#, ""); }
+fn typedef_hides_nullable() { compile_should_fail_with(r#"fn f()int?{return 42} fn g(){let x:f()??=none} fn main(){}"#, "expected =, found ("); }
 
 // Inference of nested
 #[test]

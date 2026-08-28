@@ -15,9 +15,14 @@ fn foo(self,x:string){}} fn main(){}"#, "duplicate method 'foo' in class 'C'"); 
 
 // Conflicting method names
 #[test]
-fn three_traits_name_collision() { compile_should_fail_with(r#"trait T1{fn foo(self)} trait T2{fn foo(self)} trait T3{fn foo(self)} class C impl T1, T2{
+fn three_traits_name_collision() { compile_should_fail_with(r#"trait T1{fn foo(self)}
+trait T2{fn foo(self)}
+trait T3{fn foo(self)}
+class C impl T1, T2, T3 {
 fn foo(self){}
-fn foo(self){}} impl T3{fn foo(self){}} fn main(){}"#, ""); }
+fn foo(self){}
+fn foo(self){}}
+fn main(){}"#, "duplicate method 'foo' in class 'C'"); }
 
 // One impl missing from multiple
 #[test]
@@ -34,7 +39,7 @@ fn foo(self)int{return 2}} fn main(){}"#, "duplicate method 'foo' in class 'C'")
 
 // Generic traits with same method
 #[test]
-fn two_generic_traits_conflict() { compile_should_fail_with(r#"trait T1<U>{fn foo(self)U} trait T2<V>{fn foo(self)V} class C{} impl T1<int>{fn foo(self)int{return 1}} impl T2<string>{fn foo(self)string{return "hi"}} fn main(){}"#, ""); }
+fn two_generic_traits_conflict() { compile_should_fail_with(r#"trait T1<U>{fn foo(self)U} trait T2<V>{fn foo(self)V} class C{} impl T1<int>{fn foo(self)int{return 1}} impl T2<string>{fn foo(self)string{return "hi"}} fn main(){}"#, "expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'stage', 'system', 'test', 'tests', 'extern fn', or 'extern rust', found impl"); }
 
 // Contract conflicts between traits
 #[test]
@@ -52,9 +57,14 @@ fn main(){}"#, "does not implement required method"); }
 
 // Diamond problem (if traits could extend)
 #[test]
-fn diamond_trait_hierarchy() { compile_should_fail_with(r#"trait Base{fn foo(self)} trait Left{fn foo(self)} trait Right{fn foo(self)} class C impl Base, Left{
+fn diamond_trait_hierarchy() { compile_should_fail_with(r#"trait Base{fn foo(self)}
+trait Left{fn foo(self)}
+trait Right{fn foo(self)}
+class C impl Base, Left, Right {
 fn foo(self){}
-fn foo(self){}} impl Right{fn foo(self){}} fn main(){}"#, ""); }
+fn foo(self){}
+fn foo(self){}}
+fn main(){}"#, "duplicate method 'foo' in class 'C'"); }
 
 // Trait implemented twice
 #[test]
@@ -74,7 +84,7 @@ fn main(){let b = Box<int>{value:1}}"#, "does not implement required method"); }
 #[test]
 fn contract_trait_two_classes() { compile_should_fail_with(r#"trait T{fn foo(self)int ensures result>0} class C1 impl T{
 fn foo(self)int{return -1}} class C2 impl T{
-fn foo(self)int{return 1}} fn main(){}"#, ""); }
+fn foo(self)int{return 1}} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Multiple traits, some missing methods
 #[test]
@@ -87,9 +97,16 @@ fn main(){}"#, "does not implement required method"); }
 
 // Trait composition with method overlap
 #[test]
-fn composed_traits_overlap() { compile_should_fail_with(r#"trait T1{fn foo(self) fn bar(self)} trait T2{fn bar(self) fn baz(self)} class C impl T1, T2{
-fn foo(self){} fn bar(self){}
-fn bar(self){} fn baz(self){}} fn main(){}"#, ""); }
+fn composed_traits_overlap() { compile_should_fail_with(r#"trait T1{fn foo(self)
+fn bar(self)}
+trait T2{fn bar(self)
+fn baz(self)}
+class C impl T1, T2{
+fn foo(self){}
+fn bar(self){}
+fn bar(self){}
+fn baz(self){}}
+fn main(){}"#, "duplicate method 'bar' in class 'C'"); }
 
 // Nullable method in one trait, non-nullable in another
 #[test]
@@ -99,13 +116,13 @@ fn foo(self)int{return 1}} fn main(){}"#, "duplicate method 'foo' in class 'C'")
 
 // Error method in one trait, infallible in another
 #[test]
-fn error_conflict() { compile_should_fail_with(r#"error E{} trait T1{fn foo(self)int!} trait T2{fn foo(self)int} class C{} impl T1{fn foo(self)int!{raise E{}}} impl T2{fn foo(self)int{return 1}} fn main(){}"#, ""); }
+fn error_conflict() { compile_should_fail_with(r#"error E{} trait T1{fn foo(self)int!} trait T2{fn foo(self)int} class C{} impl T1{fn foo(self)int!{raise E{}}} impl T2{fn foo(self)int{return 1}} fn main(){}"#, "expected newline after statement"); }
 
 // Generic method in both traits
 #[test]
 fn two_traits_generic_methods() { compile_should_fail_with(r#"trait T1{fn foo<U>(self,x:U)U} trait T2{fn foo<V>(self,x:V)V} class C impl T1, T2{
 fn foo<U>(self,x:U)U{return x}
-fn foo<V>(self,x:V)V{return x}} fn main(){}"#, ""); }
+fn foo<V>(self,x:V)V{return x}} fn main(){}"#, "expected (, found <"); }
 
 // Mut self in one, non-mut in another
 #[test]
@@ -115,7 +132,12 @@ fn foo(self){}} fn main(){}"#, "duplicate method 'foo' in class 'C'"); }
 
 // Static method collision (if supported)
 #[test]
-fn static_method_conflict() { compile_should_fail_with(r#"trait T1{fn create()C} trait T2{fn create()C} class C{} impl T1{fn create()C{return C{}}} impl T2{fn create()C{return C{}}} fn main(){}"#, ""); }
+fn static_method_conflict() { compile_should_fail_with(r#"trait T1{fn create()C}
+trait T2{fn create()C}
+class C impl T1, T2 {
+fn create()C{return C{}}
+fn create()C{return C{}}}
+fn main(){}"#, "duplicate method 'create' in class 'C'"); }
 
 // Trait with same name, different packages (if supported)
 #[test]
@@ -129,17 +151,21 @@ fn main(){}"#, "does not implement required method"); }
 
 // Trait method overloading (not supported)
 #[test]
-fn trait_method_overload() { compile_should_fail_with(r#"trait T{fn foo(self) fn foo(self,x:int)} class C impl T{
-fn foo(self){} fn foo(self,x:int){}} fn main(){}"#, ""); }
+fn trait_method_overload() { compile_should_fail_with(r#"trait T{fn foo(self)
+fn foo(self,x:int)}
+class C impl T{
+fn foo(self){}
+fn foo(self,x:int){}}
+fn main(){}"#, "duplicate method 'foo' in class 'C'"); }
 
 // Trait impl on enum
 #[test]
-fn multiple_traits_on_enum() { compile_should_fail_with(r#"trait T1{fn foo(self)} trait T2{fn bar(self)} enum E{A} impl T1{fn foo(self){}} impl T2{} fn main(){}"#, ""); }
+fn multiple_traits_on_enum() { compile_should_fail_with(r#"trait T1{fn foo(self)} trait T2{fn bar(self)} enum E{A} impl T1{fn foo(self){}} impl T2{} fn main(){}"#, "expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'stage', 'system', 'test', 'tests', 'extern fn', or 'extern rust', found impl"); }
 
 // Trait with invariant vs impl method
 #[test]
 fn trait_method_violates_invariant() { compile_should_fail_with(r#"trait T{fn foo(self)int ensures result>0} class C impl T{x:int invariant self.x<0
-fn foo(self)int{return self.x}} fn main(){}"#, ""); }
+fn foo(self)int{return self.x}} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
 
 // Partial overlap in method sets
 #[test]

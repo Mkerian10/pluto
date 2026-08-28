@@ -157,14 +157,17 @@ ensures result<0} class C impl T1
 
 // Trait composition
 #[test]
-fn trait_extends_adds_requires() { compile_should_fail_with(r#"trait Base{fn foo(self,x:int)} trait Derived{fn foo(self,x:int)
-requires x>0} class C impl Base
-{fn foo(self,x:int){}} impl Derived{fn foo(self,x:int){}} fn main(){}"#, ""); }
+fn trait_extends_adds_requires() { compile_should_fail_with(r#"trait Base{fn foo(self,x:int)}
+trait Derived{fn foo(self,x:int)
+requires x>0}
+class C impl Base, Derived {fn foo(self,x:int){}
+fn foo(self,x:int){}}
+fn main(){}"#, "duplicate method 'foo' in class 'C'"); }
 
 // Contract language restrictions
 #[test]
 fn contract_calls_method() { compile_should_fail_with(r#"trait T{fn foo(self)int} class C{fn helper(self)bool{return true}} impl T{fn foo(self)int requires
-self.helper(){return 1}} fn main(){}"#, ""); }
+self.helper(){return 1}} fn main(){}"#, "expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'stage', 'system', 'test', 'tests', 'extern fn', or 'extern rust', found impl"); }
 
 // Deep contract violations
 #[test]

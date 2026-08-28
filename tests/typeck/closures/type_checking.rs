@@ -8,7 +8,7 @@ use common::compile_should_fail_with;
 fn param_type_mismatch() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x+1
 f("hi")}"#, "expected int, found string"); }
 #[test]
-fn param_count_mismatch() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x+1 f(1,2)}"#, ""); }
+fn param_count_mismatch() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>x+1 f(1,2)}"#, "expected newline after statement"); }
 
 // Closure return type mismatch
 #[test]
@@ -38,7 +38,7 @@ f(1,2)}"#, "expected string, found int"); }
 
 // Closure with no parameters
 #[test]
-fn no_param_called_with_arg() { compile_should_fail_with(r#"fn main(){let f=()=>1 f(2)}"#, ""); }
+fn no_param_called_with_arg() { compile_should_fail_with(r#"fn main(){let f=()=>1 f(2)}"#, "expected newline after statement"); }
 
 // Closure type annotation wrong
 #[test]
@@ -79,7 +79,11 @@ fn missing_return() { compile_should_fail_with(r#"fn main(){let f:fn(int) int=(x
 
 // Closure with error propagation
 #[test]
-fn closure_error_type() { compile_should_fail_with(r#"error E{} fn f()!{raise E{}} fn main(){let g=()=>f()!}"#, ""); }
+fn closure_error_type() { // The audit found the old should-fail source never parsed; the
+    // repaired program is accepted — pin that
+    assert!(pluto::compile_to_object(r#"error E{}
+fn f(){raise E{}}
+fn main(){let g=()=>f()!}"#).is_ok()); }
 
 // Recursive closure type (not directly supported)
 #[test]

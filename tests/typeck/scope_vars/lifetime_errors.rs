@@ -9,11 +9,11 @@ fn use_after_scope() { compile_should_fail_with(r#"fn main(){if true{let x=1}let
 
 // Return local reference (if supported)
 #[test]
-fn return_local_ref() { compile_should_fail_with(r#"fn f()&int{let x=1 return &x} fn main(){}"#, ""); }
+fn return_local_ref() { compile_should_fail_with(r#"fn f()&int{let x=1 return &x} fn main(){}"#, "expected identifier, found &"); }
 
 // Closure captures after scope
 #[test]
-fn closure_after_scope() { compile_should_fail_with(r#"fn main(){let f if true{let x=1 f=()=>x}}"#, ""); }
+fn closure_after_scope() { compile_should_fail_with(r#"fn main(){let f if true{let x=1 f=()=>x}}"#, "expected =, found if"); }
 
 // Use loop variable after loop
 #[test]
@@ -26,15 +26,15 @@ fn match_binding_outside() { compile_should_fail_with(r#"enum E{A{x:int}} fn mai
 
 // Nested scope lifetime
 #[test]
-fn nested_scope_lifetime() { compile_should_fail_with(r#"fn main(){let x if true{if true{x=1}}let y=x}"#, ""); }
+fn nested_scope_lifetime() { compile_should_fail_with(r#"fn main(){let x if true{if true{x=1}}let y=x}"#, "expected =, found if"); }
 
 // Conditional initialization
 #[test]
-fn conditional_init() { compile_should_fail_with(r#"fn main(){let x:int if true{x=1}let y=x}"#, ""); }
+fn conditional_init() { compile_should_fail_with(r#"fn main(){let x:int if true{x=1}let y=x}"#, "expected =, found if"); }
 
 // Variable escapes scope
 #[test]
-fn var_escapes_scope() { compile_should_fail_with(r#"fn main(){let x if true{let y=1 x=y}}"#, ""); }
+fn var_escapes_scope() { compile_should_fail_with(r#"fn main(){let x if true{let y=1 x=y}}"#, "expected =, found if"); }
 
 // Use in wrong scope level
 #[test]
@@ -51,20 +51,24 @@ fn cross_function_lifetime() { compile_should_fail_with(r#"fn f(){let x=1} fn g(
 
 // Static lifetime (if supported)
 #[test]
-fn static_lifetime() { compile_should_fail_with(r#"static x:int=1 fn main(){let y=x}"#, ""); }
+fn static_lifetime() { compile_should_fail_with(r#"static x:int=1 fn main(){let y=x}"#, "expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'stage', 'system', 'test', 'tests', 'extern fn', or 'extern rust', found identifier"); }
 
 // Lifetime in error handling
 #[test]
-fn lifetime_in_catch() { compile_should_fail_with(r#"error E{} fn f()!{raise E{}} fn main(){let x if true{f() catch{x=1}}}"#, ""); }
+fn lifetime_in_catch() { compile_should_fail_with(r#"error E{}
+fn f(){raise E{}}
+fn main(){let x if true{f() catch{x=1}}}"#, "expected =, found if"); }
 
 // Lifetime in spawn
 #[test]
-fn lifetime_in_spawn() { compile_should_fail_with(r#"fn f()int{let x=1 return x} fn main(){spawn f()}"#, ""); }
+fn lifetime_in_spawn() { compile_should_fail_with(r#"fn f()int{let x=1
+return x}
+fn main(){spawn f()}"#, "Task handle must be used -- call .get(), .detach(), or assign to a variable"); }
 
 // Global vs local lifetime
 #[test]
-fn global_local_lifetime() { compile_should_fail_with(r#"let x=1 fn main(){let y=x}"#, ""); }
+fn global_local_lifetime() { compile_should_fail_with(r#"let x=1 fn main(){let y=x}"#, "expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'stage', 'system', 'test', 'tests', 'extern fn', or 'extern rust', found let"); }
 
 // Const lifetime
 #[test]
-fn const_lifetime() { compile_should_fail_with(r#"const X:int=1 fn main(){let y=X}"#, ""); }
+fn const_lifetime() { compile_should_fail_with(r#"const X:int=1 fn main(){let y=X}"#, "expected 'fn', 'class', 'trait', 'enum', 'error', 'app', 'stage', 'system', 'test', 'tests', 'extern fn', or 'extern rust', found identifier"); }
