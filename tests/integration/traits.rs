@@ -15579,3 +15579,140 @@ fn generic_trait_default_method_via_trait_object() {
     );
     assert_eq!(out.trim(), "6");
 }
+
+// ── Generic classes implementing generic traits ──────────────────────────
+
+#[test]
+fn generic_class_impl_generic_trait() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Producer<U> {
+            fn produce(self) U
+        }
+        class Box<V> impl Producer<V> {
+            value: V
+
+            fn produce(self) V {
+                return self.value
+            }
+        }
+        fn main() {
+            print(Box<int> { value: 42 }.produce())
+            print(Box<string> { value: "hi" }.produce())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "42\nhi");
+}
+
+#[test]
+fn generic_class_impl_as_trait_object() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Producer<U> {
+            fn produce(self) U
+        }
+        class Box<V> impl Producer<V> {
+            value: V
+
+            fn produce(self) V {
+                return self.value
+            }
+        }
+        fn consume(p: Producer<int>) int {
+            return p.produce()
+        }
+        fn main() {
+            print(consume(Box<int> { value: 7 }))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "7");
+}
+
+#[test]
+fn generic_class_impl_mixed_type_args() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Pairer<A, B> {
+            fn first(self) A
+            fn second(self) B
+        }
+        class Holder<V> impl Pairer<string, V> {
+            v: V
+
+            fn first(self) string {
+                return "tag"
+            }
+
+            fn second(self) V {
+                return self.v
+            }
+        }
+        fn main() {
+            let h = Holder<int> { v: 5 }
+            print(h.first())
+            print(h.second())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "tag\n5");
+}
+
+#[test]
+fn generic_class_impl_mixed_dispatch() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Conv<U> {
+            fn conv(self) U
+        }
+        class Box<V> impl Conv<V> {
+            value: V
+
+            fn conv(self) V {
+                return self.value
+            }
+        }
+        class Fixed impl Conv<int> {
+            n: int
+
+            fn conv(self) int {
+                return self.n * 10
+            }
+        }
+        fn main() {
+            let items: [Conv<int>] = [Box<int> { value: 3 }, Fixed { n: 4 }]
+            for it in items {
+                print(it.conv())
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "3\n40");
+}
+
+#[test]
+fn generic_class_impl_inherits_default() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Conv<U> {
+            fn base(self) U
+
+            fn twice(self) U {
+                return self.base()
+            }
+        }
+        class Box<V> impl Conv<V> {
+            value: V
+
+            fn base(self) V {
+                return self.value
+            }
+        }
+        fn main() {
+            print(Box<int> { value: 8 }.twice())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "8");
+}

@@ -49,12 +49,31 @@ fn non_generic_trait_with_args() {
     );
 }
 
-// Generic class implementing a generic trait with its own type parameter
+// Generic class implementing a generic trait with its own type parameter:
+// conformance is checked per instantiation
 #[test]
-fn generic_class_trait_class_param() {
+fn generic_class_generic_trait_conformance() {
     compile_should_fail_with(
-        "trait T<U>{\n    fn foo(self) U\n}\n\nclass Box<V> impl T<V> {\n    value:V\n\n    fn foo(self) V {\n        return self.value\n    }\n}\n\nfn main(){}",
-        "not supported yet",
+        "trait T<U>{\n    fn foo(self) U\n}\n\nclass Box<V> impl T<V> {\n    value:V\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){\n    let b = Box<string>{value:\"hi\"}\n}",
+        "return type mismatch",
+    );
+}
+
+// Per-instantiation bound enforcement through a class type parameter
+#[test]
+fn generic_class_generic_trait_bound() {
+    compile_should_fail_with(
+        "trait Printable{\n    fn show(self) string\n}\n\ntrait Holder<U: Printable>{\n    fn get(self) U\n}\n\nclass Box<V> impl Holder<V> {\n    v:V\n\n    fn get(self) V {\n        return self.v\n    }\n}\n\nfn main(){\n    let b = Box<int>{v:1}\n}",
+        "does not satisfy trait bound 'Printable'",
+    );
+}
+
+// Wrong arity on a class-parameterized impl clause
+#[test]
+fn generic_class_generic_trait_wrong_arity() {
+    compile_should_fail_with(
+        "trait T<U,W>{\n    fn foo(self) U\n}\n\nclass Box<V> impl T<V> {\n    value:V\n\n    fn foo(self) V {\n        return self.value\n    }\n}\n\nfn main(){}",
+        "expects 2 type arguments, got 1",
     );
 }
 

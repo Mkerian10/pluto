@@ -24,18 +24,16 @@ use crate::span::{Span, Spanned};
 use crate::visit::{walk_program_mut, walk_type_expr_mut, VisitMut};
 
 pub fn instantiate_generic_traits(program: &mut Program) -> Result<(), CompileError> {
-    // Split off templates
+    // Collect templates. They STAY in the program: registration skips them,
+    // monomorphize instantiates class-parameterized impls from them and
+    // strips them after phase 3.
     let mut templates: HashMap<String, TraitDecl> = HashMap::new();
-    let mut concrete = Vec::new();
-    for tr in std::mem::take(&mut program.traits) {
-        if tr.node.type_params.is_empty() {
-            concrete.push(tr);
-        } else {
+    for tr in &program.traits {
+        if !tr.node.type_params.is_empty() {
             validate_template(&tr.node)?;
-            templates.insert(tr.node.name.node.clone(), tr.node);
+            templates.insert(tr.node.name.node.clone(), tr.node.clone());
         }
     }
-    program.traits = concrete;
     if templates.is_empty() {
         // Still reject stray type args on non-generic traits
         for class in &program.classes {
@@ -76,17 +74,46 @@ pub fn instantiate_generic_traits(program: &mut Program) -> Result<(), CompileEr
         program.classes[ci].node.impl_traits = refs;
     }
 
-    // Type mentions anywhere in the program (T<int> as a trait-object type)
-    let mut rewriter = TypeMentionRewriter {
-        templates: &templates,
-        program_classes: ClassImplIndex::build(program),
-        instantiated: &mut instantiated,
-        new_traits: &mut new_traits,
-        error: None,
-    };
-    walk_program_mut(&mut rewriter, program);
-    if let Some(err) = rewriter.error {
-        return Err(err);
+    // Type mentions anywhere in the program (T<int> as a trait-object type).
+    // Mentions whose arguments involve an enclosing declaration's type
+    // parameters are left for monomorphize; template decls are not walked.
+    {
+        let index = ClassImplIndex::build(program);
+        let mut rewriter = TypeMentionRewriter {
+            templates: &templates,
+            program_classes: index,
+            instantiated: &mut instantiated,
+            new_traits: &mut new_traits,
+            skip_params: Vec::new(),
+            error: None,
+        };
+        for f in &mut program.functions {
+            rewriter.visit_function_mut(f);
+        }
+        for c in &mut program.classes {
+            rewriter.skip_params = c.node.type_params.iter().map(|tp| tp.node.clone()).collect();
+            crate::visit::walk_class_mut(&mut rewriter, c);
+            rewriter.skip_params.clear();
+        }
+        for tr in &mut program.traits {
+            if tr.node.type_params.is_empty() {
+                rewriter.visit_trait_mut(tr);
+            }
+        }
+        for e in &mut program.enums {
+            rewriter.skip_params = e.node.type_params.iter().map(|tp| tp.node.clone()).collect();
+            crate::visit::walk_enum_mut(&mut rewriter, e);
+            rewriter.skip_params.clear();
+        }
+        if let Some(app) = &mut program.app {
+            rewriter.visit_app_mut(app);
+        }
+        for st in &mut program.stages {
+            rewriter.visit_stage_mut(st);
+        }
+        if let Some(err) = rewriter.error {
+            return Err(err);
+        }
     }
 
     // Newly stamped traits may themselves mention generic traits in their
@@ -103,6 +130,7 @@ pub fn instantiate_generic_traits(program: &mut Program) -> Result<(), CompileEr
                 program_classes: index.clone(),
                 instantiated: &mut instantiated,
                 new_traits: &mut new_traits,
+                skip_params: Vec::new(),
                 error: None,
             };
             rewriter.visit_trait_mut(tr);
@@ -190,17 +218,10 @@ fn rewrite_impl_ref(
             r.name.span,
         ));
     }
-    for ta in &r.type_args {
-        if mentions_any(&ta.node, class_type_params) {
-            return Err(CompileError::type_err(
-                format!(
-                    "cannot instantiate generic trait '{}' with a class type parameter; \
-                     generic-class impls of generic traits are not supported yet",
-                    r.name.node
-                ),
-                ta.span,
-            ));
-        }
+    // Arguments naming the class's own type parameters resolve per class
+    // instantiation — monomorphize handles them (the ref stays as-is here)
+    if r.type_args.iter().any(|ta| mentions_any(&ta.node, class_type_params)) {
+        return Ok(());
     }
     let index = ClassImplIndex::build(program);
     let mangled = instantiate(template, &r.type_args, &index, instantiated, new_traits)?;
@@ -228,7 +249,7 @@ fn mentions_any(te: &TypeExpr, names: &[String]) -> bool {
 
 /// Structural mangling of a type argument, consistent with `mangle_name`
 /// ("T$$int", "T$$Box$$int") for the supported subset.
-fn mangle_te(te: &Spanned<TypeExpr>) -> Result<String, CompileError> {
+pub(crate) fn mangle_te(te: &Spanned<TypeExpr>) -> Result<String, CompileError> {
     match &te.node {
         TypeExpr::Named(n) => Ok(n.clone()),
         TypeExpr::Generic { name, type_args } => {
@@ -269,12 +290,25 @@ fn instantiate(
         }
     }
 
-    let suffixes: Result<Vec<_>, _> = type_args.iter().map(mangle_te).collect();
-    let mangled = format!("{}$${}", template.name.node, suffixes?.join("$"));
+    let (decl, mangled) = stamp(template, type_args)?;
     if instantiated.contains(&mangled) {
         return Ok(mangled);
     }
     instantiated.insert(mangled.clone());
+    let span = Span::new(template.name.span.start, template.name.span.end);
+    new_traits.push(Spanned::new(decl, span));
+    Ok(mangled)
+}
+
+/// Stamp a concrete trait from a template and concrete type-argument
+/// expressions: substituted signatures, default bodies, and contracts, named
+/// with the generic mangling. Pure — no bounds checking or dedup.
+pub(crate) fn stamp(
+    template: &TraitDecl,
+    type_args: &[Spanned<TypeExpr>],
+) -> Result<(TraitDecl, String), CompileError> {
+    let suffixes: Result<Vec<_>, _> = type_args.iter().map(mangle_te).collect();
+    let mangled = format!("{}$${}", template.name.node, suffixes?.join("$"));
 
     let bindings: HashMap<&str, &TypeExpr> = template
         .type_params
@@ -305,12 +339,33 @@ fn instantiate(
             body_subst.visit_expr_mut(&mut contract.node.expr);
         }
     }
-    let span = Span::new(template.name.span.start, template.name.span.end);
-    new_traits.push(Spanned::new(decl, span));
-    Ok(mangled)
+    Ok((decl, mangled))
 }
 
-fn subst_te(te: &mut Spanned<TypeExpr>, bindings: &HashMap<&str, &TypeExpr>) {
+/// Convert a concrete PlutoType back to a TypeExpr for trait stamping —
+/// class-instantiation-time impl resolution has PlutoType arguments in hand.
+pub(crate) fn pluto_type_to_type_expr(t: &crate::typeck::types::PlutoType) -> Option<TypeExpr> {
+    use crate::typeck::types::PlutoType as P;
+    Some(match t {
+        P::Int => TypeExpr::Named("int".to_string()),
+        P::Float => TypeExpr::Named("float".to_string()),
+        P::Bool => TypeExpr::Named("bool".to_string()),
+        P::Byte => TypeExpr::Named("byte".to_string()),
+        P::Bytes => TypeExpr::Named("bytes".to_string()),
+        P::String => TypeExpr::Named("string".to_string()),
+        P::Class(n) | P::Enum(n) | P::Trait(n) => TypeExpr::Named(n.clone()),
+        P::GenericInstance(_, name, args) => {
+            let mut te_args = Vec::new();
+            for a in args {
+                te_args.push(Spanned::new(pluto_type_to_type_expr(a)?, Span::dummy()));
+            }
+            TypeExpr::Generic { name: name.clone(), type_args: te_args }
+        }
+        _ => return None,
+    })
+}
+
+pub(crate) fn subst_te(te: &mut Spanned<TypeExpr>, bindings: &HashMap<&str, &TypeExpr>) {
     if let TypeExpr::Named(n) = &te.node
         && let Some(replacement) = bindings.get(n.as_str())
     {
@@ -354,16 +409,30 @@ struct TypeMentionRewriter<'a> {
     program_classes: ClassImplIndex,
     instantiated: &'a mut HashSet<String>,
     new_traits: &'a mut Vec<Spanned<TraitDecl>>,
+    /// Type parameters of the enclosing declaration — mentions involving
+    /// them are deferred to monomorphize
+    skip_params: Vec<String>,
     error: Option<CompileError>,
 }
 
 impl VisitMut for TypeMentionRewriter<'_> {
+    fn visit_function_mut(&mut self, func: &mut Spanned<crate::parser::ast::Function>) {
+        let added = func.node.type_params.len();
+        self.skip_params
+            .extend(func.node.type_params.iter().map(|tp| tp.node.clone()));
+        crate::visit::walk_function_mut(self, func);
+        self.skip_params.truncate(self.skip_params.len() - added);
+    }
+
     fn visit_type_expr_mut(&mut self, te: &mut Spanned<TypeExpr>) {
         if self.error.is_some() {
             return;
         }
         // Children first, so nested mentions resolve inside-out
         walk_type_expr_mut(self, te);
+        if !self.skip_params.is_empty() && mentions_any(&te.node, &self.skip_params) {
+            return;
+        }
         if let TypeExpr::Generic { name, type_args } = &te.node
             && let Some(template) = self.templates.get(name)
         {

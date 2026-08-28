@@ -59,7 +59,21 @@ fn check_function_contracts(
 pub(crate) fn register_trait_names(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     for trait_decl in &program.traits {
         let t = &trait_decl.node;
+        // Generic trait templates are instantiated on demand (impl clauses,
+        // type mentions, class instantiations) — store the AST for stamping
+        if !t.type_params.is_empty() {
+            env.generic_trait_decls.insert(t.name.node.clone(), t.clone());
+            continue;
+        }
+        register_trait_skeleton(t, env)?;
+    }
+    Ok(())
+}
 
+/// Register a single concrete trait's skeleton (names, defaults, raw sigs).
+/// Shared by initial registration and on-demand generic-trait stamping.
+pub(crate) fn register_trait_skeleton(t: &crate::parser::ast::TraitDecl, env: &mut TypeEnv) -> Result<(), CompileError> {
+    {
         // Check for duplicate trait declarations
         if env.traits.contains_key(&t.name.node) {
             return Err(CompileError::type_err(
@@ -120,7 +134,17 @@ pub(crate) fn register_trait_names(program: &Program, env: &mut TypeEnv) -> Resu
 /// Pass 1: Resolve trait method signatures now that all classes/enums are registered.
 pub(crate) fn resolve_trait_signatures(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     for trait_decl in &program.traits {
-        let t = &trait_decl.node;
+        if !trait_decl.node.type_params.is_empty() {
+            continue;
+        }
+        resolve_trait_signatures_for(&trait_decl.node, env)?;
+    }
+    Ok(())
+}
+
+/// Resolve one concrete trait's method signatures into its TraitInfo.
+pub(crate) fn resolve_trait_signatures_for(t: &crate::parser::ast::TraitDecl, env: &mut TypeEnv) -> Result<(), CompileError> {
+    {
         let trait_name = &t.name.node;
 
         let mut methods = Vec::new();
@@ -466,7 +490,8 @@ pub(crate) fn register_class_names(program: &Program, env: &mut TypeEnv) -> Resu
                 fields: Vec::new(),
                 methods: Vec::new(),
                 method_sigs: HashMap::new(),
-                impl_traits: c.impl_traits.iter().map(|t| t.name.node.clone()).collect(),
+                impl_traits: c.impl_traits.iter().filter(|t| t.type_args.is_empty()).map(|t| t.name.node.clone()).collect(),
+                generic_impl_traits: c.impl_traits.iter().filter(|t| !t.type_args.is_empty()).map(|t| (t.name.node.clone(), t.type_args.clone())).collect(),
                 mut_self_methods: HashSet::new(),
                 lifecycle: c.lifecycle,
             });
@@ -493,8 +518,33 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
             // fill in fields and method signatures now that every declaration's
             // name (concrete and generic alike) is known.
 
-            // Validate trait names for generic classes
+            // Validate trait names for generic classes. Refs with type args
+            // name a generic trait template, resolved per class instantiation.
             for trait_name in &c.impl_traits {
+                if !trait_name.type_args.is_empty() {
+                    match env.generic_trait_decls.get(&trait_name.name.node) {
+                        Some(template) => {
+                            if trait_name.type_args.len() != template.type_params.len() {
+                                return Err(CompileError::type_err(
+                                    format!(
+                                        "trait '{}' expects {} type arguments, got {}",
+                                        trait_name.name.node,
+                                        template.type_params.len(),
+                                        trait_name.type_args.len()
+                                    ),
+                                    trait_name.name.span,
+                                ));
+                            }
+                        }
+                        None => {
+                            return Err(CompileError::type_err(
+                                format!("unknown trait '{}'", trait_name.name.node),
+                                trait_name.name.span,
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 if !env.traits.contains_key(&trait_name.name.node) {
                     return Err(CompileError::type_err(
                         format!("unknown trait '{}'", trait_name.name.node),
@@ -581,7 +631,8 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                 fields,
                 methods: method_names,
                 method_sigs,
-                impl_traits: c.impl_traits.iter().map(|t| t.name.node.clone()).collect(),
+                impl_traits: c.impl_traits.iter().filter(|t| t.type_args.is_empty()).map(|t| t.name.node.clone()).collect(),
+                generic_impl_traits: c.impl_traits.iter().filter(|t| !t.type_args.is_empty()).map(|t| (t.name.node.clone(), t.type_args.clone())).collect(),
                 mut_self_methods: generic_mut_self,
                 lifecycle: c.lifecycle,
             });
