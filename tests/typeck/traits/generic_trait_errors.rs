@@ -67,12 +67,13 @@ fn generic_trait_bound_not_satisfied() {
     );
 }
 
-// Default methods in generic traits are not supported
+// Default methods in generic traits: a broken default body still errors
+// against the instantiated signature
 #[test]
-fn generic_trait_default_method() {
+fn generic_trait_default_body_type_error() {
     compile_should_fail_with(
-        "trait T<U>{\n    fn foo(self) U\n\n    fn bar(self) int {\n        return 1\n    }\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){}",
-        "default method 'bar' in generic trait 'T' is not supported",
+        "trait T<U>{\n    fn foo(self) U\n\n    fn bar(self) U {\n        return \"hi\"\n    }\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){}",
+        "",
     );
 }
 
