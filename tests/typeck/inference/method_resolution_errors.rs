@@ -58,7 +58,7 @@ e.foo()}"#, "method call on non-class type"); }
 #[test]
 fn mut_method_on_immut_var() { compile_should_fail_with(r#"class C{x:int
 fn foo(mut self){self.x=2}} fn main(){let c=C{x:1}
-c.foo()}"#, ""); }
+c.foo()}"#, "cannot call mutating method 'foo' on immutable variable 'c'; declare with 'let mut' to allow mutation"); }
 #[test]
 fn method_on_task() { compile_should_fail_with(r#"fn work()int{return 1}
 fn main(){let t=spawn work()

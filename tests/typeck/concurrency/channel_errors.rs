@@ -33,7 +33,7 @@ fn receive_on_sender() { compile_should_fail_with(r#"fn main(){let ch=chan<int>(
 
 // Channel generic wrong instantiation
 #[test]
-fn channel_generic_wrong() { compile_should_fail_with(r#"fn make<T>()Channel<T,T>{return chan<T>()} fn main(){let ch:Channel<int,int>=make<string>()}"#, ""); }
+fn channel_generic_wrong() { compile_should_fail_with(r#"fn make<T>()Channel<T,T>{return chan<T>()} fn main(){let ch:Channel<int,int>=make<string>()}"#, "unknown generic type 'Channel'"); }
 
 // Send nullable to non-nullable channel
 #[test]

@@ -37,15 +37,15 @@ fn spawn_non_function() { compile_should_fail_with(r#"fn main(){let x=1 spawn x}
 
 // Spawn with wrong args
 #[test]
-fn spawn_wrong_args() { compile_should_fail_with(r#"fn task(x:int)int{return x} fn main(){spawn task("hi")}"#, ""); }
+fn spawn_wrong_args() { compile_should_fail_with(r#"fn task(x:int)int{return x} fn main(){spawn task("hi")}"#, "argument 1 of 'task': expected int, found string"); }
 
 // Spawn with missing args
 #[test]
-fn spawn_missing_args() { compile_should_fail_with(r#"fn task(x:int)int{return x} fn main(){spawn task()}"#, ""); }
+fn spawn_missing_args() { compile_should_fail_with(r#"fn task(x:int)int{return x} fn main(){spawn task()}"#, "function 'task' expects 1 arguments, got 0"); }
 
 // Spawn with extra args
 #[test]
-fn spawn_extra_args() { compile_should_fail_with(r#"fn task()int{return 1} fn main(){spawn task(1)}"#, ""); }
+fn spawn_extra_args() { compile_should_fail_with(r#"fn task()int{return 1} fn main(){spawn task(1)}"#, "function 'task' expects 0 arguments, got 1"); }
 
 // Task propagate without fallible get
 #[test]

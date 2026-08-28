@@ -159,7 +159,7 @@ fn multiple_decimal_points_still_rejected() {
 fn nullable_receiver_requires_narrowing() {
     compile_should_fail_with(
         "fn main(){\n    let x: int? = 5\n    print(x.abs())\n}",
-        "",
+        "method call on non-class type int?",
     );
 }
 

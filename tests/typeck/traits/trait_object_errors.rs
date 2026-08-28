@@ -113,4 +113,4 @@ fn match_on_trait_object() { compile_should_fail_with(r#"trait T{} class C impl 
 
 // Trait object size/layout issues
 #[test]
-fn sizeof_trait_object() { compile_should_fail_with(r#"trait T{} fn main(){let s=sizeof(T)}"#, ""); }
+fn sizeof_trait_object() { compile_should_fail_with(r#"trait T{} fn main(){let s=sizeof(T)}"#, "undefined function 'sizeof'"); }

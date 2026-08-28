@@ -13,7 +13,7 @@ fn get_moved_task() { compile_should_fail_with(r#"fn task()int{return 1} fn main
 
 // Task assigned to wrong type
 #[test]
-fn task_wrong_type() { compile_should_fail_with(r#"fn task()int{return 1} fn main(){let t:Task<string>=spawn task()}"#, ""); }
+fn task_wrong_type() { compile_should_fail_with(r#"fn task()int{return 1} fn main(){let t:Task<string>=spawn task()}"#, "type mismatch: expected Task<string>, found Task<int>"); }
 
 // Task type inference failure
 #[test]
@@ -21,7 +21,7 @@ fn task_type_inference() { compile_should_fail_with(r#"fn task()int{return 1} fn
 
 // Task in array wrong type
 #[test]
-fn task_array_wrong_type() { compile_should_fail_with(r#"fn task()int{return 1} fn main(){let tasks:Array<Task<string>>=[spawn task()]}"#, ""); }
+fn task_array_wrong_type() { compile_should_fail_with(r#"fn task()int{return 1} fn main(){let tasks:[Task<string>]=[spawn task()]}"#, "type mismatch"); }
 
 // Task in map wrong type
 #[test]
@@ -29,15 +29,15 @@ fn task_map_wrong_type() { compile_should_fail_with(r#"fn task()int{return 1} fn
 
 // Task return from function wrong type
 #[test]
-fn task_return_wrong_type() { compile_should_fail_with(r#"fn task()int{return 1} fn make()Task<string>{return spawn task()} fn main(){}"#, ""); }
+fn task_return_wrong_type() { compile_should_fail_with(r#"fn task()int{return 1} fn make()Task<string>{return spawn task()} fn main(){}"#, "return type mismatch: expected Task<string>, found Task<int>"); }
 
 // Task as parameter wrong type
 #[test]
-fn task_param_wrong_type() { compile_should_fail_with(r#"fn task()int{return 1} fn wait(t:Task<string>){let x=t.get()} fn main(){wait(spawn task())}"#, ""); }
+fn task_param_wrong_type() { compile_should_fail_with(r#"fn task()int{return 1} fn wait(t:Task<string>){let x=t.get()} fn main(){wait(spawn task())}"#, "argument 1 of 'wait': expected Task<string>, found Task<int>"); }
 
 // Task field wrong type
 #[test]
-fn task_field_wrong_type() { compile_should_fail_with(r#"fn task()int{return 1} class C{t:Task<string>} fn main(){let c=C{t:spawn task()}}"#, ""); }
+fn task_field_wrong_type() { compile_should_fail_with(r#"fn task()int{return 1} class C{t:Task<string>} fn main(){let c=C{t:spawn task()}}"#, "field 't': expected Task<string>, found Task<int>"); }
 
 // Task generic instantiation wrong
 #[test]
@@ -53,7 +53,11 @@ fn task_through_closure() { compile_should_fail_with(r#"fn task()int{return 1} f
 
 // Task in nested spawn
 #[test]
-fn task_nested_spawn() { compile_should_fail_with(r#"fn inner()int{return 1} fn outer()Task<int>{return spawn inner()} fn main(){spawn outer()}"#, ""); }
+fn task_nested_spawn() {
+    // Returning a spawned task and re-spawning are legal; the outer
+    // discarded handle is the error
+    compile_should_fail_with(r#"fn inner()int{return 1} fn outer()Task<int>{return spawn inner()} fn main(){spawn outer()}"#, "Task handle must be used");
+}
 
 // Task nullable field access
 #[test]

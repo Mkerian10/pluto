@@ -25,11 +25,11 @@ fn overload_mut_self() { compile_should_fail_with(r#"class C{x:int} fn foo(self)
 
 // Constructor overload
 #[test]
-fn overload_constructor() { compile_should_fail_with(r#"class C{x:int} fn new()C{return C{x:0}} fn new(x:int)C{return C{x:x}} fn main(){}"#, ""); }
+fn overload_constructor() { compile_should_fail_with(r#"class C{x:int} fn new()C{return C{x:0}} fn new(x:int)C{return C{x:x}} fn main(){}"#, "function 'new' is already declared"); }
 
 // Static method overload (if supported)
 #[test]
-fn overload_static() { compile_should_fail_with(r#"class C{} fn create()C{return C{}} fn create(x:int)C{return C{}} fn main(){}"#, ""); }
+fn overload_static() { compile_should_fail_with(r#"class C{} fn create()C{return C{}} fn create(x:int)C{return C{}} fn main(){}"#, "function 'create' is already declared"); }
 
 // Trait method overload
 #[test]

@@ -42,7 +42,7 @@ fn method_wrong_receiver() { compile_should_fail_with(r#"class C1{} class C2{} f
 
 // Static method lookup (not supported)
 #[test]
-fn static_method() { compile_should_fail_with(r#"class C{} fn create()C{return C{}} fn main(){C.create()}"#, ""); }
+fn static_method() { compile_should_fail_with(r#"class C{} fn create()C{return C{}} fn main(){C.create()}"#, "undefined variable 'C'"); }
 
 // Method with wrong self type
 #[test]

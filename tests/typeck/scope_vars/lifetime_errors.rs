@@ -47,7 +47,7 @@ fn while_lifetime() { compile_should_fail_with(r#"fn main(){while true{let x=1}l
 
 // Lifetime across function boundary
 #[test]
-fn cross_function_lifetime() { compile_should_fail_with(r#"fn f(){let x=1} fn g(){let y=x} fn main(){}"#, ""); }
+fn cross_function_lifetime() { compile_should_fail_with(r#"fn f(){let x=1} fn g(){let y=x} fn main(){}"#, "undefined variable 'x'"); }
 
 // Static lifetime (if supported)
 #[test]

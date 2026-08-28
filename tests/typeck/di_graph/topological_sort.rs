@@ -51,28 +51,31 @@ fn generic_class_dep() {
     assert_eq!(out.trim(), "5");
 }
 
+// Non-class injected deps are rejected: DI wires class singletons, and
+// these previously compiled with zero-filled slots (an int dep read 0, an
+// enum dep held an invalid value, a trait dep was a null vtable handle)
 #[test]
-fn dep_on_value_type_allowed() {
-    let out = compile_and_run_stdout(
+fn dep_on_value_type_rejected() {
+    compile_should_fail_with(
         "class A[x: int] {\n    fn v(self) int {\n        return self.x\n    }\n}\n\napp MyApp[a: A] {\n    fn main(self){\n        print(self.a.v())\n    }\n}",
+        "injected dependency 'x' of class 'A' must be a class type, found int",
     );
-    assert_eq!(out.trim(), "0");
 }
 
 #[test]
-fn dep_on_trait_allowed() {
-    let out = compile_and_run_stdout(
+fn dep_on_trait_rejected() {
+    compile_should_fail_with(
         "trait T {}\n\nclass A[t: T] {}\n\napp MyApp[a: A] {\n    fn main(self){\n        print(1)\n    }\n}",
+        "must be a class type",
     );
-    assert_eq!(out.trim(), "1");
 }
 
 #[test]
-fn dep_on_enum_allowed() {
-    let out = compile_and_run_stdout(
+fn dep_on_enum_rejected() {
+    compile_should_fail_with(
         "enum E {\n    A\n}\n\nclass C[e: E] {}\n\napp MyApp[c: C] {\n    fn main(self){\n        print(1)\n    }\n}",
+        "must be a class type",
     );
-    assert_eq!(out.trim(), "1");
 }
 
 // ── Rejections ───────────────────────────────────────────────────────────────
@@ -105,7 +108,10 @@ fn duplicate_dep_names() {
 // ── Kept from the original file ──────────────────────────────────────────────
 
 #[test]
-fn multiple_deps_same() { compile_should_fail_with(r#"class A{} class B[a1:A,a2:A]{} app MyApp{fn main(self){}}"#, ""); }
+fn multiple_deps_same() {
+    // Two deps of the same type are two edges — legal (was a false cycle)
+    assert_eq!(common::compile_and_run(r#"class A{} class B[a1:A,a2:A]{} app MyApp[b:B]{fn main(self){}}"#), 0);
+}
 
 #[test]
 fn dep_on_private() { compile_should_fail_with(r#"private class A{} class B[a:A]{} app MyApp{fn main(self){}}"#, ""); }
@@ -114,10 +120,10 @@ fn dep_on_private() { compile_should_fail_with(r#"private class A{} class B[a:A]
 fn multiple_apps() { compile_should_fail_with(r#"app App1{fn main(self){}} app App2{fn main(self){}}"#, ""); }
 
 #[test]
-fn app_no_main() { compile_should_fail_with(r#"app MyApp{fn helper(self){}}"#, ""); }
+fn app_no_main() { compile_should_fail_with(r#"app MyApp{fn helper(self){}}"#, "app must have a 'main' method"); }
 
 #[test]
-fn app_main_wrong_sig() { compile_should_fail_with(r#"app MyApp{fn main(self)int{return 1}}"#, ""); }
+fn app_main_wrong_sig() { compile_should_fail_with(r#"app MyApp{fn main(self)int{return 1}}"#, "app main method must not have a return type"); }
 
 #[test]
 fn scoped_class_in_graph_compiles() {

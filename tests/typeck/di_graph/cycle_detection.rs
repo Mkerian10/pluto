@@ -43,7 +43,7 @@ fn partial_cycle() { compile_should_fail_with(r#"class A[b:B]{} class B[c:C]{} c
 
 // Cycle only in unused classes
 #[test]
-fn unused_cycle() { compile_should_fail_with(r#"class A[b:B]{} class B[a:A]{} class C{} app MyApp[c:C]{fn main(self){}}"#, ""); }
+fn unused_cycle() { compile_should_fail_with(r#"class A[b:B]{} class B[a:A]{} class C{} app MyApp[c:C]{fn main(self){}}"#, "circular dependency detected"); }
 
 // Cycle through scoped classes
 #[test]

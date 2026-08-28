@@ -18,7 +18,7 @@ fn nested_empty_blocks() { compile_should_fail_with(r#"fn main(){{{{}}}}}"#, "")
 
 // Match with single arm
 #[test]
-fn match_single_arm() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{E.A{}}}"#, ""); }
+fn match_single_arm() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{E.A{}}}"#, "non-exhaustive match: missing variant 'B'"); }
 
 // REMOVED: for_empty_range - empty ranges are valid
 // REMOVED: infinite_loop_only_break - while true {break} is valid

@@ -56,7 +56,7 @@ fn enum_vtable() { compile_should_fail_with(r#"trait T{fn foo(self)} enum E{A B}
 // Vtable with mut self
 #[test]
 fn vtable_mut_self() { compile_should_fail_with(r#"trait T{fn foo(mut self)} class C impl T{x:int
-fn foo(self){}} fn main(){}"#, ""); }
+fn foo(self){}} fn main(){}"#, "method 'foo' in trait 'T' declares 'mut self', but class 'C' does not"); }
 
 // Vtable with parameters
 #[test]

@@ -32,7 +32,7 @@ fn closure_in_match() { compile_should_fail_with(r#"enum E{A B} fn main(){match 
 
 // Closure in set literal (closures not hashable)
 #[test]
-fn closure_in_set() { compile_should_fail_with(r#"fn main(){let s=Set<fn(int) int>{(x:int)=>x}}"#, ""); }
+fn closure_in_set() { compile_should_fail_with(r#"fn main(){let s=Set<fn(int) int>{(x:int)=>x}}"#, "type fn(int) int cannot be used as a map/set key (must be int, float, bool, string, byte, or enum)"); }
 
 // REMOVED: closure_as_arg - closures as arguments actually work
 

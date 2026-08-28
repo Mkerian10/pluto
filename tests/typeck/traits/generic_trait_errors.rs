@@ -92,7 +92,7 @@ fn generic_trait_bound_not_satisfied() {
 fn generic_trait_default_body_type_error() {
     compile_should_fail_with(
         "trait T<U>{\n    fn foo(self) U\n\n    fn bar(self) U {\n        return \"hi\"\n    }\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){}",
-        "",
+        "return type mismatch: expected int, found string",
     );
 }
 
@@ -119,7 +119,7 @@ fn generic_trait_method_uses_wrong_param() {
 fn generic_trait_object_wrong_args() {
     compile_should_fail_with(
         "trait T<U>{\n    fn foo(self) U\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){\n    let t: T<string> = C{x:1}\n}",
-        "",
+        "type mismatch: expected trait T$$string, found C",
     );
 }
 
@@ -128,7 +128,7 @@ fn generic_trait_object_wrong_args() {
 fn generic_trait_bare_type_mention() {
     compile_should_fail_with(
         "trait T<U>{\n    fn foo(self) U\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){\n    let t: T = C{x:1}\n}",
-        "",
+        "unknown type 'T'",
     );
 }
 

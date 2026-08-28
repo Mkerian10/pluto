@@ -92,7 +92,7 @@ fn assign_in_expr() { compile_should_fail_with(r#"fn main(){let x=1 let y=(x=2)}
 
 // Compound assignment on undefined
 #[test]
-fn compound_assign_undefined() { compile_should_fail_with(r#"fn main(){x+=1}"#, ""); }
+fn compound_assign_undefined() { compile_should_fail_with(r#"fn main(){x+=1}"#, "undefined variable 'x'"); }
 
 // Array element assign out of bounds aborts at runtime (not a typeck error)
 #[test]

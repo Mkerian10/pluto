@@ -7,11 +7,11 @@ use common::compile_should_fail_with;
 #[test]
 fn two_traits_same_method_diff_sig() { compile_should_fail_with(r#"trait T1{fn foo(self)int} trait T2{fn foo(self)string} class C impl T1, T2{
 fn foo(self)int{return 1}
-fn foo(self)string{return "hi"}} fn main(){}"#, ""); }
+fn foo(self)string{return "hi"}} fn main(){}"#, "duplicate method 'foo' in class 'C'"); }
 #[test]
 fn two_traits_same_method_diff_params() { compile_should_fail_with(r#"trait T1{fn foo(self,x:int)} trait T2{fn foo(self,x:string)} class C impl T1, T2{
 fn foo(self,x:int){}
-fn foo(self,x:string){}} fn main(){}"#, ""); }
+fn foo(self,x:string){}} fn main(){}"#, "duplicate method 'foo' in class 'C'"); }
 
 // Conflicting method names
 #[test]
@@ -30,7 +30,7 @@ fn main(){}"#, "does not implement required method"); }
 #[test]
 fn two_traits_compatible_methods() { compile_should_fail_with(r#"trait T1{fn foo(self)int} trait T2{fn foo(self)int} class C impl T1, T2{
 fn foo(self)int{return 1}
-fn foo(self)int{return 2}} fn main(){}"#, ""); }
+fn foo(self)int{return 2}} fn main(){}"#, "duplicate method 'foo' in class 'C'"); }
 
 // Generic traits with same method
 #[test]
@@ -40,7 +40,7 @@ fn two_generic_traits_conflict() { compile_should_fail_with(r#"trait T1<U>{fn fo
 #[test]
 fn two_traits_conflicting_contracts() { compile_should_fail_with(r#"trait T1{fn foo(self)int requires true} trait T2{fn foo(self)int requires false} class C impl T1, T2{
 fn foo(self)int{return 1}
-fn foo(self)int{return 1}} fn main(){}"#, ""); }
+fn foo(self)int{return 1}} fn main(){}"#, "duplicate method 'foo' in class 'C'"); }
 
 // Method from one trait, wrong impl
 #[test]
@@ -60,7 +60,7 @@ fn foo(self){}} impl Right{fn foo(self){}} fn main(){}"#, ""); }
 #[test]
 fn duplicate_trait_impl() { compile_should_fail_with(r#"trait T{fn foo(self)} class C impl T, T{
 fn foo(self){}
-fn foo(self){}} fn main(){}"#, ""); }
+fn foo(self){}} fn main(){}"#, "duplicate method 'foo' in class 'C'"); }
 
 // Generic class with multiple traits
 #[test]
@@ -95,7 +95,7 @@ fn bar(self){} fn baz(self){}} fn main(){}"#, ""); }
 #[test]
 fn nullable_conflict() { compile_should_fail_with(r#"trait T1{fn foo(self)int?} trait T2{fn foo(self)int} class C impl T1, T2{
 fn foo(self)int?{return none}
-fn foo(self)int{return 1}} fn main(){}"#, ""); }
+fn foo(self)int{return 1}} fn main(){}"#, "duplicate method 'foo' in class 'C'"); }
 
 // Error method in one trait, infallible in another
 #[test]
@@ -111,7 +111,7 @@ fn foo<V>(self,x:V)V{return x}} fn main(){}"#, ""); }
 #[test]
 fn mut_self_conflict() { compile_should_fail_with(r#"trait T1{fn foo(mut self)} trait T2{fn foo(self)} class C impl T1, T2{
 fn foo(mut self){}
-fn foo(self){}} fn main(){}"#, ""); }
+fn foo(self){}} fn main(){}"#, "duplicate method 'foo' in class 'C'"); }
 
 // Static method collision (if supported)
 #[test]
@@ -120,7 +120,7 @@ fn static_method_conflict() { compile_should_fail_with(r#"trait T1{fn create()C}
 // Trait with same name, different packages (if supported)
 #[test]
 fn same_trait_name_collision() { compile_should_fail_with(r#"trait T{fn foo(self)} trait T{fn bar(self)} class C impl T{
-fn foo(self){}} fn main(){}"#, ""); }
+fn foo(self){}} fn main(){}"#, "trait 'T' is already declared"); }
 
 // Multiple traits on multiple classes
 #[test]

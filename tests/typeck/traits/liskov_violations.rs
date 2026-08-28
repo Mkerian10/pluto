@@ -59,7 +59,7 @@ fn impl_contradicts_trait_requires() { compile_should_fail_with(r#"trait T{fn fo
 requires x>0} class C impl T
 {fn foo(self,x:int)
 requires x<0
-{}} fn main(){}"#, ""); }
+{}} fn main(){}"#, "method 'foo' on class 'C' cannot add 'requires' clauses: it implements trait 'T' and adding preconditions would violate the Liskov Substitution Principle"); }
 #[test]
 fn impl_contradicts_trait_ensures() { compile_should_fail_with(r#"trait T{fn foo(self)int
 ensures result>0} class C impl T

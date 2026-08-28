@@ -26,7 +26,13 @@ fn capture_param() { compile_and_run(r#"fn f(x:int){let g=()=>x+1} fn main(){}"#
 
 // Capture self in method
 #[test]
-fn capture_self() { compile_should_fail_with(r#"class C{x:int} fn foo(self){let f=()=>self.x} fn main(){}"#, ""); }
+fn capture_self() {
+    // Capturing self in a method closure is legal (the old source put the
+    // method outside the class, so it never parsed)
+    compile_and_run(r#"class C{x:int
+fn foo(self) int {let f=()=>self.x
+return f()}} fn main(){}"#);
+}
 
 // Capture mutable variable (immutable capture)
 #[test]

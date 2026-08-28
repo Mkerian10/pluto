@@ -109,7 +109,7 @@ fn main(){}"#), 0);
 
 // Recursive with closure
 #[test]
-fn recursive_closure_generic() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>f(x)}"#, ""); }
+fn recursive_closure_generic() { compile_should_fail_with(r#"fn main(){let f=(x:int)=>f(x)}"#, "undefined function 'f'"); }
 
 // Chain of recursive calls
 #[test]
@@ -130,7 +130,7 @@ fn pair_self_reference() { compile_should_fail_with(r#"class Pair<T,U>{first:T s
 
 // Recursive with nullable doesn't prevent infinite
 #[test]
-fn nullable_still_recursive() { compile_should_fail_with(r#"class Box<T>{inner:Box<Box<T>>?} fn main(){}"#, ""); }
+fn nullable_still_recursive() { compile_should_fail_with(r#"class Box<T>{inner:Box<Box<T>>?} fn main(){}"#, "expanding recursive reference: 'Box' instantiates 'Box' with nested type arguments on a reference cycle back to 'Box' — each round would demand a deeper instantiation, forever. Use plain type parameters or concrete types in the reference."); }
 
 // Generic recursion depth check
 #[test]
@@ -165,7 +165,7 @@ fn recursive_bounded() {
 
 // Function returning recursive type
 #[test]
-fn fn_returns_recursive() { compile_should_fail_with(r#"class Box<T>{inner:Box<T>} fn make<U>()Box<U>{return Box<U>{inner:make()}} fn main(){}"#, ""); }
+fn fn_returns_recursive() { compile_should_fail_with(r#"class Box<T>{inner:Box<T>} fn make<U>()Box<U>{return Box<U>{inner:make()}} fn main(){}"#, "cannot infer type parameter 'U' for 'make'"); }
 
 // Recursive with explicit type args
 #[test]

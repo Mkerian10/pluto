@@ -17,11 +17,18 @@ fn spawn_lambda() { compile_should_fail_with(r#"fn main(){spawn ((x:int)=>x+1)(1
 
 // Spawn builtin function
 #[test]
-fn spawn_builtin() { compile_should_fail_with(r#"fn main(){spawn print("hi")}"#, ""); }
+fn spawn_builtin() {
+    // Spawning a builtin is legal; discarding the handle is not
+    compile_should_fail_with(r#"fn main(){spawn print("hi")}"#, "Task handle must be used");
+}
 
 // Spawn void function
 #[test]
-fn spawn_void_func() { compile_should_fail_with(r#"fn task(){print("hi")} fn main(){spawn task()}"#, ""); }
+fn spawn_void_func() {
+    // Spawning a void fn is legal (see integration spawn_void_function);
+    // discarding the handle is the error
+    compile_should_fail_with(r#"fn task(){print("hi")} fn main(){spawn task()}"#, "Task handle must be used");
+}
 
 // Spawn constructor
 #[test]
@@ -53,7 +60,7 @@ fn spawn_string_lit() { compile_should_fail_with(r#"fn main(){spawn "hello"}"#, 
 
 // Spawn in spawn args
 #[test]
-fn spawn_in_spawn_args() { compile_should_fail_with(r#"fn inner()int{return 1} fn outer(x:int)int{return x} fn main(){spawn outer(spawn inner())}"#, ""); }
+fn spawn_in_spawn_args() { compile_should_fail_with(r#"fn inner()int{return 1} fn outer(x:int)int{return x} fn main(){spawn outer(spawn inner())}"#, "argument 1 of 'outer': expected int, found Task<int>"); }
 
 // Spawn generic function wrong type args
 #[test]
@@ -65,7 +72,10 @@ fn spawn_catch_in_args() { compile_should_fail_with(r#"error E{} fn f()!int{rais
 
 // Spawn recursive function
 #[test]
-fn spawn_recursive() { compile_should_fail_with(r#"fn rec(n:int)int{if n==0{return 1}else{return rec(n-1)}} fn main(){spawn rec(5)}"#, ""); }
+fn spawn_recursive() {
+    // Spawning a recursive fn is legal; discarding the handle is not
+    compile_should_fail_with(r#"fn rec(n:int)int{if n==0{return 1}else{return rec(n-1)}} fn main(){spawn rec(5)}"#, "Task handle must be used");
+}
 
 // Spawn trait method
 #[test]
