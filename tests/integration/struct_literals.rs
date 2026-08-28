@@ -119,14 +119,14 @@ fn struct_literal_with_expressions() {
 fn struct_literal_shorthand_rejected() {
     // Foo { a } → shorthand field syntax should be rejected (if not supported)
     // If shorthand IS supported, this test documents that fact
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
         class Foo { a: int }
 
         fn main() {
             let a = 42
             let x = Foo { a }
         }
-    "#);
+    "#, "expected newline after statement");
 }
 
 #[test]

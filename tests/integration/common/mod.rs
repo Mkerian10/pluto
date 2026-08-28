@@ -81,10 +81,16 @@ pub fn compile_should_fail_with(source: &str, expected_msg: &str) {
 /// Assert compilation fails (any error).
 /// Uses compile_to_object() — no file I/O or linking needed for failure tests.
 pub fn compile_should_fail(source: &str) {
-    assert!(
-        pluto::compile_to_object(source).is_err(),
-        "Compilation should have failed"
-    );
+    match pluto::compile_to_object(source) {
+        Ok(_) => panic!("Compilation should have failed"),
+        Err(e) => {
+            // Audit mode: this helper asserts nothing about WHICH error
+            // occurred — see compile_should_fail_with
+            if std::env::var("PLUTO_AUDIT_VACUOUS").is_ok() {
+                panic!("VACUOUS-AUDIT: {}", e);
+            }
+        }
+    }
 }
 
 /// Compile source in test mode and run the resulting binary, capturing stdout + stderr.

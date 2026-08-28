@@ -368,21 +368,18 @@ fn match_expr_missing_comma_between_arms() {
 
 #[test]
 fn match_expr_empty_match() {
-    compile_should_fail(
-        r#"
+    compile_should_fail_with(r#"
         enum E { A B }
         fn main() {
             let e = E.A
             let x = match e { }
         }
-        "#
-    );
+        "#, "match expression must have at least one arm");
 }
 
 #[test]
 fn match_expr_missing_fat_arrow() {
-    compile_should_fail(
-        r#"
+    compile_should_fail_with(r#"
         enum E { A B }
         fn main() {
             let e = E.A
@@ -391,8 +388,7 @@ fn match_expr_missing_fat_arrow() {
                 E.B => 2
             }
         }
-        "#
-    );
+        "#, "expected =>, found 1");
 }
 
 #[test]

@@ -94,11 +94,11 @@ fn array_access_after_newline() {
 #[test]
 fn multiple_let_statements_same_line() {
     // Parser behavior with multiple statements without newlines
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
         fn main() {
             let x = 1 let y = 2
         }
-    "#);
+    "#, "expected newline after statement");
 }
 
 #[test]

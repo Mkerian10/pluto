@@ -14,11 +14,11 @@ use common::*;
 #[test]
 fn arrow_no_parens_single_param() {
     // x => x + 1 (no parens) → Pluto requires parens around params
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
         fn main() {
             let f = x => x + 1
         }
-    "#);
+    "#, "expected newline after statement");
 }
 
 #[test]

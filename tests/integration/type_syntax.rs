@@ -393,11 +393,11 @@ fn self_referential_generic_type() {
 #[test]
 fn map_key_complex_type() {
     // Using complex types as map keys (may fail if not hashable)
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
         class Point { x: int, y: int }
 
         fn main() {
             let m: Map<Point, int> = Map<Point, int> {}
         }
-    "#);
+    "#, "type Point cannot be used as a map/set key (must be int, float, bool, string, byte, or enum)");
 }

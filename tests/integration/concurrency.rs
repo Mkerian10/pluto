@@ -178,11 +178,11 @@ fn main() {
 
 #[test]
 fn compile_fail_spawn_non_call() {
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 fn main() {
     let t = spawn 42
 }
-"#);
+"#, "expected identifier, found 42");
 }
 
 #[test]
@@ -376,11 +376,11 @@ fn main() {
 
 #[test]
 fn compile_fail_spawn_closure() {
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
 fn main() {
     let t = spawn (() => 42)()
 }
-"#);
+"#, "expected identifier, found (");
 }
 
 // ── Assignment invalidation ────────────────────────────────────────────

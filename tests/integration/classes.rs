@@ -75,8 +75,9 @@ fn class_methods_only() {
 
 #[test]
 fn class_unknown_field_type_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "class Bad {\n    x: NonExistent\n}\n\nfn main() {\n    let b = Bad { x: 1 }\n}",
+        "unknown type 'NonExistent'",
     );
 }
 

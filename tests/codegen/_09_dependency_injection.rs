@@ -1,7 +1,7 @@
 // Category 9: Dependency Injection Tests (15+ tests)
 // Validates DI codegen: bracket deps, app main, scoped instances
 
-use super::common::{compile_and_run, compile_and_run_stdout, compile_should_fail};
+use super::common::{compile_and_run, compile_and_run_stdout, compile_should_fail_with};
 
 // ============================================================================
 // Bracket Dependencies (5 tests)
@@ -444,7 +444,7 @@ fn test_di_struct_literal_blocked() {
             let svc = Service { db: db }
         }
     "#;
-    compile_should_fail(src);
+    compile_should_fail_with(src, "cannot manually construct class 'Service' with injected dependencies");
 }
 
 #[test]
@@ -458,7 +458,7 @@ fn test_di_cycle_detected() {
             fn main(self) {}
         }
     "#;
-    compile_should_fail(src);
+    compile_should_fail_with(src, "circular dependency detected");
 }
 
 #[test]

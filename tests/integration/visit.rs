@@ -275,7 +275,7 @@ fn create_program_with_types() -> Program {
 // ==============================================================================
 
 mod common;
-use common::{compile_and_run, compile_and_run_stdout, compile_should_fail};
+use common::{compile_and_run, compile_and_run_stdout, compile_should_fail_with};
 
 #[test]
 fn test_visitor_spawn_closure_detection() {
@@ -389,7 +389,7 @@ fn test_visitor_self_mutation_immutable_method() {
         fn main() {}
     "#;
 
-    compile_should_fail(source);
+    compile_should_fail_with(source, "cannot assign to 'self.value' in a non-mut method");
 }
 
 #[test]

@@ -77,8 +77,9 @@ fn for_loop_empty_body() {
 
 #[test]
 fn for_loop_non_array_rejected() {
-    compile_should_fail(
+    compile_should_fail_with(
         "fn main() {\n    for x in 42 {\n    }\n}",
+        "for loop requires array, range, string, bytes, receiver, or stream, found int",
     );
 }
 

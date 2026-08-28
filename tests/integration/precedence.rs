@@ -34,12 +34,12 @@ fn precedence_logical_and_vs_or() {
 fn precedence_bitwise_vs_comparison() {
     // x & 3 == 0 → C parses as x & (3 == 0), but Pluto rejects due to type error
     // Pluto follows C precedence (== binds tighter than &) but has stricter typing
-    compile_should_fail(r#"
+    compile_should_fail_with(r#"
         fn main() {
             let x = 4
             let result = x & 3 == 0  // Would parse as x & (3 == 0), but bool not allowed with &
         }
-    "#);
+    "#, "bitwise operators require int operands, found int and bool");
 
     // With parentheses, it works
     let stdout = compile_and_run_stdout(r#"

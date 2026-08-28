@@ -39,7 +39,9 @@ fn trait_contract_self_ref() { compile_should_fail_with(r#"trait T{fn f(self,x:i
 requires self.y>0}
 class C impl T {y:int
 fn f(self,x:int){}}
-fn main(){}"#, ""); }
+fn main(){}"#, "field access on non-class type"); }
+// (self in a bodiless trait-signature contract types as the Void
+// placeholder — the rejection is real, the message could be better)
 
 // Contract on nested trait impl
 #[test]
