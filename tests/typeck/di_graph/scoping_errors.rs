@@ -109,20 +109,33 @@ fn transient_keyword_parses() {
     );
 }
 
+// A transient reaching a seed-requiring scoped class at startup is the
+// captive-dependency error — same as any other startup path
 #[test]
-#[ignore] // Deferred: transient lifecycle rules (transient vs scoped/singleton mixing) are not yet specified
 fn transient_depends_scoped() {
     compile_should_fail_with(
         "scoped class A {\n    x: int\n}\n\ntransient class B[a: A] {}\n\napp MyApp[b: B] {\n    fn main(self){}\n}",
-        "scope",
+        "captive dependency",
+    );
+}
+
+// A singleton may depend on a transient — it gets a private fresh instance
+// (the transient must be auto-constructible; 'x' here is a non-injected
+// field, so auto-creation is rejected)
+#[test]
+fn singleton_depends_transient() {
+    compile_should_fail_with(
+        "transient class A {\n    x: int\n}\n\nclass B[a: A] {}\n\napp MyApp[b: B] {\n    fn main(self){}\n}",
+        "transient class 'A' has non-injected fields",
     );
 }
 
 #[test]
-#[ignore] // Deferred: transient lifecycle rules (transient vs scoped/singleton mixing) are not yet specified
-fn singleton_depends_transient() {
-    compile_should_fail_with(
-        "transient class A {\n    x: int\n}\n\nclass B[a: A] {}\n\napp MyApp[b: B] {\n    fn main(self){}\n}",
-        "scope",
+fn singleton_depends_auto_constructible_transient() {
+    assert_eq!(
+        compile_and_run(
+            "transient class A {\n    fn v(self) int {\n        return 1\n    }\n}\n\nclass B[a: A] {\n    fn go(self) int {\n        return self.a.v()\n    }\n}\n\napp MyApp[b: B] {\n    fn main(self){\n        print(self.b.go())\n    }\n}"
+        ),
+        0
     );
 }

@@ -1475,6 +1475,13 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
 
             for dep_name in &deps {
                 if let Some(dep_info) = env.classes.get(dep_name) {
+                    // A transient dep is a private per-injection copy — it
+                    // does not tie the consumer's lifetime (unlike scoped,
+                    // whose per-scope identity forces the consumer to vary
+                    // with it)
+                    if dep_info.lifecycle == Lifecycle::Transient {
+                        continue;
+                    }
                     inferred = min_lifecycle(inferred, dep_info.lifecycle);
                 }
             }
@@ -1543,6 +1550,9 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
                 let mut inferred = class_info.lifecycle;
                 for dep_name in &deps {
                     if let Some(dep_info) = env.classes.get(dep_name) {
+                        if dep_info.lifecycle == Lifecycle::Transient {
+                            continue;
+                        }
                         inferred = min_lifecycle(inferred, dep_info.lifecycle);
                     }
                 }
@@ -1622,6 +1632,9 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
                 let mut inferred = class_info.lifecycle;
                 for dep_name in &deps {
                     if let Some(dep_info) = env.classes.get(dep_name) {
+                        if dep_info.lifecycle == Lifecycle::Transient {
+                            continue;
+                        }
                         inferred = min_lifecycle(inferred, dep_info.lifecycle);
                     }
                 }
@@ -1650,6 +1663,56 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
         }
 
         env.di_order.retain(|n| !env.lifecycle_overridden.contains(n));
+    }
+
+
+    // Transient classes must be auto-constructible wherever they are
+    // injected: a fresh instance is created at every injection point with
+    // no seed mechanism, so non-injected fields would be silently
+    // zero-filled. Manual construction (`let x = T { ... }`) stays legal.
+    {
+        let mut check_dep = |dep_name: &str, holder: &str| -> Result<(), CompileError> {
+            if let Some(dep_info) = env.classes.get(dep_name)
+                && dep_info.lifecycle == Lifecycle::Transient
+                && dep_info.fields.iter().any(|(_, _, inj)| !*inj)
+            {
+                let span = program
+                    .classes
+                    .iter()
+                    .find(|c| c.node.name.node == holder)
+                    .map(|c| c.node.name.span)
+                    .or_else(|| program.app.as_ref().map(|a| a.span))
+                    .unwrap_or_else(crate::span::Span::dummy);
+                return Err(CompileError::type_err(
+                    format!(
+                        "transient class '{dep_name}' has non-injected fields and cannot be auto-created for injection into '{holder}'; transient classes must be auto-constructible (only injected dependencies)"
+                    ),
+                    span,
+                ));
+            }
+            Ok(())
+        };
+        for class in &program.classes {
+            let c = &class.node;
+            for f in &c.fields {
+                if !f.is_injected {
+                    continue;
+                }
+                if let crate::parser::ast::TypeExpr::Named(ref dep) = f.ty.node {
+                    check_dep(dep, &c.name.node)?;
+                }
+            }
+        }
+        if let Some(app_spanned) = &program.app {
+            for f in &app_spanned.node.inject_fields {
+                if f.is_remote || f.is_ambient {
+                    continue;
+                }
+                if let crate::parser::ast::TypeExpr::Named(ref dep) = f.ty.node {
+                    check_dep(dep, &app_spanned.node.name.node)?;
+                }
+            }
+        }
     }
 
     Ok(())
