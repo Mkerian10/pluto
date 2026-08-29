@@ -301,3 +301,159 @@ app MyApp {
 "#);
     assert_eq!(output.trim(), "b");
 }
+
+// ── Transient lifecycle: fresh instance per injection point ──────────────
+
+#[test]
+fn transient_distinct_per_injection_point() {
+    // Two consumers of the same transient class get DISTINCT instances,
+    // while the transient's own singleton dep stays shared
+    let output = compile_and_run_stdout(r#"
+class Log {
+    n: int
+}
+
+transient class Fresh[log: Log] {
+    fn logger(self) Log {
+        return self.log
+    }
+}
+
+class A[f: Fresh] {
+    fn fresh(self) Fresh {
+        return self.f
+    }
+}
+
+class B[f: Fresh] {
+    fn fresh(self) Fresh {
+        return self.f
+    }
+}
+
+app MyApp[a: A, b: B] {
+    fn main(self){
+        if self.a.fresh() == self.b.fresh() {
+            print("transient shared")
+        } else {
+            print("transient distinct")
+        }
+        if self.a.fresh().logger() == self.b.fresh().logger() {
+            print("singleton shared")
+        } else {
+            print("singleton distinct")
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "transient distinct\nsingleton shared");
+}
+
+#[test]
+fn transient_nested_in_transient() {
+    let output = compile_and_run_stdout(r#"
+transient class Inner {
+    fn v(self) int {
+        return 3
+    }
+}
+
+transient class Outer[inner: Inner] {
+    fn v(self) int {
+        return self.inner.v() + 1
+    }
+}
+
+class S[o: Outer] {
+    fn go(self) int {
+        return self.o.v()
+    }
+}
+
+app MyApp[s: S] {
+    fn main(self){
+        print(self.s.go())
+    }
+}
+"#);
+    assert_eq!(output.trim(), "4");
+}
+
+#[test]
+fn transient_dep_in_scope_block() {
+    // A scoped class's transient dep is created fresh at scope entry
+    let output = compile_and_run_stdout(r#"
+class Log {
+    fn say(self) {
+        print("log")
+    }
+}
+
+transient class Helper[log: Log] {
+    fn go(self) {
+        self.log.say()
+    }
+}
+
+scoped class Handler[h: Helper] {
+    id: int
+
+    fn run(self) {
+        self.h.go()
+        print(self.id)
+    }
+}
+
+app MyApp {
+    fn main(self){
+        scope(Handler { id: 5 }) |hd: Handler| {
+            hd.run()
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "log\n5");
+}
+
+#[test]
+fn transient_not_auto_constructible_rejected() {
+    // Injected transients must be auto-constructible: a non-injected field
+    // would be silently zero-filled (there is no seed mechanism)
+    compile_should_fail_with(r#"
+transient class Cfg {
+    port: int
+}
+
+class Service[cfg: Cfg] {}
+
+app MyApp[svc: Service] {
+    fn main(self){}
+}
+"#, "transient class 'Cfg' has non-injected fields and cannot be auto-created");
+}
+
+#[test]
+fn transient_does_not_propagate_lifecycle() {
+    // A consumer of a transient keeps its own lifecycle (unlike scoped,
+    // which propagates): Service stays a singleton the app may hold
+    let output = compile_and_run_stdout(r#"
+transient class Fresh {
+    fn v(self) int {
+        return 9
+    }
+}
+
+class Service[f: Fresh] {
+    fn go(self) int {
+        return self.f.v()
+    }
+}
+
+app MyApp[svc: Service] {
+    fn main(self){
+        print(self.svc.go())
+    }
+}
+"#);
+    assert_eq!(output.trim(), "9");
+}

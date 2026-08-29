@@ -137,6 +137,9 @@ pub enum FieldWiring {
     Singleton(String),
     /// Value comes from another scoped instance created within this scope block (class name)
     ScopedInstance(String),
+    /// A fresh instance of the named transient class, created at this
+    /// injection point (its own fields wire per field_wirings)
+    Transient(String),
 }
 
 /// Resolved DI graph for a single scope block — computed in typeck, consumed in codegen.

@@ -207,7 +207,7 @@ cargo run -- run examples/nullable/main.pt
 
 ## scope-blocks
 
-Demonstrates scoped dependency injection with `scope()` blocks: creating per-request scoped class instances from seed values, auto-wiring dependency chains (`Handler` -> `UserService` -> `RequestCtx`), mixing scoped and singleton deps, and binding multiple services from a single seed.
+Demonstrates scoped dependency injection with `scope()` blocks: creating per-request scoped class instances from seed values, auto-wiring dependency chains (`Handler` -> `UserService` -> `RequestCtx`), mixing scoped and singleton deps, binding multiple services from a single seed, and transient classes that get a fresh instance at every injection point (`transient class Tracer`).
 
 ```bash
 cargo run -- run examples/scope-blocks/main.pt

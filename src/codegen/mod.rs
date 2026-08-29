@@ -42,6 +42,46 @@ fn host_target_triple() -> Result<&'static str, CompileError> {
 }
 
 /// Declare a writable, zero-initialized 8-byte global for each name in the iterator.
+/// Allocate and wire a fresh instance of a transient class during startup
+/// wiring. Singleton deps come from the shared map; transient deps recurse
+/// (typeck rejects transient cycles). Scoped deps cannot appear at startup
+/// (captive-dependency validation).
+fn emit_startup_transient(
+    class_name: &str,
+    env: &crate::typeck::env::TypeEnv,
+    builder: &mut cranelift_frontend::FunctionBuilder,
+    alloc_ref: cranelift_codegen::ir::FuncRef,
+    singletons: &HashMap<String, Value>,
+) -> Result<Value, CompileError> {
+    let class_info = env.classes.get(class_name).ok_or_else(|| {
+        CompileError::codegen(format!("DI: unknown transient class '{class_name}'"))
+    })?;
+    let size = class_info.fields.len() as i64 * POINTER_SIZE as i64;
+    let size_val = builder.ins().iconst(types::I64, size);
+    let call = builder.ins().call(alloc_ref, &[size_val]);
+    let ptr = builder.inst_results(call)[0];
+    let fields = class_info.fields.clone();
+    for (i, (_, field_ty, is_injected)) in fields.iter().enumerate() {
+        if !*is_injected {
+            continue;
+        }
+        if let PlutoType::Class(dep_name) = field_ty {
+            let dep_ptr = if env.classes.get(dep_name).map(|c| c.lifecycle)
+                == Some(crate::parser::ast::Lifecycle::Transient)
+            {
+                emit_startup_transient(dep_name, env, builder, alloc_ref, singletons)?
+            } else if let Some(&v) = singletons.get(dep_name) {
+                v
+            } else {
+                continue;
+            };
+            let offset = (i as i32) * POINTER_SIZE;
+            builder.ins().store(MemFlags::new(), dep_ptr, ptr, Offset32::new(offset));
+        }
+    }
+    Ok(ptr)
+}
+
 fn declare_global_data<'a>(
     names: impl Iterator<Item = &'a String>,
     prefix: &str,
@@ -731,6 +771,11 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
                 let class_info = env.classes.get(class_name).ok_or_else(|| {
                     CompileError::codegen(format!("DI: unknown class '{}'", class_name))
                 })?;
+                // Transient classes have no shared instance — fresh ones are
+                // created at each injection point below
+                if class_info.lifecycle == crate::parser::ast::Lifecycle::Transient {
+                    continue;
+                }
                 let size = class_info.fields.len() as i64 * POINTER_SIZE as i64;
                 let size_val = builder.ins().iconst(types::I64, size);
                 let call = builder.ins().call(alloc_ref, &[size_val]);
@@ -738,17 +783,23 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
 
                 // Wire injected fields
                 for (i, (_, field_ty, is_injected)) in class_info.fields.iter().enumerate() {
-                    if *is_injected
-                        && let PlutoType::Class(dep_name) = field_ty
-                        && let Some(&dep_ptr) = singletons.get(dep_name)
-                    {
-                        let offset = (i as i32) * POINTER_SIZE;
-                        builder.ins().store(
-                            MemFlags::new(),
-                            dep_ptr,
-                            ptr,
-                            Offset32::new(offset),
-                        );
+                    if *is_injected && let PlutoType::Class(dep_name) = field_ty {
+                        let dep_ptr = if env.classes.get(dep_name).map(|c| c.lifecycle)
+                            == Some(crate::parser::ast::Lifecycle::Transient)
+                        {
+                            Some(emit_startup_transient(dep_name, env, &mut builder, alloc_ref, &singletons)?)
+                        } else {
+                            singletons.get(dep_name).copied()
+                        };
+                        if let Some(dep_ptr) = dep_ptr {
+                            let offset = (i as i32) * POINTER_SIZE;
+                            builder.ins().store(
+                                MemFlags::new(),
+                                dep_ptr,
+                                ptr,
+                                Offset32::new(offset),
+                            );
+                        }
                     }
                     // Non-injected fields are zero-initialized by calloc
                 }
@@ -785,17 +836,23 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             let app_ptr = builder.inst_results(app_call)[0];
 
             for (i, (_, field_ty, is_injected)) in app_info.fields.iter().enumerate() {
-                if *is_injected
-                    && let PlutoType::Class(dep_name) = field_ty
-                    && let Some(&dep_ptr) = singletons.get(dep_name)
-                {
-                    let offset = (i as i32) * POINTER_SIZE;
-                    builder.ins().store(
-                        MemFlags::new(),
-                        dep_ptr,
-                        app_ptr,
-                        Offset32::new(offset),
-                    );
+                if *is_injected && let PlutoType::Class(dep_name) = field_ty {
+                    let dep_ptr = if env.classes.get(dep_name).map(|c| c.lifecycle)
+                        == Some(crate::parser::ast::Lifecycle::Transient)
+                    {
+                        Some(emit_startup_transient(dep_name, env, &mut builder, alloc_ref, &singletons)?)
+                    } else {
+                        singletons.get(dep_name).copied()
+                    };
+                    if let Some(dep_ptr) = dep_ptr {
+                        let offset = (i as i32) * POINTER_SIZE;
+                        builder.ins().store(
+                            MemFlags::new(),
+                            dep_ptr,
+                            app_ptr,
+                            Offset32::new(offset),
+                        );
+                    }
                 }
             }
 
@@ -873,6 +930,11 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
                 let class_info = env.classes.get(class_name).ok_or_else(|| {
                     CompileError::codegen(format!("DI: unknown class '{}'", class_name))
                 })?;
+                // Transient classes have no shared instance — fresh ones are
+                // created at each injection point below
+                if class_info.lifecycle == crate::parser::ast::Lifecycle::Transient {
+                    continue;
+                }
                 let size = class_info.fields.len() as i64 * POINTER_SIZE as i64;
                 let size_val = builder.ins().iconst(types::I64, size);
                 let call = builder.ins().call(alloc_ref, &[size_val]);
@@ -880,17 +942,23 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
 
                 // Wire injected fields
                 for (i, (_, field_ty, is_injected)) in class_info.fields.iter().enumerate() {
-                    if *is_injected
-                        && let PlutoType::Class(dep_name) = field_ty
-                        && let Some(&dep_ptr) = singletons.get(dep_name)
-                    {
-                        let offset = (i as i32) * POINTER_SIZE;
-                        builder.ins().store(
-                            MemFlags::new(),
-                            dep_ptr,
-                            ptr,
-                            Offset32::new(offset),
-                        );
+                    if *is_injected && let PlutoType::Class(dep_name) = field_ty {
+                        let dep_ptr = if env.classes.get(dep_name).map(|c| c.lifecycle)
+                            == Some(crate::parser::ast::Lifecycle::Transient)
+                        {
+                            Some(emit_startup_transient(dep_name, env, &mut builder, alloc_ref, &singletons)?)
+                        } else {
+                            singletons.get(dep_name).copied()
+                        };
+                        if let Some(dep_ptr) = dep_ptr {
+                            let offset = (i as i32) * POINTER_SIZE;
+                            builder.ins().store(
+                                MemFlags::new(),
+                                dep_ptr,
+                                ptr,
+                                Offset32::new(offset),
+                            );
+                        }
                     }
                 }
 
@@ -925,17 +993,23 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             let stage_ptr = builder.inst_results(stage_call)[0];
 
             for (i, (_, field_ty, is_injected)) in stage_info.fields.iter().enumerate() {
-                if *is_injected
-                    && let PlutoType::Class(dep_name) = field_ty
-                    && let Some(&dep_ptr) = singletons.get(dep_name)
-                {
-                    let offset = (i as i32) * POINTER_SIZE;
-                    builder.ins().store(
-                        MemFlags::new(),
-                        dep_ptr,
-                        stage_ptr,
-                        Offset32::new(offset),
-                    );
+                if *is_injected && let PlutoType::Class(dep_name) = field_ty {
+                    let dep_ptr = if env.classes.get(dep_name).map(|c| c.lifecycle)
+                        == Some(crate::parser::ast::Lifecycle::Transient)
+                    {
+                        Some(emit_startup_transient(dep_name, env, &mut builder, alloc_ref, &singletons)?)
+                    } else {
+                        singletons.get(dep_name).copied()
+                    };
+                    if let Some(dep_ptr) = dep_ptr {
+                        let offset = (i as i32) * POINTER_SIZE;
+                        builder.ins().store(
+                            MemFlags::new(),
+                            dep_ptr,
+                            stage_ptr,
+                            Offset32::new(offset),
+                        );
+                    }
                 }
             }
 

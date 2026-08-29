@@ -1833,6 +1833,54 @@ impl<'a> LowerContext<'a> {
         Ok(())
     }
 
+
+    /// Allocate and wire a fresh instance of a transient class at an
+    /// injection point inside a scope block. Transient deps recurse (cycle
+    /// detection rejects transient cycles at typeck).
+    fn emit_transient_instance(
+        &mut self,
+        class_name: &str,
+        field_wirings: &std::collections::HashMap<String, Vec<(String, crate::typeck::env::FieldWiring)>>,
+        seed_vals: &[Value],
+        scoped_locals: &std::collections::HashMap<String, Value>,
+    ) -> Result<Value, CompileError> {
+        use crate::typeck::env::FieldWiring;
+        let class_info = self.env.classes.get(class_name).ok_or_else(|| {
+            CompileError::codegen(format!("scope: unknown transient class '{class_name}'"))
+        })?.clone();
+        let size = class_info.fields.len() as i64 * POINTER_SIZE as i64;
+        let size_val = self.builder.ins().iconst(types::I64, size);
+        let ptr = self.call_runtime("__pluto_alloc", &[size_val]);
+        if let Some(wirings) = field_wirings.get(class_name).cloned() {
+            for (field_name, wiring) in &wirings {
+                let field_idx = class_info.fields.iter()
+                    .position(|(n, _, _)| n == field_name)
+                    .ok_or_else(|| {
+                        CompileError::codegen(format!(
+                            "scope: unknown field '{field_name}' on transient '{class_name}'"
+                        ))
+                    })?;
+                let offset = field_idx as i32 * POINTER_SIZE;
+                let dep_val = match wiring {
+                    FieldWiring::Seed(idx) => seed_vals[*idx],
+                    FieldWiring::Singleton(name) => self.load_singleton(name)?,
+                    FieldWiring::ScopedInstance(name) => {
+                        *scoped_locals.get(name).ok_or_else(|| {
+                            CompileError::codegen(format!(
+                                "scope: scoped instance '{name}' unavailable for transient wiring"
+                            ))
+                        })?
+                    }
+                    FieldWiring::Transient(name) => {
+                        self.emit_transient_instance(name, field_wirings, seed_vals, scoped_locals)?
+                    }
+                };
+                self.builder.ins().store(MemFlags::new(), dep_val, ptr, Offset32::new(offset));
+            }
+        }
+        Ok(ptr)
+    }
+
     fn lower_scope(
         &mut self,
         seeds: &[crate::span::Spanned<Expr>],
@@ -1921,6 +1969,9 @@ impl<'a> LowerContext<'a> {
                                 ))
                             })?
                         }
+                        FieldWiring::Transient(name) => self.emit_transient_instance(
+                            name, &resolution.field_wirings, &seed_vals, &scoped_locals,
+                        )?,
                     };
 
                     self.builder.ins().store(
@@ -1968,6 +2019,9 @@ impl<'a> LowerContext<'a> {
                             ))
                         })?
                     }
+                    FieldWiring::Transient(name) => self.emit_transient_instance(
+                        name, &resolution.field_wirings, &seed_vals, &scoped_locals,
+                    )?,
                 };
                 self.builder.ins().store(MemFlags::new(), dep_val, seed_ptr, Offset32::new(offset));
             }
@@ -1993,6 +2047,9 @@ impl<'a> LowerContext<'a> {
                     })?
                 }
                 FieldWiring::Singleton(class_name) => self.load_singleton(class_name)?,
+                FieldWiring::Transient(class_name) => self.emit_transient_instance(
+                    class_name, &resolution.field_wirings, &seed_vals, &scoped_locals,
+                )?,
             };
 
             // Create a new Cranelift variable for the binding

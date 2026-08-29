@@ -830,8 +830,16 @@ fn check_scope_stmt(
             wiring_targets.push(name.clone());
         }
     }
+    // Transient deps found while wiring are themselves wiring targets
+    // (their fresh instances need their own fields wired) — the worklist
+    // grows as new transient classes are discovered
+    let mut transient_deps: Vec<String> = Vec::new();
     let mut field_wirings: DMap<String, Vec<(String, FieldWiring)>> = DMap::new();
-    for class_name in &wiring_targets {
+    let mut wi = 0;
+    while wi < wiring_targets.len() {
+        let class_name = &wiring_targets[wi].clone();
+        wi += 1;
+        {
         let info = env.classes.get(class_name).unwrap();
         let mut wirings = Vec::new();
         for (field_name, field_ty, is_injected) in &info.fields {
@@ -840,6 +848,10 @@ fn check_scope_stmt(
                 let dep_info = env.classes.get(dep_name);
                 let wiring = if let Some((_, idx)) = seed_types.iter().find(|(n, _)| n == dep_name) {
                     FieldWiring::Seed(*idx)
+                } else if dep_info.map_or(false, |d| d.lifecycle == Lifecycle::Transient) {
+                    // Fresh instance per injection point
+                    transient_deps.push(dep_name.clone());
+                    FieldWiring::Transient(dep_name.clone())
                 } else if dep_info.map_or(false, |d| d.lifecycle == Lifecycle::Singleton) {
                     FieldWiring::Singleton(dep_name.clone())
                 } else if creation_order.contains(dep_name) || seed_class_names.contains(dep_name) {
@@ -858,6 +870,12 @@ fn check_scope_stmt(
             }
         }
         field_wirings.insert(class_name.clone(), wirings);
+        }
+        for t in transient_deps.drain(..) {
+            if !wiring_targets.contains(&t) {
+                wiring_targets.push(t);
+            }
+        }
     }
 
     // 7. Compute binding sources — how each binding gets its value

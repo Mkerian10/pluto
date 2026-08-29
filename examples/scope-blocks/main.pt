@@ -47,7 +47,26 @@ scoped class Handler[svc: UserService, ctx: RequestCtx] {
     }
 }
 
-app MyApp[db: Database] {
+// Transient: a fresh instance at every injection point
+transient class Tracer[db: Database] {
+    fn trace(self) string {
+        return self.db.query("trace")
+    }
+}
+
+class LeftHolder[t: Tracer] {
+    fn tracer(self) Tracer {
+        return self.t
+    }
+}
+
+class RightHolder[t: Tracer] {
+    fn tracer(self) Tracer {
+        return self.t
+    }
+}
+
+app MyApp[db: Database, left: LeftHolder, right: RightHolder] {
     fn main(self) {
         // Basic scope block: seed a RequestCtx, bind a UserService
         print("--- Basic scope block ---")
@@ -77,6 +96,16 @@ app MyApp[db: Database] {
         }
         scope(RequestCtx { request_id: "second", user_id: 2 }) |svc: UserService| {
             print(svc.get_user())
+        }
+
+        // Transient: fresh instance per injection point (the two holders
+        // below get DIFFERENT Tracer instances; the logger inside stays
+        // the shared singleton)
+        print("--- Transient ---")
+        if self.left.tracer() == self.right.tracer() {
+            print("shared")
+        } else {
+            print("distinct per injection point")
         }
     }
 }
