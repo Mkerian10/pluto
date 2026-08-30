@@ -181,6 +181,14 @@ pub(crate) fn infer_expr(
                 PlutoType::Error if field.node == "message" && env.errors.contains_key("MathError") => {
                     Ok(PlutoType::String)
                 }
+                PlutoType::Trait(trait_name) => Err(CompileError::type_err(
+                    format!(
+                        "cannot access field '{}' through trait '{trait_name}': traits have no fields; \
+                         use a trait method instead",
+                        field.node
+                    ),
+                    object.span,
+                )),
                 _ => Err(CompileError::type_err(
                     format!("field access on non-class type {obj_type}"),
                     object.span,
@@ -2876,7 +2884,19 @@ fn infer_method_call(
 
     let sig = env.functions.get(&mangled).ok_or_else(|| {
         CompileError::type_err(
-            format!("class '{class_name}' has no method '{}'", method.node),
+            if class_name.starts_with('%') {
+                // Skolem: an opaque stand-in for a type parameter during
+                // generic template checking
+                format!(
+                    "type parameter '{}' has no method '{}'; add a trait bound that provides it \
+                     (e.g. `<{}: SomeTrait>`)",
+                    class_name.trim_start_matches('%'),
+                    method.node,
+                    class_name.trim_start_matches('%')
+                )
+            } else {
+                format!("class '{class_name}' has no method '{}'", method.node)
+            },
             method.span,
         )
     })?.clone();

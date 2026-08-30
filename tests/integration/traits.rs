@@ -1010,7 +1010,7 @@ fn main() {
     let d = Dog { val: 42 }
     use_worker(d)
 }
-"#, "field access on non-class type trait Worker");
+"#, "cannot access field 'val' through trait 'Worker': traits have no fields");
 }
 
 #[test]
@@ -12916,7 +12916,7 @@ fn use_foo(f: Foo) {
 fn main() {
     use_foo(Impl { val: 5 })
 }
-"#, "field access on non-class type trait Foo");
+"#, "cannot access field 'val' through trait 'Foo': traits have no fields");
 }
 
 #[test]

@@ -1386,7 +1386,7 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
                     .unwrap_or(crate::span::Span { start: 0, end: 0, file_id: 0 });
                 return Err(CompileError::type_err(
                     format!(
-                        "captive dependency: {why}, but it is reached from '{holder}' at app startup,                          where no seed exists; create it inside a scope block instead"
+                        "captive dependency: {why}, but it is reached from '{holder}' at app startup, where no seed exists; create it inside a scope block instead"
                     ),
                     span,
                 ));
@@ -2177,7 +2177,11 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
             let mut param_types = Vec::new();
             for p in &m.params {
                 if p.name.node == "self" {
-                    param_types.push(("self".to_string(), PlutoType::Void));
+                    // Type self as the trait: method calls through self
+                    // resolve via dynamic dispatch, and field access gets
+                    // the traits-have-no-fields error instead of a
+                    // confusing 'non-class type void'
+                    param_types.push(("self".to_string(), PlutoType::Trait(t.name.node.clone())));
                 } else {
                     let ty = resolve_type(&p.ty, env)?;
                     param_types.push((p.name.node.clone(), ty));

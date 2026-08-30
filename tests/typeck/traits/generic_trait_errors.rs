@@ -119,7 +119,7 @@ fn generic_trait_method_uses_wrong_param() {
 fn generic_trait_object_wrong_args() {
     compile_should_fail_with(
         "trait T<U>{\n    fn foo(self) U\n}\n\nclass C impl T<int> {\n    x:int\n\n    fn foo(self) int {\n        return 1\n    }\n}\n\nfn main(){\n    let t: T<string> = C{x:1}\n}",
-        "type mismatch: expected trait T$$string, found C",
+        "type mismatch: expected trait T<string>, found C",
     );
 }
 
