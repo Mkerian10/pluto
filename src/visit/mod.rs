@@ -24,10 +24,10 @@
 //! Implement the visitor trait for your pass, overriding only the methods you need.
 //! Call the corresponding `walk_*` function inside your override to get default recursion.
 //!
-//! ```rust
-//! use crate::visit::{Visitor, walk_expr};
-//! use crate::parser::ast::Expr;
-//! use crate::span::Spanned;
+//! ```
+//! use pluto::visit::{Visitor, walk_expr};
+//! use pluto::parser::ast::{BinOp, Expr};
+//! use pluto::span::{Span, Spanned};
 //! use std::collections::HashSet;
 //!
 //! struct IdentCollector {
@@ -42,6 +42,16 @@
 //!         walk_expr(self, expr); // Continue recursion
 //!     }
 //! }
+//!
+//! let sp = |e: Expr| Spanned::new(e, Span::new(0, 0));
+//! let expr = sp(Expr::BinOp {
+//!     op: BinOp::Add,
+//!     lhs: Box::new(sp(Expr::Ident("a".to_string()))),
+//!     rhs: Box::new(sp(Expr::Ident("b".to_string()))),
+//! });
+//! let mut collector = IdentCollector { names: HashSet::new() };
+//! collector.visit_expr(&expr);
+//! assert_eq!(collector.names.len(), 2);
 //! ```
 //!
 //! ## Common Patterns
@@ -50,7 +60,7 @@
 //!
 //! Track variable scopes by pushing/popping state in block and function visitors:
 //!
-//! ```rust
+//! ```ignore
 //! struct ScopeTracker {
 //!     scopes: Vec<HashSet<String>>,
 //! }
@@ -75,7 +85,7 @@
 //!
 //! Collect error information during analysis passes:
 //!
-//! ```rust
+//! ```ignore
 //! struct ErrorCollector {
 //!     errors: Vec<String>,
 //! }
@@ -94,7 +104,7 @@
 //!
 //! Skip recursion into certain subtrees by omitting the `walk_*` call:
 //!
-//! ```rust
+//! ```ignore
 //! impl Visitor for MyVisitor {
 //!     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
 //!         match &expr.node {
@@ -112,7 +122,7 @@
 //!
 //! Use `VisitMut` for transformations that modify the AST:
 //!
-//! ```rust
+//! ```ignore
 //! use crate::visit::{VisitMut, walk_expr_mut};
 //!
 //! struct IntRewriter;
@@ -139,7 +149,7 @@
 //! String interpolation parts can contain both literals and expressions. Use
 //! `visit_string_interp_part` to handle both cases:
 //!
-//! ```rust
+//! ```ignore
 //! fn visit_string_interp_part(&mut self, part: &StringInterpPart) {
 //!     if let StringInterpPart::Expr(expr) = part {
 //!         self.visit_expr(expr);

@@ -6,15 +6,19 @@
 /// # Examples
 ///
 /// ```
-/// use crate::visit::composers::*;
-/// use crate::parser::ast::*;
-/// use crate::span::Spanned;
+/// use pluto::visit::composers::{contains_expr, collect_exprs};
+/// use pluto::parser::ast::{BinOp, Expr};
+/// use pluto::span::{Span, Spanned};
 ///
-/// // Check if an expression contains any propagate operators
-/// let has_propagate = contains_expr(&expr, |e| matches!(e, Expr::Propagate { .. }));
+/// let sp = |e: Expr| Spanned::new(e, Span::new(0, 0));
+/// let expr = sp(Expr::BinOp {
+///     op: BinOp::Add,
+///     lhs: Box::new(sp(Expr::Ident("a".to_string()))),
+///     rhs: Box::new(sp(Expr::IntLit(1))),
+/// });
 ///
-/// // Count all yield statements in a block
-/// let yield_count = count_stmts(&block, |s| matches!(s, Stmt::Yield { .. }));
+/// // Check if an expression tree contains a matching node
+/// assert!(contains_expr(&expr, |e| matches!(e, Expr::Ident(_))));
 ///
 /// // Collect all identifier names
 /// let idents = collect_exprs(&expr, |e| {
@@ -24,6 +28,7 @@
 ///         None
 ///     }
 /// });
+/// assert_eq!(idents, vec!["a".to_string()]);
 /// ```
 
 use crate::parser::ast::*;
@@ -41,7 +46,7 @@ use std::collections::HashSet;
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// // Check for error propagation
 /// let has_propagate = contains_expr(&expr, |e| matches!(e, Expr::Propagate { .. }));
 ///
@@ -82,7 +87,7 @@ where
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// // Check for yield statements
 /// let has_yield = contains_stmt(&stmt, |s| matches!(s, Stmt::Yield { .. }));
 /// ```
@@ -155,7 +160,7 @@ where
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// // Count all method calls
 /// let method_count = count_exprs(&expr, |e| matches!(e, Expr::MethodCall { .. }));
 /// ```
@@ -189,7 +194,7 @@ where
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// // Count all return statements
 /// let return_count = count_stmts(&stmt, |s| matches!(s, Stmt::Return(_)));
 /// ```
@@ -283,7 +288,7 @@ where
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// // Collect all identifier names
 /// let idents = collect_exprs(&expr, |e| {
 ///     if let Expr::Ident(name) = e {
@@ -365,7 +370,7 @@ where
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// // Collect unique identifier names
 /// let unique_idents = collect_exprs_unique(&expr, |e| {
 ///     if let Expr::Ident(name) = e {
@@ -456,7 +461,7 @@ where
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// // Find first propagate operator
 /// let propagate = find_expr(&expr, |e| matches!(e, Expr::Propagate { .. }));
 /// ```
@@ -538,7 +543,7 @@ where
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// // Check if all identifiers are lowercase
 /// let all_lowercase = !any_expr(&expr,
 ///     |e| matches!(e, Expr::Ident(name) if name.chars().any(|c| c.is_uppercase()))
