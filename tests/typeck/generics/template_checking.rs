@@ -102,7 +102,7 @@ fn shout<T>(x: T) string {
 }
 fn main() {}
 "#,
-        "class '%T' has no method 'to_string'",
+        "type parameter 'T' has no method 'to_string'; add a trait bound",
     );
 }
 

@@ -61,7 +61,7 @@ let n:T?=t}"#).is_ok()); }
 fn trait_object_field_access() { compile_should_fail_with(r#"trait T{}
 class C impl T{x:int}
 fn main(){let t:T=C{x:1}
-let y=t.x}"#, "field access on non-class type trait T"); }
+let y=t.x}"#, "cannot access field 'x' through trait 'T': traits have no fields"); }
 
 // Trait objects with generics
 #[test]

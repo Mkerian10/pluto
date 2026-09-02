@@ -319,7 +319,7 @@ fn field_access_on_trait_object() {
             let v = p.x
         }
         "#,
-        "field access on non-class type",
+        "traits have no fields",
     );
 }
 

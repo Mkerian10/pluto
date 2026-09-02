@@ -42,11 +42,11 @@ impl CompileError {
     }
 
     pub fn type_err(msg: impl Into<String>, span: Span) -> Self {
-        Self::Type { msg: msg.into(), span }
+        Self::Type { msg: sanitize_message(&msg.into()), span }
     }
 
     pub fn codegen(msg: impl Into<String>) -> Self {
-        Self::Codegen { msg: msg.into() }
+        Self::Codegen { msg: sanitize_message(&msg.into()) }
     }
 
     pub fn link(msg: impl Into<String>) -> Self {
@@ -71,6 +71,130 @@ impl CompileError {
 
     pub fn version_not_found(msg: impl Into<String>) -> Self {
         Self::VersionNotFound(msg.into())
+    }
+}
+
+
+/// Internal generic-instance names use a `$`-based mangling
+/// (`Box$$int$string`), and skolem classes carry a `%` marker; neither
+/// should reach users. Rewrites mangled tokens in an error message to
+/// source syntax (`Box<int, string>`), leaving anything unparseable
+/// untouched. Multi-arg generics nested in multi-arg generics are
+/// ambiguous in the mangling; the greedy (innermost-swallows) reading is
+/// used — acceptable for display.
+fn sanitize_message(msg: &str) -> String {
+    if !msg.contains("$$") && !msg.contains('%') {
+        return msg.to_string();
+    }
+    let mut out = String::with_capacity(msg.len());
+    let mut token = String::new();
+    let flush = |token: &mut String, out: &mut String| {
+        if token.is_empty() {
+            return;
+        }
+        let stripped = token.replace('%', "");
+        if stripped.contains("$$") {
+            out.push_str(&demangle_token(&stripped).unwrap_or(stripped));
+        } else {
+            out.push_str(&stripped);
+        }
+        token.clear();
+    };
+    for c in msg.chars() {
+        if c.is_alphanumeric() || c == '_' || c == '$' || c == '%' {
+            token.push(c);
+        } else {
+            flush(&mut token, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut token, &mut out);
+    out
+}
+
+fn demangle_token(tok: &str) -> Option<String> {
+    let segs: Vec<&str> = tok.split('$').collect();
+    let (rendered, next) = demangle_segs(&segs, 0)?;
+    if next != segs.len() {
+        return None;
+    }
+    Some(rendered)
+}
+
+fn demangle_segs(segs: &[&str], mut i: usize) -> Option<(String, usize)> {
+    let s = *segs.get(i)?;
+    if s.is_empty() {
+        return None;
+    }
+    i += 1;
+    match s {
+        "arr" => {
+            let (t, j) = demangle_segs(segs, i)?;
+            Some((format!("[{t}]"), j))
+        }
+        "set" => {
+            let (t, j) = demangle_segs(segs, i)?;
+            Some((format!("Set<{t}>"), j))
+        }
+        "map" => {
+            let (k, j) = demangle_segs(segs, i)?;
+            let (v, j2) = demangle_segs(segs, j)?;
+            Some((format!("Map<{k}, {v}>"), j2))
+        }
+        "task" => {
+            let (t, j) = demangle_segs(segs, i)?;
+            Some((format!("Task<{t}>"), j))
+        }
+        "sender" => {
+            let (t, j) = demangle_segs(segs, i)?;
+            Some((format!("Sender<{t}>"), j))
+        }
+        "receiver" => {
+            let (t, j) = demangle_segs(segs, i)?;
+            Some((format!("Receiver<{t}>"), j))
+        }
+        "nullable" => {
+            let (t, j) = demangle_segs(segs, i)?;
+            Some((format!("{t}?"), j))
+        }
+        "stream" => {
+            let (t, j) = demangle_segs(segs, i)?;
+            Some((format!("stream {t}"), j))
+        }
+        "fn" => {
+            let mut params = Vec::new();
+            while *segs.get(i)? != "ret" {
+                let (p, j) = demangle_segs(segs, i)?;
+                params.push(p);
+                i = j;
+            }
+            i += 1; // consume "ret"
+            let (ret, mut j) = demangle_segs(segs, i)?;
+            let mut suffix = "";
+            if segs.get(j) == Some(&"err") {
+                suffix = "!";
+                j += 1;
+            }
+            Some((format!("fn({}) {ret}{suffix}", params.join(", ")), j))
+        }
+        _ => {
+            if segs.get(i) == Some(&"") {
+                // `name$$args`: a generic instance
+                i += 1;
+                let mut args = Vec::new();
+                let (first, j) = demangle_segs(segs, i)?;
+                args.push(first);
+                i = j;
+                while i < segs.len() && !segs[i].is_empty() {
+                    let (a, j) = demangle_segs(segs, i)?;
+                    args.push(a);
+                    i = j;
+                }
+                Some((format!("{}<{}>", s, args.join(", ")), i))
+            } else {
+                Some((s.to_string(), i))
+            }
+        }
     }
 }
 
@@ -390,5 +514,63 @@ mod tests {
         // Test that the matches! macro correctly identifies Syntax variant
         assert!(matches!(err, CompileError::Syntax { .. }));
         render_error(source, "test.pluto", &err);
+    }
+}
+
+#[cfg(test)]
+mod demangle_tests {
+    use super::sanitize_message;
+
+    #[test]
+    fn single_arg_generic() {
+        assert_eq!(sanitize_message("expected Box$$int"), "expected Box<int>");
+    }
+
+    #[test]
+    fn multi_arg_generic() {
+        assert_eq!(sanitize_message("found Pair$$int$string"), "found Pair<int, string>");
+    }
+
+    #[test]
+    fn nested_generic() {
+        assert_eq!(sanitize_message("Box$$Box$$int"), "Box<Box<int>>");
+    }
+
+    #[test]
+    fn builtin_wrappers() {
+        assert_eq!(sanitize_message("T$$arr$int"), "T<[int]>");
+        assert_eq!(sanitize_message("T$$map$string$int"), "T<Map<string, int>>");
+        assert_eq!(sanitize_message("T$$nullable$int"), "T<int?>");
+    }
+
+    #[test]
+    fn fn_type_arg() {
+        assert_eq!(sanitize_message("T$$fn$int$ret$bool"), "T<fn(int) bool>");
+        assert_eq!(sanitize_message("T$$fn$int$ret$bool$err"), "T<fn(int) bool!>");
+    }
+
+    #[test]
+    fn skolem_marker_stripped() {
+        assert_eq!(sanitize_message("class '%T' has no method"), "class 'T' has no method");
+    }
+
+    #[test]
+    fn unmangled_text_untouched() {
+        let msg = "type mismatch: expected int, found string";
+        assert_eq!(sanitize_message(msg), msg);
+    }
+
+    #[test]
+    fn unparseable_token_left_alone() {
+        // A malformed mangle falls back to the raw token
+        assert_eq!(sanitize_message("weird$$"), "weird$$");
+    }
+
+    #[test]
+    fn surrounded_by_punctuation() {
+        assert_eq!(
+            sanitize_message("trait 'T$$int' expects int"),
+            "trait 'T<int>' expects int"
+        );
     }
 }
