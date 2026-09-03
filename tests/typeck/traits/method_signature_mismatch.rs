@@ -90,11 +90,15 @@ fn main(){}"#, "expected");
 
 // Generic method mismatches
 #[test]
-fn trait_generic_method_missing_param() { compile_should_fail_with(r#"trait T{fn foo<U>(self,x:U)U} class C{} impl T{fn foo(self,x:int)int{return x}}
-fn main(){}"#, "expected (, found <"); }
+fn trait_generic_method_missing_param() { compile_should_fail_with(r#"trait T{fn foo<U>(self,x:U)U} class C impl T{
+x: int
+fn foo(self,x:int)int{return x}}
+fn main(){}"#, "must declare type parameters matching trait 'T'"); }
 #[test]
-fn trait_method_wrong_generic_count() { compile_should_fail_with(r#"trait T{fn foo<U>(self,x:U)U} class C{} impl T{fn foo<U,V>(self,x:U)U{return x}}
-fn main(){}"#, "expected (, found <"); }
+fn trait_method_wrong_generic_count() { compile_should_fail_with(r#"trait T{fn foo<U>(self,x:U)U} class C impl T{
+x: int
+fn foo<U,V>(self,x:U)U{return x}}
+fn main(){}"#, "declares 2 type parameters, but trait 'T' declares 1"); }
 
 // Array/collection parameter mismatches
 #[test]

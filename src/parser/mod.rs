@@ -1211,6 +1211,7 @@ impl<'a> Parser<'a> {
     fn parse_trait_method(&mut self) -> Result<TraitMethod, CompileError> {
         self.expect(&Token::Fn)?;
         let name = self.expect_ident()?;
+        let (type_params, type_param_bounds) = self.parse_type_params()?;
         self.expect(&Token::LParen)?;
 
         let mut params = Vec::new();
@@ -1294,7 +1295,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(TraitMethod { id: Uuid::new_v4(), name, params, return_type, contracts, body })
+        Ok(TraitMethod { id: Uuid::new_v4(), name, type_params, type_param_bounds, params, return_type, contracts, body })
     }
 
     fn parse_class(&mut self) -> Result<Spanned<ClassDecl>, CompileError> {

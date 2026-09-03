@@ -89,6 +89,41 @@ pub(crate) fn register_trait_skeleton(t: &crate::parser::ast::TraitDecl, env: &m
         let mut method_type_exprs = HashMap::new();
 
         for m in &t.methods {
+            if !m.type_params.is_empty() {
+                // Generic trait methods: instance-only signatures with no
+                // vtable slot; defaults and contracts are future work
+                if m.body.is_some() {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "generic trait method '{}' cannot have a default body; implement it in each class",
+                            m.name.node
+                        ),
+                        m.name.span,
+                    ));
+                }
+                if !m.contracts.is_empty() {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "contracts on generic trait method '{}' are not supported",
+                            m.name.node
+                        ),
+                        m.name.span,
+                    ));
+                }
+                if m.params.is_empty() || m.params[0].name.node != "self" {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "generic trait method '{}' must take self; static generic methods are not supported",
+                            m.name.node
+                        ),
+                        m.name.span,
+                    ));
+                }
+                if m.params[0].is_mut {
+                    mut_self_methods.insert(m.name.node.clone());
+                }
+                continue;
+            }
             if m.body.is_some() {
                 default_methods.push(m.name.node.clone());
             }
@@ -121,6 +156,7 @@ pub(crate) fn register_trait_skeleton(t: &crate::parser::ast::TraitDecl, env: &m
 
         env.traits.insert(t.name.node.clone(), TraitInfo {
             methods: Vec::new(),  // Will be populated in Pass 1
+            generic_methods: Vec::new(),  // Populated in Pass 1
             default_methods,
             mut_self_methods,
             static_methods,
@@ -148,9 +184,51 @@ pub(crate) fn resolve_trait_signatures_for(t: &crate::parser::ast::TraitDecl, en
         let trait_name = &t.name.node;
 
         let mut methods = Vec::new();
+        let mut generic_methods = Vec::new();
         for m in &t.methods {
             // Trait methods can be instance methods (with self) or static methods (without self)
             let _has_self = !m.params.is_empty() && m.params[0].name.node == "self";
+
+            if !m.type_params.is_empty() {
+                // Generic trait method: resolve with the method's own type
+                // parameters in scope, mirroring generic-function registration
+                let tp_names: HashSet<String> =
+                    m.type_params.iter().map(|tp| tp.node.clone()).collect();
+                let mut param_types = Vec::new();
+                for p in &m.params {
+                    if p.name.node == "self" {
+                        param_types.push(PlutoType::Void); // placeholder for self
+                    } else {
+                        param_types.push(resolve_type_with_params(&p.ty, env, &tp_names)?);
+                    }
+                }
+                let return_type = match &m.return_type {
+                    Some(rt) => resolve_type_with_params(rt, env, &tp_names)?,
+                    None => PlutoType::Void,
+                };
+                let bounds: HashMap<String, Vec<String>> = m.type_param_bounds.iter()
+                    .map(|(tp, traits)| {
+                        (tp.clone(), traits.iter().map(|tr| tr.node.clone()).collect())
+                    })
+                    .collect();
+                for trait_names in m.type_param_bounds.values() {
+                    for tn in trait_names {
+                        if !env.traits.contains_key(&tn.node) {
+                            return Err(CompileError::type_err(
+                                format!("unknown trait '{}' in type bound", tn.node),
+                                tn.span,
+                            ));
+                        }
+                    }
+                }
+                generic_methods.push((m.name.node.clone(), GenericFuncSig {
+                    type_params: m.type_params.iter().map(|tp| tp.node.clone()).collect(),
+                    type_param_bounds: bounds,
+                    params: param_types,
+                    return_type,
+                }));
+                continue;
+            }
 
             let mut param_types = Vec::new();
             for p in &m.params {
@@ -170,6 +248,7 @@ pub(crate) fn resolve_trait_signatures_for(t: &crate::parser::ast::TraitDecl, en
         // Update the TraitInfo with resolved method signatures
         if let Some(trait_info) = env.traits.get_mut(trait_name) {
             trait_info.methods = methods;
+            trait_info.generic_methods = generic_methods;
             trait_info.method_type_exprs.clear();  // No longer needed
         }
     }
@@ -1715,6 +1794,168 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
         }
     }
 
+    Ok(())
+}
+
+/// Conformance for generic trait methods (`fn foo<V>(self, x: V) V` in a
+/// trait): the implementing class must provide a generic method whose
+/// signature matches up to type-parameter renaming, with identical bounds.
+/// Class-side generic methods are hoisted to top-level generic functions
+/// (generic_methods.rs), so the check runs against env.generic_functions.
+pub(crate) fn check_generic_trait_method_conformance(
+    program: &Program,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    use super::resolve::substitute_pluto_type;
+
+    // Normalize a generic signature: rename its type params positionally so
+    // `fn foo<U>(self, x: U) U` and `fn foo<V>(self, x: V) V` compare equal
+    fn normalize(sig: &super::env::GenericFuncSig) -> (Vec<PlutoType>, PlutoType) {
+        let bindings: HashMap<String, PlutoType> = sig
+            .type_params
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), PlutoType::TypeParam(format!("${i}"))))
+            .collect();
+        let params = sig.params.iter().skip(1).map(|p| substitute_pluto_type(p, &bindings)).collect();
+        let ret = substitute_pluto_type(&sig.return_type, &bindings);
+        (params, ret)
+    }
+
+    for class in &program.classes {
+        let c = &class.node;
+        let class_name = &c.name.node;
+        for tr in &c.impl_traits {
+            let trait_name = &tr.name.node;
+            let Some(trait_info) = env.traits.get(trait_name).cloned() else {
+                continue; // unknown traits reported elsewhere
+            };
+            if trait_info.generic_methods.is_empty() {
+                continue;
+            }
+            if !c.type_params.is_empty() {
+                return Err(CompileError::type_err(
+                    format!(
+                        "generic class '{class_name}' cannot implement trait '{trait_name}': \
+                         it declares generic methods, which are not supported on generic classes"
+                    ),
+                    tr.name.span,
+                ));
+            }
+            for (method_name, trait_sig) in &trait_info.generic_methods {
+                let mangled = mangle_method(class_name, method_name);
+                let Some(class_sig) = env.generic_functions.get(&mangled).cloned() else {
+                    if env.functions.contains_key(&mangled) {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "method '{method_name}' of class '{class_name}' must declare type \
+                                 parameters matching trait '{trait_name}' (e.g. fn {method_name}<{}>(...))",
+                                trait_sig.type_params.join(", ")
+                            ),
+                            tr.name.span,
+                        ));
+                    }
+                    return Err(CompileError::type_err(
+                        format!(
+                            "class '{class_name}' does not implement required method '{method_name}' \
+                             from trait '{trait_name}'"
+                        ),
+                        tr.name.span,
+                    ));
+                };
+                if class_sig.type_params.len() != trait_sig.type_params.len() {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "method '{method_name}' of class '{class_name}' declares {} type \
+                             parameters, but trait '{trait_name}' declares {}",
+                            class_sig.type_params.len(),
+                            trait_sig.type_params.len()
+                        ),
+                        tr.name.span,
+                    ));
+                }
+                let (t_params, t_ret) = normalize(trait_sig);
+                let (c_params, c_ret) = normalize(&class_sig);
+                if t_params != c_params || t_ret != c_ret {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "method '{method_name}' of class '{class_name}' does not match the \
+                             generic signature declared by trait '{trait_name}'"
+                        ),
+                        tr.name.span,
+                    ));
+                }
+                // Bounds must be identical per position (a weaker or stronger
+                // bound changes what callers may rely on)
+                for (i, (t_tp, c_tp)) in trait_sig
+                    .type_params
+                    .iter()
+                    .zip(&class_sig.type_params)
+                    .enumerate()
+                {
+                    let mut tb: Vec<String> = trait_sig
+                        .type_param_bounds
+                        .get(t_tp)
+                        .cloned()
+                        .unwrap_or_default();
+                    let mut cb: Vec<String> = class_sig
+                        .type_param_bounds
+                        .get(c_tp)
+                        .cloned()
+                        .unwrap_or_default();
+                    tb.sort();
+                    cb.sort();
+                    if tb != cb {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "type parameter {} of method '{method_name}' on class \
+                                 '{class_name}' has bounds [{}], but trait '{trait_name}' \
+                                 declares [{}]",
+                                i + 1,
+                                cb.join(", "),
+                                tb.join(", ")
+                            ),
+                            tr.name.span,
+                        ));
+                    }
+                }
+                // mut self must agree
+                let trait_mut = trait_info.mut_self_methods.contains(method_name);
+                let class_mut = env.mut_self_methods.contains(&mangled);
+                if trait_mut != class_mut {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "method '{method_name}' in trait '{trait_name}' and class \
+                             '{class_name}' disagree on 'mut self'"
+                        ),
+                        tr.name.span,
+                    ));
+                }
+                // Liskov: the implementation must not add requires clauses
+                if let Some(hoisted) = program
+                    .functions
+                    .iter()
+                    .find(|f| f.node.name.node == mangled && !f.node.type_params.is_empty())
+                {
+                    let adds_requires = hoisted
+                        .node
+                        .contracts
+                        .iter()
+                        .any(|ct| ct.node.kind == crate::parser::ast::ContractKind::Requires);
+                    if adds_requires {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "method '{method_name}' on class '{class_name}' cannot add \
+                                 'requires' clauses: it implements trait '{trait_name}' and \
+                                 adding preconditions would violate the Liskov Substitution Principle"
+                            ),
+                            hoisted.node.name.span,
+                        ));
+                    }
+                }
+            }
+        }
+    }
     Ok(())
 }
 

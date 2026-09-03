@@ -117,6 +117,7 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     register::check_expanding_reference_cycles(&env)?;
     register::validate_di_graph(program, &mut env)?;
     register::check_trait_conformance(program, &mut env)?;
+    register::check_generic_trait_method_conformance(program, &mut env)?;
     register::check_all_bodies(program, &mut env)?;
     templates::check_generic_templates(program, &mut env)?;
     check::enforce_mut_self(program, &env)?;

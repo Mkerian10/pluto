@@ -38,7 +38,12 @@ fn multi_constraint_inference() { compile_should_fail_with(r#"fn f<T>(x:T,y:T)T{
 
 // Inference through trait method
 #[test]
-fn trait_method_inference() { compile_should_fail_with(r#"trait T{fn f<U>(self,x:U)U} class C{} impl T{fn f<U>(self,x:U)U{return x}} fn main(){let c=C{} let x=c.f()}"#, "expected (, found <"); }
+fn trait_method_inference() { compile_should_fail_with(r#"trait T{fn f<U>(self,x:U)U} class C impl T{
+x: int
+fn f<U>(self,x:U)U{return x}}
+fn main(){
+let c=C{x:1}
+let y=c.f()}"#, "expects 1 arguments, got 0"); }
 
 // Inference limit in deep nesting
 #[test]

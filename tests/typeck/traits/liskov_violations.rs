@@ -131,9 +131,8 @@ requires y>0
 {}}
 fn main(){}"#, "Liskov"); }
 
-// Generic method contracts
+// Generic method contracts (#301 hoisting + generic trait methods)
 #[test]
-#[ignore] // Unsupported syntax: trait methods cannot declare their own type parameters
 fn generic_method_adds_contract() { compile_should_fail_with(r#"trait T{fn foo<U>(self,x:U)U} class C impl T{fn foo<U>(self,x:U)U
 requires true
 {return x}}

@@ -16,7 +16,7 @@ use crate::parser::ast::Program;
 const MAGIC: &[u8; 4] = b"PLTO";
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 5;
+const SCHEMA_VERSION: u32 = 6;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;

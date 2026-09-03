@@ -1,7 +1,7 @@
 //! Multiple trait implementation tests - 25 tests
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run, compile_should_fail_with};
 
 // Conflicting method signatures
 #[test]
@@ -120,9 +120,21 @@ fn error_conflict() { compile_should_fail_with(r#"error E{} trait T1{fn foo(self
 
 // Generic method in both traits
 #[test]
-fn two_traits_generic_methods() { compile_should_fail_with(r#"trait T1{fn foo<U>(self,x:U)U} trait T2{fn foo<V>(self,x:V)V} class C impl T1, T2{
+fn two_traits_generic_methods() {
+    // A class cannot define the same generic method twice; one definition
+    // satisfies both traits (the duplicate is the error)
+    compile_should_fail_with(r#"trait T1{fn foo<U>(self,x:U)U} trait T2{fn foo<V>(self,x:V)V} class C impl T1, T2{
 fn foo<U>(self,x:U)U{return x}
-fn foo<V>(self,x:V)V{return x}} fn main(){}"#, "expected (, found <"); }
+fn foo<V>(self,x:V)V{return x}} fn main(){}"#, "already declared");
+}
+
+#[test]
+fn two_traits_shared_generic_method_ok() {
+    // One generic method satisfies both traits' matching signatures
+    compile_and_run(r#"trait T1{fn foo<U>(self,x:U)U} trait T2{fn foo<V>(self,x:V)V} class C impl T1, T2{
+x: int
+fn foo<U>(self,x:U)U{return x}} fn main(){}"#);
+}
 
 // Mut self in one, non-mut in another
 #[test]

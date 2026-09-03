@@ -511,6 +511,10 @@ pub struct TraitDecl {
 pub struct TraitMethod {
     pub id: Uuid,
     pub name: Spanned<String>,
+    #[serde(default)]
+    pub type_params: Vec<Spanned<String>>,
+    #[serde(default)]
+    pub type_param_bounds: HashMap<String, Vec<Spanned<String>>>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub contracts: Vec<Spanned<ContractClause>>,

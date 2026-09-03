@@ -15716,3 +15716,163 @@ fn generic_class_impl_inherits_default() {
     );
     assert_eq!(out.trim(), "8");
 }
+
+// ── Generic trait methods (trait signatures with their own type params) ──
+
+#[test]
+fn trait_generic_method_basic() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait T {
+            fn echo<V>(self, x: V) V
+        }
+        class C impl T {
+            a: int
+
+            fn echo<V>(self, x: V) V {
+                return x
+            }
+        }
+        fn main() {
+            let c = C { a: 1 }
+            print(c.echo(42))
+            print(c.echo("hi"))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "42\nhi");
+}
+
+#[test]
+fn trait_generic_method_renamed_params_conform() {
+    // Type-parameter names are positional: <U> in the trait, <W> in the class
+    let out = compile_and_run_stdout(
+        r#"
+        trait T {
+            fn echo<U>(self, x: U) U
+        }
+        class C impl T {
+            a: int
+
+            fn echo<W>(self, x: W) W {
+                return x
+            }
+        }
+        fn main() {
+            print(C { a: 1 }.echo(9))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "9");
+}
+
+#[test]
+fn trait_generic_method_with_bounds() {
+    let out = compile_and_run_stdout(
+        r#"
+        trait Show {
+            fn show(self) string
+        }
+        class Item impl Show {
+            n: string
+
+            fn show(self) string {
+                return self.n
+            }
+        }
+        trait T {
+            fn describe<V: Show>(self, x: V) string
+        }
+        class C impl T {
+            a: int
+
+            fn describe<W: Show>(self, x: W) string {
+                return x.show()
+            }
+        }
+        fn main() {
+            print(C { a: 1 }.describe(Item { n: "it" }))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "it");
+}
+
+#[test]
+fn trait_generic_method_in_generic_trait() {
+    // A generic trait template may carry generic methods; both layers work
+    let out = compile_and_run_stdout(
+        r#"
+        trait Conv<A> {
+            fn base(self) A
+            fn pick<V>(self, x: V) V
+        }
+        class C impl Conv<int> {
+            n: int
+
+            fn base(self) int {
+                return self.n
+            }
+
+            fn pick<V>(self, x: V) V {
+                return x
+            }
+        }
+        fn main() {
+            let c = C { n: 3 }
+            print(c.base())
+            print(c.pick("z"))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "3\nz");
+}
+
+#[test]
+fn trait_generic_method_missing_impl() {
+    compile_should_fail_with(
+        "trait T {\n    fn foo<V>(self, x: V) V\n}\n\nclass C impl T {\n    a: int\n}\n\nfn main(){}",
+        "class 'C' does not implement required method 'foo' from trait 'T'",
+    );
+}
+
+#[test]
+fn trait_generic_method_non_generic_impl() {
+    compile_should_fail_with(
+        "trait T {\n    fn foo<V>(self, x: V) V\n}\n\nclass C impl T {\n    a: int\n\n    fn foo(self, x: int) int {\n        return x\n    }\n}\n\nfn main(){}",
+        "must declare type parameters matching trait 'T'",
+    );
+}
+
+#[test]
+fn trait_generic_method_signature_mismatch() {
+    compile_should_fail_with(
+        "trait T {\n    fn foo<V>(self, x: V) V\n}\n\nclass C impl T {\n    a: int\n\n    fn foo<V>(self, x: V) int {\n        return 1\n    }\n}\n\nfn main(){}",
+        "does not match the generic signature declared by trait 'T'",
+    );
+}
+
+#[test]
+fn trait_generic_method_bounds_mismatch() {
+    compile_should_fail_with(
+        "trait Show {\n    fn show(self) string\n}\n\ntrait T {\n    fn describe<V: Show>(self, x: V) string\n}\n\nclass C impl T {\n    a: int\n\n    fn describe<W>(self, x: W) string {\n        return \"x\"\n    }\n}\n\nfn main(){}",
+        "has bounds [], but trait 'T' declares [Show]",
+    );
+}
+
+#[test]
+fn trait_generic_method_no_trait_object_dispatch() {
+    // Generic methods have no vtable slot — trait objects cannot call them
+    compile_should_fail_with(
+        "trait T {\n    fn name(self) string\n    fn foo<V>(self, x: V) V\n}\n\nclass C impl T {\n    a: int\n\n    fn name(self) string {\n        return \"c\"\n    }\n\n    fn foo<V>(self, x: V) V {\n        return x\n    }\n}\n\nfn use_t(t: T) {\n    t.foo(1)\n}\n\nfn main(){}",
+        "generic method 'foo' cannot be called through a trait object of 'T'",
+    );
+}
+
+#[test]
+fn trait_generic_method_no_default_body() {
+    compile_should_fail_with(
+        "trait T {\n    fn foo<V>(self, x: V) V {\n        return x\n    }\n}\n\nfn main(){}",
+        "generic trait method 'foo' cannot have a default body",
+    );
+}

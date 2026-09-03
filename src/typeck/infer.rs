@@ -2677,6 +2677,18 @@ fn infer_method_call(
                 object.span,
             )
         })?.clone();
+        // Generic trait methods have no vtable slot — a trait object cannot
+        // dispatch them (there is no single monomorphized address)
+        if trait_info.generic_methods.iter().any(|(n, _)| *n == method.node) {
+            return Err(CompileError::type_err(
+                format!(
+                    "generic method '{}' cannot be called through a trait object of '{trait_name}'; \
+                     call it on a concrete type",
+                    method.node
+                ),
+                method.span,
+            ));
+        }
         let (_, method_sig) = trait_info.methods.iter()
             .find(|(n, _)| *n == method.node)
             .ok_or_else(|| {
