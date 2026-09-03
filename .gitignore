@@ -9,3 +9,6 @@ book/book/
 fuzz/target/
 a.out
 .DS_Store
+
+# Incremental test cache written by `pluto test`
+.pluto-cache/
