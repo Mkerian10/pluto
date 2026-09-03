@@ -28,9 +28,10 @@ fn main(){}"#, "wrong number of parameters");
 // Missing generic methods
 #[test]
 fn missing_generic_method() {
-    // Trait methods cannot declare their own type parameters
-    compile_should_fail_with(r#"trait T{fn foo<U>(self,x:U)U} class C impl T{}
-fn main(){}"#, "expected");
+    compile_should_fail_with(r#"trait T{fn foo<U>(self,x:U)U} class C impl T{
+x: int
+}
+fn main(){}"#, "class 'C' does not implement required method 'foo' from trait 'T'");
 }
 
 // Missing with nullable/error signatures

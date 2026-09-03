@@ -608,6 +608,8 @@ mod tests {
         TraitMethod {
             id: uuid,
             name: Spanned::new(name.to_string(), Span::dummy()),
+            type_params: vec![],
+            type_param_bounds: std::collections::HashMap::new(),
             params: param_uuids
                 .into_iter()
                 .map(|(n, id)| make_param(n, id))

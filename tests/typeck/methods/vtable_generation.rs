@@ -74,7 +74,7 @@ fn main(){}"#, "type mismatch"); }
 fn vtable_generic_method() { compile_should_fail_with(r#"trait T{fn foo<U>(self,x:U)U}
 class C impl T{
 fn foo<U>(self,x:U)string{return "hi"}}
-fn main(){}"#, "expected (, found <"); }
+fn main(){}"#, "does not match the generic signature declared by trait 'T'"); }
 
 // Vtable with contracts
 #[test]

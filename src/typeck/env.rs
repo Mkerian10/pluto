@@ -22,6 +22,11 @@ pub struct ClassInfo {
 #[derive(Debug, Clone)]
 pub struct TraitInfo {
     pub methods: Vec<(String, FuncSig)>,
+    /// Methods that declare their own type parameters (`fn foo<V>(self, x: V) V`).
+    /// Not in `methods` — they have no single vtable slot and cannot be
+    /// called through trait objects; conformance checks them against the
+    /// class's hoisted generic method (see generic_methods.rs).
+    pub generic_methods: Vec<(String, GenericFuncSig)>,
     pub default_methods: Vec<String>,
     pub mut_self_methods: HashSet<String>,
     pub static_methods: HashSet<String>,  // Methods without self parameter

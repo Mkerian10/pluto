@@ -6248,6 +6248,7 @@ mod tests {
         // Add some test traits
         env.traits.insert("Printable".to_string(), crate::typeck::env::TraitInfo {
             methods: vec![],
+            generic_methods: vec![],
             default_methods: vec![],
             mut_self_methods: HashSet::new(),
             static_methods: HashSet::new(),
@@ -6378,6 +6379,7 @@ mod tests {
         let mut env = make_test_env();
         env.traits.insert("io.Reader".to_string(), crate::typeck::env::TraitInfo {
             methods: vec![],
+            generic_methods: vec![],
             default_methods: vec![],
             mut_self_methods: HashSet::new(),
             static_methods: HashSet::new(),
