@@ -99,7 +99,7 @@ Rules:
 | Request handler needing Database/Logger singletons | scope block; singletons wire automatically into seeds and auto-created classes |
 | Scoped class with request-specific fields *and* deps | seed with bracket deps (this RFC) |
 | Nested scoped objects (`Outer[inner: Inner]`) | seed `Inner`, bind `Outer` — auto-created and wired |
-| Test instances without the full container | scope blocks work in any `fn` (no app required); mock *substitution* is future DI-override work |
+| Test instances without the full container | test-local scope containers: inside `test` bodies, `scope()` may seed singleton classes (the override) and auto-creates the rest — see [Test-Local DI Containers](rfc-test-local-scopes.md) |
 
 ### Answers to #125's design questions
 

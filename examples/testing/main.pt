@@ -28,3 +28,31 @@ test "string equality" {
     expect("hello").to_equal("hello")
     expect("").to_equal("")
 }
+
+// ── Test-local DI containers ─────────────────────────────────────────────
+// Inside a test body, scope() may seed singleton classes: the seed is the
+// override (a fake), and unseeded dependencies are auto-created for the
+// duration of the block. DI-wired code is testable without an app.
+
+class PriceFeed {
+    quote: int
+
+    fn latest(self) int {
+        return self.quote
+    }
+}
+
+class Portfolio[feed: PriceFeed] {
+    fn value(self, shares: int) int {
+        return self.feed.latest() * shares
+    }
+}
+
+test "portfolio uses injected feed" {
+    scope(PriceFeed { quote: 50 }) |p: Portfolio| {
+        expect(p.value(3)).to_equal(150)
+    }
+    scope(PriceFeed { quote: 100 }) |p: Portfolio| {
+        expect(p.value(3)).to_equal(300)
+    }
+}
