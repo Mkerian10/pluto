@@ -21,6 +21,9 @@ jobs:
           - os: macos-latest
             target: macos-arm64
     runs-on: ${{ matrix.os }}
+    # A hung test must fail the gate, not wedge the job: plain `cargo test`
+    # has no per-test timeout, and one run sat 6h on a deadlocked test
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -48,6 +51,7 @@ jobs:
     name: Publish release
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
