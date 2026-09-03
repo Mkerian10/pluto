@@ -27,11 +27,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
 
       # The channel's promise is "more stable than master": a commit only
       # ships if the full suite passes on the release build's platform.
+      # nextest for per-test timeouts and process isolation (plain
+      # `cargo test` hung on a deadlocked test and races the git-dep
+      # manifest tests); doctests separately — nextest does not run them.
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo nextest run --workspace --profile ci
+
+      - name: Run doc-tests
+        run: cargo test --workspace --doc
 
       - name: Build release binaries
         run: cargo build --release -p pluto -p pluto-mcp
