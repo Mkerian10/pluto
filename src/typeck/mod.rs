@@ -59,6 +59,9 @@ fn types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> 
 
 pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), CompileError> {
     let mut env = TypeEnv::new();
+    // Present only in test mode (stripped before typeck otherwise): scope
+    // blocks in these functions may build test-local DI containers
+    env.test_fns = program.test_info.iter().map(|t| t.fn_name.clone()).collect();
 
     // Pass 0: Register names only (no type resolution)
     register::register_trait_names(program, &mut env)?;

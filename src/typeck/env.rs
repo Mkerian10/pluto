@@ -173,6 +173,10 @@ pub struct TypeEnv {
     /// Errors raised on infallible resolution paths (resolve_generic_instances),
     /// surfaced at the end of type checking.
     pub pending_errors: Vec<crate::diagnostics::CompileError>,
+    /// Test function names (from program.test_info) — non-empty only in test
+    /// mode. Scope blocks inside these functions may seed and bind classes
+    /// of any lifecycle (test-local DI containers).
+    pub test_fns: HashSet<String>,
     pub enums: HashMap<String, EnumInfo>,
     pub errors: HashMap<String, ErrorInfo>,
     pub extern_fns: HashSet<String>,
@@ -338,6 +342,7 @@ impl TypeEnv {
             generic_trait_decls: HashMap::new(),
             pending_trait_decls: Vec::new(),
             pending_errors: Vec::new(),
+            test_fns: HashSet::new(),
             enums: HashMap::new(),
             errors: HashMap::new(),
             extern_fns: HashSet::new(),

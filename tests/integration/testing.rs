@@ -405,3 +405,169 @@ test "another test in file b" {
     // Should NOT contain file_a tests
     assert!(!stdout_b.contains("test in file a"), "file_b should not include file_a tests");
 }
+
+// ── Test-local DI containers (scope blocks in test bodies) ───────────────
+
+#[test]
+fn test_scope_singleton_override() {
+    // Seeding a singleton inside a test overrides what the graph wires
+    let (stdout, _, code) = compile_test_and_run(r#"
+class Database {
+    tag: string
+
+    fn query(self) string {
+        return self.tag
+    }
+}
+
+class Service[db: Database] {
+    fn run(self) string {
+        return self.db.query()
+    }
+}
+
+test "service with fake db" {
+    scope(Database { tag: "fake" }) |svc: Service| {
+        expect(svc.run()).to_equal("fake")
+    }
+}
+"#);
+    assert_eq!(code, 0, "stdout: {stdout}");
+    assert!(stdout.contains("1 tests passed"));
+}
+
+#[test]
+fn test_scope_deep_singleton_chain() {
+    // Unseeded auto-constructible singletons are created scope-locally
+    let (stdout, _, code) = compile_test_and_run(r#"
+class Level3 {
+    v: int
+}
+
+class Level2[l3: Level3] {
+    fn get(self) int {
+        return self.l3.v
+    }
+}
+
+class Level1[l2: Level2] {
+    fn get(self) int {
+        return self.l2.get()
+    }
+}
+
+test "deep chain" {
+    scope(Level3 { v: 42 }) |top: Level1| {
+        expect(top.get()).to_equal(42)
+    }
+}
+"#);
+    assert_eq!(code, 0, "stdout: {stdout}");
+    assert!(stdout.contains("1 tests passed"));
+}
+
+#[test]
+fn test_scope_containers_isolated() {
+    // Two scope blocks in one test are independent containers
+    let (stdout, _, code) = compile_test_and_run(r#"
+class Db {
+    tag: string
+
+    fn t(self) string {
+        return self.tag
+    }
+}
+
+class Svc[db: Db] {
+    fn run(self) string {
+        return self.db.t()
+    }
+}
+
+test "two containers isolated" {
+    scope(Db { tag: "first" }) |s: Svc| {
+        expect(s.run()).to_equal("first")
+    }
+    scope(Db { tag: "second" }) |s: Svc| {
+        expect(s.run()).to_equal("second")
+    }
+}
+"#);
+    assert_eq!(code, 0, "stdout: {stdout}");
+    assert!(stdout.contains("1 tests passed"));
+}
+
+#[test]
+fn test_scope_mixed_lifecycles() {
+    // Scoped and singleton seeds coexist in one test container
+    let (stdout, _, code) = compile_test_and_run(r#"
+class Db {
+    tag: string
+}
+
+scoped class Ctx {
+    id: int
+}
+
+scoped class Handler[ctx: Ctx, db: Db] {
+    fn dbtag(self) string {
+        return self.db.tag
+    }
+
+    fn cid(self) int {
+        return self.ctx.id
+    }
+}
+
+test "mixed lifecycles" {
+    scope(Ctx { id: 9 }, Db { tag: "test-db" }) |h: Handler| {
+        expect(h.dbtag()).to_equal("test-db")
+        expect(h.cid()).to_equal(9)
+    }
+}
+"#);
+    assert_eq!(code, 0, "stdout: {stdout}");
+    assert!(stdout.contains("1 tests passed"));
+}
+
+#[test]
+fn test_scope_stateful_singleton_needs_seed() {
+    // A stateful singleton reached by a test container must be seeded
+    compile_test_should_fail_with(r#"
+class Config {
+    port: int
+}
+
+class Service[cfg: Config] {
+    fn p(self) int {
+        return self.cfg.port
+    }
+}
+
+scoped class W {
+    z: int
+}
+
+test "missing seed" {
+    scope(W { z: 1 }) |svc: Service| {
+        expect(svc.p()).to_equal(1)
+    }
+}
+"#, "singleton class 'Config' has non-injected fields and must be provided as a seed");
+}
+
+#[test]
+fn test_scope_singleton_seed_rejected_outside_tests() {
+    // The relaxation is test-only: run-mode scope blocks still require
+    // scoped classes, with a hint pointing at test bodies
+    compile_should_fail_with(r#"
+class Database {
+    tag: string
+}
+
+fn main(){
+    scope(Database { tag: "x" }) |d: Database| {
+    }
+}
+"#, "seed it inside a test body for a test-local override");
+}

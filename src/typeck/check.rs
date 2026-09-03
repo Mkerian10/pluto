@@ -613,6 +613,17 @@ fn check_scope_stmt(
     use crate::parser::ast::Lifecycle;
     use super::env::{FieldWiring, ScopeResolution};
 
+    // Inside a test body, a scope block is a test-local DI container:
+    // singleton classes may be seeded (the override) or auto-created as
+    // scope-local instances. Test mode has no app, so singleton globals are
+    // never initialized — wiring to them would read null.
+    let in_test = env
+        .current_fn
+        .as_ref()
+        .is_some_and(|f| env.test_fns.contains(f));
+    let scope_local =
+        |lc: Lifecycle| lc == Lifecycle::Scoped || (in_test && lc == Lifecycle::Singleton);
+
     // 1. Check seed expressions and verify each is a scoped class
     let mut seed_types: Vec<(String, usize)> = Vec::new(); // (class_name, seed_index)
     let mut seed_class_names: DSet<String> = DSet::new();
@@ -631,11 +642,16 @@ fn check_scope_stmt(
                         seed.span,
                     )
                 })?;
-                if info.lifecycle != Lifecycle::Scoped {
+                if !scope_local(info.lifecycle) {
+                    let hint = if info.lifecycle == Lifecycle::Singleton {
+                        "add 'scoped' keyword if a per-scope lifetime is intended, \
+                         or seed it inside a test body for a test-local override"
+                    } else {
+                        "transient classes are created per injection point and cannot be seeded"
+                    };
                     return Err(CompileError::type_err(
                         format!(
-                            "scope seed must be a scoped class, but '{name}' has lifecycle '{}'; \
-                             add 'scoped' keyword: scoped class {name} {{ ... }}",
+                            "scope seed must be a scoped class, but '{name}' has lifecycle '{}'; {hint}",
                             info.lifecycle
                         ),
                         seed.span,
@@ -706,8 +722,10 @@ fn check_scope_stmt(
             if let PlutoType::Class(dep_name) = field_ty {
                 let dep_info = env.classes.get(dep_name);
                 if let Some(dep_info) = dep_info {
-                    // Only add scoped deps to the needed set; singletons are accessed via globals
-                    if dep_info.lifecycle == Lifecycle::Scoped && !needed.contains(dep_name) {
+                    // Scoped deps are created in-scope. Outside tests,
+                    // singletons wire to process globals; in tests they are
+                    // scope-local too (no app ever initialized the globals)
+                    if scope_local(dep_info.lifecycle) && !needed.contains(dep_name) {
                         needed.insert(dep_name.clone());
                         queue.push_back(dep_name.clone());
                     }
@@ -729,13 +747,14 @@ fn check_scope_stmt(
             // Transient classes are not wired through scope blocks
             continue;
         }
-        if info.lifecycle == Lifecycle::Scoped {
+        if scope_local(info.lifecycle) {
             // Check if all fields are injected (auto-creatable)
             let has_non_injected = info.fields.iter().any(|(_, _, inj)| !*inj);
             if has_non_injected {
+                let kind = if info.lifecycle == Lifecycle::Scoped { "scoped" } else { "singleton" };
                 return Err(CompileError::type_err(
                     format!(
-                        "scoped class '{class_name}' has non-injected fields and must be provided as a seed; \
+                        "{kind} class '{class_name}' has non-injected fields and must be provided as a seed; \
                          provide it as a seed expression: scope({class_name} {{ field: val }}) |...| {{ ... }}"
                     ),
                     span,
@@ -748,7 +767,7 @@ fn check_scope_stmt(
     let classes_to_create: Vec<String> = needed.iter()
         .filter(|n| !seed_class_names.contains(*n))
         .filter(|n| {
-            env.classes.get(*n).map_or(false, |i| i.lifecycle == Lifecycle::Scoped)
+            env.classes.get(*n).map_or(false, |i| scope_local(i.lifecycle))
         })
         .cloned()
         .collect();
@@ -852,10 +871,13 @@ fn check_scope_stmt(
                     // Fresh instance per injection point
                     transient_deps.push(dep_name.clone());
                     FieldWiring::Transient(dep_name.clone())
+                } else if creation_order.contains(dep_name) || seed_class_names.contains(dep_name) {
+                    // Created within this scope block — in tests this covers
+                    // scope-local singletons, which must NOT wire to the
+                    // (uninitialized) process globals
+                    FieldWiring::ScopedInstance(dep_name.clone())
                 } else if dep_info.map_or(false, |d| d.lifecycle == Lifecycle::Singleton) {
                     FieldWiring::Singleton(dep_name.clone())
-                } else if creation_order.contains(dep_name) || seed_class_names.contains(dep_name) {
-                    FieldWiring::ScopedInstance(dep_name.clone())
                 } else {
                     return Err(CompileError::type_err(
                         format!(

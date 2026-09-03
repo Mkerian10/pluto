@@ -74,7 +74,7 @@ cargo run -- run examples/rust_ffi/main.pt
 
 ## testing
 
-Demonstrates Pluto's built-in test framework with `test` blocks, `expect()` assertions, and multiple assertion methods (`to_equal`, `to_be_true`, `to_be_false`).
+Demonstrates Pluto's built-in test framework with `test` blocks, `expect()` assertions, and multiple assertion methods (`to_equal`, `to_be_true`, `to_be_false`), and test-local DI containers: seeding singleton classes inside test scope blocks to override what the graph wires (`scope(PriceFeed { quote: 50 }) |p: Portfolio| { ... }`).
 
 ```bash
 cargo run -- test examples/testing/main.pt
