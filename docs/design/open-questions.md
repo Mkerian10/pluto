@@ -96,3 +96,7 @@ Previously open questions that have been designed and implemented.
 - [x] **DI lifecycle** — singleton/scoped/transient lifecycle scopes with captive dependency detection at compile time
 - [x] **Standard library (extended)** — 19 modules: base64, collections, env, fs, http, io, json, log, math, net, path, random, regex, rpc, socket, strings, time, uuid, wire
 - [x] **Package manager** — `pluto.toml` manifest with path and git dependencies, transitive resolution, scope isolation
+
+## Known gaps (from retired bugs/ tracker)
+
+- **TaskCancelled not inferred from task.get() after cancel()** — `TaskCancelled` exists in the error catalog, but error inference doesn't model cancellation as a fallible outcome of `task.get()`, so cancellation paths need artificially fallible spawned functions. (Reported 2026-02-13, P2; the two P1 reports retired with this tracker were verified fixed by the error-inference work in PRs #265–#270.)

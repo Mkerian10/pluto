@@ -11,7 +11,7 @@ Pluto is a domain-specific programming language for distributed backend systems.
 
 ## Design Principles
 
-- **Distribution is invisible until it matters.** Cross-pod function calls look like local calls. The compiler handles serialization, networking, and failure modes. But errors from remote calls are explicit and must be handled.
+- **Logical placement, physical execution.** Programs state *where* computation logically belongs (`at domain { ... }`); the compiler and deployment plan decide how the boundary is physically crossed (network, IPC, in-process). Distribution is explicit in the source — crossing a domain is visible, its failure modes are typed and must be handled — but transport is never the programming model. See docs/design/distributed-model.md.
 - **Whole-program compilation.** All source code must be available at compile time. The compiler sees the entire system and uses this to verify correctness, infer error-ability, and optimize topology.
 - **Dependencies are declared, not configured.** Code declares what it needs via dependency injection. How those dependencies are provided is an upstream concern.
 - **Errors are unavoidable.** Every error must be handled. The compiler infers which functions can error and enforces handling at every call site.
