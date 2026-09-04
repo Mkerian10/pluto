@@ -131,6 +131,15 @@ static atomic_int gc_safepoint_requested = 0;
 static atomic_int gc_stw_stopped = 0;
 static atomic_int gc_stw_resumed = 0;
 static atomic_int gc_safe_count = 0;
+// Set while this thread has an active registry slot. Safe-region accounting
+// must be invisible for unregistered threads: the collector's closing
+// condition is `stopped + safe >= count(registered)`, and an UNREGISTERED
+// thread parked in a safe region (e.g. blocked in gc_heap_lock during its
+// own registration) would inflate `safe` and stand in for a still-running
+// registered thread — releasing the collector to scan a heap that thread is
+// mutating. An unregistered thread is not in `count`, so not counting it is
+// exactly right: it only ever blocks on gc_mutex and cannot touch the heap.
+static __thread int gc_thread_registered = 0;
 
 // Safepoint check - called by threads at regular intervals (loop back-edges,
 // runtime waits). If GC has requested a safepoint, park here until it's done.
@@ -156,10 +165,12 @@ void __pluto_safepoint(void) {
 // A safe region brackets code that blocks without touching the GC heap.
 // While inside, the thread counts as stopped for stop-the-world purposes.
 void __pluto_gc_enter_safe_region(void) {
+    if (!gc_thread_registered) return;
     atomic_fetch_add(&gc_safe_count, 1);
 }
 
 void __pluto_gc_leave_safe_region(void) {
+    if (!gc_thread_registered) return;
     for (;;) {
         if (atomic_load(&gc_safepoint_requested) == 0) {
             atomic_fetch_sub(&gc_safe_count, 1);
@@ -212,6 +223,9 @@ void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi) {
     gc_thread_stacks[slot].stack_lo = stack_lo;
     gc_thread_stacks[slot].stack_hi = stack_hi;
     gc_thread_stacks[slot].active = 1;
+    // Flag and slot flip together under gc_mutex: the collector (which also
+    // holds gc_mutex to count) can never see one without the other
+    gc_thread_registered = 1;
     pthread_mutex_unlock(&gc_mutex);
 }
 
@@ -224,6 +238,7 @@ void __pluto_gc_deregister_thread_stack(void) {
             break;
         }
     }
+    gc_thread_registered = 0;
     pthread_mutex_unlock(&gc_mutex);
 }
 
