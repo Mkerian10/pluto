@@ -508,8 +508,10 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
             substitute_in_expr(&mut expr.node, bindings);
             for arm in arms.iter_mut() {
                 substitute_in_block(&mut arm.body.node, bindings);
-                for ta in &mut arm.type_args {
-                    substitute_in_type_expr(&mut ta.node, bindings);
+                if let MatchPattern::Variant { type_args, .. } = &mut arm.pattern {
+                    for ta in type_args {
+                        substitute_in_type_expr(&mut ta.node, bindings);
+                    }
                 }
             }
         }
@@ -710,8 +712,10 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
             substitute_in_expr(&mut expr.node, bindings);
             for arm in arms {
                 substitute_in_expr(&mut arm.value.node, bindings);
-                for ta in &mut arm.type_args {
-                    substitute_in_type_expr(&mut ta.node, bindings);
+                if let MatchPattern::Variant { type_args, .. } = &mut arm.pattern {
+                    for ta in type_args {
+                        substitute_in_type_expr(&mut ta.node, bindings);
+                    }
                 }
             }
         }
@@ -886,13 +890,15 @@ impl VisitMut for MonomorphizeRewriter<'_> {
 
             // Rewrite enum names in match arms
             for arm in arms.iter_mut() {
-                let arm_key = (arm.enum_name.span.start, arm.enum_name.span.end);
-                if let Some(mangled) = self.rewrites.get(&arm_key) {
-                    arm.enum_name.node = mangled.clone();
-                }
-                // Also check if match expr span maps to a rewrite
-                if let Some(mangled) = self.rewrites.get(&match_span) {
-                    arm.enum_name.node = mangled.clone();
+                if let MatchPattern::Variant { enum_name, .. } = &mut arm.pattern {
+                    let arm_key = (enum_name.span.start, enum_name.span.end);
+                    if let Some(mangled) = self.rewrites.get(&arm_key) {
+                        enum_name.node = mangled.clone();
+                    }
+                    // Also check if match expr span maps to a rewrite
+                    if let Some(mangled) = self.rewrites.get(&match_span) {
+                        enum_name.node = mangled.clone();
+                    }
                 }
                 self.visit_block_mut(&mut arm.body);
             }
@@ -2061,13 +2067,15 @@ mod tests {
             expr: spanned(Expr::Ident("x".to_string())),
             arms: vec![
                 MatchArm {
-                    enum_name: spanned("Option".to_string()),
-                    variant_name: spanned("Some".to_string()),
-                    bindings: vec![(spanned("val".to_string()), None)],
-                    type_args: vec![spanned(TypeExpr::Named("T".to_string()))],
+                    pattern: crate::parser::ast::MatchPattern::Variant {
+                        enum_name: spanned("Option".to_string()),
+                        variant_name: spanned("Some".to_string()),
+                        bindings: vec![(spanned("val".to_string()), None)],
+                        type_args: vec![spanned(TypeExpr::Named("T".to_string()))],
+                        enum_id: None,
+                        variant_id: None,
+                    },
                     body: spanned(Block { stmts: vec![] }),
-                    enum_id: None,
-                    variant_id: None,
                 },
             ],
         };
@@ -2079,7 +2087,7 @@ mod tests {
 
         if let Stmt::Match { arms, .. } = stmt {
             assert!(matches!(
-                &arms[0].type_args[0].node,
+                &arms[0].pattern.type_args()[0].node,
                 TypeExpr::Named(n) if n == "string"
             ));
         } else {

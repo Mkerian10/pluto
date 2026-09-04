@@ -636,12 +636,14 @@ fn collect_dangling_in_stmt(stmt: &Stmt, span: Span, target: Uuid, out: &mut Vec
         Stmt::Match { expr, arms } => {
             collect_dangling_in_expr(&expr.node, expr.span, target, out);
             for arm in arms {
-                if arm.enum_id == Some(target) {
-                    out.push(DanglingRef {
-                        kind: DanglingRefKind::MatchArm,
-                        name: arm.enum_name.node.clone(),
-                        span: arm.enum_name.span,
-                    });
+                if let pluto::parser::ast::MatchPattern::Variant { enum_name, enum_id, .. } = &arm.pattern {
+                    if *enum_id == Some(target) {
+                        out.push(DanglingRef {
+                            kind: DanglingRefKind::MatchArm,
+                            name: enum_name.node.clone(),
+                            span: enum_name.span,
+                        });
+                    }
                 }
                 collect_dangling_in_block(&arm.body.node, target, out);
             }
@@ -976,8 +978,10 @@ fn rename_in_stmt(stmt: &mut Stmt, id: Uuid, kind: DeclKindSimple, old_name: &st
             rename_in_expr(&mut expr.node, id, kind, old_name, new_name);
             for arm in arms {
                 if kind == DeclKindSimple::Enum {
-                    if arm.enum_id == Some(id) {
-                        arm.enum_name.node = new_name.to_string();
+                    if let pluto::parser::ast::MatchPattern::Variant { enum_name, enum_id, .. } = &mut arm.pattern {
+                        if *enum_id == Some(id) {
+                            enum_name.node = new_name.to_string();
+                        }
                     }
                 }
                 rename_in_block(&mut arm.body.node, id, kind, old_name, new_name);

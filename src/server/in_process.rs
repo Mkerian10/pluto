@@ -574,11 +574,16 @@ impl Visitor for XrefCollector {
             }
             Stmt::Match { arms, .. } if self.look_for_enums => {
                 for arm in arms {
-                    if arm.enum_id == Some(self.target_id)
-                        || arm.variant_id == Some(self.target_id)
+                    if let crate::parser::ast::MatchPattern::Variant {
+                        enum_name, variant_name, enum_id, variant_id, ..
+                    } = &arm.pattern
                     {
-                        self.sites
-                            .push((arm.enum_name.span.start, arm.variant_name.span.end));
+                        if *enum_id == Some(self.target_id)
+                            || *variant_id == Some(self.target_id)
+                        {
+                            self.sites
+                                .push((enum_name.span.start, variant_name.span.end));
+                        }
                     }
                 }
             }

@@ -67,6 +67,27 @@ fn process_result(r: Result) string {
     }
 }
 
+// Wildcard arms: `_` matches anything not claimed by an earlier arm, so a
+// match doesn't have to list every variant. Works in statement form (`_ { }`)
+// and expression form (`_ => value`).
+fn is_error(r: Result) bool {
+    match r {
+        Result.Err { code } {
+            return true
+        }
+        _ {
+            return false
+        }
+    }
+}
+
+fn shape_kind(s: Shape) string {
+    return match s {
+        Shape.Circle { radius } => "round",
+        _ => "angular"
+    }
+}
+
 // Nested pattern matching
 fn classify_shape(s: Shape) string {
     match s {
@@ -107,6 +128,12 @@ fn main() {
     print(process_result(Result.Ok { value: 42 }))
     print(process_result(Result.Err { code: 404 }))
     print(process_result(Result.Pending))
+
+    // Wildcard arms
+    print(is_error(Result.Err { code: 500 }))
+    print(is_error(Result.Pending))
+    print(shape_kind(Shape.Circle { radius: 1 }))
+    print(shape_kind(Shape.Triangle { base: 2, height: 2 }))
 
     // Nested matching
     print(classify_shape(Shape.Circle { radius: 15 }))

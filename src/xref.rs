@@ -175,10 +175,15 @@ impl VisitMut for XrefResolver<'_> {
             Stmt::Match { expr, arms } => {
                 self.visit_expr_mut(expr);
                 for arm in arms {
-                    arm.enum_id = self.index.enum_index.get(&arm.enum_name.node).copied();
-                    arm.variant_id = self.index.variant_index.get(
-                        &(arm.enum_name.node.clone(), arm.variant_name.node.clone())
-                    ).copied();
+                    if let MatchPattern::Variant {
+                        enum_name, variant_name, enum_id, variant_id, ..
+                    } = &mut arm.pattern
+                    {
+                        *enum_id = self.index.enum_index.get(&enum_name.node).copied();
+                        *variant_id = self.index.variant_index.get(
+                            &(enum_name.node.clone(), variant_name.node.clone())
+                        ).copied();
+                    }
                     self.visit_block_mut(&mut arm.body);
                 }
                 return;
@@ -459,13 +464,15 @@ mod tests {
             stmts: vec![sp(Stmt::Match {
                 expr: sp(Expr::IntLit(0)),
                 arms: vec![MatchArm {
-                    enum_name: sp("Option".to_string()),
-                    variant_name: sp("Some".to_string()),
-                    type_args: vec![],
-                    bindings: vec![],
+                    pattern: MatchPattern::Variant {
+                        enum_name: sp("Option".to_string()),
+                        variant_name: sp("Some".to_string()),
+                        type_args: vec![],
+                        bindings: vec![],
+                        enum_id: None,
+                        variant_id: None,
+                    },
                     body: empty_block(),
-                    enum_id: None,
-                    variant_id: None,
                 }],
             })],
         });
@@ -474,8 +481,11 @@ mod tests {
         resolve_cross_refs(&mut program);
 
         if let Stmt::Match { arms, .. } = &program.functions[0].node.body.node.stmts[0].node {
-            assert_eq!(arms[0].enum_id, Some(enum_id));
-            assert_eq!(arms[0].variant_id, Some(variant_id));
+            let MatchPattern::Variant { enum_id: eid, variant_id: vid, .. } = &arms[0].pattern else {
+                panic!("expected variant pattern");
+            };
+            assert_eq!(*eid, Some(enum_id));
+            assert_eq!(*vid, Some(variant_id));
             return;
         }
         panic!("expected Match stmt");

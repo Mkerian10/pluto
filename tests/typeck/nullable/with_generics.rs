@@ -31,8 +31,7 @@ let x:int=b.get()}"#, "type mismatch"); }
 #[test]
 fn option_nullable_variant() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} fn main(){let o:Opt<int?>=Opt<int>.Some{v:42}}"#, "type mismatch"); }
 #[test]
-#[ignore] // Parser error: "expected identifier, found =>" in match arm - match syntax issue
-fn option_unwrap_nullable() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} fn unwrap<U>(o:Opt<U>)U{match o{Opt.Some{v}=>{return v}Opt.None=>{return none}}} fn main(){}"#, "type mismatch"); }
+fn option_unwrap_nullable() { compile_should_fail_with(r#"enum Opt<T>{Some{v:T}None} fn unwrap<U>(o:Opt<U>)U{match o{Opt.Some{v}{return v}Opt.None{return none}}} fn main(){}"#, "type mismatch"); }
 
 // Type bounds with nullable
 #[test]

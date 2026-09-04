@@ -313,9 +313,11 @@ impl VisitMut for AmbientRewriter<'_> {
                 self.visit_expr_mut(expr);
                 for arm in arms {
                     let mut inner = self.active.clone();
-                    for (binding, rename) in &arm.bindings {
-                        let name = rename.as_ref().unwrap_or(binding);
-                        inner.remove(&name.node);
+                    if let MatchPattern::Variant { bindings, .. } = &arm.pattern {
+                        for (binding, rename) in bindings {
+                            let name = rename.as_ref().unwrap_or(binding);
+                            inner.remove(&name.node);
+                        }
                     }
                     let mut inner_rewriter = AmbientRewriter { active: &inner };
                     inner_rewriter.visit_block_mut(&mut arm.body);

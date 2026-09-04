@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Program {
@@ -563,26 +563,68 @@ pub struct EnumVariant {
     pub fields: Vec<Field>,
 }
 
+/// What a match arm matches against. A `Variant` arm names an enum variant and
+/// may bind its fields; a `Wildcard` arm (`_`) matches any value not claimed by
+/// an earlier arm and binds nothing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MatchPattern {
+    Variant {
+        enum_name: Spanned<String>,
+        variant_name: Spanned<String>,
+        type_args: Vec<Spanned<TypeExpr>>,
+        bindings: Vec<(Spanned<String>, Option<Spanned<String>>)>,
+        enum_id: Option<Uuid>,
+        variant_id: Option<Uuid>,
+    },
+    Wildcard {
+        span: Span,
+    },
+}
+
+impl MatchPattern {
+    /// The matched enum name, or None for a wildcard arm.
+    pub fn enum_name(&self) -> Option<&Spanned<String>> {
+        match self {
+            MatchPattern::Variant { enum_name, .. } => Some(enum_name),
+            MatchPattern::Wildcard { .. } => None,
+        }
+    }
+
+    /// The matched variant name, or None for a wildcard arm.
+    pub fn variant_name(&self) -> Option<&Spanned<String>> {
+        match self {
+            MatchPattern::Variant { variant_name, .. } => Some(variant_name),
+            MatchPattern::Wildcard { .. } => None,
+        }
+    }
+
+    /// The arm's field bindings; empty for a wildcard arm.
+    pub fn bindings(&self) -> &[(Spanned<String>, Option<Spanned<String>>)] {
+        match self {
+            MatchPattern::Variant { bindings, .. } => bindings,
+            MatchPattern::Wildcard { .. } => &[],
+        }
+    }
+
+    /// The arm's explicit type arguments; empty for a wildcard arm.
+    pub fn type_args(&self) -> &[Spanned<TypeExpr>] {
+        match self {
+            MatchPattern::Variant { type_args, .. } => type_args,
+            MatchPattern::Wildcard { .. } => &[],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchArm {
-    pub enum_name: Spanned<String>,
-    pub variant_name: Spanned<String>,
-    pub type_args: Vec<Spanned<TypeExpr>>,
-    pub bindings: Vec<(Spanned<String>, Option<Spanned<String>>)>,
+    pub pattern: MatchPattern,
     pub body: Spanned<Block>,
-    pub enum_id: Option<Uuid>,
-    pub variant_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchExprArm {
-    pub enum_name: Spanned<String>,
-    pub variant_name: Spanned<String>,
-    pub type_args: Vec<Spanned<TypeExpr>>,
-    pub bindings: Vec<(Spanned<String>, Option<Spanned<String>>)>,
+    pub pattern: MatchPattern,
     pub value: Spanned<Expr>,
-    pub enum_id: Option<Uuid>,
-    pub variant_id: Option<Uuid>,
 }
 
 #[cfg(test)]
