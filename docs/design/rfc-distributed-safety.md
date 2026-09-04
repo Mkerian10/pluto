@@ -4,6 +4,7 @@
 **Author:** Matt Kerian
 **Date:** 2026-02-14
 **Depends on:** `rfc-schema.md`, `rfc-concurrency-v2.md`
+**Framing:** subordinate to [distributed-model.md](distributed-model.md) — the checks below apply to logical domain boundaries (`at` expressions), whatever physical transport the deployment plan chooses. Where this document says "RPC," read "a boundary whose physical plan chose a network transport.
 
 ## Summary
 
@@ -48,7 +49,7 @@ app ServiceB[processor: EventProcessor] {
 
 ### Cross-Process Communication
 
-Services communicate through typed channels — RPC calls, message queues, event streams. The compiler type-checks these at both endpoints.
+Services communicate across logical domain boundaries — placement expressions, message queues, event streams. The compiler type-checks both endpoints of every boundary regardless of the transport the plan selects.
 
 **Stage pub methods** define the cross-process API:
 
