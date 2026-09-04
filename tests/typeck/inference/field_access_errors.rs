@@ -189,18 +189,16 @@ fn case_mismatch_field() {
 // ============================================================================
 
 #[test]
-#[ignore]
 fn field_access_on_nullable_class() {
     compile_should_fail_with(
         r#"
         class Point { x: int, y: int }
-
-        fn main() {
+fn main() {
             let p: Point? = Point { x: 1, y: 2 }
-            let v = p.x
+let v = p.x
         }
         "#,
-        "no field",
+        "field access on non-class type Point?",
     );
 }
 
@@ -379,14 +377,12 @@ fn field_access_on_method_result_non_class() {
 // ============================================================================
 
 #[test]
-#[ignore]
 fn assign_to_unknown_field() {
     compile_should_fail_with(
         r#"
         class Point { x: int, y: int }
-
-        fn main() {
-            let p = Point { x: 1, y: 2 }
+fn main() {
+            let mut p = Point { x: 1, y: 2 }
             p.z = 3
         }
         "#,
@@ -395,18 +391,16 @@ fn assign_to_unknown_field() {
 }
 
 #[test]
-#[ignore]
 fn assign_wrong_type_to_field() {
     compile_should_fail_with(
         r#"
         class Point { x: int, y: int }
-
-        fn main() {
-            let p = Point { x: 1, y: 2 }
+fn main() {
+            let mut p = Point { x: 1, y: 2 }
             p.x = "hello"
         }
         "#,
-        "type mismatch",
+        "field 'x': expected int, found string",
     );
 }
 

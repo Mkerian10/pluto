@@ -13,12 +13,12 @@ fn main(){}"#, "trait 'T' has no method 'bar'"); }
 
 // Dispatch with wrong arguments
 #[test]
-#[ignore]
+#[ignore] // source uses legacy escaped-quote + standalone-impl syntax; rewrite when revisiting dispatch coverage
 fn dispatch_wrong_args() { compile_should_fail_with(r#"trait T{fn foo(self,x:int)} class C{} impl T{fn foo(self,x:int){}} fn use_t(t:T){t.foo(\"hi\")} fn main(){}"#, "type mismatch"); }
 
 // Dispatch return type mismatch
 #[test]
-#[ignore]
+#[ignore] // source uses legacy standalone-impl syntax; rewrite when revisiting dispatch coverage
 fn dispatch_return_mismatch() { compile_should_fail_with(r#"trait T{fn foo(self)int} class C{} impl T{fn foo(self)int{return 1}} fn use_t(t:T)string{return t.foo()} fn main(){}"#, "type mismatch"); }
 
 // Multiple trait dispatch
@@ -116,7 +116,7 @@ fn main(){}"#).is_ok()); }
 
 // Dispatch with closure parameter
 #[test]
-#[ignore]
+#[ignore] // source uses legacy (int)int fn-type syntax (real syntax: fn(int) int); rewrite when revisiting
 fn dispatch_closure_param() { compile_should_fail_with(r#"trait T{fn foo(self,f:(int)int)} class C{} impl T{fn foo(self,f:(int)int){}} fn use_t(t:T){t.foo((x:string)=>1)} fn main(){}"#, "type mismatch"); }
 
 // Dispatch on array of trait objects

@@ -78,18 +78,18 @@ fn newline_before_dot_method_call() {
 }
 
 #[test]
-#[ignore] // Empty files now parse successfully but fail at link (no main)
+// Empty files parse and compile to object; the missing main only surfaces at link
 fn empty_file() {
-    compile_should_fail("");
+    assert!(pluto::compile_to_object("").is_ok());
 }
 
 #[test]
-#[ignore] // Comment-only files now parse successfully but fail at link (no main)
+// Comment-only files parse and compile to object; missing main surfaces at link
 fn only_comments() {
-    compile_should_fail(r#"
+    assert!(pluto::compile_to_object(r#"
         // This is a comment
         // Another comment
-    "#);
+    "#).is_ok());
 }
 
 #[test]

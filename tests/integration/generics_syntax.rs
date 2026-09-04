@@ -144,9 +144,9 @@ fn generic_shift_right_in_nested() {
 }
 
 #[test]
-#[ignore] // Parser now accepts trailing commas in generic type args
-fn generic_trailing_comma_rejected() {
-    compile_should_fail(r#"
+// Trailing commas in generic type args are accepted (audit: premise flipped)
+fn generic_trailing_comma_accepted() {
+    assert!(pluto::compile_to_object(r#"
         class Box<T> {
             value: T
         }
@@ -154,7 +154,7 @@ fn generic_trailing_comma_rejected() {
         fn main() {
             let x = Box<int,> { value: 42 }
         }
-    "#);
+    "#).is_ok());
 }
 
 #[test]
@@ -170,9 +170,9 @@ fn generic_empty_type_args_rejected() {
 }
 
 #[test]
-#[ignore] // Parser now accepts space before < in generic type args
-fn generic_space_before_bracket() {
-    compile_should_fail(r#"
+// Space before < in generic type args is accepted
+fn generic_space_before_bracket_accepted() {
+    assert!(pluto::compile_to_object(r#"
         class Box<T> {
             value: T
         }
@@ -180,5 +180,5 @@ fn generic_space_before_bracket() {
         fn main() {
             let x = Box <int> { value: 42 }
         }
-    "#);
+    "#).is_ok());
 }

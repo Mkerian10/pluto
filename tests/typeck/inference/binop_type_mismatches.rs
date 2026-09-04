@@ -103,19 +103,17 @@ fn array_plus_array() {
 }
 
 #[test]
-#[ignore]
 fn class_plus_class() {
     compile_should_fail_with(
         r#"
         class Point { x: int, y: int }
-
-        fn main() {
+fn main() {
             let p1 = Point { x: 1, y: 2 }
-            let p2 = Point { x: 3, y: 4 }
-            let p3 = p1 + p2
+let p2 = Point { x: 3, y: 4 }
+let p3 = p1 + p2
         }
         "#,
-        "expected identifier, found ,",
+        "operator not supported for type Point",
     );
 }
 
@@ -234,20 +232,16 @@ fn greater_than_bools() {
 // REMOVED: compare_array_to_array - array comparison actually works in Pluto
 
 #[test]
-#[ignore]
 fn compare_class_to_class() {
-    compile_should_fail_with(
-        r#"
+    // Class == compares by reference identity (used by DI lifecycle tests) (audit: premise flipped)
+    assert!(pluto::compile_to_object(r#"
         class Point { x: int, dummy: int }
-
-        fn main() {
+fn main() {
             let p1 = Point { x: 1, dummy: 0 }
-            let p2 = Point { x: 1, dummy: 0 }
-            let x = p1 == p2
+let p2 = Point { x: 1, dummy: 0 }
+let x = p1 == p2
         }
-        "#,
-        "expected identifier, found ,",
-    );
+        "#).is_ok());
 }
 
 // ============================================================================

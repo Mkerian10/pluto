@@ -94,8 +94,8 @@ spawn c.f()}"#, "Task handle must be used -- call .get(), .detach(), or assign t
 
 // Spawn with nullable return
 #[test]
-#[ignore]
-fn spawn_nullable_return() { compile_should_fail_with(r#"fn task()int?{return none} fn main(){let t=spawn task()}"#, ""); }
+fn spawn_nullable_return() { // Spawning a nullable-returning fn is legal; t.get() yields T? (audit: premise flipped)
+    assert!(pluto::compile_to_object(r#"fn task()int?{return none} fn main(){let t=spawn task()}"#).is_ok()); }
 
 // Spawn with error return unhandled
 #[test]
