@@ -1362,6 +1362,53 @@ long __pluto_serve_port(long fd) {
 // raw newline (the field delimiter): '\' -> "\\", newline -> "\n". Reversed by
 // __pluto_wire_unescape. Struct/enum arguments go through JSON, which already
 // escapes newlines, so only primitive string fields need this.
+// ── Wire helpers for float/bool/nullable values ─────────────────────────────
+// Raw strtod parse for wire decoding (unlike __pluto_string_to_float, which
+// returns a boxed nullable for user code).
+double __pluto_wire_parse_float(void *s) {
+    const char *data;
+    long len;
+    __pluto_string_data(s, &data, &len);
+    char *tmp = (char *)malloc((size_t)len + 1);
+    if (!tmp) return 0.0;
+    memcpy(tmp, data, (size_t)len);
+    tmp[len] = '\0';
+    double v = strtod(tmp, NULL);
+    free(tmp);
+    return v;
+}
+
+// Nullable framing: a nullable wire field is "N" (none) or "V<payload>".
+// The payload is the inner type's own encoding (already newline-safe).
+void *__pluto_wire_opt_wrap(void *payload, long is_none) {
+    if (is_none) return __pluto_string_new("N", 1);
+    const char *data;
+    long len;
+    __pluto_string_data(payload, &data, &len);
+    char *buf = (char *)malloc((size_t)len + 2);
+    if (!buf) return payload;
+    buf[0] = 'V';
+    memcpy(buf + 1, data, (size_t)len);
+    void *r = __pluto_string_new(buf, len + 1);
+    free(buf);
+    return r;
+}
+
+long __pluto_wire_opt_is_none(void *s) {
+    const char *data;
+    long len;
+    __pluto_string_data(s, &data, &len);
+    return (len < 1 || data[0] == 'N') ? 1 : 0;
+}
+
+void *__pluto_wire_opt_payload(void *s) {
+    const char *data;
+    long len;
+    __pluto_string_data(s, &data, &len);
+    if (len < 1) return __pluto_string_new("", 0);
+    return __pluto_string_new(data + 1, len - 1);
+}
+
 void *__pluto_wire_escape(void *s) {
     const char *data;
     long len;

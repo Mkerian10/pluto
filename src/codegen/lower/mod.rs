@@ -649,8 +649,7 @@ impl<'a> LowerContext<'a> {
                 other => format!("{other}"),
             }
         }
-        let supported = |t: &PlutoType| matches!(t,
-            PlutoType::Int | PlutoType::String | PlutoType::Class(_) | PlutoType::Enum(_));
+        let supported = Self::wire_supported;
         let mut sigs: Vec<String> = Vec::new();
         if let Some(info) = self.env.classes.get(class_name) {
             for mname in &info.methods {
@@ -692,8 +691,7 @@ impl<'a> LowerContext<'a> {
 
         // Collect dispatchable methods (owned, to release the env borrow before
         // we start mutating the builder): (method_name, mangled, arg_types, return).
-        let supported = |t: &PlutoType| matches!(t,
-            PlutoType::Int | PlutoType::String | PlutoType::Class(_) | PlutoType::Enum(_));
+        let supported = Self::wire_supported;
         let mut methods: Vec<(String, String, Vec<PlutoType>, PlutoType, Vec<String>)> = Vec::new();
         if let Some(info) = self.env.classes.get(&class_name) {
             for mname in &info.methods {
@@ -777,15 +775,7 @@ impl<'a> LowerContext<'a> {
             for (ai, aty) in arg_types.iter().enumerate() {
                 let idx = self.builder.ins().iconst(types::I64, (ai + 1) as i64);
                 let field = self.call_runtime("__pluto_request_field", &[req, idx]);
-                let v = match aty {
-                    PlutoType::Int => self.call_runtime("__pluto_parse_long", &[field]),
-                    PlutoType::Class(tn) | PlutoType::Enum(tn) => {
-                        self.call_named_func(&format!("__wire_decode_{tn}"), &[field])?
-                    }
-                    // Reverse the wire escaping applied to the string on the client.
-                    PlutoType::String => self.call_runtime("__pluto_wire_unescape", &[field]),
-                    _ => field,
-                };
+                let v = self.decode_wire_value(aty, field)?;
                 call_args.push(v);
             }
             let func_id = self.func_ids.get(mangled).ok_or_else(|| {
@@ -810,14 +800,10 @@ impl<'a> LowerContext<'a> {
             // OK: "OK\n" + the formatted return value.
             self.builder.switch_to_block(ok_bb);
             self.builder.seal_block(ok_bb);
-            let payload = match ret {
-                PlutoType::Void => self.make_string_literal("")?,
-                PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[result_val]),
-                PlutoType::String => self.call_runtime("__pluto_wire_escape", &[result_val]),
-                PlutoType::Class(tn) | PlutoType::Enum(tn) => {
-                    self.call_named_func(&format!("__wire_encode_{tn}"), &[result_val])?
-                }
-                _ => self.make_string_literal("")?,
+            let payload = if *ret == PlutoType::Void {
+                self.make_string_literal("")?
+            } else {
+                self.encode_wire_value(ret, result_val)?
             };
             let ok_prefix = self.make_string_literal("OK\n")?;
             let ok_resp = self.call_runtime("__pluto_string_concat", &[ok_prefix, payload]);
@@ -863,10 +849,18 @@ impl<'a> LowerContext<'a> {
         for (i, (_, fty)) in fields.iter().enumerate() {
             let idx = self.builder.ins().iconst(types::I64, (i + 2) as i64);
             let fstr = self.call_runtime("__pluto_request_field", &[resp, idx]);
-            let val = match fty {
-                PlutoType::Int => self.call_runtime("__pluto_parse_long", &[fstr]),
-                PlutoType::String => fstr,
-                _ => self.builder.ins().iconst(types::I64, 0), // MVP: primitive fields
+            let val = if Self::wire_supported(fty) {
+                let decoded = self.decode_wire_value(fty, fstr)?;
+                // Error-object slots are I64-width; convert natural reprs
+                match fty {
+                    PlutoType::Bool => self.builder.ins().uextend(types::I64, decoded),
+                    PlutoType::Float => {
+                        self.builder.ins().bitcast(types::I64, MemFlags::new(), decoded)
+                    }
+                    _ => decoded,
+                }
+            } else {
+                self.builder.ins().iconst(types::I64, 0) // unsupported field type
             };
             let offset = (i as i32) * POINTER_SIZE;
             self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
@@ -882,6 +876,169 @@ impl<'a> LowerContext<'a> {
     /// precisely (its primitive fields read from the live error object). With
     /// zero or multiple possible types there's no runtime tag to disambiguate,
     /// so an `__unknown` marker is sent (the client raises a generic error).
+
+    /// Whether a type can cross the RPC wire. Shared by the serve dispatch
+    /// filter, the interface hash, and both marshal directions.
+    pub(crate) fn wire_supported(t: &PlutoType) -> bool {
+        match t {
+            PlutoType::Int
+            | PlutoType::Float
+            | PlutoType::Bool
+            | PlutoType::String
+            | PlutoType::Class(_)
+            | PlutoType::Enum(_) => true,
+            PlutoType::Nullable(inner) => Self::wire_supported(inner),
+            _ => false,
+        }
+    }
+
+    /// Encode a value of a wire-supported type into its newline-safe string
+    /// form: ints/floats as text, bools as "1"/"0", strings wire-escaped,
+    /// classes/enums via the generated JSON marshalers, nullables as "N" or
+    /// "V<inner encoding>".
+    fn encode_wire_value(&mut self, ty: &PlutoType, val: Value) -> Result<Value, CompileError> {
+        Ok(match ty {
+            PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[val]),
+            PlutoType::Float => self.call_runtime("__pluto_float_to_string", &[val]),
+            PlutoType::Bool => {
+                let one = self.make_string_literal("1")?;
+                let zero_s = self.make_string_literal("0")?;
+                let extended = self.builder.ins().uextend(types::I64, val);
+                let z = self.builder.ins().iconst(types::I64, 0);
+                let is_true = self.builder.ins().icmp(IntCC::NotEqual, extended, z);
+                self.builder.ins().select(is_true, one, zero_s)
+            }
+            PlutoType::String => self.call_runtime("__pluto_wire_escape", &[val]),
+            PlutoType::Class(tn) | PlutoType::Enum(tn) => {
+                self.call_named_func(&format!("__wire_encode_{tn}"), &[val])?
+            }
+            PlutoType::Nullable(inner) => {
+                // val is the nullable pointer (0 = none)
+                let z = self.builder.ins().iconst(types::I64, 0);
+                let is_none = self.builder.ins().icmp(IntCC::Equal, val, z);
+                let none_bb = self.builder.create_block();
+                let some_bb = self.builder.create_block();
+                let merge_bb = self.builder.create_block();
+                self.builder.append_block_param(merge_bb, types::I64);
+                self.builder.ins().brif(is_none, none_bb, &[], some_bb, &[]);
+
+                self.builder.switch_to_block(none_bb);
+                self.builder.seal_block(none_bb);
+                let empty = self.make_string_literal("")?;
+                let one_c = self.builder.ins().iconst(types::I64, 1);
+                let none_s = self.call_runtime("__pluto_wire_opt_wrap", &[empty, one_c]);
+                self.builder.ins().jump(merge_bb, &[none_s]);
+
+                self.builder.switch_to_block(some_bb);
+                self.builder.seal_block(some_bb);
+                let unboxed = match inner.as_ref() {
+                    PlutoType::Int => self
+                        .builder
+                        .ins()
+                        .load(types::I64, MemFlags::new(), val, Offset32::new(0)),
+                    PlutoType::Float => {
+                        let raw = self
+                            .builder
+                            .ins()
+                            .load(types::I64, MemFlags::new(), val, Offset32::new(0));
+                        self.builder.ins().bitcast(types::F64, MemFlags::new(), raw)
+                    }
+                    PlutoType::Bool => {
+                        let raw = self
+                            .builder
+                            .ins()
+                            .load(types::I64, MemFlags::new(), val, Offset32::new(0));
+                        self.builder.ins().ireduce(types::I8, raw)
+                    }
+                    _ => val, // heap types: nullable repr IS the pointer
+                };
+                let inner_enc = self.encode_wire_value(inner, unboxed)?;
+                let zero_c = self.builder.ins().iconst(types::I64, 0);
+                let some_s = self.call_runtime("__pluto_wire_opt_wrap", &[inner_enc, zero_c]);
+                self.builder.ins().jump(merge_bb, &[some_s]);
+
+                self.builder.switch_to_block(merge_bb);
+                self.builder.seal_block(merge_bb);
+                self.builder.block_params(merge_bb)[0]
+            }
+            other => {
+                return Err(CompileError::codegen(format!(
+                    "wire encode: unsupported type {other}"
+                )))
+            }
+        })
+    }
+
+    /// Decode a wire string back into a value of the given type — the inverse
+    /// of encode_wire_value.
+    fn decode_wire_value(&mut self, ty: &PlutoType, val: Value) -> Result<Value, CompileError> {
+        Ok(match ty {
+            PlutoType::Int => self.call_runtime("__pluto_parse_long", &[val]),
+            PlutoType::Float => self.call_runtime("__pluto_wire_parse_float", &[val]),
+            PlutoType::Bool => {
+                // icmp yields the natural I8 bool representation
+                let parsed = self.call_runtime("__pluto_parse_long", &[val]);
+                let z = self.builder.ins().iconst(types::I64, 0);
+                self.builder.ins().icmp(IntCC::NotEqual, parsed, z)
+            }
+            PlutoType::String => self.call_runtime("__pluto_wire_unescape", &[val]),
+            PlutoType::Class(tn) | PlutoType::Enum(tn) => {
+                self.call_named_func(&format!("__wire_decode_{tn}"), &[val])?
+            }
+            PlutoType::Nullable(inner) => {
+                let is_none = self.call_runtime("__pluto_wire_opt_is_none", &[val]);
+                let z = self.builder.ins().iconst(types::I64, 0);
+                let none_cond = self.builder.ins().icmp(IntCC::NotEqual, is_none, z);
+                let none_bb = self.builder.create_block();
+                let some_bb = self.builder.create_block();
+                let merge_bb = self.builder.create_block();
+                self.builder.append_block_param(merge_bb, types::I64);
+                self.builder.ins().brif(none_cond, none_bb, &[], some_bb, &[]);
+
+                self.builder.switch_to_block(none_bb);
+                self.builder.seal_block(none_bb);
+                let nil = self.builder.ins().iconst(types::I64, 0);
+                self.builder.ins().jump(merge_bb, &[nil]);
+
+                self.builder.switch_to_block(some_bb);
+                self.builder.seal_block(some_bb);
+                let payload = self.call_runtime("__pluto_wire_opt_payload", &[val]);
+                let inner_val = self.decode_wire_value(inner, payload)?;
+                let boxed = match inner.as_ref() {
+                    PlutoType::Int | PlutoType::Bool => {
+                        let sz = self.builder.ins().iconst(types::I64, 8);
+                        let ptr = self.call_runtime("__pluto_alloc", &[sz]);
+                        let as64 = if matches!(inner.as_ref(), PlutoType::Bool) {
+                            self.builder.ins().uextend(types::I64, inner_val)
+                        } else {
+                            inner_val
+                        };
+                        self.builder.ins().store(MemFlags::new(), as64, ptr, Offset32::new(0));
+                        ptr
+                    }
+                    PlutoType::Float => {
+                        let sz = self.builder.ins().iconst(types::I64, 8);
+                        let ptr = self.call_runtime("__pluto_alloc", &[sz]);
+                        let raw = self.builder.ins().bitcast(types::I64, MemFlags::new(), inner_val);
+                        self.builder.ins().store(MemFlags::new(), raw, ptr, Offset32::new(0));
+                        ptr
+                    }
+                    _ => inner_val, // heap types: pointer is the nullable repr
+                };
+                self.builder.ins().jump(merge_bb, &[boxed]);
+
+                self.builder.switch_to_block(merge_bb);
+                self.builder.seal_block(merge_bb);
+                self.builder.block_params(merge_bb)[0]
+            }
+            other => {
+                return Err(CompileError::codegen(format!(
+                    "wire decode: unsupported type {other}"
+                )))
+            }
+        })
+    }
+
     fn build_error_response(&mut self, errs: &[String]) -> Result<Value, CompileError> {
         if errs.len() != 1 {
             return self.make_string_literal("ERR\n__unknown");
@@ -897,10 +1054,19 @@ impl<'a> LowerContext<'a> {
         for (i, (_, fty)) in fields.iter().enumerate() {
             let offset = (i as i32) * POINTER_SIZE;
             let raw = self.builder.ins().load(types::I64, MemFlags::new(), err_ptr, Offset32::new(offset));
-            let fstr = match fty {
-                PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[raw]),
-                PlutoType::String => raw,
-                _ => self.make_string_literal("")?, // MVP: primitive error fields
+            let fstr = if Self::wire_supported(fty) {
+                // Error-object slots are I64-width; restore natural reprs
+                // before encoding (Bool I8, Float F64)
+                let natural = match fty {
+                    PlutoType::Bool => self.builder.ins().ireduce(types::I8, raw),
+                    PlutoType::Float => {
+                        self.builder.ins().bitcast(types::F64, MemFlags::new(), raw)
+                    }
+                    _ => raw,
+                };
+                self.encode_wire_value(fty, natural)?
+            } else {
+                self.make_string_literal("")? // unsupported field type: blank
             };
             resp = self.call_runtime("__pluto_string_concat", &[resp, nl]);
             resp = self.call_runtime("__pluto_string_concat", &[resp, fstr]);
@@ -3572,21 +3738,15 @@ impl<'a> LowerContext<'a> {
                 for (i, arg) in args.iter().enumerate() {
                     let aty = infer_type_for_expr(&arg.node, self.env, &self.var_types);
                     let av = self.lower_expr(&arg.node)?;
-                    let s = match aty {
-                        PlutoType::Int => self.call_runtime("__pluto_int_to_string", &[av]),
-                        // Escape so a newline in the string can't split the field.
-                        PlutoType::String => self.call_runtime("__pluto_wire_escape", &[av]),
-                        // Complex types: marshal to a JSON wire string via the
-                        // generated `__wire_encode_<T>` wrapper.
-                        PlutoType::Class(tn) | PlutoType::Enum(tn) => {
-                            self.call_named_func(&format!("__wire_encode_{tn}"), &[av])?
-                        }
-                        other => return Err(CompileError::codegen(format!(
-                            "remote call '{}.{}': unsupported argument type {other} \
-                             (supported: int, string, and class/enum via std.wire)",
+                    if !Self::wire_supported(&aty) {
+                        return Err(CompileError::codegen(format!(
+                            "remote call '{}.{}': unsupported argument type {aty} \
+                             (supported: int, float, bool, string, nullables of those, \
+                             and class/enum via std.wire)",
                             cname, method.node
-                        ))),
-                    };
+                        )));
+                    }
+                    let s = self.encode_wire_value(&aty, av)?;
                     if i > 0 {
                         payload = self.call_runtime("__pluto_string_concat", &[payload, nl]);
                     }
@@ -3606,10 +3766,23 @@ impl<'a> LowerContext<'a> {
                 let meth_s = self.make_string_literal(&format!("{}#{iface_hash}", method.node))?;
                 let resp = self.call_runtime("__pluto_remote_request", &[svc_s, meth_s, payload]);
 
+                if ret_type != PlutoType::Void && !Self::wire_supported(&ret_type) {
+                    return Err(CompileError::codegen(format!(
+                        "remote call '{}.{}': unsupported return type {ret_type} \
+                         (supported: int, float, bool, string, void, nullables, \
+                         and class/enum via std.wire)",
+                        cname, method.node
+                    )));
+                }
+                let ret_cl = if ret_type == PlutoType::Void {
+                    types::I64
+                } else {
+                    pluto_to_cranelift(&ret_type)
+                };
                 let fail_bb = self.builder.create_block();
                 let ok_bb = self.builder.create_block();
                 let cont_bb = self.builder.create_block();
-                self.builder.append_block_param(cont_bb, types::I64);
+                self.builder.append_block_param(cont_bb, ret_cl);
 
                 let zero = self.builder.ins().iconst(types::I64, 0);
                 let is_null = self.builder.ins().icmp(IntCC::Equal, resp, zero);
@@ -3626,7 +3799,11 @@ impl<'a> LowerContext<'a> {
                 let mstr = self.make_string_literal(&msg)?;
                 self.builder.ins().store(MemFlags::new(), mstr, err_ptr, Offset32::new(0));
                 self.call_runtime_void("__pluto_raise_error", &[err_ptr]);
-                let dflt = self.builder.ins().iconst(types::I64, 0);
+                let dflt = if ret_cl == types::F64 {
+                    self.builder.ins().f64const(0.0)
+                } else {
+                    self.builder.ins().iconst(ret_cl, 0)
+                };
                 self.builder.ins().jump(cont_bb, &[dflt]);
 
                 // Got a response. It is `OK\n<payload>` or `ERR\n<Type>\n<fields>`.
@@ -3646,18 +3823,10 @@ impl<'a> LowerContext<'a> {
                 self.builder.switch_to_block(ok_payload_bb);
                 self.builder.seal_block(ok_payload_bb);
                 let payload = self.call_runtime("__pluto_request_field", &[resp, one]);
-                let parsed = match &ret_type {
-                    PlutoType::Int => self.call_runtime("__pluto_parse_long", &[payload]),
-                    PlutoType::String => self.call_runtime("__pluto_wire_unescape", &[payload]),
-                    PlutoType::Void => self.builder.ins().iconst(types::I64, 0),
-                    PlutoType::Class(tn) | PlutoType::Enum(tn) => {
-                        self.call_named_func(&format!("__wire_decode_{tn}"), &[payload])?
-                    }
-                    other => return Err(CompileError::codegen(format!(
-                        "remote call '{}.{}': unsupported return type {other} \
-                         (supported: int, string, void, and class/enum via std.wire)",
-                        cname, method.node
-                    ))),
+                let parsed = if ret_type == PlutoType::Void {
+                    self.builder.ins().iconst(types::I64, 0)
+                } else {
+                    self.decode_wire_value(&ret_type, payload)?
                 };
                 self.builder.ins().jump(cont_bb, &[parsed]);
 
@@ -3684,7 +3853,11 @@ impl<'a> LowerContext<'a> {
                     self.builder.switch_to_block(handle_bb);
                     self.builder.seal_block(handle_bb);
                     self.emit_raise_from_response(etype, resp)?;
-                    let d = self.builder.ins().iconst(types::I64, 0);
+                    let d = if ret_cl == types::F64 {
+                        self.builder.ins().f64const(0.0)
+                    } else {
+                        self.builder.ins().iconst(ret_cl, 0)
+                    };
                     self.builder.ins().jump(cont_bb, &[d]);
                     self.builder.switch_to_block(next_bb);
                     self.builder.seal_block(next_bb);
@@ -3697,7 +3870,11 @@ impl<'a> LowerContext<'a> {
                 let nmsg = self.make_string_literal("remote error")?;
                 self.builder.ins().store(MemFlags::new(), nmsg, nptr, Offset32::new(0));
                 self.call_runtime_void("__pluto_raise_error", &[nptr]);
-                let d2 = self.builder.ins().iconst(types::I64, 0);
+                let d2 = if ret_cl == types::F64 {
+                    self.builder.ins().f64const(0.0)
+                } else {
+                    self.builder.ins().iconst(ret_cl, 0)
+                };
                 self.builder.ins().jump(cont_bb, &[d2]);
 
                 self.builder.switch_to_block(cont_bb);
