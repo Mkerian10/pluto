@@ -20,7 +20,7 @@ The canonical statement of where Pluto is going is **[docs/v1-vision.md](docs/v1
 - [ ] **Static verification engine** — contracts as compile-time proofs; typestates via generics; auto-executing ensures. (Today: runtime-checked invariants and `requires`; the decidable-fragment validator in `src/contracts.rs` is the seed. Runtime-`ensures`-as-assertion was rejected — `ensures` returns as a *proof* obligation, not a runtime check.)
 - [ ] **Object construct** — design and prototyping: entity semantics, contract-constrained inheritance, traceable identity. *Under active design.*
 - [ ] **Program structure** — bare file to distributed system with no ceremony threshold; objects and their dependency graph *are* the program (no mandatory `app`/`main`).
-- [ ] **DI-driven topology** — the wiring, not the code, decides boundaries; compiler generates serialization and error paths when an edge becomes remote. (Today: `app`/stage DI with lifecycles is compile-time-wired; `remote` deps + `serve` exist but are declared in code rather than derived from topology.)
+- [ ] **DI-driven topology & the placement model** — `at` expressions over logical execution domains; the wiring and deployment plan, not the code, decide physical boundaries, and the compiler synthesizes transport, serialization, and error paths at each one (docs/design/distributed-model.md). (Today: `app`/stage DI with lifecycles is compile-time-wired; `remote` deps + `serve` exist but couple the transport into the code — exactly what this pillar removes.)
 
 ## Mid-term (per the vision)
 
@@ -28,7 +28,7 @@ The canonical statement of where Pluto is going is **[docs/v1-vision.md](docs/v1
 - [ ] `pluto fmt`; package registry + lock file (manifests with path/git deps shipped)
 - [ ] Infrastructure as Pluto code — topology declarations, deploy-time validation
 - [ ] Stdlib expansion — database drivers, messaging, crypto, observability
-- [x] Cross-boundary type checking and serialization codegen — shipped: typed RPC over sockets, interface hashing against version skew, schema-derived wire marshaling (scalars, classes, enums, nullables, arrays, maps, sets), typed errors across boundaries
+- [x] Cross-boundary type checking and serialization codegen — shipped for the socket transport: interface hashing against version skew, schema-derived wire marshaling (scalars, classes, enums, nullables, arrays, maps, sets), typed errors across boundaries
 - [ ] Cloud infrastructure APIs — type-safe Kubernetes and AWS interfaces
 - [ ] Distributed contract predicates — stdlib ownership/lease/leader patterns
 - [ ] Migration engine — schema diffing, validation, generation (design: docs/design/rfc-migration.md, rfc-evolution-rules.md)
@@ -48,7 +48,7 @@ The substrate the pillars build on is largely shipped and tested (~6,300 tests i
 - **Language core** — classes/traits/enums (wildcard + destructuring match), closures and function references, full generics (generic traits, generic trait methods), nullable types with flow narrowing, f-strings, explicit mutability, methods on primitives
 - **Errors** — typed errors with whole-program inferred fallibility (through closures, generics, function types), `!`/`catch` enforcement — the vision's error model, working today
 - **DI** — compile-time resolution and wiring, singleton/scoped/transient lifecycles, captive-dependency detection, test-local containers
-- **Distributed** — `serve`/`remote` RPC with the full schema-level wire surface; **the wire is schema-level only** (closed, compiler-derived shapes — no custom encoder hooks; settled 2026-09-04)
+- **Distributed** — `serve`/`remote` over sockets as the first physical transport, with the full schema-level wire surface; **the wire is schema-level only** (closed, compiler-derived shapes — no custom encoder hooks; settled 2026-09-04). The target programming model is `at` placement over logical domains (docs/design/distributed-model.md); today's explicit RPC declarations are the mechanism it subsumes
 - **Concurrency & runtime** — spawn/Task, channels, select, synchronized state, concurrent mark-sweep GC; native compilation via Cranelift
 - **Toolchain** — `compile/run/test/watch/coverage/check`-style dev loop, package manifests with git deps, toolchain versioning (`install/use/versions`), experimental release channel
 - **AI-native foundations** — binary `.pluto` container with stable UUIDs, `emit-ast`/`generate-pt`/`sync`/`analyze`, `pluto-sdk`, read-only MCP server; canonical-flip work active on the `ast-uuids`/`canonical-flip` branches
