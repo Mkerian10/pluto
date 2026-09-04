@@ -300,7 +300,7 @@ cargo run -- run examples/reflection_demo.pt
 
 ## rpc
 
-Cross-service RPC where both ends are compiler-generated. The server exposes a service with the `serve` statement (which generates the accept loop, request parsing, method dispatch, and reply); the client calls it through a `remote` dependency, so `self.billing.charge(21)` is type-checked across the boundary and executed over a socket — raising `NetworkError` (handled with `catch`) on any transport failure.
+Cross-service RPC where both ends are compiler-generated. The server exposes a service with the `serve` statement (which generates the accept loop, request parsing, method dispatch, and reply); the client calls it through a `remote` dependency, so `self.billing.charge(21)` is type-checked across the boundary and executed over a socket — raising `NetworkError` (handled with `catch`) on any transport failure. Scalars, classes, enums, nullables, arrays, maps, and sets all cross the boundary (`charge_all` sends and returns an `[int]`); complex types are marshaled through `std.wire`.
 
 ```bash
 # Terminal 1 — start the server (prints its bound port)

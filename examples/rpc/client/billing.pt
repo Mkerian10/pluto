@@ -4,4 +4,8 @@ pub class BillingService {
     fn charge(self, amount: int) int {
         return amount
     }
+
+    fn charge_all(self, amounts: [int]) [int] {
+        return amounts
+    }
 }

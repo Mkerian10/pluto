@@ -39,7 +39,8 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
     });
     if !has_wire {
         // Only fail if an RPC interface actually carries a non-primitive type.
-        let needs_wire = !collect_types_from_stage_methods(program)?.is_empty();
+        let needs_wire = !collect_types_from_stage_methods(program)?.is_empty()
+            || !rpc_container_types(program).is_empty();
         if needs_wire && !rpc_interfaces.is_empty() {
             return Err(CompileError::codegen(
                 "RPC with complex (non-primitive) types requires `import std.wire`".to_string(),
@@ -126,6 +127,15 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
             generated_functions.push(generate_wire_encode(type_name));
             generated_functions.push(generate_wire_decode(type_name));
         }
+    }
+
+    // Standalone wire wrappers for container types (arrays/maps/sets) at RPC
+    // boundaries — named types got theirs above alongside their marshalers.
+    for cty in &rpc_container_types(program) {
+        let suffix = wire_type_suffix(cty)
+            .expect("rpc_container_types only yields suffix-able types");
+        generated_functions.push(generate_container_wire_encode(cty, &suffix)?);
+        generated_functions.push(generate_container_wire_decode(cty, &suffix)?);
     }
 
     // Inject generated functions and instantiated types into the program
@@ -1113,6 +1123,57 @@ fn mk_let(name: &str, ty: Option<TypeExpr>, value: Expr) -> Spanned<Stmt> {
     }
 }
 
+fn mk_let_mut(name: &str, ty: Option<TypeExpr>, value: Expr) -> Spanned<Stmt> {
+    Spanned {
+        node: Stmt::Let {
+            name: Spanned { node: name.to_string(), span: mk_span() },
+            ty: ty.map(|t| Spanned { node: t, span: mk_span() }),
+            value: Spanned { node: value, span: mk_span() },
+            is_mut: true,
+        },
+        span: mk_span(),
+    }
+}
+
+/// Build `<name> = <name> + <by>`.
+fn mk_incr(name: &str, by: i64) -> Spanned<Stmt> {
+    Spanned {
+        node: Stmt::Assign {
+            target: Spanned { node: name.to_string(), span: mk_span() },
+            value: Spanned {
+                node: Expr::BinOp {
+                    lhs: Box::new(Spanned { node: mk_var(name), span: mk_span() }),
+                    op: crate::parser::ast::BinOp::Add,
+                    rhs: Box::new(Spanned { node: Expr::IntLit(by), span: mk_span() }),
+                },
+                span: mk_span(),
+            },
+        },
+        span: mk_span(),
+    }
+}
+
+/// Build `while <lhs> < <limit> { <body> }`.
+fn mk_while_lt(lhs: Expr, limit: Expr, body: Vec<Spanned<Stmt>>) -> Spanned<Stmt> {
+    Spanned {
+        node: Stmt::While {
+            condition: Spanned {
+                node: Expr::BinOp {
+                    lhs: Box::new(Spanned { node: lhs, span: mk_span() }),
+                    op: crate::parser::ast::BinOp::Lt,
+                    rhs: Box::new(Spanned { node: limit, span: mk_span() }),
+                },
+                span: mk_span(),
+            },
+            body: Spanned {
+                node: Block { stmts: body },
+                span: mk_span(),
+            },
+        },
+        span: mk_span(),
+    }
+}
+
 /// Build a `fn <name>(<param>: <param_ty>) <ret_ty> { <body> }` AST function.
 fn mk_function(name: String, param: (&str, TypeExpr), ret: Option<TypeExpr>, body: Vec<Spanned<Stmt>>) -> Spanned<Function> {
     Spanned {
@@ -1213,9 +1274,110 @@ fn mk_struct_lit(type_name: &str, fields: Vec<(String, Expr)>) -> Expr {
     }
 }
 
+/// Wire wrapper name suffix for a type at an RPC boundary. Named types keep
+/// their (sanitized) name; containers get structural names (`arr_int`,
+/// `map_string_int`, `set_int`, `opt_int`) so marshal generation and RPC
+/// codegen derive the same `__wire_encode_/__wire_decode_` symbol. Returns
+/// None for types that can't cross the wire (fn types, generic classes, ...).
+pub(crate) fn wire_type_suffix(ty: &TypeExpr) -> Option<String> {
+    match ty {
+        TypeExpr::Named(n) => Some(n.replace("$$", "__")),
+        TypeExpr::Array(e) => Some(format!("arr_{}", wire_type_suffix(&e.node)?)),
+        TypeExpr::Nullable(e) => Some(format!("opt_{}", wire_type_suffix(&e.node)?)),
+        TypeExpr::Generic { name, type_args } => {
+            let args: Option<Vec<String>> =
+                type_args.iter().map(|a| wire_type_suffix(&a.node)).collect();
+            let args = args?;
+            match (name.as_str(), args.len()) {
+                ("Map", 2) => Some(format!("map_{}_{}", args[0], args[1])),
+                ("Set", 1) => Some(format!("set_{}", args[0])),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Collect the container types (arrays, maps, sets — possibly under a
+/// nullable) appearing as top-level parameter or return types in the methods
+/// of RPC interface classes. These need standalone wire wrappers: unlike
+/// classes/enums they have no named `__marshal_<T>` pair, and unlike scalars
+/// RPC codegen can't encode them inline.
+fn rpc_container_types(program: &Program) -> Vec<TypeExpr> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<TypeExpr> = Vec::new();
+    for cname in collect_rpc_interface_classes(program) {
+        let Some(cd) = program.classes.iter().find(|c| c.node.name.node == cname) else {
+            continue;
+        };
+        for m in &cd.node.methods {
+            let param_tys = m.node.params.iter()
+                .filter(|p| p.name.node != "self")
+                .map(|p| &p.ty.node);
+            let ret_ty = m.node.return_type.iter().map(|rt| &rt.node);
+            for ty in param_tys.chain(ret_ty) {
+                collect_container_type(ty, &mut seen, &mut out);
+            }
+        }
+    }
+    out
+}
+
+fn collect_container_type(ty: &TypeExpr, seen: &mut HashSet<String>, out: &mut Vec<TypeExpr>) {
+    match ty {
+        // RPC codegen unwraps top-level nullables itself and calls the
+        // wrapper for the inner type.
+        TypeExpr::Nullable(inner) => collect_container_type(&inner.node, seen, out),
+        TypeExpr::Array(_) | TypeExpr::Generic { .. } => {
+            // wire_type_suffix is None for non-Map/Set generics (Box<int>, ...)
+            if let Some(suffix) = wire_type_suffix(ty) {
+                if seen.insert(suffix) {
+                    out.push(ty.clone());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `fn __wire_encode_<suffix>(value: <ty>) string` for a container type —
+/// same contract as the named-type wrappers, body inlined from
+/// mk_encode_value since containers have no standalone `__marshal_<T>`.
+fn generate_container_wire_encode(ty: &TypeExpr, suffix: &str) -> Result<Spanned<Function>, CompileError> {
+    let mut body = vec![
+        mk_let_mut("enc", None, mk_func_call("wire.wire_value_encoder", vec![])),
+    ];
+    body.extend(mk_encode_value(ty, mk_var("value"))?);
+    body.push(mk_let("__fmt", None, mk_func_call("wire.json_wire_format", vec![])));
+    body.push(mk_return(mk_method_call("__fmt", "serialize", vec![
+        mk_method_call("enc", "result", vec![]),
+    ])));
+    Ok(mk_function(format!("__wire_encode_{suffix}"), ("value", ty.clone()),
+                   Some(TypeExpr::Named("string".to_string())), body))
+}
+
+/// `fn __wire_decode_<suffix>(data: string) <ty>` for a container type.
+fn generate_container_wire_decode(ty: &TypeExpr, suffix: &str) -> Result<Spanned<Function>, CompileError> {
+    let mut body = vec![
+        mk_let("__fmt", None, mk_func_call("wire.json_wire_format", vec![])),
+        mk_let("__wv", None, mk_propagate(mk_method_call("__fmt", "deserialize", vec![mk_var("data")]))),
+        mk_let_mut("dec", None, mk_func_call("wire.wire_value_decoder", vec![mk_var("__wv")])),
+    ];
+    body.extend(mk_let_decode("__out", ty)?);
+    body.push(mk_return(mk_var("__out")));
+    Ok(mk_function(format!("__wire_decode_{suffix}"), ("data", TypeExpr::Named("string".to_string())),
+                   Some(ty.clone()), body))
+}
+
 /// Generates statement(s) to encode a value of the given type.
 /// Returns a vector of statements (may be multiple for complex types like arrays).
 fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>, CompileError> {
+    mk_encode_value_at(ty, value_expr, 0)
+}
+
+/// Depth-aware worker for mk_encode_value: generated loop variables carry
+/// the nesting depth so nested containers don't shadow (illegal since #160).
+fn mk_encode_value_at(ty: &TypeExpr, value_expr: Expr, depth: usize) -> Result<Vec<Spanned<Stmt>>, CompileError> {
     match ty {
         TypeExpr::Named(name) => {
             let encode_expr = match name.as_str() {
@@ -1244,7 +1406,7 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
                 }
                 _ => {
                     // User-defined class or enum → call __marshal_T(value, enc)
-                    mk_call(&format!("__marshal_{}", name), vec![value_expr, mk_var("enc")])
+                    mk_func_call(&format!("__marshal_{}", name), vec![value_expr, mk_var("enc")])
                 }
             };
             Ok(vec![mk_stmt_expr(encode_expr)])
@@ -1271,7 +1433,7 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
             // let mut __i = 0
             stmts.push(Spanned {
                 node: Stmt::Let {
-                    name: Spanned { node: "__i".to_string(), span: mk_span() },
+                    name: Spanned { node: format!("__i_{depth}"), span: mk_span() },
                     ty: Some(Spanned {
                         node: TypeExpr::Named("int".to_string()),
                         span: mk_span(),
@@ -1288,17 +1450,17 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
             // __marshal_T(value[__i], enc) or enc.encode_primitive(value[__i])
             let index_expr = Expr::Index {
                 object: Box::new(Spanned { node: value_expr.clone(), span: mk_span() }),
-                index: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
+                index: Box::new(Spanned { node: mk_var(&format!("__i_{depth}")), span: mk_span() }),
             };
-            loop_body.extend(mk_encode_value(&elem_ty.node, index_expr)?);
+            loop_body.extend(mk_encode_value_at(&elem_ty.node, index_expr, depth + 1)?);
 
             // __i = __i + 1
             loop_body.push(Spanned {
                 node: Stmt::Assign {
-                    target: Spanned { node: "__i".to_string(), span: mk_span() },
+                    target: Spanned { node: format!("__i_{depth}"), span: mk_span() },
                     value: Spanned {
                         node: Expr::BinOp {
-                            lhs: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
+                            lhs: Box::new(Spanned { node: mk_var(&format!("__i_{depth}")), span: mk_span() }),
                             op: crate::parser::ast::BinOp::Add,
                             rhs: Box::new(Spanned { node: mk_int_lit(1), span: mk_span() }),
                         },
@@ -1311,7 +1473,7 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
             let while_stmt = Stmt::While {
                 condition: Spanned {
                     node: Expr::BinOp {
-                        lhs: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
+                        lhs: Box::new(Spanned { node: mk_var(&format!("__i_{depth}")), span: mk_span() }),
                         op: crate::parser::ast::BinOp::Lt,
                         rhs: Box::new(Spanned {
                             node: mk_method_call_on_expr(value_expr.clone(), "len", vec![]),
@@ -1360,7 +1522,7 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
 
             let else_block = Spanned {
                 node: Block {
-                    stmts: mk_encode_value(&inner_ty.node, unwrapped)?,
+                    stmts: mk_encode_value_at(&inner_ty.node, unwrapped, depth + 1)?,
                 },
                 span: mk_span(),
             };
@@ -1377,17 +1539,10 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
         TypeExpr::Generic { name, type_args } => {
             match name.as_str() {
                 "Map" => {
-                    // enc.encode_map_start(map.len())
-                    // let keys = map.keys()
-                    // let mut __i = 0
-                    // while __i < keys.len() {
-                    //     let key = keys[__i]
-                    //     __marshal_K(key, enc)
-                    //     __marshal_V(map[key], enc)
-                    //     __i = __i + 1
-                    // }
-                    // enc.encode_map_end()
-
+                    // Maps cross the wire as a flat array [k1, v1, k2, v2, ...]:
+                    // JSON-object records can't carry non-string keys, and the
+                    // encoder's record frames key values by encode_field name,
+                    // which map entries don't have.
                     if type_args.len() != 2 {
                         return Err(CompileError::codegen(
                             "Map type must have exactly 2 type arguments"
@@ -1398,108 +1553,43 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
                     let val_ty = &type_args[1].node;
                     let mut stmts = Vec::new();
 
-                    // enc.encode_map_start(value.len())
-                    stmts.push(mk_stmt_expr(mk_method_call(
-                        "enc",
-                        "encode_map_start",
-                        vec![mk_method_call_on_expr(value_expr.clone(), "len", vec![])]
-                    )));
+                    // enc.encode_array_start(value.len() * 2)
+                    let two_n = Expr::BinOp {
+                        lhs: Box::new(Spanned {
+                            node: mk_method_call_on_expr(value_expr.clone(), "len", vec![]),
+                            span: mk_span(),
+                        }),
+                        op: crate::parser::ast::BinOp::Mul,
+                        rhs: Box::new(Spanned { node: mk_int_lit(2), span: mk_span() }),
+                    };
+                    stmts.push(mk_stmt_expr(mk_method_call("enc", "encode_array_start", vec![two_n])));
 
-                    // let keys = value.keys()
-                    stmts.push(Spanned {
-                        node: Stmt::Let {
-                            name: Spanned { node: "__keys".to_string(), span: mk_span() },
-                            ty: None, // Type inference
-                            value: Spanned {
-                                node: mk_method_call_on_expr(value_expr.clone(), "keys", vec![]),
-                                span: mk_span(),
-                            },
-                            is_mut: false,
-                        },
-                        span: mk_span(),
-                    });
+                    // let __keys = value.keys()
+                    stmts.push(mk_let(&format!("__keys_{depth}"), None,
+                        mk_method_call_on_expr(value_expr.clone(), "keys", vec![])));
 
                     // let mut __i = 0
-                    stmts.push(Spanned {
-                        node: Stmt::Let {
-                            name: Spanned { node: "__i".to_string(), span: mk_span() },
-                            ty: Some(Spanned {
-                                node: TypeExpr::Named("int".to_string()),
-                                span: mk_span(),
-                            }),
-                            value: Spanned { node: mk_int_lit(0), span: mk_span() },
-                            is_mut: false,
-                        },
-                        span: mk_span(),
-                    });
+                    stmts.push(mk_let_mut(&format!("__i_{depth}"),
+                        Some(TypeExpr::Named("int".to_string())), mk_int_lit(0)));
 
-                    // while __i < keys.len() { ... }
+                    // while __i < __keys.len() { encode key; encode value; __i += 1 }
                     let mut loop_body = Vec::new();
-
-                    // let key = keys[__i]
-                    loop_body.push(Spanned {
-                        node: Stmt::Let {
-                            name: Spanned { node: "__key".to_string(), span: mk_span() },
-                            ty: None,
-                            value: Spanned {
-                                node: Expr::Index {
-                                    object: Box::new(Spanned { node: mk_var("__keys"), span: mk_span() }),
-                                    index: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
-                                },
-                                span: mk_span(),
-                            },
-                            is_mut: false,
-                        },
-                        span: mk_span(),
-                    });
-
-                    // Encode key
-                    loop_body.extend(mk_encode_value(key_ty, mk_var("__key"))?);
-
-                    // Encode value: map[key]
+                    loop_body.push(mk_let(&format!("__key_{depth}"), None, Expr::Index {
+                        object: Box::new(Spanned { node: mk_var(&format!("__keys_{depth}")), span: mk_span() }),
+                        index: Box::new(Spanned { node: mk_var(&format!("__i_{depth}")), span: mk_span() }),
+                    }));
+                    loop_body.extend(mk_encode_value_at(key_ty, mk_var(&format!("__key_{depth}")), depth + 1)?);
                     let map_index_expr = Expr::Index {
                         object: Box::new(Spanned { node: value_expr.clone(), span: mk_span() }),
-                        index: Box::new(Spanned { node: mk_var("__key"), span: mk_span() }),
+                        index: Box::new(Spanned { node: mk_var(&format!("__key_{depth}")), span: mk_span() }),
                     };
-                    loop_body.extend(mk_encode_value(val_ty, map_index_expr)?);
+                    loop_body.extend(mk_encode_value_at(val_ty, map_index_expr, depth + 1)?);
+                    loop_body.push(mk_incr(&format!("__i_{depth}"), 1));
 
-                    // __i = __i + 1
-                    loop_body.push(Spanned {
-                        node: Stmt::Assign {
-                            target: Spanned { node: "__i".to_string(), span: mk_span() },
-                            value: Spanned {
-                                node: Expr::BinOp {
-                                    lhs: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
-                                    op: crate::parser::ast::BinOp::Add,
-                                    rhs: Box::new(Spanned { node: mk_int_lit(1), span: mk_span() }),
-                                },
-                                span: mk_span(),
-                            },
-                        },
-                        span: mk_span(),
-                    });
+                    stmts.push(mk_while_lt(mk_var(&format!("__i_{depth}")), mk_method_call(&format!("__keys_{depth}"), "len", vec![]), loop_body));
 
-                    let while_stmt = Stmt::While {
-                        condition: Spanned {
-                            node: Expr::BinOp {
-                                lhs: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
-                                op: crate::parser::ast::BinOp::Lt,
-                                rhs: Box::new(Spanned {
-                                    node: mk_call("__keys.len", vec![]),
-                                    span: mk_span(),
-                                }),
-                            },
-                            span: mk_span(),
-                        },
-                        body: Spanned {
-                            node: Block { stmts: loop_body },
-                            span: mk_span(),
-                        },
-                    };
-                    stmts.push(Spanned { node: while_stmt, span: mk_span() });
-
-                    // enc.encode_map_end()
-                    stmts.push(mk_stmt_expr(mk_method_call("enc", "encode_map_end", vec![])));
+                    // enc.encode_array_end()
+                    stmts.push(mk_stmt_expr(mk_method_call("enc", "encode_array_end", vec![])));
 
                     Ok(stmts)
                 }
@@ -1533,7 +1623,7 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
                     // let arr = value.to_array()
                     stmts.push(Spanned {
                         node: Stmt::Let {
-                            name: Spanned { node: "__arr".to_string(), span: mk_span() },
+                            name: Spanned { node: format!("__arr_{depth}"), span: mk_span() },
                             ty: None,
                             value: Spanned {
                                 node: mk_method_call_on_expr(value_expr.clone(), "to_array", vec![]),
@@ -1547,13 +1637,13 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
                     // let mut __i = 0
                     stmts.push(Spanned {
                         node: Stmt::Let {
-                            name: Spanned { node: "__i".to_string(), span: mk_span() },
+                            name: Spanned { node: format!("__i_{depth}"), span: mk_span() },
                             ty: Some(Spanned {
                                 node: TypeExpr::Named("int".to_string()),
                                 span: mk_span(),
                             }),
                             value: Spanned { node: mk_int_lit(0), span: mk_span() },
-                            is_mut: false,
+                            is_mut: true,
                         },
                         span: mk_span(),
                     });
@@ -1563,18 +1653,18 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
 
                     // Encode element: arr[__i]
                     let index_expr = Expr::Index {
-                        object: Box::new(Spanned { node: mk_var("__arr"), span: mk_span() }),
-                        index: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
+                        object: Box::new(Spanned { node: mk_var(&format!("__arr_{depth}")), span: mk_span() }),
+                        index: Box::new(Spanned { node: mk_var(&format!("__i_{depth}")), span: mk_span() }),
                     };
-                    loop_body.extend(mk_encode_value(elem_ty, index_expr)?);
+                    loop_body.extend(mk_encode_value_at(elem_ty, index_expr, depth + 1)?);
 
                     // __i = __i + 1
                     loop_body.push(Spanned {
                         node: Stmt::Assign {
-                            target: Spanned { node: "__i".to_string(), span: mk_span() },
+                            target: Spanned { node: format!("__i_{depth}"), span: mk_span() },
                             value: Spanned {
                                 node: Expr::BinOp {
-                                    lhs: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
+                                    lhs: Box::new(Spanned { node: mk_var(&format!("__i_{depth}")), span: mk_span() }),
                                     op: crate::parser::ast::BinOp::Add,
                                     rhs: Box::new(Spanned { node: mk_int_lit(1), span: mk_span() }),
                                 },
@@ -1587,10 +1677,10 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
                     let while_stmt = Stmt::While {
                         condition: Spanned {
                             node: Expr::BinOp {
-                                lhs: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
+                                lhs: Box::new(Spanned { node: mk_var(&format!("__i_{depth}")), span: mk_span() }),
                                 op: crate::parser::ast::BinOp::Lt,
                                 rhs: Box::new(Spanned {
-                                    node: mk_call("__arr.len", vec![]),
+                                    node: mk_method_call(&format!("__arr_{depth}"), "len", vec![]),
                                     span: mk_span(),
                                 }),
                             },
@@ -1611,7 +1701,7 @@ fn mk_encode_value(ty: &TypeExpr, value_expr: Expr) -> Result<Vec<Spanned<Stmt>>
                 _ => {
                     // Generic user type like Box<T> → call __marshal_Box__int(value, enc)
                     let mangled_name = mangle_generic_name(name, type_args);
-                    let encode_expr = mk_call(&format!("__marshal_{}", mangled_name), vec![value_expr, mk_var("enc")]);
+                    let encode_expr = mk_func_call(&format!("__marshal_{}", mangled_name), vec![value_expr, mk_var("enc")]);
                     Ok(vec![mk_stmt_expr(encode_expr)])
                 }
             }
@@ -1665,6 +1755,11 @@ fn type_expr_to_string(ty: &TypeExpr) -> String {
 /// For simple types: Returns a single let statement: let var_name = decode_type(dec)!
 /// For complex types: Returns multiple statements ending with the final let binding
 fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, CompileError> {
+    mk_let_decode_at(var_name, ty, 0)
+}
+
+/// Depth-aware worker for mk_let_decode — see mk_encode_value_at.
+fn mk_let_decode_at(var_name: &str, ty: &TypeExpr, depth: usize) -> Result<Vec<Spanned<Stmt>>, CompileError> {
     match ty {
         TypeExpr::Named(name) => {
             let decode_expr = match name.as_str() {
@@ -1694,7 +1789,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                 }
                 _ => {
                     // User-defined class or enum → call __unmarshal_T(dec)!
-                    mk_propagate(mk_call(&format!("__unmarshal_{}", name), vec![mk_var("dec")]))
+                    mk_propagate(mk_func_call(&format!("__unmarshal_{}", name), vec![mk_var("dec")]))
                 }
             };
 
@@ -1726,7 +1821,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
             // let __len = dec.decode_array_start()!
             stmts.push(Spanned {
                 node: Stmt::Let {
-                    name: Spanned { node: "__len".to_string(), span: mk_span() },
+                    name: Spanned { node: format!("__len_{depth}"), span: mk_span() },
                     ty: None,
                     value: Spanned {
                         node: mk_propagate(mk_method_call("dec", "decode_array_start", vec![])),
@@ -1740,7 +1835,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
             // let mut __result: [T] = []
             stmts.push(Spanned {
                 node: Stmt::Let {
-                    name: Spanned { node: "__result".to_string(), span: mk_span() },
+                    name: Spanned { node: format!("__result_{depth}"), span: mk_span() },
                     ty: Some(Spanned { node: ty.clone(), span: mk_span() }),
                     value: Spanned {
                         node: Expr::ArrayLit { elements: vec![] },
@@ -1754,7 +1849,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
             // let mut __i = 0
             stmts.push(Spanned {
                 node: Stmt::Let {
-                    name: Spanned { node: "__i".to_string(), span: mk_span() },
+                    name: Spanned { node: format!("__i_{depth}"), span: mk_span() },
                     ty: Some(Spanned {
                         node: TypeExpr::Named("int".to_string()),
                         span: mk_span(),
@@ -1769,21 +1864,21 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
             let mut loop_body = Vec::new();
 
             // dec.decode_array_element(__i)!
-            loop_body.push(mk_stmt_expr(mk_propagate(mk_method_call("dec", "decode_array_element", vec![mk_var("__i")]))));
+            loop_body.push(mk_stmt_expr(mk_propagate(mk_method_call("dec", "decode_array_element", vec![mk_var(&format!("__i_{depth}"))]))));
 
             // let elem = decode_T(dec)!
-            loop_body.extend(mk_let_decode("__elem", &elem_ty.node)?);
+            loop_body.extend(mk_let_decode_at(&format!("__elem_{depth}"), &elem_ty.node, depth + 1)?);
 
             // __result.push(elem)
-            loop_body.push(mk_stmt_expr(mk_call("__result.push", vec![mk_var("__elem")])));
+            loop_body.push(mk_stmt_expr(mk_method_call(&format!("__result_{depth}"), "push", vec![mk_var(&format!("__elem_{depth}"))])));
 
             // __i = __i + 1
             loop_body.push(Spanned {
                 node: Stmt::Assign {
-                    target: Spanned { node: "__i".to_string(), span: mk_span() },
+                    target: Spanned { node: format!("__i_{depth}"), span: mk_span() },
                     value: Spanned {
                         node: Expr::BinOp {
-                            lhs: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
+                            lhs: Box::new(Spanned { node: mk_var(&format!("__i_{depth}")), span: mk_span() }),
                             op: crate::parser::ast::BinOp::Add,
                             rhs: Box::new(Spanned { node: mk_int_lit(1), span: mk_span() }),
                         },
@@ -1796,9 +1891,9 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
             let while_stmt = Stmt::While {
                 condition: Spanned {
                     node: Expr::BinOp {
-                        lhs: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
+                        lhs: Box::new(Spanned { node: mk_var(&format!("__i_{depth}")), span: mk_span() }),
                         op: crate::parser::ast::BinOp::Lt,
-                        rhs: Box::new(Spanned { node: mk_var("__len"), span: mk_span() }),
+                        rhs: Box::new(Spanned { node: mk_var(&format!("__len_{depth}")), span: mk_span() }),
                     },
                     span: mk_span(),
                 },
@@ -1817,7 +1912,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                 node: Stmt::Let {
                     name: Spanned { node: var_name.to_string(), span: mk_span() },
                     ty: Some(Spanned { node: ty.clone(), span: mk_span() }),
-                    value: Spanned { node: mk_var("__result"), span: mk_span() },
+                    value: Spanned { node: mk_var(&format!("__result_{depth}")), span: mk_span() },
                     is_mut: false,
                 },
                 span: mk_span(),
@@ -1840,7 +1935,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
             // let __is_present = dec.decode_nullable()
             stmts.push(Spanned {
                 node: Stmt::Let {
-                    name: Spanned { node: "__is_present".to_string(), span: mk_span() },
+                    name: Spanned { node: format!("__is_present_{depth}"), span: mk_span() },
                     ty: None,
                     value: Spanned {
                         node: mk_method_call("dec", "decode_nullable", vec![]),
@@ -1854,7 +1949,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
             // let mut __result: T? = none
             stmts.push(Spanned {
                 node: Stmt::Let {
-                    name: Spanned { node: "__result".to_string(), span: mk_span() },
+                    name: Spanned { node: format!("__result_{depth}"), span: mk_span() },
                     ty: Some(Spanned { node: ty.clone(), span: mk_span() }),
                     value: Spanned { node: Expr::NoneLit, span: mk_span() },
                     is_mut: true,
@@ -1889,7 +1984,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
 
                     if_body.push(Spanned {
                         node: Stmt::Assign {
-                            target: Spanned { node: "__result".to_string(), span: mk_span() },
+                            target: Spanned { node: format!("__result_{depth}"), span: mk_span() },
                             value: Spanned { node: decode_expr, span: mk_span() },
                         },
                         span: mk_span(),
@@ -1899,9 +1994,9 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                     // User-defined type
                     if_body.push(Spanned {
                         node: Stmt::Assign {
-                            target: Spanned { node: "__result".to_string(), span: mk_span() },
+                            target: Spanned { node: format!("__result_{depth}"), span: mk_span() },
                             value: Spanned {
-                                node: mk_propagate(mk_call(&format!("__unmarshal_{}", name), vec![mk_var("dec")])),
+                                node: mk_propagate(mk_func_call(&format!("__unmarshal_{}", name), vec![mk_var("dec")])),
                                 span: mk_span(),
                             },
                         },
@@ -1910,11 +2005,11 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                 }
                 _ => {
                     // Complex inner types - decode into temporary, then assign
-                    if_body.extend(mk_let_decode("__inner", &inner_ty.node)?);
+                    if_body.extend(mk_let_decode_at(&format!("__inner_{depth}"), &inner_ty.node, depth + 1)?);
                     if_body.push(Spanned {
                         node: Stmt::Assign {
-                            target: Spanned { node: "__result".to_string(), span: mk_span() },
-                            value: Spanned { node: mk_var("__inner"), span: mk_span() },
+                            target: Spanned { node: format!("__result_{depth}"), span: mk_span() },
+                            value: Spanned { node: mk_var(&format!("__inner_{depth}")), span: mk_span() },
                         },
                         span: mk_span(),
                     });
@@ -1923,7 +2018,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
 
             let if_stmt = Stmt::If {
                 condition: Spanned {
-                    node: mk_var("__is_present"),
+                    node: mk_var(&format!("__is_present_{depth}")),
                     span: mk_span(),
                 },
                 then_block: Spanned {
@@ -1939,7 +2034,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                 node: Stmt::Let {
                     name: Spanned { node: var_name.to_string(), span: mk_span() },
                     ty: Some(Spanned { node: ty.clone(), span: mk_span() }),
-                    value: Spanned { node: mk_var("__result"), span: mk_span() },
+                    value: Spanned { node: mk_var(&format!("__result_{depth}")), span: mk_span() },
                     is_mut: false,
                 },
                 span: mk_span(),
@@ -1951,7 +2046,8 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
         TypeExpr::Generic { name, type_args } => {
             match name.as_str() {
                 "Map" => {
-                    // Similar to array but decode key-value pairs
+                    // Flat-array wire scheme: [k1, v1, k2, v2, ...] — see the
+                    // matching Map arm in mk_encode_value.
                     if type_args.len() != 2 {
                         return Err(CompileError::codegen(
                             "Map type must have exactly 2 type arguments"
@@ -1962,109 +2058,45 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                     let val_ty = &type_args[1].node;
                     let mut stmts = Vec::new();
 
-                    // let __len = dec.decode_map_start()!
-                    stmts.push(Spanned {
-                        node: Stmt::Let {
-                            name: Spanned { node: "__len".to_string(), span: mk_span() },
-                            ty: None,
-                            value: Spanned {
-                                node: mk_method_call("dec", "decode_map_start", vec![]),
-                                span: mk_span(),
-                            },
-                            is_mut: false,
-                        },
-                        span: mk_span(),
-                    });
+                    // let __len = dec.decode_array_start()!
+                    stmts.push(mk_let(&format!("__len_{depth}"), None,
+                        mk_propagate(mk_method_call("dec", "decode_array_start", vec![]))));
 
-                    // let mut __result: Map<K,V> = Map<K,V> {}
-                    stmts.push(Spanned {
-                        node: Stmt::Let {
-                            name: Spanned { node: "__result".to_string(), span: mk_span() },
-                            ty: Some(Spanned { node: ty.clone(), span: mk_span() }),
-                            value: Spanned {
-                                node: Expr::MapLit {
-                                    key_type: type_args[0].clone(),
-                                    value_type: type_args[1].clone(),
-                                    entries: vec![],
-                                },
-                                span: mk_span(),
-                            },
-                            is_mut: false,
-                        },
-                        span: mk_span(),
-                    });
+                    // let __result: Map<K, V> = Map<K, V> {}
+                    stmts.push(mk_let(&format!("__result_{depth}"), Some(ty.clone()), Expr::MapLit {
+                        key_type: type_args[0].clone(),
+                        value_type: type_args[1].clone(),
+                        entries: vec![],
+                    }));
 
                     // let mut __i = 0
-                    stmts.push(Spanned {
-                        node: Stmt::Let {
-                            name: Spanned { node: "__i".to_string(), span: mk_span() },
-                            ty: Some(Spanned {
-                                node: TypeExpr::Named("int".to_string()),
-                                span: mk_span(),
-                            }),
-                            value: Spanned { node: mk_int_lit(0), span: mk_span() },
-                            is_mut: false,
-                        },
-                        span: mk_span(),
-                    });
+                    stmts.push(mk_let_mut(&format!("__i_{depth}"),
+                        Some(TypeExpr::Named("int".to_string())), mk_int_lit(0)));
 
-                    // while __i < __len { ... }
+                    // while __i < __len { decode key at __i, value at __i+1; insert; __i += 2 }
                     let mut loop_body = Vec::new();
-
-                    // let key = decode_K(dec)!
-                    loop_body.extend(mk_let_decode("__key", key_ty)?);
-
-                    // let val = decode_V(dec)!
-                    loop_body.extend(mk_let_decode("__val", val_ty)?);
-
-                    // __result.insert(__key, __val)
-                    loop_body.push(mk_stmt_expr(mk_call("__result.insert", vec![mk_var("__key"), mk_var("__val")])));
-
-                    // __i = __i + 1
-                    loop_body.push(Spanned {
-                        node: Stmt::Assign {
-                            target: Spanned { node: "__i".to_string(), span: mk_span() },
-                            value: Spanned {
-                                node: Expr::BinOp {
-                                    lhs: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
-                                    op: crate::parser::ast::BinOp::Add,
-                                    rhs: Box::new(Spanned { node: mk_int_lit(1), span: mk_span() }),
-                                },
-                                span: mk_span(),
-                            },
-                        },
-                        span: mk_span(),
-                    });
-
-                    let while_stmt = Stmt::While {
-                        condition: Spanned {
-                            node: Expr::BinOp {
-                                lhs: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
-                                op: crate::parser::ast::BinOp::Lt,
-                                rhs: Box::new(Spanned { node: mk_var("__len"), span: mk_span() }),
-                            },
-                            span: mk_span(),
-                        },
-                        body: Spanned {
-                            node: Block { stmts: loop_body },
-                            span: mk_span(),
-                        },
+                    loop_body.push(mk_stmt_expr(mk_propagate(
+                        mk_method_call("dec", "decode_array_element", vec![mk_var(&format!("__i_{depth}"))]))));
+                    loop_body.extend(mk_let_decode_at(&format!("__key_{depth}"), key_ty, depth + 1)?);
+                    let next_idx = Expr::BinOp {
+                        lhs: Box::new(Spanned { node: mk_var(&format!("__i_{depth}")), span: mk_span() }),
+                        op: crate::parser::ast::BinOp::Add,
+                        rhs: Box::new(Spanned { node: mk_int_lit(1), span: mk_span() }),
                     };
-                    stmts.push(Spanned { node: while_stmt, span: mk_span() });
+                    loop_body.push(mk_stmt_expr(mk_propagate(
+                        mk_method_call("dec", "decode_array_element", vec![next_idx]))));
+                    loop_body.extend(mk_let_decode_at(&format!("__val_{depth}"), val_ty, depth + 1)?);
+                    loop_body.push(mk_stmt_expr(mk_method_call(&format!("__result_{depth}"), "insert",
+                        vec![mk_var(&format!("__key_{depth}")), mk_var(&format!("__val_{depth}"))])));
+                    loop_body.push(mk_incr(&format!("__i_{depth}"), 2));
 
-                    // dec.decode_map_end()
-                    stmts.push(mk_stmt_expr(mk_method_call("dec", "decode_map_end", vec![])));
+                    stmts.push(mk_while_lt(mk_var(&format!("__i_{depth}")), mk_var(&format!("__len_{depth}")), loop_body));
+
+                    // dec.decode_array_end()
+                    stmts.push(mk_stmt_expr(mk_method_call("dec", "decode_array_end", vec![])));
 
                     // let var_name = __result
-                    stmts.push(Spanned {
-                        node: Stmt::Let {
-                            name: Spanned { node: var_name.to_string(), span: mk_span() },
-                            ty: Some(Spanned { node: ty.clone(), span: mk_span() }),
-                            value: Spanned { node: mk_var("__result"), span: mk_span() },
-                            is_mut: false,
-                        },
-                        span: mk_span(),
-                    });
+                    stmts.push(mk_let(var_name, Some(ty.clone()), mk_var(&format!("__result_{depth}"))));
 
                     Ok(stmts)
                 }
@@ -2082,10 +2114,10 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                     // let __len = dec.decode_array_start()!
                     stmts.push(Spanned {
                         node: Stmt::Let {
-                            name: Spanned { node: "__len".to_string(), span: mk_span() },
+                            name: Spanned { node: format!("__len_{depth}"), span: mk_span() },
                             ty: None,
                             value: Spanned {
-                                node: mk_method_call("dec", "decode_array_start", vec![]),
+                                node: mk_propagate(mk_method_call("dec", "decode_array_start", vec![])),
                                 span: mk_span(),
                             },
                             is_mut: false,
@@ -2096,7 +2128,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                     // let mut __result: Set<T> = Set<T> {}
                     stmts.push(Spanned {
                         node: Stmt::Let {
-                            name: Spanned { node: "__result".to_string(), span: mk_span() },
+                            name: Spanned { node: format!("__result_{depth}"), span: mk_span() },
                             ty: Some(Spanned { node: ty.clone(), span: mk_span() }),
                             value: Spanned {
                                 node: Expr::SetLit {
@@ -2113,13 +2145,13 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                     // let mut __i = 0
                     stmts.push(Spanned {
                         node: Stmt::Let {
-                            name: Spanned { node: "__i".to_string(), span: mk_span() },
+                            name: Spanned { node: format!("__i_{depth}"), span: mk_span() },
                             ty: Some(Spanned {
                                 node: TypeExpr::Named("int".to_string()),
                                 span: mk_span(),
                             }),
                             value: Spanned { node: mk_int_lit(0), span: mk_span() },
-                            is_mut: false,
+                            is_mut: true,
                         },
                         span: mk_span(),
                     });
@@ -2127,19 +2159,23 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                     // while __i < __len { ... }
                     let mut loop_body = Vec::new();
 
+                    // dec.decode_array_element(__i)!
+                    loop_body.push(mk_stmt_expr(mk_propagate(
+                        mk_method_call("dec", "decode_array_element", vec![mk_var(&format!("__i_{depth}"))]))));
+
                     // let elem = decode_T(dec)!
-                    loop_body.extend(mk_let_decode("__elem", elem_ty)?);
+                    loop_body.extend(mk_let_decode_at(&format!("__elem_{depth}"), elem_ty, depth + 1)?);
 
                     // __result.insert(__elem)
-                    loop_body.push(mk_stmt_expr(mk_call("__result.insert", vec![mk_var("__elem")])));
+                    loop_body.push(mk_stmt_expr(mk_method_call(&format!("__result_{depth}"), "insert", vec![mk_var(&format!("__elem_{depth}"))])));
 
                     // __i = __i + 1
                     loop_body.push(Spanned {
                         node: Stmt::Assign {
-                            target: Spanned { node: "__i".to_string(), span: mk_span() },
+                            target: Spanned { node: format!("__i_{depth}"), span: mk_span() },
                             value: Spanned {
                                 node: Expr::BinOp {
-                                    lhs: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
+                                    lhs: Box::new(Spanned { node: mk_var(&format!("__i_{depth}")), span: mk_span() }),
                                     op: crate::parser::ast::BinOp::Add,
                                     rhs: Box::new(Spanned { node: mk_int_lit(1), span: mk_span() }),
                                 },
@@ -2152,9 +2188,9 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                     let while_stmt = Stmt::While {
                         condition: Spanned {
                             node: Expr::BinOp {
-                                lhs: Box::new(Spanned { node: mk_var("__i"), span: mk_span() }),
+                                lhs: Box::new(Spanned { node: mk_var(&format!("__i_{depth}")), span: mk_span() }),
                                 op: crate::parser::ast::BinOp::Lt,
-                                rhs: Box::new(Spanned { node: mk_var("__len"), span: mk_span() }),
+                                rhs: Box::new(Spanned { node: mk_var(&format!("__len_{depth}")), span: mk_span() }),
                             },
                             span: mk_span(),
                         },
@@ -2173,7 +2209,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                         node: Stmt::Let {
                             name: Spanned { node: var_name.to_string(), span: mk_span() },
                             ty: Some(Spanned { node: ty.clone(), span: mk_span() }),
-                            value: Spanned { node: mk_var("__result"), span: mk_span() },
+                            value: Spanned { node: mk_var(&format!("__result_{depth}")), span: mk_span() },
                             is_mut: false,
                         },
                         span: mk_span(),
@@ -2184,7 +2220,7 @@ fn mk_let_decode(var_name: &str, ty: &TypeExpr) -> Result<Vec<Spanned<Stmt>>, Co
                 _ => {
                     // Generic user type → call __unmarshal_Box__int(dec)
                     let mangled_name = mangle_generic_name(name, type_args);
-                    let decode_expr = mk_call(&format!("__unmarshal_{}", mangled_name), vec![mk_var("dec")]);
+                    let decode_expr = mk_func_call(&format!("__unmarshal_{}", mangled_name), vec![mk_var("dec")]);
 
                     Ok(vec![Spanned {
                         node: Stmt::Let {
@@ -3329,14 +3365,15 @@ mod tests {
         let expr = mk_var("m");
         let stmts = mk_encode_value(&ty, expr).unwrap();
 
-        // Should generate multiple statements: encode_map_start, keys binding, while loop, encode_map_end
+        // Maps use the flat-array wire scheme: encode_array_start, keys
+        // binding, while loop, encode_array_end
         assert!(stmts.len() > 1);
 
-        // First statement should be encode_map_start
+        // First statement should be encode_array_start
         match &stmts[0].node {
             Stmt::Expr(e) => match &e.node {
                 Expr::MethodCall { method, .. } => {
-                    assert_eq!(method.node, "encode_map_start");
+                    assert_eq!(method.node, "encode_array_start");
                 }
                 _ => panic!("Expected MethodCall"),
             },
@@ -3346,11 +3383,11 @@ mod tests {
         // Should have a while loop
         assert!(stmts.iter().any(|s| matches!(&s.node, Stmt::While { .. })));
 
-        // Last statement should be encode_map_end
+        // Last statement should be encode_array_end
         match &stmts[stmts.len() - 1].node {
             Stmt::Expr(e) => match &e.node {
                 Expr::MethodCall { method, .. } => {
-                    assert_eq!(method.node, "encode_map_end");
+                    assert_eq!(method.node, "encode_array_end");
                 }
                 _ => panic!("Expected MethodCall"),
             },
