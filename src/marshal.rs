@@ -171,8 +171,6 @@ pub fn generate_marshalers_phase_b(
     // Collect types from stage methods (now includes monomorphized names like Box$$int)
     let types_to_marshal = collect_types_from_stage_methods(program)?;
 
-    eprintln!("Phase B: Collected types: {:?}", types_to_marshal);
-
     let mut generated_functions = Vec::new();
 
     for type_name in &types_to_marshal {
