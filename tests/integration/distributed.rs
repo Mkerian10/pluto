@@ -908,3 +908,113 @@ fn remote_string_arg_with_backslash_and_newline_roundtrips() {
     // "a\b\nc" is 5 bytes: 'a', '\', 'b', newline, 'c'.
     assert_eq!(String::from_utf8_lossy(&out.stdout), "len:5\n");
 }
+
+// ── Phase 7: float / bool / nullable over the wire ──────────────────────────────
+
+const SCALAR_SERVER_SRC: &str = "\
+import std.wire
+
+class Calc {
+    seed: int
+    fn half(self, x: float) float {
+        return x / 2.0
+    }
+    fn flip(self, b: bool) bool {
+        return !b
+    }
+    fn tag(self, s: string) string? {
+        if s == \"none\" {
+            return none
+        }
+        return s
+    }
+}
+
+fn main() {
+    let c = Calc { seed: 1 }
+    serve c on 0
+}";
+
+const SCALAR_IFACE: &str = "\
+pub class Calc {
+    fn half(self, x: float) float {
+        return x / 2.0
+    }
+    fn flip(self, b: bool) bool {
+        return !b
+    }
+    fn tag(self, s: string) string? {
+        if s == \"none\" {
+            return none
+        }
+        return s
+    }
+}";
+
+const SCALAR_CLIENT_SRC: &str = "\
+import std.wire
+import calc
+
+app App[c: remote calc.Calc] {
+    fn main(self) {
+        let h = self.c.half(10.0) catch -1.0
+        print(f\"half={h}\")
+        let f = self.c.flip(true) catch true
+        print(f\"flip={f}\")
+        let t = self.c.tag(\"hello\") catch \"ERR\"
+        let tv = t ?? \"was-none\"
+        print(f\"tag={tv}\")
+        let n = self.c.tag(\"none\") catch \"ERR\"
+        let nv = n ?? \"was-none\"
+        print(f\"none-case={nv}\")
+    }
+}";
+
+/// Floats, bools, and nullables cross the wire in both directions: float and
+/// bool as arguments and returns, and a nullable return in both its some and
+/// none states.
+#[test]
+fn scalar_and_nullable_round_trip_over_rpc() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", SCALAR_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("calc.pluto", SCALAR_IFACE), ("main.pluto", SCALAR_CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_CALC", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "half=5\nflip=false\ntag=hello\nnone-case=was-none\n"
+    );
+}
+
+/// Arrays are still outside the wire's type surface — rejected at compile time
+/// with the full supported list, never silently mis-marshaled.
+#[test]
+fn array_over_rpc_rejected_at_compile_time() {
+    compile_project_should_fail_with(
+        &[
+            (
+                "calc.pluto",
+                "pub class Calc {\n    fn triple(self, n: int) [int] {\n        return [n, n, n]\n    }\n}",
+            ),
+            (
+                "main.pluto",
+                "import calc\n\napp App[c: remote calc.Calc] {\n    fn main(self) {\n        let a = self.c.triple(2) catch [0]\n        print(a.len())\n    }\n}",
+            ),
+        ],
+        "unsupported return type [int]",
+    );
+}

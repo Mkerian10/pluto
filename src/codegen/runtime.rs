@@ -71,6 +71,10 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_fork", &[], &[types::I64])?;
         reg.declare(module, "__pluto_process_exit", &[types::I64], &[])?;
         reg.declare(module, "__pluto_wire_escape", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_wire_parse_float", &[types::I64], &[types::F64])?;
+        reg.declare(module, "__pluto_wire_opt_wrap", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_wire_opt_is_none", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_wire_opt_payload", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_wire_unescape", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_request_field", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_socket_read", &[types::I64, types::I64], &[types::I64])?;
