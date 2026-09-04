@@ -119,7 +119,19 @@ pub fn infer_synchronization(program: &Program, env: &mut TypeEnv) {
     let mut spawn_side: HashSet<String> = HashSet::new();
     let mut per_spawn_accesses: Vec<HashSet<String>> = Vec::new();
     for target_fn in env.spawn_target_fns.values() {
-        let accesses = singleton_accesses.get(target_fn).cloned().unwrap_or_default();
+        let mut accesses = singleton_accesses.get(target_fn).cloned().unwrap_or_default();
+        // A spawned METHOD runs on its receiver: `spawn self.counter.work()`
+        // accesses the Counter singleton through `self` field reads/writes,
+        // which the MethodCall-resolution collector above cannot see. Count
+        // the target's own class as accessed when it is a DI singleton —
+        // otherwise a singleton mutated only via `self` in the spawned method
+        // is never marked synchronized and no rwlock is ever emitted (the
+        // sync_basic_counter lost-increment flake on loaded CI runners).
+        if let Some(class_name) = target_fn.split('$').next()
+            && di_singletons.contains(class_name)
+        {
+            accesses.insert(class_name.to_string());
+        }
         spawn_side.extend(accesses.iter().cloned());
         per_spawn_accesses.push(accesses);
     }
@@ -260,3 +272,64 @@ fn collect_block_accesses(
     (accesses, edges)
 }
 
+
+#[cfg(test)]
+mod tests {
+    use crate::lexer::lex;
+    use crate::parser::Parser;
+
+    /// Regression: a singleton mutated only through `self` inside a spawned
+    /// METHOD (`spawn self.counter.do_increments()`) must be marked
+    /// synchronized. The access collector only sees MethodCall resolutions,
+    /// so the spawn target's own receiver class has to be counted explicitly
+    /// — before that fix, no rwlock was emitted at all and increments raced
+    /// (the sync_basic_counter CI flake).
+    #[test]
+    fn spawned_method_receiver_is_synchronized() {
+        let src = r#"
+class Counter {
+    value: int
+
+    fn increment(mut self) {
+        self.value = self.value + 1
+    }
+
+    fn do_increments(mut self) {
+        let mut i = 0
+        while i < 1000 {
+            self.value = self.value + 1
+            i = i + 1
+        }
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+app MyApp[counter: Counter] {
+    fn main(self) {
+        let t = spawn self.counter.do_increments()
+        let mut i = 0
+        while i < 1000 {
+            self.counter.increment()
+            i = i + 1
+        }
+        t.get()
+        print(self.counter.get())
+    }
+}
+"#;
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let mut program = parser.parse_program().unwrap();
+        crate::modules::resolve_qualified_access_single_file(&mut program).unwrap();
+        let result = crate::run_frontend(&mut program, false).unwrap();
+        assert!(
+            result.env.synchronized_singletons.contains("Counter"),
+            "Counter must be synchronized: it is mutated by both the main \
+             thread and a spawned method running on it; got {:?}",
+            result.env.synchronized_singletons
+        );
+    }
+}
