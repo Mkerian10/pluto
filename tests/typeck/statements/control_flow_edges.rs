@@ -24,9 +24,9 @@ fn match_single_arm() { compile_should_fail_with(r#"enum E{A B} fn main(){match 
 // REMOVED: infinite_loop_only_break - while true {break} is valid
 // REMOVED: if_else_chain - if-else chains with empty bodies are valid
 
-// Match with wildcard only
+// Match with only a wildcard arm is legal: `_` satisfies exhaustiveness
 #[test]
-fn match_wildcard_only() { compile_should_fail_with(r#"enum E{A B} fn main(){match E.A{_={}}}"#, "expected ., found ="); }
+fn match_wildcard_only() { assert!(pluto::compile_to_object(r#"enum E{A B} fn main(){match E.A{_ {}}}"#).is_ok()); }
 
 // REMOVED: nested_loops_breaks - nested loops with breaks are valid
 // REMOVED: empty_void_function - empty void functions are valid
