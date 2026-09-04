@@ -1242,13 +1242,12 @@ void *__pluto_read_framed(long fd) {
     return result;
 }
 
-void *__pluto_remote_request(void *service_str, void *method_str, void *payload_str) {
+static void *pluto_boundary_request(const char *prefix, void *service_str, void *method_str, void *payload_str) {
     const char *svc;
     long svclen;
     __pluto_string_data(service_str, &svc, &svclen);
 
     char envname[256];
-    const char *prefix = "PLUTO_REMOTE_";
     int n = 0;
     while (prefix[n]) { envname[n] = prefix[n]; n++; }
     for (long i = 0; i < svclen && n < (int)sizeof(envname) - 1; i++) {
@@ -2239,3 +2238,32 @@ void *__pluto_http_url_decode(void *pluto_str) {
     return result;
 }
 
+
+
+void *__pluto_remote_request(void *service_str, void *method_str, void *payload_str) {
+    return pluto_boundary_request("PLUTO_REMOTE_", service_str, method_str, payload_str);
+}
+
+/* `at` placement boundaries resolve their physical plan from
+ * PLUTO_DOMAIN_<SERVICE>: bound -> socket transport, unbound -> the caller
+ * uses its colocated instance (docs/design/rfc-at-placement.md). */
+void *__pluto_domain_request(void *service_str, void *method_str, void *payload_str) {
+    return pluto_boundary_request("PLUTO_DOMAIN_", service_str, method_str, payload_str);
+}
+
+long __pluto_domain_bound(void *service_str) {
+    const char *svc;
+    long svclen;
+    __pluto_string_data(service_str, &svc, &svclen);
+    char envname[256];
+    const char *prefix = "PLUTO_DOMAIN_";
+    int n = 0;
+    while (prefix[n]) { envname[n] = prefix[n]; n++; }
+    for (long i = 0; i < svclen && n < (int)sizeof(envname) - 1; i++) {
+        char c = svc[i];
+        if (c >= 'a' && c <= 'z') c -= 32;
+        envname[n++] = c;
+    }
+    envname[n] = 0;
+    return getenv(envname) != NULL ? 1 : 0;
+}

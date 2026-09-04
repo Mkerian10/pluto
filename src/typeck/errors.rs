@@ -195,7 +195,7 @@ fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<Str
             }
             env.fn_errors.get(&name.node).cloned().unwrap_or_default()
         }
-        Expr::MethodCall { method, .. } => {
+        Expr::MethodCall { method, .. } | Expr::At { method, .. } => {
             let key = (current_fn.to_string(), method.span.start);
             match env.method_resolutions.get(&key) {
                 Some(MethodResolution::Class { mangled_name }) =>
@@ -480,6 +480,19 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
                         collect_expr_effects(arg, ctx);
                     }
                 }
+                Expr::At { domain, method, args } => {
+                    collect_expr_effects(domain, ctx);
+                    for arg in args {
+                        collect_expr_effects(arg, ctx);
+                    }
+                    let key = (ctx.current_fn.clone(), method.span.start);
+                    if let Some(MethodResolution::RemoteClass { mangled_name }) =
+                        ctx.env.method_resolutions.get(&key).cloned()
+                    {
+                        ctx.raise("NetworkError".to_string());
+                        ctx.edge(mangled_name);
+                    }
+                }
                 Expr::MethodCall { object, method, args, .. } => {
                     collect_expr_effects(object, ctx);
                     for arg in args {
@@ -565,6 +578,14 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
                         collect_expr_effects(arg, ctx);
                     }
                 }
+                Expr::At { domain, args, .. } => {
+                    // Catch-handled: coverage is verified by enforcement, so
+                    // the boundary's errors don't propagate — collect only.
+                    collect_expr_effects(domain, ctx);
+                    for arg in args {
+                        collect_expr_effects(arg, ctx);
+                    }
+                }
                 _ => collect_expr_effects(inner, ctx),
             }
             for handler in handlers {
@@ -601,6 +622,12 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
         }
         Expr::MethodCall { object, args, .. } => {
             collect_expr_effects(object, ctx);
+            for arg in args {
+                collect_expr_effects(arg, ctx);
+            }
+        }
+        Expr::At { domain, args, .. } => {
+            collect_expr_effects(domain, ctx);
             for arg in args {
                 collect_expr_effects(arg, ctx);
             }
@@ -962,6 +989,22 @@ fn enforce_expr(
             }
             Ok(())
         }
+        Expr::At { domain, method, args } => {
+            enforce_expr(&domain.node, domain.span, current_fn, env, lenient)?;
+            for arg in args {
+                enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
+            }
+            // A placement boundary is fallible in every physical plan — an
+            // unhandled `at` is rejected even when the domain is colocated.
+            return Err(CompileError::type_err(
+                format!(
+                    "placement expression `at` (calling '{}') must be handled with ! or catch: \
+                     the domain boundary can fail in any deployment plan",
+                    method.node
+                ),
+                span,
+            ));
+        }
         Expr::MethodCall { object, method, args, .. } => {
             enforce_expr(&object.node, object.span, current_fn, env, lenient)?;
             for arg in args {
@@ -983,6 +1026,13 @@ fn enforce_expr(
             Ok(())
         }
         Expr::Propagate { expr: inner } => match &inner.node {
+            Expr::At { domain, args, .. } => {
+                enforce_expr(&domain.node, domain.span, current_fn, env, lenient)?;
+                for arg in args {
+                    enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
+                }
+                Ok(())
+            }
             Expr::Call { name, args, .. } => {
                 for arg in args {
                     enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
@@ -1070,6 +1120,12 @@ fn enforce_expr(
                                 span,
                             ));
                         }
+                    }
+                }
+                Expr::At { domain, args, .. } => {
+                    enforce_expr(&domain.node, domain.span, current_fn, env, lenient)?;
+                    for arg in args {
+                        enforce_expr(&arg.node, arg.span, current_fn, env, lenient)?;
                     }
                 }
                 _ => {

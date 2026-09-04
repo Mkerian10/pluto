@@ -548,6 +548,12 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
         // Unary wrappers
         Expr::UnaryOp { operand, .. } => v.visit_expr(operand),
         Expr::Propagate { expr: inner } => v.visit_expr(inner),
+        Expr::At { domain, args, .. } => {
+            v.visit_expr(domain);
+            for a in args {
+                v.visit_expr(a);
+            }
+        }
         Expr::NullPropagate { expr: inner } => v.visit_expr(inner),
         Expr::NullCoalesce { lhs, rhs } => {
             v.visit_expr(lhs);
@@ -1075,6 +1081,12 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, expr: &mut Spanned<Expr>) {
 
         Expr::UnaryOp { operand, .. } => v.visit_expr_mut(operand),
         Expr::Propagate { expr: inner } => v.visit_expr_mut(inner),
+        Expr::At { domain, args, .. } => {
+            v.visit_expr_mut(domain);
+            for a in args {
+                v.visit_expr_mut(a);
+            }
+        }
         Expr::NullPropagate { expr: inner } => v.visit_expr_mut(inner),
         Expr::NullCoalesce { lhs, rhs } => {
             v.visit_expr_mut(lhs);
@@ -1306,6 +1318,7 @@ mod tests {
                 Expr::StaticTraitCall { .. } => "StaticTraitCall",
                 Expr::QualifiedAccess { .. } => "QualifiedAccess",
                 Expr::If { .. } => "If",
+                Expr::At { .. } => "At",
                 Expr::Match { .. } => "Match",
             };
             self.visited.insert(expr_type.to_string());

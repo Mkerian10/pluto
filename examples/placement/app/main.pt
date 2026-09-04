@@ -1,0 +1,58 @@
+// Placement expressions — logical distribution without physical coupling.
+//
+// `at self.pay { charge(21) }` evaluates the call in the `pay` logical
+// execution domain. The code says WHERE the computation belongs; the
+// deployment binding decides HOW the boundary is crossed:
+//
+//   Plan A (colocated):   ./app                      -> direct in-process call
+//   Plan B (distributed): PLUTO_DOMAIN_PAYMENTSERVICE=127.0.0.1:<port> ./app
+//                                                    -> socket transport
+//
+// Same binary, both plans, identical behavior. The boundary contract is
+// checked identically either way: arguments and results must be
+// wire-shaped, and the `at` must be handled (`catch`) because a domain
+// boundary can fail in ANY deployment plan — even one that happens to be
+// colocated today. See docs/design/distributed-model.md.
+//
+// Run it:
+//   cargo run -- run examples/placement/app/main.pt --stdlib stdlib
+//   # then, with examples/placement/server running (prints its port):
+//   PLUTO_DOMAIN_PAYMENTSERVICE=127.0.0.1:<port> \
+//     cargo run -- run examples/placement/app/main.pt --stdlib stdlib
+
+import std.wire
+
+error PaymentDeclined {
+    code: int
+}
+
+class PaymentService {
+    fn charge(self, amount: int) int {
+        if amount > 100 {
+            raise PaymentDeclined { code: 402 }
+        }
+        return amount * 2
+    }
+}
+
+app Shop[pay: domain PaymentService] {
+    fn main(self) {
+        let charged = at self.pay {
+            charge(21)
+        } catch err: PaymentDeclined {
+            0 - err.code
+        } catch err {
+            -1
+        }
+        print(f"charged: {charged}")
+
+        let declined = at self.pay {
+            charge(500)
+        } catch err: PaymentDeclined {
+            0 - err.code
+        } catch err {
+            -1
+        }
+        print(f"declined: {declined}")
+    }
+}

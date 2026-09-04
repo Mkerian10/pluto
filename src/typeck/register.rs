@@ -1015,6 +1015,9 @@ pub(crate) fn register_app_fields_and_methods(program: &Program, env: &mut TypeE
             if f.is_remote && let crate::parser::ast::TypeExpr::Named(ref n) = f.ty.node {
                 env.remote_types.insert(n.clone());
             }
+            if f.is_domain && let crate::parser::ast::TypeExpr::Named(ref n) = f.ty.node {
+                env.domain_types.insert(n.clone());
+            }
             fields.push((f.name.node.clone(), ty, f.is_injected));
         }
 
@@ -1129,6 +1132,9 @@ pub(crate) fn register_stage_fields_and_methods(program: &Program, env: &mut Typ
             let ty = resolve_type(&f.ty, env)?;
             if f.is_remote && let crate::parser::ast::TypeExpr::Named(ref n) = f.ty.node {
                 env.remote_types.insert(n.clone());
+            }
+            if f.is_domain && let crate::parser::ast::TypeExpr::Named(ref n) = f.ty.node {
+                env.domain_types.insert(n.clone());
             }
             fields.push((f.name.node.clone(), ty, f.is_injected));
         }

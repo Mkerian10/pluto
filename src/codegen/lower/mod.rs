@@ -649,7 +649,7 @@ impl<'a> LowerContext<'a> {
                 other => format!("{other}"),
             }
         }
-        let supported = Self::wire_supported;
+        let supported = crate::typeck::types::wire_supported;
         let mut sigs: Vec<String> = Vec::new();
         if let Some(info) = self.env.classes.get(class_name) {
             for mname in &info.methods {
@@ -691,7 +691,7 @@ impl<'a> LowerContext<'a> {
 
         // Collect dispatchable methods (owned, to release the env borrow before
         // we start mutating the builder): (method_name, mangled, arg_types, return).
-        let supported = Self::wire_supported;
+        let supported = crate::typeck::types::wire_supported;
         let mut methods: Vec<(String, String, Vec<PlutoType>, PlutoType, Vec<String>)> = Vec::new();
         if let Some(info) = self.env.classes.get(&class_name) {
             for mname in &info.methods {
@@ -849,7 +849,7 @@ impl<'a> LowerContext<'a> {
         for (i, (_, fty)) in fields.iter().enumerate() {
             let idx = self.builder.ins().iconst(types::I64, (i + 2) as i64);
             let fstr = self.call_runtime("__pluto_request_field", &[resp, idx]);
-            let val = if Self::wire_supported(fty) {
+            let val = if crate::typeck::types::wire_supported(fty) {
                 let decoded = self.decode_wire_value(fty, fstr)?;
                 // Error-object slots are I64-width; convert natural reprs
                 match fty {
@@ -876,24 +876,6 @@ impl<'a> LowerContext<'a> {
     /// precisely (its primitive fields read from the live error object). With
     /// zero or multiple possible types there's no runtime tag to disambiguate,
     /// so an `__unknown` marker is sent (the client raises a generic error).
-
-    /// Whether a type can cross the RPC wire. Shared by the serve dispatch
-    /// filter, the interface hash, and both marshal directions.
-    pub(crate) fn wire_supported(t: &PlutoType) -> bool {
-        match t {
-            PlutoType::Int
-            | PlutoType::Float
-            | PlutoType::Bool
-            | PlutoType::String
-            | PlutoType::Class(_)
-            | PlutoType::Enum(_) => true,
-            PlutoType::Nullable(inner) => Self::wire_supported(inner),
-            PlutoType::Array(elem) => Self::wire_supported(elem),
-            PlutoType::Set(elem) => Self::wire_supported(elem),
-            PlutoType::Map(k, v) => Self::wire_supported(k) && Self::wire_supported(v),
-            _ => false,
-        }
-    }
 
     /// Wrapper-name suffix for a wire-supported type — must mirror
     /// `marshal::wire_type_suffix` (which names the generated wrappers from
@@ -1091,7 +1073,7 @@ impl<'a> LowerContext<'a> {
         for (i, (_, fty)) in fields.iter().enumerate() {
             let offset = (i as i32) * POINTER_SIZE;
             let raw = self.builder.ins().load(types::I64, MemFlags::new(), err_ptr, Offset32::new(offset));
-            let fstr = if Self::wire_supported(fty) {
+            let fstr = if crate::typeck::types::wire_supported(fty) {
                 // Error-object slots are I64-width; restore natural reprs
                 // before encoding (Bool I8, Float F64)
                 let natural = match fty {
@@ -2485,10 +2467,258 @@ impl<'a> LowerContext<'a> {
         Ok(())
     }
 
+
+    /// Emit a boundary call over the socket transport: encode the (already
+    /// lowered) arguments, send `<method>#<interface-hash>` with the payload
+    /// via `request_fn` (`__pluto_remote_request` for `remote` deps,
+    /// `__pluto_domain_request` for domains bound by the deployment plan),
+    /// and decode the response — raising NetworkError on transport failure
+    /// and reconstructing the interface's typed errors from ERR responses.
+    /// Every exit jumps to `cont_bb`, which must carry one `ret_cl` param;
+    /// the caller switches to and seals `cont_bb`.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_transport_call(
+        &mut self,
+        cname: &str,
+        method_name: &str,
+        arg_tys: &[PlutoType],
+        arg_vals: &[Value],
+        ret_type: &PlutoType,
+        ret_cl: cranelift_codegen::ir::Type,
+        request_fn: &str,
+        cont_bb: cranelift_codegen::ir::Block,
+    ) -> Result<(), CompileError> {
+        // Build the payload: arg string-encodings joined with newlines.
+        let mut payload = self.make_string_literal("")?;
+        let nl = self.make_string_literal("\n")?;
+        for (i, (aty, av)) in arg_tys.iter().zip(arg_vals.iter()).enumerate() {
+            let s = self.encode_wire_value(aty, *av)?;
+            if i > 0 {
+                payload = self.call_runtime("__pluto_string_concat", &[payload, nl]);
+            }
+            payload = self.call_runtime("__pluto_string_concat", &[payload, s]);
+        }
+
+        // Use the unqualified class name as the service identifier so the
+        // env key (PLUTO_REMOTE_<SERVICE>) is independent of the importing
+        // module's prefix (e.g. `billing.BillingService` -> `BillingService`).
+        let service_name = cname.rsplit('.').next().unwrap_or(&cname);
+        let svc_s = self.make_string_literal(service_name)?;
+        // Send `method#interface_hash`: the server dispatches only if its
+        // served interface hashes to the same value, so a version-skewed
+        // client is rejected instead of running against a mismatched
+        // signature. The hash is compile-time constant on both sides.
+        let iface_hash = self.compute_interface_hash(cname);
+        let meth_s = self.make_string_literal(&format!("{method_name}#{iface_hash}"))?;
+        let resp = self.call_runtime(request_fn, &[svc_s, meth_s, payload]);
+
+        let fail_bb = self.builder.create_block();
+        let ok_bb = self.builder.create_block();
+
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let is_null = self.builder.ins().icmp(IntCC::Equal, resp, zero);
+        self.builder.ins().brif(is_null, fail_bb, &[], ok_bb, &[]);
+
+        // Failure: raise NetworkError, yield a dummy value.
+        self.builder.switch_to_block(fail_bb);
+        self.builder.seal_block(fail_bb);
+        let nfields = self.env.errors.get("NetworkError").map_or(1, |e| e.fields.len());
+        let size = (nfields as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
+        let size_val = self.builder.ins().iconst(types::I64, size);
+        let err_ptr = self.call_runtime("__pluto_alloc", &[size_val]);
+        let msg = format!("boundary call to {cname}.{method_name} failed");
+        let mstr = self.make_string_literal(&msg)?;
+        self.builder.ins().store(MemFlags::new(), mstr, err_ptr, Offset32::new(0));
+        self.call_runtime_void("__pluto_raise_error", &[err_ptr]);
+        let dflt = if ret_cl == types::F64 {
+            self.builder.ins().f64const(0.0)
+        } else {
+            self.builder.ins().iconst(ret_cl, 0)
+        };
+        self.builder.ins().jump(cont_bb, &[dflt]);
+
+        // Got a response. It is `OK\n<payload>` or `ERR\n<Type>\n<fields>`.
+        self.builder.switch_to_block(ok_bb);
+        self.builder.seal_block(ok_bb);
+        let status = self.call_runtime("__pluto_request_field", &[resp, zero]);
+        let ok_lit = self.make_string_literal("OK")?;
+        let is_ok = self.call_runtime("__pluto_string_eq", &[status, ok_lit]);
+        // `one` is defined here (dominating both successors) so both the
+        // OK and ERR blocks can index response field 1.
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let ok_payload_bb = self.builder.create_block();
+        let err_status_bb = self.builder.create_block();
+        self.builder.ins().brif(is_ok, ok_payload_bb, &[], err_status_bb, &[]);
+
+        // OK: parse field 1 (the payload) into the declared return type.
+        self.builder.switch_to_block(ok_payload_bb);
+        self.builder.seal_block(ok_payload_bb);
+        let payload = self.call_runtime("__pluto_request_field", &[resp, one]);
+        let parsed = if *ret_type == PlutoType::Void {
+            self.builder.ins().iconst(types::I64, 0)
+        } else {
+            self.decode_wire_value(ret_type, payload)?
+        };
+        self.builder.ins().jump(cont_bb, &[parsed]);
+
+        // ERR: the server propagated a typed error. Reconstruct whichever
+        // of the interface method's declared errors matches the type name
+        // (field 1), and raise it so the caller's `catch` sees the real
+        // error. An unrecognized/ambiguous type falls back to NetworkError.
+        self.builder.switch_to_block(err_status_bb);
+        self.builder.seal_block(err_status_bb);
+        let err_type = self.call_runtime("__pluto_request_field", &[resp, one]);
+        let iface_mangled = mangle_method(cname, method_name);
+        let mut error_types: Vec<String> = self.env.fn_errors.get(&iface_mangled)
+            .map(|s| s.iter().filter(|e| *e != "NetworkError").cloned().collect())
+            .unwrap_or_default();
+        error_types.sort();
+        for etype in &error_types {
+            let handle_bb = self.builder.create_block();
+            let next_bb = self.builder.create_block();
+            // The wire carries the unqualified error name.
+            let wire_name = etype.rsplit('.').next().unwrap_or(etype);
+            let lit = self.make_string_literal(wire_name)?;
+            let eq = self.call_runtime("__pluto_string_eq", &[err_type, lit]);
+            self.builder.ins().brif(eq, handle_bb, &[], next_bb, &[]);
+            self.builder.switch_to_block(handle_bb);
+            self.builder.seal_block(handle_bb);
+            self.emit_raise_from_response(etype, resp)?;
+            let d = if ret_cl == types::F64 {
+                self.builder.ins().f64const(0.0)
+            } else {
+                self.builder.ins().iconst(ret_cl, 0)
+            };
+            self.builder.ins().jump(cont_bb, &[d]);
+            self.builder.switch_to_block(next_bb);
+            self.builder.seal_block(next_bb);
+        }
+        // Fallback: unrecognized error type -> NetworkError.
+        let nf = self.env.errors.get("NetworkError").map_or(1, |e| e.fields.len());
+        let nsize = (nf as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
+        let nsize_val = self.builder.ins().iconst(types::I64, nsize);
+        let nptr = self.call_runtime("__pluto_alloc", &[nsize_val]);
+        let nmsg = self.make_string_literal("remote error")?;
+        self.builder.ins().store(MemFlags::new(), nmsg, nptr, Offset32::new(0));
+        self.call_runtime_void("__pluto_raise_error", &[nptr]);
+        let d2 = if ret_cl == types::F64 {
+            self.builder.ins().f64const(0.0)
+        } else {
+            self.builder.ins().iconst(ret_cl, 0)
+        };
+        self.builder.ins().jump(cont_bb, &[d2]);
+
+
+        Ok(())
+    }
+
     // ── lower_expr dispatch ──────────────────────────────────────────────
 
     fn lower_expr(&mut self, expr: &Expr) -> Result<Value, CompileError> {
         match expr {
+            Expr::At { domain, method, args } => {
+                // Placement expression: one boundary, two physical plans.
+                // The startup binding (PLUTO_DOMAIN_<SERVICE>) decides whether
+                // the call crosses the socket transport or runs against the
+                // DI-wired colocated instance — the compile-time contract
+                // (wire checks, fallibility) was identical for both.
+                let dom_type = infer_type_for_expr(&domain.node, self.env, &self.var_types);
+                let PlutoType::Class(cname) = dom_type else {
+                    return Err(CompileError::codegen(
+                        "internal: at-domain is not a class after typeck".to_string(),
+                    ));
+                };
+                let obj_ptr = self.lower_expr(&domain.node)?;
+                let mangled = mangle_method(&cname, &method.node);
+                let sig = self.env.functions.get(&mangled).cloned().ok_or_else(|| {
+                    CompileError::codegen(format!("internal: missing domain method '{mangled}'"))
+                })?;
+                let ret_type = sig.return_type.clone();
+
+                // Lower each argument once (dominates both plan branches),
+                // coerced to the interface's parameter types.
+                let mut arg_tys = Vec::new();
+                let mut arg_vals = Vec::new();
+                for (i, arg) in args.iter().enumerate() {
+                    let raw_ty = infer_type_for_expr(&arg.node, self.env, &self.var_types);
+                    let raw = self.lower_expr(&arg.node)?;
+                    let expected = sig.params[i + 1].clone();
+                    let coerced = self.coerce_to_expected_type(raw, &raw_ty, &expected)?;
+                    arg_tys.push(expected);
+                    arg_vals.push(coerced);
+                }
+
+                let ret_cl = if ret_type == PlutoType::Void {
+                    types::I64
+                } else {
+                    pluto_to_cranelift(&ret_type)
+                };
+                let cont_bb = self.builder.create_block();
+                self.builder.append_block_param(cont_bb, ret_cl);
+                let transport_bb = self.builder.create_block();
+                let local_bb = self.builder.create_block();
+
+                let service_name = cname.rsplit('.').next().unwrap_or(&cname);
+                let svc_s = self.make_string_literal(service_name)?;
+                let bound = self.call_runtime("__pluto_domain_bound", &[svc_s]);
+                self.builder.ins().brif(bound, transport_bb, &[], local_bb, &[]);
+
+                // Plan A: the domain is bound to an endpoint — socket transport.
+                self.builder.switch_to_block(transport_bb);
+                self.builder.seal_block(transport_bb);
+                self.emit_transport_call(
+                    &cname, &method.node, &arg_tys, &arg_vals,
+                    &ret_type, ret_cl, "__pluto_domain_request", cont_bb,
+                )?;
+
+                // Plan B: colocated — direct call on the local instance. The
+                // logical boundary still holds: same wire-checked surface,
+                // same fallibility contract enforced at compile time.
+                self.builder.switch_to_block(local_bb);
+                self.builder.seal_block(local_bb);
+                let func_id = self.func_ids.get(&mangled).ok_or_else(|| {
+                    CompileError::codegen(format!("undefined domain method '{}'", method.node))
+                })?;
+                let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+                // Synchronized-singleton locking, as for any local method call
+                let needs_sync = self.rwlock_globals.contains_key(&cname);
+                if needs_sync {
+                    let data_id = self.rwlock_globals[&cname];
+                    let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+                    let addr = self.builder.ins().global_value(types::I64, gv);
+                    let lock_ptr = self.builder.ins().load(types::I64, MemFlags::new(), addr, Offset32::new(0));
+                    if self.env.mut_self_methods.contains(&mangled) {
+                        self.call_runtime_void("__pluto_rwlock_wrlock", &[lock_ptr]);
+                    } else {
+                        self.call_runtime_void("__pluto_rwlock_rdlock", &[lock_ptr]);
+                    }
+                }
+                let mut call_args = vec![obj_ptr];
+                call_args.extend_from_slice(&arg_vals);
+                let call = self.builder.ins().call(func_ref, &call_args);
+                let results = self.builder.inst_results(call).to_vec();
+                if needs_sync {
+                    let data_id = self.rwlock_globals[&cname];
+                    let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+                    let addr = self.builder.ins().global_value(types::I64, gv);
+                    let lock_ptr = self.builder.ins().load(types::I64, MemFlags::new(), addr, Offset32::new(0));
+                    self.call_runtime_void("__pluto_rwlock_unlock", &[lock_ptr]);
+                }
+                let local_result = if results.is_empty() || ret_type == PlutoType::Void {
+                    if ret_cl == types::F64 {
+                        self.builder.ins().f64const(0.0)
+                    } else {
+                        self.builder.ins().iconst(ret_cl, 0)
+                    }
+                } else {
+                    results[0]
+                };
+                self.builder.ins().jump(cont_bb, &[local_result]);
+
+                self.builder.switch_to_block(cont_bb);
+                self.builder.seal_block(cont_bb);
+                Ok(self.builder.block_params(cont_bb)[0])
+            }
             Expr::IntLit(n) => Ok(self.builder.ins().iconst(types::I64, *n)),
             Expr::FloatLit(n) => Ok(self.builder.ins().f64const(*n)),
             Expr::BoolLit(b) => Ok(self.builder.ins().iconst(types::I8, if *b { 1 } else { 0 })),
@@ -3794,13 +4024,12 @@ impl<'a> LowerContext<'a> {
                     .map(|s| s.return_type.clone())
                     .unwrap_or(PlutoType::Void);
 
-                // Build the payload: arg string-encodings joined with newlines.
-                let mut payload = self.make_string_literal("")?;
-                let nl = self.make_string_literal("\n")?;
-                for (i, arg) in args.iter().enumerate() {
+                let mut arg_tys = Vec::new();
+                let mut arg_vals = Vec::new();
+                for arg in args {
                     let aty = infer_type_for_expr(&arg.node, self.env, &self.var_types);
                     let av = self.lower_expr(&arg.node)?;
-                    if !Self::wire_supported(&aty) {
+                    if !crate::typeck::types::wire_supported(&aty) {
                         return Err(CompileError::codegen(format!(
                             "remote call '{}.{}': unsupported argument type {aty} \
                              (supported: int, float, bool, string, nullables, \
@@ -3808,27 +4037,11 @@ impl<'a> LowerContext<'a> {
                             cname, method.node
                         )));
                     }
-                    let s = self.encode_wire_value(&aty, av)?;
-                    if i > 0 {
-                        payload = self.call_runtime("__pluto_string_concat", &[payload, nl]);
-                    }
-                    payload = self.call_runtime("__pluto_string_concat", &[payload, s]);
+                    arg_tys.push(aty);
+                    arg_vals.push(av);
                 }
 
-                // Use the unqualified class name as the service identifier so the
-                // env key (PLUTO_REMOTE_<SERVICE>) is independent of the importing
-                // module's prefix (e.g. `billing.BillingService` -> `BillingService`).
-                let service_name = cname.rsplit('.').next().unwrap_or(&cname);
-                let svc_s = self.make_string_literal(service_name)?;
-                // Send `method#interface_hash`: the server dispatches only if its
-                // served interface hashes to the same value, so a version-skewed
-                // client is rejected instead of running against a mismatched
-                // signature. The hash is compile-time constant on both sides.
-                let iface_hash = self.compute_interface_hash(&cname);
-                let meth_s = self.make_string_literal(&format!("{}#{iface_hash}", method.node))?;
-                let resp = self.call_runtime("__pluto_remote_request", &[svc_s, meth_s, payload]);
-
-                if ret_type != PlutoType::Void && !Self::wire_supported(&ret_type) {
+                if ret_type != PlutoType::Void && !crate::typeck::types::wire_supported(&ret_type) {
                     return Err(CompileError::codegen(format!(
                         "remote call '{}.{}': unsupported return type {ret_type} \
                          (supported: int, float, bool, string, void, nullables, \
@@ -3841,104 +4054,12 @@ impl<'a> LowerContext<'a> {
                 } else {
                     pluto_to_cranelift(&ret_type)
                 };
-                let fail_bb = self.builder.create_block();
-                let ok_bb = self.builder.create_block();
                 let cont_bb = self.builder.create_block();
                 self.builder.append_block_param(cont_bb, ret_cl);
-
-                let zero = self.builder.ins().iconst(types::I64, 0);
-                let is_null = self.builder.ins().icmp(IntCC::Equal, resp, zero);
-                self.builder.ins().brif(is_null, fail_bb, &[], ok_bb, &[]);
-
-                // Failure: raise NetworkError, yield a dummy value.
-                self.builder.switch_to_block(fail_bb);
-                self.builder.seal_block(fail_bb);
-                let nfields = self.env.errors.get("NetworkError").map_or(1, |e| e.fields.len());
-                let size = (nfields as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
-                let size_val = self.builder.ins().iconst(types::I64, size);
-                let err_ptr = self.call_runtime("__pluto_alloc", &[size_val]);
-                let msg = format!("remote call to {}.{} failed", cname, method.node);
-                let mstr = self.make_string_literal(&msg)?;
-                self.builder.ins().store(MemFlags::new(), mstr, err_ptr, Offset32::new(0));
-                self.call_runtime_void("__pluto_raise_error", &[err_ptr]);
-                let dflt = if ret_cl == types::F64 {
-                    self.builder.ins().f64const(0.0)
-                } else {
-                    self.builder.ins().iconst(ret_cl, 0)
-                };
-                self.builder.ins().jump(cont_bb, &[dflt]);
-
-                // Got a response. It is `OK\n<payload>` or `ERR\n<Type>\n<fields>`.
-                self.builder.switch_to_block(ok_bb);
-                self.builder.seal_block(ok_bb);
-                let status = self.call_runtime("__pluto_request_field", &[resp, zero]);
-                let ok_lit = self.make_string_literal("OK")?;
-                let is_ok = self.call_runtime("__pluto_string_eq", &[status, ok_lit]);
-                // `one` is defined here (dominating both successors) so both the
-                // OK and ERR blocks can index response field 1.
-                let one = self.builder.ins().iconst(types::I64, 1);
-                let ok_payload_bb = self.builder.create_block();
-                let err_status_bb = self.builder.create_block();
-                self.builder.ins().brif(is_ok, ok_payload_bb, &[], err_status_bb, &[]);
-
-                // OK: parse field 1 (the payload) into the declared return type.
-                self.builder.switch_to_block(ok_payload_bb);
-                self.builder.seal_block(ok_payload_bb);
-                let payload = self.call_runtime("__pluto_request_field", &[resp, one]);
-                let parsed = if ret_type == PlutoType::Void {
-                    self.builder.ins().iconst(types::I64, 0)
-                } else {
-                    self.decode_wire_value(&ret_type, payload)?
-                };
-                self.builder.ins().jump(cont_bb, &[parsed]);
-
-                // ERR: the server propagated a typed error. Reconstruct whichever
-                // of the interface method's declared errors matches the type name
-                // (field 1), and raise it so the caller's `catch` sees the real
-                // error. An unrecognized/ambiguous type falls back to NetworkError.
-                self.builder.switch_to_block(err_status_bb);
-                self.builder.seal_block(err_status_bb);
-                let err_type = self.call_runtime("__pluto_request_field", &[resp, one]);
-                let iface_mangled = mangle_method(&cname, &method.node);
-                let mut error_types: Vec<String> = self.env.fn_errors.get(&iface_mangled)
-                    .map(|s| s.iter().filter(|e| *e != "NetworkError").cloned().collect())
-                    .unwrap_or_default();
-                error_types.sort();
-                for etype in &error_types {
-                    let handle_bb = self.builder.create_block();
-                    let next_bb = self.builder.create_block();
-                    // The wire carries the unqualified error name.
-                    let wire_name = etype.rsplit('.').next().unwrap_or(etype);
-                    let lit = self.make_string_literal(wire_name)?;
-                    let eq = self.call_runtime("__pluto_string_eq", &[err_type, lit]);
-                    self.builder.ins().brif(eq, handle_bb, &[], next_bb, &[]);
-                    self.builder.switch_to_block(handle_bb);
-                    self.builder.seal_block(handle_bb);
-                    self.emit_raise_from_response(etype, resp)?;
-                    let d = if ret_cl == types::F64 {
-                        self.builder.ins().f64const(0.0)
-                    } else {
-                        self.builder.ins().iconst(ret_cl, 0)
-                    };
-                    self.builder.ins().jump(cont_bb, &[d]);
-                    self.builder.switch_to_block(next_bb);
-                    self.builder.seal_block(next_bb);
-                }
-                // Fallback: unrecognized error type -> NetworkError.
-                let nf = self.env.errors.get("NetworkError").map_or(1, |e| e.fields.len());
-                let nsize = (nf as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
-                let nsize_val = self.builder.ins().iconst(types::I64, nsize);
-                let nptr = self.call_runtime("__pluto_alloc", &[nsize_val]);
-                let nmsg = self.make_string_literal("remote error")?;
-                self.builder.ins().store(MemFlags::new(), nmsg, nptr, Offset32::new(0));
-                self.call_runtime_void("__pluto_raise_error", &[nptr]);
-                let d2 = if ret_cl == types::F64 {
-                    self.builder.ins().f64const(0.0)
-                } else {
-                    self.builder.ins().iconst(ret_cl, 0)
-                };
-                self.builder.ins().jump(cont_bb, &[d2]);
-
+                self.emit_transport_call(
+                    &cname, &method.node, &arg_tys, &arg_vals,
+                    &ret_type, ret_cl, "__pluto_remote_request", cont_bb,
+                )?;
                 self.builder.switch_to_block(cont_bb);
                 self.builder.seal_block(cont_bb);
                 return Ok(self.builder.block_params(cont_bb)[0]);
@@ -5920,6 +6041,17 @@ fn key_type_tag(ty: &PlutoType) -> i64 {
 /// Quick type inference at codegen time (type checker has already validated).
 fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, PlutoType>) -> PlutoType {
     match expr {
+        Expr::At { domain, method, .. } => {
+            let dom = infer_type_for_expr(&domain.node, env, var_types);
+            if let PlutoType::Class(cname) = dom {
+                env.functions
+                    .get(&mangle_method(&cname, &method.node))
+                    .map(|s| s.return_type.clone())
+                    .unwrap_or(PlutoType::Void)
+            } else {
+                PlutoType::Void
+            }
+        }
         Expr::IntLit(_) => PlutoType::Int,
         Expr::FloatLit(_) => PlutoType::Float,
         Expr::BoolLit(_) => PlutoType::Bool,

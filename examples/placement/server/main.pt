@@ -1,0 +1,25 @@
+// The payments domain, deployed as its own process (Plan B). It serves the
+// same PaymentService interface the app's `at` blocks place computation in.
+//
+// Run it (prints the bound port; use it as PLUTO_DOMAIN_PAYMENTSERVICE):
+//   cargo run -- run examples/placement/server/main.pt --stdlib stdlib
+
+import std.wire
+
+error PaymentDeclined {
+    code: int
+}
+
+class PaymentService {
+    fn charge(self, amount: int) int {
+        if amount > 100 {
+            raise PaymentDeclined { code: 402 }
+        }
+        return amount * 2
+    }
+}
+
+fn main() {
+    let svc = PaymentService {}
+    serve svc on 0
+}

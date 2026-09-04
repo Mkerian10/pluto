@@ -311,6 +311,22 @@ PLUTO_REMOTE_BILLINGSERVICE=127.0.0.1:9000 \
   cargo run -- run examples/rpc/client/main.pt --stdlib stdlib
 ```
 
+## placement
+
+The distributed model's `at` expression (docs/design/distributed-model.md): `at self.pay { charge(21) }` places a computation in the `pay` logical execution domain, and the deployment binding — not the code — decides the physical plan. Unbound, the same binary calls the DI-wired colocated instance directly; with `PLUTO_DOMAIN_PAYMENTSERVICE=host:port` set, the identical binary crosses a socket to the served domain. The boundary contract (wire-shaped values, mandatory `catch` — a domain can be unreachable in *some* deployment even if not this one, typed errors crossing intact) is compile-time checked identically for both plans.
+
+```bash
+# Plan A — colocated: one process, direct call
+cargo run -- run examples/placement/app/main.pt --stdlib stdlib
+
+# Plan B — distributed: same app, domain bound to a separate server
+# Terminal 1 (prints its port):
+cargo run -- run examples/placement/server/main.pt --stdlib stdlib
+# Terminal 2:
+PLUTO_DOMAIN_PAYMENTSERVICE=127.0.0.1:<port> \
+  cargo run -- run examples/placement/app/main.pt --stdlib stdlib
+```
+
 ## distributed
 
 A whole `system` of two services, checked end to end at compile time. `billing` serves a `BillingService` that takes a `ChargeRequest` and returns a `Receipt` (structs that marshal across the wire); `orders` calls it as a `remote` dependency and handles failures with multi-catch — a typed `PaymentError` (whose `reason` field arrives from the server) and a wildcard for transport errors.

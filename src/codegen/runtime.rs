@@ -63,6 +63,8 @@ impl RuntimeRegistry {
 
         // Remote calls (Phase 2 transport)
         reg.declare(module, "__pluto_remote_request", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_domain_request", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_domain_bound", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_parse_long", &[types::I64], &[types::I64])?;
         // Serve side (generated RPC server)
         reg.declare(module, "__pluto_serve_listen", &[types::I64], &[types::I64])?;

@@ -871,8 +871,12 @@ impl<'a> Parser<'a> {
                 // Contextual `remote` keyword: `[billing: remote BillingStage]`.
                 // Marks the dep as a cross-service boundary reference.
                 let is_remote = p.eat_contextual_keyword("remote");
+                // Contextual `domain` keyword: `[pay: domain PaymentService]`.
+                // Marks the dep as a logical execution domain — computation is
+                // placed in it with `at` (docs/design/rfc-at-placement.md).
+                let is_domain = !is_remote && p.eat_contextual_keyword("domain");
                 let ty = p.parse_type()?;
-                Ok(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false, is_remote })
+                Ok(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false, is_remote, is_domain })
             })?;
             self.expect(&Token::RBracket)?;
             Ok(deps)
@@ -1128,7 +1132,7 @@ impl<'a> Parser<'a> {
                     let fname = p.expect_ident()?;
                     p.expect(&Token::Colon)?;
                     let fty = p.parse_type()?;
-                    Ok(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false })
+                    Ok(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false })
                 })?;
                 self.expect(&Token::RBrace)?;
                 fields
@@ -1166,7 +1170,7 @@ impl<'a> Parser<'a> {
             let fname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type()?;
-            fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false });
+            fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false });
             self.skip_newlines();
         }
 
@@ -1360,7 +1364,7 @@ impl<'a> Parser<'a> {
                 let fname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
-                fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false });
+                fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false });
                 // Allow comma-separated fields: x: int, y: int
                 if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Comma) {
                     self.advance(); // consume comma
@@ -3198,6 +3202,64 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
+    /// True when the cursor sits on contextual `at` starting a placement
+    /// expression: `at <ident-or-self>` (the following token begins a domain
+    /// expression, not an operator/call on an identifier named `at`).
+    fn is_at_placement_ahead(&self) -> bool {
+        let Some(tok) = self.tokens.get(self.pos) else { return false };
+        if !matches!(tok.node, Token::Ident) || &self.source[tok.span.start..tok.span.end] != "at" {
+            return false;
+        }
+        matches!(
+            self.tokens.get(self.pos + 1).map(|t| &t.node),
+            Some(Token::Ident) | Some(Token::SelfVal)
+        )
+    }
+
+    /// `at <domain-expr> { <method>(<args>) }` — slice 1 of the placement
+    /// model (docs/design/rfc-at-placement.md): the body is exactly one call
+    /// to a method of the domain's interface.
+    fn parse_at_expr(&mut self) -> Result<Spanned<Expr>, CompileError> {
+        let at_span = self.advance().expect("checked by is_at_placement_ahead").span;
+        let start = at_span.start;
+        let old_restrict = self.restrict_struct_lit;
+        self.restrict_struct_lit = true;
+        let domain = self.parse_expr(0)?;
+        self.restrict_struct_lit = old_restrict;
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let method = self.expect_ident()?;
+        self.expect(&Token::LParen)?;
+        let mut args = Vec::new();
+        while self.peek().is_some() && !matches!(self.peek().expect("checked is_some").node, Token::RParen) {
+            if !args.is_empty() {
+                self.expect(&Token::Comma)?;
+            }
+            args.push(self.parse_expr(0)?);
+        }
+        self.expect(&Token::RParen)?;
+        self.skip_newlines();
+        let close_span = if self.peek().is_some() && matches!(self.peek().expect("checked is_some").node, Token::RBrace) {
+            self.advance().expect("checked above").span
+        } else {
+            return Err(CompileError::syntax(
+                "an `at` block holds exactly one call to a domain method \
+                 (general computation shipping is not yet supported — see \
+                 docs/design/rfc-at-placement.md)"
+                    .to_string(),
+                self.peek().map(|t| t.span).unwrap_or(at_span),
+            ));
+        };
+        Ok(Spanned::new(
+            Expr::At {
+                domain: Box::new(domain),
+                method,
+                args,
+            },
+            Span::new(start, close_span.end),
+        ))
+    }
+
     fn parse_prefix(&mut self) -> Result<Spanned<Expr>, CompileError> {
         self.skip_newlines();
         let tok = self.peek().ok_or_else(|| {
@@ -3244,6 +3306,12 @@ impl<'a> Parser<'a> {
                 Ok(Spanned::new(Expr::StringLit(s), span))
             }
             Token::Ident => {
+                // Contextual `at`: placement expression `at <domain> { m(args) }`.
+                // Only when followed by an identifier/self (a domain expr) —
+                // `at(...)`, `at + 1` etc. stay ordinary identifier uses.
+                if self.is_at_placement_ahead() {
+                    return self.parse_at_expr();
+                }
                 let ident = self.expect_ident()?;
                 self.parse_expr_after_ident(ident)
             }

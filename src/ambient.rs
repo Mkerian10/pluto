@@ -72,7 +72,7 @@ pub fn desugar_ambient(program: &mut Program) -> Result<(), CompileError> {
                 ty: Spanned::new(TypeExpr::Named(type_name.node.clone()), type_name.span),
                 is_injected: true,
                 is_ambient: true,
-                is_remote: false,
+                is_remote: false, is_domain: false,
             });
         }
 
@@ -132,7 +132,7 @@ pub fn desugar_ambient(program: &mut Program) -> Result<(), CompileError> {
                     ty: Spanned::new(TypeExpr::Named(type_name.node.clone()), type_name.span),
                     is_injected: true,
                     is_ambient: true,
-                    is_remote: false,
+                    is_remote: false, is_domain: false,
                 });
             }
 
@@ -187,7 +187,7 @@ pub fn desugar_ambient(program: &mut Program) -> Result<(), CompileError> {
                     ty: Spanned::new(TypeExpr::Named(type_name.node.clone()), type_name.span),
                     is_injected: true,
                     is_ambient: true,
-                    is_remote: false,
+                    is_remote: false, is_domain: false,
                 });
             }
 

@@ -16,6 +16,95 @@ pub(crate) fn infer_expr(
     expected: Option<&PlutoType>,
 ) -> Result<PlutoType, CompileError> {
     match expr {
+        Expr::At { domain, method, args } => {
+            // Placement expression: evaluate one interface call in a logical
+            // execution domain (docs/design/rfc-at-placement.md). The boundary
+            // contract below is plan-independent: wire-shape checks and
+            // unconditional fallibility apply whether the deployment binding
+            // colocates the domain or puts it across a socket.
+            let dom_type = infer_expr(&domain.node, domain.span, env, None)?;
+            let cname = match &dom_type {
+                PlutoType::Class(n) if env.domain_types.contains(n) => n.clone(),
+                PlutoType::Class(n) => {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "'at' requires a domain: '{n}' is not declared as one \
+                             (mark the dependency with `domain`, e.g. `[pay: domain {n}]`)"
+                        ),
+                        domain.span,
+                    ));
+                }
+                other => {
+                    return Err(CompileError::type_err(
+                        format!("'at' requires a domain dependency, found {other}"),
+                        domain.span,
+                    ));
+                }
+            };
+            let mangled = mangle_method(&cname, &method.node);
+            let sig = env.functions.get(&mangled).cloned().ok_or_else(|| {
+                CompileError::type_err(
+                    format!("domain interface '{cname}' has no method '{}'", method.node),
+                    method.span,
+                )
+            })?;
+            if args.len() != sig.params.len() - 1 {
+                return Err(CompileError::type_err(
+                    format!(
+                        "domain method '{}' expects {} argument(s), found {}",
+                        method.node,
+                        sig.params.len() - 1,
+                        args.len()
+                    ),
+                    method.span,
+                ));
+            }
+            for (i, arg) in args.iter().enumerate() {
+                let arg_ty = infer_expr(&arg.node, arg.span, env, Some(&sig.params[i + 1]))?;
+                if !types_compatible(&arg_ty, &sig.params[i + 1], env) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "argument {} of '{}': expected {}, found {arg_ty}",
+                            i + 1,
+                            method.node,
+                            sig.params[i + 1]
+                        ),
+                        arg.span,
+                    ));
+                }
+                if !super::types::wire_supported(&arg_ty) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "value of type {arg_ty} cannot enter domain '{cname}': \
+                             not transferable across a placement boundary \
+                             (transferable: int, float, bool, string, nullables, \
+                             and class/enum/array/map/set via std.wire)"
+                        ),
+                        arg.span,
+                    ));
+                }
+            }
+            if sig.return_type != PlutoType::Void && !super::types::wire_supported(&sig.return_type) {
+                return Err(CompileError::type_err(
+                    format!(
+                        "value of type {} cannot leave domain '{cname}': \
+                         not transferable across a placement boundary",
+                        sig.return_type
+                    ),
+                    method.span,
+                ));
+            }
+            // The boundary is unconditionally fallible — record the same
+            // resolution as a remote call so error inference adds the
+            // stage-level error (NetworkError) in every physical plan.
+            if let Some(ref current) = env.current_fn {
+                env.method_resolutions.insert(
+                    (current.clone(), method.span.start),
+                    super::env::MethodResolution::RemoteClass { mangled_name: mangled.clone() },
+                );
+            }
+            Ok(sig.return_type.clone())
+        }
         Expr::IntLit(_) => Ok(PlutoType::Int),
         Expr::FloatLit(_) => Ok(PlutoType::Float),
         Expr::BoolLit(_) => Ok(PlutoType::Bool),
@@ -2801,6 +2890,16 @@ fn infer_method_call(
     if let Some(ref current) = env.current_fn {
         // A call whose receiver type is a stage referenced by a `remote` dep
         // crosses a service boundary — record it as a remote call.
+        if env.domain_types.contains(&class_name) && !env.remote_types.contains(&class_name) {
+            return Err(CompileError::type_err(
+                format!(
+                    "computation in domain '{class_name}' must be placed with 'at' \
+                     (e.g. `at self.dep {{ {}(...) }}`)",
+                    method.node
+                ),
+                method.span,
+            ));
+        }
         let resolution = if env.remote_types.contains(&class_name) {
             super::env::MethodResolution::RemoteClass { mangled_name: mangled.clone() }
         } else {

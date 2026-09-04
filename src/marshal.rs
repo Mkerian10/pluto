@@ -231,7 +231,7 @@ fn collect_rpc_interface_classes(program: &Program) -> HashSet<String> {
 
     let mut add_remote = |fields: &[crate::parser::ast::Field]| {
         for fld in fields {
-            if fld.is_remote {
+            if fld.is_remote || fld.is_domain {
                 if let TypeExpr::Named(n) = &fld.ty.node {
                     classes.insert(n.clone());
                 }
@@ -367,6 +367,7 @@ fn instantiate_generic_class(template: &ClassDecl, mangled_name: &str, type_arg_
             is_injected: field.is_injected,
             is_ambient: field.is_ambient,
             is_remote: field.is_remote,
+            is_domain: field.is_domain,
         });
     }
 
@@ -411,6 +412,7 @@ fn instantiate_generic_enum(template: &crate::parser::ast::EnumDecl, mangled_nam
                 is_injected: field.is_injected,
                 is_ambient: field.is_ambient,
                 is_remote: field.is_remote,
+                is_domain: field.is_domain,
             });
         }
         instantiated_variants.push(EnumVariant {
@@ -2954,7 +2956,7 @@ mod tests {
                 },
                 is_injected: false,
                 is_ambient: false,
-                is_remote: false,
+                is_remote: false, is_domain: false,
             }],
             methods: vec![],
             invariants: vec![],
@@ -3006,7 +3008,7 @@ mod tests {
                 },
                 is_injected: false,
                 is_ambient: false,
-                is_remote: false,
+                is_remote: false, is_domain: false,
             }],
             methods: vec![],
             invariants: vec![],
@@ -3063,7 +3065,7 @@ mod tests {
                         },
                         is_injected: false,
                         is_ambient: false,
-                        is_remote: false,
+                        is_remote: false, is_domain: false,
                     }],
                 },
                 EnumVariant {
@@ -3128,7 +3130,7 @@ mod tests {
                     },
                     is_injected: false,
                     is_ambient: false,
-                    is_remote: false,
+                    is_remote: false, is_domain: false,
                 }],
             }],
             is_pub: false,
