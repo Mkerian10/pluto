@@ -572,6 +572,7 @@ pub(crate) fn register_class_names(program: &Program, env: &mut TypeEnv) -> Resu
                 impl_traits: c.impl_traits.iter().filter(|t| t.type_args.is_empty()).map(|t| t.name.node.clone()).collect(),
                 generic_impl_traits: c.impl_traits.iter().filter(|t| !t.type_args.is_empty()).map(|t| (t.name.node.clone(), t.type_args.clone())).collect(),
                 mut_self_methods: HashSet::new(),
+                method_state_constraints: HashMap::new(),
                 lifecycle: c.lifecycle,
             });
             continue;
@@ -704,6 +705,38 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                     generic_mut_self.insert(m.node.name.node.clone());
                 }
             }
+            // Typestate constraints: `where S == Owned` clauses on methods.
+            // The LHS must name one of the class's type params; the RHS must
+            // be a registered class or enum (the state marker).
+            let mut method_state_constraints: HashMap<String, Vec<(String, String)>> = HashMap::new();
+            for m in &c.methods {
+                for clause in &m.node.contracts {
+                    if clause.node.kind != crate::parser::ast::ContractKind::StateWhere {
+                        continue;
+                    }
+                    let crate::parser::ast::Expr::BinOp { lhs, rhs, .. } = &clause.node.expr.node else {
+                        continue;
+                    };
+                    let (crate::parser::ast::Expr::Ident(param), crate::parser::ast::Expr::Ident(state)) =
+                        (&lhs.node, &rhs.node)
+                    else {
+                        continue;
+                    };
+                    if !c.type_params.iter().any(|tp| tp.node == *param) {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "'where {param} == {state}' on method '{}': '{param}' is not a type parameter of class '{}'",
+                                m.node.name.node, c.name.node
+                            ),
+                            clause.span,
+                        ));
+                    }
+                    method_state_constraints
+                        .entry(m.node.name.node.clone())
+                        .or_default()
+                        .push((param.clone(), state.clone()));
+                }
+            }
             env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
                 type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
                 type_param_bounds: bounds,
@@ -713,6 +746,7 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                 impl_traits: c.impl_traits.iter().filter(|t| t.type_args.is_empty()).map(|t| t.name.node.clone()).collect(),
                 generic_impl_traits: c.impl_traits.iter().filter(|t| !t.type_args.is_empty()).map(|t| (t.name.node.clone(), t.type_args.clone())).collect(),
                 mut_self_methods: generic_mut_self,
+                method_state_constraints,
                 lifecycle: c.lifecycle,
             });
             continue;

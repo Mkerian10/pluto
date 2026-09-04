@@ -504,6 +504,9 @@ pub struct ContractClause {
 pub enum ContractKind {
     Requires,
     Invariant,
+    /// `where S == Owned` on a generic-class method: a compile-time typestate
+    /// constraint (expr is `Ident == Ident`), never a runtime check.
+    StateWhere,
 }
 
 /// A trait named in a class's `impl` list; generic traits carry type

@@ -157,7 +157,7 @@ fn generic_trait_default_param() {
 fn generic_trait_where_clause() {
     compile_should_fail_with(
         "trait Printable{\n    fn show(self) string\n}\n\ntrait T<U> where U: Printable {\n    fn foo(self) U\n}\n\nfn main(){}",
-        "expected {, found identifier",
+        "expected {, found where",
     );
 }
 #[test]

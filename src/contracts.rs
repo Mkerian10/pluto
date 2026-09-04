@@ -5,7 +5,29 @@ use crate::span::{Span, Spanned};
 /// Validate that every contract in a list is within the decidable fragment.
 fn validate_contract_list(contracts: &[Spanned<ContractClause>]) -> Result<(), CompileError> {
     for contract in contracts {
+        // StateWhere is a compile-time typestate constraint, not a value
+        // predicate — typeck validates it against the class's type params.
+        if contract.node.kind == ContractKind::StateWhere {
+            continue;
+        }
         validate_decidable_fragment(&contract.node.expr.node, contract.node.expr.span, contract.node.kind)?;
+    }
+    Ok(())
+}
+
+/// Reject `where` typestate clauses anywhere except generic-class methods.
+fn reject_state_where(contracts: &[Spanned<ContractClause>], context: &str) -> Result<(), CompileError> {
+    for c in contracts {
+        if c.node.kind == ContractKind::StateWhere {
+            return Err(CompileError::type_err(
+                format!(
+                    "'where' typestate constraints are only allowed on methods of \
+                     generic classes (they constrain the class's type parameters); \
+                     not on {context}"
+                ),
+                c.span,
+            ));
+        }
     }
     Ok(())
 }
@@ -17,24 +39,31 @@ pub fn validate_contracts(program: &Program) -> Result<(), CompileError> {
         validate_contract_list(&class.node.invariants)?;
         for method in &class.node.methods {
             validate_contract_list(&method.node.contracts)?;
+            if class.node.type_params.is_empty() {
+                reject_state_where(&method.node.contracts, "methods of non-generic classes")?;
+            }
         }
     }
     for func in &program.functions {
         validate_contract_list(&func.node.contracts)?;
+        reject_state_where(&func.node.contracts, "free functions")?;
     }
     if let Some(app) = &program.app {
         for method in &app.node.methods {
             validate_contract_list(&method.node.contracts)?;
+            reject_state_where(&method.node.contracts, "app methods")?;
         }
     }
     for stage in &program.stages {
         for method in &stage.node.methods {
             validate_contract_list(&method.node.contracts)?;
+            reject_state_where(&method.node.contracts, "stage methods")?;
         }
     }
     for tr in &program.traits {
         for method in &tr.node.methods {
             validate_contract_list(&method.contracts)?;
+            reject_state_where(&method.contracts, "trait methods")?;
         }
     }
     Ok(())

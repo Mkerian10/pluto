@@ -3033,6 +3033,21 @@ fn infer_method_call(
                     method.node,
                     class_name.trim_start_matches('%')
                 )
+            } else if let Some((base, cs)) = class_name.split("$$").next().and_then(|base| {
+                env.generic_classes
+                    .get(base)
+                    .and_then(|g| g.method_state_constraints.get(&method.node))
+                    .map(|cs| (base, cs.clone()))
+            }) {
+                // The template HAS this method, gated behind a typestate
+                // constraint this instantiation doesn't satisfy.
+                let reqs: Vec<String> =
+                    cs.iter().map(|(p, st)| format!("{p} == {st}")).collect();
+                format!(
+                    "method '{}' does not exist on '{class_name}': on '{base}' it exists only where {}",
+                    method.node,
+                    reqs.join(" and ")
+                )
             } else {
                 format!("class '{class_name}' has no method '{}'", method.node)
             },

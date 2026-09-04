@@ -548,9 +548,29 @@ pub(crate) fn ensure_generic_class_instantiated(
     // early-return guard above must see the instance as already present or
     // the recursion never terminates. The re-entrant call only needs the
     // class *name*; the resolved fields are filled in right after.
+    // Typestate gate (docs/design/rfc-typestates.md): a method with
+    // `where S == Owned` constraints exists only on instantiations whose
+    // binding satisfies every equality — on others it simply isn't there.
+    let method_included = |method_name: &str| -> bool {
+        match gen_info.method_state_constraints.get(method_name) {
+            None => true,
+            Some(cs) => cs.iter().all(|(param, state)| {
+                matches!(
+                    bindings.get(param),
+                    Some(PlutoType::Class(n)) | Some(PlutoType::Enum(n)) if n == state
+                )
+            }),
+        }
+    };
+    let included_methods: Vec<String> = gen_info
+        .methods
+        .iter()
+        .filter(|m| method_included(m))
+        .cloned()
+        .collect();
     env.classes.insert(mangled.clone(), ClassInfo {
         fields: Vec::new(),
-        methods: gen_info.methods.clone(),
+        methods: included_methods,
         impl_traits: gen_info.impl_traits.clone(),
         lifecycle: gen_info.lifecycle,
     });
@@ -588,6 +608,9 @@ pub(crate) fn ensure_generic_class_instantiated(
     // Also register concrete method signatures
     // Need to substitute self type as well (it references the base class name)
     for (method_name, sig) in &gen_info.method_sigs {
+        if !method_included(method_name) {
+            continue;
+        }
         let mut concrete_params: Vec<PlutoType> = Vec::new();
         for p in &sig.params {
             if *p == PlutoType::Class(base_name.to_string()) {

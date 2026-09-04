@@ -79,7 +79,7 @@ fn main(){}"#, "cannot call mutating method 'foo' on immutable variable 't'; dec
 
 // Dispatch in generic function
 #[test]
-fn generic_fn_dispatch() { compile_should_fail_with(r#"trait T{fn foo(self)} fn use_t<U>(t:U) where U:T{t.foo()} class C{} fn main(){use_t(C{})}"#, "expected {, found identifier"); }
+fn generic_fn_dispatch() { compile_should_fail_with(r#"trait T{fn foo(self)} fn use_t<U>(t:U) where U:T{t.foo()} class C{} fn main(){use_t(C{})}"#, "expected ==, found :"); }
 
 // Dispatch with contract violation
 #[test]

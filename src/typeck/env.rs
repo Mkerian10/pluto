@@ -69,6 +69,10 @@ pub struct GenericClassInfo {
     /// plus raw type-argument expressions, resolved per class instantiation.
     pub generic_impl_traits: Vec<(String, Vec<crate::span::Spanned<crate::parser::ast::TypeExpr>>)>,
     pub mut_self_methods: HashSet<String>,
+    /// Typestate constraints per method (`where S == Owned`): the method
+    /// exists only on instantiations whose binding for each named type param
+    /// equals the named state type (docs/design/rfc-typestates.md).
+    pub method_state_constraints: HashMap<String, Vec<(String, String)>>,
     pub lifecycle: Lifecycle,
 }
 

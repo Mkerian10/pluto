@@ -311,6 +311,14 @@ PLUTO_REMOTE_BILLINGSERVICE=127.0.0.1:9000 \
   cargo run -- run examples/rpc/client/main.pt --stdlib stdlib
 ```
 
+## typestates
+
+State as a type parameter (docs/design/rfc-typestates.md): `Partition<Unowned>` and `Partition<Owned>` are different types, transitions are methods returning the new state, and `where S == Owned` methods exist only on the matching state — wrong-order protocol calls are type errors, not runtime failures.
+
+```bash
+cargo run -- run examples/typestates/main.pt
+```
+
 ## placement
 
 The distributed model's `at` expression (docs/design/distributed-model.md): `at self.pay { charge(21) }` places a computation in the `pay` logical execution domain, and the deployment binding — not the code — decides the physical plan. Unbound, the same binary calls the DI-wired colocated instance directly; with `PLUTO_DOMAIN_PAYMENTSERVICE=host:port` set, the identical binary crosses a socket to the served domain. The boundary contract (wire-shaped values, mandatory `catch` — a domain can be unreachable in *some* deployment even if not this one, typed errors crossing intact) is compile-time checked identically for both plans.

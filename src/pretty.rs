@@ -519,6 +519,7 @@ impl PrettyPrinter {
             match contract.node.kind {
                 ContractKind::Requires => self.write("requires "),
                 ContractKind::Invariant => self.write("invariant "),
+                ContractKind::StateWhere => self.write("where "),
             }
             self.emit_expr(&contract.node.expr.node, 0);
         }
