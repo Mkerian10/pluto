@@ -203,6 +203,27 @@ fn instantiate_class(
     reassign_class_uuids(&mut class);
     class.name = Spanned::new(mangled.to_string(), template.node.name.span);
     class.type_params.clear();
+    // Typestate gate: methods whose `where` constraints this instantiation
+    // does not satisfy are not part of it — don't generate (or re-typecheck)
+    // their bodies here; their bodies may only be valid under the constraint.
+    let state_constraints = env
+        .generic_classes
+        .get(name)
+        .map(|g| g.method_state_constraints.clone())
+        .unwrap_or_default();
+    class.methods.retain(|m| {
+        match state_constraints.get(&m.node.name.node) {
+            None => true,
+            Some(cs) => cs.iter().all(|(param, state)| {
+                type_params
+                    .iter()
+                    .position(|p| p == param)
+                    .and_then(|i| type_args.get(i))
+                    .map(|t| matches!(t, PlutoType::Class(n) | PlutoType::Enum(n) if n == state))
+                    .unwrap_or(false)
+            }),
+        }
+    });
     substitute_in_class(&mut class, &bindings);
     offset_class_spans(&mut class, span_offset);
 

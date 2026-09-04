@@ -1,0 +1,50 @@
+// Typestates — protocol safety through the type system.
+//
+// State lives in a type parameter: Partition<Unowned> and Partition<Owned>
+// are different types. Methods gated with `where S == ...` exist only on the
+// matching state, so calling consume() on an unowned partition isn't a
+// runtime error — the method doesn't exist on that type and the program
+// doesn't compile. Transitions are methods that return the object in its new
+// state. See docs/design/rfc-typestates.md.
+
+class Unowned { tag: int }
+class Owned { tag: int }
+
+class Partition<S> {
+    id: int
+
+    // Only an unowned partition can be acquired...
+    fn acquire(self) Partition<Owned> where S == Unowned {
+        return Partition<Owned> { id: self.id }
+    }
+
+    // ...and only an owned one can be consumed or released.
+    fn consume(self) int where S == Owned {
+        return self.id * 10
+    }
+
+    fn release(self) Partition<Unowned> where S == Owned {
+        return Partition<Unowned> { id: self.id }
+    }
+
+    // No constraint: available in every state.
+    fn describe(self) string {
+        return f"partition {self.id}"
+    }
+}
+
+fn main() {
+    let u = Partition<Unowned> { id: 7 }
+    print(u.describe())
+
+    let o = u.acquire()
+    print(o.consume())
+
+    let back = o.release()
+    print(back.describe())
+
+    // Wrong-order calls don't compile:
+    //   u.consume()
+    //   -> method 'consume' does not exist on 'Partition<Unowned>':
+    //      on 'Partition' it exists only where S == Owned
+}

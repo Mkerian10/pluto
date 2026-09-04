@@ -78,6 +78,8 @@ pub enum Token {
     Invariant,
     #[token("requires")]
     Requires,
+    #[token("where")]
+    Where,
     #[token("assert")]
     Assert,
     #[token("select")]
@@ -352,6 +354,7 @@ impl std::fmt::Display for Token {
             Token::Test => write!(f, "test"),
             Token::Invariant => write!(f, "invariant"),
             Token::Requires => write!(f, "requires"),
+            Token::Where => write!(f, "where"),
             Token::Assert => write!(f, "assert"),
             Token::Select => write!(f, "select"),
             Token::Default => write!(f, "default"),

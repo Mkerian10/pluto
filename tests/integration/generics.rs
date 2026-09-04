@@ -1070,3 +1070,192 @@ fn generic_method_comparison_still_parses() {
     );
     assert_eq!(out.trim(), "1");
 }
+
+// ── Typestates: `where` state constraints on methods (rfc-typestates.md) ──
+
+/// The full typestate protocol: state as a phantom type param, transitions as
+/// methods returning the new state, state-restricted methods, and an
+/// unconstrained method available in every state.
+#[test]
+fn typestate_protocol_round_trip() {
+    let out = compile_and_run_stdout(
+        r#"
+        class Unowned { tag: int }
+        class Owned { tag: int }
+
+        class Partition<S> {
+            id: int
+
+            fn acquire(self) Partition<Owned> where S == Unowned {
+                return Partition<Owned> { id: self.id }
+            }
+
+            fn consume(self) int where S == Owned {
+                return self.id * 10
+            }
+
+            fn release(self) Partition<Unowned> where S == Owned {
+                return Partition<Unowned> { id: self.id }
+            }
+
+            fn describe(self) string {
+                return f"partition {self.id}"
+            }
+        }
+
+        fn main() {
+            let u = Partition<Unowned> { id: 7 }
+            print(u.describe())
+            let o = u.acquire()
+            print(o.consume())
+            let back = o.release()
+            print(back.describe())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "partition 7\n70\npartition 7");
+}
+
+/// Calling a state-restricted method in the wrong state is a type error that
+/// names the constraint — the method does not exist on that instantiation.
+#[test]
+fn typestate_wrong_state_rejected() {
+    compile_should_fail_with(
+        r#"
+        class Unowned { tag: int }
+        class Owned { tag: int }
+
+        class Partition<S> {
+            id: int
+
+            fn consume(self) int where S == Owned {
+                return self.id
+            }
+        }
+
+        fn main() {
+            let u = Partition<Unowned> { id: 3 }
+            print(u.consume())
+        }
+        "#,
+        "method 'consume' does not exist on 'Partition<Unowned>': on 'Partition' it exists only where S == Owned",
+    );
+}
+
+/// Multiple constraints on one method target different type params; both must
+/// hold. Transitions can change one param while constraining another.
+#[test]
+fn typestate_multi_param_constraints() {
+    let out = compile_and_run_stdout(
+        r#"
+        class Open { tag: int }
+        class Closed { tag: int }
+        class Leader { tag: int }
+        class Follower { tag: int }
+
+        class Conn<S, R> {
+            id: int
+
+            fn write(self, data: int) int where S == Open, R == Leader {
+                return self.id + data
+            }
+
+            fn promote(self) Conn<Open, Leader> where S == Open, R == Follower {
+                return Conn<Open, Leader> { id: self.id }
+            }
+        }
+
+        fn main() {
+            let c = Conn<Open, Follower> { id: 100 }
+            let l = c.promote()
+            print(l.write(5))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "105");
+}
+
+/// Typestates compose with data-carrying type params: the state param gates
+/// methods while other params stay ordinary generics.
+#[test]
+fn typestate_with_data_type_param() {
+    let out = compile_and_run_stdout(
+        r#"
+        class Ready { tag: int }
+        class Draft { tag: int }
+
+        class Doc<S, T> {
+            payload: T
+
+            fn publish(self) T where S == Ready {
+                return self.payload
+            }
+
+            fn finalize(self) Doc<Ready, T> where S == Draft {
+                return Doc<Ready, T> { payload: self.payload }
+            }
+        }
+
+        fn main() {
+            let d = Doc<Draft, string> { payload: "hello" }
+            let r = d.finalize()
+            print(r.publish())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "hello");
+}
+
+/// `where` clauses only make sense on generic-class methods.
+#[test]
+fn typestate_where_rejected_elsewhere() {
+    compile_should_fail_with(
+        r#"
+        class Owned { tag: int }
+        fn f(x: int) int where S == Owned {
+            return x
+        }
+        fn main() {
+            print(f(1))
+        }
+        "#,
+        "'where' typestate constraints are only allowed on methods of generic classes",
+    );
+    compile_should_fail_with(
+        r#"
+        class Owned { tag: int }
+        class C<S> {
+            id: int
+            fn m(self) int where Q == Owned {
+                return self.id
+            }
+        }
+        fn main() {
+            let c = C<Owned> { id: 1 }
+            print(c.m())
+        }
+        "#,
+        "'Q' is not a type parameter of class 'C'",
+    );
+}
+
+/// Unknown state types in a constraint are rejected at template checking, not
+/// silently never-satisfiable.
+#[test]
+fn typestate_unknown_state_rejected() {
+    compile_should_fail_with(
+        r#"
+        class C<S> {
+            id: int
+            fn m(self) int where S == Nonexistent {
+                return self.id
+            }
+        }
+        fn main() {
+            let x = 1
+            print(x)
+        }
+        "#,
+        "unknown state type 'Nonexistent'",
+    );
+}

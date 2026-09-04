@@ -183,10 +183,67 @@ fn check_class_template(class: &ClassDecl, env: &mut TypeEnv) -> Result<(), Comp
     let bindings = build_type_expr_bindings(&type_params, &skolem_args);
 
     let mut result = Ok(());
+    let state_constraints = env
+        .generic_classes
+        .get(name)
+        .map(|g| g.method_state_constraints.clone())
+        .unwrap_or_default();
     for method in &class.methods {
+        let constraints = state_constraints
+            .get(&method.node.name.node)
+            .cloned()
+            .unwrap_or_default();
+        if constraints.is_empty() {
+            let mut m = method.node.clone();
+            substitute_in_function(&mut m, &bindings);
+            if let Err(e) = check_function(&m, env, Some(&mangled)) {
+                result = Err(e);
+                break;
+            }
+            continue;
+        }
+        // `where S == Owned` methods are checked as members of the
+        // instantiation their constraints describe: S bound to the state
+        // type, unconstrained params kept skolem. The body may therefore
+        // rely on the constraint (construct Partition<Unowned>, etc.).
+        let mut per_args = skolem_args.clone();
+        let mut bad = None;
+        for (param, state) in &constraints {
+            let idx = type_params
+                .iter()
+                .position(|p| p == param)
+                .expect("validated against class type params at registration");
+            let st = if env.classes.contains_key(state) || env.generic_classes.contains_key(state) {
+                PlutoType::Class(state.clone())
+            } else if env.enums.contains_key(state) {
+                PlutoType::Enum(state.clone())
+            } else {
+                bad = Some((param.clone(), state.clone()));
+                break;
+            };
+            per_args[idx] = st;
+        }
+        if let Some((param, state)) = bad {
+            result = Err(CompileError::type_err(
+                format!(
+                    "'where {param} == {state}' on method '{}': unknown state type '{state}'",
+                    method.node.name.node
+                ),
+                method.node.name.span,
+            ));
+            break;
+        }
+        let m_mangled = match ensure_generic_class_instantiated(name, &per_args, env) {
+            Ok(m) => m,
+            Err(e) => {
+                result = Err(e);
+                break;
+            }
+        };
+        let m_bindings = build_type_expr_bindings(&type_params, &per_args);
         let mut m = method.node.clone();
-        substitute_in_function(&mut m, &bindings);
-        if let Err(e) = check_function(&m, env, Some(&mangled)) {
+        substitute_in_function(&mut m, &m_bindings);
+        if let Err(e) = check_function(&m, env, Some(&m_mangled)) {
             result = Err(e);
             break;
         }

@@ -1061,7 +1061,7 @@ impl<'a> Parser<'a> {
 
         // Optional return type — anything that's NOT a newline, `{`, `}`, `requires`, `fn`, `override`, `pub`
         let return_type = if self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node,
-            Token::Newline | Token::LBrace | Token::RBrace | Token::Requires | Token::Fn | Token::Override | Token::Pub
+            Token::Newline | Token::LBrace | Token::RBrace | Token::Requires | Token::Where | Token::Fn | Token::Override | Token::Pub
         ) {
             Some(self.parse_type()?)
         } else {
@@ -1270,7 +1270,7 @@ impl<'a> Parser<'a> {
 
         // Check for return type - use peek_raw() to detect newline boundary
         let return_type = if let Some(next_raw) = self.peek_raw()
-            && (matches!(next_raw.node, Token::Newline | Token::RBrace | Token::Requires)
+            && (matches!(next_raw.node, Token::Newline | Token::RBrace | Token::Requires | Token::Where)
                 || self.peek_is_ensures())
         {
             // Newline, closing brace, or contract - no return type
@@ -1440,7 +1440,7 @@ impl<'a> Parser<'a> {
         self.expect(&Token::RParen)?;
 
         let return_type = if self.peek().is_some()
-            && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires)
+            && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires | Token::Where)
             && !self.peek_is_ensures()
         {
             Some(self.parse_type()?)
@@ -1545,6 +1545,44 @@ impl<'a> Parser<'a> {
                     ));
                     self.consume_statement_end()?;
                 }
+                Token::Where => {
+                    // Typestate constraint: `where S == Owned, T == Locked`
+                    // (docs/design/rfc-typestates.md). Each equality becomes a
+                    // StateWhere clause; validated against the class's type
+                    // params during registration.
+                    self.skip_newlines();
+                    let where_tok = self.advance().expect("token should exist after peek");
+                    let where_start = where_tok.span.start;
+                    loop {
+                        let param = self.expect_ident()?;
+                        self.expect(&Token::EqEq)?;
+                        let state = self.expect_ident()?;
+                        let clause_span = Span::new(param.span.start, state.span.end);
+                        let expr = Spanned::new(
+                            Expr::BinOp {
+                                lhs: Box::new(Spanned::new(Expr::Ident(param.node.clone()), param.span)),
+                                op: BinOp::Eq,
+                                rhs: Box::new(Spanned::new(Expr::Ident(state.node.clone()), state.span)),
+                            },
+                            clause_span,
+                        );
+                        contracts.push(Spanned::new(
+                            ContractClause { kind: ContractKind::StateWhere, expr },
+                            Span::new(where_start, state.span.end),
+                        ));
+                        if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
+                            self.advance();
+                            continue;
+                        }
+                        break;
+                    }
+                    // Inline form `... where S == Owned {` — the body brace
+                    // follows directly; only a standalone clause line needs a
+                    // statement terminator.
+                    if !matches!(self.peek().map(|t| &t.node), Some(Token::LBrace)) {
+                        self.consume_statement_end()?;
+                    }
+                }
                 Token::Ident if &self.source[tok.span.start..tok.span.end] == "ensures" => {
                     // Deliberately not part of the language: postconditions
                     // were eliminated by design (docs/design/contracts.md)
@@ -1583,7 +1621,7 @@ impl<'a> Parser<'a> {
 
         // Return type: if next non-newline token is not '{' or a contract keyword, it's a return type
         let return_type = if self.peek().is_some()
-            && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires)
+            && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires | Token::Where)
             && !self.peek_is_ensures()
         {
             Some(self.parse_type()?)
