@@ -7,6 +7,7 @@ mod infer;
 mod check;
 mod closures;
 pub(crate) mod errors;
+mod linearity;
 mod templates;
 
 // Re-exports for external use
@@ -130,6 +131,10 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     }
     errors::infer_error_sets(program, &mut env);
     errors::enforce_error_handling(program, &env)?;
+    // Typestate transition linearity (rfc-typestates.md phase 2): must run
+    // before sweep_skolems — generic templates' resolutions are keyed under
+    // skolem-instance names this pass reconstructs.
+    linearity::check_transition_linearity(program, &env)?;
     // Skolem artifacts served error inference/enforcement above; they must not
     // reach monomorphization, reflection, or marshaling.
     templates::sweep_skolems(&mut env);
