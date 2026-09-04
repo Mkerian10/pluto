@@ -8,6 +8,7 @@ book/book/
 .pluto-coverage/
 fuzz/target/
 a.out
+a.o
 .DS_Store
 
 # Incremental test cache written by `pluto test`

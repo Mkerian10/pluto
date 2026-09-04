@@ -91,8 +91,6 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 - `runtime/builtins.h` — Shared declarations and GC tags
 - `runtime/coverage.c` — Coverage instrumentation (when enabled)
 
-NOTE: the untracked split-out files in `runtime/` (`arrays.c`, `net.c`, `strings.c`, …) are NOT part of the build — the shipped runtime is exactly the files above (see the `include_str!` calls in `src/lib.rs`). They are leftovers from an unfinished split refactor; do not edit them expecting effects.
-
 Each `.c` file is compiled to a `.o` file, then linked with `ld -r` into a single relocatable `runtime.o`, which is finally linked with the Cranelift-generated object code.
 
 **AI-native representation (planned)** — Future direction where `.pluto` becomes a binary canonical representation (full semantic graph with stable UUIDs per declaration) and `.pt` files provide human-readable text views. AI agents write `.pluto` via an SDK (`pluto-sdk`), the compiler enriches `.pluto` with derived analysis data on demand (`pluto analyze`), and `pluto sync` converts human `.pt` edits back to `.pluto`. See `docs/design/ai-native-representation.md` for the full RFC.
@@ -172,7 +170,7 @@ let ast = tc.parse().unwrap();
 let output = tc.run().unwrap();
 ```
 
-**Pre-commit hook** — A git pre-commit hook runs `cargo test` before every commit. All tests must pass for a commit to succeed.
+**Pre-commit hook** — A git pre-commit hook blocks commits made directly on `master`. It does NOT run tests; CI is the test gate.
 
 **Running the full test suite** — Do NOT run `cargo test` (all tests) locally when verifying a feature branch. Instead, push the branch, create a PR, and let CI run the full test suite. Running all tests locally is slow and CI is the source of truth. You may run individual test files locally for quick iteration (e.g., `cargo test --test generators`).
 

@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Priority:** Critical (foundational for all future tooling)
-**Related:** [ai-native-representation.md](ai-native-representation.md), [lsp-server.md](lsp-server.md), [package-manager.md](rfc-package-manager.md), [build-cache.md](build-cache.md), [program-structure.md](program-structure.md), [compilation.md](compilation.md)
+**Related:** [ai-native-representation.md](ai-native-representation.md), [lsp-server.md](lsp-server.md), [package-manager.md](package-manager.md), [build-cache.md](build-cache.md), [program-structure.md](program-structure.md), [compilation.md](compilation.md)
 
 ## 1. Overview
 
