@@ -79,7 +79,7 @@ system OrderPlatform {
 }
 ```
 
-This is where Pluto's distributed systems story comes together — the compiler sees the full graph of stages and can generate RPC code, validate contracts across service boundaries, and inform the orchestration layer.
+This is where Pluto's distributed systems story comes together — the system layer binds logical execution domains to a physical plan. The compiler sees the full graph of stages, validates contracts and value transfer across domain boundaries, synthesizes whatever transport the plan requires, and informs the orchestration layer. See [distributed-model.md](distributed-model.md) for the placement model.
 
 The system layer is not yet designed. See [Open Questions](#open-questions) below.
 

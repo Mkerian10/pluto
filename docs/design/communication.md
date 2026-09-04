@@ -1,61 +1,50 @@
 # Communication Model
 
-> **Implementation status:** Not yet implemented. This document describes the design vision for Pluto's communication model. The current compiler supports local function calls only.
+> **Framing:** Pluto is a distributed language, not an RPC language. The canonical model is [distributed-model.md](distributed-model.md): programs express **logical placement** with `at` expressions over execution domains; the compiler and deployment plan derive **physical execution** (network, IPC, in-process, or fused). This document covers how computation and data move between domains.
+>
+> **Implementation status:** The current compiler ships one concrete transport — `serve` + `remote` dependencies over sockets with the schema-level wire format. The `at` placement model is design-stage; see the open questions in distributed-model.md.
 
-## Overview
+## Two-tier model
 
-Pluto has a two-tier communication model:
+1. **Placement expressions (default)** — `at domain { expr }` evaluates an expression in another logical execution domain and yields its result. Synchronous from the caller's perspective; the physical mechanism is the deployment plan's concern.
+2. **Channels (opt-in)** — for streaming, pub/sub, fan-out/fan-in, and decoupled producers/consumers.
 
-1. **Synchronous function calls (default)** — cross-service calls look like local method calls. The compiler determines what crosses pod/network boundaries and generates appropriate code.
-2. **Channels (opt-in)** — for asynchronous and streaming use cases.
+Most code uses placement. Channels are the tool when a call/response shape is genuinely wrong.
 
-Most code (~90%) uses synchronous calls. Channels are the tool for when you genuinely need async/streaming behavior.
+## Placement
 
----
-
-## Synchronous Communication
-
-### How It Works
-
-Cross-service communication looks like regular method calls:
-
-```
-class OrderService[accounts: AccountsService] {
-    fn process(mut self, order: Order) {
-        let user = self.accounts.get_user(order.user_id)!
-        // This might be a local call or a cross-pod RPC.
-        // The programmer doesn't know or care.
-        // The compiler generates the right code.
-    }
+```pluto
+let result = at payments {
+    charge(order)
 }
 ```
 
-### Compiler Behavior
+What the programmer is saying: *this computation belongs to the `payments` domain* — its data, capabilities, and failure envelope live there. What the programmer is **not** saying: how the boundary is physically crossed.
 
-The compiler (via whole-program analysis):
-- Knows whether `accounts` is local or remote
-- Generates serialization/deserialization if crossing pod boundaries
-- Infers that the call can error (network, timeout, etc.) if remote
-- Optimizes to a direct function call if both are on the same pod
+What the compiler does at the boundary:
 
-### Error Implications
+- checks which values enter and leave, and that they are transferable (wire-shaped or otherwise legal to cross)
+- verifies the domain provides the capabilities/services the block uses
+- extends the caller's inferred error set with the boundary's failure contract — unreachability, deadline expiry, and ambiguous completion are part of the type-checked surface, never silent
+- generates whatever the physical plan requires: serialization and a network call, IPC, or a direct call — with boundary semantics (isolation, secrets, cancellation behavior) preserved even when fused into one process
 
-Remote calls can fail in ways local calls cannot (network errors, timeouts, pod unavailability). The compiler infers these error possibilities automatically — a function that calls a remote service is fallible even if it would be infallible locally.
+Crossing a boundary is explicit in the source. Code that reads as local *is* local.
 
----
+### Errors are layered
+
+Transport failures (socket reset, TLS, serialization) are translated to stage-level failures ("`payments` unreachable", "completion unknown", "deadline exceeded"), which application code maps into domain errors (`PaymentUnavailable`). Causes stay attached for diagnostics; low-level errors are not public control flow. See distributed-model.md.
 
 ## Channels
 
-### When to Use
+### When to use
 
-Channels are for when synchronous call/response is not the right model:
 - Streaming data (continuous flow of values)
 - Pub/sub patterns
 - Fan-out / fan-in
 - Fire-and-forget
 - Decoupling producer and consumer speeds
 
-### Creating Channels
+### Creating channels
 
 Channels are **directional** — separate send and receive ends:
 
@@ -65,9 +54,7 @@ let ch = chan<Order>()
 // ch.sender and ch.receiver are separate typed handles
 ```
 
-### Sending and Receiving
-
-Channel operations use method syntax:
+### Sending and receiving
 
 ```
 // Send — can fail (disconnected)
@@ -83,25 +70,16 @@ let val = ch.receiver.try_recv()      // returns T?
 
 ### Iteration
 
-Receivers support for-in iteration:
-
 ```
 for msg in ch.receiver {
     process(msg)
 }
 ```
 
-### Compiler Optimizations
+### Physical plans for channels
 
-The compiler optimizes channel implementation based on topology:
+Like `at`, a channel whose ends land in different domains gets a physical implementation chosen by the plan — in-memory queue, shared memory, or serialized network transport. The same preservation rule applies: the channel's semantics (ordering, failure modes, backpressure behavior) do not change with the plan, and a cross-domain channel's element type must be transferable.
 
-| Scenario                    | Generated code                          |
-| --------------------------- | --------------------------------------- |
-| Both ends in same process   | In-memory queue, no serialization       |
-| Same pod, different process | Shared memory, no network               |
-| Cross-pod, same region      | Serialization + local network           |
-| Cross-pod, cross-region     | Serialization + handles latency/retries |
+### Auto-serialization
 
-### Auto-Serialization
-
-Any type sent over a cross-pod channel must implement the `Serializable` trait. The compiler enforces this at compile time and can auto-derive `Serializable` for simple types.
+Any type crossing a physical process boundary must be wire-shaped. The compiler enforces this at compile time; the wire surface is schema-level and compiler-derived (see rfc-wire-format.md and rfc-schema.md).
