@@ -1,285 +1,54 @@
 # Pluto Language Roadmap
 
-**Last Updated:** 2026-02-11
-**Vision:** A domain-specific language for distributed backend systems with geographic awareness
+**Last Updated:** 2026-09-04
 
-See also: [GitHub Issues](https://github.com/plutolang/pluto/issues) for feature tracking and bugs
-
----
-
-## 🎯 Vision
-
-Pluto is designed to make building **distributed, geographically-aware backend systems** as simple as writing a monolith. The compiler handles the complexity of:
-- **Cross-pod RPC** - Function calls across services look identical to local calls
-- **Dependency injection** - Compile-time resolution, environment-specific wiring
-- **Contracts** - Runtime-verified correctness guarantees
-- **Geographic distribution** - Deploy code close to users, enforce locality constraints
-- **AI-native tooling** - Semantic representation optimized for AI agent collaboration
-
-**Core Principles:**
-1. **Correctness by default** - Contracts, type safety, error handling
-2. **Distributed-first** - RPC, service boundaries, geographic awareness built into the language
-3. **Compiler does the hard work** - Whole-program analysis, automatic serialization, dependency wiring
-4. **Explicit over implicit** - Clear syntax, predictable behavior, no magic
-5. **AI collaboration** - Canonical representation with stable UUIDs, SDK for agents
+The canonical statement of where Pluto is going is **[docs/v1-vision.md](docs/v1-vision.md)** — the rocket-engine vision: whole-program compilation of entire distributed systems, contracts as compile-time proofs, and distributed safety the way Rust delivered memory safety. This file tracks where we are against that vision's roadmap. When they disagree, the vision wins.
 
 ---
 
-## 🚀 Current Milestone: **v0.2 - Production Foundations**
+## The pillars (from the vision)
 
-**Target:** Q2 2026
-**Focus:** Make Pluto viable for real projects - stability, ergonomics, core distributed features
+1. **Whole-program compilation** — the compiler sees every service, boundary, and data flow as one program
+2. **Static verification** — contracts as compile-time proofs; ownership as contract patterns (`owns`, `holds_lease`, `is_leader`); typestates via generics; auto-executing `ensures`
+3. **Objects vs classes** — classes are data; objects are entities (the actual thing, possibly remote). Classes get traits; objects get contract-constrained inheritance
+4. **DI-driven topology** — wiring determines what's local and what's remote; moving a service out is a topology change, not a code change
+5. **Infrastructure in the type system** — k8s/SQL/Terraform artifacts as typed compile-time inputs, validated against service code
+6. **Migrations as a language capability** — schema diffing, change classification, compiler-checked evolution across the whole system
 
-### Must-Have for v0.2
-- ✅ Trait method validation (PR #43)
-- [ ] **Fix critical bugs** (errors in closures, immutable reassignment, trait-field coercion)
-- [ ] **Unannotated empty array literals** - Blocks too much natural code
-- [ ] **If/Match as expressions** - Essential for functional style
-- [ ] **HTTP client** - Replace stub with real implementation
-- [ ] **RPC Phase 1** - Wire format + std.wire module
-- [ ] **RPC Phase 2** - Stage declarations + service model
-- [ ] **Package manager foundations** - Basic dependency resolution
+## Near-term (per the vision)
 
-### Nice-to-Have for v0.2
-- [ ] Methods on primitives (`42.to_string()`)
-- [ ] Field binding in match arms
-- [ ] Binary/scientific notation literals
-- [ ] Code formatter (`pluto fmt`)
+- [ ] **Static verification engine** — contracts as compile-time proofs; typestates via generics; auto-executing ensures. (Today: runtime-checked invariants and `requires`; the decidable-fragment validator in `src/contracts.rs` is the seed. Runtime-`ensures`-as-assertion was rejected — `ensures` returns as a *proof* obligation, not a runtime check.)
+- [ ] **Object construct** — design and prototyping: entity semantics, contract-constrained inheritance, traceable identity. *Under active design.*
+- [ ] **Program structure** — bare file to distributed system with no ceremony threshold; objects and their dependency graph *are* the program (no mandatory `app`/`main`).
+- [ ] **DI-driven topology & the placement model** — `at` expressions over logical execution domains; the wiring and deployment plan, not the code, decide physical boundaries, and the compiler synthesizes transport, serialization, and error paths at each one (docs/design/distributed-model.md). (Today: `app`/stage DI with lifecycles is compile-time-wired; `remote` deps + `serve` exist but couple the transport into the code — exactly what this pillar removes.)
 
-**Success Metrics:**
-- Build a non-trivial distributed app (multi-service)
-- Zero P0 bugs
-- <5 P1 bugs
-- Documentation complete (installation, tutorial, stdlib reference)
+## Mid-term (per the vision)
 
----
+- [ ] LSP server and editor integration (CompilerService backend exists)
+- [ ] `pluto fmt`; package registry + lock file (manifests with path/git deps shipped)
+- [ ] Infrastructure as Pluto code — topology declarations, deploy-time validation
+- [ ] Stdlib expansion — database drivers, messaging, crypto, observability
+- [x] Cross-boundary type checking and serialization codegen — shipped for the socket transport: interface hashing against version skew, schema-derived wire marshaling (scalars, classes, enums, nullables, arrays, maps, sets), typed errors across boundaries
+- [ ] Cloud infrastructure APIs — type-safe Kubernetes and AWS interfaces
+- [ ] Distributed contract predicates — stdlib ownership/lease/leader patterns
+- [ ] Migration engine — schema diffing, validation, generation (design: docs/design/rfc-migration.md, rfc-evolution-rules.md)
 
-## 📅 Quarterly Roadmap
+## Long-term (per the vision)
 
-### Q1 2026 (Jan-Mar) - **Stability & Ergonomics** ✅ In Progress
+Incremental compilation · advanced verification (protocol contracts, bounded quantifiers) · geographic annotations and placement constraints · derived observability (traces/metrics/topology from language constructs) · comprehensive docs · real-world hardening.
 
-**Theme:** Fix blockers, improve developer experience
-
-**Completed:**
-- ✅ Static trait calls parser support (PR #41)
-- ✅ Trait method validation (PR #43)
-- ✅ GitHub Pages deployment for documentation
-- ✅ Improved error messages and test coverage
-
-**In Progress:**
-- 🔵 RPC Phase 1 - Wire format design
-- 🔵 Compile-time reflection Phase 1
-
-**Remaining:**
-- [ ] Fix errors in closures bug (P0)
-- [ ] Fix immutable reassignment bug (P1)
-- [ ] Unannotated empty array literals
-- [ ] If/Match as expressions
-
-### Q2 2026 (Apr-Jun) - **Distributed Systems MVP**
-
-**Theme:** Core RPC features for multi-service deployments
-
-**Goals:**
-- [ ] **RPC Phase 1-3** - Wire format, stage declarations, codegen
-- [ ] **HTTP client** - Real implementation
-- [ ] **Service discovery basics** - Static config file
-- [ ] **Package manager** - Dependency resolution + lock files
-- [ ] **Documentation** - Distributed systems guide
-
-**Deliverable:** Build a real distributed app with 3+ services communicating via RPC
-
-### Q3 2026 (Jul-Sep) - **Developer Experience**
-
-**Theme:** Tooling, ergonomics, quality of life
-
-**Goals:**
-- [ ] **Code formatter** - `pluto fmt`
-- [ ] **Linter** - Static analysis for common mistakes
-- [ ] **LSP foundations** - Autocomplete, go-to-definition
-- [ ] **Improved error messages** - More context, suggestions
-- [ ] **Methods on primitives** - `42.to_string()`
-- [ ] **Reflection Phase 2** - Loop unrolling, compiler transforms
-- [ ] **JsonEncoding** - Auto-generated serialization
-
-**Deliverable:** Smooth onboarding experience for new users
-
-### Q4 2026 (Oct-Dec) - **Production Readiness**
-
-**Theme:** Performance, observability, reliability
-
-**Goals:**
-- [ ] **Incremental compilation** - Faster builds
-- [ ] **Compiler metrics** - Performance profiling
-- [ ] **Observability hooks** - Metrics, tracing, logging
-- [ ] **Supervision strategies** - Crash recovery (Erlang-style)
-- [ ] **Structured concurrency** - Task groups, scopes
-- [ ] **Move semantics** - Prevent shared mutable state bugs
-- [ ] **Contract enforcement** - Requires/ensures runtime checks
-
-**Deliverable:** Run Pluto services in production with confidence
+**1.0** = all pillars end-to-end, pristine DX, batteries-included stdlib with cloud-native APIs, and at least one real distributed system built entirely in Pluto.
 
 ---
 
-## 🏔️ Long-Term Vision (2027+)
+## Foundation already in place (September 2026)
 
-### Geographic Distribution (The Differentiator)
+The substrate the pillars build on is largely shipped and tested (~6,300 tests in CI):
 
-**Vision:** Deploy code close to users, enforce locality constraints automatically
-
-**Features:**
-- **Geographic annotations** - `@region("us-east") class UserService`
-- **Multi-region deployment** - Compiler-assisted orchestration
-- **Data locality** - Enforce data residency rules (GDPR, etc.)
-- **Automatic failover** - Cross-region redundancy
-- **Latency-aware routing** - Send requests to nearest instance
-
-**Impact:** Makes geo-distribution as easy as deploying to one region
-
-### AI-Native Tooling (The Future)
-
-**Vision:** Canonical binary representation optimized for AI collaboration
-
-**Features:**
-- **Binary `.pluto` format** - Stable UUIDs, semantic graph representation
-- **Human-readable `.pt` views** - Text files for humans, `pluto sync` reconciles
-- **`pluto-sdk`** - Python/TS bindings for AI agents
-- **Incremental analysis** - planned `pluto analyze` command computes derived data on demand
-- **Collaborative editing** - Multiple AI agents, same codebase (CRDT-based)
-
-**Impact:** AI agents as first-class contributors to Pluto projects
-
-### Advanced Contracts (Correctness at Scale)
-
-**Features:**
-- **Quantifiers** - `forall item in items: item.valid()`
-- **Protocol contracts** - State machine enforcement (open → read → close)
-- **Static verification** - Prove correctness at compile-time (subset of contracts)
-- **Contract testing mode** - Generate test cases from contracts
-
-**Impact:** Catch bugs before deployment, not in production
-
----
-
-## 🎓 Milestones Completed
-
-### v0.1 (2025-2026) - **Language Foundations** ✅
-
-**Highlights:**
-- ✅ Core language features (functions, classes, traits, enums, generics)
-- ✅ Module system with visibility
-- ✅ Closures with capture-by-value
-- ✅ Dependency injection (compile-time)
-- ✅ Error handling (`!`, `catch`, `raise`)
-- ✅ Concurrency (spawn, Task, channels, select)
-- ✅ Contracts Phase 1-3 (invariants, requires/ensures, trait contracts)
-- ✅ Nullable types (`T?`, `none`, `?` operator)
-- ✅ String interpolation (f-strings)
-- ✅ Maps and Sets
-- ✅ Test framework
-- ✅ Stdlib modules (strings, math, json, http, fs, collections, log, time)
-- ✅ Compilation to native code (Cranelift)
-
-**Shipped:** Jan 2026
-
----
-
-## 📊 Progress Tracking
-
-### By Theme
-
-| Theme | Status | Progress |
-|-------|--------|----------|
-| **Core Language** | ✅ Complete | 100% |
-| **Type System** | ✅ Complete | 100% |
-| **Error Handling** | ✅ Complete | 100% |
-| **Concurrency** | 🟡 Phase 1 | 60% (Phase 2: structured concurrency pending) |
-| **Contracts** | 🟡 Phase 3 | 60% (enforcement, quantifiers pending) |
-| **Dependency Injection** | 🟡 Phase 1 | 70% (scoped services pending) |
-| **RPC/Distribution** | 🔵 Starting | 5% (wire format in progress) |
-| **Reflection** | 🔵 Phase 1 | 20% (parser done, typeck/codegen pending) |
-| **Tooling** | 🟡 Basic | 30% (formatter, linter, LSP pending) |
-| **Geographic** | ⬜ Not Started | 0% |
-| **AI-Native** | 🟡 Foundations | 20% (PLTO container + emit/sync/sdk shipped; analyze workflow pending) |
-
-### By Quarter
-
-| Quarter | Theme | Completion |
-|---------|-------|------------|
-| Q4 2025 | Foundation | ✅ 100% |
-| Q1 2026 | Stability | 🔵 60% (in progress) |
-| Q2 2026 | Distributed | ⬜ 0% (planned) |
-| Q3 2026 | Tooling | ⬜ 0% (planned) |
-| Q4 2026 | Production | ⬜ 0% (planned) |
-
----
-
-## 🎯 Success Criteria
-
-### v0.2 Success Criteria (Q2 2026)
-- [ ] Build a real distributed app (3+ services, RPC communication)
-- [ ] Zero P0 bugs, <5 P1 bugs
-- [ ] Documentation complete (tutorial, stdlib docs, distributed guide)
-- [ ] 10+ external users trying Pluto
-- [ ] Package manager with 10+ published libraries
-
-### v1.0 Success Criteria (Q4 2026)
-- [ ] 100+ external users
-- [ ] 3+ production deployments
-- [ ] <1% compiler crash rate
-- [ ] Complete stdlib (http, db, queues, caching)
-- [ ] LSP with IDE support (VSCode, IntelliJ)
-- [ ] Incremental compilation (<1s for small changes)
-
-### v2.0 Success Criteria (2027)
-- [ ] Geographic distribution in production
-- [ ] AI-native tooling (binary format, SDK)
-- [ ] Static contract verification (subset)
-- [ ] 1000+ users, 50+ production deployments
-
----
-
-## 🔄 Review Cadence
-
-**Weekly:**
-- Feature progress updates
-- Bug triage (P0/P1 only)
-- Blocker resolution
-
-**Monthly:**
-- Roadmap review
-- Milestone progress assessment
-- Reprioritization based on user feedback
-
-**Quarterly:**
-- Major milestone retrospective
-- Next quarter planning
-- Long-term vision refinement
-
----
-
-## 📢 Community & Feedback
-
-**How to influence the roadmap:**
-1. Open an issue on GitHub
-2. Propose features via GitHub issues
-3. Share use cases that aren't well-served
-4. Contribute PRs for features you need
-
-**Roadmap principles:**
-- User needs drive priorities
-- Foundational features before advanced features
-- Ship incrementally, gather feedback, iterate
-- Maintain high code quality (no technical debt shortcuts)
-
----
-
-## 📝 Notes
-
-- Dates are targets, not commitments - quality over deadlines
-- Priorities may shift based on user feedback and blockers
-- Long-term vision (2027+) is aspirational, timelines fluid
-- This roadmap is reviewed and updated monthly
-
-**Last reviewed:** 2026-02-11
-**Next review:** 2026-03-11
+- **Language core** — classes/traits/enums (wildcard + destructuring match), closures and function references, full generics (generic traits, generic trait methods), nullable types with flow narrowing, f-strings, explicit mutability, methods on primitives
+- **Errors** — typed errors with whole-program inferred fallibility (through closures, generics, function types), `!`/`catch` enforcement — the vision's error model, working today
+- **DI** — compile-time resolution and wiring, singleton/scoped/transient lifecycles, captive-dependency detection, test-local containers
+- **Distributed** — `serve`/`remote` over sockets as the first physical transport, with the full schema-level wire surface; **the wire is schema-level only** (closed, compiler-derived shapes — no custom encoder hooks; settled 2026-09-04). The target programming model is `at` placement over logical domains (docs/design/distributed-model.md); today's explicit RPC declarations are the mechanism it subsumes
+- **Concurrency & runtime** — spawn/Task, channels, select, synchronized state, concurrent mark-sweep GC; native compilation via Cranelift
+- **Toolchain** — `compile/run/test/watch/coverage/check`-style dev loop, package manifests with git deps, toolchain versioning (`install/use/versions`), experimental release channel
+- **AI-native foundations** — binary `.pluto` container with stable UUIDs, `emit-ast`/`generate-pt`/`sync`/`analyze`, `pluto-sdk`, read-only MCP server; canonical-flip work active on the `ast-uuids`/`canonical-flip` branches
