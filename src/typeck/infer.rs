@@ -652,25 +652,51 @@ pub(crate) fn infer_expr(
 
             let mut arm_types = Vec::new();
             let mut covered = HashSet::new();
+            let mut wildcard_seen = false;
 
             // Type-check each arm
             for arm in arms {
+                let (arm_enum_name, arm_variant_name, arm_bindings) = match &arm.pattern {
+                    crate::parser::ast::MatchPattern::Wildcard { span: wspan } => {
+                        if wildcard_seen {
+                            return Err(CompileError::type_err(
+                                "unreachable match arm: a wildcard arm '_' already matches all remaining values".to_string(),
+                                *wspan,
+                            ));
+                        }
+                        wildcard_seen = true;
+                        env.push_scope();
+                        let arm_type = infer_expr(&arm.value.node, arm.value.span, env, None)?;
+                        arm_types.push((arm_type, arm.value.span));
+                        env.pop_scope();
+                        continue;
+                    }
+                    crate::parser::ast::MatchPattern::Variant { enum_name, variant_name, bindings, .. } => {
+                        if wildcard_seen {
+                            return Err(CompileError::type_err(
+                                "unreachable match arm: a wildcard arm '_' already matches all remaining values".to_string(),
+                                enum_name.span,
+                            ));
+                        }
+                        (enum_name, variant_name, bindings)
+                    }
+                };
+
                 // Validate enum name matches (handle generics via prefix)
-                let arm_enum_base = arm
-                    .enum_name
+                let arm_enum_base = arm_enum_name
                     .node
                     .split("$$")
                     .next()
-                    .unwrap_or(&arm.enum_name.node);
+                    .unwrap_or(&arm_enum_name.node);
                 let scrutinee_enum_base = enum_name.split("$$").next().unwrap_or(&enum_name);
 
                 if arm_enum_base != scrutinee_enum_base {
                     return Err(CompileError::type_err(
                         format!(
                             "match arm enum '{}' does not match scrutinee enum '{}'",
-                            arm.enum_name.node, enum_name
+                            arm_enum_name.node, enum_name
                         ),
-                        arm.enum_name.span,
+                        arm_enum_name.span,
                     ));
                 }
 
@@ -678,45 +704,45 @@ pub(crate) fn infer_expr(
                 let variant = enum_info
                     .variants
                     .iter()
-                    .find(|(name, _)| name == &arm.variant_name.node)
+                    .find(|(name, _)| name == &arm_variant_name.node)
                     .ok_or_else(|| {
                         CompileError::type_err(
                             format!(
                                 "enum '{}' has no variant '{}'",
-                                enum_name, arm.variant_name.node
+                                enum_name, arm_variant_name.node
                             ),
-                            arm.variant_name.span,
+                            arm_variant_name.span,
                         )
                     })?;
 
                 // Check for duplicates
-                if !covered.insert(arm.variant_name.node.clone()) {
+                if !covered.insert(arm_variant_name.node.clone()) {
                     return Err(CompileError::type_err(
                         format!(
                             "duplicate match arm for variant '{}'",
-                            arm.variant_name.node
+                            arm_variant_name.node
                         ),
-                        arm.variant_name.span,
+                        arm_variant_name.span,
                     ));
                 }
 
                 // Validate bindings
-                if arm.bindings.len() != variant.1.len() {
+                if arm_bindings.len() != variant.1.len() {
                     return Err(CompileError::type_err(
                         format!(
                             "variant '{}' has {} fields, but {} bindings provided",
-                            arm.variant_name.node,
+                            arm_variant_name.node,
                             variant.1.len(),
-                            arm.bindings.len()
+                            arm_bindings.len()
                         ),
-                        arm.variant_name.span,
+                        arm_variant_name.span,
                     ));
                 }
 
                 // Create new scope and bind fields
                 env.push_scope();
 
-                for (binding_field, opt_rename) in arm.bindings.iter() {
+                for (binding_field, opt_rename) in arm_bindings.iter() {
                     // Find field in variant
                     let field = variant
                         .1
@@ -726,7 +752,7 @@ pub(crate) fn infer_expr(
                             CompileError::type_err(
                                 format!(
                                     "variant '{}' has no field '{}'",
-                                    arm.variant_name.node, binding_field.node
+                                    arm_variant_name.node, binding_field.node
                                 ),
                                 binding_field.span,
                             )
@@ -747,13 +773,15 @@ pub(crate) fn infer_expr(
                 env.pop_scope();
             }
 
-            // Check exhaustiveness
-            for (variant_name, _) in &enum_info.variants {
-                if !covered.contains(variant_name) {
-                    return Err(CompileError::type_err(
-                        format!("non-exhaustive match: missing variant '{}'", variant_name),
-                        span,
-                    ));
+            // Check exhaustiveness: a wildcard arm covers every remaining variant
+            if !wildcard_seen {
+                for (variant_name, _) in &enum_info.variants {
+                    if !covered.contains(variant_name) {
+                        return Err(CompileError::type_err(
+                            format!("non-exhaustive match: missing variant '{}'", variant_name),
+                            span,
+                        ));
+                    }
                 }
             }
 

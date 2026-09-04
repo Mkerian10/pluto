@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::{
-    Block, ClassDecl, Expr, Function, Param, Program, Stmt, TypeExpr,
+    Block, ClassDecl, Expr, Function, MatchPattern, Param, Program, Stmt, TypeExpr,
 };
 use crate::span::{Span, Spanned};
 use crate::typeck::env::TypeEnv;
@@ -766,13 +766,15 @@ fn generate_marshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<Spa
         stmts.push(mk_stmt_expr(mk_method_call("enc", "encode_variant_end", vec![])));
 
         let arm = MatchArm {
-            enum_name: Spanned { node: enum_name.clone(), span: mk_span() },
-            variant_name: Spanned { node: variant_name.clone(), span: mk_span() },
-            type_args: vec![],
-            bindings,
+            pattern: MatchPattern::Variant {
+                enum_name: Spanned { node: enum_name.clone(), span: mk_span() },
+                variant_name: Spanned { node: variant_name.clone(), span: mk_span() },
+                type_args: vec![],
+                bindings,
+                enum_id: Some(enum_decl.id),
+                variant_id: Some(variant.id),
+            },
             body: Spanned { node: Block { stmts }, span: mk_span() },
-            enum_id: Some(enum_decl.id),
-            variant_id: Some(variant.id),
         };
 
         match_arms.push(arm);

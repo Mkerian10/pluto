@@ -470,8 +470,10 @@ pub fn walk_stmt<V: Visitor>(v: &mut V, stmt: &Spanned<Stmt>) {
         Stmt::Match { expr, arms } => {
             v.visit_expr(expr);
             for arm in arms {
-                for te in &arm.type_args {
-                    v.visit_type_expr(te);
+                if let MatchPattern::Variant { type_args, .. } = &arm.pattern {
+                    for te in type_args {
+                        v.visit_type_expr(te);
+                    }
                 }
                 v.visit_block(&arm.body);
             }
@@ -1000,8 +1002,10 @@ pub fn walk_stmt_mut<V: VisitMut>(v: &mut V, stmt: &mut Spanned<Stmt>) {
         Stmt::Match { expr, arms } => {
             v.visit_expr_mut(expr);
             for arm in arms {
-                for te in &mut arm.type_args {
-                    v.visit_type_expr_mut(te);
+                if let MatchPattern::Variant { type_args, .. } = &mut arm.pattern {
+                    for te in type_args {
+                        v.visit_type_expr_mut(te);
+                    }
                 }
                 v.visit_block_mut(&mut arm.body);
             }
@@ -1671,23 +1675,27 @@ mod tests {
             expr: dummy(Expr::Ident("x".to_string())),
             arms: vec![
                 MatchArm {
-                    enum_name: dummy("Option".to_string()),
-                    variant_name: dummy("Some".to_string()),
-                    type_args: vec![],
-                    bindings: vec![],
-                    enum_id: None,
-                    variant_id: None,
+                    pattern: MatchPattern::Variant {
+                        enum_name: dummy("Option".to_string()),
+                        variant_name: dummy("Some".to_string()),
+                        type_args: vec![],
+                        bindings: vec![],
+                        enum_id: None,
+                        variant_id: None,
+                    },
                     body: dummy(Block {
                         stmts: vec![dummy(Stmt::Return(Some(dummy(Expr::IntLit(1)))))],
                     }),
                 },
                 MatchArm {
-                    enum_name: dummy("Option".to_string()),
-                    variant_name: dummy("None".to_string()),
-                    type_args: vec![],
-                    bindings: vec![],
-                    enum_id: None,
-                    variant_id: None,
+                    pattern: MatchPattern::Variant {
+                        enum_name: dummy("Option".to_string()),
+                        variant_name: dummy("None".to_string()),
+                        type_args: vec![],
+                        bindings: vec![],
+                        enum_id: None,
+                        variant_id: None,
+                    },
                     body: dummy(Block {
                         stmts: vec![dummy(Stmt::Return(Some(dummy(Expr::IntLit(0)))))],
                     }),

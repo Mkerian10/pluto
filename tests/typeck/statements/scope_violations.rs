@@ -17,7 +17,7 @@ fn access_from_for_scope() { compile_should_fail_with(r#"fn main(){for i in 0..1
 
 // Access match binding outside match
 #[test]
-#[ignore] // Syntax error: match pattern binding syntax not supported
+#[ignore] // struct-literal scrutinee (match E.A{x:1} {...}) not supported: match restricts struct literals in scrutinee position
 fn access_match_binding_outside() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match E.A{x:1}{E.A{x}{}}let y=x}"#, "undefined"); }
 
 // Access closure parameter outside closure
@@ -58,7 +58,7 @@ fn self_reference() { compile_should_fail_with(r#"fn main(){let x=x+1}"#, "undef
 
 // Access match arm binding in different arm
 #[test]
-#[ignore] // Syntax error: match pattern binding syntax not supported
+#[ignore] // struct-literal scrutinee (match E.A{x:1} {...}) not supported: match restricts struct literals in scrutinee position
 fn access_other_arm_binding() { compile_should_fail_with(r#"enum E{A{x:int}B{y:int}} fn main(){match E.A{x:1}{E.A{x}{}E.B{y}{let z=x}}}"#, "undefined"); }
 
 // Access spawn closure scope

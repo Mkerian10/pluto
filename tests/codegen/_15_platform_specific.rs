@@ -462,9 +462,9 @@ fn test_cross_platform_class_methods() {
 }
 
 #[test]
-#[ignore] // LIMITATION: Field binding syntax in match arms ({ value: v }) not supported
 fn test_cross_platform_enum_match() {
-    // Test enum matching (validates discriminant handling)
+    // Test enum matching (validates discriminant handling), with renamed
+    // field bindings ({ value: v }) in statement-form arms
     let src = r#"
         enum Result {
             Ok { value: int }
@@ -476,13 +476,21 @@ fn test_cross_platform_enum_match() {
             let r2 = Result.Err { msg: "failed" }
 
             match r1 {
-                Result.Ok { value: v } => print(v)
-                Result.Err { msg: m } => print(m)
+                Result.Ok { value: v } {
+                    print(v)
+                }
+                Result.Err { msg: m } {
+                    print(m)
+                }
             }
 
             match r2 {
-                Result.Ok { value: v } => print(v)
-                Result.Err { msg: m } => print(m)
+                Result.Ok { value: v } {
+                    print(v)
+                }
+                Result.Err { msg: m } {
+                    print(m)
+                }
             }
         }
     "#;

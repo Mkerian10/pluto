@@ -115,7 +115,7 @@ cargo run -- run examples/packages/main.pt
 
 ## pattern_matching
 
-Demonstrates enum pattern matching: unit variants (no data), data-carrying variants with field destructuring, mixed variants (unit and data), exhaustiveness checking, and nested pattern matching within match arms.
+Demonstrates enum pattern matching: unit variants (no data), data-carrying variants with field destructuring, mixed variants (unit and data), exhaustiveness checking, wildcard arms (`_` matches everything not claimed by an earlier arm, in both statement and expression form), and nested pattern matching within match arms.
 
 ```bash
 cargo run -- run examples/pattern_matching/main.pt

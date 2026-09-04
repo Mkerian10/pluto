@@ -2108,6 +2108,18 @@ impl<'a> Parser<'a> {
         let mut arms = Vec::new();
         while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
             let first_name = self.expect_ident()?;
+
+            // Wildcard arm: `_ { body }`
+            if first_name.node == "_" {
+                let body = self.parse_block()?;
+                arms.push(MatchArm {
+                    pattern: MatchPattern::Wildcard { span: first_name.span },
+                    body,
+                });
+                self.skip_newlines();
+                continue;
+            }
+
             self.expect(&Token::Dot)?;
             let second_name = self.expect_ident()?;
 
@@ -2159,7 +2171,17 @@ impl<'a> Parser<'a> {
                 (Vec::new(), body)
             };
 
-            arms.push(MatchArm { enum_name, variant_name, type_args: vec![], bindings, body, enum_id: None, variant_id: None });
+            arms.push(MatchArm {
+                pattern: MatchPattern::Variant {
+                    enum_name,
+                    variant_name,
+                    type_args: vec![],
+                    bindings,
+                    enum_id: None,
+                    variant_id: None,
+                },
+                body,
+            });
             self.skip_newlines();
         }
 
@@ -2343,6 +2365,20 @@ impl<'a> Parser<'a> {
     fn parse_match_expr_arm(&mut self) -> Result<MatchExprArm, CompileError> {
         // Parse enum and variant name
         let first_ident = self.expect_ident()?;
+
+        // Wildcard arm: `_ => value`
+        if first_ident.node == "_" {
+            self.expect(&Token::FatArrow)?;
+            let old_restrict = self.restrict_struct_lit;
+            self.restrict_struct_lit = true;
+            let value = self.parse_expr(0)?;
+            self.restrict_struct_lit = old_restrict;
+            return Ok(MatchExprArm {
+                pattern: MatchPattern::Wildcard { span: first_ident.span },
+                value,
+            });
+        }
+
         self.expect(&Token::Dot)?;
         let second_ident = self.expect_ident()?;
 
@@ -2382,13 +2418,15 @@ impl<'a> Parser<'a> {
         self.restrict_struct_lit = old_restrict;
 
         Ok(MatchExprArm {
-            enum_name,
-            variant_name,
-            type_args: Vec::new(),
-            bindings,
+            pattern: MatchPattern::Variant {
+                enum_name,
+                variant_name,
+                type_args: Vec::new(),
+                bindings,
+                enum_id: None,
+                variant_id: None,
+            },
             value,
-            enum_id: None,
-            variant_id: None,
         })
     }
 
@@ -4298,9 +4336,9 @@ mod tests {
         match &f.body.node.stmts[1].node {
             Stmt::Match { arms, .. } => {
                 assert_eq!(arms.len(), 2);
-                assert_eq!(arms[0].enum_name.node, "Color");
-                assert_eq!(arms[0].variant_name.node, "Red");
-                assert!(arms[0].bindings.is_empty());
+                assert_eq!(arms[0].pattern.enum_name().unwrap().node, "Color");
+                assert_eq!(arms[0].pattern.variant_name().unwrap().node, "Red");
+                assert!(arms[0].pattern.bindings().is_empty());
             }
             _ => panic!("expected match"),
         }
@@ -4313,10 +4351,10 @@ mod tests {
         match &f.body.node.stmts[1].node {
             Stmt::Match { arms, .. } => {
                 assert_eq!(arms.len(), 2);
-                assert_eq!(arms[1].variant_name.node, "Suspended");
-                assert_eq!(arms[1].bindings.len(), 1);
-                assert_eq!(arms[1].bindings[0].0.node, "reason");
-                assert!(arms[1].bindings[0].1.is_none());
+                assert_eq!(arms[1].pattern.variant_name().unwrap().node, "Suspended");
+                assert_eq!(arms[1].pattern.bindings().len(), 1);
+                assert_eq!(arms[1].pattern.bindings()[0].0.node, "reason");
+                assert!(arms[1].pattern.bindings()[0].1.is_none());
             }
             _ => panic!("expected match"),
         }
@@ -5587,8 +5625,8 @@ mod tests {
                 assert!(matches!(value.node, Expr::Match { .. }));
                 if let Expr::Match { arms, .. } = &value.node {
                     assert_eq!(arms.len(), 2);
-                    assert_eq!(arms[0].variant_name.node, "A");
-                    assert_eq!(arms[1].variant_name.node, "B");
+                    assert_eq!(arms[0].pattern.variant_name().unwrap().node, "A");
+                    assert_eq!(arms[1].pattern.variant_name().unwrap().node, "B");
                 }
             }
             _ => panic!("expected let statement"),
@@ -5613,9 +5651,9 @@ mod tests {
             Stmt::Let { value, .. } => {
                 if let Expr::Match { arms, .. } = &value.node {
                     assert_eq!(arms.len(), 1);
-                    assert_eq!(arms[0].bindings.len(), 1);
-                    assert_eq!(arms[0].bindings[0].0.node, "radius");
-                    assert_eq!(arms[0].bindings[0].1.as_ref().unwrap().node, "r");
+                    assert_eq!(arms[0].pattern.bindings().len(), 1);
+                    assert_eq!(arms[0].pattern.bindings()[0].0.node, "radius");
+                    assert_eq!(arms[0].pattern.bindings()[0].1.as_ref().unwrap().node, "r");
                 }
             }
             _ => panic!("expected let statement"),
@@ -5669,7 +5707,7 @@ mod tests {
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
                 if let Expr::Match { arms, .. } = &value.node {
-                    assert_eq!(arms[0].enum_name.node, "mod.E");
+                    assert_eq!(arms[0].pattern.enum_name().unwrap().node, "mod.E");
                 }
             }
             _ => panic!("expected let statement"),

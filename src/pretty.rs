@@ -925,32 +925,39 @@ impl PrettyPrinter {
                 self.indent();
                 for arm in arms {
                     self.write_indent();
-                    self.write(&arm.enum_name.node);
-                    if !arm.type_args.is_empty() {
-                        self.write("<");
-                        for (i, ta) in arm.type_args.iter().enumerate() {
-                            if i > 0 {
-                                self.write(", ");
-                            }
-                            self.emit_type_expr(&ta.node);
+                    match &arm.pattern {
+                        MatchPattern::Wildcard { .. } => {
+                            self.write("_");
                         }
-                        self.write(">");
-                    }
-                    self.write(".");
-                    self.write(&arm.variant_name.node);
-                    if !arm.bindings.is_empty() {
-                        self.write(" { ");
-                        for (i, (field_name, rename)) in arm.bindings.iter().enumerate() {
-                            if i > 0 {
-                                self.write(", ");
+                        MatchPattern::Variant { enum_name, variant_name, type_args, bindings, .. } => {
+                            self.write(&enum_name.node);
+                            if !type_args.is_empty() {
+                                self.write("<");
+                                for (i, ta) in type_args.iter().enumerate() {
+                                    if i > 0 {
+                                        self.write(", ");
+                                    }
+                                    self.emit_type_expr(&ta.node);
+                                }
+                                self.write(">");
                             }
-                            self.write(&field_name.node);
-                            if let Some(rename) = rename {
-                                self.write(": ");
-                                self.write(&rename.node);
+                            self.write(".");
+                            self.write(&variant_name.node);
+                            if !bindings.is_empty() {
+                                self.write(" { ");
+                                for (i, (field_name, rename)) in bindings.iter().enumerate() {
+                                    if i > 0 {
+                                        self.write(", ");
+                                    }
+                                    self.write(&field_name.node);
+                                    if let Some(rename) = rename {
+                                        self.write(": ");
+                                        self.write(&rename.node);
+                                    }
+                                }
+                                self.write(" }");
                             }
                         }
-                        self.write(" }");
                     }
                     self.write(" ");
                     self.emit_block(&arm.body.node);
@@ -1458,22 +1465,29 @@ impl PrettyPrinter {
                 self.indent += 1;
                 for arm in arms {
                     self.newline();
-                    self.write(&arm.enum_name.node);
-                    self.write(".");
-                    self.write(&arm.variant_name.node);
-                    if !arm.bindings.is_empty() {
-                        self.write(" { ");
-                        for (i, (field, rename)) in arm.bindings.iter().enumerate() {
-                            if i > 0 {
-                                self.write(", ");
-                            }
-                            self.write(&field.node);
-                            if let Some(r) = rename {
-                                self.write(": ");
-                                self.write(&r.node);
+                    match &arm.pattern {
+                        MatchPattern::Wildcard { .. } => {
+                            self.write("_");
+                        }
+                        MatchPattern::Variant { enum_name, variant_name, bindings, .. } => {
+                            self.write(&enum_name.node);
+                            self.write(".");
+                            self.write(&variant_name.node);
+                            if !bindings.is_empty() {
+                                self.write(" { ");
+                                for (i, (field, rename)) in bindings.iter().enumerate() {
+                                    if i > 0 {
+                                        self.write(", ");
+                                    }
+                                    self.write(&field.node);
+                                    if let Some(r) = rename {
+                                        self.write(": ");
+                                        self.write(&r.node);
+                                    }
+                                }
+                                self.write(" }");
                             }
                         }
-                        self.write(" }");
                     }
                     self.write(" => ");
                     self.emit_expr(&arm.value.node, 0);

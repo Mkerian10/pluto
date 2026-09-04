@@ -1154,50 +1154,75 @@ fn check_match_stmt(
     })?.clone();
 
     let mut covered = std::collections::HashSet::new();
+    let mut wildcard_span: Option<crate::span::Span> = None;
     for arm in arms {
+        let (enum_name_sp, variant_name_sp, bindings) = match &arm.pattern {
+            MatchPattern::Wildcard { span: wspan } => {
+                if wildcard_span.is_some() {
+                    return Err(CompileError::type_err(
+                        "unreachable match arm: a wildcard arm '_' already matches all remaining values".to_string(),
+                        *wspan,
+                    ));
+                }
+                wildcard_span = Some(*wspan);
+                env.push_scope();
+                check_block(&arm.body.node, env, return_type)?;
+                env.pop_scope();
+                continue;
+            }
+            MatchPattern::Variant { enum_name, variant_name, bindings, .. } => {
+                if wildcard_span.is_some() {
+                    return Err(CompileError::type_err(
+                        "unreachable match arm: a wildcard arm '_' already matches all remaining values".to_string(),
+                        enum_name.span,
+                    ));
+                }
+                (enum_name, variant_name, bindings)
+            }
+        };
         // Accept exact match, or base generic name match (e.g., "Option" matches "Option$$int")
-        let arm_matches = arm.enum_name.node == enum_name
-            || (env.generic_enums.contains_key(&arm.enum_name.node)
-                && enum_name.starts_with(&format!("{}$$", arm.enum_name.node)));
+        let arm_matches = enum_name_sp.node == enum_name
+            || (env.generic_enums.contains_key(&enum_name_sp.node)
+                && enum_name.starts_with(&format!("{}$$", enum_name_sp.node)));
         if !arm_matches {
             return Err(CompileError::type_err(
-                format!("match arm enum '{}' does not match scrutinee enum '{}'", arm.enum_name.node, enum_name),
-                arm.enum_name.span,
+                format!("match arm enum '{}' does not match scrutinee enum '{}'", enum_name_sp.node, enum_name),
+                enum_name_sp.span,
             ));
         }
-        let variant_info = enum_info.variants.iter().find(|(n, _)| *n == arm.variant_name.node);
+        let variant_info = enum_info.variants.iter().find(|(n, _)| *n == variant_name_sp.node);
         let variant_fields = match variant_info {
             None => {
                 return Err(CompileError::type_err(
-                    format!("enum '{}' has no variant '{}'", enum_name, arm.variant_name.node),
-                    arm.variant_name.span,
+                    format!("enum '{}' has no variant '{}'", enum_name, variant_name_sp.node),
+                    variant_name_sp.span,
                 ));
             }
             Some((_, fields)) => fields,
         };
-        if !covered.insert(arm.variant_name.node.clone()) {
+        if !covered.insert(variant_name_sp.node.clone()) {
             return Err(CompileError::type_err(
-                format!("duplicate match arm for variant '{}'", arm.variant_name.node),
-                arm.variant_name.span,
+                format!("duplicate match arm for variant '{}'", variant_name_sp.node),
+                variant_name_sp.span,
             ));
         }
-        if arm.bindings.len() != variant_fields.len() {
+        if bindings.len() != variant_fields.len() {
             return Err(CompileError::type_err(
                 format!(
                     "variant '{}' has {} fields, but {} bindings provided",
-                    arm.variant_name.node, variant_fields.len(), arm.bindings.len()
+                    variant_name_sp.node, variant_fields.len(), bindings.len()
                 ),
-                arm.variant_name.span,
+                variant_name_sp.span,
             ));
         }
         env.push_scope();
-        for (binding_field, opt_rename) in &arm.bindings {
+        for (binding_field, opt_rename) in bindings {
             let field_type = variant_fields.iter()
                 .find(|(n, _)| *n == binding_field.node)
                 .map(|(_, t)| t.clone())
                 .ok_or_else(|| {
                     CompileError::type_err(
-                        format!("variant '{}' has no field '{}'", arm.variant_name.node, binding_field.node),
+                        format!("variant '{}' has no field '{}'", variant_name_sp.node, binding_field.node),
                         binding_field.span,
                     )
                 })?;
@@ -1210,13 +1235,15 @@ fn check_match_stmt(
         check_block(&arm.body.node, env, return_type)?;
         env.pop_scope();
     }
-    // Exhaustiveness check
-    for (variant_name, _) in &enum_info.variants {
-        if !covered.contains(variant_name) {
-            return Err(CompileError::type_err(
-                format!("non-exhaustive match: missing variant '{}'", variant_name),
-                span,
-            ));
+    // Exhaustiveness check: a wildcard arm covers every remaining variant
+    if wildcard_span.is_none() {
+        for (variant_name, _) in &enum_info.variants {
+            if !covered.contains(variant_name) {
+                return Err(CompileError::type_err(
+                    format!("non-exhaustive match: missing variant '{}'", variant_name),
+                    span,
+                ));
+            }
         }
     }
     Ok(())

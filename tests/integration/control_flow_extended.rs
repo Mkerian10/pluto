@@ -225,10 +225,7 @@ fn match_all_enum_variants() {
     assert_eq!(stdout.trim(), "green");
 }
 
-// Forward-compatible test for wildcard match patterns (not yet implemented).
-// Will pass once match supports _ wildcard for catch-all patterns.
 #[test]
-#[ignore] // wildcard match arms (_ =>) are not supported; match requires explicit variant arms
 fn match_with_wildcard() {
     // match x { _ => 0 }
     let stdout = compile_and_run_stdout(r#"
@@ -276,12 +273,12 @@ fn match_with_destructuring() {
     assert_eq!(stdout.trim(), "200");
 }
 
-// Forward-compatible test for nested match-as-expression (not yet implemented).
-// Will pass once match can be used as an expression with nested patterns.
+// A match expression can nest directly as an arm value. The inner binding is
+// renamed (`value: inner`) because shadowing the outer binding is illegal
+// since #160, and arm values are expressions (there are no block expressions),
+// so the inner match follows `=>` directly.
 #[test]
-#[ignore] // nested patterns in match arms are not supported (bindings are flat field lists)
 fn match_nested_patterns() {
-    // match opt { Some{Some{x}} => x, ... }
     let stdout = compile_and_run_stdout(r#"
         enum Option<T> {
             Some { value: T }
@@ -293,11 +290,9 @@ fn match_nested_patterns() {
                 value: Option<int>.Some { value: 42 }
             }
             let result = match outer {
-                Option.Some { value } => {
-                    match value {
-                        Option.Some { value } => value,
-                        Option.None => 0
-                    }
+                Option.Some { value } => match value {
+                    Option.Some { value: inner } => inner,
+                    Option.None => 0
                 },
                 Option.None => 0
             }
@@ -305,6 +300,79 @@ fn match_nested_patterns() {
         }
     "#);
     assert_eq!(stdout.trim(), "42");
+}
+
+// A wildcard arm after another wildcard (or any arm after a wildcard) is
+// unreachable and rejected.
+#[test]
+fn match_arm_after_wildcard_rejected() {
+    compile_should_fail_with(r#"
+        enum Color { Red Green }
+        fn main() {
+            let c = Color.Red
+            let x = match c {
+                _ => 0,
+                Color.Red => 1
+            }
+            print(x)
+        }
+    "#, "unreachable match arm");
+}
+
+// A wildcard in statement-form match: `_ { body }`.
+#[test]
+fn match_statement_wildcard() {
+    let stdout = compile_and_run_stdout(r#"
+        enum Shape {
+            Circle { radius: int }
+            Rect { w: int, h: int }
+        }
+
+        fn describe(s: Shape) {
+            match s {
+                Shape.Circle { radius } {
+                    print(f"circle {radius}")
+                }
+                _ {
+                    print("other")
+                }
+            }
+        }
+
+        fn main() {
+            describe(Shape.Circle { radius: 5 })
+            describe(Shape.Rect { w: 2, h: 3 })
+        }
+    "#);
+    assert_eq!(stdout.trim(), "circle 5\nother");
+}
+
+// A wildcard doesn't weaken checking of the arms before it: unknown variants
+// are still rejected, and a match without a wildcard must still be exhaustive.
+#[test]
+fn match_wildcard_keeps_other_checks() {
+    compile_should_fail_with(r#"
+        enum Color { Red Green }
+        fn main() {
+            let c = Color.Red
+            let x = match c {
+                Color.Purple => 1,
+                _ => 0
+            }
+            print(x)
+        }
+    "#, "no variant 'Purple'");
+    compile_should_fail_with(r#"
+        enum Color { Red Green }
+        fn main() {
+            let c = Color.Red
+            match c {
+                Color.Red {
+                    print("red")
+                }
+            }
+        }
+    "#, "non-exhaustive match");
 }
 
 #[test]

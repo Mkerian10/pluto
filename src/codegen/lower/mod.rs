@@ -1903,23 +1903,37 @@ impl<'a> LowerContext<'a> {
         let mut all_terminated = true;
 
         for (i, arm) in arms.iter().enumerate() {
-            // Check block: compare tag
+            // A wildcard arm matches unconditionally; typeck guarantees it is
+            // the last arm. Variant arms compare the tag.
+            let (arm_variant_name, arm_bindings): (Option<&crate::span::Spanned<String>>, &[(crate::span::Spanned<String>, Option<crate::span::Spanned<String>>)]) =
+                match &arm.pattern {
+                    crate::parser::ast::MatchPattern::Wildcard { .. } => (None, &[]),
+                    crate::parser::ast::MatchPattern::Variant { variant_name, bindings, .. } => {
+                        (Some(variant_name), bindings)
+                    }
+                };
+
+            // Check block: compare tag (or fall straight through for `_`)
             self.builder.switch_to_block(check_blocks[i]);
             self.builder.seal_block(check_blocks[i]);
 
-            let variant_idx = enum_info.variants.iter()
-                .position(|(n, _)| *n == arm.variant_name.node)
-                .expect("match arm variant should exist after typeck") as i64;
-            let expected_tag = self.builder.ins().iconst(types::I64, variant_idx);
-            let cmp = self.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
+            if let Some(variant_name) = arm_variant_name {
+                let variant_idx = enum_info.variants.iter()
+                    .position(|(n, _)| *n == variant_name.node)
+                    .expect("match arm variant should exist after typeck") as i64;
+                let expected_tag = self.builder.ins().iconst(types::I64, variant_idx);
+                let cmp = self.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
 
-            let fallthrough = if i + 1 < arms.len() {
-                check_blocks[i + 1]
+                let fallthrough = if i + 1 < arms.len() {
+                    check_blocks[i + 1]
+                } else {
+                    // Last arm: exhaustiveness guaranteed, so fallthrough to merge
+                    merge_bb
+                };
+                self.builder.ins().brif(cmp, body_blocks[i], &[], fallthrough, &[]);
             } else {
-                // Last arm: exhaustiveness guaranteed, so fallthrough to merge
-                merge_bb
-            };
-            self.builder.ins().brif(cmp, body_blocks[i], &[], fallthrough, &[]);
+                self.builder.ins().jump(body_blocks[i], &[]);
+            }
 
             // Body block: extract bindings and lower body
             self.builder.switch_to_block(body_blocks[i]);
@@ -1927,14 +1941,15 @@ impl<'a> LowerContext<'a> {
             // Branch coverage: match arm taken
             self.emit_coverage_hit(arm.body.span.file_id, arm.body.span.start, 1);
 
-            let variant_fields = &enum_info.variants.iter()
-                .find(|(n, _)| *n == arm.variant_name.node)
-                .expect("match arm variant should exist after typeck").1;
-
             // Save previous variable bindings so we can restore after this arm
             let mut prev_vars: Vec<(String, Option<Variable>, Option<PlutoType>)> = Vec::new();
 
-            for (binding_field, opt_rename) in &arm.bindings {
+            for (binding_field, opt_rename) in arm_bindings {
+                let variant_name = arm_variant_name
+                    .expect("wildcard arms have no bindings");
+                let variant_fields = &enum_info.variants.iter()
+                    .find(|(n, _)| *n == variant_name.node)
+                    .expect("match arm variant should exist after typeck").1;
                 let field_idx = variant_fields.iter()
                     .position(|(n, _)| *n == binding_field.node)
                     .expect("binding field should exist in variant after typeck");
@@ -3502,26 +3517,35 @@ impl<'a> LowerContext<'a> {
 
         // Lower each arm
         for (i, arm) in arms.iter().enumerate() {
+            // A wildcard arm matches unconditionally; typeck guarantees it is
+            // the last arm. Variant arms compare the tag.
+            let (arm_variant_name, arm_bindings): (Option<&crate::span::Spanned<String>>, &[(crate::span::Spanned<String>, Option<crate::span::Spanned<String>>)]) =
+                match &arm.pattern {
+                    crate::parser::ast::MatchPattern::Wildcard { .. } => (None, &[]),
+                    crate::parser::ast::MatchPattern::Variant { variant_name, bindings, .. } => {
+                        (Some(variant_name), bindings)
+                    }
+                };
+
             // === Check block: compare tag ===
             self.builder.switch_to_block(check_blocks[i]);
             self.builder.seal_block(check_blocks[i]);
 
-            // Find variant index in enum definition
-            let variant_idx = enum_info.variants
-                .iter()
-                .position(|(name, _)| name == &arm.variant_name.node)
-                .ok_or_else(|| CompileError::codegen(
-                    format!("variant '{}' not found", arm.variant_name.node)
-                ))? as i64;
-
-            // For the last arm, exhaustiveness guarantees a match, so skip the check
-            if i + 1 < arms.len() {
+            // For the last arm (or a wildcard), a match is guaranteed, so skip the check
+            if i + 1 < arms.len() && arm_variant_name.is_some() {
+                let variant_name = arm_variant_name.expect("checked is_some above");
+                let variant_idx = enum_info.variants
+                    .iter()
+                    .position(|(name, _)| name == &variant_name.node)
+                    .ok_or_else(|| CompileError::codegen(
+                        format!("variant '{}' not found", variant_name.node)
+                    ))? as i64;
                 // Not the last arm - check the tag and branch
                 let expected_tag = self.builder.ins().iconst(types::I64, variant_idx);
                 let cmp = self.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
                 self.builder.ins().brif(cmp, body_blocks[i], &[], check_blocks[i + 1], &[]);
             } else {
-                // Last arm - exhaustiveness guarantees match, unconditional jump to body
+                // Last arm or wildcard - match guaranteed, unconditional jump to body
                 self.builder.ins().jump(body_blocks[i], &[]);
             }
 
@@ -3534,19 +3558,20 @@ impl<'a> LowerContext<'a> {
             // Save current variable bindings
             let mut prev_vars = Vec::new();
 
-            // Extract and bind fields from variant
-            let variant = &enum_info.variants
-                .iter()
-                .find(|(name, _)| name == &arm.variant_name.node)
-                .unwrap()
-                .1;
-
-            for (binding_field, opt_rename) in &arm.bindings {
+            for (binding_field, opt_rename) in arm_bindings {
+                let variant_name = arm_variant_name
+                    .expect("wildcard arms have no bindings");
+                // Extract and bind fields from variant
+                let variant = &enum_info.variants
+                    .iter()
+                    .find(|(name, _)| name == &variant_name.node)
+                    .expect("match arm variant should exist after typeck")
+                    .1;
                 // Find field index
                 let field_idx = variant
                     .iter()
                     .position(|(fname, _)| fname == &binding_field.node)
-                    .unwrap();
+                    .expect("binding field should exist in variant after typeck");
                 let field_type = &variant[field_idx].1;
 
                 // Load field value from heap: offset = (1 + field_idx) * 8
@@ -5773,6 +5798,16 @@ fn infer_type_for_expr_match(
 ) -> PlutoType {
     // Infer from the first arm's value expression (typeck guarantees all arms have same type)
     if let Some(arm) = arms.first() {
+        let (arm_variant_name, arm_bindings) = match &arm.pattern {
+            crate::parser::ast::MatchPattern::Variant { variant_name, bindings, .. } => {
+                (variant_name, bindings)
+            }
+            // A wildcard arm binds nothing — infer its value directly.
+            crate::parser::ast::MatchPattern::Wildcard { .. } => {
+                return infer_type_for_expr(&arm.value.node, env, var_types);
+            }
+        };
+
         // Get scrutinee type to find enum info
         let scrutinee_type = infer_type_for_expr(scrutinee, env, var_types);
         let enum_name = match &scrutinee_type {
@@ -5783,11 +5818,11 @@ fn infer_type_for_expr_match(
         // Get variant info to find field types
         if let Some(enum_info) = env.enums.get(enum_name) {
             if let Some((_, variant_fields)) = enum_info.variants.iter()
-                .find(|(name, _)| name == &arm.variant_name.node)
+                .find(|(name, _)| name == &arm_variant_name.node)
             {
                 // Create temporary var_types with bindings
                 let mut temp_var_types = var_types.clone();
-                for (binding_field, opt_rename) in &arm.bindings {
+                for (binding_field, opt_rename) in arm_bindings {
                     if let Some((_, field_type)) = variant_fields.iter()
                         .find(|(fname, _)| fname == &binding_field.node)
                     {

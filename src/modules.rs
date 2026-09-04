@@ -1223,11 +1223,13 @@ impl VisitMut for ModuleRewriter<'_> {
             }
             Stmt::Match { arms, .. } => {
                 for arm in arms {
-                    if is_module_type(&arm.enum_name.node, self.module_prog) {
-                        arm.enum_name.node = prefix_name(self.module_name, &arm.enum_name.node);
-                    }
-                    for ta in &mut arm.type_args {
-                        prefix_type_expr(&mut ta.node, self.module_name, self.module_prog);
+                    if let MatchPattern::Variant { enum_name, type_args, .. } = &mut arm.pattern {
+                        if is_module_type(&enum_name.node, self.module_prog) {
+                            enum_name.node = prefix_name(self.module_name, &enum_name.node);
+                        }
+                        for ta in type_args {
+                            prefix_type_expr(&mut ta.node, self.module_name, self.module_prog);
+                        }
                     }
                 }
             }
@@ -1481,8 +1483,10 @@ impl VisitMut for QualifiedAccessRewriter<'_> {
             }
             Stmt::Match { arms, .. } => {
                 for arm in arms {
-                    for ta in &mut arm.type_args {
-                        rewrite_type_expr(ta, self.import_names);
+                    if let MatchPattern::Variant { type_args, .. } = &mut arm.pattern {
+                        for ta in type_args {
+                            rewrite_type_expr(ta, self.import_names);
+                        }
                     }
                 }
             }

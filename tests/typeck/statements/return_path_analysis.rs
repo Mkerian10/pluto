@@ -80,7 +80,6 @@ fn both_raise_missing_return() { compile_and_run("error E1{}\nerror E2{}\nfn f()
 
 // Match with wildcard
 #[test]
-#[ignore] // Syntax error: wildcard match arms not supported
 fn match_wildcard_missing_return() { compile_should_fail_with(r#"enum E{A B} fn f()int{match E.A{E.A{return 1}_{let x=2}}}"#, "missing return"); }
 
 // Nested match
