@@ -1000,21 +1000,185 @@ fn scalar_and_nullable_round_trip_over_rpc() {
     );
 }
 
-/// Arrays are still outside the wire's type surface — rejected at compile time
-/// with the full supported list, never silently mis-marshaled.
+const CONTAINER_SERVER_SRC: &str = r#"
+import std.wire
+
+class User {
+    id: int
+    name: string
+}
+
+class Store {
+    seed: int
+    fn double_all(self, xs: [int]) [int] {
+        let mut out: [int] = []
+        let mut i = 0
+        while i < xs.len() {
+            out.push(xs[i] * 2)
+            i = i + 1
+        }
+        return out
+    }
+    fn counts(self) Map<string, int> {
+        let m = Map<string, int> {}
+        m.insert("a", 1)
+        m.insert("b", 2)
+        return m
+    }
+    fn users(self, n: int) [User] {
+        let mut out: [User] = []
+        let mut i = 0
+        while i < n {
+            out.push(User { id: i, name: f"u{i}" })
+            i = i + 1
+        }
+        return out
+    }
+    fn uniq(self, xs: [int]) Set<int> {
+        let s = Set<int> {}
+        let mut i = 0
+        while i < xs.len() {
+            s.insert(xs[i])
+            i = i + 1
+        }
+        return s
+    }
+    fn maybe(self, want: bool) [int]? {
+        if want {
+            return [7, 8]
+        }
+        return none
+    }
+    fn rows(self) [[int]] {
+        let mut out: [[int]] = []
+        out.push([1, 2])
+        out.push([3])
+        return out
+    }
+}
+
+fn main() {
+    let s = Store { seed: 1 }
+    serve s on 0
+}"#;
+
+const CONTAINER_IFACE: &str = r#"
+pub class User {
+    id: int
+    name: string
+}
+
+pub class Store {
+    seed: int
+    fn double_all(self, xs: [int]) [int] {
+        return xs
+    }
+    fn counts(self) Map<string, int> {
+        let m = Map<string, int> {}
+        return m
+    }
+    fn users(self, n: int) [User] {
+        let out: [User] = []
+        return out
+    }
+    fn uniq(self, xs: [int]) Set<int> {
+        let s = Set<int> {}
+        return s
+    }
+    fn maybe(self, want: bool) [int]? {
+        return none
+    }
+    fn rows(self) [[int]] {
+        let out: [[int]] = []
+        return out
+    }
+}"#;
+
+const CONTAINER_CLIENT_SRC: &str = r#"
+import std.wire
+import store
+
+app App[s: remote store.Store] {
+    fn main(self) {
+        let empty: [int] = []
+        let d = self.s.double_all([1, 2, 3]) catch empty
+        let d0 = d[0]
+        let d1 = d[1]
+        let d2 = d[2]
+        print(f"doubled={d0},{d1},{d2}")
+
+        let fallback = Map<string, int> {}
+        let m = self.s.counts() catch fallback
+        let ma = m["a"]
+        let mb = m["b"]
+        print(f"counts a={ma} b={mb}")
+
+        let nousers: [store.User] = []
+        let us = self.s.users(2) catch nousers
+        let u0 = us[0].name
+        let u1 = us[1].name
+        print(f"users={u0},{u1}")
+
+        let noset = Set<int> {}
+        let sq = self.s.uniq([3, 3, 4]) catch noset
+        let sqlen = sq.len()
+        let has3 = sq.contains(3)
+        let has5 = sq.contains(5)
+        print(f"set len={sqlen} has3={has3} has5={has5}")
+
+        let some = self.s.maybe(true) catch empty
+        let somev = some ?? empty
+        let s0 = somev[0]
+        let s1 = somev[1]
+        print(f"maybe={s0},{s1}")
+        let nothing = self.s.maybe(false) catch empty
+        if nothing == none {
+            print("maybe-none=yes")
+        } else {
+            print("maybe-none=no")
+        }
+
+        let norows: [[int]] = []
+        let r = self.s.rows() catch norows
+        let r00 = r[0][0]
+        let r01 = r[0][1]
+        let r10 = r[1][0]
+        print(f"rows={r00},{r01},{r10}")
+    }
+}"#;
+
+/// Containers cross the wire as top-level argument and return types: arrays
+/// (of ints and of classes), maps, sets, nullable arrays (both states), and
+/// nested arrays — each round-tripped over a real socket.
 #[test]
-fn array_over_rpc_rejected_at_compile_time() {
-    compile_project_should_fail_with(
-        &[
-            (
-                "calc.pluto",
-                "pub class Calc {\n    fn triple(self, n: int) [int] {\n        return [n, n, n]\n    }\n}",
-            ),
-            (
-                "main.pluto",
-                "import calc\n\napp App[c: remote calc.Calc] {\n    fn main(self) {\n        let a = self.c.triple(2) catch [0]\n        print(a.len())\n    }\n}",
-            ),
-        ],
-        "unsupported return type [int]",
+fn containers_round_trip_over_rpc() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", CONTAINER_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("store.pluto", CONTAINER_IFACE), ("main.pluto", CONTAINER_CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_STORE", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "doubled=2,4,6\n\
+         counts a=1 b=2\n\
+         users=u0,u1\n\
+         set len=2 has3=true has5=false\n\
+         maybe=7,8\n\
+         maybe-none=yes\n\
+         rows=1,2,3\n"
     );
 }

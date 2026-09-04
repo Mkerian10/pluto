@@ -10,11 +10,25 @@
 //
 // Then point a client at the port it prints (see examples/rpc/client/).
 
+import std.wire
+
 class BillingService {
     rate: int
 
     fn charge(self, amount: int) int {
         return amount * self.rate
+    }
+
+    // Containers work as argument and return types too — arrays, maps, and
+    // sets are marshaled through std.wire (hence the import above).
+    fn charge_all(self, amounts: [int]) [int] {
+        let mut out: [int] = []
+        let mut i = 0
+        while i < amounts.len() {
+            out.push(amounts[i] * self.rate)
+            i = i + 1
+        }
+        return out
     }
 }
 

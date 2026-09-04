@@ -11,11 +11,19 @@
 //   PLUTO_REMOTE_BILLINGSERVICE=127.0.0.1:9000 \
 //     cargo run -- run examples/rpc/client/main.pt --stdlib stdlib
 
+import std.wire
 import billing
 
 app Payments[billing: remote billing.BillingService] {
     fn main(self) {
         let charged = self.billing.charge(21) catch -1
         print(f"charged: {charged}")
+
+        let empty: [int] = []
+        let batch = self.billing.charge_all([10, 20, 30]) catch empty
+        let b0 = batch[0]
+        let b1 = batch[1]
+        let b2 = batch[2]
+        print(f"batch: {b0}, {b1}, {b2}")
     }
 }

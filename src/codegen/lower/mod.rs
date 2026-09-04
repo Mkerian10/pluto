@@ -888,7 +888,32 @@ impl<'a> LowerContext<'a> {
             | PlutoType::Class(_)
             | PlutoType::Enum(_) => true,
             PlutoType::Nullable(inner) => Self::wire_supported(inner),
+            PlutoType::Array(elem) => Self::wire_supported(elem),
+            PlutoType::Set(elem) => Self::wire_supported(elem),
+            PlutoType::Map(k, v) => Self::wire_supported(k) && Self::wire_supported(v),
             _ => false,
+        }
+    }
+
+    /// Wrapper-name suffix for a wire-supported type — must mirror
+    /// `marshal::wire_type_suffix` (which names the generated wrappers from
+    /// the pre-typeck TypeExprs).
+    fn wire_container_suffix(t: &PlutoType) -> Option<String> {
+        match t {
+            PlutoType::Int => Some("int".to_string()),
+            PlutoType::Float => Some("float".to_string()),
+            PlutoType::Bool => Some("bool".to_string()),
+            PlutoType::String => Some("string".to_string()),
+            PlutoType::Class(n) | PlutoType::Enum(n) => Some(n.replace("$$", "__")),
+            PlutoType::Array(e) => Some(format!("arr_{}", Self::wire_container_suffix(e)?)),
+            PlutoType::Set(e) => Some(format!("set_{}", Self::wire_container_suffix(e)?)),
+            PlutoType::Map(k, v) => Some(format!(
+                "map_{}_{}",
+                Self::wire_container_suffix(k)?,
+                Self::wire_container_suffix(v)?
+            )),
+            PlutoType::Nullable(e) => Some(format!("opt_{}", Self::wire_container_suffix(e)?)),
+            _ => None,
         }
     }
 
@@ -911,6 +936,12 @@ impl<'a> LowerContext<'a> {
             PlutoType::String => self.call_runtime("__pluto_wire_escape", &[val]),
             PlutoType::Class(tn) | PlutoType::Enum(tn) => {
                 self.call_named_func(&format!("__wire_encode_{tn}"), &[val])?
+            }
+            PlutoType::Array(_) | PlutoType::Map(..) | PlutoType::Set(_) => {
+                let suffix = Self::wire_container_suffix(ty).ok_or_else(|| {
+                    CompileError::codegen(format!("wire encode: unsupported type {ty}"))
+                })?;
+                self.call_named_func(&format!("__wire_encode_{suffix}"), &[val])?
             }
             PlutoType::Nullable(inner) => {
                 // val is the nullable pointer (0 = none)
@@ -984,6 +1015,12 @@ impl<'a> LowerContext<'a> {
             PlutoType::String => self.call_runtime("__pluto_wire_unescape", &[val]),
             PlutoType::Class(tn) | PlutoType::Enum(tn) => {
                 self.call_named_func(&format!("__wire_decode_{tn}"), &[val])?
+            }
+            PlutoType::Array(_) | PlutoType::Map(..) | PlutoType::Set(_) => {
+                let suffix = Self::wire_container_suffix(ty).ok_or_else(|| {
+                    CompileError::codegen(format!("wire decode: unsupported type {ty}"))
+                })?;
+                self.call_named_func(&format!("__wire_decode_{suffix}"), &[val])?
             }
             PlutoType::Nullable(inner) => {
                 let is_none = self.call_runtime("__pluto_wire_opt_is_none", &[val]);
@@ -3741,8 +3778,8 @@ impl<'a> LowerContext<'a> {
                     if !Self::wire_supported(&aty) {
                         return Err(CompileError::codegen(format!(
                             "remote call '{}.{}': unsupported argument type {aty} \
-                             (supported: int, float, bool, string, nullables of those, \
-                             and class/enum via std.wire)",
+                             (supported: int, float, bool, string, nullables, \
+                             and class/enum/array/map/set via std.wire)",
                             cname, method.node
                         )));
                     }
@@ -3770,7 +3807,7 @@ impl<'a> LowerContext<'a> {
                     return Err(CompileError::codegen(format!(
                         "remote call '{}.{}': unsupported return type {ret_type} \
                          (supported: int, float, bool, string, void, nullables, \
-                         and class/enum via std.wire)",
+                         and class/enum/array/map/set via std.wire)",
                         cname, method.node
                     )));
                 }
