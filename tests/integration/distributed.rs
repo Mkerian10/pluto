@@ -1182,3 +1182,151 @@ fn containers_round_trip_over_rpc() {
          rows=1,2,3\n"
     );
 }
+
+// ── Phase 8: `at` placement expressions (docs/design/rfc-at-placement.md) ──
+
+const AT_APP_SRC: &str = r#"
+import std.wire
+
+error PaymentDeclined {
+    code: int
+}
+
+class PaymentService {
+    fn charge(self, amount: int) int {
+        if amount > 50 {
+            raise PaymentDeclined { code: 402 }
+        }
+        return amount + 1
+    }
+    fn batch(self, amounts: [int]) [int] {
+        let mut out: [int] = []
+        let mut i = 0
+        while i < amounts.len() {
+            out.push(amounts[i] + 1)
+            i = i + 1
+        }
+        return out
+    }
+}
+
+app Shop[pay: domain PaymentService] {
+    fn main(self) {
+        let ok = at self.pay { charge(10) } catch -1
+        print(f"ok: {ok}")
+        let declined = at self.pay {
+            charge(100)
+        } catch err: PaymentDeclined {
+            0 - err.code
+        } catch err {
+            -1
+        }
+        print(f"declined: {declined}")
+        let empty: [int] = []
+        let b = at self.pay { batch([5, 6]) } catch empty
+        let b0 = b[0]
+        let b1 = b[1]
+        print(f"batch: {b0},{b1}")
+    }
+}"#;
+
+const AT_SERVER_SRC: &str = r#"
+import std.wire
+
+error PaymentDeclined {
+    code: int
+}
+
+class PaymentService {
+    fn charge(self, amount: int) int {
+        if amount > 50 {
+            raise PaymentDeclined { code: 402 }
+        }
+        return amount + 1
+    }
+    fn batch(self, amounts: [int]) [int] {
+        let mut out: [int] = []
+        let mut i = 0
+        while i < amounts.len() {
+            out.push(amounts[i] + 1)
+            i = i + 1
+        }
+        return out
+    }
+}
+
+fn main() {
+    let svc = PaymentService {}
+    serve svc on 0
+}"#;
+
+/// The placement model's central claim, as running code: ONE app binary whose
+/// `at` boundary lowers to a direct local call when the domain is unbound and
+/// to the socket transport when PLUTO_DOMAIN_<SERVICE> is set — with identical
+/// observable behavior, including typed-error reconstruction and container
+/// returns, in both plans.
+#[test]
+fn at_placement_same_binary_two_plans() {
+    let (_ad, app_bin) = build_binary(&[("main.pluto", AT_APP_SRC)]);
+    let expected = "ok: 11\ndeclined: -402\nbatch: 6,7\n";
+
+    // Plan A: colocated — no binding, direct in-process call.
+    let colocated = Command::new(&app_bin).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&colocated.stdout), expected);
+
+    // Plan B: distributed — same binary, domain bound to a real server.
+    let (_sd, server_bin) = build_binary(&[("main.pluto", AT_SERVER_SRC)]);
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let distributed = Command::new(&app_bin)
+        .env("PLUTO_DOMAIN_PAYMENTSERVICE", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+    assert_eq!(String::from_utf8_lossy(&distributed.stdout), expected);
+}
+
+/// The boundary contract is plan-independent: an unhandled `at` is rejected
+/// at compile time even though the program may only ever run colocated.
+#[test]
+fn at_unhandled_rejected_in_any_plan() {
+    compile_project_should_fail_with(
+        &[(
+            "main.pluto",
+            "class Svc {\n    fn ping(self) int {\n        return 1\n    }\n}\n\napp A[s: domain Svc] {\n    fn main(self) {\n        let x = at self.s { ping() }\n        print(x)\n    }\n}",
+        )],
+        "placement expression `at` (calling 'ping') must be handled",
+    );
+}
+
+/// The boundary must be syntactically visible: direct method calls on a
+/// domain dep are rejected with a pointer to `at`.
+#[test]
+fn direct_call_on_domain_dep_rejected() {
+    compile_project_should_fail_with(
+        &[(
+            "main.pluto",
+            "class Svc {\n    fn ping(self) int {\n        return 1\n    }\n}\n\napp A[s: domain Svc] {\n    fn main(self) {\n        let x = self.s.ping() catch -1\n        print(x)\n    }\n}",
+        )],
+        "computation in domain 'Svc' must be placed with 'at'",
+    );
+}
+
+/// `at` only places into declared domains — an ordinary dep is rejected.
+#[test]
+fn at_on_non_domain_dep_rejected() {
+    compile_project_should_fail_with(
+        &[(
+            "main.pluto",
+            "class Svc {\n    fn ping(self) int {\n        return 1\n    }\n}\n\napp A[s: Svc] {\n    fn main(self) {\n        let x = at self.s { ping() } catch -1\n        print(x)\n    }\n}",
+        )],
+        "'at' requires a domain: 'Svc' is not declared as one",
+    );
+}

@@ -106,6 +106,14 @@ pub struct Field {
     /// add `NetworkError` to the caller's inferred error set.
     #[serde(default)]
     pub is_remote: bool,
+    /// True when this injected dep is a `domain` reference: a logical
+    /// execution domain (docs/design/distributed-model.md). Computation is
+    /// placed there with `at` expressions; the physical plan (colocated vs.
+    /// socket transport) is decided by the deployment binding, while the
+    /// boundary contract (wire-shaped transfer, unconditional fallibility)
+    /// is checked identically in every plan.
+    #[serde(default)]
+    pub is_domain: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -433,6 +441,16 @@ pub enum Expr {
         condition: Box<Spanned<Expr>>,
         then_block: Spanned<Block>,
         else_block: Spanned<Block>,
+    },
+    /// `at <domain> { <call> }` — placement expression: evaluate the call in
+    /// the named logical execution domain (docs/design/distributed-model.md).
+    /// Slice 1: the body is exactly one call to a method of the domain's
+    /// service interface; lowering picks the physical plan (direct local call
+    /// vs. socket transport) from the startup domain binding.
+    At {
+        domain: Box<Spanned<Expr>>,
+        method: Spanned<String>,
+        args: Vec<Spanned<Expr>>,
     },
     /// Match-expression: all arms must return same type, exhaustiveness required
     Match {

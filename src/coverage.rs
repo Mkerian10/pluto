@@ -460,6 +460,12 @@ impl<'a> CoverageScanner<'a> {
                 self.scan_expr(&lhs.node);
                 self.scan_expr(&rhs.node);
             }
+            Expr::At { domain, args, .. } => {
+                self.scan_expr(&domain.node);
+                for a in args {
+                    self.scan_expr(&a.node);
+                }
+            }
             Expr::NullPropagate { expr: inner } => {
                 if inner.span.start < self.source_len() {
                     // branch_id 1: null path, branch_id 2: value path

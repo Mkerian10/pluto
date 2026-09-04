@@ -687,3 +687,24 @@ mod tests {
         );
     }
 }
+
+/// Whether a type can cross a domain boundary (the schema-level wire surface).
+/// The single predicate shared by `at` placement checking, the serve dispatch
+/// filter, the interface hash, and both marshal directions — per
+/// docs/design/distributed-model.md, this is checked identically whatever
+/// physical plan the boundary gets.
+pub(crate) fn wire_supported(t: &PlutoType) -> bool {
+    match t {
+        PlutoType::Int
+        | PlutoType::Float
+        | PlutoType::Bool
+        | PlutoType::String
+        | PlutoType::Class(_)
+        | PlutoType::Enum(_) => true,
+        PlutoType::Nullable(inner) => wire_supported(inner),
+        PlutoType::Array(elem) => wire_supported(elem),
+        PlutoType::Set(elem) => wire_supported(elem),
+        PlutoType::Map(k, v) => wire_supported(k) && wire_supported(v),
+        _ => false,
+    }
+}

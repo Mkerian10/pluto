@@ -577,6 +577,12 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
             substitute_in_expr(&mut lhs.node, bindings);
             substitute_in_expr(&mut rhs.node, bindings);
         }
+        Expr::At { domain, args, .. } => {
+            substitute_in_expr(&mut domain.node, bindings);
+            for a in args {
+                substitute_in_expr(&mut a.node, bindings);
+            }
+        }
         Expr::NullPropagate { expr } => {
             substitute_in_expr(&mut expr.node, bindings);
         }
@@ -1294,7 +1300,7 @@ mod tests {
                     ty: spanned(TypeExpr::Named("string".to_string())),
                     is_injected: false,
                     is_ambient: false,
-                    is_remote: false,
+                    is_remote: false, is_domain: false,
                 },
             ],
             methods: vec![
@@ -1345,7 +1351,7 @@ mod tests {
                             ty: spanned(TypeExpr::Named("int".to_string())),
                             is_injected: false,
                             is_ambient: false,
-                            is_remote: false,
+                            is_remote: false, is_domain: false,
                         },
                     ],
                 },
@@ -1611,7 +1617,7 @@ mod tests {
                     ty: spanned(TypeExpr::Named("T".to_string())),
                     is_injected: false,
                     is_ambient: false,
-                    is_remote: false,
+                    is_remote: false, is_domain: false,
                 },
             ],
             methods: vec![],
@@ -1692,7 +1698,7 @@ mod tests {
                     ty: spanned(TypeExpr::Named("A".to_string())),
                     is_injected: false,
                     is_ambient: false,
-                    is_remote: false,
+                    is_remote: false, is_domain: false,
                 },
                 Field {
                     id: Uuid::new_v4(),
@@ -1700,7 +1706,7 @@ mod tests {
                     ty: spanned(TypeExpr::Named("B".to_string())),
                     is_injected: false,
                     is_ambient: false,
-                    is_remote: false,
+                    is_remote: false, is_domain: false,
                 },
             ],
             methods: vec![],
@@ -1741,7 +1747,7 @@ mod tests {
                             ty: spanned(TypeExpr::Named("T".to_string())),
                             is_injected: false,
                             is_ambient: false,
-                            is_remote: false,
+                            is_remote: false, is_domain: false,
                         },
                     ],
                 },
@@ -1783,7 +1789,7 @@ mod tests {
                             ty: spanned(TypeExpr::Named("T".to_string())),
                             is_injected: false,
                             is_ambient: false,
-                            is_remote: false,
+                            is_remote: false, is_domain: false,
                         },
                     ],
                 },
@@ -1797,7 +1803,7 @@ mod tests {
                             ty: spanned(TypeExpr::Named("E".to_string())),
                             is_injected: false,
                             is_ambient: false,
-                            is_remote: false,
+                            is_remote: false, is_domain: false,
                         },
                     ],
                 },
@@ -3067,7 +3073,7 @@ mod tests {
                     ty: spanned(TypeExpr::Named("string".to_string())),
                     is_injected: false,
                     is_ambient: false,
-                    is_remote: false,
+                    is_remote: false, is_domain: false,
                 },
             ],
             methods: vec![],
@@ -3303,7 +3309,7 @@ mod tests {
                 ty: spanned(TypeExpr::Named("T".to_string())),
                 is_injected: false,
                 is_ambient: false,
-                is_remote: false,
+                is_remote: false, is_domain: false,
             }],
             methods: vec![],
             impl_traits: vec![],
@@ -3337,7 +3343,7 @@ mod tests {
                 ty: spanned(TypeExpr::Named("T".to_string())),
                 is_injected: false,
                 is_ambient: false,
-                is_remote: false,
+                is_remote: false, is_domain: false,
             }],
             methods: vec![],
             impl_traits: vec![ImplTraitRef { name: spanned("Printable".to_string()), type_args: vec![] }],
@@ -3377,7 +3383,7 @@ mod tests {
                         ty: spanned(TypeExpr::Named("T".to_string())),
                         is_injected: false,
                         is_ambient: false,
-                        is_remote: false,
+                        is_remote: false, is_domain: false,
                     }],
                 },
             ],

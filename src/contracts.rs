@@ -64,6 +64,12 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
         // Identifiers — allowed
         Expr::Ident(_) => Ok(()),
 
+        // Placement expressions — never decidable (cross-domain effects)
+        Expr::At { .. } => Err(CompileError::type_err(
+            "'at' placement expressions are not allowed in contract expressions".to_string(),
+            span,
+        )),
+
         // Binary operators — allowed (recurse into operands)
         Expr::BinOp { lhs, rhs, .. } => {
             validate_decidable_fragment(&lhs.node, lhs.span, kind)?;

@@ -1684,6 +1684,12 @@ fn resolve_qualified_access_in_stmt(stmt: &mut Stmt, module_names: &HashSet<Stri
 
 fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &HashSet<String>, enum_name_map: &HashMap<String, String>) {
     match expr {
+        Expr::At { domain, args, .. } => {
+            resolve_qualified_access_in_expr(&mut domain.node, span, module_names, enum_name_map);
+            for a in args {
+                resolve_qualified_access_in_expr(&mut a.node, a.span, module_names, enum_name_map);
+            }
+        }
         Expr::QualifiedAccess { segments } => {
             if segments.is_empty() {
                 return;

@@ -1084,6 +1084,20 @@ impl PrettyPrinter {
 
     fn emit_expr(&mut self, expr: &Expr, parent_prec: u8) {
         match expr {
+            Expr::At { domain, method, args } => {
+                self.write("at ");
+                self.emit_expr(&domain.node, 0);
+                self.write(" { ");
+                self.write(&method.node);
+                self.write("(");
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(&a.node, 0);
+                }
+                self.write(") }");
+            }
             Expr::IntLit(n) => {
                 self.write(&n.to_string());
             }

@@ -237,6 +237,10 @@ pub struct TypeEnv {
     /// `remote` in one place is remote for all calls to it. Per-call-site
     /// precision is a later refinement.
     pub remote_types: HashSet<String>,
+    /// Class names referenced by `domain` deps: logical execution domains.
+    /// Computation is placed in them with `at` expressions; direct method
+    /// calls on domain deps are rejected. Like remote_types, program-global.
+    pub domain_types: HashSet<String>,
     /// Nesting depth of loops (for validating break/continue)
     pub loop_depth: u32,
     /// Spawn span → target function name
@@ -370,6 +374,7 @@ impl TypeEnv {
             generic_rewrites: HashMap::new(),
             method_resolutions: HashMap::new(),
             remote_types: HashSet::new(),
+            domain_types: HashSet::new(),
             fallible_builtin_calls: HashSet::new(),
             current_fn: None,
             ambient_types: HashSet::new(),

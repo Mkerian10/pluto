@@ -18,7 +18,8 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// Current schema version.
 /// v7: match arms carry a MatchPattern (Variant | Wildcard) instead of flat
 /// variant fields.
-const SCHEMA_VERSION: u32 = 7;
+/// v8: Expr::At placement expressions; Field.is_domain.
+const SCHEMA_VERSION: u32 = 8;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;
