@@ -47,4 +47,11 @@ fn main() {
     //   u.consume()
     //   -> method 'consume' does not exist on 'Partition<Unowned>':
     //      on 'Partition' it exists only where S == Owned
+    //
+    // And transitions are linear — the old binding is consumed:
+    //   let o2 = u.acquire()   (fine: this was the first use above)
+    //   u.describe()
+    //   -> 'u' was consumed by the transition '.acquire()'
+    //      (it is now Partition<Owned>); use the transition's result,
+    //      or rebind 'u'
 }

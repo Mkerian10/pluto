@@ -1259,3 +1259,182 @@ fn typestate_unknown_state_rejected() {
         "unknown state type 'Nonexistent'",
     );
 }
+
+// ── Typestates phase 2: transition linearity ──
+
+/// Calling a state-transition method consumes the receiver binding: the
+/// old-state alias is unusable afterward.
+#[test]
+fn typestate_use_after_transition_rejected() {
+    compile_should_fail_with(
+        r#"
+        class Unowned { tag: int }
+        class Owned { tag: int }
+
+        class Partition<S> {
+            id: int
+            fn acquire(self) Partition<Owned> where S == Unowned {
+                return Partition<Owned> { id: self.id }
+            }
+            fn describe(self) string {
+                return f"p{self.id}"
+            }
+        }
+
+        fn main() {
+            let u = Partition<Unowned> { id: 1 }
+            let o = u.acquire()
+            print(u.describe())
+        }
+        "#,
+        "'u' was consumed by the transition '.acquire()' (it is now Partition<Owned>)",
+    );
+}
+
+/// Reassignment revives a consumed binding; consumption inside a branch is
+/// conservative (consumed on any path is consumed after the join); loops
+/// catch iteration-two use of a binding consumed in iteration one.
+#[test]
+fn typestate_linearity_flow_rules() {
+    // reassignment revives
+    let out = compile_and_run_stdout(
+        r#"
+        class Unowned { tag: int }
+        class Owned { tag: int }
+
+        class Partition<S> {
+            id: int
+            fn acquire(self) Partition<Owned> where S == Unowned {
+                return Partition<Owned> { id: self.id }
+            }
+            fn describe(self) string {
+                return f"p{self.id}"
+            }
+        }
+
+        fn main() {
+            let mut u = Partition<Unowned> { id: 1 }
+            let o = u.acquire()
+            u = Partition<Unowned> { id: 2 }
+            print(u.describe())
+            print(o.describe())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "p2\np1");
+
+    // branch join is conservative
+    compile_should_fail_with(
+        r#"
+        class Unowned { tag: int }
+        class Owned { tag: int }
+
+        class Partition<S> {
+            id: int
+            fn acquire(self) Partition<Owned> where S == Unowned {
+                return Partition<Owned> { id: self.id }
+            }
+            fn describe(self) string {
+                return f"p{self.id}"
+            }
+        }
+
+        fn main() {
+            let u = Partition<Unowned> { id: 1 }
+            if u.id > 0 {
+                let o = u.acquire()
+                print(o.describe())
+            }
+            print(u.describe())
+        }
+        "#,
+        "'u' was consumed by the transition",
+    );
+
+    // loop: consumed in iteration one, used in iteration two
+    compile_should_fail_with(
+        r#"
+        class Unowned { tag: int }
+        class Owned { tag: int }
+
+        class Partition<S> {
+            id: int
+            fn acquire(self) Partition<Owned> where S == Unowned {
+                return Partition<Owned> { id: self.id }
+            }
+        }
+
+        fn main() {
+            let u = Partition<Unowned> { id: 1 }
+            let mut i = 0
+            while i < 3 {
+                let o = u.acquire()
+                i = i + 1
+            }
+            print(i)
+        }
+        "#,
+        "'u' was consumed by the transition",
+    );
+}
+
+/// Only STATE parameters trigger consumption. A class with no `where`
+/// clauses is a plain data generic: instance-returning transform methods
+/// never consume the receiver.
+#[test]
+fn typestate_linearity_ignores_data_generics() {
+    let out = compile_and_run_stdout(
+        r#"
+        class Box<T> {
+            value: T
+
+            fn as_label(self) Box<string> {
+                return Box<string> { value: "x" }
+            }
+
+            fn get(self) T {
+                return self.value
+            }
+        }
+
+        fn main() {
+            let b = Box<int> { value: 5 }
+            let s = b.as_label()
+            print(b.get())
+            print(s.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "5\nx");
+}
+
+/// In a mixed class the discrimination is per-parameter: changing the state
+/// param consumes; a non-transition method on the same class does not.
+#[test]
+fn typestate_linearity_state_vs_data_params() {
+    compile_should_fail_with(
+        r#"
+        class Ready { tag: int }
+        class Draft { tag: int }
+
+        class Doc<S, T> {
+            payload: T
+
+            fn finalize(self) Doc<Ready, T> where S == Draft {
+                return Doc<Ready, T> { payload: self.payload }
+            }
+
+            fn peek(self) T {
+                return self.payload
+            }
+        }
+
+        fn main() {
+            let d = Doc<Draft, string> { payload: "hello" }
+            let r = d.finalize()
+            print(d.peek())
+        }
+        "#,
+        "'d' was consumed by the transition '.finalize()'",
+    );
+}

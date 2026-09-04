@@ -1,6 +1,6 @@
 # RFC: Typestates via Generics
 
-**Status:** Phase 1 implemented
+**Status:** Phases 1 and 2 implemented
 **Author:** Matt Kerian
 **Date:** 2026-09-04
 **Related:** [v1-vision.md](../v1-vision.md) (Static Verification), [contracts.md](contracts.md), [rfc-distributed-safety.md](rfc-distributed-safety.md)
@@ -83,9 +83,18 @@ Each equality names one of the **class's** type parameters on the left and a con
 - **No `where` on free functions or trait declarations.** Free functions already express state via parameter types (`fn f(p: Partition<Owned>)`). Constraints on trait *impl* methods are rejected in phase 1.
 - **No generic state arguments** (`where S == Box<int>`). States are plain named classes/enums.
 
-## Phase 2: transition linearity (planned)
+## Phase 2: transition linearity (implemented)
 
-The stale-alias gap closes with a *moved-binding* analysis: calling a state-transition method (one whose return type is the same class at a different state) marks the receiver binding consumed; later uses are errors. The compiler already does exactly this shape of dataflow for task handles ("Task handle must be used") and scope-tainted closures, so this is an extension of existing analysis, not new machinery. Design question to settle first: is consumption tied to *transition methods* specifically, or opt-in per class (`linear class Partition<S>`)?
+The stale-alias gap is closed by a *moved-binding* analysis (`src/typeck/linearity.rs`): calling a **transition method** through a local binding consumes that binding; later uses are errors naming the transition and the state the value moved to.
+
+**What counts as a transition.** The consumption decision settled on *automatic, discriminated by state parameters*: a *state parameter* is any type parameter named on the left of a `where` clause anywhere in the class; a *transition method* is one whose return type is the same class with a state-parameter position changed. This keeps data generics completely out of the analysis — a class with no `where` clauses never participates, and `Box<T>.map() Box<U>` (data param change) never consumes. The opt-in `linear class` form remains available as future work if automatic consumption proves too aggressive.
+
+**Flow rules.**
+- Reassignment (`u = ...`) or a fresh `let u` revives the binding.
+- Branch joins are conservative: consumed on any path ⇒ consumed after the join.
+- Loop bodies are analyzed to a fixpoint, so a transition in iteration one is caught as a use in iteration two.
+- Closure/spawn bodies are checked against a snapshot (capturing a consumed value is a use); their consumption doesn't escape (captures are by-value).
+- Only simple local receivers consume (`u.acquire()`); transitions through fields or temporaries are outside the analysis (documented gap, aligned with the class-level granularity of other analyses).
 
 ## Phase 3: distributed contract predicates (planned)
 
