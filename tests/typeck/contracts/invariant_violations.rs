@@ -66,8 +66,10 @@ fn main(){}"#).is_ok()); }
 
 // Invariant on bracket dep field
 #[test]
-#[ignore]
-fn invariant_bracket_dep() { compile_should_fail_with(r#"class Dep{x:int} class C[d:Dep]{invariant self.d.x>0} fn main(){}"#, ""); }
+fn invariant_bracket_dep() { // Invariants may read bracket deps (injected fields are fields) (audit: premise flipped)
+    assert!(pluto::compile_to_object(r#"class Dep{x:int}
+class C[d:Dep]{invariant self.d.x>0}
+fn main(){}"#).is_ok()); }
 
 // Invariant with spawn
 #[test]

@@ -392,21 +392,6 @@ fn test_closure_captures_survive_gc() {
 // ============================================================================
 
 #[test]
-#[ignore] // DUPLICATE: Already covered by integration tests in tests/integration/strings.rs
-fn test_string_tag_allocation() {
-    // Verify string allocations work (tag is implicit via runtime)
-    let src = r#"
-        fn main() {
-            let s1 = "string one"
-            let s2 = "string two"
-            let s3 = "string three"
-            print(s1.len() + s2.len() + s3.len())
-        }
-    "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "32"); // 10 + 10 + 12
-}
-
-#[test]
 fn test_class_tag_allocation() {
     // Verify class instance allocations work
     let src = r#"

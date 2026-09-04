@@ -228,7 +228,7 @@ fn match_all_enum_variants() {
 // Forward-compatible test for wildcard match patterns (not yet implemented).
 // Will pass once match supports _ wildcard for catch-all patterns.
 #[test]
-#[ignore]
+#[ignore] // wildcard match arms (_ =>) are not supported; match requires explicit variant arms
 fn match_with_wildcard() {
     // match x { _ => 0 }
     let stdout = compile_and_run_stdout(r#"
@@ -279,7 +279,7 @@ fn match_with_destructuring() {
 // Forward-compatible test for nested match-as-expression (not yet implemented).
 // Will pass once match can be used as an expression with nested patterns.
 #[test]
-#[ignore]
+#[ignore] // nested patterns in match arms are not supported (bindings are flat field lists)
 fn match_nested_patterns() {
     // match opt { Some{Some{x}} => x, ... }
     let stdout = compile_and_run_stdout(r#"

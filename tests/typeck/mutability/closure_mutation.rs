@@ -27,7 +27,7 @@ fn mutate_outer_from_inner() { compile_should_fail_with(r#"fn main(){let x=1 let
 
 // Mutate after closure creation
 #[test]
-#[ignore]
+#[ignore] // one-liner source with closure-adjacent statements the healer cannot split; rewrite when revisiting
 fn mutate_after_closure() { compile_and_run(r#"fn main(){let x=1 let f=()=>x x=2}"#); }
 
 // Mutate inside closure parameter
@@ -42,7 +42,7 @@ let f=()=>{c.x=2}}"#, "cannot assign to field of immutable variable 'c'; declare
 
 // Mutate through closure call
 #[test]
-#[ignore]
+#[ignore] // one-liner source with closure-adjacent statements the healer cannot split; rewrite when revisiting
 fn mutate_through_call() { compile_and_run(r#"fn main(){let x=1 let f=()=>x let y=f() x=2}"#); }
 
 // Mutate in recursive closure

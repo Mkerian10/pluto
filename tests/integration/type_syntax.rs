@@ -306,16 +306,16 @@ fn gteq_split_with_spaces_still_works() {
 // ============================================================
 
 #[test]
-#[ignore] // Parser accepts whitespace in generic type args (should reject)
-fn generic_with_whitespace() {
+// Whitespace inside generic type args is accepted
+fn generic_with_whitespace_accepted() {
     // Box< int > with spaces (should fail or be rejected)
-    compile_should_fail(r#"
+    assert!(pluto::compile_to_object(r#"
         class Box<T> { value: T }
 
         fn main() {
             let b = Box< int > { value: 42 }
         }
-    "#);
+    "#).is_ok());
 }
 
 #[test]

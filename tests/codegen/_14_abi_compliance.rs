@@ -120,7 +120,6 @@ fn test_return_float_from_c() {
 }
 
 #[test]
-#[ignore] // Known limitation: Primitives don't have methods (no .to_string() on int)
 fn test_return_pointer_from_c() {
     // C function returns I64 (pointer to GC object)
     let src = r#"
@@ -403,26 +402,6 @@ fn test_bool_abi_compliance() {
         }
     "#;
     assert_eq!(compile_and_run_stdout(src).trim(), "true");
-}
-
-#[test]
-#[ignore] // DUPLICATE: Error state ABI already covered by integration tests in tests/integration/errors.rs
-fn test_error_state_abi_compliance() {
-    // Verify error state (TLS) is correctly managed across C calls
-    let src = r#"
-        error MyError {}
-
-        fn may_fail() {
-            raise MyError {}
-        }
-
-        fn main() {
-            may_fail() catch err {
-                print("caught")
-            }
-        }
-    "#;
-    assert_eq!(compile_and_run_stdout(src).trim(), "caught");
 }
 
 #[test]

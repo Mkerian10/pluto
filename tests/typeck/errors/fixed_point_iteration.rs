@@ -51,8 +51,10 @@ fn five_way_mutual_recursion() { compile_should_fail_with(r#"error E{} fn a(n:in
 
 // Recursion with method calls
 #[test]
-#[ignore]
-fn recursive_method() { compile_should_fail_with(r#"error E{} class C{x:int fn fac(self,n:int)int{if n==0{return 1}if n==5{raise E{}}return n*self.fac(n-1)}} fn main(){}"#, "call to fallible method"); }
+fn recursive_method() { compile_should_fail_with(r#"error E{}
+class C{x:int
+fn fac(self,n:int)int{if n==0{return 1}if n==5{raise E{}}return n*self.fac(n-1)}}
+fn main(){}"#, "call to fallible method"); }
 #[test]
 fn recursive_method_fallible() { compile_should_fail_with("error E{}\nclass C{x:int\nfn fac(self,n:int)int{if n==0{return 1}\nif n==10{raise E{}}\nreturn n*self.fac(n-1)}}\nfn main(){let c=C{x:1}\nc.fac(5)}", "call to fallible"); }
 
