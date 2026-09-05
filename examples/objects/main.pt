@@ -1,0 +1,50 @@
+// Objects — entities, not data (docs/design/rfc-objects.md, phase 1).
+//
+// A class is bytes; an object is THE THING. Instances have reference
+// identity (`==` compares identity, not fields), spawn SHARES them instead
+// of deep-copying (an entity copied would be a second entity), and sharing
+// is safe because an object's methods are serialized — it processes one
+// message at a time. Objects cannot cross domain boundaries as values;
+// they will cross by reference (identity handles) in a later phase.
+
+object Counter {
+    value: int
+
+    fn increment(mut self) {
+        self.value = self.value + 1
+    }
+
+    fn work(mut self) {
+        let mut i = 0
+        while i < 1000 {
+            self.value = self.value + 1
+            i = i + 1
+        }
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+fn main() {
+    let mut c = Counter { value: 0 }
+    let alias = c
+
+    // Identity: two names, one entity
+    print(c == alias)
+
+    // Sharing: the spawned worker and main increment the SAME entity —
+    // the class version of this program deep-copies and needs the
+    // synchronized-singleton analysis; the object version shares by
+    // construct and serializes by construct.
+    let t = spawn c.work()
+    let mut i = 0
+    while i < 1000 {
+        c.increment()
+        i = i + 1
+    }
+    t.get()
+    print(c.get())
+    print(alias.get())
+}

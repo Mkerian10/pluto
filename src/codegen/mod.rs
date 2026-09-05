@@ -624,6 +624,19 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             let gc_init_ref = module.declare_func_in_func(runtime.get("__pluto_gc_init"), builder.func);
             builder.ins().call(gc_init_ref, &[]);
 
+            // Initialize rwlocks for synchronized singletons/objects (test
+            // binaries run no DI synthesis; see the app-main equivalent)
+            for class_name in &env.synchronized_singletons {
+                if let Some(&data_id) = rwlock_data_ids.get(class_name) {
+                    let rwlock_init_ref = module.declare_func_in_func(runtime.get("__pluto_rwlock_init"), builder.func);
+                    let call = builder.ins().call(rwlock_init_ref, &[]);
+                    let lock_ptr = builder.inst_results(call)[0];
+                    let gv = module.declare_data_in_func(data_id, builder.func);
+                    let addr = builder.ins().global_value(types::I64, gv);
+                    builder.ins().store(MemFlags::new(), lock_ptr, addr, Offset32::new(0));
+                }
+            }
+
             // Initialize coverage if enabled
             if let Some(cov_map) = coverage_map {
                 let cov_init_ref = module.declare_func_in_func(runtime.get("__pluto_coverage_init"), builder.func);

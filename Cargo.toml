@@ -73,6 +73,10 @@ name = "classes"
 path = "tests/integration/classes.rs"
 
 [[test]]
+name = "objects"
+path = "tests/integration/objects.rs"
+
+[[test]]
 name = "traits"
 path = "tests/integration/traits.rs"
 

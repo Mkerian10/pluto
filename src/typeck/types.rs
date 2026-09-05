@@ -708,3 +708,23 @@ pub(crate) fn wire_supported(t: &PlutoType) -> bool {
         _ => false,
     }
 }
+
+/// Whether a wire-shaped type is free of entity (object) types. Objects cross
+/// domain boundaries by reference — as identity handles, a later phase of
+/// rfc-objects.md — never as copied values; a copy would mint a second
+/// identity. Used with wire_supported at every boundary-crossing check.
+pub(crate) fn contains_object_type(
+    t: &PlutoType,
+    object_types: &std::collections::HashSet<String>,
+) -> bool {
+    match t {
+        PlutoType::Class(n) | PlutoType::Enum(n) => object_types.contains(n),
+        PlutoType::Nullable(inner)
+        | PlutoType::Array(inner)
+        | PlutoType::Set(inner) => contains_object_type(inner, object_types),
+        PlutoType::Map(k, v) => {
+            contains_object_type(k, object_types) || contains_object_type(v, object_types)
+        }
+        _ => false,
+    }
+}

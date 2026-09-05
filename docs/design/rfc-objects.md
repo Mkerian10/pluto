@@ -1,6 +1,6 @@
 # RFC: The Object Construct
 
-**Status:** Draft for discussion — nothing below is implemented
+**Status:** Accepted; phase 1 (identity semantics) implemented
 **Author:** Design discussion
 **Date:** 2026-09-04
 **Related:** [v1-vision.md](../v1-vision.md) (Objects), [distributed-model.md](distributed-model.md), [rfc-typestates.md](rfc-typestates.md), [program-structure.md](program-structure.md)
@@ -107,7 +107,7 @@ object ApiServer extends HTTPServer {
 
 ## Suggested phasing (proposal)
 
-1. **Phase 1 — identity semantics**: parse `object` as a class-bodied declaration; instances get reference identity, spawn-sharing with serialized methods, and `==` as identity. No inheritance, no cross-domain handles.
+1. **Phase 1 — identity semantics** *(implemented)*: `object` parses as a class-bodied declaration (contextual keyword); instances get reference identity, `==` as identity, spawn-sharing with serialized methods (per-type lock in phase 1 — over-serializes multiple instances of one type; per-instance locks are an optimization), and rejection at domain boundaries ("objects cross by reference — not yet implemented"). Generic objects rejected pending the inheritance × monomorphization story (open question 7).
 2. **Phase 2 — inheritance**: `extends` + `override` with inherited invariants and Liskov checks, on the trait vtable machinery.
 3. **Phase 3 — distributed entities**: object handles across domain boundaries, `at` on an entity's home domain, handle wire format.
 4. **Phase 4 — integration**: typestated objects, auto-executing cleanup, observability derivation.

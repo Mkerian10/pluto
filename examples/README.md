@@ -319,6 +319,14 @@ State as a type parameter (docs/design/rfc-typestates.md): `Partition<Unowned>` 
 cargo run -- run examples/typestates/main.pt
 ```
 
+## objects
+
+The object construct (docs/design/rfc-objects.md): `object` declares an entity rather than a data structure — reference identity (`==` is identity), spawn shares the entity instead of deep-copying it, and sharing is safe because an object's methods are serialized. Objects cannot cross domain boundaries as values (entities will cross by reference in a later phase).
+
+```bash
+cargo run -- run examples/objects/main.pt
+```
+
 ## placement
 
 The distributed model's `at` expression (docs/design/distributed-model.md): `at self.pay { charge(21) }` places a computation in the `pay` logical execution domain, and the deployment binding — not the code — decides the physical plan. Unbound, the same binary calls the DI-wired colocated instance directly; with `PLUTO_DOMAIN_PAYMENTSERVICE=host:port` set, the identical binary crosses a socket to the served domain. The boundary contract (wire-shaped values, mandatory `catch` — a domain can be unreachable in *some* deployment even if not this one, typed errors crossing intact) is compile-time checked identically for both plans.

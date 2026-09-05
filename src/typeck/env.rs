@@ -241,6 +241,10 @@ pub struct TypeEnv {
     /// `remote` in one place is remote for all calls to it. Per-call-site
     /// precision is a later refinement.
     pub remote_types: HashSet<String>,
+    /// Class names declared with `object`: entities (rfc-objects.md) —
+    /// identity semantics, spawn-shared, serialized methods, no boundary
+    /// crossing as values. Program-global, like remote/domain_types.
+    pub object_types: HashSet<String>,
     /// Class names referenced by `domain` deps: logical execution domains.
     /// Computation is placed in them with `at` expressions; direct method
     /// calls on domain deps are rejected. Like remote_types, program-global.
@@ -378,6 +382,7 @@ impl TypeEnv {
             generic_rewrites: HashMap::new(),
             method_resolutions: HashMap::new(),
             remote_types: HashSet::new(),
+            object_types: HashSet::new(),
             domain_types: HashSet::new(),
             fallible_builtin_calls: HashSet::new(),
             current_fn: None,
