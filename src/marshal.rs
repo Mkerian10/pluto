@@ -2981,6 +2981,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
         };
 
         let result = instantiate_generic_class(&template, "Box$$int", "int").unwrap();
@@ -3033,6 +3034,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
         };
 
         let result = instantiate_generic_class(&template, "Container$$string", "string").unwrap();
