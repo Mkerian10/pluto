@@ -434,6 +434,15 @@ void *__pluto_alloc(long size) {
     return gc_alloc((size_t)size, GC_TAG_OBJECT, field_count);
 }
 
+/* Entities (object declarations) get their own tag so the runtime can honor
+ * identity semantics structurally: deep_copy shares them, deep_eq compares
+ * them by pointer. Mark-phase tracing uses the conservative default case. */
+void *__pluto_alloc_entity(long size) {
+    if (size == 0) size = 8;
+    uint16_t field_count = (uint16_t)(size / 8);
+    return gc_alloc((size_t)size, GC_TAG_ENTITY, field_count);
+}
+
 // ── Interval table for pointer lookup ─────────────────────────────────────────
 
 static int gc_interval_cmp(const void *a, const void *b) {

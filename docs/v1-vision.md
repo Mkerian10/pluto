@@ -74,11 +74,11 @@ A class is a data structure. It is bytes in memory with a known layout. When you
 
 An object is an entity. It semantically represents **the actual thing** — not a snapshot, not a local copy, but the thing itself. When you call `getValue()` on a `Secret` object, of course that might go to a vault. That's what the secret *is*. When you call `rotate()`, the real secret rotates. The compiler knows this is an entity, and enforces rules accordingly — method calls may fail, state may change between calls, ownership and access patterns matter.
 
-This is what Alan Kay originally meant by objects and what the industry lost along the way. Languages turned objects into "structs with methods." Pluto's `object` reclaims the original meaning: an entity that represents something real, where method calls are messages to that entity, and the implications are honest and visible in the type system.
+This is what Alan Kay originally meant by objects and what the industry lost along the way. Languages turned objects into "structs with methods." Pluto's `object` reclaims the original meaning: an entity that represents something real, where method calls are messages to that entity, and the implications are honest and visible in the type system. The big idea is messaging — not hierarchy.
 
-Objects are the building blocks of a Pluto system. They compose and extend naturally — objects support inheritance, where classes do not. This is deliberate. Class inheritance is about inheriting data layout, which breeds fragile base classes and deep hierarchies that resist reasoning. Object inheritance is about specializing behavior on entities, constrained by contracts. If `HTTPServer` has contracts, any extension must satisfy them — the compiler enforces this. Inheritance on objects is safe because the verification engine ensures every subtype honors the guarantees of its parent.
+Objects are the building blocks of a Pluto system. They compose through traits, like everything else in Pluto — there is no inheritance, for objects or classes. Behavior specialization comes from traits with default methods, constrained by contracts: if a trait carries contracts, every implementor must satisfy them, and the compiler enforces it. (Object inheritance was considered and rejected: everything it would express — template methods, Liskov-constrained overrides, subtype polymorphism — traits already deliver, without a second polymorphism mechanism multiplying against generics, DI, and distribution.)
 
-**Classes get traits. Objects get inheritance.** Two different things, two different composition models, each suited to what they represent.
+**Classes get traits. Objects get traits plus entity semantics.** One composition model; two meanings for an instance — a value, or the thing itself.
 
 The distinction between class and object also maps naturally to distributed systems. A class is local — it lives on your machine, you own it, do what you want. An object is an entity that may be local today and distributed tomorrow. When all your objects are on one machine, there is no distributed overhead. When the DI topology splits them across boundaries, the compiler enforces the necessary safety guarantees. The code doesn't change. The nature of the object was always clear.
 
@@ -198,7 +198,7 @@ This is a bet on the future of software development — that AI agents will be c
 
 ### Near-Term
 - Static verification engine — contracts as compile-time proofs, typestates via generics, auto-executing ensures
-- Object construct — design, prototyping, and inheritance model
+- Object construct — design, prototyping, entity semantics
 - Program structure — bare file to distributed system, no ceremony threshold
 - DI-driven topology — wiring determines locality, compiler adapts at boundaries
 

@@ -959,6 +959,11 @@ static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
         // Tasks and channels are shared by reference
         return ptr;
 
+    case GC_TAG_ENTITY:
+        // Objects are ENTITIES (rfc-objects.md): a copy would be a second
+        // identity. Shared, even when nested inside copied class values.
+        return ptr;
+
     case GC_TAG_OBJECT: {
         // Classes, enums, closures, errors
         // Layout: field_count * 8 bytes of slots
@@ -1093,6 +1098,180 @@ long __pluto_deep_copy(long ptr) {
     long result = dc_deep_copy_impl(ptr, &visited);
     dc_visited_free(&visited);
     return result;
+}
+
+// ── Structural (value) equality ─────────────────────────────────────────────
+//
+// Mirrors dc_deep_copy_impl's traversal. Classes are DATA: `==` compares
+// structure recursively. Entities/tasks/channels compare by identity.
+// Cycles are handled coinductively: a revisited (a, b) pair is assumed equal
+// (the pair is only revisited along a path that has not yet found a
+// difference). Float fields inside structures compare bitwise (slots carry
+// no type info); top-level float == uses IEEE fcmp in codegen.
+
+typedef struct {
+    const void *a;
+    const void *b;
+} DeepEqPair;
+
+typedef struct {
+    DeepEqPair *pairs;
+    size_t len;
+    size_t cap;
+} DeepEqVisited;
+
+static int deq_seen(DeepEqVisited *v, const void *a, const void *b) {
+    for (size_t i = 0; i < v->len; i++) {
+        if (v->pairs[i].a == a && v->pairs[i].b == b) return 1;
+    }
+    if (v->len == v->cap) {
+        v->cap = v->cap ? v->cap * 2 : 16;
+        v->pairs = (DeepEqPair *)realloc(v->pairs, v->cap * sizeof(DeepEqPair));
+    }
+    v->pairs[v->len].a = a;
+    v->pairs[v->len].b = b;
+    v->len++;
+    return 0;
+}
+
+static long deq_impl(long a, long b, DeepEqVisited *v);
+
+static long deq_slot(long a, long b, DeepEqVisited *v) {
+    if (a == b) return 1;
+    if (a == 0 || b == 0) return 0;
+    GCHeader *ha = dc_find_gc_object((void *)a);
+    GCHeader *hb = dc_find_gc_object((void *)b);
+    if (!ha || !hb) {
+        // At least one primitive slot: bitwise (a != b established above).
+        // Mixed primitive/pointer can only mean a difference.
+        return 0;
+    }
+    return deq_impl(a, b, v);
+}
+
+static long deq_impl(long a, long b, DeepEqVisited *v) {
+    if (a == b) return 1;
+    if (a == 0 || b == 0) return 0;
+    GCHeader *ha = dc_find_gc_object((void *)a);
+    GCHeader *hb = dc_find_gc_object((void *)b);
+    if (!ha || !hb) return a == b;
+    if (ha->type_tag != hb->type_tag) return 0;
+    if (deq_seen(v, (void *)a, (void *)b)) return 1;
+
+    switch (ha->type_tag) {
+    case GC_TAG_STRING:
+        return __pluto_string_eq((void *)a, (void *)b);
+
+    case GC_TAG_STRING_SLICE:
+        return __pluto_string_eq((void *)a, (void *)b);
+
+    case GC_TAG_ENTITY:
+    case GC_TAG_TASK:
+    case GC_TAG_CHANNEL:
+        // Identity types: only pointer equality (handled by a == b above).
+        return 0;
+
+    case GC_TAG_OBJECT: {
+        // Classes, enums, closures, errors: slotwise structural compare.
+        if (ha->field_count != hb->field_count || ha->size != hb->size) return 0;
+        long *sa = (long *)a;
+        long *sb = (long *)b;
+        for (uint16_t i = 0; i < ha->field_count; i++) {
+            if (!deq_slot(sa[i], sb[i], v)) return 0;
+        }
+        return 1;
+    }
+
+    case GC_TAG_ARRAY: {
+        long *pa = (long *)a;
+        long *pb = (long *)b;
+        if (pa[0] != pb[0]) return 0;
+        long *da = (long *)pa[2];
+        long *db = (long *)pb[2];
+        for (long i = 0; i < pa[0]; i++) {
+            if (!deq_slot(da[i], db[i], v)) return 0;
+        }
+        return 1;
+    }
+
+    case GC_TAG_BYTES: {
+        long *pa = (long *)a;
+        long *pb = (long *)b;
+        if (pa[0] != pb[0]) return 0;
+        return memcmp((void *)pa[2], (void *)pb[2], (size_t)pa[0]) == 0;
+    }
+
+    case GC_TAG_TRAIT: {
+        // Same vtable (same concrete type) and structurally equal data.
+        long *pa = (long *)a;
+        long *pb = (long *)b;
+        if (pa[1] != pb[1]) return 0;
+        return deq_slot(pa[0], pb[0], v);
+    }
+
+    case GC_TAG_MAP: {
+        // [count][cap][keys][vals][meta]; occupied slots have meta >= 0x80.
+        long *pa = (long *)a;
+        long *pb = (long *)b;
+        if (pa[0] != pb[0]) return 0;
+        long cap_a = pa[1];
+        long cap_b = pb[1];
+        long *ka = (long *)pa[2];
+        long *va2 = (long *)pa[3];
+        unsigned char *ma = (unsigned char *)pa[4];
+        long *kb = (long *)pb[2];
+        long *vb = (long *)pb[3];
+        unsigned char *mb = (unsigned char *)pb[4];
+        for (long i = 0; i < cap_a; i++) {
+            if (ma[i] < 0x80) continue;
+            long found = 0;
+            for (long j = 0; j < cap_b; j++) {
+                if (mb[j] < 0x80) continue;
+                if (deq_slot(ka[i], kb[j], v) && deq_slot(va2[i], vb[j], v)) {
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) return 0;
+        }
+        return 1;
+    }
+
+    case GC_TAG_SET: {
+        long *pa = (long *)a;
+        long *pb = (long *)b;
+        if (pa[0] != pb[0]) return 0;
+        long cap_a = pa[1];
+        long cap_b = pb[1];
+        long *ka = (long *)pa[2];
+        unsigned char *ma = (unsigned char *)pa[3];
+        long *kb = (long *)pb[2];
+        unsigned char *mb = (unsigned char *)pb[3];
+        for (long i = 0; i < cap_a; i++) {
+            if (ma[i] < 0x80) continue;
+            long found = 0;
+            for (long j = 0; j < cap_b; j++) {
+                if (mb[j] < 0x80) continue;
+                if (deq_slot(ka[i], kb[j], v)) {
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) return 0;
+        }
+        return 1;
+    }
+
+    default:
+        return 0;
+    }
+}
+
+long __pluto_deep_eq(long a, long b) {
+    DeepEqVisited v = {0};
+    long r = deq_impl(a, b, &v);
+    free(v.pairs);
+    return r;
 }
 
 // ── Channels ────────────────────────────────────────────────────────────────
