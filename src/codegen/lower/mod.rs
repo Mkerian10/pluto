@@ -3198,6 +3198,18 @@ impl<'a> LowerContext<'a> {
         let is_float = lhs_type == PlutoType::Float;
         let is_string = lhs_type == PlutoType::String;
         let is_byte = lhs_type == PlutoType::Byte;
+        // Classes are DATA: == compares structure (recursively, through
+        // arrays/maps/sets/enums/nullables). Objects are ENTITIES: ==
+        // compares identity, so they stay on the pointer-icmp path — as do
+        // trait objects (dynamic type unknown) and task/channel handles.
+        let is_structural = match &lhs_type {
+            PlutoType::Class(n) | PlutoType::Enum(n) => !self.env.object_types.contains(n),
+            PlutoType::Array(_)
+            | PlutoType::Map(..)
+            | PlutoType::Set(_)
+            | PlutoType::Nullable(_) => true,
+            _ => false,
+        };
 
         let result = match op {
             BinOp::Add if is_string => self.call_runtime("__pluto_string_concat", &[l, r]),
@@ -3215,6 +3227,11 @@ impl<'a> LowerContext<'a> {
                 self.builder.ins().ireduce(types::I8, i32_result)
             }
             BinOp::Eq if is_float => self.builder.ins().fcmp(FloatCC::Equal, l, r),
+            BinOp::Eq if is_structural => {
+                let raw = self.call_runtime("__pluto_deep_eq", &[l, r]);
+                let z = self.builder.ins().iconst(types::I64, 0);
+                self.builder.ins().icmp(IntCC::NotEqual, raw, z)
+            }
             BinOp::Eq => self.builder.ins().icmp(IntCC::Equal, l, r),
             BinOp::Neq if is_string => {
                 let i32_result = self.call_runtime("__pluto_string_eq", &[l, r]);
@@ -3223,6 +3240,11 @@ impl<'a> LowerContext<'a> {
                 self.builder.ins().bxor(i8_result, one)
             }
             BinOp::Neq if is_float => self.builder.ins().fcmp(FloatCC::NotEqual, l, r),
+            BinOp::Neq if is_structural => {
+                let raw = self.call_runtime("__pluto_deep_eq", &[l, r]);
+                let z = self.builder.ins().iconst(types::I64, 0);
+                self.builder.ins().icmp(IntCC::Equal, raw, z)
+            }
             BinOp::Neq => self.builder.ins().icmp(IntCC::NotEqual, l, r),
             BinOp::Lt if is_float => self.builder.ins().fcmp(FloatCC::LessThan, l, r),
             BinOp::Lt if is_byte => self.builder.ins().icmp(IntCC::UnsignedLessThan, l, r),
@@ -3456,7 +3478,14 @@ impl<'a> LowerContext<'a> {
         let size = num_fields * POINTER_SIZE as i64;
 
         let size_val = self.builder.ins().iconst(types::I64, size);
-        let ptr = self.call_runtime("__pluto_alloc", &[size_val]);
+        // Entities get their own GC tag so the runtime honors identity
+        // semantics (deep_copy shares them, deep_eq compares by pointer)
+        let alloc_fn = if self.env.object_types.contains(&name.node) {
+            "__pluto_alloc_entity"
+        } else {
+            "__pluto_alloc"
+        };
+        let ptr = self.call_runtime(alloc_fn, &[size_val]);
 
         // Clone field info to avoid borrow conflict with self.lower_expr
         let field_info: Vec<(String, PlutoType, bool)> = class_info.fields.clone();

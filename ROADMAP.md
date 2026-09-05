@@ -10,7 +10,7 @@ The canonical statement of where Pluto is going is **[docs/v1-vision.md](docs/v1
 
 1. **Whole-program compilation** — the compiler sees every service, boundary, and data flow as one program
 2. **Static verification** — contracts as compile-time proofs; ownership as contract patterns (`owns`, `holds_lease`, `is_leader`); typestates via generics; auto-executing `ensures`
-3. **Objects vs classes** — classes are data; objects are entities (the actual thing, possibly remote). Classes get traits; objects get contract-constrained inheritance
+3. **Objects vs classes** — classes are values (structural `==`, copied at boundaries); objects are entities (identity, shared, serialized messages, possibly remote). Both compose through traits — inheritance was considered and rejected (rfc-objects.md)
 4. **DI-driven topology** — wiring determines what's local and what's remote; moving a service out is a topology change, not a code change
 5. **Infrastructure in the type system** — k8s/SQL/Terraform artifacts as typed compile-time inputs, validated against service code
 6. **Migrations as a language capability** — schema diffing, change classification, compiler-checked evolution across the whole system
@@ -18,7 +18,7 @@ The canonical statement of where Pluto is going is **[docs/v1-vision.md](docs/v1
 ## Near-term (per the vision)
 
 - [ ] **Static verification engine** — contracts as compile-time proofs; typestates via generics; auto-executing ensures. (Today: runtime-checked invariants and `requires`; the decidable-fragment validator in `src/contracts.rs` is the seed. Runtime-`ensures`-as-assertion was rejected — `ensures` returns as a *proof* obligation, not a runtime check.)
-- [ ] **Object construct** — design and prototyping: entity semantics, contract-constrained inheritance, traceable identity. *Under active design.*
+- [ ] **Object construct** — phase 1 (identity semantics, by-construct safe sharing, value/entity == split) shipped; next: identity handles across domains. Inheritance rejected (rfc-objects.md).
 - [ ] **Program structure** — bare file to distributed system with no ceremony threshold; objects and their dependency graph *are* the program (no mandatory `app`/`main`).
 - [ ] **DI-driven topology & the placement model** — `at` expressions over logical execution domains; the wiring and deployment plan, not the code, decide physical boundaries, and the compiler synthesizes transport, serialization, and error paths at each one (docs/design/distributed-model.md). (Today: `app`/stage DI with lifecycles is compile-time-wired; `remote` deps + `serve` exist but couple the transport into the code — exactly what this pillar removes.)
 

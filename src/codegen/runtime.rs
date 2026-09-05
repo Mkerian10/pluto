@@ -184,6 +184,8 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_task_detach", &[types::I64], &[])?;
         reg.declare(module, "__pluto_task_cancel", &[types::I64], &[])?;
         reg.declare(module, "__pluto_deep_copy", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_deep_eq", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_alloc_entity", &[types::I64], &[types::I64])?;
 
         // Rwlock synchronization
         reg.declare(module, "__pluto_rwlock_init", &[], &[types::I64])?;

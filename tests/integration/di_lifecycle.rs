@@ -305,17 +305,35 @@ app MyApp {
 // ── Transient lifecycle: fresh instance per injection point ──────────────
 
 #[test]
-fn transient_distinct_per_injection_point() {
-    // Two consumers of the same transient class get DISTINCT instances,
-    // while the transient's own singleton dep stays shared
+fn transient_value_semantics_and_shared_deps() {
+    // Each injection point of a transient gets a fresh allocation, but with
+    // class `==` structural (value semantics) and transients restricted to
+    // injected-only fields (#306), two transients are ALWAYS field-equal —
+    // per-injection identity is intentionally unobservable for values.
+    // Anything that needs observable identity is an `object` (rfc-objects.md,
+    // open question 3: entity lifecycles). What IS observable: the transient
+    // instances compare equal as values, and their singleton dep is shared
+    // (a mutation through one is visible through the other).
     let output = compile_and_run_stdout(r#"
 class Log {
     n: int
+
+    fn bump(mut self) {
+        self.n = self.n + 1
+    }
+
+    fn get(self) int {
+        return self.n
+    }
 }
 
 transient class Fresh[log: Log] {
-    fn logger(self) Log {
-        return self.log
+    fn bump_log(mut self) {
+        self.log.bump()
+    }
+
+    fn log_n(self) int {
+        return self.log.get()
     }
 }
 
@@ -333,12 +351,15 @@ class B[f: Fresh] {
 
 app MyApp[a: A, b: B] {
     fn main(self){
-        if self.a.fresh() == self.b.fresh() {
-            print("transient shared")
+        let mut fa = self.a.fresh()
+        let fb = self.b.fresh()
+        if fa == fb {
+            print("transient values equal")
         } else {
-            print("transient distinct")
+            print("transient values distinct")
         }
-        if self.a.fresh().logger() == self.b.fresh().logger() {
+        fa.bump_log()
+        if fb.log_n() == 1 {
             print("singleton shared")
         } else {
             print("singleton distinct")
@@ -346,8 +367,10 @@ app MyApp[a: A, b: B] {
     }
 }
 "#);
-    assert_eq!(output.trim(), "transient distinct\nsingleton shared");
+    assert_eq!(output.trim(), "transient values equal\nsingleton shared");
 }
+
+
 
 #[test]
 fn transient_nested_in_transient() {

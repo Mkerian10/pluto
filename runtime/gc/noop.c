@@ -49,6 +49,10 @@ void *__pluto_alloc(long size) {
     return gc_alloc((size_t)size, GC_TAG_OBJECT, 0);
 }
 
+void *__pluto_alloc_entity(long size) {
+    return gc_alloc((size_t)size, GC_TAG_ENTITY, 0);
+}
+
 void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
     GCHeader *header = (GCHeader *)malloc(sizeof(GCHeader) + user_size);
     if (!header) {

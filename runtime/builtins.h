@@ -70,6 +70,7 @@
 #define GC_TAG_BYTES   8   // [len][cap][data_ptr]; 1 byte per element
 #define GC_TAG_CHANNEL 9   // [sync_ptr][buf_ptr][capacity][count][head][tail][closed]
 #define GC_TAG_STRING_SLICE 10 // [backing_ptr][offset][len]; lightweight view into owned string
+#define GC_TAG_ENTITY 11  // object (entity) instance: identity semantics — never deep-copied, never structurally compared (rfc-objects.md)
 
 // ── Thread-Local Storage ─────────────────────────────────────────────────────
 
@@ -169,6 +170,7 @@ void *__pluto_string_slice_to_owned(void *s);
 void *__pluto_string_escape(void *s);
 const char *__pluto_string_to_cstr(void *s);
 void __pluto_string_data(void *s, const char **data_out, long *len_out);
+int __pluto_string_eq(void *a, void *b);
 
 // Coverage functions
 void __pluto_coverage_init(long num_points, void *path_str);
