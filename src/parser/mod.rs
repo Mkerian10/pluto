@@ -472,6 +472,20 @@ impl<'a> Parser<'a> {
                     class.node.lifecycle = lifecycle;
                     classes.push(class);
                 }
+                // Contextual `object` declaration (docs/design/rfc-objects.md):
+                // same body as a class, entity semantics on instances.
+                Token::Ident if &self.source[tok.span.start..tok.span.end] == "object" => {
+                    self.advance(); // consume 'object'
+                    // parse_class expects the `class` keyword consumed-equivalent
+                    // position: it starts at the name. Reuse it by rewinding
+                    // isn't possible, so parse the body via the same routine
+                    // entered after the keyword.
+                    let mut class = self.parse_class_after_keyword()?;
+                    class.node.is_pub = is_pub;
+                    class.node.lifecycle = lifecycle;
+                    class.node.is_object = true;
+                    classes.push(class);
+                }
                 Token::Fn => {
                     if lifecycle != Lifecycle::Singleton {
                         return Err(CompileError::syntax(
@@ -1305,6 +1319,17 @@ impl<'a> Parser<'a> {
     fn parse_class(&mut self) -> Result<Spanned<ClassDecl>, CompileError> {
         let class_tok = self.expect(&Token::Class)?;
         let start = class_tok.span.start;
+        self.parse_class_body_from(start)
+    }
+
+    /// Entry for `object` declarations: the contextual keyword is already
+    /// consumed; the cursor sits on the name. Body grammar is identical.
+    fn parse_class_after_keyword(&mut self) -> Result<Spanned<ClassDecl>, CompileError> {
+        let start = self.tokens.get(self.pos.saturating_sub(1)).map(|t| t.span.start).unwrap_or(0);
+        self.parse_class_body_from(start)
+    }
+
+    fn parse_class_body_from(&mut self, start: usize) -> Result<Spanned<ClassDecl>, CompileError> {
         let name = self.expect_ident()?;
         let (type_params, type_param_bounds) = self.parse_type_params()?;
 
@@ -1378,7 +1403,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, type_param_bounds, fields, methods, invariants, impl_traits, uses, is_pub: false, lifecycle: Lifecycle::Singleton }, Span::new(start, end)))
+        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, type_param_bounds, fields, methods, invariants, impl_traits, uses, is_pub: false, lifecycle: Lifecycle::Singleton, is_object: false }, Span::new(start, end)))
     }
 
     fn parse_method(&mut self) -> Result<Spanned<Function>, CompileError> {

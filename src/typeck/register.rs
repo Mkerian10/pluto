@@ -539,6 +539,23 @@ pub(crate) fn register_class_names(program: &Program, env: &mut TypeEnv) -> Resu
             ));
         }
 
+        if c.is_object {
+            // Entity declaration (rfc-objects.md phase 1): identity semantics,
+            // spawn-shared with serialized methods. Generic objects are a
+            // later phase — reject rather than silently give them class
+            // semantics per instantiation.
+            if !c.type_params.is_empty() {
+                return Err(CompileError::type_err(
+                    format!(
+                        "object '{}' cannot have type parameters yet: generic \
+                         and typestated objects are a later phase (rfc-objects.md)",
+                        c.name.node
+                    ),
+                    c.name.span,
+                ));
+            }
+            env.object_types.insert(c.name.node.clone());
+        }
         if !c.type_params.is_empty() {
             // Generic class — register a SKELETON (name, params, bounds) so any
             // declaration can reference it regardless of source order. Fields

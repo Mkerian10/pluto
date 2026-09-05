@@ -72,6 +72,17 @@ pub(crate) fn infer_expr(
                         arg.span,
                     ));
                 }
+                if super::types::contains_object_type(&arg_ty, &env.object_types) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "an object cannot enter domain '{cname}' as a value: \
+                             objects are entities and cross boundaries by reference \
+                             (not yet implemented — rfc-objects.md); pass wire-shaped \
+                             class data instead"
+                        ),
+                        arg.span,
+                    ));
+                }
                 if !super::types::wire_supported(&arg_ty) {
                     return Err(CompileError::type_err(
                         format!(
@@ -83,6 +94,16 @@ pub(crate) fn infer_expr(
                         arg.span,
                     ));
                 }
+            }
+            if super::types::contains_object_type(&sig.return_type, &env.object_types) {
+                return Err(CompileError::type_err(
+                    format!(
+                        "an object cannot leave domain '{cname}' as a value: \
+                         objects are entities and cross boundaries by reference \
+                         (not yet implemented — rfc-objects.md)"
+                    ),
+                    method.span,
+                ));
             }
             if sig.return_type != PlutoType::Void && !super::types::wire_supported(&sig.return_type) {
                 return Err(CompileError::type_err(

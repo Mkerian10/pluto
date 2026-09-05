@@ -1343,6 +1343,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
             invariants: vec![],
         };
 
@@ -1646,6 +1647,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
             invariants: vec![],
         };
 
@@ -1691,6 +1693,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
             invariants: vec![],
         };
 
@@ -1735,6 +1738,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
             invariants: vec![],
         };
 
@@ -3102,6 +3106,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
             invariants: vec![],
         };
 
@@ -3149,6 +3154,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
             invariants: vec![],
         };
 
@@ -3337,6 +3343,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
             invariants: vec![spanned(ContractClause {
                 kind: ContractKind::Invariant,
                 expr: spanned(Expr::BoolLit(true)),
@@ -3371,6 +3378,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
             invariants: vec![],
         };
 
@@ -3477,6 +3485,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
             invariants: vec![Spanned {
                 node: ContractClause {
                     kind: ContractKind::Invariant,

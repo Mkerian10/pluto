@@ -265,6 +265,22 @@ fn collect_rpc_interface_classes(program: &Program) -> HashSet<String> {
 }
 
 fn collect_types_from_stage_methods(program: &Program) -> Result<HashSet<String>, CompileError> {
+    let mut types = collect_types_from_stage_methods_inner(program)?;
+    // Objects never marshal: entities cross boundaries by reference (a later
+    // phase of rfc-objects.md), and typeck rejects them as boundary VALUES —
+    // counting them here would demand `import std.wire` before that targeted
+    // error can fire.
+    let object_names: HashSet<&str> = program
+        .classes
+        .iter()
+        .filter(|c| c.node.is_object)
+        .map(|c| c.node.name.node.as_str())
+        .collect();
+    types.retain(|t| !object_names.contains(t.as_str()));
+    Ok(types)
+}
+
+fn collect_types_from_stage_methods_inner(program: &Program) -> Result<HashSet<String>, CompileError> {
     let mut types = HashSet::new();
 
     // Initial collection from stage method signatures
@@ -373,6 +389,7 @@ fn instantiate_generic_class(template: &ClassDecl, mangled_name: &str, type_arg_
 
     Ok(ClassDecl {
         id: template.id,
+        is_object: template.is_object,
         name: Spanned { node: mangled_name.to_string(), span: template.name.span },
         type_params: vec![], // Instantiated classes have no type params
         type_param_bounds: std::collections::HashMap::new(),
@@ -2964,6 +2981,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
         };
 
         let result = instantiate_generic_class(&template, "Box$$int", "int").unwrap();
@@ -3016,6 +3034,7 @@ mod tests {
             uses: vec![],
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
+            is_object: false,
         };
 
         let result = instantiate_generic_class(&template, "Container$$string", "string").unwrap();

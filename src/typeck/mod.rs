@@ -139,6 +139,11 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // reach monomorphization, reflection, or marshaling.
     templates::sweep_skolems(&mut env);
     crate::concurrency::infer_synchronization(program, &mut env);
+    // Objects serialize their methods unconditionally (rfc-objects.md):
+    // sharing an entity is safe BECAUSE it processes one message at a time,
+    // not because an analysis proved no concurrent access.
+    let objects: Vec<String> = env.object_types.iter().cloned().collect();
+    env.synchronized_singletons.extend(objects);
 
     let warnings = generate_warnings(&env, program);
     // Errors deferred from infallible resolution paths

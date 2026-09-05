@@ -91,6 +91,13 @@ pub struct ClassDecl {
     pub uses: Vec<Spanned<String>>,
     pub is_pub: bool,
     pub lifecycle: Lifecycle,
+    /// True for `object` declarations (docs/design/rfc-objects.md): the
+    /// instances are ENTITIES — reference identity, identity `==`, shared
+    /// (not deep-copied) into spawned tasks with serialized methods, and
+    /// barred from crossing domain boundaries as values (handles are a
+    /// later phase). The body is syntactically identical to a class body.
+    #[serde(default)]
+    pub is_object: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

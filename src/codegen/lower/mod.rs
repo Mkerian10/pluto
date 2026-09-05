@@ -649,7 +649,10 @@ impl<'a> LowerContext<'a> {
                 other => format!("{other}"),
             }
         }
-        let supported = crate::typeck::types::wire_supported;
+        let objs = &self.env.object_types;
+        let supported =
+            |t: &PlutoType| crate::typeck::types::wire_supported(t)
+                && !crate::typeck::types::contains_object_type(t, objs);
         let mut sigs: Vec<String> = Vec::new();
         if let Some(info) = self.env.classes.get(class_name) {
             for mname in &info.methods {
@@ -691,7 +694,10 @@ impl<'a> LowerContext<'a> {
 
         // Collect dispatchable methods (owned, to release the env borrow before
         // we start mutating the builder): (method_name, mangled, arg_types, return).
-        let supported = crate::typeck::types::wire_supported;
+        let objs = &self.env.object_types;
+        let supported =
+            |t: &PlutoType| crate::typeck::types::wire_supported(t)
+                && !crate::typeck::types::contains_object_type(t, objs);
         let mut methods: Vec<(String, String, Vec<PlutoType>, PlutoType, Vec<String>)> = Vec::new();
         if let Some(info) = self.env.classes.get(&class_name) {
             for mname in &info.methods {
@@ -3079,13 +3085,18 @@ impl<'a> LowerContext<'a> {
                         // DI singletons and the app instance are shared by reference (not copied).
                         for (i, cap_name) in captures.iter().enumerate() {
                             let cap_type = self.var_types.get(cap_name).cloned().unwrap_or(PlutoType::Int);
-                            let is_di_singleton = if let PlutoType::Class(name) = &cap_type {
+                            let is_shared_entity = if let PlutoType::Class(name) = &cap_type {
+                                // DI singletons are shared by design; objects
+                                // are ENTITIES (rfc-objects.md) — copying one
+                                // would mint a second identity, so they are
+                                // shared too (their methods are serialized).
                                 self.env.di_order.contains(name)
+                                    || self.env.object_types.contains(name)
                                     || self.env.app.as_ref().map_or(false, |(app_name, _)| app_name == name)
                             } else {
                                 false
                             };
-                            if !is_di_singleton && needs_deep_copy(&cap_type) {
+                            if !is_shared_entity && needs_deep_copy(&cap_type) {
                                 let offset = ((1 + i) * 8) as i32;
                                 let original = self.builder.ins().load(
                                     types::I64, MemFlags::new(), closure_ptr, Offset32::new(offset),
@@ -4029,6 +4040,14 @@ impl<'a> LowerContext<'a> {
                 for arg in args {
                     let aty = infer_type_for_expr(&arg.node, self.env, &self.var_types);
                     let av = self.lower_expr(&arg.node)?;
+                    if crate::typeck::types::contains_object_type(&aty, &self.env.object_types) {
+                        return Err(CompileError::codegen(format!(
+                            "remote call '{}.{}': an object cannot cross the boundary \
+                             as a value (objects are entities; handles are a later \
+                             phase of rfc-objects.md)",
+                            cname, method.node
+                        )));
+                    }
                     if !crate::typeck::types::wire_supported(&aty) {
                         return Err(CompileError::codegen(format!(
                             "remote call '{}.{}': unsupported argument type {aty} \
@@ -4928,6 +4947,19 @@ pub fn lower_function(
     // Initialize GC at start of non-app main
     if is_main {
         ctx.call_runtime_void("__pluto_gc_init", &[]);
+
+        // Initialize rwlocks for synchronized singletons and objects: plain
+        // fn-main programs never run the DI synthesis that does this for
+        // app/stage binaries, and an uninitialized lock global segfaults on
+        // first acquisition.
+        for class_name in &ctx.env.synchronized_singletons {
+            if let Some(&data_id) = ctx.rwlock_globals.get(class_name) {
+                let lock_ptr = ctx.call_runtime("__pluto_rwlock_init", &[]);
+                let gv = ctx.module.declare_data_in_func(data_id, ctx.builder.func);
+                let addr = ctx.builder.ins().global_value(types::I64, gv);
+                ctx.builder.ins().store(MemFlags::new(), lock_ptr, addr, Offset32::new(0));
+            }
+        }
 
         // Initialize coverage if enabled (for plain fn main programs)
         if !coverage_lookup.is_empty() {
