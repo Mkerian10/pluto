@@ -1330,3 +1330,108 @@ fn at_on_non_domain_dep_rejected() {
         "'at' requires a domain: 'Svc' is not declared as one",
     );
 }
+
+// ── Phase 9: entity identity handles (rfc-objects.md phase 2, slice 1) ──
+
+const HANDLE_APP_SRC: &str = r#"
+import std.wire
+
+object Vault {
+    secret: int
+
+    fn bump(mut self) {
+        self.secret = self.secret + 1
+    }
+
+    fn get(self) int {
+        return self.secret
+    }
+}
+
+class Escrow {
+    fn hold(self, v: Vault) Vault {
+        return v
+    }
+}
+
+app A[esc: domain Escrow] {
+    fn main(self) {
+        let mut v = Vault { secret: 41 }
+        let held = at self.esc { hold(v) } catch v
+        print(v == held)
+        let mut h2 = held
+        h2.bump()
+        print(v.get())
+    }
+}"#;
+
+const HANDLE_SERVER_SRC: &str = r#"
+import std.wire
+
+object Vault {
+    secret: int
+
+    fn bump(mut self) {
+        self.secret = self.secret + 1
+    }
+
+    fn get(self) int {
+        return self.secret
+    }
+}
+
+class Escrow {
+    fn hold(self, v: Vault) Vault {
+        return v
+    }
+}
+
+fn main() {
+    let e = Escrow {}
+    serve e on 0
+}"#;
+
+/// Identity survives the wire: an entity crosses to another process as a
+/// handle and, returned to its home, resolves to the SAME entity — `==` is
+/// true and mutation through the returned reference hits the original.
+/// Verified in both physical plans from one binary.
+#[test]
+fn entity_identity_survives_round_trip() {
+    let (_ad, app_bin) = build_binary(&[("main.pluto", HANDLE_APP_SRC)]);
+    let expected = "true\n42\n";
+
+    // Plan A: colocated — the "handle" never exists; direct call.
+    let colocated = Command::new(&app_bin).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&colocated.stdout), expected);
+
+    // Plan B: distributed — the entity round-trips a real socket.
+    let (_sd, server_bin) = build_binary(&[("main.pluto", HANDLE_SERVER_SRC)]);
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let distributed = Command::new(&app_bin)
+        .env("PLUTO_DOMAIN_ESCROW", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+    assert_eq!(String::from_utf8_lossy(&distributed.stdout), expected);
+}
+
+/// Entities nested inside values are untransferable — a copy would fork
+/// their identity. Only the entity itself (as a handle) may cross.
+#[test]
+fn nested_entity_rejected_at_boundary() {
+    compile_project_should_fail_with(
+        &[(
+            "main.pluto",
+            "object Vault {\n    secret: int\n}\n\nclass Wrap {\n    v: Vault\n}\n\nclass Escrow {\n    fn hold(self, w: Wrap) int {\n        return 1\n    }\n}\n\napp A[esc: domain Escrow] {\n    fn main(self) {\n        let v = Vault { secret: 1 }\n        let w = Wrap { v: v }\n        let r = at self.esc { hold(w) } catch -1\n        print(r)\n    }\n}",
+        )],
+        "a value containing an object cannot enter domain 'Escrow'",
+    );
+}

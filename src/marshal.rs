@@ -266,17 +266,73 @@ fn collect_rpc_interface_classes(program: &Program) -> HashSet<String> {
 
 fn collect_types_from_stage_methods(program: &Program) -> Result<HashSet<String>, CompileError> {
     let mut types = collect_types_from_stage_methods_inner(program)?;
-    // Objects never marshal: entities cross boundaries by reference (a later
-    // phase of rfc-objects.md), and typeck rejects them as boundary VALUES —
-    // counting them here would demand `import std.wire` before that targeted
-    // error can fire.
+    // Objects never marshal: entities cross boundaries as identity handles
+    // (rfc-objects.md phase 2), handled directly by codegen. Classes whose
+    // fields TRANSITIVELY contain an object never marshal either — typeck
+    // rejects them at the boundary with a targeted error, and generating a
+    // marshaler that references the object's (nonexistent) marshaler would
+    // fail first with a misleading message.
     let object_names: HashSet<&str> = program
         .classes
         .iter()
         .filter(|c| c.node.is_object)
         .map(|c| c.node.name.node.as_str())
         .collect();
-    types.retain(|t| !object_names.contains(t.as_str()));
+    fn type_expr_touches(
+        ty: &TypeExpr,
+        program: &Program,
+        object_names: &HashSet<&str>,
+        visiting: &mut HashSet<String>,
+    ) -> bool {
+        match ty {
+            TypeExpr::Named(n) => {
+                if object_names.contains(n.as_str()) {
+                    return true;
+                }
+                if !visiting.insert(n.clone()) {
+                    return false;
+                }
+                let hit = program
+                    .classes
+                    .iter()
+                    .find(|c| c.node.name.node == *n)
+                    .is_some_and(|c| {
+                        c.node.fields.iter().any(|f| {
+                            type_expr_touches(&f.ty.node, program, object_names, visiting)
+                        })
+                    })
+                    || program
+                        .enums
+                        .iter()
+                        .find(|e| e.node.name.node == *n)
+                        .is_some_and(|e| {
+                            e.node.variants.iter().any(|v| {
+                                v.fields.iter().any(|f| {
+                                    type_expr_touches(&f.ty.node, program, object_names, visiting)
+                                })
+                            })
+                        });
+                visiting.remove(n);
+                hit
+            }
+            TypeExpr::Array(inner) | TypeExpr::Nullable(inner) => {
+                type_expr_touches(&inner.node, program, object_names, visiting)
+            }
+            TypeExpr::Generic { type_args, .. } => type_args
+                .iter()
+                .any(|a| type_expr_touches(&a.node, program, object_names, visiting)),
+            _ => false,
+        }
+    }
+    types.retain(|t| {
+        let mut visiting = HashSet::new();
+        !type_expr_touches(
+            &TypeExpr::Named(t.clone()),
+            program,
+            &object_names,
+            &mut visiting,
+        )
+    });
     Ok(types)
 }
 

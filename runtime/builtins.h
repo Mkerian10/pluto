@@ -71,6 +71,7 @@
 #define GC_TAG_CHANNEL 9   // [sync_ptr][buf_ptr][capacity][count][head][tail][closed]
 #define GC_TAG_STRING_SLICE 10 // [backing_ptr][offset][len]; lightweight view into owned string
 #define GC_TAG_ENTITY 11  // object (entity) instance: identity semantics — never deep-copied, never structurally compared (rfc-objects.md)
+#define GC_TAG_HANDLE 12  // foreign-entity handle stub: [home_str][type_str][id] (rfc-objects.md phase 2)
 
 // ── Thread-Local Storage ─────────────────────────────────────────────────────
 
