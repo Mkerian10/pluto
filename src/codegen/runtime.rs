@@ -186,6 +186,9 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_deep_copy", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_deep_eq", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_alloc_entity", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_entity_encode", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_entity_decode", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_entity_guard", &[types::I64], &[])?;
 
         // Rwlock synchronization
         reg.declare(module, "__pluto_rwlock_init", &[], &[types::I64])?;

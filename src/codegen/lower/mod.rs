@@ -649,10 +649,18 @@ impl<'a> LowerContext<'a> {
                 other => format!("{other}"),
             }
         }
-        let objs = &self.env.object_types;
-        let supported =
-            |t: &PlutoType| crate::typeck::types::wire_supported(t)
-                && !crate::typeck::types::contains_object_type(t, objs);
+        let env = self.env;
+        let supported = |t: &PlutoType| {
+            // Top-level entities cross as handles; entities NESTED in values
+            // are still untransferable (a copy would fork identity).
+            if let PlutoType::Class(n) = t
+                && env.object_types.contains(n)
+            {
+                return true;
+            }
+            crate::typeck::types::wire_supported(t)
+                && !crate::typeck::types::contains_object_type(t, env)
+        };
         let mut sigs: Vec<String> = Vec::new();
         if let Some(info) = self.env.classes.get(class_name) {
             for mname in &info.methods {
@@ -694,10 +702,18 @@ impl<'a> LowerContext<'a> {
 
         // Collect dispatchable methods (owned, to release the env borrow before
         // we start mutating the builder): (method_name, mangled, arg_types, return).
-        let objs = &self.env.object_types;
-        let supported =
-            |t: &PlutoType| crate::typeck::types::wire_supported(t)
-                && !crate::typeck::types::contains_object_type(t, objs);
+        let env = self.env;
+        let supported = |t: &PlutoType| {
+            // Top-level entities cross as handles; entities NESTED in values
+            // are still untransferable (a copy would fork identity).
+            if let PlutoType::Class(n) = t
+                && env.object_types.contains(n)
+            {
+                return true;
+            }
+            crate::typeck::types::wire_supported(t)
+                && !crate::typeck::types::contains_object_type(t, env)
+        };
         let mut methods: Vec<(String, String, Vec<PlutoType>, PlutoType, Vec<String>)> = Vec::new();
         if let Some(info) = self.env.classes.get(&class_name) {
             for mname in &info.methods {
@@ -922,6 +938,11 @@ impl<'a> LowerContext<'a> {
                 self.builder.ins().select(is_true, one, zero_s)
             }
             PlutoType::String => self.call_runtime("__pluto_wire_escape", &[val]),
+            PlutoType::Class(tn) if self.env.object_types.contains(tn) => {
+                // Entities cross as identity handles (rfc-objects.md phase 2)
+                let ty_s = self.make_string_literal(tn)?;
+                self.call_runtime("__pluto_entity_encode", &[val, ty_s])
+            }
             PlutoType::Class(tn) | PlutoType::Enum(tn) => {
                 self.call_named_func(&format!("__wire_encode_{tn}"), &[val])?
             }
@@ -1001,6 +1022,10 @@ impl<'a> LowerContext<'a> {
                 self.builder.ins().icmp(IntCC::NotEqual, parsed, z)
             }
             PlutoType::String => self.call_runtime("__pluto_wire_unescape", &[val]),
+            PlutoType::Class(tn) if self.env.object_types.contains(tn) => {
+                // Resolve the handle: live entity if home, stub otherwise
+                self.call_runtime("__pluto_entity_decode", &[val])
+            }
             PlutoType::Class(tn) | PlutoType::Enum(tn) => {
                 self.call_named_func(&format!("__wire_decode_{tn}"), &[val])?
             }
@@ -4069,14 +4094,6 @@ impl<'a> LowerContext<'a> {
                 for arg in args {
                     let aty = infer_type_for_expr(&arg.node, self.env, &self.var_types);
                     let av = self.lower_expr(&arg.node)?;
-                    if crate::typeck::types::contains_object_type(&aty, &self.env.object_types) {
-                        return Err(CompileError::codegen(format!(
-                            "remote call '{}.{}': an object cannot cross the boundary \
-                             as a value (objects are entities; handles are a later \
-                             phase of rfc-objects.md)",
-                            cname, method.node
-                        )));
-                    }
                     if !crate::typeck::types::wire_supported(&aty) {
                         return Err(CompileError::codegen(format!(
                             "remote call '{}.{}': unsupported argument type {aty} \
@@ -4538,6 +4555,11 @@ impl<'a> LowerContext<'a> {
                 }
             }
 
+            // Foreign-entity handles cannot be invoked locally: guard every
+            // object method call (routing is a later slice of rfc-objects.md)
+            if self.env.object_types.contains(&class_name) {
+                self.call_runtime_void("__pluto_entity_guard", &[obj_ptr]);
+            }
             // Acquire rwlock if this singleton is synchronized (Phase 4b)
             let needs_sync = self.rwlock_globals.contains_key(&class_name);
             if needs_sync {

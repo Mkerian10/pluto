@@ -90,6 +90,27 @@ Dropping inheritance sharpened the remaining question: what *is* the class/objec
 - **Program structure** (program-structure.md): "objects and their dependency graph are the program" — the ceremony-free pillar defines a program as its object graph; `app` becomes a special case.
 - **Derived observability**: an entity with identity makes every method call a meaningful span with no annotation.
 
+## Phase 2: identity handles (design + slice 1)
+
+Entities cross boundaries **by reference**. The reference is a *handle* — schema-level data, keeping the wire a closed compiler-derived surface:
+
+```
+handle = (home, type, id)
+  home: an opaque token identifying the process that owns the entity
+        (slice 1: minted per process at startup; the deployment-plan
+        artifact will replace this with routable domain identity)
+  type: the object's type name (interface-hash-relevant)
+  id:   a per-home unique entity id, minted lazily on first export
+```
+
+**Registry.** Each process keeps an entity registry (id ↔ live pointer). Exporting an object (sending it through a boundary) registers it lazily and yields its id. Registered entities are GC roots for now — a release protocol is open question 4, and connects to auto-executing cleanup.
+
+**Resolution.** Decoding an object-typed value resolves the handle: if `home` is this process, the registry returns the **live entity itself** — identity survives the round trip (`sent == returned` is `true`). Otherwise the value materializes as a handle stub (its own GC tag) that carries the triple.
+
+**Using a foreign handle.** Method calls must route to the entity's home. Distribution stays *explicit*: local object calls remain infallible and direct; remote entity use happens only through placement. Slice 1 does **not** implement routing — calling a method on a foreign handle is a runtime error naming the limitation — and slice 2 will route handle calls as placements on the home domain, with `at`'s plan-independent failure contract.
+
+**What slice 1 delivers** (implemented): object types are accepted at boundaries again (replacing the phase-1 rejection); handles encode/decode through the existing wire machinery; the registry and home-token runtime exists; and the pinned demo is *identity round-trip* — a server can accept an entity handle, store or forward it, hand it back, and the caller gets the same entity.
+
 ## Open questions (genuinely unsettled)
 
 1. **Construction and identity origin.** Who mints an entity? DI (objects as wired singletons/scoped instances) covers services; but `Secret` above is more like a *handle* to pre-existing external state. Are there two construction stories (wired vs. adopted), or one?

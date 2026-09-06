@@ -709,22 +709,56 @@ pub(crate) fn wire_supported(t: &PlutoType) -> bool {
     }
 }
 
-/// Whether a wire-shaped type is free of entity (object) types. Objects cross
-/// domain boundaries by reference — as identity handles, a later phase of
-/// rfc-objects.md — never as copied values; a copy would mint a second
-/// identity. Used with wire_supported at every boundary-crossing check.
+/// Whether a type contains entity (object) types anywhere in its shape —
+/// directly, in containers, or TRANSITIVELY through class/enum fields.
+/// Top-level entities cross boundaries as identity handles; entities nested
+/// inside values are untransferable (a copy would fork their identity).
 pub(crate) fn contains_object_type(
     t: &PlutoType,
-    object_types: &std::collections::HashSet<String>,
+    env: &crate::typeck::env::TypeEnv,
 ) -> bool {
-    match t {
-        PlutoType::Class(n) | PlutoType::Enum(n) => object_types.contains(n),
-        PlutoType::Nullable(inner)
-        | PlutoType::Array(inner)
-        | PlutoType::Set(inner) => contains_object_type(inner, object_types),
-        PlutoType::Map(k, v) => {
-            contains_object_type(k, object_types) || contains_object_type(v, object_types)
+    fn walk(
+        t: &PlutoType,
+        env: &crate::typeck::env::TypeEnv,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        match t {
+            PlutoType::Class(n) => {
+                if env.object_types.contains(n) {
+                    return true;
+                }
+                if !visiting.insert(n.clone()) {
+                    return false; // recursive type — already being examined
+                }
+                let hit = env
+                    .classes
+                    .get(n)
+                    .is_some_and(|info| info.fields.iter().any(|(_, ft, _)| walk(ft, env, visiting)));
+                visiting.remove(n);
+                hit
+            }
+            PlutoType::Enum(n) => {
+                if env.object_types.contains(n) {
+                    return true;
+                }
+                if !visiting.insert(n.clone()) {
+                    return false;
+                }
+                let hit = env.enums.get(n).is_some_and(|info| {
+                    info.variants
+                        .iter()
+                        .any(|(_, fields)| fields.iter().any(|(_, ft)| walk(ft, env, visiting)))
+                });
+                visiting.remove(n);
+                hit
+            }
+            PlutoType::Nullable(inner)
+            | PlutoType::Array(inner)
+            | PlutoType::Set(inner) => walk(inner, env, visiting),
+            PlutoType::Map(k, v) => walk(k, env, visiting) || walk(v, env, visiting),
+            _ => false,
         }
-        _ => false,
     }
+    let mut visiting = std::collections::HashSet::new();
+    walk(t, env, &mut visiting)
 }

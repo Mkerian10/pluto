@@ -72,18 +72,24 @@ pub(crate) fn infer_expr(
                         arg.span,
                     ));
                 }
-                if super::types::contains_object_type(&arg_ty, &env.object_types) {
+                let is_top_level_entity = matches!(
+                    &arg_ty,
+                    PlutoType::Class(n) if env.object_types.contains(n)
+                );
+                if !is_top_level_entity
+                    && super::types::contains_object_type(&arg_ty, env)
+                {
                     return Err(CompileError::type_err(
                         format!(
-                            "an object cannot enter domain '{cname}' as a value: \
-                             objects are entities and cross boundaries by reference \
-                             (not yet implemented — rfc-objects.md); pass wire-shaped \
-                             class data instead"
+                            "a value containing an object cannot enter domain '{cname}': \
+                             entities nested inside values would fork their identity if \
+                             copied; pass the entity itself (it crosses as a handle) or \
+                             wire-shaped class data"
                         ),
                         arg.span,
                     ));
                 }
-                if !super::types::wire_supported(&arg_ty) {
+                if !is_top_level_entity && !super::types::wire_supported(&arg_ty) {
                     return Err(CompileError::type_err(
                         format!(
                             "value of type {arg_ty} cannot enter domain '{cname}': \
@@ -95,17 +101,23 @@ pub(crate) fn infer_expr(
                     ));
                 }
             }
-            if super::types::contains_object_type(&sig.return_type, &env.object_types) {
+            let ret_is_entity = matches!(
+                &sig.return_type,
+                PlutoType::Class(n) if env.object_types.contains(n)
+            );
+            if !ret_is_entity
+                && super::types::contains_object_type(&sig.return_type, env)
+            {
                 return Err(CompileError::type_err(
                     format!(
-                        "an object cannot leave domain '{cname}' as a value: \
-                         objects are entities and cross boundaries by reference \
-                         (not yet implemented — rfc-objects.md)"
+                        "a value containing an object cannot leave domain '{cname}': \
+                         entities nested inside values would fork their identity if \
+                         copied; return the entity itself (it crosses as a handle)"
                     ),
                     method.span,
                 ));
             }
-            if sig.return_type != PlutoType::Void && !super::types::wire_supported(&sig.return_type) {
+            if !ret_is_entity && sig.return_type != PlutoType::Void && !super::types::wire_supported(&sig.return_type) {
                 return Err(CompileError::type_err(
                     format!(
                         "value of type {} cannot leave domain '{cname}': \

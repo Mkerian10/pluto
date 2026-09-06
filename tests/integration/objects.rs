@@ -75,11 +75,12 @@ fn object_spawn_shares_entity() {
     assert_eq!(out.trim(), "2000\n2000");
 }
 
-/// Objects cannot cross a domain boundary as values — an entity crosses by
-/// reference (identity handles, a later phase), never by copy.
+/// Top-level entities CROSS domain boundaries — as identity handles
+/// (rfc-objects.md phase 2), never as copied values. The colocated plan
+/// resolves the "handle" to the entity directly.
 #[test]
-fn object_rejected_at_domain_boundary() {
-    compile_should_fail_with(
+fn object_crosses_boundary_as_handle() {
+    let out = compile_and_run_stdout(
         r#"
         object Vault {
             secret: int
@@ -102,8 +103,8 @@ fn object_rejected_at_domain_boundary() {
             }
         }
         "#,
-        "an object cannot enter domain 'PayService' as a value",
     );
+    assert_eq!(out.trim(), "5");
 }
 
 /// Generic objects are a later phase — rejected with a pointer to the RFC.

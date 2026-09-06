@@ -1242,6 +1242,125 @@ void *__pluto_read_framed(long fd) {
     return result;
 }
 
+// ── Entity registry & identity handles (rfc-objects.md phase 2) ─────────────
+//
+// Entities cross boundaries as handles (home|type|id). The registry maps ids
+// to live pointers; exported entities are pinned as GC roots (release
+// protocol is future work). Decoding a handle whose home is THIS process
+// returns the live entity — identity survives the round trip. Foreign
+// handles materialize as GC_TAG_HANDLE stubs; calling methods on a stub is
+// a runtime error until handle-call routing ships.
+
+static void **entity_registry = NULL;
+static long entity_count = 0;
+static long entity_cap = 0;
+static char entity_home[64] = {0};
+
+// Test mode runs a single-threaded fiber scheduler with no pthreads — the
+// registry needs no lock there.
+#ifdef PLUTO_TEST_MODE
+#define ENTITY_LOCK()
+#define ENTITY_UNLOCK()
+#else
+static pthread_mutex_t entity_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define ENTITY_LOCK() pthread_mutex_lock(&entity_mutex)
+#define ENTITY_UNLOCK() pthread_mutex_unlock(&entity_mutex)
+#endif
+
+static const char *entity_home_str(void) {
+    if (!entity_home[0]) {
+        snprintf(entity_home, sizeof(entity_home), "H%ld-%ld",
+                 (long)getpid(), (long)time(NULL));
+    }
+    return entity_home;
+}
+
+long __pluto_entity_export(void *ptr) {
+    ENTITY_LOCK();
+    for (long i = 0; i < entity_count; i++) {
+        if (entity_registry[i] == ptr) {
+            ENTITY_UNLOCK();
+            return i + 1;
+        }
+    }
+    if (entity_count == entity_cap) {
+        entity_cap = entity_cap ? entity_cap * 2 : 16;
+        entity_registry = (void **)realloc(entity_registry, (size_t)entity_cap * sizeof(void *));
+    }
+    entity_registry[entity_count] = ptr;
+    __pluto_gc_add_pending_root(ptr);  // pinned: exported identity must outlive local refs
+    long id = ++entity_count;
+    ENTITY_UNLOCK();
+    return id;
+}
+
+// "E<home>|<type>|<id>" — schema-level, newline-free
+void *__pluto_entity_encode(void *ptr, void *type_str) {
+    // Re-encoding a HANDLE forwards the original identity triple.
+    GCHeader *h = (GCHeader *)((char *)ptr - sizeof(GCHeader));
+    if (h->type_tag == GC_TAG_HANDLE) {
+        long *slots = (long *)ptr;
+        const char *home; long home_len;
+        const char *ty; long ty_len;
+        __pluto_string_data((void *)slots[0], &home, &home_len);
+        __pluto_string_data((void *)slots[1], &ty, &ty_len);
+        char buf[256];
+        int n = snprintf(buf, sizeof(buf), "E%.*s|%.*s|%ld",
+                         (int)home_len, home, (int)ty_len, ty, slots[2]);
+        return __pluto_string_new(buf, n);
+    }
+    long id = __pluto_entity_export(ptr);
+    const char *ty; long ty_len;
+    __pluto_string_data(type_str, &ty, &ty_len);
+    char buf[256];
+    int n = snprintf(buf, sizeof(buf), "E%s|%.*s|%ld",
+                     entity_home_str(), (int)ty_len, ty, id);
+    return __pluto_string_new(buf, n);
+}
+
+void *__pluto_entity_decode(void *wire_str) {
+    const char *sdata; long slen;
+    __pluto_string_data(wire_str, &sdata, &slen);
+    if (slen < 2 || sdata[0] != 'E') return NULL;
+    // parse E<home>|<type>|<id>
+    const char *p1 = memchr(sdata + 1, '|', (size_t)(slen - 1));
+    if (!p1) return NULL;
+    const char *p2 = memchr(p1 + 1, '|', (size_t)(sdata + slen - p1 - 1));
+    if (!p2) return NULL;
+    long home_len = p1 - (sdata + 1);
+    long ty_len = p2 - (p1 + 1);
+    long id = atol(p2 + 1);
+    const char *home = entity_home_str();
+    if ((long)strlen(home) == home_len && memcmp(home, sdata + 1, (size_t)home_len) == 0) {
+        ENTITY_LOCK();
+        void *live = (id >= 1 && id <= entity_count) ? entity_registry[id - 1] : NULL;
+        ENTITY_UNLOCK();
+        if (live) return live;
+        return NULL;
+    }
+    // Foreign entity: materialize a handle stub
+    void *home_s = __pluto_string_new((char *)(sdata + 1), home_len);
+    void *ty_s = __pluto_string_new((char *)(p1 + 1), ty_len);
+    long *stub = (long *)gc_alloc(24, GC_TAG_HANDLE, 3);
+    stub[0] = (long)home_s;
+    stub[1] = (long)ty_s;
+    stub[2] = id;
+    return stub;
+}
+
+// Guard before every object method call: a foreign-handle receiver cannot be
+// invoked locally (routing is a later slice).
+void __pluto_entity_guard(void *ptr) {
+    if (!ptr) return;
+    GCHeader *h = (GCHeader *)((char *)ptr - sizeof(GCHeader));
+    if (h->type_tag == GC_TAG_HANDLE) {
+        fprintf(stderr, "pluto: cannot call a method on a foreign entity handle: "
+                        "calls must route to the entity's home domain "
+                        "(not yet implemented — rfc-objects.md phase 2)\n");
+        exit(1);
+    }
+}
+
 static void *pluto_boundary_request(const char *prefix, void *service_str, void *method_str, void *payload_str) {
     const char *svc;
     long svclen;
