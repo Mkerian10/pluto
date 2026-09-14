@@ -700,12 +700,56 @@ impl<'a> LowerContext<'a> {
             ))),
         };
 
-        // Collect dispatchable methods (owned, to release the env borrow before
-        // we start mutating the builder): (method_name, mangled, arg_types, return).
+        let svc_ptr = self.lower_expr(&service.node)?;
+        let port_val = self.lower_expr(&port.node)?;
+
+        // Bind + listen; the bound address becomes this process's entity home
+        // (so exported handles are callable back), then announce the port.
+        let fd = self.call_runtime("__pluto_serve_listen", &[port_val]);
+        let actual_port = self.call_runtime("__pluto_serve_port", &[fd]);
+        self.call_runtime_void("__pluto_serve_set_self_addr", &[actual_port]);
+        self.call_runtime_void("__pluto_print_int", &[actual_port]);
+
+        // Accept loop: one detached HANDLER THREAD per connection (replacing
+        // fork-per-request). Threads share the process, so entity and service
+        // state mutated by a handler sticks — required for handle-call
+        // routing — and a stuck client blocks only its own thread. The served
+        // class and all object types are synchronized (rwlocks), making
+        // concurrent handlers safe.
+        let handler_name = format!("__pluto_serve_handler_{class_name}");
+        let handler_id = self.func_ids.get(&handler_name).ok_or_else(|| {
+            CompileError::codegen(format!("serve: missing handler fn '{handler_name}'"))
+        })?;
+        let handler_ref = self.module.declare_func_in_func(*handler_id, self.builder.func);
+        let handler_addr = self.builder.ins().func_addr(types::I64, handler_ref);
+
+        let loop_bb = self.builder.create_block();
+        self.builder.ins().jump(loop_bb, &[]);
+        self.builder.switch_to_block(loop_bb);
+        let conn = self.call_runtime("__pluto_serve_accept", &[fd]);
+        self.call_runtime_void("__pluto_serve_handler_spawn", &[svc_ptr, conn, handler_addr]);
+        self.builder.ins().jump(loop_bb, &[]);
+        self.builder.seal_block(loop_bb);
+
+        // The accept loop never falls through; continue lowering in a dead block.
+        let dead_bb = self.builder.create_block();
+        self.builder.switch_to_block(dead_bb);
+        self.builder.seal_block(dead_bb);
+
+        Ok(())
+    }
+
+    /// The body of a serve handler thread: read one framed request from
+    /// `conn`, dispatch it (service methods, then entity handle calls), reply,
+    /// close, return. Runs on its own thread — see lower_serve.
+    pub(crate) fn emit_serve_dispatch(
+        &mut self,
+        svc_ptr: Value,
+        conn: Value,
+        class_name: &str,
+    ) -> Result<(), CompileError> {
         let env = self.env;
         let supported = |t: &PlutoType| {
-            // Top-level entities cross as handles; entities NESTED in values
-            // are still untransferable (a copy would fork identity).
             if let PlutoType::Class(n) = t
                 && env.object_types.contains(n)
             {
@@ -714,63 +758,41 @@ impl<'a> LowerContext<'a> {
             crate::typeck::types::wire_supported(t)
                 && !crate::typeck::types::contains_object_type(t, env)
         };
-        let mut methods: Vec<(String, String, Vec<PlutoType>, PlutoType, Vec<String>)> = Vec::new();
-        if let Some(info) = self.env.classes.get(&class_name) {
-            for mname in &info.methods {
-                let mangled = mangle_method(&class_name, mname);
-                let Some(sig) = self.env.functions.get(&mangled) else { continue };
-                let arg_types: Vec<PlutoType> = sig.params.iter().skip(1).cloned().collect();
-                let ret = sig.return_type.clone();
-                let ret_ok = supported(&ret) || ret == PlutoType::Void;
-                if arg_types.iter().all(supported) && ret_ok {
-                    // The method's statically-inferred error set — used to
-                    // serialize a raised error precisely when it's unambiguous.
-                    let errs: Vec<String> = self.env.fn_errors.get(&mangled)
-                        .map(|s| { let mut v: Vec<String> = s.iter().cloned().collect(); v.sort(); v })
-                        .unwrap_or_default();
-                    methods.push((mname.clone(), mangled, arg_types, ret, errs));
+        let collect_methods = |cn: &str| -> Vec<(String, String, Vec<PlutoType>, PlutoType, Vec<String>)> {
+            let mut out = Vec::new();
+            if let Some(info) = env.classes.get(cn) {
+                for mname in &info.methods {
+                    let mangled = mangle_method(cn, mname);
+                    let Some(sig) = env.functions.get(&mangled) else { continue };
+                    let arg_types: Vec<PlutoType> = sig.params.iter().skip(1).cloned().collect();
+                    let ret = sig.return_type.clone();
+                    let ret_ok = supported(&ret) || ret == PlutoType::Void;
+                    if arg_types.iter().all(supported) && ret_ok {
+                        let errs: Vec<String> = env.fn_errors.get(&mangled)
+                            .map(|s| { let mut v: Vec<String> = s.iter().cloned().collect(); v.sort(); v })
+                            .unwrap_or_default();
+                        out.push((mname.clone(), mangled, arg_types, ret, errs));
+                    }
                 }
+            }
+            out
+        };
+        let methods = collect_methods(class_name);
+        // Entity dispatch: every object type's callable methods, keyed by the
+        // OBJECT type's interface hash (version-skew protection per type).
+        let mut object_methods: Vec<(String, String, String, Vec<PlutoType>, PlutoType, Vec<String>)> = Vec::new();
+        let mut object_names: Vec<String> = self.env.object_types.iter().cloned().collect();
+        object_names.sort();
+        for oname in &object_names {
+            for (mname, mangled, argt, ret, errs) in collect_methods(oname) {
+                object_methods.push((oname.clone(), mname, mangled, argt, ret, errs));
             }
         }
 
-        // The served interface's hash — folded into each dispatch token so a
-        // client compiled against a different interface matches no method.
-        let server_hash = self.compute_interface_hash(&class_name);
+        let server_hash = self.compute_interface_hash(class_name);
 
-        let svc_ptr = self.lower_expr(&service.node)?;
-        let port_val = self.lower_expr(&port.node)?;
-
-        // Bind + listen, then announce the actual bound port (so port 0 works).
-        let fd = self.call_runtime("__pluto_serve_listen", &[port_val]);
-        let actual_port = self.call_runtime("__pluto_serve_port", &[fd]);
-        self.call_runtime_void("__pluto_print_int", &[actual_port]);
-
-        // Accept loop. Each connection is handled in a forked child, so a slow
-        // or stuck client blocks only its own child and clients are served
-        // concurrently. Each request runs in an isolated copy-on-write process.
-        let loop_bb = self.builder.create_block();
-        let child_bb = self.builder.create_block();
-        let parent_bb = self.builder.create_block();
         let close_bb = self.builder.create_block();
-        self.builder.ins().jump(loop_bb, &[]);
-        self.builder.switch_to_block(loop_bb);
-
-        let conn = self.call_runtime("__pluto_serve_accept", &[fd]);
         let zero = self.builder.ins().iconst(types::I64, 0);
-        let pid = self.call_runtime("__pluto_fork", &[]);
-        let is_child = self.builder.ins().icmp(IntCC::Equal, pid, zero);
-        self.builder.ins().brif(is_child, child_bb, &[], parent_bb, &[]);
-
-        // Parent: the child owns this connection; go back to accepting.
-        self.builder.switch_to_block(parent_bb);
-        self.builder.seal_block(parent_bb);
-        self.call_runtime("__pluto_socket_close", &[conn]);
-        self.builder.ins().jump(loop_bb, &[]);
-        self.builder.seal_block(loop_bb);
-
-        // Child: handle exactly one request, then exit (via close_bb).
-        self.builder.switch_to_block(child_bb);
-        self.builder.seal_block(child_bb);
         let req = self.call_runtime("__pluto_read_framed", &[conn]);
         let dispatch_bb = self.builder.create_block();
         let req_null = self.builder.ins().icmp(IntCC::Equal, req, zero);
@@ -780,9 +802,7 @@ impl<'a> LowerContext<'a> {
 
         let method_str = self.call_runtime("__pluto_request_field", &[req, zero]);
 
-        // Dispatch chain: compare the request's `method#interface_hash` token
-        // against each candidate. A hash mismatch matches nothing and falls
-        // through to close — the client sees a failed call (NetworkError).
+        // Service-method chain: token `method#hash`, args at fields 1..
         for (mname, mangled, arg_types, ret, errs) in &methods {
             let handle_bb = self.builder.create_block();
             let next_bb = self.builder.create_block();
@@ -790,7 +810,6 @@ impl<'a> LowerContext<'a> {
             let eq = self.call_runtime("__pluto_string_eq", &[method_str, lit]);
             self.builder.ins().brif(eq, handle_bb, &[], next_bb, &[]);
 
-            // Handler: parse args, call the method, then reply OK/ERR.
             self.builder.switch_to_block(handle_bb);
             self.builder.seal_block(handle_bb);
             let mut call_args = vec![svc_ptr];
@@ -800,63 +819,128 @@ impl<'a> LowerContext<'a> {
                 let v = self.decode_wire_value(aty, field)?;
                 call_args.push(v);
             }
-            let func_id = self.func_ids.get(mangled).ok_or_else(|| {
-                CompileError::codegen(format!("serve: undefined method '{mangled}'"))
-            })?;
-            let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
-            let call = self.builder.ins().call(func_ref, &call_args);
-            let result_val = if *ret == PlutoType::Void {
-                self.builder.ins().iconst(types::I64, 0)
-            } else {
-                self.builder.inst_results(call)[0]
-            };
-
-            // If the method raised, reply with an ERR frame; otherwise OK.
-            let has_err = self.call_runtime("__pluto_has_error", &[]);
-            let zero2 = self.builder.ins().iconst(types::I64, 0);
-            let raised = self.builder.ins().icmp(IntCC::NotEqual, has_err, zero2);
-            let ok_bb = self.builder.create_block();
-            let err_bb = self.builder.create_block();
-            self.builder.ins().brif(raised, err_bb, &[], ok_bb, &[]);
-
-            // OK: "OK\n" + the formatted return value.
-            self.builder.switch_to_block(ok_bb);
-            self.builder.seal_block(ok_bb);
-            let payload = if *ret == PlutoType::Void {
-                self.make_string_literal("")?
-            } else {
-                self.encode_wire_value(ret, result_val)?
-            };
-            let ok_prefix = self.make_string_literal("OK\n")?;
-            let ok_resp = self.call_runtime("__pluto_string_concat", &[ok_prefix, payload]);
-            self.call_runtime("__pluto_write_framed", &[conn, ok_resp]);
-            self.builder.ins().jump(close_bb, &[]);
-
-            // ERR: serialize the raised error, clear it, and reply.
-            self.builder.switch_to_block(err_bb);
-            self.builder.seal_block(err_bb);
-            let err_resp = self.build_error_response(errs)?;
-            self.call_runtime_void("__pluto_clear_error", &[]);
-            self.call_runtime("__pluto_write_framed", &[conn, err_resp]);
-            self.builder.ins().jump(close_bb, &[]);
+            self.emit_dispatch_invoke(
+                class_name, mangled, &call_args, ret, errs, conn, close_bb,
+            )?;
 
             self.builder.switch_to_block(next_bb);
             self.builder.seal_block(next_bb);
         }
 
-        // No matching method (incl. an interface-hash mismatch): the client
-        // sees an empty response. Fall through to close.
+        // Entity chain: token `@Type$method#typehash`, entity id at field 1,
+        // args at fields 2.. — the call runs on the LIVE entity here at home.
+        for (oname, mname, mangled, arg_types, ret, errs) in &object_methods {
+            let ohash = self.compute_interface_hash(oname);
+            let handle_bb = self.builder.create_block();
+            let next_bb = self.builder.create_block();
+            let lit = self.make_string_literal(&format!("@{oname}${mname}#{ohash}"))?;
+            let eq = self.call_runtime("__pluto_string_eq", &[method_str, lit]);
+            self.builder.ins().brif(eq, handle_bb, &[], next_bb, &[]);
+
+            self.builder.switch_to_block(handle_bb);
+            self.builder.seal_block(handle_bb);
+            let one = self.builder.ins().iconst(types::I64, 1);
+            let id_field = self.call_runtime("__pluto_request_field", &[req, one]);
+            let id = self.call_runtime("__pluto_parse_long", &[id_field]);
+            let entity = self.call_runtime("__pluto_entity_resolve_local", &[id]);
+            let live_bb = self.builder.create_block();
+            let is_null = self.builder.ins().icmp(IntCC::Equal, entity, zero);
+            self.builder.ins().brif(is_null, close_bb, &[], live_bb, &[]);
+            self.builder.switch_to_block(live_bb);
+            self.builder.seal_block(live_bb);
+
+            let mut call_args = vec![entity];
+            for (ai, aty) in arg_types.iter().enumerate() {
+                let idx = self.builder.ins().iconst(types::I64, (ai + 2) as i64);
+                let field = self.call_runtime("__pluto_request_field", &[req, idx]);
+                let v = self.decode_wire_value(aty, field)?;
+                call_args.push(v);
+            }
+            self.emit_dispatch_invoke(oname, mangled, &call_args, ret, errs, conn, close_bb)?;
+
+            self.builder.switch_to_block(next_bb);
+            self.builder.seal_block(next_bb);
+        }
+
+        // No match (incl. hash mismatch): close; client sees a failed call.
         self.builder.ins().jump(close_bb, &[]);
 
-        // Child close: close the connection and exit this handler process.
         self.builder.switch_to_block(close_bb);
         self.builder.seal_block(close_bb);
         self.call_runtime("__pluto_socket_close", &[conn]);
-        let exit_ok = self.builder.ins().iconst(types::I64, 0);
-        self.call_runtime_void("__pluto_process_exit", &[exit_ok]);
-        // process_exit never returns, but Cranelift needs a terminator.
-        self.builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+        let ret0 = self.builder.ins().iconst(types::I64, 0);
+        self.builder.ins().return_(&[ret0]);
 
+        Ok(())
+    }
+
+    /// Invoke a dispatched method under its class's rwlock and reply OK/ERR.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_dispatch_invoke(
+        &mut self,
+        cn: &str,
+        mangled: &str,
+        call_args: &[Value],
+        ret: &PlutoType,
+        errs: &[String],
+        conn: Value,
+        close_bb: cranelift_codegen::ir::Block,
+    ) -> Result<(), CompileError> {
+        let needs_sync = self.rwlock_globals.contains_key(cn);
+        let lock_ptr = if needs_sync {
+            let data_id = self.rwlock_globals[cn];
+            let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+            let addr = self.builder.ins().global_value(types::I64, gv);
+            let lp = self.builder.ins().load(types::I64, MemFlags::new(), addr, Offset32::new(0));
+            if self.env.mut_self_methods.contains(mangled) {
+                self.call_runtime_void("__pluto_rwlock_wrlock", &[lp]);
+            } else {
+                self.call_runtime_void("__pluto_rwlock_rdlock", &[lp]);
+            }
+            Some(lp)
+        } else {
+            None
+        };
+
+        let func_id = self.func_ids.get(mangled).ok_or_else(|| {
+            CompileError::codegen(format!("serve: undefined method '{mangled}'"))
+        })?;
+        let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+        let call = self.builder.ins().call(func_ref, call_args);
+        let result_val = if *ret == PlutoType::Void {
+            self.builder.ins().iconst(types::I64, 0)
+        } else {
+            self.builder.inst_results(call)[0]
+        };
+        if let Some(lp) = lock_ptr {
+            self.call_runtime_void("__pluto_rwlock_unlock", &[lp]);
+        }
+
+        let has_err = self.call_runtime("__pluto_has_error", &[]);
+        let zero2 = self.builder.ins().iconst(types::I64, 0);
+        let raised = self.builder.ins().icmp(IntCC::NotEqual, has_err, zero2);
+        let ok_bb = self.builder.create_block();
+        let err_bb = self.builder.create_block();
+        self.builder.ins().brif(raised, err_bb, &[], ok_bb, &[]);
+
+        self.builder.switch_to_block(ok_bb);
+        self.builder.seal_block(ok_bb);
+        let payload = if *ret == PlutoType::Void {
+            self.make_string_literal("")?
+        } else {
+            self.encode_wire_value(ret, result_val)?
+        };
+        let ok_prefix = self.make_string_literal("OK\n")?;
+        let ok_resp = self.call_runtime("__pluto_string_concat", &[ok_prefix, payload]);
+        self.call_runtime("__pluto_write_framed", &[conn, ok_resp]);
+        self.builder.ins().jump(close_bb, &[]);
+
+        self.builder.switch_to_block(err_bb);
+        self.builder.seal_block(err_bb);
+        let err_resp = self.build_error_response(errs)?;
+        self.call_runtime_void("__pluto_clear_error", &[]);
+        self.call_runtime("__pluto_write_framed", &[conn, err_resp]);
+        self.builder.ins().jump(close_bb, &[]);
         Ok(())
     }
 
@@ -2542,7 +2626,42 @@ impl<'a> LowerContext<'a> {
         let iface_hash = self.compute_interface_hash(cname);
         let meth_s = self.make_string_literal(&format!("{method_name}#{iface_hash}"))?;
         let resp = self.call_runtime(request_fn, &[svc_s, meth_s, payload]);
+        let err_key = mangle_method(cname, method_name);
+        let err_label = format!("{cname}.{method_name}");
+        self.emit_transport_response(resp, &err_key, &err_label, ret_type, ret_cl, cont_bb)
+    }
 
+    /// Encode already-lowered args as a newline-joined wire payload.
+    fn emit_wire_payload(
+        &mut self,
+        arg_tys: &[PlutoType],
+        arg_vals: &[Value],
+    ) -> Result<Value, CompileError> {
+        let mut payload = self.make_string_literal("")?;
+        let nl = self.make_string_literal("\n")?;
+        for (i, (aty, av)) in arg_tys.iter().zip(arg_vals.iter()).enumerate() {
+            let s = self.encode_wire_value(aty, *av)?;
+            if i > 0 {
+                payload = self.call_runtime("__pluto_string_concat", &[payload, nl]);
+            }
+            payload = self.call_runtime("__pluto_string_concat", &[payload, s]);
+        }
+        Ok(payload)
+    }
+
+    /// Handle a boundary response: null -> NetworkError; OK -> decode payload;
+    /// ERR -> reconstruct a typed error from `err_key`'s inferred error set.
+    /// Every exit jumps to `cont_bb` (one ret_cl param).
+    #[allow(clippy::too_many_arguments)]
+    fn emit_transport_response(
+        &mut self,
+        resp: Value,
+        err_key: &str,
+        err_label: &str,
+        ret_type: &PlutoType,
+        ret_cl: cranelift_codegen::ir::Type,
+        cont_bb: cranelift_codegen::ir::Block,
+    ) -> Result<(), CompileError> {
         let fail_bb = self.builder.create_block();
         let ok_bb = self.builder.create_block();
 
@@ -2557,7 +2676,7 @@ impl<'a> LowerContext<'a> {
         let size = (nfields as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
         let size_val = self.builder.ins().iconst(types::I64, size);
         let err_ptr = self.call_runtime("__pluto_alloc", &[size_val]);
-        let msg = format!("boundary call to {cname}.{method_name} failed");
+        let msg = format!("boundary call to {err_label} failed");
         let mstr = self.make_string_literal(&msg)?;
         self.builder.ins().store(MemFlags::new(), mstr, err_ptr, Offset32::new(0));
         self.call_runtime_void("__pluto_raise_error", &[err_ptr]);
@@ -2599,8 +2718,7 @@ impl<'a> LowerContext<'a> {
         self.builder.switch_to_block(err_status_bb);
         self.builder.seal_block(err_status_bb);
         let err_type = self.call_runtime("__pluto_request_field", &[resp, one]);
-        let iface_mangled = mangle_method(cname, method_name);
-        let mut error_types: Vec<String> = self.env.fn_errors.get(&iface_mangled)
+        let mut error_types: Vec<String> = self.env.fn_errors.get(err_key)
             .map(|s| s.iter().filter(|e| *e != "NetworkError").cloned().collect())
             .unwrap_or_default();
         error_types.sort();
@@ -2689,18 +2807,52 @@ impl<'a> LowerContext<'a> {
                 let transport_bb = self.builder.create_block();
                 let local_bb = self.builder.create_block();
 
-                let service_name = cname.rsplit('.').next().unwrap_or(&cname);
-                let svc_s = self.make_string_literal(service_name)?;
-                let bound = self.call_runtime("__pluto_domain_bound", &[svc_s]);
-                self.builder.ins().brif(bound, transport_bb, &[], local_bb, &[]);
+                let is_entity_target = self.env.object_types.contains(&cname);
+                if is_entity_target {
+                    // Entity placement: run where the entity LIVES. A foreign
+                    // handle routes to its home; a local entity is a direct
+                    // call — same expression, both physical plans.
+                    let is_handle = self.call_runtime("__pluto_handle_is", &[obj_ptr]);
+                    self.builder.ins().brif(is_handle, transport_bb, &[], local_bb, &[]);
 
-                // Plan A: the domain is bound to an endpoint — socket transport.
-                self.builder.switch_to_block(transport_bb);
-                self.builder.seal_block(transport_bb);
-                self.emit_transport_call(
-                    &cname, &method.node, &arg_tys, &arg_vals,
-                    &ret_type, ret_cl, "__pluto_domain_request", cont_bb,
-                )?;
+                    self.builder.switch_to_block(transport_bb);
+                    self.builder.seal_block(transport_bb);
+                    // Handle stub layout: [home_str][type_str][id]
+                    let home = self.builder.ins().load(
+                        types::I64, MemFlags::new(), obj_ptr, Offset32::new(0),
+                    );
+                    let id = self.builder.ins().load(
+                        types::I64, MemFlags::new(), obj_ptr, Offset32::new(2 * POINTER_SIZE),
+                    );
+                    let id_str = self.call_runtime("__pluto_int_to_string", &[id]);
+                    let args_payload = self.emit_wire_payload(&arg_tys, &arg_vals)?;
+                    let nl = self.make_string_literal("\n")?;
+                    let payload = if arg_tys.is_empty() {
+                        id_str
+                    } else {
+                        let with_nl = self.call_runtime("__pluto_string_concat", &[id_str, nl]);
+                        self.call_runtime("__pluto_string_concat", &[with_nl, args_payload])
+                    };
+                    let ohash = self.compute_interface_hash(&cname);
+                    let tok = self.make_string_literal(&format!("@{cname}${}#{ohash}", method.node))?;
+                    let resp = self.call_runtime("__pluto_entity_request", &[home, tok, payload]);
+                    let err_key = mangle_method(&cname, &method.node);
+                    let err_label = format!("{cname}.{}", method.node);
+                    self.emit_transport_response(resp, &err_key, &err_label, &ret_type, ret_cl, cont_bb)?;
+                } else {
+                    let service_name = cname.rsplit('.').next().unwrap_or(&cname);
+                    let svc_s = self.make_string_literal(service_name)?;
+                    let bound = self.call_runtime("__pluto_domain_bound", &[svc_s]);
+                    self.builder.ins().brif(bound, transport_bb, &[], local_bb, &[]);
+
+                    // Plan A: the domain is bound to an endpoint — socket transport.
+                    self.builder.switch_to_block(transport_bb);
+                    self.builder.seal_block(transport_bb);
+                    self.emit_transport_call(
+                        &cname, &method.node, &arg_tys, &arg_vals,
+                        &ret_type, ret_cl, "__pluto_domain_request", cont_bb,
+                    )?;
+                }
 
                 // Plan B: colocated — direct call on the local instance. The
                 // logical boundary still holds: same wire-checked surface,
@@ -4831,6 +4983,60 @@ fn collect_sender_var_names(stmts: &[crate::span::Spanned<Stmt>]) -> Vec<String>
 
 /// Lower a function body into Cranelift IR./// Lower a function body into Cranelift IR.
 #[allow(clippy::too_many_arguments)]
+/// Lower the synthetic serve-handler function for a served class:
+/// `fn __pluto_serve_handler_<C>(svc: i64, conn: i64) -> i64`, run on one
+/// detached thread per accepted connection (see lower_serve).
+#[allow(clippy::too_many_arguments)]
+pub fn lower_serve_handler(
+    class_name: &str,
+    mut builder: FunctionBuilder<'_>,
+    env: &TypeEnv,
+    module: &mut dyn Module,
+    func_ids: &HashMap<String, FuncId>,
+    runtime: &RuntimeRegistry,
+    vtable_ids: &HashMap<(String, String), DataId>,
+    source: &str,
+    class_invariants: &HashMap<String, Vec<(Expr, String)>>,
+    fn_contracts: &HashMap<String, FnContracts>,
+    singleton_globals: &HashMap<String, DataId>,
+    rwlock_globals: &HashMap<String, DataId>,
+    coverage_lookup: &HashMap<(u32, usize, u32), u32>,
+) -> Result<(), CompileError> {
+    let entry_block = builder.create_block();
+    builder.append_block_params_for_function_params(entry_block);
+    builder.switch_to_block(entry_block);
+    builder.seal_block(entry_block);
+    let svc = builder.block_params(entry_block)[0];
+    let conn = builder.block_params(entry_block)[1];
+
+    let mut ctx = LowerContext {
+        builder,
+        module,
+        env,
+        func_ids,
+        runtime,
+        vtable_ids,
+        source,
+        class_invariants,
+        fn_contracts,
+        singleton_globals,
+        rwlock_globals,
+        coverage_lookup,
+        variables: HashMap::new(),
+        var_types: HashMap::new(),
+        next_var: 0,
+        expected_return_type: Some(PlutoType::Int),
+        loop_stack: Vec::new(),
+        sender_cleanup_vars: Vec::new(),
+        exit_block: None,
+        fn_display_name: format!("__pluto_serve_handler_{class_name}"),
+        is_spawn_closure: false,
+    };
+    ctx.emit_serve_dispatch(svc, conn, class_name)?;
+    ctx.builder.finalize();
+    Ok(())
+}
+
 pub fn lower_function(
     func: &Function,
     mut builder: FunctionBuilder<'_>,

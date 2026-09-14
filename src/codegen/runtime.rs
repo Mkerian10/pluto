@@ -189,6 +189,11 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_entity_encode", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_entity_decode", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_entity_guard", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_entity_request", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_entity_resolve_local", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_serve_set_self_addr", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_serve_handler_spawn", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_handle_is", &[types::I64], &[types::I64])?;
 
         // Rwlock synchronization
         reg.declare(module, "__pluto_rwlock_init", &[], &[types::I64])?;

@@ -1350,6 +1350,12 @@ void *__pluto_entity_decode(void *wire_str) {
 
 // Guard before every object method call: a foreign-handle receiver cannot be
 // invoked locally (routing is a later slice).
+long __pluto_handle_is(void *ptr) {
+    if (!ptr) return 0;
+    GCHeader *h = (GCHeader *)((char *)ptr - sizeof(GCHeader));
+    return h->type_tag == GC_TAG_HANDLE ? 1 : 0;
+}
+
 void __pluto_entity_guard(void *ptr) {
     if (!ptr) return;
     GCHeader *h = (GCHeader *)((char *)ptr - sizeof(GCHeader));
@@ -1360,6 +1366,8 @@ void __pluto_entity_guard(void *ptr) {
         exit(1);
     }
 }
+
+static void *pluto_request_to_addr(const char *addr, void *method_str, void *payload_str);
 
 static void *pluto_boundary_request(const char *prefix, void *service_str, void *method_str, void *payload_str) {
     const char *svc;
@@ -1378,6 +1386,23 @@ static void *pluto_boundary_request(const char *prefix, void *service_str, void 
 
     const char *addr = getenv(envname);
     if (!addr) return NULL;
+    return pluto_request_to_addr(addr, method_str, payload_str);
+}
+
+/* Handle-call routing (rfc-objects.md phase 2 slice 2): dial an entity's
+ * home address directly — the handle carries it. */
+void *__pluto_entity_request(void *home_str, void *method_str, void *payload_str) {
+    const char *home;
+    long hlen;
+    __pluto_string_data(home_str, &home, &hlen);
+    char addr[160];
+    if (hlen <= 0 || hlen >= (long)sizeof(addr)) return NULL;
+    memcpy(addr, home, (size_t)hlen);
+    addr[hlen] = 0;
+    return pluto_request_to_addr(addr, method_str, payload_str);
+}
+
+static void *pluto_request_to_addr(const char *addr, void *method_str, void *payload_str) {
     const char *colon = strchr(addr, ':');
     if (!colon) return NULL;
     size_t hlen = (size_t)(colon - addr);
@@ -1419,6 +1444,74 @@ long __pluto_parse_long(void *s) {
 
 // ── Serve helpers (generated RPC server side) ─────────────────────────────────
 // Bind+listen a TCP socket on 0.0.0.0:<port>. Returns the listener fd, or -1.
+/* The serving process's dialable address becomes its entity home, so
+ * handles exported from here can be called back (PLUTO_SELF_ADDR overrides
+ * the 127.0.0.1 default for multi-host deployments). Must run before the
+ * first entity export mints the opaque fallback token. */
+void __pluto_serve_set_self_addr(long port) {
+    const char *self_addr = getenv("PLUTO_SELF_ADDR");
+    if (self_addr && strchr(self_addr, ':')) {
+        snprintf(entity_home, sizeof(entity_home), "%s", self_addr);
+    } else {
+        snprintf(entity_home, sizeof(entity_home), "127.0.0.1:%ld", port);
+    }
+}
+
+void *__pluto_entity_resolve_local(long id) {
+    ENTITY_LOCK();
+    void *live = (id >= 1 && id <= entity_count) ? entity_registry[id - 1] : NULL;
+    ENTITY_UNLOCK();
+    return live;
+}
+
+/* Linear JSON string escaping (quote + escape in one pass). The stdlib's
+ * per-byte concat loop was quadratic in allocation churn — a 20KB string
+ * generated ~200MB of intermediates and hundreds of GC cycles. */
+void *__pluto_json_escape_string(void *s) {
+    const char *data;
+    long len;
+    __pluto_string_data(s, &data, &len);
+    /* measure */
+    long out_len = 2; /* quotes */
+    for (long i = 0; i < len; i++) {
+        unsigned char b = (unsigned char)data[i];
+        if (b == '"' || b == '\\' || b == '\b' || b == '\f' || b == '\n' || b == '\r' || b == '\t') {
+            out_len += 2;
+        } else if (b < 32) {
+            out_len += 6; /* \u00XX */
+        } else {
+            out_len += 1;
+        }
+    }
+    char *buf = (char *)malloc((size_t)out_len);
+    long o = 0;
+    buf[o++] = '"';
+    static const char hexd[] = "0123456789abcdef";
+    for (long i = 0; i < len; i++) {
+        unsigned char b = (unsigned char)data[i];
+        switch (b) {
+        case '"': buf[o++] = '\\'; buf[o++] = '"'; break;
+        case '\\': buf[o++] = '\\'; buf[o++] = '\\'; break;
+        case '\b': buf[o++] = '\\'; buf[o++] = 'b'; break;
+        case '\f': buf[o++] = '\\'; buf[o++] = 'f'; break;
+        case '\n': buf[o++] = '\\'; buf[o++] = 'n'; break;
+        case '\r': buf[o++] = '\\'; buf[o++] = 'r'; break;
+        case '\t': buf[o++] = '\\'; buf[o++] = 't'; break;
+        default:
+            if (b < 32) {
+                buf[o++] = '\\'; buf[o++] = 'u'; buf[o++] = '0'; buf[o++] = '0';
+                buf[o++] = hexd[b >> 4]; buf[o++] = hexd[b & 0xf];
+            } else {
+                buf[o++] = (char)b;
+            }
+        }
+    }
+    buf[o++] = '"';
+    void *result = __pluto_string_new(buf, o);
+    free(buf);
+    return result;
+}
+
 long __pluto_serve_listen(long port) {
     long fd = __pluto_socket_create(2, 1, 0);
     if (fd < 0) return -1;

@@ -172,6 +172,7 @@ void *__pluto_string_escape(void *s);
 const char *__pluto_string_to_cstr(void *s);
 void __pluto_string_data(void *s, const char **data_out, long *len_out);
 int __pluto_string_eq(void *a, void *b);
+long __pluto_socket_close(long fd);
 
 // Coverage functions
 void __pluto_coverage_init(long num_points, void *path_str);
