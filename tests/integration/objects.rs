@@ -254,3 +254,33 @@ fn object_nested_in_spawned_class_stays_shared() {
     );
     assert_eq!(out.trim(), "1000");
 }
+
+/// Entity placement is plan-symmetric: `at v { m() }` on a LOCAL entity is a
+/// direct call — the same expression that routes to a remote home when v is
+/// a handle. The boundary contract (mandatory catch) applies identically.
+#[test]
+fn entity_placement_colocated() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Vault {
+            secret: int
+            fn reveal(self) int {
+                return self.secret
+            }
+            fn rotate(mut self) {
+                self.secret = self.secret + 100
+            }
+        }
+
+        fn main() {
+            let mut v = Vault { secret: 7 }
+            let s1 = at v { reveal() } catch -2
+            print(s1)
+            at v { rotate() } catch err {}
+            let s2 = at v { reveal() } catch -2
+            print(s2)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "7\n107");
+}

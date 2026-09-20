@@ -241,7 +241,15 @@ fn collect_rpc_interface_classes(program: &Program) -> HashSet<String> {
     if let Some(app) = &program.app { add_remote(&app.node.inject_fields); }
     for s in &program.stages { add_remote(&s.node.inject_fields); }
 
-    // Trace `serve <svc>`: map `let svc = Type {..}` then resolve serve targets.
+    classes.extend(collect_served_classes(program));
+    classes
+}
+
+/// Classes passed to `serve` (traced through `let svc = Type {..}`). Reused by
+/// the codegen driver (handler-function synthesis) and typeck (served classes
+/// become synchronized: handler threads run concurrently).
+pub(crate) fn collect_served_classes(program: &Program) -> HashSet<String> {
+    let mut classes = HashSet::new();
     let mut let_structs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut serve_targets: Vec<Expr> = Vec::new();
     each_top_level_stmt(program, |st| match st {
@@ -260,7 +268,6 @@ fn collect_rpc_interface_classes(program: &Program) -> HashSet<String> {
             _ => {}
         }
     }
-
     classes
 }
 

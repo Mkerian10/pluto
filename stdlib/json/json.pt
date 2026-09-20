@@ -161,51 +161,9 @@ pub fn object() Json {
 // ── Stringify ──────────────────────────────────────────────────────────────────
 
 fn escape_string(s: string) string {
-    let mut result = "\""
-    let mut i = 0
-    let slen = s.len()
-    while i < slen {
-        let b = strings.byte_at(s, i)
-        if b == 34 {
-            result = result + "\\\""
-        } else {
-            if b == 92 {
-                result = result + "\\\\"
-            } else {
-                if b == 8 {
-                    result = result + "\\b"
-                } else {
-                    if b == 12 {
-                        result = result + "\\f"
-                    } else {
-                        if b == 10 {
-                            result = result + "\\n"
-                        } else {
-                            if b == 13 {
-                                result = result + "\\r"
-                            } else {
-                                if b == 9 {
-                                    result = result + "\\t"
-                                } else {
-                                    if b < 32 {
-                                        result = result + "\\u00"
-                                        let hi = b / 16
-                                        let lo = b - hi * 16
-                                        result = result + hex_digit(hi) + hex_digit(lo)
-                                    } else {
-                                        result = result + strings.char_at(s, i)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        i = i + 1
-    }
-    result = result + "\""
-    return result
+    // One linear pass in the runtime: the per-byte concat loop this replaces
+    // was quadratic in allocation churn (each `+` copies the accumulator).
+    return __pluto_json_escape_string(s)
 }
 
 fn hex_digit(v: int) string {
@@ -741,6 +699,7 @@ class Parser {
 }
 
 // Helpers using extern C functions
+extern fn __pluto_json_escape_string(s: string) string
 extern fn __pluto_json_parse_int(s: string) int
 extern fn __pluto_json_parse_float(s: string) float
 extern fn __pluto_codepoint_to_string(cp: int) string

@@ -712,6 +712,70 @@ typedef struct {
     pthread_cond_t cond;
 } TaskSync;
 
+// ── Serve handler threads ───────────────────────────────────────────────────
+//
+// One thread per accepted connection (replacing fork-per-request): entity
+// and service state mutated by a handler STICKS — required for handle-call
+// routing (rfc-objects.md phase 2 slice 2). Threads register with the GC
+// exactly like spawn trampolines.
+
+typedef struct {
+    long svc;
+    long conn;
+    long (*handler)(long, long);
+} ServeHandlerArgs;
+
+static void *serve_handler_trampoline(void *arg) {
+    ServeHandlerArgs *a = (ServeHandlerArgs *)arg;
+    long svc = a->svc;
+    long conn = a->conn;
+    long (*handler)(long, long) = a->handler;
+    free(a);
+
+    __pluto_current_error = NULL;
+    {
+        pthread_t self = pthread_self();
+        void *stack_lo = NULL;
+        void *stack_hi = NULL;
+#ifdef __APPLE__
+        stack_hi = pthread_get_stackaddr_np(self);
+        size_t stack_sz = pthread_get_stacksize_np(self);
+        stack_lo = (char *)stack_hi - stack_sz;
+#else
+        pthread_attr_t pattr;
+        pthread_getattr_np(self, &pattr);
+        size_t stack_sz;
+        pthread_attr_getstack(&pattr, &stack_lo, &stack_sz);
+        stack_hi = (char *)stack_lo + stack_sz;
+        pthread_attr_destroy(&pattr);
+#endif
+        __pluto_gc_register_thread_stack(stack_lo, stack_hi);
+    }
+    __pluto_gc_task_start();
+
+    handler(svc, conn);
+
+    __pluto_gc_deregister_thread_stack();
+    __pluto_gc_task_end();
+    return NULL;
+}
+
+void __pluto_serve_handler_spawn(long svc, long conn, long handler_fn) {
+    ServeHandlerArgs *a = (ServeHandlerArgs *)malloc(sizeof(ServeHandlerArgs));
+    a->svc = svc;
+    a->conn = conn;
+    a->handler = (long (*)(long, long))handler_fn;
+    pthread_t tid;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&tid, &attr, serve_handler_trampoline, a) != 0) {
+        free(a);
+        __pluto_socket_close(conn);
+    }
+    pthread_attr_destroy(&attr);
+}
+
 static void *__pluto_spawn_trampoline(void *arg) {
     long *task = (long *)arg;
     long closure_ptr = task[0];

@@ -23,20 +23,24 @@ pub(crate) fn infer_expr(
             // unconditional fallibility apply whether the deployment binding
             // colocates the domain or puts it across a socket.
             let dom_type = infer_expr(&domain.node, domain.span, env, None)?;
+            // Placement targets are either DOMAINS (the computation runs in
+            // that logical domain) or ENTITIES (the computation runs where
+            // the entity lives — its home process, which may be right here).
             let cname = match &dom_type {
                 PlutoType::Class(n) if env.domain_types.contains(n) => n.clone(),
+                PlutoType::Class(n) if env.object_types.contains(n) => n.clone(),
                 PlutoType::Class(n) => {
                     return Err(CompileError::type_err(
                         format!(
-                            "'at' requires a domain: '{n}' is not declared as one \
-                             (mark the dependency with `domain`, e.g. `[pay: domain {n}]`)"
+                            "'at' requires a domain or an entity: '{n}' is neither \
+                             (mark a dependency with `domain`, or place on an object)"
                         ),
                         domain.span,
                     ));
                 }
                 other => {
                     return Err(CompileError::type_err(
-                        format!("'at' requires a domain dependency, found {other}"),
+                        format!("'at' requires a domain or an entity, found {other}"),
                         domain.span,
                     ));
                 }

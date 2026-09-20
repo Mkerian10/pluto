@@ -20,7 +20,7 @@ use crate::span::Spanned;
 use crate::typeck::env::{mangle_method, TypeEnv};
 use crate::typeck::types::PlutoType;
 use crate::visit::{walk_expr, Visitor};
-use lower::{lower_function, lower_generator_creator, lower_generator_next, pluto_to_cranelift, resolve_type_expr_to_pluto, FnContracts, POINTER_SIZE};
+use lower::{lower_function, lower_serve_handler, lower_generator_creator, lower_generator_next, pluto_to_cranelift, resolve_type_expr_to_pluto, FnContracts, POINTER_SIZE};
 use runtime::RuntimeRegistry;
 
 fn host_target_triple() -> Result<&'static str, CompileError> {
@@ -168,6 +168,29 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
                 .map_err(|e| CompileError::codegen(format!("declare extern fn error: {e}")))?;
             func_ids.insert(e.name.node.clone(), func_id);
         }
+    }
+
+    // Serve handler functions: one per served class, run on a thread per
+    // accepted connection (rfc-objects.md phase 2 slice 2). Declared before
+    // user functions so lower_serve can take their address.
+    let served_classes: Vec<String> = {
+        let mut v: Vec<String> = crate::marshal::collect_served_classes(program)
+            .into_iter()
+            .filter(|c| env.classes.contains_key(c))
+            .collect();
+        v.sort();
+        v
+    };
+    for served in &served_classes {
+        let mut hsig = module.make_signature();
+        hsig.params.push(AbiParam::new(types::I64)); // svc
+        hsig.params.push(AbiParam::new(types::I64)); // conn
+        hsig.returns.push(AbiParam::new(types::I64));
+        let hname = format!("__pluto_serve_handler_{served}");
+        let hid = module
+            .declare_function(&hname, Linkage::Local, &hsig)
+            .map_err(|e| CompileError::codegen(format!("declare serve handler error: {e}")))?;
+        func_ids.insert(hname, hid);
     }
 
     // Pass 1: Declare all top-level functions
@@ -727,6 +750,28 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
         module
             .define_function(main_id, &mut fn_ctx)
             .map_err(|e| CompileError::codegen(format!("define test main error: {e}")))?;
+    }
+
+    // Define serve handler bodies (dispatch chains over the served class's
+    // methods plus entity handle calls). Done after user functions so every
+    // callee FuncId exists.
+    for served in &served_classes {
+        let hname = format!("__pluto_serve_handler_{served}");
+        let hid = func_ids[&hname];
+        let mut hsig = module.make_signature();
+        hsig.params.push(AbiParam::new(types::I64));
+        hsig.params.push(AbiParam::new(types::I64));
+        hsig.returns.push(AbiParam::new(types::I64));
+        let mut fn_ctx = Context::new();
+        fn_ctx.func.signature = hsig;
+        let mut builder_ctx = FunctionBuilderContext::new();
+        {
+            let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
+            lower_serve_handler(served, builder, env, &mut module, &func_ids, &runtime, &vtable_ids, source, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
+        }
+        module
+            .define_function(hid, &mut fn_ctx)
+            .map_err(|e| CompileError::codegen(format!("define serve handler error: {e}")))?;
     }
 
     // Generate synthetic main for DI wiring (when app exists)

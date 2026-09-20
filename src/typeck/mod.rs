@@ -144,6 +144,13 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // not because an analysis proved no concurrent access.
     let objects: Vec<String> = env.object_types.iter().cloned().collect();
     env.synchronized_singletons.extend(objects);
+    // Served classes handle connections on concurrent threads (one per
+    // connection): serialize their methods too.
+    for served in crate::marshal::collect_served_classes(program) {
+        if env.classes.contains_key(&served) {
+            env.synchronized_singletons.insert(served);
+        }
+    }
 
     let warnings = generate_warnings(&env, program);
     // Errors deferred from infallible resolution paths

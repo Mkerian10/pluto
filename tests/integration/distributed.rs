@@ -1327,7 +1327,7 @@ fn at_on_non_domain_dep_rejected() {
             "main.pluto",
             "class Svc {\n    fn ping(self) int {\n        return 1\n    }\n}\n\napp A[s: Svc] {\n    fn main(self) {\n        let x = at self.s { ping() } catch -1\n        print(x)\n    }\n}",
         )],
-        "'at' requires a domain: 'Svc' is not declared as one",
+        "'at' requires a domain or an entity: 'Svc' is neither",
     );
 }
 
@@ -1434,4 +1434,63 @@ fn nested_entity_rejected_at_boundary() {
         )],
         "a value containing an object cannot enter domain 'Escrow'",
     );
+}
+
+// ── Phase 10: handle-call routing (rfc-objects.md phase 2, slice 2) ──
+
+const ROUTE_SHARED: &str = r#"
+import std.wire
+
+object Vault {
+    secret: int
+
+    fn reveal(self) int {
+        return self.secret
+    }
+
+    fn rotate(mut self) {
+        self.secret = self.secret + 100
+    }
+}
+
+class Registry {
+    v: Vault
+
+    fn vault(self) Vault {
+        return self.v
+    }
+}
+"#;
+
+/// The vision's opening image, executing: a client fetches a HANDLE to a
+/// server-owned entity, and `at v { reveal() }` routes the call to the
+/// entity's home process. `rotate()` mutates the entity AT HOME (the
+/// thread-per-connection serve model makes the mutation stick), so a second
+/// reveal reads the changed state.
+#[test]
+fn entity_handle_call_routes_home() {
+    let server_src = format!(
+        "{ROUTE_SHARED}\nfn main() {{\n    let v = Vault {{ secret: 7 }}\n    let r = Registry {{ v: v }}\n    serve r on 0\n}}"
+    );
+    let app_src = format!(
+        "{ROUTE_SHARED}\napp A[reg: domain Registry] {{\n    fn main(self) {{\n        let fallback = Vault {{ secret: -1 }}\n        let v = at self.reg {{ vault() }} catch fallback\n        let s1 = at v {{ reveal() }} catch -2\n        print(s1)\n        at v {{ rotate() }} catch err {{}}\n        let s2 = at v {{ reveal() }} catch -2\n        print(s2)\n    }}\n}}"
+    );
+    let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
+    let (_ad, app_bin) = build_binary(&[("main.pluto", &app_src)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&app_bin)
+        .env("PLUTO_DOMAIN_REGISTRY", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n107\n");
 }
