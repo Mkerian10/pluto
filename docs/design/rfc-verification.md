@@ -138,17 +138,19 @@ Typestates today only know transitions the caller performs. Distribution adds
 world-driven ones. Three transition kinds:
 
 1. **Caller transitions** — `release()` (shipped: phases 1–2).
-2. **Fallible transitions** — `refresh()` can raise; the open design point is the
-   binding's state on the error path. Proposal: the error *carries* the value in its
-   post-failure state (`Degraded { blob: Blob<Unknown> }`) so obligations — notably
-   must-release — survive the raise.
+2. **Fallible transitions** — `refresh()` can raise. *Decided 2026-09-28*: the
+   error **carries** the value in its post-failure state
+   (`Degraded { blob: Blob<Unknown> }`) so obligations — notably must-release —
+   survive the raise. Catch-binding ergonomics and linearity accounting for the
+   consumed receiver are implementation questions (open question 4).
 3. **Degradation** — the world moves you out of a state. Surfaces as typed errors on
    *use* (every effectful method of a degradable state has the degradation error in
    its set; `at`'s mandatory-handling contract makes it unignorable). The protocol
    author programs what degrades, to what, and what evidence renews it.
 
-**Must-release** (decided with this direction): a binding in a marked must-release
-state (e.g. `Lease<Held>`) may not go out of scope un-transitioned — compile error,
+**Must-release** (decided with this direction; marking is an **explicit state-level
+annotation** on the class — decided 2026-09-28, exact syntax TBD): a binding in a
+marked must-release state (e.g. `Lease<Held>`) may not go out of scope un-transitioned — compile error,
 powered by the existing moved-binding linearity analysis. Deterministic, no runtime
 magic. Release must be legal (and idempotent) from degraded states — "clean up your
 local belief" is an obligation the world cannot revoke.
@@ -230,9 +232,10 @@ The composed guarantee, each layer with a named owner:
 A "lockless distributed file with fully atomic, provably single-writer writes" is
 then a stdlib import, not a language feature.
 
-## Design decisions (proposal)
+## Design decisions
 
-1. **Declared facts at boundaries; inferred facts within bodies.** Flow facts are
+1. **Declared facts at boundaries; inferred facts within bodies.** *(SETTLED
+   2026-09-28.)* Flow facts are
    inferred freely inside a function. Across abstraction boundaries a fact must be
    *declared* (invariant / ensures on the type or function) and proven from the body
    — never silently inferred into the API. An inferred cross-boundary fact is a
@@ -241,10 +244,12 @@ then a stdlib import, not a language feature.
    inference, but its failure mode is "handle more"; proof inference's failure mode
    is action-at-a-distance breakage.) The compiler may *suggest*: "this invariant
    holds on all write paths — declare it?"
-2. **Gradual by default.** Unproven declared invariants demote to per-site runtime
-   residuals, `analyze` reports coverage. Strict mode later, opt-in.
-3. **No SMT.** Fixed decidable domain: intervals, equalities, linear arithmetic,
-   dominance. Extend the domain deliberately, primitive by primitive.
+2. **Gradual by default.** *(Proposal — deliberately left OPEN 2026-09-28: whether
+   unproven declared invariants demote to per-site runtime residuals or hard-error
+   is not yet decided.)* If gradual: residuals per unproven write site, `analyze`
+   reports coverage, strict mode later as opt-in.
+3. **No SMT.** *(Proposal.)* Fixed decidable domain: intervals, equalities, linear
+   arithmetic, dominance. Extend the domain deliberately, primitive by primitive.
 
 ## Open questions
 
@@ -258,12 +263,13 @@ then a stdlib import, not a language feature.
 3. **Facts across the wire.** A proven invariant on a schema type — does the receiver
    assume it (same compilation unit, interface hash guards skew) or recheck at the
    boundary as defense in depth? Interaction with schema evolution rules.
-4. **Fallible-transition error path.** Confirm errors carry the post-failure-state
-   value; what does `catch` binding look like; how does linearity account for the
-   consumed receiver on the raise path?
-5. **Must-release marking.** State-level annotation on the class declaring terminal
-   / droppable states, vs inferring "has outgoing transitions ⇒ must-release"
-   (risks false positives where dropping mid-protocol is legitimate).
+4. **Fallible-transition mechanics.** (Errors carrying the post-failure-state value
+   is DECIDED — remaining:) what does `catch` binding look like for a typestated
+   payload, and how does linearity account for the consumed receiver on the raise
+   path?
+5. **Must-release syntax.** (Explicit state-level annotation is DECIDED — remaining:)
+   the concrete surface, e.g. `must_release Held` in the class body vs a marker on
+   the state type.
 6. **Reentrancy vs dominance.** Entity self-calls (rfc-objects.md open question 6)
    interact with "methods serialize" as a proof precondition — a reentrant call
    observing a half-updated invariant would be unsound. Needs a story before
