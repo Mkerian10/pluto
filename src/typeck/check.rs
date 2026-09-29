@@ -177,6 +177,9 @@ fn check_stmt(
     env: &mut TypeEnv,
     return_type: &PlutoType,
 ) -> Result<(), CompileError> {
+    // Flow facts (facts.rs): apply this statement's kills before checking it
+    // (reassignments, field writes, calls that may mutate, loop havoc).
+    super::facts::apply_stmt_kills(stmt, env);
     match stmt {
         Stmt::Let { name, ty, value, is_mut } => {
             // Resolve declared type annotation for expected-type propagation (enables empty arrays)
@@ -365,11 +368,42 @@ fn check_stmt(
             // (`if x == none { return }` with no else, or `if x != none`
             // whose else terminates) proves it for the rest of the block.
             let null_check = null_check_target(&condition.node, env);
+            // Flow facts (facts.rs): extract int-comparison facts from the
+            // condition — unless it contains a call, which could mutate
+            // state between evaluation and use.
+            let cond_effectful = super::facts::contains_call(condition);
+            let cond_facts = if cond_effectful {
+                super::facts::CondFacts::default()
+            } else {
+                super::facts::condition_facts(&condition.node, env)
+            };
+            // Degenerate-condition warning: the current facts already decide
+            // this condition. Gated on the condition mentioning a tracked
+            // path so constant scaffolding (`if true`, `if 1 < 2`) never
+            // warns; anything undecided is Unknown and stays silent.
+            if !cond_effectful && super::facts::mentions_int_path(condition, env) {
+                match super::facts::eval_condition(&condition.node, env) {
+                    super::facts::Verdict::Proven => {
+                        env.degenerate_conditions.push((condition.span, true));
+                    }
+                    super::facts::Verdict::Refuted => {
+                        env.degenerate_conditions.push((condition.span, false));
+                    }
+                    super::facts::Verdict::Unknown => {}
+                }
+            }
+            // Kills that happen while checking the branches invalidate guard
+            // facts (a reassignment in the surviving branch must not be
+            // resurrected after the `if`).
+            let kill_mark = env.facts.kill_mark();
             env.push_scope();
             if let Some((ref name, is_neq, ref inner)) = null_check {
                 if is_neq {
                     env.narrowed_vars.insert(name.clone(), inner.clone());
                 }
+            }
+            for f in &cond_facts.then_facts {
+                env.facts.assume(f.clone());
             }
             check_block(&then_block.node, env, return_type)?;
             env.pop_scope();
@@ -380,16 +414,19 @@ fn check_stmt(
                         env.narrowed_vars.insert(name.clone(), inner.clone());
                     }
                 }
+                for f in &cond_facts.else_facts {
+                    env.facts.assume(f.clone());
+                }
                 check_block(&else_blk.node, env, return_type)?;
                 env.pop_scope();
             }
             // Guard idiom: the branch that sees `none` never falls through,
             // so the variable is non-none for the rest of the current block.
+            let then_terminates = super::block_always_terminates(&then_block.node);
+            let else_terminates = else_block
+                .as_ref()
+                .is_some_and(|eb| super::block_always_terminates(&eb.node));
             if let Some((name, is_neq, inner)) = null_check {
-                let then_terminates = super::block_always_terminates(&then_block.node);
-                let else_terminates = else_block
-                    .as_ref()
-                    .is_some_and(|eb| super::block_always_terminates(&eb.node));
                 let none_path_dead = if is_neq {
                     // `if x != none { ... } else { <terminates> }`
                     else_terminates
@@ -399,6 +436,28 @@ fn check_stmt(
                 };
                 if none_path_dead {
                     env.narrowed_vars.insert(name, inner);
+                }
+            }
+            // Same guard idiom for flow facts: if exactly one arm of the
+            // condition falls through, its facts hold for the rest of the
+            // block — unless a branch killed them (e.g. the surviving branch
+            // reassigned the variable).
+            let surviving_facts = if then_terminates && !else_terminates {
+                // `if cond { return/raise/break/continue }` — only ¬cond
+                // falls through.
+                Some(&cond_facts.else_facts)
+            } else if else_terminates && !then_terminates {
+                // `if cond { ... } else { <terminates> }` — only cond falls
+                // through.
+                Some(&cond_facts.then_facts)
+            } else {
+                None
+            };
+            if let Some(surviving) = surviving_facts {
+                for f in surviving {
+                    if !env.facts.killed_since(kill_mark, f) {
+                        env.facts.assume(f.clone());
+                    }
                 }
             }
         }

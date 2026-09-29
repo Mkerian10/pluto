@@ -20,6 +20,14 @@ pub(crate) fn infer_closure(
 ) -> Result<PlutoType, CompileError> {
     let outer_depth = env.scope_depth();
 
+    // Flow-fact barrier (facts.rs): the closure body runs later, when outer
+    // facts (especially field facts) may no longer hold — check it with no
+    // inherited facts, and let none escape. Captures are by value, so
+    // creating the closure invalidates nothing: the outer state is restored
+    // unchanged afterwards.
+    let fact_snapshot = env.facts.clone();
+    env.facts.havoc_all();
+
     // Push a scope for the closure parameters
     env.push_scope();
 
@@ -116,6 +124,9 @@ pub(crate) fn infer_closure(
     env.closure_return_types.insert((span.start, span.end), final_ret.clone());
 
     env.pop_scope();
+
+    // Restore the outer flow-fact state (see barrier note at the top).
+    env.facts = fact_snapshot;
 
     Ok(PlutoType::Fn(param_types, Box::new(final_ret), false))
 }
