@@ -541,19 +541,11 @@ pub(crate) fn register_class_names(program: &Program, env: &mut TypeEnv) -> Resu
 
         if c.is_object {
             // Entity declaration (rfc-objects.md phase 1): identity semantics,
-            // spawn-shared with serialized methods. Generic objects are a
-            // later phase — reject rather than silently give them class
-            // semantics per instantiation.
-            if !c.type_params.is_empty() {
-                return Err(CompileError::type_err(
-                    format!(
-                        "object '{}' cannot have type parameters yet: generic \
-                         and typestated objects are a later phase (rfc-objects.md)",
-                        c.name.node
-                    ),
-                    c.name.span,
-                ));
-            }
+            // spawn-shared with serialized methods. A GENERIC object registers
+            // its base name here; each instantiation (`Topic$$int`) is its own
+            // entity type with its own identity space and its own method lock —
+            // ensure_generic_class_instantiated marks every instantiation as
+            // an object type when the base name is one.
             env.object_types.insert(c.name.node.clone());
         }
         if !c.type_params.is_empty() {

@@ -327,6 +327,14 @@ The object construct (docs/design/rfc-objects.md): `object` declares an entity r
 cargo run -- run examples/objects/main.pt
 ```
 
+## generic-objects
+
+Generic objects (rfc-objects.md phase 3): an `object` can take type parameters, and each monomorphized instantiation is a distinct entity type — `Topic<int>` and `Topic<string>` have separate identity spaces (they cannot even be compared), separate serialization locks, and separate boundary interface hashes. Within an instantiation the entity semantics are unchanged: `==` is identity, spawn shares the instance, methods are serialized.
+
+```bash
+cargo run -- run examples/generic-objects/main.pt
+```
+
 ## placement
 
 The distributed model's `at` expression (docs/design/distributed-model.md): `at self.pay { charge(21) }` places a computation in the `pay` logical execution domain, and the deployment binding — not the code — decides the physical plan. Unbound, the same binary calls the DI-wired colocated instance directly; with `PLUTO_DOMAIN_PAYMENTSERVICE=host:port` set, the identical binary crosses a socket to the served domain. The boundary contract (wire-shaped values, mandatory `catch` — a domain can be unreachable in *some* deployment even if not this one, typed errors crossing intact) is compile-time checked identically for both plans.

@@ -756,6 +756,13 @@ pub(crate) fn contains_object_type(
             | PlutoType::Array(inner)
             | PlutoType::Set(inner) => walk(inner, env, visiting),
             PlutoType::Map(k, v) => walk(k, env, visiting) || walk(v, env, visiting),
+            // Symbolic generic reference (pre-resolution): a generic OBJECT
+            // base name marks every instantiation as an entity; also look
+            // through the args.
+            PlutoType::GenericInstance(_, name, args) => {
+                env.object_types.contains(name)
+                    || args.iter().any(|a| walk(a, env, visiting))
+            }
             _ => false,
         }
     }

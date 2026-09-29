@@ -1494,3 +1494,121 @@ fn entity_handle_call_routes_home() {
     let _ = server.kill();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n107\n");
 }
+
+// ── Generic objects at the boundary (rfc-objects.md phase 3, slice 1) ──
+
+const GENERIC_HANDLE_SHARED: &str = r#"
+import std.wire
+
+object Vault<T> {
+    tag: T
+    secret: int
+
+    fn bump(mut self) {
+        self.secret = self.secret + 1
+    }
+
+    fn get(self) int {
+        return self.secret
+    }
+}
+
+class Escrow {
+    fn hold(self, v: Vault<int>) Vault<int> {
+        return v
+    }
+}
+"#;
+
+/// A generic-object INSTANTIATION crosses the wire as an identity handle:
+/// the handle carries the monomorphized type name, and returned to its home
+/// it resolves to the SAME entity — `==` is true and mutation through the
+/// returned reference hits the original. Both physical plans, one binary.
+#[test]
+fn generic_entity_identity_survives_round_trip() {
+    let app_src = format!(
+        "{GENERIC_HANDLE_SHARED}\napp A[esc: domain Escrow] {{\n    fn main(self) {{\n        let mut v = Vault<int> {{ tag: 9, secret: 41 }}\n        let held = at self.esc {{ hold(v) }} catch v\n        print(v == held)\n        let mut h2 = held\n        h2.bump()\n        print(v.get())\n    }}\n}}"
+    );
+    let server_src = format!(
+        "{GENERIC_HANDLE_SHARED}\nfn main() {{\n    let e = Escrow {{}}\n    serve e on 0\n}}"
+    );
+    let (_ad, app_bin) = build_binary(&[("main.pluto", &app_src)]);
+    let expected = "true\n42\n";
+
+    // Plan A: colocated — the "handle" never exists; direct call.
+    let colocated = Command::new(&app_bin).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&colocated.stdout), expected);
+
+    // Plan B: distributed — the instantiation round-trips a real socket.
+    let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let distributed = Command::new(&app_bin)
+        .env("PLUTO_DOMAIN_ESCROW", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+    assert_eq!(String::from_utf8_lossy(&distributed.stdout), expected);
+}
+
+/// Handle-call routing works per instantiation: the client holds a handle to
+/// a server-owned `Vault<int>` and `at v { ... }` routes to its home, keyed
+/// by the instantiation's own interface hash.
+#[test]
+fn generic_entity_handle_call_routes_home() {
+    let shared = r#"
+import std.wire
+
+object Vault<T> {
+    tag: T
+    secret: int
+
+    fn reveal(self) int {
+        return self.secret
+    }
+
+    fn rotate(mut self) {
+        self.secret = self.secret + 100
+    }
+}
+
+class Registry {
+    v: Vault<int>
+
+    fn vault(self) Vault<int> {
+        return self.v
+    }
+}
+"#;
+    let server_src = format!(
+        "{shared}\nfn main() {{\n    let v = Vault<int> {{ tag: 1, secret: 7 }}\n    let r = Registry {{ v: v }}\n    serve r on 0\n}}"
+    );
+    let app_src = format!(
+        "{shared}\napp A[reg: domain Registry] {{\n    fn main(self) {{\n        let fallback = Vault<int> {{ tag: 0, secret: -1 }}\n        let v = at self.reg {{ vault() }} catch fallback\n        let s1 = at v {{ reveal() }} catch -2\n        print(s1)\n        at v {{ rotate() }} catch err {{}}\n        let s2 = at v {{ reveal() }} catch -2\n        print(s2)\n    }}\n}}"
+    );
+    let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
+    let (_ad, app_bin) = build_binary(&[("main.pluto", &app_src)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&app_bin)
+        .env("PLUTO_DOMAIN_REGISTRY", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n107\n");
+}

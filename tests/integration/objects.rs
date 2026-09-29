@@ -107,21 +107,323 @@ fn object_crosses_boundary_as_handle() {
     assert_eq!(out.trim(), "5");
 }
 
-/// Generic objects are a later phase — rejected with a pointer to the RFC.
+// ── Generic objects (rfc-objects.md phase 3, slice 1) ──
+//
+// Each monomorphized instantiation is a distinct entity TYPE: its own
+// identity space, its own method lock, its own boundary interface hash.
+
+/// A generic object declares, instantiates, and runs — each instantiation
+/// keeps identity `==` (false for distinct instances of the same
+/// instantiation, true through an alias) and mutation through an alias is
+/// visible (one shared entity, not a copied value).
 #[test]
-fn generic_object_rejected() {
-    compile_should_fail_with(
+fn generic_object_identity_per_instantiation() {
+    let out = compile_and_run_stdout(
         r#"
         object Topic<T> {
             name: string
+            count: int
+
+            fn bump(mut self) {
+                self.count = self.count + 1
+            }
+            fn get(self) int {
+                return self.count
+            }
         }
 
         fn main() {
-            let x = 1
-            print(x)
+            let mut a = Topic<int> { name: "a", count: 0 }
+            let b = Topic<int> { name: "a", count: 0 }
+            let alias = a
+            print(a == b)
+            print(a == alias)
+            a.bump()
+            print(alias.get())
+            let s = Topic<string> { name: "s", count: 5 }
+            print(s.get())
         }
         "#,
-        "object 'Topic' cannot have type parameters yet",
+    );
+    assert_eq!(out.trim(), "false\ntrue\n1\n5");
+}
+
+/// Distinct instantiations are distinct types: passing a `Cell<string>`
+/// where a `Cell<int>` is expected is a type error.
+#[test]
+fn generic_object_wrong_instantiation_is_type_error() {
+    compile_should_fail_with(
+        r#"
+        object Cell<T> {
+            v: T
+        }
+
+        fn take_int_cell(c: Cell<int>) int {
+            return 1
+        }
+
+        fn main() {
+            let c = Cell<string> { v: "x" }
+            print(take_int_cell(c))
+        }
+        "#,
+        "expected Cell<int>, found Cell<string>",
+    );
+}
+
+/// Instantiations have separate identity spaces even for `==` itself:
+/// comparing across instantiations is a type error, not `false`.
+#[test]
+fn generic_object_cross_instantiation_eq_is_type_error() {
+    compile_should_fail_with(
+        r#"
+        object Cell<T> {
+            v: T
+        }
+
+        fn main() {
+            let a = Cell<int> { v: 1 }
+            let b = Cell<string> { v: "x" }
+            print(a == b)
+        }
+        "#,
+        "cannot compare Cell<int> with Cell<string>",
+    );
+}
+
+/// Spawn SHARES a generic-object instance exactly like a non-generic one,
+/// and its methods are serialized (per-instantiation lock): concurrent
+/// increments from a spawned task and the main thread lose no update.
+#[test]
+fn generic_object_spawn_shares_entity() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Counter<T> {
+            label: T
+            value: int
+
+            fn increment(mut self) {
+                self.value = self.value + 1
+            }
+            fn work(mut self) {
+                let mut i = 0
+                while i < 1000 {
+                    self.value = self.value + 1
+                    i = i + 1
+                }
+            }
+            fn get(self) int {
+                return self.value
+            }
+        }
+
+        fn main() {
+            let mut c = Counter<string> { label: "jobs", value: 0 }
+            let alias = c
+            let t = spawn c.work()
+            let mut i = 0
+            while i < 1000 {
+                c.increment()
+                i = i + 1
+            }
+            t.get()
+            print(c.get())
+            print(alias.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "2000\n2000");
+}
+
+/// The per-instantiation method lock also covers instantiations minted only
+/// during MONOMORPHIZATION (inside a generic function body whose signature
+/// never names the object) — the lock registration must not depend on the
+/// instantiation being known at type-check time.
+#[test]
+fn generic_object_serialized_methods_mono_time_instantiation() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Cell<T> {
+            v: T
+            n: int
+
+            fn bump(mut self) {
+                self.n = self.n + 1
+            }
+            fn count(self) int {
+                return self.n
+            }
+            fn work(mut self) {
+                let mut i = 0
+                while i < 1000 {
+                    self.n = self.n + 1
+                    i = i + 1
+                }
+            }
+        }
+
+        fn agg<T>(x: T) int {
+            let mut c = Cell<T> { v: x, n: 0 }
+            let t = spawn c.work()
+            let mut i = 0
+            while i < 1000 {
+                c.bump()
+                i = i + 1
+            }
+            t.get()
+            return c.count()
+        }
+
+        fn main() {
+            print(agg(9))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "2000");
+}
+
+/// The entity GC tag survives monomorphization: a generic-object instance
+/// nested inside a class value handed to spawn is NOT deep-copied with the
+/// wrapper — both sides increment the same entity.
+#[test]
+fn generic_object_nested_in_spawned_class_stays_shared() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Counter<T> {
+            tag: T
+            value: int
+
+            fn bump(mut self) {
+                self.value = self.value + 1
+            }
+            fn get(self) int {
+                return self.value
+            }
+        }
+
+        class Holder {
+            c: Counter<int>
+            tag: int
+        }
+
+        fn work(mut h: Holder) {
+            let mut i = 0
+            while i < 500 {
+                h.c.bump()
+                i = i + 1
+            }
+        }
+
+        fn main() {
+            let mut shared = Counter<int> { tag: 7, value: 0 }
+            let h = Holder { c: shared, tag: 1 }
+            let t = spawn work(h)
+            let mut i = 0
+            while i < 500 {
+                shared.bump()
+                i = i + 1
+            }
+            t.get()
+            print(shared.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "1000");
+}
+
+/// A generic-object instantiation crosses a domain boundary as an identity
+/// handle, exactly like a non-generic entity — the colocated plan resolves
+/// the handle to the entity directly.
+#[test]
+fn generic_object_crosses_boundary_as_handle() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Vault<T> {
+            secret: T
+            fn reveal(self) T {
+                return self.secret
+            }
+        }
+
+        class PayService {
+            fn check(self, v: Vault<int>) int {
+                return v.reveal()
+            }
+        }
+
+        app A[pay: domain PayService] {
+            fn main(self) {
+                let v = Vault<int> { secret: 5 }
+                let r = at self.pay { check(v) } catch -1
+                print(r)
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "5");
+}
+
+/// Entity placement on a generic instantiation: `at v { m() }` runs where
+/// the entity lives, with the mandatory boundary catch — plan-symmetric with
+/// the routed case.
+#[test]
+fn generic_object_entity_placement_colocated() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Vault<T> {
+            tag: T
+            secret: int
+            fn reveal(self) int {
+                return self.secret
+            }
+            fn rotate(mut self) {
+                self.secret = self.secret + 100
+            }
+        }
+
+        fn main() {
+            let mut v = Vault<string> { tag: "k", secret: 7 }
+            let s1 = at v { reveal() } catch -2
+            print(s1)
+            at v { rotate() } catch err {}
+            let s2 = at v { reveal() } catch -2
+            print(s2)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "7\n107");
+}
+
+/// Values nesting a generic-object instantiation stay untransferable — a
+/// copy would fork the entity's identity, generic or not.
+#[test]
+fn generic_object_nested_in_value_rejected_at_boundary() {
+    compile_should_fail_with(
+        r#"
+        object Vault<T> {
+            secret: T
+        }
+
+        class Wrap {
+            v: Vault<int>
+        }
+
+        class Escrow {
+            fn hold(self, w: Wrap) int {
+                return 1
+            }
+        }
+
+        app A[esc: domain Escrow] {
+            fn main(self) {
+                let v = Vault<int> { secret: 1 }
+                let w = Wrap { v: v }
+                let r = at self.esc { hold(w) } catch -1
+                print(r)
+            }
+        }
+        "#,
+        "a value containing an object cannot enter domain 'Escrow'",
     );
 }
 
