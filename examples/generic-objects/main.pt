@@ -1,0 +1,56 @@
+// Generic objects — per-instantiation entities (rfc-objects.md phase 3).
+//
+// An `object` can take type parameters. Each monomorphized instantiation
+// (`Topic<int>`, `Topic<string>`) is a distinct entity TYPE: its own
+// identity space (`Topic<int>` and `Topic<string>` values can't even be
+// compared), its own serialization lock, and — at domain boundaries — its
+// own identity handle keyed by the instantiation's interface hash.
+
+object Topic<T> {
+    name: string
+    latest: T?
+    published: int
+
+    fn publish(mut self, msg: T) {
+        self.latest = msg
+        self.published = self.published + 1
+    }
+
+    fn count(self) int {
+        return self.published
+    }
+
+    fn flood(mut self, msg: T) {
+        let mut i = 0
+        while i < 1000 {
+            self.publish(msg)
+            i = i + 1
+        }
+    }
+}
+
+fn main() {
+    // Two instances of the SAME instantiation: identity ==, not structural.
+    let mut news = Topic<string> { name: "news", latest: none, published: 0 }
+    let sports = Topic<string> { name: "news", latest: none, published: 0 }
+    let alias = news
+    print(news == sports)  // false — same fields, different entities
+    print(news == alias)   // true — one entity, two names
+
+    // A different instantiation is a different entity type entirely.
+    let mut metrics = Topic<int> { name: "metrics", latest: none, published: 0 }
+    metrics.publish(42)
+    print(metrics.count())
+
+    // Spawn SHARES the entity (copying would mint a second identity), and
+    // its methods are serialized per instantiation — the spawned flood and
+    // the main-thread publishes interleave without losing an update.
+    let t = spawn news.flood("breaking")
+    let mut i = 0
+    while i < 1000 {
+        news.publish("local")
+        i = i + 1
+    }
+    t.get()
+    print(alias.count())  // 2000 — both sides hit the same entity
+}
