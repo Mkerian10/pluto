@@ -209,6 +209,9 @@ pub struct CompileWarning {
 pub enum WarningKind {
     UnusedVariable,
     UnreachableCode,
+    /// An `if` condition the flow-fact engine proved always true or always
+    /// false (verification RFC phase 1, src/typeck/facts.rs).
+    DegenerateCondition,
 }
 
 /// Render a CompileWarning with ariadne for nice terminal output (yellow).

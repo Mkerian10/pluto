@@ -322,6 +322,13 @@ pub struct TypeEnv {
     /// Return type of the current function/closure being type-checked.
     /// Used to validate that `?` (null propagation) is only used in functions returning `T?` or `void`.
     pub current_function_return: Option<PlutoType>,
+    /// Flow-fact engine (verification RFC phase 1): interval and relation
+    /// facts about int paths, scoped in lockstep with `push_scope`/`pop_scope`.
+    /// See `src/typeck/facts.rs` for the domain and kill rules.
+    pub facts: super::facts::FactEnv,
+    /// `if` conditions the fact engine decided: (span, is_always_true).
+    /// Converted to degenerate-condition warnings in `generate_warnings`.
+    pub degenerate_conditions: Vec<(Span, bool)>,
 }
 
 impl Default for TypeEnv {
@@ -412,6 +419,8 @@ impl TypeEnv {
             generators: HashSet::new(),
             current_generator_elem: None,
             current_function_return: None,
+            facts: super::facts::FactEnv::new(),
+            degenerate_conditions: Vec::new(),
         }
     }
 
@@ -421,6 +430,7 @@ impl TypeEnv {
         self.immutable_vars.push_scope();
         self.fn_value_provenance.push_scope();
         self.narrowed_vars.push_scope();
+        self.facts.push_frame();
     }
 
     pub fn pop_scope(&mut self) {
@@ -429,6 +439,7 @@ impl TypeEnv {
         self.immutable_vars.pop_scope();
         self.fn_value_provenance.pop_scope();
         self.narrowed_vars.pop_scope();
+        self.facts.pop_frame();
     }
 
     /// Define a variable with validation: same-scope redeclaration and

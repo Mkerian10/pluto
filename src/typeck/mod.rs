@@ -1,4 +1,5 @@
 pub mod env;
+pub mod facts;
 pub mod types;
 pub mod serializable;
 mod register;
@@ -234,6 +235,24 @@ fn generate_warnings(env: &TypeEnv, program: &Program) -> Vec<CompileWarning> {
         for m in &stage.node.methods {
             collect_unreachable_warnings(&m.node.body.node, &mut warnings);
         }
+    }
+
+    // Degenerate conditions decided by the flow-fact engine (facts.rs).
+    // Deduped by (span, verdict): generic template checking can visit the
+    // same source span more than once.
+    let mut seen_conditions = std::collections::HashSet::new();
+    for (span, always_true) in &env.degenerate_conditions {
+        if !seen_conditions.insert((span.start, span.end, *always_true)) {
+            continue;
+        }
+        warnings.push(CompileWarning {
+            msg: format!(
+                "condition is always {}",
+                if *always_true { "true" } else { "false" }
+            ),
+            span: *span,
+            kind: WarningKind::DegenerateCondition,
+        });
     }
 
     // Closure bodies live inside expressions, which the block walker above
