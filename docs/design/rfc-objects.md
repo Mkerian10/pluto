@@ -113,19 +113,43 @@ handle = (home, type, id)
 
 **What slice 1 delivered**: object types are accepted at boundaries again (replacing the phase-1 rejection); handles encode/decode through the existing wire machinery; the registry and home-token runtime exists; and the pinned demo is *identity round-trip* — a server can accept an entity handle, store or forward it, hand it back, and the caller gets the same entity.
 
+## Typestate and entities: resolved (2026-09-28)
+
+Phase 3's "typestated objects" (`object Lease<S>`) were considered and **rejected** —
+typestate never lives on an entity. Two independent arguments, either sufficient:
+
+1. **Sharing breaks state soundness.** Entities are the sharing construct (spawn,
+   DI, fields, handles); if task B transitions a shared entity, task A's static
+   state is a lie. Keeping typestate sound stripped away every entity property
+   (confinement: no spawn capture, no injection, no field storage, no export) until
+   what remained was a linear value — a construct the language already has.
+2. **Remote beliefs are not sound types.** For distributed entities ("the
+   coordinator considers me the holder"), the world can falsify the claim between
+   any two instructions. A type is a fact that survives from check to use; an
+   entity's defining property is that it changes without telling you — the one
+   thing a static state claim must never be attached to.
+
+The factoring that replaces it: **entities are authorities, typestated values are
+evidence.** An authority (e.g. an etcd cluster, a `BlobAuthority`) is a shared
+entity that issues linear, typestated, possibly must-release *values* (grants,
+leases, tokens — snapshots of a past interaction, honest about their staleness) and
+validates that evidence at the point of effect. Full treatment — degradable states,
+must-release, the lease-window liveness/safety split, and the Blob acceptance test —
+in [rfc-verification.md](rfc-verification.md).
+
 ## Open questions (genuinely unsettled)
 
 1. **Construction and identity origin.** Who mints an entity? DI (objects as wired singletons/scoped instances) covers services; but `Secret` above is more like a *handle* to pre-existing external state. Are there two construction stories (wired vs. adopted), or one?
 2. **Object vs. domain overlap.** Is a served service an object? Is a domain just an object boundary, or can a domain host many objects with one interface? (Proposal above says domains are object sets — needs pressure-testing against `serve`/`at` as implemented.)
 3. **Lifecycle.** How do DI lifecycles (singleton/scoped/transient) map onto entities? A transient *entity* seems contradictory; is `object` implicitly singleton-or-scoped? (Sharpened by value equality: per-injection distinctness of *transient classes* is now intentionally unobservable — transients carry injected-only fields, so instances are always field-equal, and values have no identity. Anything that needs observable per-injection identity is, by definition, an entity.)
-4. **GC and external state.** An object whose real state lives in a vault: what does collecting the in-process handle mean? Is there a `close`/release protocol (connects to auto-executing `ensures`)?
+4. **GC and external state.** An object whose real state lives in a vault: what does collecting the in-process handle mean? Is there a `close`/release protocol? *(Partially resolved 2026-09-28: cleanup obligations attach to evidence values, not entities — must-release via linearity, see rfc-verification.md. The entity-registry release protocol for handles remains open.)*
 5. **Handle wire format.** What exactly is in an object reference on the wire (domain id, type, entity id, fencing token?), and how does it interact with interface hashing and evolution rules?
 6. **Serialized methods vs. reentrancy.** If object methods are serialized, does an object calling itself (directly or through a cycle of objects) deadlock, queue, or get detected at compile time via the DI graph?
-7. **Generic and typestated objects.** Can objects be generic (`object Topic<T>`)? Typestated (`object Lease<S>`)? With inheritance gone the open part is entity identity across monomorphized instantiations (is `Topic<int>`'s identity space distinct from `Topic<string>`'s? — presumably yes and trivially so). Likely unblockable with modest design.
+7. **Generic objects.** Can objects be generic (`object Topic<T>`)? (Typestated objects: RESOLVED — rejected, see "Typestate and entities" above.) With inheritance gone the open part is entity identity across monomorphized instantiations (is `Topic<int>`'s identity space distinct from `Topic<string>`'s? — presumably yes and trivially so). Likely unblockable with modest design.
 8. **Migration path.** Several current stdlib/user "service classes" (e.g. `PaymentService` in the placement examples) are conceptually objects. Do they migrate, or do classes-behaving-as-services remain legal indefinitely?
 
 ## Suggested phasing (proposal)
 
 1. **Phase 1 — identity semantics** *(implemented)*: `object` parses as a class-bodied declaration (contextual keyword); instances get reference identity, `==` as identity, spawn-sharing with serialized methods (per-type lock in phase 1 — over-serializes multiple instances of one type; per-instance locks are an optimization), and rejection at domain boundaries ("objects cross by reference — not yet implemented"). Generic objects rejected pending the inheritance × monomorphization story (open question 7).
 2. **Phase 2 — distributed entities**: object handles across domain boundaries, `at` on an entity's home domain, handle wire format.
-3. **Phase 3 — integration**: typestated objects, auto-executing cleanup, observability derivation. (Inheritance was cut — see above — which also removes the blocker on generic objects; they now wait only on the entity-identity × monomorphization story.)
+3. **Phase 3 — integration** *(rescoped 2026-09-28)*: generic objects (entity identity × monomorphization — the inheritance blocker is gone); then the evidence pattern on classes as clients of [rfc-verification.md](rfc-verification.md) — degradable typestates, must-release linearity. Typestated objects were cut (see "Typestate and entities: resolved"); observability derivation is deferred to its own phase/RFC once the entity model settles.

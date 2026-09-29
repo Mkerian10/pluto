@@ -98,7 +98,9 @@ The stale-alias gap is closed by a *moved-binding* analysis (`src/typeck/lineari
 
 ## Phase 3: distributed contract predicates (planned)
 
-The vision's `owns` / `holds_lease` / `is_leader` stdlib patterns become typestate classes plus `requires` clauses bridging value-level facts to type-level states — fencing tokens carried in `Owned`-state fields, leases as `Lease<Held>` with auto-releasing cleanup once the verification engine can prove or generate it. Blocked on the object construct design and the broader verification engine.
+The vision's `owns` / `holds_lease` / `is_leader` stdlib patterns become typestate classes plus `requires` clauses bridging value-level facts to type-level states — fencing tokens carried in `Owned`-state fields, leases as `Lease<Held>` with must-release cleanup.
+
+*(Direction settled 2026-09-28, spec in [rfc-verification.md](rfc-verification.md).)* Typestate stays on **values**, never entities: entities are authorities that issue linear, typestated *evidence* (grants, tokens); the authority validates evidence at the point of effect (rfc-objects.md, "Typestate and entities: resolved"). Phase 3's concrete work is degradable typestates (world-driven transitions surfacing as typed errors that carry the post-failure-state value) and must-release states enforced by the phase-2 linearity analysis. Note the epistemics: `Lease<Held>` claims *session discipline* ("I acquired and have not released"), never remote truth ("the coordinator agrees") — lease windows are liveness, safety lives in the authority's fenced check.
 
 ## Implementation notes (phase 1)
 
