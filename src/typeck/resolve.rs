@@ -574,6 +574,15 @@ pub(crate) fn ensure_generic_class_instantiated(
         impl_traits: gen_info.impl_traits.clone(),
         lifecycle: gen_info.lifecycle,
     });
+    // Generic OBJECT instantiations are entity types in their own right
+    // (rfc-objects.md phase 3): each gets its own identity space (distinct
+    // monomorphized type), entity allocation tag, and per-type method lock.
+    // Instantiations minted during monomorphization must self-register the
+    // lock too — infer_synchronization has already run by then.
+    if env.object_types.contains(base_name) {
+        env.object_types.insert(mangled.clone());
+        env.synchronized_singletons.insert(mangled.clone());
+    }
     let concrete_fields: Vec<(String, PlutoType, bool)> = gen_info.fields.iter()
         .map(|(n, t, inj)| (n.clone(), resolve_generic_instances(&substitute_pluto_type(t, &bindings), env), *inj))
         .collect();

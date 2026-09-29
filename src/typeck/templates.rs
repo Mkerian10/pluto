@@ -303,6 +303,8 @@ pub(crate) fn sweep_skolems(env: &mut TypeEnv) {
     env.instantiations
         .retain(|inst| !inst.type_args.iter().any(type_contains_skolem));
     env.classes.retain(|k, _| !k.contains('%'));
+    env.object_types.retain(|k| !k.contains('%'));
+    env.synchronized_singletons.retain(|k| !k.contains('%'));
     env.enums.retain(|k, _| !k.contains('%'));
     env.functions.retain(|k, _| !k.contains('%'));
     env.fn_errors.retain(|k, _| !k.contains('%'));

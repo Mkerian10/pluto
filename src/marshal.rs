@@ -296,6 +296,14 @@ fn collect_types_from_stage_methods(program: &Program) -> Result<HashSet<String>
                 if object_names.contains(n.as_str()) {
                     return true;
                 }
+                // Mangled generic-object instantiations (`Vault$$int`) are
+                // entity types: the collector records them under the mangled
+                // name, but only the base name appears as a declaration.
+                if let Some(base) = n.split("$$").next()
+                    && object_names.contains(base)
+                {
+                    return true;
+                }
                 if !visiting.insert(n.clone()) {
                     return false;
                 }
@@ -325,9 +333,14 @@ fn collect_types_from_stage_methods(program: &Program) -> Result<HashSet<String>
             TypeExpr::Array(inner) | TypeExpr::Nullable(inner) => {
                 type_expr_touches(&inner.node, program, object_names, visiting)
             }
-            TypeExpr::Generic { type_args, .. } => type_args
-                .iter()
-                .any(|a| type_expr_touches(&a.node, program, object_names, visiting)),
+            TypeExpr::Generic { name, type_args } => {
+                // A generic OBJECT's instantiations are entity types too —
+                // the base name alone marks them (rfc-objects.md phase 3).
+                object_names.contains(name.as_str())
+                    || type_args
+                        .iter()
+                        .any(|a| type_expr_touches(&a.node, program, object_names, visiting))
+            }
             _ => false,
         }
     }
