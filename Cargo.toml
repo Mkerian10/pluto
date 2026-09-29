@@ -205,6 +205,10 @@ name = "warnings"
 path = "tests/integration/warnings.rs"
 
 [[test]]
+name = "flow_facts"
+path = "tests/integration/flow_facts.rs"
+
+[[test]]
 name = "nullable"
 path = "tests/integration/nullable.rs"
 
