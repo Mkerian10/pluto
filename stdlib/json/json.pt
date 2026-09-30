@@ -15,6 +15,11 @@ pub class Json {
     children: [Json]
     keys: [string]
 
+    // The tag is always one of the seven kinds above. Statically discharged:
+    // every construction site must prove it (make() carries the requires).
+    invariant self.tag >= 0
+    invariant self.tag <= 6
+
     fn is_null(self) bool {
         return self.tag == 0
     }
@@ -114,7 +119,10 @@ pub class Json {
     }
 }
 
-fn make(tag: int, iv: int, fv: float, sv: string) Json {
+fn make(tag: int, iv: int, fv: float, sv: string) Json
+requires tag >= 0
+requires tag <= 6
+{
     let children: [Json] = []
     let keys: [string] = []
     return Json {
@@ -224,6 +232,13 @@ class Parser {
     pos: int
     src_len: int
 
+    // The cursor never moves backwards past the start: every write advances
+    // it by a non-negative amount. (pos <= src_len also holds in practice,
+    // but proving it needs cross-method preconditions -- see rfc-verification
+    // phase 6, call-site requires discharge.)
+    invariant self.pos >= 0
+    invariant self.src_len >= 0
+
     fn peek(mut self) int {
         self.skip_whitespace()
         if self.pos >= self.src_len {
@@ -278,6 +293,9 @@ class Parser {
 
     fn match_word(mut self, word: string) bool {
         let wlen = word.len()
+        // .len() is outside the provable fragment; assert feeds the prover
+        // the fact it needs to discharge `pos >= 0` across `pos + wlen`.
+        assert wlen >= 0
         if self.pos + wlen > self.src_len {
             return false
         }
@@ -713,7 +731,10 @@ fn parse_float_value(s: string) float {
 }
 
 pub fn parse(s: string) Json {
-    let mut p = Parser { src: s, pos: 0, src_len: s.len() }
+    let n = s.len()
+    // .len() results are opaque to the invariant prover; assert bridges it.
+    assert n >= 0
+    let mut p = Parser { src: s, pos: 0, src_len: n }
     let mut result = p.parse_value()!
     p.skip_whitespace()
     if p.pos < p.src_len {

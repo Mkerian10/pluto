@@ -150,6 +150,10 @@ fn parse_request(raw: string) Request {
 pub object HttpConnection {
     fd: int
 
+    // Accepted connections always carry a real descriptor: accept() raises
+    // instead of constructing on a negative fd. Discharged at compile time.
+    invariant self.fd >= 0
+
     fn read_request(self) Request {
         let raw = __pluto_http_read_request(self.fd)
         if raw.len() == 0 {
@@ -172,6 +176,10 @@ pub object HttpConnection {
 // port). Spawn shares it; methods serialize.
 pub object HttpServer {
     fd: int
+
+    // listen() raises on any socket/bind/listen failure rather than
+    // constructing a server around a bad descriptor.
+    invariant self.fd >= 0
 
     fn accept(self) HttpConnection {
         let client_fd = __pluto_socket_accept(self.fd)
