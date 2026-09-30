@@ -28,8 +28,9 @@ use crate::typeck::env::TypeEnv;
 /// These are injected into the Program AST before typeck.
 pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileError> {
     let rpc_interfaces = collect_rpc_interface_classes(program);
-    if program.stages.is_empty() && rpc_interfaces.is_empty() {
-        return Ok(()); // No stages and no RPC boundaries: no marshaling needed
+    let entity_sig_types = collect_entity_signature_types(program);
+    if program.stages.is_empty() && rpc_interfaces.is_empty() && entity_sig_types.is_empty() {
+        return Ok(()); // No stages, RPC boundaries, or entity boundaries: no marshaling needed
     }
 
     // Marshaling needs std.wire. For stage-only programs we skip silently (back-
@@ -49,8 +50,13 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
         return Ok(());
     }
 
-    // Collect all types that need marshalers
-    let types_to_marshal = collect_types_from_stage_methods(program)?;
+    // Collect all types that need marshalers. Stage/RPC-seeded types are
+    // required (generation failures are compile errors, as before); types
+    // seeded only by entity method signatures are best-effort (see
+    // collect_entity_signature_types).
+    let required_types = collect_types_from_stage_methods(program)?;
+    let mut types_to_marshal = required_types.clone();
+    types_to_marshal.extend(entity_sig_types);
 
     // Generate marshal and unmarshal functions for each type
     let mut generated_functions = Vec::new();
@@ -58,6 +64,10 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
     let mut instantiated_enums = Vec::new();
 
     for type_name in &types_to_marshal {
+        // Types seeded only by entity method signatures are best-effort:
+        // a generation failure skips the type instead of failing the build.
+        let best_effort = !required_types.contains(type_name);
+
         // Handle mangled generic instantiations (Box$$int, etc.)
         if type_name.contains("$$") {
             // Parse mangled name: Box$$int → Box, [int]
@@ -71,32 +81,50 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
             // Find the generic template class
             if let Some(generic_class) = program.classes.iter().find(|c| &c.node.name.node == base_name && !c.node.type_params.is_empty()) {
                 // Create instantiated class declaration
-                let instantiated_class = instantiate_generic_class(&generic_class.node, type_name, type_arg_str)?;
-                let marshal_fn = generate_marshal_class(&instantiated_class)?;
-                let unmarshal_fn = generate_unmarshal_class(&instantiated_class)?;
-                generated_functions.push(marshal_fn);
-                generated_functions.push(unmarshal_fn);
-                // Add instantiated class to program so type checking knows about Box$$int
-                instantiated_classes.push(Spanned {
-                    node: instantiated_class,
-                    span: generic_class.span,
-                });
+                let generated = instantiate_generic_class(&generic_class.node, type_name, type_arg_str)
+                    .and_then(|instantiated_class| {
+                        let marshal_fn = generate_marshal_class(&instantiated_class)?;
+                        let unmarshal_fn = generate_unmarshal_class(&instantiated_class)?;
+                        Ok((instantiated_class, marshal_fn, unmarshal_fn))
+                    });
+                match generated {
+                    Ok((instantiated_class, marshal_fn, unmarshal_fn)) => {
+                        generated_functions.push(marshal_fn);
+                        generated_functions.push(unmarshal_fn);
+                        // Add instantiated class to program so type checking knows about Box$$int
+                        instantiated_classes.push(Spanned {
+                            node: instantiated_class,
+                            span: generic_class.span,
+                        });
+                    }
+                    Err(_) if best_effort => {}
+                    Err(e) => return Err(e),
+                }
                 continue;
             }
 
             // Find the generic template enum
             if let Some(generic_enum) = program.enums.iter().find(|e| &e.node.name.node == base_name && !e.node.type_params.is_empty()) {
                 // Create instantiated enum declaration
-                let instantiated_enum = instantiate_generic_enum(&generic_enum.node, type_name, type_arg_str)?;
-                let marshal_fn = generate_marshal_enum(&instantiated_enum)?;
-                let unmarshal_fn = generate_unmarshal_enum(&instantiated_enum)?;
-                generated_functions.push(marshal_fn);
-                generated_functions.push(unmarshal_fn);
-                // Add instantiated enum to program so type checking knows about Result__int
-                instantiated_enums.push(Spanned {
-                    node: instantiated_enum,
-                    span: generic_enum.span,
-                });
+                let generated = instantiate_generic_enum(&generic_enum.node, type_name, type_arg_str)
+                    .and_then(|instantiated_enum| {
+                        let marshal_fn = generate_marshal_enum(&instantiated_enum)?;
+                        let unmarshal_fn = generate_unmarshal_enum(&instantiated_enum)?;
+                        Ok((instantiated_enum, marshal_fn, unmarshal_fn))
+                    });
+                match generated {
+                    Ok((instantiated_enum, marshal_fn, unmarshal_fn)) => {
+                        generated_functions.push(marshal_fn);
+                        generated_functions.push(unmarshal_fn);
+                        // Add instantiated enum to program so type checking knows about Result__int
+                        instantiated_enums.push(Spanned {
+                            node: instantiated_enum,
+                            span: generic_enum.span,
+                        });
+                    }
+                    Err(_) if best_effort => {}
+                    Err(e) => return Err(e),
+                }
                 continue;
             }
         }
@@ -108,24 +136,42 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
                 continue;
             }
 
-            let marshal_fn = generate_marshal_class(&class_decl.node)?;
-            let unmarshal_fn = generate_unmarshal_class(&class_decl.node)?;
-            generated_functions.push(marshal_fn);
-            generated_functions.push(unmarshal_fn);
-            // Wire wrappers (T <-> JSON string) so RPC codegen can encode/decode
-            // a complex value with a single call.
-            generated_functions.push(generate_wire_encode(type_name));
-            generated_functions.push(generate_wire_decode(type_name));
+            let generated = generate_marshal_class(&class_decl.node).and_then(|marshal_fn| {
+                let unmarshal_fn = generate_unmarshal_class(&class_decl.node)?;
+                Ok((marshal_fn, unmarshal_fn))
+            });
+            match generated {
+                Ok((marshal_fn, unmarshal_fn)) => {
+                    generated_functions.push(marshal_fn);
+                    generated_functions.push(unmarshal_fn);
+                    // Wire wrappers (T <-> JSON string) so RPC codegen can encode/decode
+                    // a complex value with a single call.
+                    generated_functions.push(generate_wire_encode(type_name));
+                    generated_functions.push(generate_wire_decode(type_name));
+                }
+                Err(_) if best_effort => {}
+                Err(e) => return Err(e),
+            }
         } else if let Some(enum_decl) = program.enums.iter().find(|e| &e.node.name.node == type_name) {
             // Skip generic enums (they'll be handled above)
             if !enum_decl.node.type_params.is_empty() {
                 continue;
             }
 
-            generated_functions.push(generate_marshal_enum(&enum_decl.node)?);
-            generated_functions.push(generate_unmarshal_enum(&enum_decl.node)?);
-            generated_functions.push(generate_wire_encode(type_name));
-            generated_functions.push(generate_wire_decode(type_name));
+            let generated = generate_marshal_enum(&enum_decl.node).and_then(|marshal_fn| {
+                let unmarshal_fn = generate_unmarshal_enum(&enum_decl.node)?;
+                Ok((marshal_fn, unmarshal_fn))
+            });
+            match generated {
+                Ok((marshal_fn, unmarshal_fn)) => {
+                    generated_functions.push(marshal_fn);
+                    generated_functions.push(unmarshal_fn);
+                    generated_functions.push(generate_wire_encode(type_name));
+                    generated_functions.push(generate_wire_decode(type_name));
+                }
+                Err(_) if best_effort => {}
+                Err(e) => return Err(e),
+            }
         }
     }
 
@@ -273,6 +319,11 @@ pub(crate) fn collect_served_classes(program: &Program) -> HashSet<String> {
 
 fn collect_types_from_stage_methods(program: &Program) -> Result<HashSet<String>, CompileError> {
     let mut types = collect_types_from_stage_methods_inner(program)?;
+    retain_non_object_touching(program, &mut types);
+    Ok(types)
+}
+
+fn retain_non_object_touching(program: &Program, types: &mut HashSet<String>) {
     // Objects never marshal: entities cross boundaries as identity handles
     // (rfc-objects.md phase 2), handled directly by codegen. Classes whose
     // fields TRANSITIVELY contain an object never marshal either — typeck
@@ -353,7 +404,39 @@ fn collect_types_from_stage_methods(program: &Program) -> Result<HashSet<String>
             &mut visiting,
         )
     });
-    Ok(types)
+}
+
+/// Types appearing in non-generic object (entity) method signatures. Entity
+/// placement — `at <entity> { method(args) }` — may route the call to the
+/// entity's home (rfc-objects.md phase 2 slice 2), so the values those
+/// methods exchange need wire codecs even when no stage/serve/domain
+/// boundary exists in the program. The entity types themselves never
+/// marshal (they cross as identity handles); marshaler generation for
+/// these seeds is best-effort — a signature type that cannot marshal is
+/// skipped, and if a program actually sends such a value across a
+/// boundary, typeck's transferability check reports the real error.
+fn collect_entity_signature_types(program: &Program) -> HashSet<String> {
+    let mut types = HashSet::new();
+    for class_decl in program
+        .classes
+        .iter()
+        .filter(|c| c.node.is_object && c.node.type_params.is_empty())
+    {
+        for method in &class_decl.node.methods {
+            for param in &method.node.params {
+                if param.name.node == "self" {
+                    continue;
+                }
+                collect_types_from_type_expr(&param.ty.node, &mut types);
+            }
+            if let Some(ret_type) = &method.node.return_type {
+                collect_types_from_type_expr(&ret_type.node, &mut types);
+            }
+        }
+    }
+    expand_nested_types(program, &mut types);
+    retain_non_object_touching(program, &mut types);
+    types
 }
 
 fn collect_types_from_stage_methods_inner(program: &Program) -> Result<HashSet<String>, CompileError> {
@@ -398,11 +481,18 @@ fn collect_types_from_stage_methods_inner(program: &Program) -> Result<HashSet<S
         }
     }
 
-    // Fixed-point expansion: recursively collect nested types from class fields and enum variants
+    expand_nested_types(program, &mut types);
+
+    Ok(types)
+}
+
+/// Fixed-point expansion: recursively collect nested types from class fields
+/// and enum variants until no new types are found.
+fn expand_nested_types(program: &Program, types: &mut HashSet<String>) {
     loop {
         let mut new_types = HashSet::new();
 
-        for type_name in &types {
+        for type_name in types.iter() {
             // Expand class fields
             if let Some(class_decl) = program.classes.iter().find(|c| &c.node.name.node == type_name) {
                 for field in &class_decl.node.fields {
@@ -424,15 +514,13 @@ fn collect_types_from_stage_methods_inner(program: &Program) -> Result<HashSet<S
         }
 
         // Check if we found any new types (fixed point reached when no new types added)
-        let added = new_types.difference(&types).count();
+        let added = new_types.difference(types).count();
         if added == 0 {
             break;
         }
 
         types.extend(new_types);
     }
-
-    Ok(types)
 }
 
 /// Instantiates a generic class template with concrete type arguments.
