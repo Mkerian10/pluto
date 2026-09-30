@@ -86,8 +86,10 @@ fn main() {
 }
 
 #[test]
-fn invariant_with_len() {
-    let out = compile_and_run_stdout(
+fn invariant_with_len_rejected() {
+    // Collection facts are outside the provable fragment — rejected at
+    // declaration under static discharge.
+    compile_should_fail_with(
         r#"
 class NonEmptyList {
     items: [int]
@@ -100,8 +102,8 @@ fn main() {
     print(list.items.len())
 }
 "#,
+        "outside the provable fragment",
     );
-    assert_eq!(out, "3\n");
 }
 
 #[test]
@@ -154,8 +156,9 @@ fn main() {
 }
 
 #[test]
-fn invariant_float_comparison() {
-    let out = compile_and_run_stdout(
+fn invariant_float_comparison_rejected() {
+    // Float comparisons are outside the provable fragment.
+    compile_should_fail_with(
         r#"
 class Temperature {
     celsius: float
@@ -168,8 +171,8 @@ fn main() {
     print(t.celsius)
 }
 "#,
+        "outside the provable fragment",
     );
-    assert!(out.starts_with("20"), "expected output starting with 20, got: {out}");
 }
 
 // ── Requires parse ───────────────────────────────────────────────────────────
@@ -391,11 +394,12 @@ fn main() {
     );
 }
 
-// ── Runtime enforcement ──────────────────────────────────────────────────────
+// ── Static discharge: violations are compile errors ─────────────────────────
 
 #[test]
 fn invariant_violation_at_construction() {
-    let (_stdout, stderr, code) = compile_and_run_output(
+    // A construction that refutes the invariant never compiles.
+    compile_should_fail_with(
         r#"
 class Positive {
     value: int
@@ -408,21 +412,13 @@ fn main() {
     print(p.value)
 }
 "#,
-    );
-    assert_ne!(code, 0, "Should have exited with non-zero for invariant violation");
-    assert!(
-        stderr.contains("invariant violation"),
-        "stderr should contain 'invariant violation', got: {stderr}"
-    );
-    assert!(
-        stderr.contains("Positive"),
-        "stderr should mention the class name, got: {stderr}"
+        "construction of 'Positive' violates its invariant",
     );
 }
 
 #[test]
 fn invariant_violation_at_construction_negative() {
-    let (_stdout, stderr, code) = compile_and_run_output(
+    compile_should_fail_with(
         r#"
 class BoundedInt {
     value: int
@@ -436,14 +432,16 @@ fn main() {
     print(b.value)
 }
 "#,
+        "construction of 'BoundedInt' violates its invariant",
     );
-    assert_ne!(code, 0);
-    assert!(stderr.contains("invariant violation"));
 }
 
 #[test]
-fn invariant_violation_after_method_call() {
-    let (_stdout, stderr, code) = compile_and_run_output(
+fn invariant_unpreserved_method_rejected() {
+    // A method that cannot be proven to preserve the invariant is a
+    // compile error at the method — for every input, not just the one in
+    // main (the old runtime test aborted on c.decrement() from 0).
+    compile_should_fail_with(
         r#"
 class Counter {
     value: int
@@ -461,17 +459,13 @@ fn main() {
     print(c.value)
 }
 "#,
-    );
-    assert_ne!(code, 0, "Should have exited with non-zero for invariant violation after method");
-    assert!(
-        stderr.contains("invariant violation"),
-        "stderr should contain 'invariant violation', got: {stderr}"
+        "cannot prove invariant 'self.value >= 0' of class 'Counter'",
     );
 }
 
 #[test]
 fn invariant_multiple_one_violated() {
-    let (_stdout, stderr, code) = compile_and_run_output(
+    compile_should_fail_with(
         r#"
 class Range {
     lo: int
@@ -486,9 +480,8 @@ fn main() {
     print(r.lo)
 }
 "#,
+        "violates its invariant 'self.hi > self.lo'",
     );
-    assert_ne!(code, 0);
-    assert!(stderr.contains("invariant violation"));
 }
 
 #[test]
@@ -502,7 +495,9 @@ class Range {
     invariant self.lo >= 0
     invariant self.hi > self.lo
 
-    fn widen(mut self, amount: int) {
+    fn widen(mut self, amount: int)
+        requires amount >= 0
+    {
         self.hi = self.hi + amount
     }
 
@@ -524,8 +519,9 @@ fn main() {
 // ── Edge cases ───────────────────────────────────────────────────────────────
 
 #[test]
-fn invariant_with_bool_field() {
-    let out = compile_and_run_stdout(
+fn invariant_with_bool_field_rejected() {
+    // Boolean invariants are outside the provable fragment.
+    compile_should_fail_with(
         r#"
 class Active {
     enabled: bool
@@ -538,28 +534,31 @@ fn main() {
     print(a.enabled)
 }
 "#,
+        "outside the provable fragment",
     );
-    assert_eq!(out, "true\n");
 }
 
 #[test]
-fn invariant_bool_field_violation() {
-    let (_stdout, stderr, code) = compile_and_run_output(
+fn invariant_on_generic_class_rejected() {
+    // Generic bodies are checked against opaque type parameters and their
+    // instantiations are never re-checked, so invariants on generic
+    // classes are rejected for now.
+    compile_should_fail_with(
         r#"
-class Active {
-    enabled: bool
+class Box<T> {
+    value: T
+    count: int
 
-    invariant self.enabled
+    invariant self.count >= 0
 }
 
 fn main() {
-    let a = Active { enabled: false }
-    print(a.enabled)
+    let b = Box<int> { value: 1, count: 0 }
+    print(b.count)
 }
 "#,
+        "invariants on generic classes are not yet supported",
     );
-    assert_ne!(code, 0);
-    assert!(stderr.contains("invariant violation"));
 }
 
 #[test]
@@ -1344,3 +1343,405 @@ fn main() {
 // fragment restriction. Contract expressions are limited to comparisons, arithmetic,
 // logical ops, .len(), field access, and literals. No function calls, indexing,
 // closures, casts, or if-expressions.
+
+// ── Static invariant discharge (verification RFC phase 2) ───────────────────
+// Invariants are compile-time proof obligations, strict mode: every
+// construction and write site must be statically proven to preserve the
+// invariant, or compilation fails. See src/typeck/discharge.rs.
+
+#[test]
+fn discharge_guarded_write_proves() {
+    // The classic pattern: a guard whose failure path raises establishes
+    // the fact the write needs.
+    let out = compile_and_run_stdout(
+        r#"
+error Insufficient { msg: string }
+
+class Account {
+    balance: int
+    invariant self.balance >= 0
+
+    fn withdraw(mut self, amt: int)
+        requires amt > 0
+    {
+        if amt > self.balance {
+            raise Insufficient { msg: "insufficient" }
+        }
+        self.balance = self.balance - amt
+    }
+}
+
+fn main() {
+    let mut a = Account { balance: 100 }
+    a.withdraw(30) catch e {
+        print("caught")
+    }
+    print(a.balance)
+}
+"#,
+    );
+    assert_eq!(out, "70\n");
+}
+
+#[test]
+fn discharge_requires_clause_proves() {
+    // requires clauses are entry facts for the proof.
+    let out = compile_and_run_stdout(
+        r#"
+class Account {
+    balance: int
+    invariant self.balance >= 0
+
+    fn withdraw(mut self, amt: int) int
+        requires amt > 0
+        requires self.balance >= amt
+    {
+        self.balance = self.balance - amt
+        return self.balance
+    }
+}
+
+fn main() {
+    let mut a = Account { balance: 100 }
+    print(a.withdraw(30))
+}
+"#,
+    );
+    assert_eq!(out, "70\n");
+}
+
+#[test]
+fn discharge_unguarded_write_rejected_with_guidance() {
+    // The diagnostic names the invariant, the site, the symbolic state,
+    // and teaches the fix.
+    compile_should_fail_with(
+        r#"
+class Account {
+    balance: int
+    invariant self.balance >= 0
+
+    fn drain(mut self, amt: int) {
+        self.balance = self.balance - amt
+    }
+}
+
+fn main() {
+    let mut a = Account { balance: 100 }
+    a.drain(30)
+}
+"#,
+        "guard, a 'requires' clause, or an 'assert'",
+    );
+}
+
+#[test]
+fn discharge_construction_from_guard_proves() {
+    let out = compile_and_run_stdout(
+        r#"
+class Account {
+    balance: int
+    invariant self.balance >= 0
+}
+
+fn make(x: int) {
+    if x >= 0 {
+        let a = Account { balance: x }
+        print(a.balance)
+    } else {
+        print("rejected")
+    }
+}
+
+fn main() {
+    make(5)
+    make(0 - 3)
+}
+"#,
+    );
+    assert_eq!(out, "5\nrejected\n");
+}
+
+#[test]
+fn discharge_construction_unknown_rejected() {
+    // An initializer the prover cannot bound is a compile error, not a
+    // runtime check.
+    compile_should_fail_with(
+        r#"
+class Account {
+    balance: int
+    invariant self.balance >= 0
+}
+
+fn make(x: int) Account {
+    return Account { balance: x }
+}
+
+fn main() {
+    let a = make(5)
+    print(a.balance)
+}
+"#,
+        "for this construction",
+    );
+}
+
+#[test]
+fn discharge_subtract_then_add_proves_at_exit() {
+    // Temporary violation between writes is fine — only boundaries matter.
+    // The symbolic forms cancel: balance ends exactly where it started.
+    let out = compile_and_run_stdout(
+        r#"
+class Account {
+    balance: int
+    invariant self.balance >= 0
+
+    fn adjust(mut self, amt: int) {
+        self.balance = self.balance - amt
+        self.balance = self.balance + amt
+    }
+}
+
+fn main() {
+    let mut a = Account { balance: 5 }
+    a.adjust(100)
+    print(a.balance)
+}
+"#,
+    );
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn discharge_call_while_broken_rejected() {
+    // Reentrancy conservatism: any call while the invariant may be broken
+    // is rejected — the callee (or an alias holder) could observe the
+    // object mid-violation.
+    compile_should_fail_with(
+        r#"
+class Account {
+    balance: int
+    invariant self.balance >= 0
+
+    fn log(self) {
+        print(self.balance)
+    }
+
+    fn weird(mut self, amt: int)
+        requires amt >= 0
+    {
+        self.balance = self.balance - amt
+        self.log()
+        self.balance = self.balance + amt
+    }
+}
+
+fn main() {
+    let mut a = Account { balance: 5 }
+    a.weird(10)
+}
+"#,
+        "the callee may observe the object",
+    );
+}
+
+#[test]
+fn discharge_foreign_write_with_requires_proves() {
+    // Writes outside the class's own methods are proven immediately,
+    // using the caller's requires facts and parameter invariants.
+    let out = compile_and_run_stdout(
+        r#"
+class Account {
+    balance: int
+    invariant self.balance >= 0
+}
+
+fn transfer(mut from: Account, mut to: Account, amount: int)
+    requires from.balance >= amount
+    requires amount > 0
+{
+    from.balance = from.balance - amount
+    to.balance = to.balance + amount
+}
+
+fn main() {
+    let mut a = Account { balance: 100 }
+    let mut b = Account { balance: 0 }
+    transfer(a, b, 40)
+    print(a.balance)
+    print(b.balance)
+}
+"#,
+    );
+    assert_eq!(out, "60\n40\n");
+}
+
+#[test]
+fn discharge_foreign_violating_write_rejected() {
+    compile_should_fail_with(
+        r#"
+class Account {
+    balance: int
+    invariant self.balance >= 0
+}
+
+fn main() {
+    let mut a = Account { balance: 100 }
+    a.balance = 0 - 1
+}
+"#,
+        "violates invariant 'self.balance >= 0'",
+    );
+}
+
+#[test]
+fn discharge_foreign_unprovable_write_rejected() {
+    compile_should_fail_with(
+        r#"
+class Account {
+    balance: int
+    invariant self.balance >= 0
+}
+
+fn set_balance(mut a: Account, v: int) {
+    a.balance = v
+}
+
+fn main() {
+    let mut a = Account { balance: 100 }
+    set_balance(a, 5)
+}
+"#,
+        "after this write",
+    );
+}
+
+#[test]
+fn discharge_loop_body_write_proves() {
+    let out = compile_and_run_stdout(
+        r#"
+class Balance {
+    amount: int
+    invariant self.amount >= 0
+
+    fn do_deposits(mut self) {
+        let mut i = 0
+        while i < 100 {
+            self.amount = self.amount + 1
+            i = i + 1
+        }
+    }
+}
+
+fn main() {
+    let mut b = Balance { amount: 0 }
+    b.do_deposits()
+    print(b.amount)
+}
+"#,
+    );
+    assert_eq!(out, "100\n");
+}
+
+#[test]
+fn discharge_branch_guarded_write_proves() {
+    // A write inside a guarded branch proves at the branch end using the
+    // branch's facts.
+    let out = compile_and_run_stdout(
+        r#"
+class Account {
+    balance: int
+    invariant self.balance >= 0
+
+    fn withdraw(mut self, amt: int) {
+        if amt >= 0 && amt <= self.balance {
+            self.balance = self.balance - amt
+        }
+    }
+}
+
+fn main() {
+    let mut a = Account { balance: 50 }
+    a.withdraw(20)
+    print(a.balance)
+}
+"#,
+    );
+    assert_eq!(out, "30\n");
+}
+
+#[test]
+fn discharge_nonzero_invariant_with_guard_proves() {
+    // The != fragment extension: a `v != 0` guard proves `self.x != 0`.
+    let out = compile_and_run_stdout(
+        r#"
+class NonZero {
+    x: int
+    invariant self.x != 0
+
+    fn set(mut self, v: int) {
+        if v != 0 {
+            self.x = v
+        }
+    }
+}
+
+fn main() {
+    let mut n = NonZero { x: 42 }
+    n.set(7)
+    print(n.x)
+}
+"#,
+    );
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn discharge_assert_establishes_fact() {
+    // assert is the documented escape hatch: after it passes, the prover
+    // may assume the condition.
+    let out = compile_and_run_stdout(
+        r#"
+class Account {
+    balance: int
+    invariant self.balance >= 0
+
+    fn set(mut self, v: int) {
+        assert v >= 0
+        self.balance = v
+    }
+}
+
+fn main() {
+    let mut a = Account { balance: 1 }
+    a.set(9)
+    print(a.balance)
+}
+"#,
+    );
+    assert_eq!(out, "9\n");
+}
+
+#[test]
+fn discharge_parameter_invariant_assumed() {
+    // A class-typed parameter satisfies its invariants at entry — enough
+    // to prove an increment immediately.
+    let out = compile_and_run_stdout(
+        r#"
+class Account {
+    balance: int
+    invariant self.balance >= 0
+}
+
+fn bump(mut a: Account) {
+    a.balance = a.balance + 1
+}
+
+fn main() {
+    let mut a = Account { balance: 0 }
+    bump(a)
+    print(a.balance)
+}
+"#,
+    );
+    assert_eq!(out, "1\n");
+}

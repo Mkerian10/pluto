@@ -393,3 +393,86 @@ fn main() {
 "#);
     assert!(out.contains("ok"));
 }
+
+// ── Invariant validation at the decode boundary ─────────────────────────────
+// Class invariants are statically discharged inside the compilation unit,
+// but decoded wire data is external testimony: __unmarshal re-checks the
+// invariants and raises wire.WireError on violation.
+
+#[test]
+fn unmarshal_validates_invariants_at_boundary() {
+    let out = run_marshal_test(r#"
+import std.wire
+
+class Account {
+    balance: int
+    invariant self.balance >= 0
+}
+
+stage Api {
+    pub fn get_account(self) Account {
+        return Account { balance: 1 }
+    }
+
+    fn main(self) {
+        // A valid round trip decodes fine.
+        let acct = Account { balance: 100 }
+        let enc = wire.wire_value_encoder()
+        __marshal_Account(acct, enc)
+        let good = enc.result()
+        let mut dec = wire.wire_value_decoder(good)
+        let decoded = __unmarshal_Account(dec) catch err {
+            print("unexpected decode failure")
+            return
+        }
+        print(decoded.balance)
+
+        // Hand-crafted wire data violating the invariant raises WireError.
+        let bad = wire.wire_record(["balance"], [wire.wire_int(0 - 5)])
+        let mut dec2 = wire.wire_value_decoder(bad)
+        let decoded2 = __unmarshal_Account(dec2) catch err {
+            print("rejected at boundary")
+            return
+        }
+        print(decoded2.balance)
+    }
+}
+"#);
+    assert!(out.contains("100"), "valid decode should succeed, got: {out}");
+    assert!(
+        out.contains("rejected at boundary"),
+        "violating decode should raise, got: {out}"
+    );
+}
+
+#[test]
+fn unmarshal_boundary_error_names_invariant() {
+    let out = run_marshal_test(r#"
+import std.wire
+
+class Account {
+    balance: int
+    invariant self.balance >= 0
+}
+
+stage Api {
+    pub fn get_account(self) Account {
+        return Account { balance: 1 }
+    }
+
+    fn main(self) {
+        let bad = wire.wire_record(["balance"], [wire.wire_int(0 - 5)])
+        let mut dec = wire.wire_value_decoder(bad)
+        let decoded = __unmarshal_Account(dec) catch err: wire.WireError {
+            print(err.message)
+            return
+        }
+        print(decoded.balance)
+    }
+}
+"#);
+    assert!(
+        out.contains("invariant violation on Account: self.balance >= 0"),
+        "error should name class and invariant, got: {out}"
+    );
+}

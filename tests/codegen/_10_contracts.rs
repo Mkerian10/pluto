@@ -1,8 +1,11 @@
 // Category 10: Contracts Tests (20+ tests)
-// Comprehensive test suite for runtime contract checking codegen.
-// Tests validate correct invariant, requires, and assert enforcement.
+// Comprehensive test suite for contract enforcement: invariants are
+// statically discharged (compile-time proofs, see src/typeck/discharge.rs);
+// requires and assert remain runtime-checked.
 
-use super::common::{compile_and_run, compile_and_run_output, compile_and_run_stdout};
+use super::common::{
+    compile_and_run, compile_and_run_output, compile_and_run_stdout, compile_should_fail_with,
+};
 
 // ============================================================================
 // 1. Invariants - Construction (5 tests)
@@ -47,9 +50,10 @@ fn test_invariant_checked_after_construction_multiple_fields() {
 }
 
 #[test]
-fn test_invariant_violation_at_construction_aborts() {
-    // Invariant violation during construction should abort
-    let (_, stderr, code) = compile_and_run_output(
+fn test_invariant_violation_at_construction_rejected() {
+    // A construction that violates the invariant is a compile error
+    // (static discharge — the violation never reaches runtime)
+    compile_should_fail_with(
         r#"
         class Positive {
             value: int
@@ -62,15 +66,7 @@ fn test_invariant_violation_at_construction_aborts() {
             print(p.value)
         }
         "#,
-    );
-    assert_ne!(code, 0, "Should exit with non-zero for invariant violation");
-    assert!(
-        stderr.contains("invariant violation"),
-        "stderr should contain 'invariant violation', got: {stderr}"
-    );
-    assert!(
-        stderr.contains("Positive"),
-        "stderr should mention class name, got: {stderr}"
+        "construction of 'Positive' violates its invariant",
     );
 }
 
@@ -144,9 +140,10 @@ fn test_invariant_checked_after_mut_method() {
 }
 
 #[test]
-fn test_invariant_violation_after_mut_method_aborts() {
-    // Invariant violation after mut method should abort
-    let (_, stderr, code) = compile_and_run_output(
+fn test_invariant_unconstrained_setter_rejected() {
+    // A setter that could violate the invariant for some input is a
+    // compile error at the method (static discharge over all inputs)
+    compile_should_fail_with(
         r#"
         class BoundedCounter {
             value: int
@@ -164,9 +161,8 @@ fn test_invariant_violation_after_mut_method_aborts() {
             c.set(100)
         }
         "#,
+        "cannot prove invariant",
     );
-    assert_ne!(code, 0);
-    assert!(stderr.contains("invariant violation"), "stderr: {stderr}");
 }
 
 #[test]
@@ -208,7 +204,9 @@ fn test_invariant_write_lock_for_mut_methods() {
                 self.size = self.size + 1
             }
 
-            fn pop(mut self) {
+            fn pop(mut self)
+                requires self.size > 0
+            {
                 self.size = self.size - 1
             }
         }
@@ -240,7 +238,9 @@ fn test_invariant_multiple_mut_methods_chained() {
                 self.hi = self.hi + amount
             }
 
-            fn widen(mut self, amount: int) {
+            fn widen(mut self, amount: int)
+                requires amount > 0
+            {
                 self.hi = self.hi + amount
             }
         }
@@ -633,9 +633,10 @@ fn test_requires_violation_before_assert() {
 }
 
 #[test]
-fn test_invariant_violation_before_assert() {
-    // If invariant is violated at construction, assert in method is not reached
-    let (_, stderr, code) = compile_and_run_output(
+fn test_invariant_violation_at_construction_rejected_statically() {
+    // A violating construction never compiles, regardless of what the
+    // program would do afterwards
+    compile_should_fail_with(
         r#"
         class BoundedValue {
             value: int
@@ -654,7 +655,6 @@ fn test_invariant_violation_before_assert() {
             print(b.check())
         }
         "#,
+        "construction of 'BoundedValue' violates its invariant",
     );
-    assert_ne!(code, 0);
-    assert!(stderr.contains("invariant violation"), "stderr: {stderr}");
 }
