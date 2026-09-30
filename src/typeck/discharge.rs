@@ -890,6 +890,13 @@ fn pre_field_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    // An illegal write (immutable binding) is rejected by the mutability
+    // checks with a better message — no proof obligation on it.
+    if let Some(root) = super::check::root_variable(&object.node) {
+        if root != "self" && env.is_immutable(root) {
+            return Ok(());
+        }
+    }
     let resolved = typed_path(&object.node, env);
     let (opath, cls) = match resolved {
         Some((p, PlutoType::Class(c))) => (Some(p), c),

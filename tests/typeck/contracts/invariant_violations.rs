@@ -66,10 +66,11 @@ fn main(){}"#).is_ok()); }
 
 // Invariant on bracket dep field
 #[test]
-fn invariant_bracket_dep() { // Invariants may read bracket deps (injected fields are fields) (audit: premise flipped)
-    assert!(pluto::compile_to_object(r#"class Dep{x:int}
+fn invariant_bracket_dep() { // Nested field access (a dep's field is another object's state) is
+    // outside the provable fragment under static discharge
+    compile_should_fail_with(r#"class Dep{x:int}
 class C[d:Dep]{invariant self.d.x>0}
-fn main(){}"#).is_ok()); }
+fn main(){}"#, "outside the provable fragment"); }
 
 // Invariant with spawn
 #[test]
@@ -86,9 +87,11 @@ fn main(){}"#, "expected newline after statement"); }
 
 // Invariant on generic type param
 #[test]
-fn invariant_generic_param() { compile_should_fail_with(r#"class C<T>{x:T
+fn invariant_generic_param() { // Generic-class invariants are rejected outright under static
+    // discharge (instantiations are never re-checked)
+    compile_should_fail_with(r#"class C<T>{x:T
 invariant self.x>0}
-fn main(){}"#, "cannot compare T with int"); }
+fn main(){}"#, "invariants on generic classes are not yet supported"); }
 
 // Invariant with nested field access
 #[test]

@@ -59,7 +59,9 @@ fn main() {}
 }
 
 #[test]
-fn generic_class_invariant_checked() {
+fn generic_class_invariant_rejected() {
+    // Static discharge rejects invariants on generic classes outright
+    // (before the template's expression is even type-checked).
     compile_should_fail_with(
         r#"
 class Counter<T> {
@@ -74,7 +76,7 @@ class Counter<T> {
 }
 fn main() {}
 "#,
-        "invariant expression must be bool",
+        "invariants on generic classes are not yet supported",
     );
 }
 
