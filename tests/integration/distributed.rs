@@ -1612,3 +1612,105 @@ class Registry {
     let _ = server.kill();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n107\n");
 }
+
+// ── Per-instance entity locks: handle calls vs local calls ──
+
+const LOCK_SHARED: &str = r#"
+import std.wire
+
+object Counter {
+    value: int
+
+    fn increment(mut self) {
+        self.value = self.value + 1
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+class Registry {
+    c: Counter
+    go: Sender<int>
+
+    fn counter(self) Counter {
+        return self.c
+    }
+
+    fn kick(self) {
+        self.go.send(1)!
+    }
+}
+"#;
+
+/// The handle-call dispatch path takes the SAME per-instance lock as local
+/// calls: remote increments through a handle race a spawned local worker
+/// hammering the same entity, and no update is lost. The worker starts only
+/// on the client's `kick()` (so the two sides overlap), does its 1000
+/// increments, and the client polls until both sides' 1050 total is visible.
+#[test]
+fn entity_handle_calls_serialize_with_local_calls() {
+    let server_src = format!(
+        "{LOCK_SHARED}\n\
+        fn work(mut c: Counter, rx: Receiver<int>) {{\n\
+            let x = rx.recv() catch 0\n\
+            let mut i = 0\n\
+            while i < 1000 {{\n\
+                c.increment()\n\
+                i = i + 1\n\
+            }}\n\
+        }}\n\
+        \n\
+        fn main() {{\n\
+            let (tx, rx) = chan<int>(1)\n\
+            let c = Counter {{ value: 0 }}\n\
+            let r = Registry {{ c: c, go: tx }}\n\
+            let t = spawn work(c, rx)\n\
+            serve r on 0\n\
+        }}"
+    );
+    let app_src = format!(
+        "{LOCK_SHARED}\n\
+        app A[reg: domain Registry] {{\n\
+            fn main(self) {{\n\
+                let fallback = Counter {{ value: -1 }}\n\
+                let mut c = at self.reg {{ counter() }} catch fallback\n\
+                at self.reg {{ kick() }} catch err {{}}\n\
+                let mut i = 0\n\
+                while i < 50 {{\n\
+                    at c {{ increment() }} catch err {{}}\n\
+                    i = i + 1\n\
+                }}\n\
+                let mut v = 0\n\
+                let mut tries = 0\n\
+                while tries < 2000 {{\n\
+                    v = at c {{ get() }} catch -2\n\
+                    if v == 1050 {{\n\
+                        break\n\
+                    }}\n\
+                    tries = tries + 1\n\
+                }}\n\
+                print(v)\n\
+            }}\n\
+        }}"
+    );
+    let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
+    let (_ad, app_bin) = build_binary(&[("main.pluto", &app_src)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&app_bin)
+        .env("PLUTO_DOMAIN_REGISTRY", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1050\n");
+}
