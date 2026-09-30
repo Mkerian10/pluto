@@ -42,6 +42,9 @@ Detailed design for each area of the language:
 | [Dependency Injection](docs/design/dependency-injection.md) | Bracket deps, ambient DI, auto-wiring, environment opacity |
 | [Concurrency](book/src/whats-different/concurrency.md) | Tasks, channels, structured concurrency |
 | [Contracts](docs/design/contracts.md) | Invariants, pre/post conditions, failure semantics, protocol contracts |
+| [Objects](docs/design/rfc-objects.md) | Entities: reference identity, serialized methods, boundary handles, placement |
+| [Typestates](docs/design/rfc-typestates.md) | State-parameterized classes, `where` constraints, transition linearity |
+| [Verification](docs/design/rfc-verification.md) | Flow-fact engine, compile-time invariant proofs |
 | [Communication](docs/design/communication.md) | Synchronous calls, channels, serialization |
 | [Mutability](docs/design/mutability.md) | Explicit mutation, compiler optimizations |
 | [Runtime](docs/design/runtime.md) | The Pluto "VM", GC, process lifecycle, crash recovery |
@@ -80,7 +83,7 @@ class OrderService[db: APIDatabase, accounts: AccountsService] uses Logger {
 
         let user = self.accounts.get_user(order.user_id)!
         self.db.insert(order)!
-        logger.info("created order {order.id} for {user.name}")
+        logger.info(f"created order {order.id} for {user.name}")
         return order
     }
 }
@@ -124,15 +127,68 @@ fn find_user(id: int) string? {
     if id <= 0 {
         return none
     }
-    return "User {id}"
+    return f"User {id}"
 }
 
 fn greet(id: int) string? {
     let name = find_user(id)?    // unwrap or propagate none
-    return "Hello, {name}!"
+    return f"Hello, {name}!"
 }
 
 // Maps and Sets
 let m = Map<string, int> { "a": 1, "b": 2 }
 let s = Set<int> { 1, 2, 3 }
+
+// Objects — entities with reference identity (docs/design/rfc-objects.md)
+object Counter {
+    value: int
+
+    fn increment(mut self) {
+        self.value = self.value + 1
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+let mut c = Counter { value: 0 }
+let alias = c               // same entity: alias == c (identity, not structure)
+let t = spawn c.increment() // spawn SHARES the entity; methods serialize per instance
+
+// Entity placement: run the call where the entity lives (direct call when local)
+let n = at c { get() } catch -1
+
+// Compile-time invariants: proof obligations, not runtime checks
+// (docs/design/rfc-verification.md) — every construction and write site
+// must be statically proven to preserve the invariant, or compilation fails
+class Account {
+    invariant self.balance >= 0
+
+    balance: int
+
+    fn withdraw(mut self, amount: int) {
+        if amount >= 0 && amount <= self.balance {
+            self.balance = self.balance - amount   // proven from the guard
+        }
+    }
+}
+
+// Typestates: state-restricted methods + linear transitions
+// (docs/design/rfc-typestates.md)
+class Partition<S> {
+    id: int
+
+    fn acquire(self) Partition<Owned> where S == Unowned {
+        return Partition<Owned> { id: self.id }
+    }
+
+    fn consume(self) int where S == Owned {
+        return self.id
+    }
+}
+
+let u = Partition<Unowned> { id: 7 }
+let o = u.acquire()   // transition: 'u' is consumed; using it again is an error
+o.consume()           // only exists where S == Owned
 ```
