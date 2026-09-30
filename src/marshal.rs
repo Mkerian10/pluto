@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::{
-    Block, ClassDecl, Expr, Function, MatchPattern, Param, Program, Stmt, TypeExpr,
+    Block, ClassDecl, Expr, Function, MatchPattern, Param, Program, Stmt, TypeExpr, UnaryOp,
 };
 use crate::span::{Span, Spanned};
 use crate::typeck::env::TypeEnv;
@@ -758,7 +758,22 @@ fn generate_unmarshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>,
     let field_inits: Vec<_> = data_fields.iter()
         .map(|f| (f.name.node.clone(), mk_var(&f.name.node)))
         .collect();
-    stmts.push(mk_return(mk_struct_lit(class_name, field_inits)));
+    if class_decl.invariants.is_empty() {
+        stmts.push(mk_return(mk_struct_lit(class_name, field_inits)));
+    } else {
+        // Boundary validation: class invariants are statically discharged
+        // inside the compilation unit, but decoded data is testimony, not
+        // proof — re-check each invariant at the trust boundary and raise
+        // WireError on violation.
+        //   let __out = ClassName { ... }
+        //   if !(<invariant with self -> __out>) { raise wire.WireError { ... } }
+        //   return __out
+        stmts.push(mk_let("__out", None, mk_struct_lit(class_name, field_inits)));
+        for inv in &class_decl.invariants {
+            stmts.push(mk_invariant_guard(class_name, &inv.node.expr.node));
+        }
+        stmts.push(mk_return(mk_var("__out")));
+    }
 
     let body = Spanned {
         node: Block { stmts },
@@ -1322,6 +1337,69 @@ fn generate_wire_decode(type_name: &str) -> Spanned<Function> {
     ];
     mk_function(fn_name, ("data", TypeExpr::Named("string".to_string())),
                 Some(TypeExpr::Named(type_name.to_string())), body)
+}
+
+/// Rewrite an invariant expression's `self` root to another variable name
+/// (`self.balance >= 0` → `__out.balance >= 0`).
+fn rewrite_invariant_self(expr: &Expr, root: &str) -> Expr {
+    match expr {
+        Expr::Ident(s) if s == "self" => Expr::Ident(root.to_string()),
+        Expr::FieldAccess { object, field } => Expr::FieldAccess {
+            object: Box::new(Spanned {
+                node: rewrite_invariant_self(&object.node, root),
+                span: object.span,
+            }),
+            field: field.clone(),
+        },
+        Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
+            op: *op,
+            lhs: Box::new(Spanned { node: rewrite_invariant_self(&lhs.node, root), span: lhs.span }),
+            rhs: Box::new(Spanned { node: rewrite_invariant_self(&rhs.node, root), span: rhs.span }),
+        },
+        Expr::UnaryOp { op, operand } => Expr::UnaryOp {
+            op: *op,
+            operand: Box::new(Spanned {
+                node: rewrite_invariant_self(&operand.node, root),
+                span: operand.span,
+            }),
+        },
+        other => other.clone(),
+    }
+}
+
+/// `if !(<invariant over __out>) { raise wire.WireError { message: ... } }`
+/// — the decode-time trust-boundary check for an invariant-carrying class.
+fn mk_invariant_guard(class_name: &str, inv: &Expr) -> Spanned<Stmt> {
+    let desc = crate::codegen::format_invariant_expr(inv);
+    let condition = Expr::UnaryOp {
+        op: UnaryOp::Not,
+        operand: Box::new(Spanned {
+            node: rewrite_invariant_self(inv, "__out"),
+            span: mk_span(),
+        }),
+    };
+    let raise = Stmt::Raise {
+        error_name: Spanned { node: "wire.WireError".to_string(), span: mk_span() },
+        fields: vec![(
+            Spanned { node: "message".to_string(), span: mk_span() },
+            Spanned {
+                node: mk_string_lit(&format!("invariant violation on {class_name}: {desc}")),
+                span: mk_span(),
+            },
+        )],
+        error_id: None,
+    };
+    Spanned {
+        node: Stmt::If {
+            condition: Spanned { node: condition, span: mk_span() },
+            then_block: Spanned {
+                node: Block { stmts: vec![Spanned { node: raise, span: mk_span() }] },
+                span: mk_span(),
+            },
+            else_block: None,
+        },
+        span: mk_span(),
+    }
 }
 
 fn mk_propagate(expr: Expr) -> Expr {
