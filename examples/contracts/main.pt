@@ -1,6 +1,12 @@
 // Contracts Example
 // Demonstrates requires (preconditions) and class invariants.
 // Postconditions are handled by invariants in Pluto.
+//
+// Invariants are compile-time proof obligations: the compiler proves at
+// every construction and write site that the invariant is preserved, or
+// compilation fails. The requires clauses below are exactly what make the
+// method bodies provable (they are runtime-checked at entry, and the
+// prover assumes them).
 
 // --- Class with invariants ---
 class BankAccount {
@@ -49,14 +55,15 @@ fn absolute(x: int) int {
 }
 
 fn main() int {
-    // Create account (invariant checked: balance >= 0)
+    // Create account (invariant proven at compile time: 100 >= 0)
     let mut account = BankAccount { name: "Alice", balance: 100 }
 
-    // Deposit (requires amount > 0, invariant ensures balance >= 0)
+    // Deposit (requires amount > 0 — which proves balance stays >= 0)
     let after_deposit = account.deposit(50)
     print(after_deposit) // 150
 
-    // Withdraw (requires amount > 0 and sufficient funds, invariant checked)
+    // Withdraw (requires amount > 0 and sufficient funds — which proves
+    // the invariant at the method's exit; no runtime invariant check)
     let after_withdraw = account.withdraw(30)
     print(after_withdraw) // 120
 

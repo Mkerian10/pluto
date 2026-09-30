@@ -1,6 +1,6 @@
 # RFC: The Verification Engine
 
-**Status:** Draft — direction accepted in design discussion (2026-09-28); nothing implemented
+**Status:** Draft — direction accepted in design discussion (2026-09-28); phases 1–2 implemented
 **Author:** Design discussion
 **Date:** 2026-09-28
 **Related:** [v1-vision.md](../v1-vision.md) (Static Verification), [contracts.md](contracts.md), [rfc-typestates.md](rfc-typestates.md), [rfc-objects.md](rfc-objects.md), [rfc-distributed-safety.md](rfc-distributed-safety.md), [distributed-model.md](distributed-model.md)
@@ -46,10 +46,11 @@ Two commitments the language already made are the soundness preconditions:
 
 Pluto already has three disconnected fact systems. The engine is their unification:
 
-- **Invariants on types** (`invariant self.balance >= 0`) — per-type facts, today
-  runtime-checked. Upgrade: the compiler attempts to *statically discharge* each
-  invariant at each write site. What it proves costs nothing at runtime; what it
-  can't stays a runtime check (see the proof ladder below).
+- **Invariants on types** (`invariant self.balance >= 0`) — per-type facts,
+  *statically discharged* (phase 2, shipped): the compiler proves each invariant
+  at each construction and write site, and an unprovable site is a compile
+  error. No runtime checks remain at code sites; the only runtime validation is
+  at trust boundaries (wire decode — see the proof ladder below).
 - **Flow narrowing** — already shipped for exactly one predicate: `if x != none`
   narrows a nullable. That *is* a flow-sensitive proof. Generalize the domain from
   nullability to comparisons and intervals: `if amt <= self.balance { /* fact:
@@ -69,19 +70,21 @@ already draws (the decidable fragment for invariants/requires).
 
 ## The proof ladder
 
-**proof > runtime check > typed error.** Nothing becomes undefined behavior;
-unprovability costs a branch and an error-set entry:
+**proof > runtime check > typed error.** Nothing becomes undefined behavior. The
+ladder means different things for different fact carriers:
 
-- A declared fact the compiler can discharge statically is free at runtime.
-- A declared fact it cannot discharge remains a runtime check at the unproven write
-  sites only (per-site residuals).
-- A runtime check that can fail surfaces as a typed error, and error handling is
-  already mandatory.
-
-This is **gradual verification**: today's programs keep working (invariants stay
-runtime-checked), `pluto analyze` reports proof coverage (which sites are proven vs
-residual), and codebases tighten over time. A strict mode (unproven invariant =
-compile error) can exist later as an opt-in.
+- **Invariants are proof-or-reject** *(decided 2026-09-30)*: a declared invariant
+  the compiler can discharge is free at runtime; one it cannot discharge at some
+  site is a **compile error** at that site, never a runtime residual. There is no
+  gradual fallback for invariants — the diagnostic names the invariant, the site,
+  the symbolic state, and the missing fact, so unprovability costs a guard or a
+  `requires` clause, not a crash path.
+- **`requires` and boundary validation keep the full ladder**: `requires` is
+  runtime-checked at entry today (static call-site discharge is future work), and
+  data entering the compilation unit through wire/marshal decode is *testimony,
+  not proof* — decode re-checks the invariants of the target type and raises the
+  existing wire error (a typed error, mandatory to handle) on violation. That
+  boundary check is the one place runtime invariant validation remains.
 
 ## Facts have consequences: proofs shrink error sets
 
@@ -244,10 +247,17 @@ then a stdlib import, not a language feature.
    inference, but its failure mode is "handle more"; proof inference's failure mode
    is action-at-a-distance breakage.) The compiler may *suggest*: "this invariant
    holds on all write paths — declare it?"
-2. **Gradual by default.** *(Proposal — deliberately left OPEN 2026-09-28: whether
-   unproven declared invariants demote to per-site runtime residuals or hard-error
-   is not yet decided.)* If gradual: residuals per unproven write site, `analyze`
-   reports coverage, strict mode later as opt-in.
+2. **Strict for invariants.** *(SETTLED 2026-09-30; implemented.)* An unprovable
+   invariant site is a compile error — no demotion to per-site runtime residuals,
+   no runtime checks at code sites, no opt-in modes. Consequences, all intended:
+   invariants outside the provable fragment (floats, strings, booleans,
+   collections, `.len()`, nested fields) are rejected at declaration; every
+   construction and write site is proven or rejected with a diagnostic that
+   teaches the fix; runtime invariant-check emission is removed from codegen;
+   wire/marshal decode keeps (gains) runtime validation at the trust boundary,
+   raising the existing wire error. `analyze` proof-coverage reporting for
+   invariants is moot (coverage is definitionally 100% of accepted programs);
+   coverage reporting may return later for `requires` call-site discharge.
 3. **No SMT.** *(Proposal.)* Fixed decidable domain: intervals, equalities, linear
    arithmetic, dominance. Extend the domain deliberately, primitive by primitive.
 
@@ -281,10 +291,17 @@ then a stdlib import, not a language feature.
 
 1. **Flow-fact generalization** — extend narrowing from nullability to comparisons /
    intervals on ints. Self-contained; immediately useful (dead-check elimination,
-   better diagnostics). No new syntax.
-2. **Invariant static discharge** — prove declared class invariants at write sites
-   where the fragment allows; per-site runtime residuals otherwise; `analyze`
-   coverage reporting.
+   better diagnostics). No new syntax. **Shipped** (`src/typeck/facts.rs`).
+2. **Invariant static discharge** — prove declared class invariants at every
+   construction and write site; unprovable sites are compile errors (strict mode,
+   see design decision 2); runtime validation only at wire decode boundaries.
+   **Shipped** (`src/typeck/discharge.rs`): symbolic strong updates over ghost
+   variables inside `mut self` methods with proofs at boundaries (exits, raises,
+   calls, loops, branch joins), immediate proofs for foreign writes and
+   constructions, and a small fragment extension (`x != const` facts). Invariants
+   on generic classes are rejected for now (their instantiations are never
+   re-checked); entity reentrancy is handled conservatively (any call while the
+   invariant may be broken is rejected — rfc-objects.md open question 6).
 3. **Error-set shrinking** — fact-sensitive error inference: a `raise` proven
    unreachable at a call site removes the variant from that site's inferred set.
 4. **Distribution primitives** — monotonic fields and dominance (guarded effects);
