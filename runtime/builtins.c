@@ -15,7 +15,7 @@
 // - Math builtins (trigonometry, rounding)
 // - Test framework (expect assertions)
 // - Error handling (TLS error state)
-// - Contract enforcement (__pluto_invariant_violation)
+// - Contract enforcement (__pluto_requires_violation, __pluto_assert_failure)
 // - RPC response parsing (JSON extraction)
 //──────────────────────────────────────────────────────────────────────────────
 

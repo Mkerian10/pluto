@@ -319,18 +319,10 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
         }
     }
 
-    // Build class invariants map for codegen
-    let class_invariants: HashMap<String, Vec<(Expr, String)>> = program.classes.iter()
-        .filter(|c| !c.node.invariants.is_empty())
-        .map(|c| {
-            let name = c.node.name.node.clone();
-            let invs = c.node.invariants.iter().map(|inv| {
-                let desc = format_invariant_expr(&inv.node.expr.node);
-                (inv.node.expr.node.clone(), desc)
-            }).collect();
-            (name, invs)
-        })
-        .collect();
+    // Class invariants are discharged statically at compile time
+    // (src/typeck/discharge.rs) -- no runtime checks are emitted. The only
+    // runtime invariant validation lives at wire/marshal decode boundaries,
+    // generated as ordinary AST by src/marshal.rs.
 
     // Build function contracts map for codegen
     let mut fn_contracts: HashMap<String, FnContracts> = HashMap::new();
@@ -440,7 +432,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             let mut next_builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut next_ctx.func, &mut next_builder_ctx);
-                lower_generator_next(f, builder, env, &mut module, &func_ids, &runtime, &vtable_ids, source, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
+                lower_generator_next(f, builder, env, &mut module, &func_ids, &runtime, &vtable_ids, source, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
             }
             module
                 .define_function(next_id, &mut next_ctx)
@@ -460,7 +452,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
+                lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
             }
 
             module
@@ -484,7 +476,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
             }
 
             module
@@ -541,7 +533,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
                             let mut builder_ctx = FunctionBuilderContext::new();
                             {
                                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
+                                lower_function(&tmp_func, builder, env, &mut module, &func_ids, &runtime, Some(class_name), &vtable_ids, source, &spawn_closure_fns, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
                             }
 
                             module
@@ -600,7 +592,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(app_name), &vtable_ids, source, &spawn_closure_fns, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
             }
 
             module
@@ -625,7 +617,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             let mut builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(stage_name), &vtable_ids, source, &spawn_closure_fns, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
+                lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(stage_name), &vtable_ids, source, &spawn_closure_fns, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
             }
 
             module
@@ -776,7 +768,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_serve_handler(served, builder, env, &mut module, &func_ids, &runtime, &vtable_ids, source, &class_invariants, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
+            lower_serve_handler(served, builder, env, &mut module, &func_ids, &runtime, &vtable_ids, source, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
         }
         module
             .define_function(hid, &mut fn_ctx)
