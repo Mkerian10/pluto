@@ -3,7 +3,16 @@
 **Status:** Draft — direction accepted in design discussion (2026-09-28); phases 1–2 implemented
 **Author:** Design discussion
 **Date:** 2026-09-28
-**Related:** [v1-vision.md](../v1-vision.md) (Static Verification), [contracts.md](contracts.md), [rfc-typestates.md](rfc-typestates.md), [rfc-objects.md](rfc-objects.md), [rfc-distributed-safety.md](rfc-distributed-safety.md), [distributed-model.md](distributed-model.md)
+**Related:** [epistemics.md](epistemics.md) (the semantic this engine instantiates), [v1-vision.md](../v1-vision.md) (Static Verification), [contracts.md](contracts.md), [rfc-typestates.md](rfc-typestates.md), [rfc-objects.md](rfc-objects.md), [rfc-distributed-safety.md](rfc-distributed-safety.md), [distributed-model.md](distributed-model.md)
+
+> **Foundations note (2026-09-30):** [epistemics.md](epistemics.md) names the
+> semantic this RFC serves and adds the **genericity principle**: the language
+> hardcodes no specific epistemic property. The kernel shapes below stay; named
+> properties (`idempotent`, `transactional`, `fenced`, `monotonic`) are
+> library-defined bundles of kernel obligations with owners and discharge modes
+> (proven / checked / assumed). Where this RFC's examples read as built-ins
+> (e.g. `monotonic(...)` in the Blob sketch), read them as stdlib property
+> vocabulary, not compiler magic.
 
 ## Thesis
 
