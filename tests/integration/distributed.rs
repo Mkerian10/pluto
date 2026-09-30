@@ -1495,6 +1495,80 @@ fn entity_handle_call_routes_home() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n107\n");
 }
 
+/// Entity placement can carry CLASS values across the boundary surface:
+/// marshalers are generated for the param/return types of object methods
+/// even when the program has no serve/remote/domain boundary. Pins the
+/// examples/blob protocol (rfc-verification.md's acceptance-test shape):
+/// a WriteGrant evidence value crosses `at blob { ... }` in both
+/// directions, and the authority's fence rejects a stale grant with a
+/// typed error.
+#[test]
+fn entity_placement_carries_evidence_values() {
+    let src = r#"
+import std.wire
+
+error StaleGrant {
+    token: int
+    epoch: int
+}
+
+class WriteGrant {
+    token: int
+}
+
+object BlobAuthority {
+    data: string
+    epoch: int
+    applied: int
+
+    invariant self.epoch >= 0
+    invariant self.applied <= self.epoch
+
+    fn grant_write(mut self) WriteGrant {
+        self.epoch = self.epoch + 1
+        return WriteGrant { token: self.epoch }
+    }
+
+    fn apply(mut self, grant: WriteGrant, d: string) {
+        let tok = grant.token
+        if tok != self.epoch {
+            raise StaleGrant { token: tok, epoch: self.epoch }
+        }
+        self.applied = tok
+        self.data = d
+    }
+
+    fn read(self) string {
+        return self.data
+    }
+}
+
+fn run(mut blob: BlobAuthority) {
+    let a = at blob { grant_write() }!
+    at blob { apply(a, "A") }!
+    let b = at blob { grant_write() }!
+    at blob { apply(a, "A-stale") } catch err: StaleGrant {
+        print(f"fenced {err.token} < {err.epoch}")
+    } catch err {
+        print("boundary failure")
+    }
+    at blob { apply(b, "B") }!
+    let v = at blob { read() }!
+    print(v)
+}
+
+fn main() {
+    let mut blob = BlobAuthority { data: "genesis", epoch: 0, applied: 0 }
+    run(blob) catch err {
+        print("unexpected failure")
+    }
+}
+"#;
+    let (_d, bin) = build_binary(&[("main.pluto", src)]);
+    let out = Command::new(&bin).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "fenced 1 < 2\nB\n");
+}
+
 // ── Generic objects at the boundary (rfc-objects.md phase 3, slice 1) ──
 
 const GENERIC_HANDLE_SHARED: &str = r#"

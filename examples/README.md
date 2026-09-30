@@ -371,6 +371,14 @@ PLUTO_REMOTE_BILLINGSERVICE=127.0.0.1:9000 ./examples/distributed/build/orders
 
 Stop `billing` and re-run `orders` to see the wildcard path (`billing service unavailable`). Change the charge amount above the server's funds to see the typed error cross the wire (`payment declined: insufficient funds`).
 
+## blob
+
+The north-star example of docs/design/rfc-verification.md ("Blob is a stdlib module"), built with today's primitives: a lockless single-writer blob store with fenced atomic writes. A `BlobAuthority` entity owns the data and a fencing epoch; minting a `WriteGrant` advances the epoch (silently invalidating all older grants), and every write is judged against the current epoch at the point of effect — a stale grant raises a typed `StaleGrant` error before any byte lands. Each mechanism owns one guarantee: atomicity from entity method serialization, safety from the authority-side fence, liveness from the grant, discipline from typed errors plus `at`'s mandatory-handling contract. Two invariants are discharged at compile time — `self.epoch >= 0` and the protocol fact `self.applied <= self.epoch` ("no admitted write ever carried a token newer than the newest grant", provable because the fence is an exact match); the full monotonicity and dominance theorems are the verification RFC's phase 4.
+
+```bash
+cargo run -- run examples/blob/main.pt --stdlib stdlib
+```
+
 ## function-references
 
 Named functions as first-class values: bind them to variables, pass them to
