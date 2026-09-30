@@ -1183,7 +1183,7 @@ fn build_method_signature(func: &Function, module: &impl Module, class_name: &st
 }
 
 /// Format an invariant expression as a human-readable string for error messages.
-pub(super) fn format_invariant_expr(expr: &Expr) -> String {
+pub(crate) fn format_invariant_expr(expr: &Expr) -> String {
     match expr {
         Expr::IntLit(n) => n.to_string(),
         Expr::FloatLit(f) => f.to_string(),

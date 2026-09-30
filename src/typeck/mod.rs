@@ -1,4 +1,5 @@
 pub mod env;
+pub mod discharge;
 pub mod facts;
 pub mod types;
 pub mod serializable;
@@ -120,6 +121,10 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     register::validate_di_graph(program, &mut env)?;
     register::check_trait_conformance(program, &mut env)?;
     register::check_generic_trait_method_conformance(program, &mut env)?;
+    // Static invariant discharge (verification RFC phase 2): validate and
+    // register provable class invariants before any body is checked, so
+    // every construction and write site carries its proof obligation.
+    discharge::register_invariants(program, &mut env)?;
     register::check_all_bodies(program, &mut env)?;
     templates::check_generic_templates(program, &mut env)?;
     check::enforce_mut_self(program, &env)?;

@@ -1551,6 +1551,10 @@ fn infer_struct_lit(
         }
     }
 
+    // Invariant discharge: construction is a proof obligation — the field
+    // initializers must be proven to satisfy the class invariants.
+    super::discharge::check_construction(&effective_name, lit_fields, span, env)?;
+
     Ok(PlutoType::Class(effective_name))
 }
 

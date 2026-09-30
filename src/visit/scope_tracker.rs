@@ -177,6 +177,13 @@ impl<T> ScopeTracker<T> {
         self.scopes.is_empty()
     }
 
+    /// Iterate over every (name, value) pair in every scope, outermost
+    /// first. Shadowing is rejected at definition, so each visible name
+    /// appears at most once.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &T)> {
+        self.scopes.iter().flat_map(|s| s.iter())
+    }
+
     /// Remove all scopes, resetting to empty state.
     pub fn clear(&mut self) {
         self.scopes.clear();

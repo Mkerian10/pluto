@@ -27,6 +27,11 @@ pub(crate) fn infer_closure(
     // unchanged afterwards.
     let fact_snapshot = env.facts.clone();
     env.facts.havoc_all();
+    // The invariant proof scope (discharge.rs) is suspended too: the
+    // closure body runs later, so writes inside it are foreign writes
+    // (proven immediately), not strong updates of the enclosing method's
+    // symbolic state.
+    let invariant_scope = env.invariant_scope.take();
 
     // Push a scope for the closure parameters
     env.push_scope();
@@ -127,6 +132,7 @@ pub(crate) fn infer_closure(
 
     // Restore the outer flow-fact state (see barrier note at the top).
     env.facts = fact_snapshot;
+    env.invariant_scope = invariant_scope;
 
     Ok(PlutoType::Fn(param_types, Box::new(final_ret), false))
 }

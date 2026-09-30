@@ -193,13 +193,16 @@ pub enum Fact {
     Bound(String, Interval),
     /// A binary relation between two paths.
     Rel(String, RelOp, String),
+    /// The path's value is not a specific constant (`x != 0`). Intervals
+    /// cannot express holes, so inequations get their own fact shape.
+    NeConst(String, i64),
 }
 
 impl Fact {
     /// Every path this fact talks about.
     fn paths(&self) -> impl Iterator<Item = &str> {
         match self {
-            Fact::Bound(p, _) => std::iter::once(p.as_str()).chain(None),
+            Fact::Bound(p, _) | Fact::NeConst(p, _) => std::iter::once(p.as_str()).chain(None),
             Fact::Rel(a, _, b) => std::iter::once(a.as_str()).chain(Some(b.as_str())),
         }
     }
@@ -213,6 +216,7 @@ impl Fact {
 struct Frame {
     intervals: HashMap<String, Interval>,
     relations: Vec<(String, RelOp, String)>,
+    ne_consts: Vec<(String, i64)>,
 }
 
 /// Record of a kill, for the guard logic: a guard fact may only be assumed
@@ -293,6 +297,11 @@ impl FactEnv {
                     frame.relations.push((a, op, b));
                 }
             }
+            Fact::NeConst(p, v) => {
+                if !frame.ne_consts.contains(&(p.clone(), v)) {
+                    frame.ne_consts.push((p, v));
+                }
+            }
         }
     }
 
@@ -303,6 +312,7 @@ impl FactEnv {
             frame
                 .relations
                 .retain(|(a, _, b)| !path_under(a, root) && !path_under(b, root));
+            frame.ne_consts.retain(|(p, _)| !path_under(p, root));
         }
         self.kill_log.push(KillEvent::Path(root.to_string()));
     }
@@ -316,6 +326,7 @@ impl FactEnv {
             frame
                 .relations
                 .retain(|(a, _, b)| !a.contains('.') && !b.contains('.'));
+            frame.ne_consts.retain(|(p, _)| !p.contains('.'));
         }
         self.kill_log.push(KillEvent::Fields);
     }
@@ -325,6 +336,7 @@ impl FactEnv {
         for frame in &mut self.frames {
             frame.intervals.clear();
             frame.relations.clear();
+            frame.ne_consts.clear();
         }
         self.kill_log.push(KillEvent::All);
     }
@@ -361,6 +373,13 @@ impl FactEnv {
         iv
     }
 
+    /// Is `path != v` recorded?
+    fn ne_const_holds(&self, path: &str, v: i64) -> bool {
+        self.frames
+            .iter()
+            .any(|frame| frame.ne_consts.iter().any(|(p, c)| p == path && *c == v))
+    }
+
     /// Is the directed relation `a op b` recorded? `Eq`/`Ne` are checked
     /// symmetrically.
     fn rel_holds(&self, a: &str, op: RelOp, b: &str) -> bool {
@@ -380,7 +399,7 @@ impl FactEnv {
 /// Resolve `expr` to a trackable path and its type: an identifier, or a
 /// chain of plain class field accesses rooted at one. Excludes entities
 /// (`object`), remote types, and domain deps at every step.
-fn typed_path(expr: &Expr, env: &TypeEnv) -> Option<(String, PlutoType)> {
+pub(crate) fn typed_path(expr: &Expr, env: &TypeEnv) -> Option<(String, PlutoType)> {
     match expr {
         Expr::Ident(name) => {
             // Mirror identifier inference: a flow-narrowed nullable reads at
@@ -782,9 +801,27 @@ fn eval_comparison(
 
     // `x != y` facts only decide equality when the difference is exactly
     // x - y (no constant offset).
-    let ne_known = d.k == 0
+    let ne_rel_known = d.k == 0
         && d.as_diff()
             .is_some_and(|(x, y)| facts.rel_holds(x, RelOp::Ne, y));
+
+    // Single-term equations `c·x + k == 0` are impossible when no integer
+    // solution exists (indivisible, or out of i64 range) or when an
+    // inequation fact excludes the solution (`x != v`).
+    let eq_impossible = if d.terms.len() == 1 {
+        let (p, &c) = d.terms.iter().next().expect("len checked");
+        if d.k % c != 0 {
+            true
+        } else {
+            match i64::try_from(-d.k / c) {
+                Ok(sol) => facts.ne_const_holds(p, sol),
+                Err(_) => true,
+            }
+        }
+    } else {
+        false
+    };
+    let ne_known = ne_rel_known || eq_impossible;
 
     match op {
         BinOp::Lt => {
@@ -968,6 +1005,16 @@ fn facts_from_diff(op: BinOp, d: &Affine) -> Vec<Fact> {
     if d.terms.len() == 1 {
         let (path, &c) = d.terms.iter().next().expect("len checked");
         debug_assert!(c != 0, "zero coefficients are pruned");
+        // c·x + k != 0 ⇒ x != -k/c when that quotient is an exact i64
+        // (otherwise the inequation is vacuously true — no fact).
+        if op == BinOp::Neq {
+            if d.k % c == 0 {
+                if let Ok(sol) = i64::try_from(-d.k / c) {
+                    return vec![Fact::NeConst(path.clone(), sol)];
+                }
+            }
+            return Vec::new();
+        }
         // c·x + k cmp 0, normalized to c·x ≤ U and/or c·x ≥ L.
         let (le, ge): (Option<i128>, Option<i128>) = match op {
             BinOp::Lt => (d.k.checked_neg().and_then(|v| v.checked_sub(1)), None),
@@ -1358,9 +1405,23 @@ mod tests {
     }
 
     #[test]
-    fn extract_neq_yields_no_interval() {
+    fn extract_neq_yields_ne_const() {
+        // x - 5 != 0 ⇒ x != 5
         let facts = facts_from_diff(BinOp::Neq, &single("x", 1, -5));
+        assert_eq!(facts, vec![Fact::NeConst("x".into(), 5)]);
+        // 2x - 7 != 0 is vacuously true over the integers — no fact.
+        let facts = facts_from_diff(BinOp::Neq, &single("x", 2, -7));
         assert!(facts.is_empty());
+    }
+
+    #[test]
+    fn ne_const_decides_equality() {
+        let mut f = FactEnv::new();
+        f.assume(Fact::NeConst("x".into(), 0));
+        assert!(f.ne_const_holds("x", 0));
+        assert!(!f.ne_const_holds("x", 1));
+        f.kill_path("x");
+        assert!(!f.ne_const_holds("x", 0));
     }
 
     #[test]
