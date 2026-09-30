@@ -12,7 +12,10 @@
 
 import std.wire
 
-class BillingService {
+// The served service is an entity (THE billing service, not a copyable
+// value), so it is an object. The client's interface mirror stays a class —
+// the interface hash covers method signatures only, so the two agree.
+object BillingService {
     rate: int
 
     fn charge(self, amount: int) int {

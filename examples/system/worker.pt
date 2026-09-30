@@ -1,4 +1,5 @@
-class JobRunner {
+// The job runner is a stateful service — an entity, so declared as an object.
+object JobRunner {
     jobs_done: int
 
     fn run_job(mut self, name: string) {

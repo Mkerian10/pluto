@@ -4,8 +4,8 @@
 // identity (`==` compares identity, not fields), spawn SHARES them instead
 // of deep-copying (an entity copied would be a second entity), and sharing
 // is safe because an object's methods are serialized — it processes one
-// message at a time. Objects cannot cross domain boundaries as values;
-// they will cross by reference (identity handles) in a later phase.
+// message at a time. Objects never cross domain boundaries as values —
+// they cross by reference, as identity handles (rfc-objects.md phase 2).
 
 object Counter {
     value: int

@@ -1,6 +1,9 @@
 import std.socket
 
-pub class TcpListener {
+// A listening socket is an entity — it owns an OS resource with identity
+// (the bound port). Objects are spawn-shared and serialize their methods,
+// so handing a listener to a task never forks the descriptor.
+pub object TcpListener {
     fd: int
 
     fn accept(self) TcpConnection {
@@ -17,7 +20,10 @@ pub class TcpListener {
     }
 }
 
-pub class TcpConnection {
+// One live connection = one entity: reads and writes are messages to the
+// same underlying socket, and serialized methods keep concurrent users from
+// interleaving mid-operation.
+pub object TcpConnection {
     fd: int
 
     fn read(self, max_bytes: int) string {
