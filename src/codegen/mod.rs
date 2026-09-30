@@ -140,8 +140,17 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
     // Declare module-level globals for DI singleton pointers (Phase 2)
     let singleton_data_ids = declare_global_data(env.di_order.iter(), "__pluto_singleton_", &mut module)?;
 
-    // Declare module-level globals for rwlock pointers (Phase 4b)
-    let rwlock_data_ids = declare_global_data(env.synchronized_singletons.iter(), "__pluto_rwlock_", &mut module)?;
+    // Declare module-level globals for rwlock pointers (Phase 4b). Entity
+    // (object) types are excluded: their methods serialize on a PER-INSTANCE
+    // lock carried in a hidden trailing slot of each entity allocation, not
+    // on a per-type global (rfc-objects.md).
+    let rwlock_data_ids = declare_global_data(
+        env.synchronized_singletons
+            .iter()
+            .filter(|c| !env.object_types.contains(*c)),
+        "__pluto_rwlock_",
+        &mut module,
+    )?;
 
     // Pre-pass: collect spawn closure function names (needed before declarations)
     let spawn_closure_fns = collect_spawn_closure_names(program);

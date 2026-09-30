@@ -1,7 +1,10 @@
 // Object construct phase 1 (docs/design/rfc-objects.md): entity semantics.
 
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail_with};
+use common::{
+    compile_and_run_stdout, compile_and_run_stdout_timeout, compile_should_fail_with,
+    compile_test_and_run_stdout,
+};
 
 /// Objects have reference identity: `==` compares identity, not structure.
 #[test]
@@ -585,4 +588,125 @@ fn entity_placement_colocated() {
         "#,
     );
     assert_eq!(out.trim(), "7\n107");
+}
+
+// ── Per-instance entity locks ──
+//
+// Entity method serialization is per INSTANCE, not per type: each entity
+// carries its own rwlock (hidden trailing slot of the allocation), so two
+// instances of one object type run methods concurrently while concurrent
+// calls to the SAME instance still serialize (object_spawn_shares_entity
+// above covers the latter).
+
+/// Two instances of one object type do NOT serialize against each other.
+/// Deterministic distinguisher: a spawned task enters instance `a`'s method
+/// (taking a's write lock), signals readiness, then blocks on a channel that
+/// only instance `b`'s method sends to. Under a per-type lock b.push can
+/// never start (deadlock — the timeout catches a regression); under
+/// per-instance locks it completes and unblocks a.
+#[test]
+fn object_instances_do_not_serialize_against_each_other() {
+    let out = compile_and_run_stdout_timeout(
+        r#"
+        object Relay {
+            n: int
+
+            fn hold_and_recv(mut self, ready: Sender<int>, data: Receiver<int>) int {
+                ready.send(1)!
+                let v = data.recv()!
+                self.n = v
+                return v
+            }
+
+            fn push(mut self, data: Sender<int>) {
+                self.n = 1
+                data.send(42)!
+            }
+        }
+
+        fn main() {
+            let (ready_tx, ready_rx) = chan<int>(1)
+            let (data_tx, data_rx) = chan<int>(1)
+            let mut a = Relay { n: 0 }
+            let mut b = Relay { n: 0 }
+            let t = spawn a.hold_and_recv(ready_tx, data_rx)
+            ready_rx.recv()!
+            b.push(data_tx)!
+            print(t.get()!)
+        }
+        "#,
+        30,
+    );
+    assert_eq!(out.trim(), "42");
+}
+
+/// Instances of the SAME generic-object instantiation get per-instance
+/// behavior too: same channel-handshake distinguisher as above, with two
+/// Relay<int> entities.
+#[test]
+fn generic_object_instances_do_not_serialize_against_each_other() {
+    let out = compile_and_run_stdout_timeout(
+        r#"
+        object Relay<T> {
+            item: T
+            n: int
+
+            fn hold_and_recv(mut self, ready: Sender<int>, data: Receiver<int>) int {
+                ready.send(1)!
+                let v = data.recv()!
+                self.n = v
+                return v
+            }
+
+            fn push(mut self, data: Sender<int>) {
+                self.n = 1
+                data.send(77)!
+            }
+        }
+
+        fn main() {
+            let (ready_tx, ready_rx) = chan<int>(1)
+            let (data_tx, data_rx) = chan<int>(1)
+            let mut a = Relay<int> { item: 0, n: 0 }
+            let mut b = Relay<int> { item: 0, n: 0 }
+            let t = spawn a.hold_and_recv(ready_tx, data_rx)
+            ready_rx.recv()!
+            b.push(data_tx)
+            print(t.get())
+        }
+        "#,
+        30,
+    );
+    assert_eq!(out.trim(), "77");
+}
+
+/// `pluto test` binaries with objects link and run: the test-mode runtime
+/// provides no-op lock stubs (the fiber scheduler is single-threaded), and
+/// entity allocations still carry the hidden lock slot.
+#[test]
+fn object_methods_run_in_test_mode() {
+    let out = compile_test_and_run_stdout(
+        r#"
+        object Counter {
+            value: int
+
+            fn increment(mut self) {
+                self.value = self.value + 1
+            }
+
+            fn get(self) int {
+                return self.value
+            }
+        }
+
+        test "entities work in test mode" {
+            let mut c = Counter { value: 0 }
+            let d = Counter { value: 10 }
+            c.increment()
+            assert c.get() == 1
+            assert d.get() == 10
+        }
+        "#,
+    );
+    assert!(out.contains("1 tests passed"), "unexpected output: {out}");
 }

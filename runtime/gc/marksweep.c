@@ -436,11 +436,21 @@ void *__pluto_alloc(long size) {
 
 /* Entities (object declarations) get their own tag so the runtime can honor
  * identity semantics structurally: deep_copy shares them, deep_eq compares
- * them by pointer. Mark-phase tracing uses the conservative default case. */
+ * them by pointer. Mark-phase tracing uses the conservative default case.
+ *
+ * Each entity carries one hidden trailing slot holding its per-instance
+ * method rwlock (see __pluto_entity_rdlock/wrlock in threading.c). The slot
+ * sits past field_count, so the mark phase never scans it (it is a malloc'd
+ * pointer, not a GC reference), and deep_copy/deep_eq/marshal never see it
+ * (entities are shared by identity, never traversed). */
 void *__pluto_alloc_entity(long size) {
     if (size == 0) size = 8;
     uint16_t field_count = (uint16_t)(size / 8);
-    return gc_alloc((size_t)size, GC_TAG_ENTITY, field_count);
+    long *ptr = (long *)gc_alloc((size_t)size + 8, GC_TAG_ENTITY, field_count);
+#ifndef PLUTO_TEST_MODE
+    ptr[size / 8] = __pluto_rwlock_init();
+#endif
+    return ptr;
 }
 
 // ── Interval table for pointer lookup ─────────────────────────────────────────
@@ -910,6 +920,12 @@ void __pluto_gc_collect(void) {
                     free(sync);
                 }
                 if (buf) free(buf);
+            }
+            // Free the per-instance entity lock (hidden trailing slot; zero
+            // in test mode, where __pluto_rwlock_destroy is a no-op anyway)
+            if (h->type_tag == GC_TAG_ENTITY && h->size >= 8) {
+                long *slots = (long *)((char *)h + sizeof(GCHeader));
+                __pluto_rwlock_destroy(slots[h->size / 8 - 1]);
             }
             free(h);
             freed_bytes += total;

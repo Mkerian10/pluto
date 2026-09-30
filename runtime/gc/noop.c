@@ -50,7 +50,15 @@ void *__pluto_alloc(long size) {
 }
 
 void *__pluto_alloc_entity(long size) {
-    return gc_alloc((size_t)size, GC_TAG_ENTITY, 0);
+    // Hidden trailing slot: the entity's per-instance method rwlock (see
+    // __pluto_entity_rdlock/wrlock in threading.c). Never freed here — the
+    // noop backend never collects.
+    if (size == 0) size = 8;
+    long *ptr = (long *)gc_alloc((size_t)size + 8, GC_TAG_ENTITY, 0);
+#ifndef PLUTO_TEST_MODE
+    ptr[size / 8] = __pluto_rwlock_init();
+#endif
+    return ptr;
 }
 
 void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {

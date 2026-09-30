@@ -874,7 +874,11 @@ impl<'a> LowerContext<'a> {
         Ok(())
     }
 
-    /// Invoke a dispatched method under its class's rwlock and reply OK/ERR.
+    /// Invoke a dispatched method under its lock and reply OK/ERR. Entity
+    /// receivers serialize on the instance's own lock — the SAME lock local
+    /// calls take, so handle calls and local calls on one entity serialize
+    /// against each other; synchronized singletons/served classes take the
+    /// per-type lock.
     #[allow(clippy::too_many_arguments)]
     fn emit_dispatch_invoke(
         &mut self,
@@ -886,7 +890,15 @@ impl<'a> LowerContext<'a> {
         conn: Value,
         close_bb: cranelift_codegen::ir::Block,
     ) -> Result<(), CompileError> {
-        let needs_sync = self.rwlock_globals.contains_key(cn);
+        let is_entity = self.env.object_types.contains(cn);
+        let needs_sync = !is_entity && self.rwlock_globals.contains_key(cn);
+        if is_entity {
+            if self.env.mut_self_methods.contains(mangled) {
+                self.call_runtime_void("__pluto_entity_wrlock", &[call_args[0]]);
+            } else {
+                self.call_runtime_void("__pluto_entity_rdlock", &[call_args[0]]);
+            }
+        }
         let lock_ptr = if needs_sync {
             let data_id = self.rwlock_globals[cn];
             let gv = self.module.declare_data_in_func(data_id, self.builder.func);
@@ -912,6 +924,9 @@ impl<'a> LowerContext<'a> {
         } else {
             self.builder.inst_results(call)[0]
         };
+        if is_entity {
+            self.call_runtime_void("__pluto_entity_unlock", &[call_args[0]]);
+        }
         if let Some(lp) = lock_ptr {
             self.call_runtime_void("__pluto_rwlock_unlock", &[lp]);
         }
@@ -2863,9 +2878,18 @@ impl<'a> LowerContext<'a> {
                     CompileError::codegen(format!("undefined domain method '{}'", method.node))
                 })?;
                 let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
-                // Synchronized-singleton locking, as for any local method call
-                let needs_sync = self.rwlock_globals.contains_key(&cname);
-                if needs_sync {
+                // Locking, as for any local method call: entities serialize
+                // on the instance's own lock; synchronized singletons on the
+                // per-type lock.
+                let is_entity = self.env.object_types.contains(&cname);
+                let needs_sync = !is_entity && self.rwlock_globals.contains_key(&cname);
+                if is_entity {
+                    if self.env.mut_self_methods.contains(&mangled) {
+                        self.call_runtime_void("__pluto_entity_wrlock", &[obj_ptr]);
+                    } else {
+                        self.call_runtime_void("__pluto_entity_rdlock", &[obj_ptr]);
+                    }
+                } else if needs_sync {
                     let data_id = self.rwlock_globals[&cname];
                     let gv = self.module.declare_data_in_func(data_id, self.builder.func);
                     let addr = self.builder.ins().global_value(types::I64, gv);
@@ -2880,7 +2904,9 @@ impl<'a> LowerContext<'a> {
                 call_args.extend_from_slice(&arg_vals);
                 let call = self.builder.ins().call(func_ref, &call_args);
                 let results = self.builder.inst_results(call).to_vec();
-                if needs_sync {
+                if is_entity {
+                    self.call_runtime_void("__pluto_entity_unlock", &[obj_ptr]);
+                } else if needs_sync {
                     let data_id = self.rwlock_globals[&cname];
                     let gv = self.module.declare_data_in_func(data_id, self.builder.func);
                     let addr = self.builder.ins().global_value(types::I64, gv);
@@ -4709,12 +4735,23 @@ impl<'a> LowerContext<'a> {
 
             // Foreign-entity handles cannot be invoked locally: guard every
             // object method call (routing is a later slice of rfc-objects.md)
-            if self.env.object_types.contains(&class_name) {
+            let is_entity = self.env.object_types.contains(&class_name);
+            if is_entity {
                 self.call_runtime_void("__pluto_entity_guard", &[obj_ptr]);
             }
-            // Acquire rwlock if this singleton is synchronized (Phase 4b)
-            let needs_sync = self.rwlock_globals.contains_key(&class_name);
-            if needs_sync {
+            // Entity methods serialize on the INSTANCE's own lock (hidden
+            // trailing slot of the allocation) — two instances of one object
+            // type run concurrently. Synchronized singletons and served
+            // classes keep the per-type lock (they are singletons, so
+            // per-type == per-instance).
+            let needs_sync = !is_entity && self.rwlock_globals.contains_key(&class_name);
+            if is_entity {
+                if self.env.mut_self_methods.contains(&mangled) {
+                    self.call_runtime_void("__pluto_entity_wrlock", &[obj_ptr]);
+                } else {
+                    self.call_runtime_void("__pluto_entity_rdlock", &[obj_ptr]);
+                }
+            } else if needs_sync {
                 let data_id = self.rwlock_globals[&class_name];
                 let gv = self.module.declare_data_in_func(data_id, self.builder.func);
                 let addr = self.builder.ins().global_value(types::I64, gv);
@@ -4740,8 +4777,10 @@ impl<'a> LowerContext<'a> {
                 self.emit_invariant_checks(&class_name, obj_ptr)?;
             }
 
-            // Release rwlock after method call + invariant checks
-            if needs_sync {
+            // Release the lock after method call + invariant checks
+            if is_entity {
+                self.call_runtime_void("__pluto_entity_unlock", &[obj_ptr]);
+            } else if needs_sync {
                 let data_id = self.rwlock_globals[&class_name];
                 let gv = self.module.declare_data_in_func(data_id, self.builder.func);
                 let addr = self.builder.ins().global_value(types::I64, gv);

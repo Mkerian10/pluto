@@ -1997,6 +1997,68 @@ void __pluto_rwlock_wrlock(long lock_ptr) {
 void __pluto_rwlock_unlock(long lock_ptr) {
     pthread_rwlock_unlock((pthread_rwlock_t *)lock_ptr);
 }
+
+void __pluto_rwlock_destroy(long lock_ptr) {
+    if (!lock_ptr) return;
+    pthread_rwlock_destroy((pthread_rwlock_t *)lock_ptr);
+    free((void *)lock_ptr);
+}
+
+// ── Per-instance entity locks ──────────────────────────────────────────────
+//
+// Entity method serialization is PER INSTANCE (rfc-objects.md): each entity
+// allocation carries its own rwlock in a hidden trailing slot (the last
+// 8-byte slot of the allocation — see __pluto_alloc_entity in the GC
+// backends). Two instances of one object type run methods concurrently;
+// concurrent calls to the SAME instance serialize.
+//
+// Acquisition brackets the wait in a GC safe region, mirroring chan_lock:
+// the lock holder can be parked (at a safepoint or in a safe region, e.g.
+// blocked on a channel inside a method body) for a whole collection, so a
+// thread blocked acquiring an entity lock must count as stopped for
+// stop-the-world or the collector would wait on it forever. The collector
+// never takes entity locks, so parking while holding one is fine.
+
+static pthread_rwlock_t *entity_lock_of(void *entity) {
+    if (!entity) return NULL;
+    GCHeader *h = (GCHeader *)((char *)entity - sizeof(GCHeader));
+    if (h->type_tag != GC_TAG_ENTITY || h->size < 8) return NULL;
+    long *slots = (long *)entity;
+    return (pthread_rwlock_t *)slots[h->size / 8 - 1];
+}
+
+void __pluto_entity_rdlock(void *entity) {
+    pthread_rwlock_t *lock = entity_lock_of(entity);
+    if (!lock) return;
+    __pluto_gc_enter_safe_region();
+    pthread_rwlock_rdlock(lock);
+    __pluto_gc_leave_safe_region();
+}
+
+void __pluto_entity_wrlock(void *entity) {
+    pthread_rwlock_t *lock = entity_lock_of(entity);
+    if (!lock) return;
+    __pluto_gc_enter_safe_region();
+    pthread_rwlock_wrlock(lock);
+    __pluto_gc_leave_safe_region();
+}
+
+void __pluto_entity_unlock(void *entity) {
+    pthread_rwlock_t *lock = entity_lock_of(entity);
+    if (!lock) return;
+    pthread_rwlock_unlock(lock);
+}
+#else
+// Test mode: single-threaded fiber scheduler — locks are no-ops. (The
+// symbols must still exist: codegen emits lock calls unconditionally.)
+long __pluto_rwlock_init(void) { return 0; }
+void __pluto_rwlock_rdlock(long lock_ptr) { (void)lock_ptr; }
+void __pluto_rwlock_wrlock(long lock_ptr) { (void)lock_ptr; }
+void __pluto_rwlock_unlock(long lock_ptr) { (void)lock_ptr; }
+void __pluto_rwlock_destroy(long lock_ptr) { (void)lock_ptr; }
+void __pluto_entity_rdlock(void *entity) { (void)entity; }
+void __pluto_entity_wrlock(void *entity) { (void)entity; }
+void __pluto_entity_unlock(void *entity) { (void)entity; }
 #endif
 
 // ── Logging ────────────────────────────────────────────────────────────────

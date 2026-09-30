@@ -200,6 +200,10 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_rwlock_rdlock", &[types::I64], &[])?;
         reg.declare(module, "__pluto_rwlock_wrlock", &[types::I64], &[])?;
         reg.declare(module, "__pluto_rwlock_unlock", &[types::I64], &[])?;
+        // Per-instance entity locks (hidden trailing slot of the allocation)
+        reg.declare(module, "__pluto_entity_rdlock", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_entity_wrlock", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_entity_unlock", &[types::I64], &[])?;
 
         // Channels
         reg.declare(module, "__pluto_chan_create", &[types::I64], &[types::I64])?;
