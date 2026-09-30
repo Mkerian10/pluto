@@ -78,9 +78,13 @@
 //! Anything outside the fragment is `Unknown`. **False positives are worse
 //! than misses: when in doubt, every query answers `Unknown`.**
 //!
-//! Consumers in phase 1: degenerate-condition warnings ("condition is
-//! always true/false") on `if` statements. Later phases (invariant
-//! discharge, error-set shrinking) query the same API.
+//! Consumers: degenerate-condition warnings ("condition is always
+//! true/false") on `if` statements (phase 1), and static invariant
+//! discharge (phase 2, `discharge.rs`), which evaluates conditions through
+//! the resolver-parameterized `*_with` variants — the same fragment and the
+//! same conservatism, but with leaf paths resolved into a caller-chosen
+//! affine vocabulary (ghost variables over a method body, field
+//! substitutions at construction sites).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -189,13 +193,16 @@ pub enum Fact {
     Bound(String, Interval),
     /// A binary relation between two paths.
     Rel(String, RelOp, String),
+    /// The path's value is not a specific constant (`x != 0`). Intervals
+    /// cannot express holes, so inequations get their own fact shape.
+    NeConst(String, i64),
 }
 
 impl Fact {
     /// Every path this fact talks about.
     fn paths(&self) -> impl Iterator<Item = &str> {
         match self {
-            Fact::Bound(p, _) => std::iter::once(p.as_str()).chain(None),
+            Fact::Bound(p, _) | Fact::NeConst(p, _) => std::iter::once(p.as_str()).chain(None),
             Fact::Rel(a, _, b) => std::iter::once(a.as_str()).chain(Some(b.as_str())),
         }
     }
@@ -209,6 +216,7 @@ impl Fact {
 struct Frame {
     intervals: HashMap<String, Interval>,
     relations: Vec<(String, RelOp, String)>,
+    ne_consts: Vec<(String, i64)>,
 }
 
 /// Record of a kill, for the guard logic: a guard fact may only be assumed
@@ -289,6 +297,11 @@ impl FactEnv {
                     frame.relations.push((a, op, b));
                 }
             }
+            Fact::NeConst(p, v) => {
+                if !frame.ne_consts.contains(&(p.clone(), v)) {
+                    frame.ne_consts.push((p, v));
+                }
+            }
         }
     }
 
@@ -299,6 +312,7 @@ impl FactEnv {
             frame
                 .relations
                 .retain(|(a, _, b)| !path_under(a, root) && !path_under(b, root));
+            frame.ne_consts.retain(|(p, _)| !path_under(p, root));
         }
         self.kill_log.push(KillEvent::Path(root.to_string()));
     }
@@ -312,6 +326,7 @@ impl FactEnv {
             frame
                 .relations
                 .retain(|(a, _, b)| !a.contains('.') && !b.contains('.'));
+            frame.ne_consts.retain(|(p, _)| !p.contains('.'));
         }
         self.kill_log.push(KillEvent::Fields);
     }
@@ -321,6 +336,7 @@ impl FactEnv {
         for frame in &mut self.frames {
             frame.intervals.clear();
             frame.relations.clear();
+            frame.ne_consts.clear();
         }
         self.kill_log.push(KillEvent::All);
     }
@@ -357,6 +373,13 @@ impl FactEnv {
         iv
     }
 
+    /// Is `path != v` recorded?
+    fn ne_const_holds(&self, path: &str, v: i64) -> bool {
+        self.frames
+            .iter()
+            .any(|frame| frame.ne_consts.iter().any(|(p, c)| p == path && *c == v))
+    }
+
     /// Is the directed relation `a op b` recorded? `Eq`/`Ne` are checked
     /// symmetrically.
     fn rel_holds(&self, a: &str, op: RelOp, b: &str) -> bool {
@@ -376,7 +399,7 @@ impl FactEnv {
 /// Resolve `expr` to a trackable path and its type: an identifier, or a
 /// chain of plain class field accesses rooted at one. Excludes entities
 /// (`object`), remote types, and domain deps at every step.
-fn typed_path(expr: &Expr, env: &TypeEnv) -> Option<(String, PlutoType)> {
+pub(crate) fn typed_path(expr: &Expr, env: &TypeEnv) -> Option<(String, PlutoType)> {
     match expr {
         Expr::Ident(name) => {
             // Mirror identifier inference: a flow-narrowed nullable reads at
@@ -478,17 +501,17 @@ pub fn contains_call(expr: &Spanned<Expr>) -> bool {
 /// checked i128 ops only overflow on absurd inputs — and then we bail to
 /// `None`, i.e. Unknown).
 #[derive(Debug, Clone, PartialEq)]
-struct Affine {
-    terms: BTreeMap<String, i128>,
-    k: i128,
+pub struct Affine {
+    pub(crate) terms: BTreeMap<String, i128>,
+    pub(crate) k: i128,
 }
 
 impl Affine {
-    fn constant(k: i128) -> Affine {
+    pub(crate) fn constant(k: i128) -> Affine {
         Affine { terms: BTreeMap::new(), k }
     }
 
-    fn term(path: String) -> Affine {
+    pub(crate) fn term(path: String) -> Affine {
         let mut terms = BTreeMap::new();
         terms.insert(path, 1i128);
         Affine { terms, k: 0 }
@@ -539,30 +562,38 @@ impl Affine {
     }
 }
 
-/// Normalize an integer-typed expression into affine form. Returns `None`
-/// for anything outside the fragment.
-fn to_affine(expr: &Expr, env: &TypeEnv) -> Option<Affine> {
-    if let Some(path) = int_path(expr, env) {
-        return Some(Affine::term(path));
+/// A leaf resolver: maps a (sub)expression directly to an affine form, or
+/// `None` to let the structural rules (literals, `+`, `-`, `*` by constant)
+/// try, and ultimately give up. The default resolver maps trackable int
+/// paths to single-term affines; invariant discharge substitutes ghost
+/// variables or construction-site field initializers instead.
+pub type AffineResolver<'a> = dyn Fn(&Expr) -> Option<Affine> + 'a;
+
+/// Normalize an integer-typed expression into affine form, resolving leaf
+/// paths through `resolve`. Returns `None` for anything outside the
+/// fragment.
+pub fn to_affine_with(expr: &Expr, resolve: &AffineResolver) -> Option<Affine> {
+    if let Some(a) = resolve(expr) {
+        return Some(a);
     }
     match expr {
         Expr::IntLit(v) => Some(Affine::constant(*v as i128)),
         Expr::UnaryOp { op: UnaryOp::Neg, operand } => {
-            to_affine(&operand.node, env)?.checked_neg()
+            to_affine_with(&operand.node, resolve)?.checked_neg()
         }
         Expr::BinOp { op: BinOp::Add, lhs, rhs } => {
-            let l = to_affine(&lhs.node, env)?;
-            let r = to_affine(&rhs.node, env)?;
+            let l = to_affine_with(&lhs.node, resolve)?;
+            let r = to_affine_with(&rhs.node, resolve)?;
             l.checked_add(&r)
         }
         Expr::BinOp { op: BinOp::Sub, lhs, rhs } => {
-            let l = to_affine(&lhs.node, env)?;
-            let r = to_affine(&rhs.node, env)?.checked_neg()?;
+            let l = to_affine_with(&lhs.node, resolve)?;
+            let r = to_affine_with(&rhs.node, resolve)?.checked_neg()?;
             l.checked_add(&r)
         }
         Expr::BinOp { op: BinOp::Mul, lhs, rhs } => {
-            let l = to_affine(&lhs.node, env)?;
-            let r = to_affine(&rhs.node, env)?;
+            let l = to_affine_with(&lhs.node, resolve)?;
+            let r = to_affine_with(&rhs.node, resolve)?;
             // Constant coefficients only: one side must be term-free.
             if l.terms.is_empty() {
                 r.checked_mul_const(l.k)
@@ -574,6 +605,12 @@ fn to_affine(expr: &Expr, env: &TypeEnv) -> Option<Affine> {
         }
         _ => None,
     }
+}
+
+/// Normalize an integer-typed expression into affine form over trackable
+/// paths. Returns `None` for anything outside the fragment.
+pub(crate) fn to_affine(expr: &Expr, env: &TypeEnv) -> Option<Affine> {
+    to_affine_with(expr, &|e| int_path(e, env).map(Affine::term))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -602,14 +639,18 @@ fn min_opt(a: Option<i128>, b: Option<i128>) -> Option<i128> {
     }
 }
 
-/// Bound an affine form using the current interval facts (and relation facts
-/// when the form is exactly `x - y + k`). Returns `(lo, hi)`; `None` means
-/// unbounded on that side. Returns `Err(())` when some involved path has a
-/// contradictory (empty) interval — the code is unreachable and every query
-/// should answer Unknown rather than cascade warnings into dead branches.
-fn affine_bounds(a: &Affine, facts: &FactEnv) -> Result<(Option<i128>, Option<i128>), ()> {
-    let mut lo = Some(a.k);
-    let mut hi = Some(a.k);
+/// Bound an affine form using the current interval facts, tightened by
+/// relation facts wherever a pair of terms has opposite coefficients of
+/// equal magnitude (`c·x - c·y` is bounded by `c·(x − y)` when a relation
+/// between x and y is known — covering both the pure difference `x - y + k`
+/// and mixed forms like `hi + amount - lo`). Returns `(lo, hi)`; `None`
+/// means unbounded on that side. Returns `Err(())` when some involved path
+/// has a contradictory (empty) interval — the code is unreachable and every
+/// query should answer Unknown rather than cascade warnings into dead
+/// branches.
+pub(crate) fn affine_bounds(a: &Affine, facts: &FactEnv) -> Result<(Option<i128>, Option<i128>), ()> {
+    // Per-term interval contributions.
+    let mut contribs: Vec<(&str, i128, Option<i128>, Option<i128>)> = Vec::new();
     for (path, &c) in &a.terms {
         let iv = facts.interval_of(path);
         if iv.is_empty() {
@@ -620,32 +661,68 @@ fn affine_bounds(a: &Affine, facts: &FactEnv) -> Result<(Option<i128>, Option<i1
         } else {
             (mul_opt(iv.hi_bound(), c), mul_opt(iv.lo_bound(), c))
         };
-        lo = add_opt(lo, term_lo);
-        hi = add_opt(hi, term_hi);
+        contribs.push((path.as_str(), c, term_lo, term_hi));
     }
 
-    // Relation tightening for the pure difference form x - y + k.
-    if let Some((x, y)) = a.as_diff() {
-        let mut dlo: Option<i128> = None; // bounds on (x - y)
-        let mut dhi: Option<i128> = None;
-        if facts.rel_holds(x, RelOp::Lt, y) {
-            dhi = min_opt(dhi, Some(-1));
+    // Sum the interval contributions of every term except the skipped pair.
+    let sum_bounds = |skip: Option<(usize, usize)>| -> (Option<i128>, Option<i128>) {
+        let mut lo = Some(a.k);
+        let mut hi = Some(a.k);
+        for (i, (_, _, tl, th)) in contribs.iter().enumerate() {
+            if let Some((x, y)) = skip {
+                if i == x || i == y {
+                    continue;
+                }
+            }
+            lo = add_opt(lo, *tl);
+            hi = add_opt(hi, *th);
         }
-        if facts.rel_holds(x, RelOp::Le, y) {
-            dhi = min_opt(dhi, Some(0));
+        (lo, hi)
+    };
+
+    let (mut lo, mut hi) = sum_bounds(None);
+
+    // Relation tightening: each opposite-coefficient pair (c·x, -c·y) with a
+    // known relation between x and y bounds its combined contribution
+    // c·(x − y); the best bound from any single pair decomposition is kept.
+    for i in 0..contribs.len() {
+        for j in 0..contribs.len() {
+            if i == j {
+                continue;
+            }
+            let (x, cx, _, _) = contribs[i];
+            let (y, cy, _, _) = contribs[j];
+            if cx <= 0 || cx != -cy {
+                continue;
+            }
+            // Bounds on (x − y) from relation facts.
+            let mut dlo: Option<i128> = None;
+            let mut dhi: Option<i128> = None;
+            if facts.rel_holds(x, RelOp::Lt, y) {
+                dhi = min_opt(dhi, Some(-1));
+            }
+            if facts.rel_holds(x, RelOp::Le, y) {
+                dhi = min_opt(dhi, Some(0));
+            }
+            if facts.rel_holds(y, RelOp::Lt, x) {
+                dlo = max_opt(dlo, Some(1));
+            }
+            if facts.rel_holds(y, RelOp::Le, x) {
+                dlo = max_opt(dlo, Some(0));
+            }
+            if facts.rel_holds(x, RelOp::Eq, y) {
+                dlo = max_opt(dlo, Some(0));
+                dhi = min_opt(dhi, Some(0));
+            }
+            if dlo.is_none() && dhi.is_none() {
+                continue;
+            }
+            let (rest_lo, rest_hi) = sum_bounds(Some((i, j)));
+            let pair_lo = dlo.and_then(|d| d.checked_mul(cx));
+            let pair_hi = dhi.and_then(|d| d.checked_mul(cx));
+            lo = max_opt(lo, add_opt(rest_lo, pair_lo));
+            hi = min_opt(hi, add_opt(rest_hi, pair_hi));
         }
-        if facts.rel_holds(y, RelOp::Lt, x) {
-            dlo = max_opt(dlo, Some(1));
-        }
-        if facts.rel_holds(y, RelOp::Le, x) {
-            dlo = max_opt(dlo, Some(0));
-        }
-        if facts.rel_holds(x, RelOp::Eq, y) {
-            dlo = max_opt(dlo, Some(0));
-            dhi = min_opt(dhi, Some(0));
-        }
-        lo = max_opt(lo, add_opt(dlo, Some(a.k)));
-        hi = min_opt(hi, add_opt(dhi, Some(a.k)));
     }
 
     Ok((lo, hi))
@@ -665,10 +742,17 @@ fn is_comparison(op: BinOp) -> bool {
 /// Decide a boolean condition against the current facts. See the module docs
 /// for the fragment; anything outside it is `Unknown`.
 pub fn eval_condition(cond: &Expr, env: &TypeEnv) -> Verdict {
+    eval_condition_with(cond, &|e| int_path(e, env).map(Affine::term), &env.facts)
+}
+
+/// Decide a boolean condition with leaf paths resolved through `resolve`
+/// and bounds drawn from `facts`. Same fragment and conservatism as
+/// [`eval_condition`].
+pub fn eval_condition_with(cond: &Expr, resolve: &AffineResolver, facts: &FactEnv) -> Verdict {
     match cond {
         Expr::BinOp { op: BinOp::And, lhs, rhs } => {
-            let l = eval_condition(&lhs.node, env);
-            let r = eval_condition(&rhs.node, env);
+            let l = eval_condition_with(&lhs.node, resolve, facts);
+            let r = eval_condition_with(&rhs.node, resolve, facts);
             match (l, r) {
                 (Verdict::Refuted, _) | (_, Verdict::Refuted) => Verdict::Refuted,
                 (Verdict::Proven, Verdict::Proven) => Verdict::Proven,
@@ -676,8 +760,8 @@ pub fn eval_condition(cond: &Expr, env: &TypeEnv) -> Verdict {
             }
         }
         Expr::BinOp { op: BinOp::Or, lhs, rhs } => {
-            let l = eval_condition(&lhs.node, env);
-            let r = eval_condition(&rhs.node, env);
+            let l = eval_condition_with(&lhs.node, resolve, facts);
+            let r = eval_condition_with(&rhs.node, resolve, facts);
             match (l, r) {
                 (Verdict::Proven, _) | (_, Verdict::Proven) => Verdict::Proven,
                 (Verdict::Refuted, Verdict::Refuted) => Verdict::Refuted,
@@ -685,23 +769,29 @@ pub fn eval_condition(cond: &Expr, env: &TypeEnv) -> Verdict {
             }
         }
         Expr::UnaryOp { op: UnaryOp::Not, operand } => {
-            eval_condition(&operand.node, env).negate()
+            eval_condition_with(&operand.node, resolve, facts).negate()
         }
         Expr::BinOp { op, lhs, rhs } if is_comparison(*op) => {
-            eval_comparison(*op, &lhs.node, &rhs.node, env)
+            eval_comparison(*op, &lhs.node, &rhs.node, resolve, facts)
         }
         _ => Verdict::Unknown,
     }
 }
 
-fn eval_comparison(op: BinOp, lhs: &Expr, rhs: &Expr, env: &TypeEnv) -> Verdict {
-    let Some(l) = to_affine(lhs, env) else { return Verdict::Unknown };
-    let Some(r) = to_affine(rhs, env) else { return Verdict::Unknown };
+fn eval_comparison(
+    op: BinOp,
+    lhs: &Expr,
+    rhs: &Expr,
+    resolve: &AffineResolver,
+    facts: &FactEnv,
+) -> Verdict {
+    let Some(l) = to_affine_with(lhs, resolve) else { return Verdict::Unknown };
+    let Some(r) = to_affine_with(rhs, resolve) else { return Verdict::Unknown };
     let Some(neg_r) = r.checked_neg() else { return Verdict::Unknown };
     let Some(d) = l.checked_add(&neg_r) else { return Verdict::Unknown };
 
     // A - B cmp 0, with (lo, hi) bounding A - B.
-    let Ok((lo, hi)) = affine_bounds(&d, &env.facts) else {
+    let Ok((lo, hi)) = affine_bounds(&d, facts) else {
         // Contradictory facts: this code is unreachable; don't cascade.
         return Verdict::Unknown;
     };
@@ -711,9 +801,27 @@ fn eval_comparison(op: BinOp, lhs: &Expr, rhs: &Expr, env: &TypeEnv) -> Verdict 
 
     // `x != y` facts only decide equality when the difference is exactly
     // x - y (no constant offset).
-    let ne_known = d.k == 0
+    let ne_rel_known = d.k == 0
         && d.as_diff()
-            .is_some_and(|(x, y)| env.facts.rel_holds(x, RelOp::Ne, y));
+            .is_some_and(|(x, y)| facts.rel_holds(x, RelOp::Ne, y));
+
+    // Single-term equations `c·x + k == 0` are impossible when no integer
+    // solution exists (indivisible, or out of i64 range) or when an
+    // inequation fact excludes the solution (`x != v`).
+    let eq_impossible = if d.terms.len() == 1 {
+        let (p, &c) = d.terms.iter().next().expect("len checked");
+        if d.k % c != 0 {
+            true
+        } else {
+            match i64::try_from(-d.k / c) {
+                Ok(sol) => facts.ne_const_holds(p, sol),
+                Err(_) => true,
+            }
+        }
+    } else {
+        false
+    };
+    let ne_known = ne_rel_known || eq_impossible;
 
     match op {
         BinOp::Lt => {
@@ -805,12 +913,18 @@ fn negate_cmp(op: BinOp) -> BinOp {
 /// Extract branch facts from a condition. Callers must ensure the condition
 /// contains no call-like expressions (see [`contains_call`]).
 pub fn condition_facts(cond: &Expr, env: &TypeEnv) -> CondFacts {
+    condition_facts_with(cond, &|e| int_path(e, env).map(Affine::term))
+}
+
+/// Extract branch facts from a condition with leaf paths resolved through
+/// `resolve`. Same contract as [`condition_facts`].
+pub fn condition_facts_with(cond: &Expr, resolve: &AffineResolver) -> CondFacts {
     match cond {
         Expr::BinOp { op: BinOp::And, lhs, rhs } => {
             // Both conjuncts hold in the then-branch; the negation of a
             // conjunction is a disjunction, which yields no usable facts.
-            let l = condition_facts(&lhs.node, env);
-            let r = condition_facts(&rhs.node, env);
+            let l = condition_facts_with(&lhs.node, resolve);
+            let r = condition_facts_with(&rhs.node, resolve);
             CondFacts {
                 then_facts: [l.then_facts, r.then_facts].concat(),
                 else_facts: Vec::new(),
@@ -818,23 +932,23 @@ pub fn condition_facts(cond: &Expr, env: &TypeEnv) -> CondFacts {
         }
         Expr::BinOp { op: BinOp::Or, lhs, rhs } => {
             // De Morgan: both negations hold in the else-branch.
-            let l = condition_facts(&lhs.node, env);
-            let r = condition_facts(&rhs.node, env);
+            let l = condition_facts_with(&lhs.node, resolve);
+            let r = condition_facts_with(&rhs.node, resolve);
             CondFacts {
                 then_facts: Vec::new(),
                 else_facts: [l.else_facts, r.else_facts].concat(),
             }
         }
         Expr::UnaryOp { op: UnaryOp::Not, operand } => {
-            let inner = condition_facts(&operand.node, env);
+            let inner = condition_facts_with(&operand.node, resolve);
             CondFacts {
                 then_facts: inner.else_facts,
                 else_facts: inner.then_facts,
             }
         }
         Expr::BinOp { op, lhs, rhs } if is_comparison(*op) => {
-            let Some(l) = to_affine(&lhs.node, env) else { return CondFacts::default() };
-            let Some(r) = to_affine(&rhs.node, env) else { return CondFacts::default() };
+            let Some(l) = to_affine_with(&lhs.node, resolve) else { return CondFacts::default() };
+            let Some(r) = to_affine_with(&rhs.node, resolve) else { return CondFacts::default() };
             let Some(neg_r) = r.checked_neg() else { return CondFacts::default() };
             let Some(d) = l.checked_add(&neg_r) else { return CondFacts::default() };
             CondFacts {
@@ -891,6 +1005,16 @@ fn facts_from_diff(op: BinOp, d: &Affine) -> Vec<Fact> {
     if d.terms.len() == 1 {
         let (path, &c) = d.terms.iter().next().expect("len checked");
         debug_assert!(c != 0, "zero coefficients are pruned");
+        // c·x + k != 0 ⇒ x != -k/c when that quotient is an exact i64
+        // (otherwise the inequation is vacuously true — no fact).
+        if op == BinOp::Neq {
+            if d.k % c == 0 {
+                if let Ok(sol) = i64::try_from(-d.k / c) {
+                    return vec![Fact::NeConst(path.clone(), sol)];
+                }
+            }
+            return Vec::new();
+        }
         // c·x + k cmp 0, normalized to c·x ≤ U and/or c·x ≥ L.
         let (le, ge): (Option<i128>, Option<i128>) = match op {
             BinOp::Lt => (d.k.checked_neg().and_then(|v| v.checked_sub(1)), None),
@@ -949,42 +1073,23 @@ fn facts_from_diff(op: BinOp, d: &Affine) -> Vec<Fact> {
 // Statement effects (kills)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Apply a statement's fact kills before it is checked. See the module docs
-/// for the kill rules. Nested blocks are *not* scanned here — their
-/// statements apply their own kills as the checker reaches them, which is
-/// what makes the analysis flow-sensitive.
-pub fn apply_stmt_kills(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) {
+/// The expressions a statement evaluates *directly* (nested blocks are not
+/// scanned — their statements are visited by the checker in flow order).
+/// Shared by the kill rules below and by invariant discharge's call
+/// detection.
+pub fn immediate_exprs(stmt: &crate::parser::ast::Stmt) -> Vec<&Spanned<Expr>> {
     use crate::parser::ast::{SelectOp, Stmt};
 
     let mut exprs: Vec<&Spanned<Expr>> = Vec::new();
     match stmt {
-        Stmt::Let { name, value, .. } => {
-            // A fresh binding can't shadow (rejected earlier), but kill
-            // defensively in case a same-named fact survived a sibling scope.
-            env.facts.kill_path(&name.node);
-            exprs.push(value);
-        }
-        Stmt::Assign { target, value } => {
-            env.facts.kill_path(&target.node);
-            exprs.push(value);
-        }
+        Stmt::Let { value, .. } => exprs.push(value),
+        Stmt::Assign { value, .. } => exprs.push(value),
         Stmt::FieldAssign { object, value, .. } => {
-            // Aliasing: another local may reference the same object, so a
-            // field write invalidates every field fact.
-            env.facts.kill_fields();
             exprs.push(object);
             exprs.push(value);
         }
-        Stmt::While { condition, .. } => {
-            // Conservative loop rule: drop everything at loop entry (and
-            // therefore after the loop). See module docs.
-            env.facts.havoc_all();
-            exprs.push(condition);
-        }
-        Stmt::For { iterable, .. } => {
-            env.facts.havoc_all();
-            exprs.push(iterable);
-        }
+        Stmt::While { condition, .. } => exprs.push(condition),
+        Stmt::For { iterable, .. } => exprs.push(iterable),
         Stmt::Return(value) => {
             if let Some(v) = value {
                 exprs.push(v);
@@ -992,8 +1097,6 @@ pub fn apply_stmt_kills(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) {
         }
         Stmt::If { condition, .. } => exprs.push(condition),
         Stmt::IndexAssign { object, index, value } => {
-            // Collections hold values; writing an element can't change any
-            // tracked int path, but the index/value exprs may contain calls.
             exprs.push(object);
             exprs.push(index);
             exprs.push(value);
@@ -1034,8 +1137,52 @@ pub fn apply_stmt_kills(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) {
         Stmt::Break | Stmt::Continue => {}
         Stmt::Expr(e) => exprs.push(e),
     }
+    exprs
+}
 
-    if exprs.iter().any(|e| contains_call(e)) {
+/// Apply a statement's fact kills before it is checked. See the module docs
+/// for the kill rules. Nested blocks are *not* scanned here — their
+/// statements apply their own kills as the checker reaches them, which is
+/// what makes the analysis flow-sensitive.
+pub fn apply_stmt_kills(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) {
+    use crate::parser::ast::Stmt;
+
+    match stmt {
+        Stmt::Let { name, .. } => {
+            // A fresh binding can't shadow (rejected earlier), but kill
+            // defensively in case a same-named fact survived a sibling scope.
+            env.facts.kill_path(&name.node);
+        }
+        Stmt::Assign { target, .. } => {
+            env.facts.kill_path(&target.node);
+        }
+        Stmt::FieldAssign { .. } => {
+            // Aliasing: another local may reference the same object, so a
+            // field write invalidates every field fact.
+            env.facts.kill_fields();
+        }
+        Stmt::While { .. } | Stmt::For { .. } => {
+            // Conservative loop rule: drop everything at loop entry (and
+            // therefore after the loop). See module docs.
+            env.facts.havoc_all();
+        }
+        Stmt::Return(_)
+        | Stmt::If { .. }
+        | Stmt::IndexAssign { .. }
+        | Stmt::Match { .. }
+        | Stmt::Raise { .. }
+        | Stmt::LetChan { .. }
+        | Stmt::Select { .. }
+        | Stmt::Scope { .. }
+        | Stmt::Yield { .. }
+        | Stmt::Assert { .. }
+        | Stmt::Serve { .. }
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::Expr(_) => {}
+    }
+
+    if immediate_exprs(stmt).iter().any(|e| contains_call(e)) {
         env.facts.kill_fields();
     }
 }
@@ -1258,9 +1405,23 @@ mod tests {
     }
 
     #[test]
-    fn extract_neq_yields_no_interval() {
+    fn extract_neq_yields_ne_const() {
+        // x - 5 != 0 ⇒ x != 5
         let facts = facts_from_diff(BinOp::Neq, &single("x", 1, -5));
+        assert_eq!(facts, vec![Fact::NeConst("x".into(), 5)]);
+        // 2x - 7 != 0 is vacuously true over the integers — no fact.
+        let facts = facts_from_diff(BinOp::Neq, &single("x", 2, -7));
         assert!(facts.is_empty());
+    }
+
+    #[test]
+    fn ne_const_decides_equality() {
+        let mut f = FactEnv::new();
+        f.assume(Fact::NeConst("x".into(), 0));
+        assert!(f.ne_const_holds("x", 0));
+        assert!(!f.ne_const_holds("x", 1));
+        f.kill_path("x");
+        assert!(!f.ne_const_holds("x", 0));
     }
 
     #[test]
@@ -1322,6 +1483,51 @@ mod tests {
         let d = Affine { terms, k: 0 };
         // a - b ≤ 0 from the relation; lower side unbounded.
         assert_eq!(affine_bounds(&d, &f), Ok((None, Some(0))));
+    }
+
+    #[test]
+    fn bounds_pair_decomposition_with_extra_term() {
+        // d = hi + amount - lo with lo < hi and amount ≥ 0: the (hi, -lo)
+        // pair contributes ≥ 1 via the relation, amount contributes ≥ 0.
+        let mut f = FactEnv::new();
+        f.assume(Fact::Rel("lo".into(), RelOp::Lt, "hi".into()));
+        f.assume(Fact::Bound("amount".into(), Interval::at_least(0)));
+        let mut terms = BTreeMap::new();
+        terms.insert("hi".to_string(), 1i128);
+        terms.insert("amount".to_string(), 1i128);
+        terms.insert("lo".to_string(), -1i128);
+        let d = Affine { terms, k: 0 };
+        let (lo, hi) = affine_bounds(&d, &f).unwrap();
+        assert_eq!(lo, Some(1));
+        assert_eq!(hi, None);
+    }
+
+    #[test]
+    fn bounds_pair_decomposition_scaled_coefficients() {
+        // d = 2x - 2y with x ≤ y ⇒ 2(x−y) ≤ 0.
+        let mut f = FactEnv::new();
+        f.assume(Fact::Rel("x".into(), RelOp::Le, "y".into()));
+        let mut terms = BTreeMap::new();
+        terms.insert("x".to_string(), 2i128);
+        terms.insert("y".to_string(), -2i128);
+        let d = Affine { terms, k: 0 };
+        let (lo, hi) = affine_bounds(&d, &f).unwrap();
+        assert_eq!(lo, None);
+        assert_eq!(hi, Some(0));
+    }
+
+    #[test]
+    fn bounds_pair_decomposition_keeps_constant() {
+        // d = x - y + 5 with x == y ⇒ exactly 5 (the original pure-diff case).
+        let mut f = FactEnv::new();
+        f.assume(Fact::Rel("x".into(), RelOp::Eq, "y".into()));
+        let mut terms = BTreeMap::new();
+        terms.insert("x".to_string(), 1i128);
+        terms.insert("y".to_string(), -1i128);
+        let d = Affine { terms, k: 5 };
+        let (lo, hi) = affine_bounds(&d, &f).unwrap();
+        assert_eq!(lo, Some(5));
+        assert_eq!(hi, Some(5));
     }
 
     #[test]

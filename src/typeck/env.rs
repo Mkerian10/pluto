@@ -329,6 +329,14 @@ pub struct TypeEnv {
     /// `if` conditions the fact engine decided: (span, is_always_true).
     /// Converted to degenerate-condition warnings in `generate_warnings`.
     pub degenerate_conditions: Vec<(Span, bool)>,
+    /// Provable class invariants (verification RFC phase 2): class name →
+    /// validated invariant specs. Populated by `discharge::register_invariants`
+    /// before body checking; every construction/write site is proven against
+    /// these. See `src/typeck/discharge.rs`.
+    pub class_invariants: HashMap<String, Vec<super::discharge::InvariantSpec>>,
+    /// Active proof scope while checking a `mut self` method body of an
+    /// invariant-carrying class (symbolic field state + ghost facts).
+    pub invariant_scope: Option<super::discharge::InvariantScope>,
 }
 
 impl Default for TypeEnv {
@@ -421,6 +429,8 @@ impl TypeEnv {
             current_function_return: None,
             facts: super::facts::FactEnv::new(),
             degenerate_conditions: Vec::new(),
+            class_invariants: HashMap::new(),
+            invariant_scope: None,
         }
     }
 
@@ -431,6 +441,9 @@ impl TypeEnv {
         self.fn_value_provenance.push_scope();
         self.narrowed_vars.push_scope();
         self.facts.push_frame();
+        if let Some(scope) = &mut self.invariant_scope {
+            scope.ghost_facts.push_frame();
+        }
     }
 
     pub fn pop_scope(&mut self) {
@@ -440,6 +453,9 @@ impl TypeEnv {
         self.fn_value_provenance.pop_scope();
         self.narrowed_vars.pop_scope();
         self.facts.pop_frame();
+        if let Some(scope) = &mut self.invariant_scope {
+            scope.ghost_facts.pop_frame();
+        }
     }
 
     /// Define a variable with validation: same-scope redeclaration and
@@ -525,6 +541,11 @@ impl TypeEnv {
 
     pub fn lookup(&self, name: &str) -> Option<&PlutoType> {
         self.variables.lookup(name)
+    }
+
+    /// Iterate over every in-scope variable binding (name, type).
+    pub fn iter_variables(&self) -> impl Iterator<Item = (&String, &PlutoType)> {
+        self.variables.iter()
     }
 
     pub fn scope_depth(&self) -> usize {

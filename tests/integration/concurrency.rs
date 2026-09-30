@@ -1336,7 +1336,9 @@ class Balance {
     amount: int
     invariant self.amount >= 0
 
-    fn deposit(mut self, n: int) {
+    fn deposit(mut self, n: int)
+        requires n > 0
+    {
         self.amount = self.amount + n
     }
 

@@ -125,8 +125,16 @@ fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&s
     let prev_function_return = env.current_function_return.take();
     env.current_function_return = Some(effective_return.clone());
 
+    // Invariant discharge (discharge.rs): entry facts (requires clauses,
+    // parameter invariants) and, for mut-self methods of invariant-carrying
+    // classes, the ghost proof scope.
+    super::discharge::function_entry(func, env, class_name)?;
+
     // Check body
     check_block(&func.body.node, env, &effective_return)?;
+
+    // Invariant discharge: the invariant must hold at the fall-through exit.
+    super::discharge::function_exit(env, func.body.span)?;
 
     // Verify non-void functions have a return or raise on every control flow path.
     if !matches!(effective_return, PlutoType::Void) && !all_paths_return(&func.body.node) {
@@ -177,6 +185,10 @@ fn check_stmt(
     env: &mut TypeEnv,
     return_type: &PlutoType,
 ) -> Result<(), CompileError> {
+    // Invariant discharge (discharge.rs): obligations that need the
+    // pre-statement fact state — field-write proofs/strong updates, call
+    // boundaries, exit checkpoints.
+    super::discharge::pre_stmt(stmt, span, env)?;
     // Flow facts (facts.rs): apply this statement's kills before checking it
     // (reassignments, field writes, calls that may mutate, loop havoc).
     super::facts::apply_stmt_kills(stmt, env);
@@ -396,6 +408,22 @@ fn check_stmt(
             // facts (a reassignment in the surviving branch must not be
             // resurrected after the `if`).
             let kill_mark = env.facts.kill_mark();
+            // Invariant discharge: ghost facts mirror the branch facts, and
+            // the symbolic field state must be merged across the branches.
+            let ghost_cond = env
+                .invariant_scope
+                .as_ref()
+                .filter(|_| !cond_effectful)
+                .map(|scope| {
+                    super::facts::condition_facts_with(&condition.node, &|e| {
+                        scope.resolve(env, e)
+                    })
+                });
+            let disc_snap = super::discharge::branch_snapshot(env);
+            let then_terminates = super::block_always_terminates(&then_block.node);
+            let else_terminates = else_block
+                .as_ref()
+                .is_some_and(|eb| super::block_always_terminates(&eb.node));
             env.push_scope();
             if let Some((ref name, is_neq, ref inner)) = null_check {
                 if is_neq {
@@ -405,9 +433,22 @@ fn check_stmt(
             for f in &cond_facts.then_facts {
                 env.facts.assume(f.clone());
             }
+            if let (Some(gc), Some(scope)) = (&ghost_cond, env.invariant_scope.as_mut()) {
+                for f in &gc.then_facts {
+                    scope.ghost_facts.assume(f.clone());
+                }
+            }
             check_block(&then_block.node, env, return_type)?;
+            let then_changed = super::discharge::branch_end(
+                env,
+                &disc_snap,
+                then_terminates,
+                then_block.span,
+            )?;
             env.pop_scope();
+            let mut else_changed = false;
             if let Some(else_blk) = else_block {
+                super::discharge::branch_restore(env, &disc_snap);
                 env.push_scope();
                 if let Some((ref name, is_neq, ref inner)) = null_check {
                     if !is_neq {
@@ -417,15 +458,34 @@ fn check_stmt(
                 for f in &cond_facts.else_facts {
                     env.facts.assume(f.clone());
                 }
+                if let (Some(gc), Some(scope)) = (&ghost_cond, env.invariant_scope.as_mut()) {
+                    for f in &gc.else_facts {
+                        scope.ghost_facts.assume(f.clone());
+                    }
+                }
                 check_block(&else_blk.node, env, return_type)?;
+                else_changed = super::discharge::branch_end(
+                    env,
+                    &disc_snap,
+                    else_terminates,
+                    else_blk.span,
+                )?;
                 env.pop_scope();
             }
+            // Merge the symbolic field state across the branches.
+            let any_surviving_changed = then_changed || else_changed;
+            let unchanged_survivor = (!then_terminates && !then_changed)
+                || (else_block.is_some() && !else_terminates && !else_changed)
+                || else_block.is_none();
+            super::discharge::branch_join(
+                env,
+                disc_snap,
+                any_surviving_changed,
+                unchanged_survivor,
+                span,
+            )?;
             // Guard idiom: the branch that sees `none` never falls through,
             // so the variable is non-none for the rest of the current block.
-            let then_terminates = super::block_always_terminates(&then_block.node);
-            let else_terminates = else_block
-                .as_ref()
-                .is_some_and(|eb| super::block_always_terminates(&eb.node));
             if let Some((name, is_neq, inner)) = null_check {
                 let none_path_dead = if is_neq {
                     // `if x != none { ... } else { <terminates> }`
@@ -460,6 +520,25 @@ fn check_stmt(
                     }
                 }
             }
+            // Same guard idiom in ghost space. Ghost variables are SSA
+            // values (facts about them are never killed, reassignment mints
+            // a new ghost), so no kill check is needed.
+            if let Some(gc) = &ghost_cond {
+                let ghost_surviving = if then_terminates && !else_terminates {
+                    Some(&gc.else_facts)
+                } else if else_terminates && !then_terminates {
+                    Some(&gc.then_facts)
+                } else {
+                    None
+                };
+                if let (Some(surviving), Some(scope)) =
+                    (ghost_surviving, env.invariant_scope.as_mut())
+                {
+                    for f in surviving {
+                        scope.ghost_facts.assume(f.clone());
+                    }
+                }
+            }
         }
         Stmt::While { condition, body } => {
             let cond_type = infer_expr(&condition.node, condition.span, env, None)?;
@@ -469,11 +548,17 @@ fn check_stmt(
                     condition.span,
                 ));
             }
+            // Invariant discharge: iterations are not tracked, so a loop
+            // whose body touches the object is bracketed by checkpoints.
+            let affects = super::discharge::loop_affects(env, &body.node);
+            super::discharge::loop_enter(env, span, affects)?;
             env.push_scope();
             env.loop_depth += 1;
             check_block(&body.node, env, return_type)?;
+            super::discharge::loop_body_end(env, body.span, affects)?;
             env.loop_depth -= 1;
             env.pop_scope();
+            super::discharge::loop_exit(env, affects);
         }
         Stmt::For { var, iterable, body } => {
             let iter_type = infer_expr(&iterable.node, iterable.span, env, None)?;
@@ -491,14 +576,18 @@ fn check_stmt(
                     ));
                 }
             };
+            let affects = super::discharge::loop_affects(env, &body.node);
+            super::discharge::loop_enter(env, span, affects)?;
             env.push_scope();
             env.define(var.node.clone(), elem_type, var.span)?;
             // The loop variable is rebound by iteration, never assigned
             env.mark_immutable(&var.node);
             env.loop_depth += 1;
             check_block(&body.node, env, return_type)?;
+            super::discharge::loop_body_end(env, body.span, affects)?;
             env.loop_depth -= 1;
             env.pop_scope();
+            super::discharge::loop_exit(env, affects);
         }
         Stmt::IndexAssign { object, index, value } => {
             check_index_assign(object, index, value, env)?;
@@ -657,6 +746,9 @@ fn check_stmt(
             }
         }
     }
+    // Invariant discharge: post-statement fact updates (assert assumptions,
+    // invariant re-assumption after calls/writes, fresh class bindings).
+    super::discharge::post_stmt(stmt, env)?;
     Ok(())
 }
 
@@ -1214,6 +1306,11 @@ fn check_match_stmt(
 
     let mut covered = std::collections::HashSet::new();
     let mut wildcard_span: Option<crate::span::Span> = None;
+    // Invariant discharge: arms are alternative paths — snapshot the
+    // symbolic field state, restore per arm, and merge at the end.
+    let disc_snap = super::discharge::branch_snapshot(env);
+    let mut any_surviving_changed = false;
+    let mut unchanged_survivor = false;
     for arm in arms {
         let (enum_name_sp, variant_name_sp, bindings) = match &arm.pattern {
             MatchPattern::Wildcard { span: wspan } => {
@@ -1224,9 +1321,18 @@ fn check_match_stmt(
                     ));
                 }
                 wildcard_span = Some(*wspan);
+                super::discharge::branch_restore(env, &disc_snap);
+                let terminates = super::block_always_terminates(&arm.body.node);
                 env.push_scope();
                 check_block(&arm.body.node, env, return_type)?;
+                let changed =
+                    super::discharge::branch_end(env, &disc_snap, terminates, arm.body.span)?;
                 env.pop_scope();
+                if changed {
+                    any_surviving_changed = true;
+                } else if !terminates {
+                    unchanged_survivor = true;
+                }
                 continue;
             }
             MatchPattern::Variant { enum_name, variant_name, bindings, .. } => {
@@ -1274,6 +1380,8 @@ fn check_match_stmt(
                 variant_name_sp.span,
             ));
         }
+        super::discharge::branch_restore(env, &disc_snap);
+        let terminates = super::block_always_terminates(&arm.body.node);
         env.push_scope();
         for (binding_field, opt_rename) in bindings {
             let field_type = variant_fields.iter()
@@ -1292,8 +1400,15 @@ fn check_match_stmt(
             env.mark_immutable(var_name);
         }
         check_block(&arm.body.node, env, return_type)?;
+        let changed = super::discharge::branch_end(env, &disc_snap, terminates, arm.body.span)?;
         env.pop_scope();
+        if changed {
+            any_surviving_changed = true;
+        } else if !terminates {
+            unchanged_survivor = true;
+        }
     }
+    super::discharge::branch_join(env, disc_snap, any_surviving_changed, unchanged_survivor, span)?;
     // Exhaustiveness check: a wildcard arm covers every remaining variant
     if wildcard_span.is_none() {
         for (variant_name, _) in &enum_info.variants {

@@ -2439,21 +2439,8 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
             check_function(&method.node, env, Some(&c.name.node))?;
             check_function_contracts(&method.node, env, Some(&c.name.node))?;
         }
-        // Type-check class invariants
-        if !c.invariants.is_empty() {
-            env.push_scope();
-            env.define_unchecked("self".to_string(), PlutoType::Class(c.name.node.clone()));
-            for inv in &c.invariants {
-                let inv_type = super::infer::infer_expr(&inv.node.expr.node, inv.node.expr.span, env, None)?;
-                if inv_type != PlutoType::Bool {
-                    return Err(CompileError::type_err(
-                        format!("invariant expression must be bool, found {inv_type}"),
-                        inv.node.expr.span,
-                    ));
-                }
-            }
-            env.pop_scope();
-        }
+        // Class invariants are type-checked and fragment-validated earlier,
+        // in discharge::register_invariants (before any body checking).
     }
 
     // Type-check trait method contracts (requires on abstract trait methods)

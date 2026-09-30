@@ -26,9 +26,9 @@ Pluto's contract system has exactly three primitives:
 
 | Primitive | Purpose | When Checked |
 |-----------|---------|--------------|
-| **`invariant`** | Class properties that always hold | Compile-time proof (future); runtime after `mut self` methods (current) |
+| **`invariant`** | Class properties that always hold | **Compile-time proof (strict — shipped).** Runtime validation only at wire decode boundaries |
 | **`requires`** | Preconditions — what caller must prove | Compile-time at call sites (future); runtime at entry (current) |
-| **`assert`** | Explicit runtime check | Always runtime |
+| **`assert`** | Explicit runtime check | Always runtime (and establishes the fact for the prover) |
 
 **Why just three?**
 - `invariant` expresses "always true" properties of data
@@ -62,65 +62,83 @@ Multiple invariants can be declared. All must hold (logical AND).
 
 An invariant is a property that is **always true** for instances of the class:
 - After construction
-- After every method with `mut self`
+- Whenever the object is observable during a `mut self` method (method exits —
+  returns, fall-through, raises — and at any call, which might observe the
+  object through the callee or an alias). *Between* writes inside a `mut self`
+  method the invariant may be temporarily broken; only boundaries matter.
 - Everywhere else (can be assumed by the compiler)
 
-Any code holding a reference to an `Account` can **assume** `balance >= 0` without checking. This is hugely powerful for optimization and verification.
+Any code holding a reference to an `Account` can **assume** `balance >= 0` without checking. This is hugely powerful for optimization and verification — and the prover uses it: parameter invariants and `requires` clauses are entry facts for every proof.
 
-### Current Implementation (Phase 1)
+### Implementation: Static Discharge (strict — SHIPPED, decided 2026-09-30)
 
-**Status:** Runtime checks after construction and all method calls.
+Invariants are **compile-time proof obligations**. Every site that could break
+one must be statically proven not to, or compilation fails. There is no gradual
+fallback to runtime checks. See `src/typeck/discharge.rs` and
+[rfc-verification.md](rfc-verification.md) phase 2.
 
-**When checked:**
-- After every struct literal (`Account { balance: 100 }`)
-- After every method call (conservative — will narrow to `mut self` only in Phase 6)
+**Obligation sites:**
+- **Construction** — each struct literal substitutes its field initializers
+  into the invariant and evaluates them against the flow facts in scope
+  (`if x >= 0 { Account { balance: x } }` proves; an unbounded initializer is a
+  compile error).
+- **Foreign writes** (`obj.field = v` outside the class's own `mut self`
+  methods) — proven immediately after the write; external code gets no
+  temporary-violation window.
+- **`mut self` method bodies** — writes are symbolic strong updates (each int
+  field's value is tracked as a linear form over its entry value and locals),
+  and the invariant is proven at every boundary: exits, raises,
+  `break`/`continue`/`yield`, statements containing calls (conservative
+  reentrancy answer), loop entry/body-end, and branch joins. Subtract-then-add
+  proves because the symbolic forms cancel.
 
-**Violation behavior:** Hard abort — prints diagnostic to stderr and exits:
+**What the prover knows:** `requires` clauses (runtime-checked at entry),
+invariants of class-typed parameters, `if` guards, and `assert` statements
+(the escape hatch — after an `assert` passes, the prover assumes it).
+
+**Violation behavior:** a compile error naming the invariant, the site, the
+symbolic state, and the fix:
 ```
-invariant violation on Account: self.balance >= 0
+cannot prove invariant 'self.balance >= 0' of class 'Account' holds at the end
+of this method in method 'drain': at this point self.balance =
+old(self.balance) - amt. ... Establish the missing bound before this point with
+a guard, a 'requires' clause, or an 'assert'
 ```
 
-This is intentional. Invariant violations mean the program is in an invalid state that should never occur. They represent bugs, not recoverable errors.
+**Boundary validation (the only runtime check):** data decoded from the wire is
+testimony, not proof. `__unmarshal_T` for an invariant-carrying class re-checks
+the invariants and raises `wire.WireError` on violation. Inside the compilation
+unit, no runtime invariant checks exist.
 
-### Future Implementation (Phase 6)
+### Provable Fragment
 
-**Static verification:**
-- Prove invariants hold after construction (from field values)
-- Prove `mut self` methods preserve invariants (from requires/ensures... wait, we removed ensures!)
-- Actually, prove methods preserve invariants by analyzing the method body
-- Eliminate runtime checks where proven
-
-**Runtime checks remain only:**
-- Where compiler can't prove it holds
-- At external boundaries (deserialization, etc.)
-
-### Decidable Fragment
-
-Invariant expressions are restricted to a decidable subset so the compiler can always evaluate them:
+Because unprovable means rejected, invariants are restricted to what the flow-
+fact engine can decide:
 
 **Allowed:**
-- Field access: `self.balance`, `self.items`
-- Comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`
-- Arithmetic: `+`, `-`, `*`, `/`, `%`
-- Logical: `&&`, `||`, `!`
-- Literals: `0`, `3.14`, `true`
-- `.len()` method (only allowed method call)
+- `&&`, `||`, `!` over integer comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`)
+- Sides are linear arithmetic (`+`, `-`, `*` by a constant) over int literals
+  and **direct int fields of `self`** (`self.balance`, `self.lo + 1`)
 
-**Rejected:**
-- Function calls
-- Method calls (except `.len()`)
-- Array/map indexing
-- String literals or interpolation
-- Closures, casts, spawn, error handling
+**Rejected at declaration** ("invariant is outside the provable fragment"):
+- Float, string, or boolean properties
+- `.len()` and any method call, indexing, nested field access
+  (`self.child.value`)
+- Non-linear arithmetic (`self.x * self.y`), division, modulo
+- Invariants on generic classes (their instantiations are never re-checked)
 
-This keeps verification decidable without an SMT solver.
+This keeps verification decidable without an SMT solver. The fragment grows
+deliberately (e.g. `x != const` facts were added so `invariant self.x != 0`
+proves through `if v != 0` guards); float/string/collection domains are out of
+scope.
 
 ### Rules
 
-- Invariants apply to classes only (not enums, traits, modules)
+- Invariants apply to classes and objects (not enums, traits, modules)
 - Multiple invariants are conjoined (all must hold)
-- Generic classes get invariants after monomorphization
-- Invariants cannot reference methods (only fields and `.len()`)
+- Invariants must be in the provable fragment (see above); generic classes are
+  rejected for now
+- A write to a field no invariant mentions carries no obligation
 
 ---
 
@@ -318,25 +336,24 @@ requires x >= 0.0
 
 | Feature | Status | Phase |
 |---------|--------|-------|
-| **`invariant` (runtime)** | ✅ Implemented | Phase 1 |
+| **`invariant` (static discharge)** | ✅ Implemented (strict) | Verification RFC phase 2 |
 | **`requires` (runtime)** | ✅ Implemented | Phase 2 |
-| **`ensures` (runtime)** | ✅ Implemented, **will be removed** | Phase 2 |
+| **`ensures` (runtime)** | ❌ Removed (rejected at parse) | Phase 4 |
 | **Trait contracts** | ✅ Implemented | Phase 3 |
-| **`assert`** | ⬜ Not yet implemented | Phase 4 |
-| **Static verification** | ⬜ Not started | Phase 6 |
+| **`assert`** | ✅ Implemented (runtime check + prover fact) | Phase 4 |
+| **Static verification of `requires`** | ⬜ Not started | Phase 6 |
 
-### Phase 1: Invariants (Runtime) — Done
+### Phase 1: Invariants — Done (upgraded to static discharge)
 
-Runtime-checked class invariants.
+Originally runtime-checked; now statically discharged (see the invariant
+section above). What remains from the runtime era:
 
-**Delivered:**
 - `invariant` keyword and syntax
-- Decidable fragment validator
-- Runtime checks after construction and method calls
-- Hard abort on violation
-- 29 integration tests
+- Syntactic decidable-fragment validator (`src/contracts.rs`), tightened by the
+  provable-fragment validator (`src/typeck/discharge.rs`)
+- Decode-boundary validation in generated marshalers (`src/marshal.rs`)
 
-**Key files:** `src/contracts.rs`, `src/typeck/register.rs`, `src/codegen/lower.rs`, `runtime/builtins.c`
+**Key files:** `src/contracts.rs`, `src/typeck/discharge.rs`, `src/typeck/facts.rs`, `src/marshal.rs`
 
 ### Phase 2: Requires (Runtime) — Done
 
@@ -393,18 +410,21 @@ Contracts on trait methods, enforced on implementations.
 
 **Estimated complexity:** High. Requires dataflow analysis across tasks, reasoning about interleavings.
 
-### Phase 6: Static Verification
+### Phase 6: Static Verification of `requires`
 
 **Scope:**
 - Prove `requires` clauses at call sites (obligation propagation)
-- Prove invariants hold after construction and `mut self` methods
-- Eliminate runtime checks where proven
-- Abstract interpretation for constraint tracking
-- Good error messages when proof fails
+- Eliminate the entry-time runtime checks where proven
 
-**Dependencies:** Phase 4 (simplified contract model), Phase 5 (concurrency safety)
+Invariant discharge — originally part of this phase — shipped separately as
+verification RFC phase 2 (strict mode), including the constraint tracking
+(flow facts + ghost symbolic state) and proof-failure diagnostics that
+call-site `requires` discharge will reuse.
 
-**Estimated complexity:** High. This is the capstone — full static verifier.
+**Dependencies:** Phase 4 (simplified contract model)
+
+**Estimated complexity:** Medium — the proof engine exists; the remaining work
+is call-site obligation propagation.
 
 ---
 
@@ -428,9 +448,10 @@ fn concurrent_example(c: Counter) {
     let t2 = spawn increment(c)
     t1.get()
     t2.get()
-    // Compiler must prove: invariant holds despite interleaving
-    // Current: runtime checks after each increment
-    // Future: static proof or compile error
+    // Spawn deep-copies values, so each task's copy is proven at its own
+    // write sites; synchronized singletons serialize mut methods. The
+    // static proof covers each write path; interleaving-specific analysis
+    // is Phase 5.
 }
 ```
 
@@ -605,11 +626,13 @@ Pluto's contract system is simple and powerful:
 - Runtime checks only when static proof isn't possible (external inputs)
 
 **Current status:**
-- Runtime enforcement of `invariant` and `requires` (Phases 1-3 done)
-- Static verification coming (Phase 6)
-- Concurrent safety coming (Phase 5)
+- `invariant`: statically discharged, strict mode (verification RFC phase 2);
+  runtime validation only at wire decode boundaries
+- `requires`: runtime-enforced at entry (Phases 2-3 done)
+- `assert`: runtime check that also feeds the prover (Phase 4 done)
+- `ensures`: removed (runtime form rejected at parse; the proof form is the
+  verification RFC)
 
 **Next steps:**
-- Remove `ensures` (redundant)
-- Add `assert` (Phase 4)
-- Build static verifier (Phase 6)
+- Static `requires` discharge at call sites (Phase 6)
+- Concurrency safety (Phase 5)
