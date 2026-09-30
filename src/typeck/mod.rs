@@ -125,6 +125,10 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // register provable class invariants before any body is checked, so
     // every construction and write site carries its proof obligation.
     discharge::register_invariants(program, &mut env)?;
+    // DI-synthesized construction (startup singletons, per-injection
+    // transients) zero-initializes non-dep fields without a struct literal;
+    // the invariants must hold for that initial state.
+    discharge::check_di_constructions(program, &env)?;
     register::check_all_bodies(program, &mut env)?;
     templates::check_generic_templates(program, &mut env)?;
     check::enforce_mut_self(program, &env)?;

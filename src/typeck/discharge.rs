@@ -25,6 +25,14 @@
 //! - **Construction**: each struct literal of an invariant-carrying class
 //!   must prove the invariant from the field initializers (substituted
 //!   into the invariant and evaluated against the flow facts in scope).
+//! - **DI construction**: instances synthesized by dependency-injection
+//!   wiring (startup singletons and per-injection transients from
+//!   `env.di_order`, and scope-block auto-created instances) never pass
+//!   through a struct literal — they are allocated zero-initialized and
+//!   only their injected (class-typed) dep fields are wired. Their
+//!   invariants must therefore hold for the all-int-fields-are-zero state
+//!   (`check_di_construction`). Seeded scope instances are ordinary struct
+//!   literals and carry the construction obligation above instead.
 //! - **Foreign field writes** (`obj.field = v` anywhere outside the
 //!   class's own `mut self` methods): the invariant must be proven
 //!   *immediately* after the write — external code gets no
@@ -1270,6 +1278,99 @@ pub(crate) fn check_construction(
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DI construction obligations
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Prove the invariants of a DI-constructed class against the state DI
+/// synthesis actually produces. DI wiring never goes through a struct
+/// literal: the instance is allocated zero-initialized and only its
+/// injected dep fields are wired afterwards. Injected deps are class-typed,
+/// so every field an invariant can mention (a non-injected int field)
+/// starts at 0 — and since the rest of the program *assumes* the invariant
+/// of every live instance, that zero state must satisfy it or the strict
+/// guarantee has a hole.
+///
+/// All int fields resolve to the constant 0, so the verdict is always
+/// decidable in practice; Unknown is handled identically for safety (it can
+/// only arise from arithmetic-overflow bailouts).
+pub(crate) fn check_di_construction(
+    class_name: &str,
+    site: &str,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let Some(specs) = env.class_invariants.get(class_name) else {
+        return Ok(());
+    };
+    let no_facts = FactEnv::new();
+    for spec in specs {
+        let resolve = |e: &Expr| match e {
+            Expr::FieldAccess { object, .. }
+                if matches!(&object.node, Expr::Ident(s) if s == "self") =>
+            {
+                Some(Affine::constant(0))
+            }
+            _ => None,
+        };
+        match eval_condition_with(&spec.expr, &resolve, &no_facts) {
+            Verdict::Proven => {}
+            Verdict::Refuted | Verdict::Unknown => {
+                return Err(CompileError::type_err(
+                    format!(
+                        "class '{class_name}' is constructed by dependency injection \
+                         {site}, and its invariant '{}' does not hold for the \
+                         zero-initialized state DI synthesis produces (every non-dep int \
+                         field starts at 0; DI construction never passes through a struct \
+                         literal that could prove otherwise). Either state an invariant \
+                         the zero state satisfies (e.g. 'self.count >= 0'), or take \
+                         '{class_name}' out of DI wiring: give it a 'scoped' lifecycle and \
+                         seed it with proven initial values in a scope block \
+                         ('scope({class_name} {{ ... }}) |x: {class_name}| {{ ... }}')",
+                        spec.desc
+                    ),
+                    spec.span,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The startup pass: every singleton and transient in `env.di_order` is
+/// zero-constructed by the synthesized app/stage startup wiring (singletons
+/// once at startup, transients fresh at each injection point), so each must
+/// satisfy its invariants in the zero state. Runs right after
+/// `register_invariants` (by which point `validate_di_graph` has finalized
+/// the order and inferred effective lifecycles).
+///
+/// Scoped-effective classes are skipped: a scoped class with non-injected
+/// fields is already rejected if it is reachable from startup (captive
+/// dependency), and otherwise it is only ever created through a scope block
+/// — seeded instances are proven at their struct literal, auto-created ones
+/// carry this obligation at the scope block (`check_scope_stmt`). Programs
+/// with no app and no stages run no startup wiring, so the obligation does
+/// not apply.
+pub(crate) fn check_di_constructions(
+    program: &Program,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    if env.class_invariants.is_empty() {
+        return Ok(());
+    }
+    if program.app.is_none() && program.stages.is_empty() {
+        return Ok(());
+    }
+    for class_name in &env.di_order {
+        if env.classes.get(class_name).map(|c| c.lifecycle)
+            == Some(crate::parser::ast::Lifecycle::Scoped)
+        {
+            continue;
+        }
+        check_di_construction(class_name, "at startup", env)?;
     }
     Ok(())
 }

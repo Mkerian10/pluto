@@ -911,6 +911,14 @@ fn check_scope_stmt(
                     span,
                 ));
             }
+            // Auto-created instances are DI-synthesized (zero-initialized,
+            // no struct literal): their invariants must hold at zero.
+            // Seeded instances are struct literals and were proven there.
+            super::discharge::check_di_construction(
+                class_name,
+                "when auto-created in this scope block",
+                env,
+            )?;
         }
     }
 

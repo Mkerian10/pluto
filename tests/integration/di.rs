@@ -520,3 +520,83 @@ app MyApp[svc: Service] {
     let output = compile_and_run_stdout(src);
     assert_eq!(output.trim(), "before catch\n0");
 }
+
+// ── Invariants at DI construction ────────────────────────────────────────────
+// DI-synthesized instances (startup singletons, transients, scope-block
+// auto-creates) never pass through a struct literal: non-dep fields are
+// zero-initialized. A DI-wired class's invariants must hold at zero.
+
+#[test]
+fn di_singleton_invariant_satisfiable_at_zero() {
+    let output = compile_and_run_stdout(
+        "class Counter {\n    count: int\n    invariant self.count >= 0\n\n    fn get(self) int {\n        return self.count\n    }\n}\n\napp MyApp[c: Counter] {\n    fn main(self) {\n        print(self.c.get())\n    }\n}",
+    );
+    assert_eq!(output.trim(), "0");
+}
+
+#[test]
+fn di_singleton_invariant_unsatisfiable_at_zero_rejected() {
+    compile_should_fail_with(
+        "class Counter {\n    count: int\n    invariant self.count > 0\n\n    fn get(self) int {\n        return self.count\n    }\n}\n\napp MyApp[c: Counter] {\n    fn main(self) {\n        print(self.c.get())\n    }\n}",
+        "class 'Counter' is constructed by dependency injection at startup, and its invariant 'self.count > 0' does not hold for the zero-initialized state",
+    );
+}
+
+#[test]
+fn di_transitive_dep_invariant_unsatisfiable_rejected() {
+    // The invariant-carrying class is a dep of a dep — still zero-constructed
+    // at startup, still an obligation.
+    compile_should_fail_with(
+        "class Pool {\n    size: int\n    invariant self.size >= 1\n}\n\nclass Repo[pool: Pool] {\n}\n\nclass Service[repo: Repo] {\n}\n\napp MyApp[svc: Service] {\n    fn main(self) {\n    }\n}",
+        "class 'Pool' is constructed by dependency injection at startup, and its invariant 'self.size >= 1' does not hold",
+    );
+}
+
+#[test]
+fn di_ambient_uses_invariant_satisfiable_compiles() {
+    let output = compile_and_run_stdout(
+        "class Metrics {\n    hits: int\n    invariant self.hits >= 0\n\n    fn report(self) int {\n        return self.hits\n    }\n}\n\nclass Service uses Metrics {\n    fn run(self) {\n        print(metrics.report())\n    }\n}\n\napp MyApp[svc: Service] {\n    ambient Metrics\n\n    fn main(self) {\n        self.svc.run()\n    }\n}",
+    );
+    assert_eq!(output.trim(), "0");
+}
+
+#[test]
+fn di_ambient_uses_invariant_unsatisfiable_rejected() {
+    // `uses` desugars to a hidden injected field: the ambient class is wired
+    // by DI at startup and must satisfy its invariants at zero.
+    compile_should_fail_with(
+        "class Metrics {\n    hits: int\n    invariant self.hits > 0\n\n    fn report(self) int {\n        return self.hits\n    }\n}\n\nclass Service uses Metrics {\n    fn run(self) {\n        print(metrics.report())\n    }\n}\n\napp MyApp[svc: Service] {\n    ambient Metrics\n\n    fn main(self) {\n        self.svc.run()\n    }\n}",
+        "class 'Metrics' is constructed by dependency injection at startup, and its invariant 'self.hits > 0' does not hold",
+    );
+}
+
+#[test]
+fn di_scoped_seeded_invariant_not_zero_checked() {
+    // A scoped class is never zero-constructed (a data-carrying one must be
+    // seeded, and the seed literal carries the ordinary construction proof),
+    // so an invariant the zero state violates is fine.
+    let output = compile_and_run_stdout(
+        "scoped class Session {\n    user: int\n    invariant self.user > 0\n\n    fn who(self) int {\n        return self.user\n    }\n}\n\nscoped class Handler[s: Session] {\n    fn run(self) int {\n        return self.s.who()\n    }\n}\n\napp MyApp {\n    fn main(self) {\n        scope(Session { user: 7 }) |h: Handler| {\n            print(h.run())\n        }\n    }\n}",
+    );
+    assert_eq!(output.trim(), "7");
+}
+
+#[test]
+fn di_scoped_seed_literal_still_proven() {
+    // Taking a class out of DI zero-construction does not exempt it: the
+    // seed's struct literal must still prove the invariant.
+    compile_should_fail_with(
+        "scoped class Session {\n    user: int\n    invariant self.user > 0\n}\n\nscoped class Handler[s: Session] {\n    fn run(self) int {\n        return 1\n    }\n}\n\napp MyApp {\n    fn main(self) {\n        scope(Session { user: 0 }) |h: Handler| {\n            print(h.run())\n        }\n    }\n}",
+        "construction of 'Session' violates its invariant 'self.user > 0'",
+    );
+}
+
+#[test]
+fn di_transient_invariant_data_field_already_rejected() {
+    // A transient with non-injected fields is rejected before invariants come
+    // into play — it could never be auto-created with meaningful state.
+    compile_should_fail_with(
+        "transient class Token {\n    value: int\n    invariant self.value > 0\n}\n\nclass Service[token: Token] {\n}\n\napp MyApp[svc: Service] {\n    fn main(self) {\n    }\n}",
+        "transient class 'Token' has non-injected fields and cannot be auto-created",
+    );
+}
