@@ -10,7 +10,8 @@ error PaymentDeclined {
     code: int
 }
 
-class PaymentService {
+// Same entity declaration as the app side — the served service is an object.
+object PaymentService {
     fn charge(self, amount: int) int {
         if amount > 100 {
             raise PaymentDeclined { code: 402 }

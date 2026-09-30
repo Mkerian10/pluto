@@ -1,16 +1,19 @@
-class Database {
+// DI-wired services are entities — each is THE database / THE user service,
+// a singleton with identity, not a value you could meaningfully copy — so
+// they are declared as objects (rfc-objects.md). Wiring is unchanged.
+object Database {
     fn query(self, sql: string) string {
         return "result for: " + sql
     }
 }
 
-class UserService[db: Database] {
+object UserService[db: Database] {
     fn get_user(self, id: string) string {
         return self.db.query("SELECT * FROM users WHERE id = " + id)
     }
 }
 
-class OrderService[db: Database] {
+object OrderService[db: Database] {
     fn get_orders(self, user_id: string) string {
         return self.db.query("SELECT * FROM orders WHERE user_id = " + user_id)
     }

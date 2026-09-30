@@ -16,7 +16,10 @@ class Receipt {
     balance: int
 }
 
-class BillingService {
+// The billing service is an entity: one pool of funds with identity. The
+// orders side keeps a plain class as its interface mirror — the interface
+// hash covers method signatures only, so they stay compatible.
+object BillingService {
     funds: int
     fn charge(self, req: ChargeRequest) Receipt {
         if req.amount <= 0 {

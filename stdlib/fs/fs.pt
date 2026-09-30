@@ -28,7 +28,10 @@ extern fn __pluto_fs_seek_set() int
 extern fn __pluto_fs_seek_cur() int
 extern fn __pluto_fs_seek_end() int
 
-pub class File {
+// An open file is an entity: it owns an OS file descriptor and a cursor, so
+// two copies of one File would be semantically wrong (shared offset, double
+// close). As an object it is spawn-shared and its methods serialize.
+pub object File {
     fd: int
 
     fn read(self, max_bytes: int) string {

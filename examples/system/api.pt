@@ -1,4 +1,6 @@
-class OrderService {
+// A stateful service singleton is an entity: there is one order counter, and
+// a copy of it would be a second, diverging counter — so it is an object.
+object OrderService {
     count: int
 
     fn process_order(mut self) {
