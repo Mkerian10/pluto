@@ -180,7 +180,8 @@ Applied retroactively to earlier proposals:
 
 ## Prior art and the gap
 
-- **Halpern–Moses knowledge logic** — the theory; never a programming language.
+- **Halpern–Moses knowledge logic** — the theory; never a programming language
+  (formal grounding below).
 - **Session types** — knowledge of protocol *position*, not of world state.
 - **Information-flow types (Jif etc.)** — who *may* know (deontic), not whether
   you *do* and on what warrant.
@@ -189,6 +190,60 @@ Applied retroactively to earlier proposals:
 
 The gap Pluto occupies: a type system that audits *how you know*, checked by a
 whole-program compiler that sees both sides of every boundary.
+
+### Formal grounding (Halpern–Moses and successors)
+
+The epistemic-logic tradition in distributed computing supplies proofs for
+several claims this document otherwise makes by argument.
+
+**The framework** (Halpern & Moses, *Knowledge and Common Knowledge in a
+Distributed Environment*, PODC '84 / JACM '90): a system is its set of possible
+**runs**; process *i* **knows** φ at a point iff φ holds at every point
+consistent with *i*'s local state (indistinguishability semantics). Knowledge
+is a property of the protocol's information structure, not a mental state.
+
+Consequences, mapped:
+
+- **A sound type is a K-claim.** A type must hold at every point consistent
+  with local state — exactly the knowledge operator. "The coordinator currently
+  considers me the holder" fails (revoked runs are indistinguishable), which
+  *proves* the "remote beliefs are never sound types" rule. Typestate passes
+  (action history is local state). A lease-until-T passes **only given**
+  clock/pause assumptions that exclude the past-deadline runs — the formal
+  reason those assumptions must be declared, never defaulted.
+- **Common knowledge is unattainable** over uncertain communication (their
+  formalization of two-generals; even reliable-but-unbounded-delay channels
+  cannot attain it), and simultaneous coordinated action *requires* it. Design
+  rule with a theorem behind it: **no Pluto construct may require in-the-moment
+  agreement between parties** — no "both sides know" types, no
+  synchronized-view abstractions. Everything decomposes into unilateral
+  warrants plus authority-side checks (the Blob shape), and version-skew
+  handling assumes no synchronized deployments.
+- **The attainable weakenings are our primitives.** H–M's hierarchy below full
+  common knowledge maps directly: *timestamped* common knowledge ("by time T,
+  all know") **is a lease**; *eventual* common knowledge **is the monotone
+  corner** (facts that only accrete converge without invalidation — CALM,
+  reached from the logic side). The warrant gradient is a classification of
+  which runs local state can exclude, and why.
+- **Knowledge of Preconditions** (Moses, TARK 2015): in any correct protocol,
+  a process taking an action that requires φ must *know* φ when acting.
+  Correct distributed programs already satisfy this implicitly, in their
+  authors' heads. Pluto's one-sentence pitch: **the compiler enforces KoP** —
+  it refuses to compile programs whose actions outrun their knowledge.
+- **Knowledge-based programs** (Fagin–Halpern–Moses–Vardi, *Reasoning About
+  Knowledge*, 1995): specifications with explicit knowledge tests
+  (`if K(φ) then act`), implemented by concrete local-state predicates that
+  entail them. The literature's hard problem is synthesis (implementations may
+  not exist or be unique); Pluto keeps only the sound direction — the
+  programmer supplies the concrete evidence (token, deadline, typestate) and
+  the compiler **verifies the entailment**. We type-check against knowledge
+  programs; we do not synthesize them.
+- **Learning vs run-elimination.** The framework distinguishes coming to know
+  by *refining* which run you are in (a response, a read-back) from coming to
+  know by *acting so the bad runs cease to exist* (fencing, self-invalidation).
+  This is precisely the constructive-knowledge (level 3) vs testimony (level 5)
+  distinction, and the formal reason fencing is robust to message loss while
+  learning never is.
 
 ## Open questions
 
