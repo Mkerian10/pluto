@@ -82,6 +82,15 @@ fallback to runtime checks. See `src/typeck/discharge.rs` and
   into the invariant and evaluates them against the flow facts in scope
   (`if x >= 0 { Account { balance: x } }` proves; an unbounded initializer is a
   compile error).
+- **DI construction** — instances synthesized by DI wiring (startup singletons,
+  per-injection transients, scope-block auto-created instances) never pass
+  through a struct literal: they are allocated zero-initialized and only their
+  injected (class-typed) dep fields are wired. Their invariants must hold for
+  the all-int-fields-are-zero state (`invariant self.count >= 0` proves;
+  `invariant self.count > 0` on a DI-wired class is a compile error). Seeded
+  scope instances are ordinary struct literals and carry the construction
+  obligation above instead; scoped classes with data fields are never
+  zero-constructed (the captive-dependency check forces a seed).
 - **Foreign writes** (`obj.field = v` outside the class's own `mut self`
   methods) — proven immediately after the write; external code gets no
   temporary-violation window.
@@ -477,6 +486,14 @@ Contracts and errors are complementary:
 - **`assert` always aborts** — not catchable with `catch`
 
 ### Dependency Injection
+
+A DI-constructed instance starts in the zero state (non-dep fields are
+zero-initialized; there is no struct literal to prove anything stronger), so a
+class that DI wiring constructs — a startup singleton, a transient, or a
+scope-auto-created class — may only carry invariants the zero state satisfies.
+A class whose invariant requires nonzero initial state must be taken out of DI
+wiring: give it a `scoped` lifecycle and seed it in a scope block, where the
+seed's struct literal carries the ordinary construction proof.
 
 Contracts on DI-injected dependencies are verified through concrete types:
 

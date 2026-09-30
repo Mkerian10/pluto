@@ -1745,3 +1745,32 @@ fn main() {
     );
     assert_eq!(out, "1\n");
 }
+
+// ── Invariants at DI construction (zero-state proof) ─────────────────────────
+
+#[test]
+fn di_construction_arithmetic_invariant_holds_at_zero() {
+    let output = compile_and_run_stdout(
+        "class Ledger {\n    debits: int\n    credits: int\n    invariant self.debits + self.credits >= 0\n\n    fn total(self) int {\n        return self.debits + self.credits\n    }\n}\n\napp MyApp[l: Ledger] {\n    fn main(self) {\n        print(self.l.total())\n    }\n}",
+    );
+    assert_eq!(output.trim(), "0");
+}
+
+#[test]
+fn di_construction_arithmetic_invariant_refuted_at_zero() {
+    compile_should_fail_with(
+        "class Ledger {\n    debits: int\n    credits: int\n    invariant self.debits + self.credits >= 10\n}\n\napp MyApp[l: Ledger] {\n    fn main(self) {\n    }\n}",
+        "class 'Ledger' is constructed by dependency injection at startup, and its invariant 'self.debits + self.credits >= 10' does not hold for the zero-initialized state",
+    );
+}
+
+#[test]
+fn di_scope_auto_created_constant_invariant_refuted() {
+    // An auto-created scoped class has only injected (class-typed) fields, so
+    // the only invariants it can declare are field-free constants — but even
+    // those must hold, since no struct literal ever proves them.
+    compile_should_fail_with(
+        "scoped class Flag {\n    invariant 1 > 2\n}\n\nscoped class Handler[f: Flag] {\n    tag: int\n\n    fn run(self) int {\n        return self.tag\n    }\n}\n\napp MyApp {\n    fn main(self) {\n        scope(Handler { tag: 1 }) |h: Handler| {\n            print(h.run())\n        }\n    }\n}",
+        "class 'Flag' is constructed by dependency injection when auto-created in this scope block",
+    );
+}
