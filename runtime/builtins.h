@@ -133,6 +133,25 @@ void __pluto_gc_after_fork(int is_child);
 void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count);
 size_t __pluto_gc_bytes_allocated(void);
 
+// ── Rwlocks & per-instance entity locks (threading.c) ────────────────────────
+
+// Raw rwlock API (per-type locks for synchronized singletons/served classes,
+// emitted by codegen). No-ops in test mode (single-threaded fiber scheduler).
+long __pluto_rwlock_init(void);
+void __pluto_rwlock_rdlock(long lock_ptr);
+void __pluto_rwlock_wrlock(long lock_ptr);
+void __pluto_rwlock_unlock(long lock_ptr);
+void __pluto_rwlock_destroy(long lock_ptr);
+
+// Per-instance entity locks (rfc-objects.md): every entity allocation carries
+// one hidden trailing slot (see __pluto_alloc_entity in the GC backends)
+// holding an rwlock pointer. Method calls on an entity serialize through THAT
+// lock, so distinct instances of one object type run concurrently. No-ops in
+// test mode.
+void __pluto_entity_rdlock(void *entity);
+void __pluto_entity_wrlock(void *entity);
+void __pluto_entity_unlock(void *entity);
+
 #ifdef PLUTO_TEST_MODE
 // Fiber stack API for scheduler (test mode only)
 void __pluto_gc_register_fiber_stack(char *base, size_t size);
