@@ -321,7 +321,7 @@ cargo run -- run examples/typestates/main.pt
 
 ## objects
 
-The object construct (docs/design/rfc-objects.md): `object` declares an entity rather than a data structure — reference identity (`==` is identity), spawn shares the entity instead of deep-copying it, and sharing is safe because an object's methods are serialized. Objects cannot cross domain boundaries as values (entities will cross by reference in a later phase).
+The object construct (docs/design/rfc-objects.md): `object` declares an entity rather than a data structure — reference identity (`==` is identity), spawn shares the entity instead of deep-copying it, and sharing is safe because an object's methods are serialized. Objects never cross domain boundaries as values — they cross by reference, as identity handles (rfc-objects.md phase 2).
 
 ```bash
 cargo run -- run examples/objects/main.pt
