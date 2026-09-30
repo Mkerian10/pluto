@@ -35,7 +35,7 @@ prior run — which looks like a stale binary but isn't (`lsof -ti :PORT | xargs
 
 ## Compiler Pipeline
 
-Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and `compile()` (single-source-string). The full pipeline has 17 stages, orchestrated by `run_frontend()`:
+Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and `compile()` (single-source-string), orchestrated by `run_frontend()`:
 
 1. **Lex** (`src/lexer/`) — logos-based tokenizer, produces `Vec<Spanned<Token>>`
 2. **Parse** (`src/parser/`) — recursive descent + Pratt parsing for expressions, produces `Program` AST
@@ -44,19 +44,21 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 5. **Prelude inject** (`src/prelude.rs`) — prepends prelude classes, traits, enums into the program
 6. **Stage flatten** (`src/stages.rs`) — flattens `stage` declaration hierarchy
 7. **Ambient desugar** (`src/ambient.rs`) — desugars `uses` clauses into hidden injected fields
-8. **Spawn desugar** (`src/spawn.rs`) — transforms `spawn func(args)` into `Expr::Spawn { call: Closure { ... } }`
-9. **Contract validation** (`src/contracts.rs`) — validates decidable fragment for invariants/requires/ensures
-10. **Marshal phase A** (`src/marshal.rs`) — generates marshaler stubs before typeck
-11. **Type check** (`src/typeck/`) — multi-pass: registers declarations (traits, enums, app, errors, classes, functions), checks bodies, infers error sets, enforces error handling. Returns `TypeEnv`
-12. **Reflection generation** (`src/reflection.rs`) — generates `TypeInfo` intrinsic implementations
-13. **Monomorphize** (`src/monomorphize.rs`) — generates concrete copies of generic functions/classes/enums
-14. **Marshal phase B** (`src/marshal.rs`) — generates marshalers for monomorphized types
-15. **Trait conformance** (`src/typeck/`) — validates all trait implementations post-monomorphize
-16. **Serializable validation** (`src/typeck/serializable.rs`) — validates types marked serializable
-17. **Closure lift** (`src/closures.rs`) — transforms `Expr::Closure` into top-level functions + `Expr::ClosureCreate`
-18. **Cross-reference resolution** (`src/xref.rs`) — resolves stable UUIDs for declarations
-19. **Codegen** (`src/codegen/`) — lowers AST to Cranelift IR, produces object bytes
-20. **Link** (`src/lib.rs::link()`) — compiles runtime C files with `cc`, links into final binary
+8. **Generic trait instantiation** (`src/generic_traits.rs`) — stamps generic traits into concrete traits (`Convert<int>` → `Convert$$int`) before typeck
+9. **Generic method hoisting** (`src/generic_methods.rs`) — hoists methods with their own type params into top-level generic functions (`C$foo`)
+10. **Spawn desugar** (`src/spawn.rs`) — transforms `spawn func(args)` into `Expr::Spawn { call: Closure { ... } }`
+11. **Contract validation** (`src/contracts.rs`) — validates decidable fragment for invariants/requires; checks `where` typestate clause placement (`ensures` is rejected at parse)
+12. **Marshal phase A** (`src/marshal.rs`) — generates marshaler stubs before typeck
+13. **Type check** (`src/typeck/`) — multi-pass: registers declarations (traits, enums, app, errors, classes, functions), registers + discharges invariants (`discharge.rs`), checks bodies (with flow-fact narrowing, `facts.rs`), infers error sets, enforces error handling, checks typestate transition linearity (`linearity.rs`), infers synchronization. Returns `TypeEnv`
+14. **Reflection generation** (`src/reflection.rs`) — generates `TypeInfo` intrinsic implementations
+15. **Monomorphize** (`src/monomorphize.rs`) — generates concrete copies of generic functions/classes/enums
+16. **Marshal phase B** (`src/marshal.rs`) — generates marshalers for monomorphized types
+17. **Trait conformance** (`src/typeck/`) — validates all trait implementations post-monomorphize
+18. **Serializable validation** (`src/typeck/serializable.rs`) — validates types marked serializable
+19. **Closure lift** (`src/closures.rs`) — transforms `Expr::Closure` into top-level functions + `Expr::ClosureCreate`
+20. **Cross-reference resolution** (`src/xref.rs`) — resolves stable UUIDs for declarations
+21. **Codegen** (`src/codegen/`) — lowers AST to Cranelift IR, produces object bytes
+22. **Link** (`src/lib.rs::link()`) — compiles runtime C files with `cc`, links into final binary
 
 ## Key Architecture Notes
 
@@ -66,13 +68,19 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 
 **Enums** — Unit variants (`Color::Red`) and data-carrying variants (`Shape::Circle { radius: float }`). `match` with exhaustiveness checking.
 
-**Closures** — Arrow syntax `(x: int) => x + 1`. Capture by value. Represented as heap-allocated `[fn_ptr, captures...]`. Lifted to top-level functions by `src/closures.rs` after monomorphization (stage 17). Closures bound to variables get their own node in the error-inference graph, so `catch`/`!` on closure calls works.
+**Closures** — Arrow syntax `(x: int) => x + 1`. Capture by value. Represented as heap-allocated `[fn_ptr, captures...]`. Lifted to top-level functions by `src/closures.rs` after monomorphization. Closures bound to variables get their own node in the error-inference graph, so `catch`/`!` on closure calls works.
 
 **Function references** — A bare identifier naming a non-generic top-level function is a first-class value (`let f = double`, `apply(double, 5)`, arrays of functions, returns). Implemented by eta-expansion into wrapper closures during lifting. Bare generic functions are rejected with guidance (wrap in a closure with concrete types).
 
 **Error handling** — `error` declarations, `raise` to throw, `!` postfix to propagate, `catch` (shorthand, wildcard, or typed with coverage checking) to handle. Compiler infers error-ability via fixed-point analysis and enforces handling at call sites — including generic functions/classes (checked pre-monomorphization via skolem substitution) and closures. Function *types* carry a fallibility contract: `fn(int) int!` accepts fallible values (calls through them must be handled); plain `fn(int) int` rejects fallible values at the boundary. See `docs/design/rfc-fn-effects.md`.
 
 **App + DI** — `app` declaration with `fn main(self)`. Classes use bracket deps `class Foo[dep: Type]` for injection. Compile-time topological sort wires singletons. Codegen synthesizes `main()` that allocates and connects all dependencies.
+
+**Objects (entities)** — `object Name { ... }` declares an entity (rfc-objects.md): reference identity (`==` is identity, not structure; classes/values stay structural), spawn *shares* the instance instead of copying it, and methods are serialized per instance via a hidden per-instance rwlock (distinct instances run concurrently). Entities cross domain boundaries as identity handles, never as copied values; `at v { m() }` on an entity places the call where the entity lives (a direct call when local — plan-symmetric with remote routing). Generic objects monomorphize into distinct entity types. Parsed as `ClassDecl` with `is_object: true`.
+
+**Typestates** — On a generic class, `fn acquire(self) Partition<Owned> where S == Unowned` restricts a method to instantiations where the state param matches; calling in the wrong state is a type error ("exists only where S == ..."). A method returning the same class with a state param changed is a *transition*: calling it through a local binding consumes the binding, and later use is an error (`src/typeck/linearity.rs`). See `docs/design/rfc-typestates.md`.
+
+**Flow facts + invariant proofs** — `src/typeck/facts.rs` tracks integer comparison facts (interval bounds + relations between paths) flow-sensitively, mirroring nullable narrowing; degenerate conditions get "condition is always true/false" warnings. `invariant` clauses on classes/objects are compile-time proof obligations (STRICT, `src/typeck/discharge.rs`): every construction and write site must be statically proven to preserve the invariant or compilation fails. Provable fragment: linear int arithmetic over the class's *own* int fields; generic classes rejected. No runtime invariant checks remain except wire/marshal-decode validation. See `docs/design/rfc-verification.md`.
 
 **Modules** — `import math` with `pub` visibility. Flatten-before-typeck design: imported items get prefixed names (e.g., `math.add`). Supports directory modules, single-file modules, and hierarchical imports.
 
@@ -97,7 +105,7 @@ Each `.c` file is compiled to a `.o` file, then linked with `ld -r` into a singl
 
 **CompilerService** — Protocol-agnostic trait in `src/server/mod.rs` covering module management, declaration inspection, cross-references, compilation/execution, analysis, and documentation. MCP is read-only — all editing operations have been removed. `InProcessServer` in `src/server/in_process.rs` caches `(Program, String, DerivedInfo)` per module and delegates to compiler primitives. Both CLI (`src/main.rs` compile command) and MCP (`mcp/src/server.rs` — docs, stdlib_docs, check, compile, run, test) route through it. See `src/server/types.rs` for all result types.
 
-**Stdlib modules** — 19 modules in `stdlib/`: `std.base64`, `std.collections`, `std.env`, `std.fs`, `std.http`, `std.io`, `std.json`, `std.log`, `std.math`, `std.net`, `std.path`, `std.random`, `std.regex`, `std.rpc`, `std.socket`, `std.strings`, `std.time`, `std.uuid`, `std.wire`. Plus `stdlib/prelude.pluto` (auto-imported into every program).
+**Stdlib modules** — 19 modules in `stdlib/`: `std.base64`, `std.collections`, `std.env`, `std.fs`, `std.http`, `std.io`, `std.json`, `std.log`, `std.math`, `std.net`, `std.path`, `std.random`, `std.regex`, `std.rpc`, `std.socket`, `std.strings`, `std.time`, `std.uuid`, `std.wire`. Plus `stdlib/prelude.pt` (auto-imported into every program).
 
 **No semicolons** — Pluto uses newline-based statement termination. Newlines are lexed as `Token::Newline` and the parser consumes them at statement boundaries while skipping them inside expressions.
 
@@ -129,7 +137,7 @@ See `docs/design/visitor-phase4-assessment.md` for the full analysis of which wa
 
 ## Test Infrastructure
 
-**Unit tests** — inline `#[cfg(test)]` modules in `src/lexer/mod.rs`, `src/parser/mod.rs`, and `src/typeck/mod.rs`.
+**Unit tests** — inline `#[cfg(test)]` modules throughout `src/` (lexer, parser, typeck, facts, codegen, modules, visit, and more). Run with `cargo test --lib`.
 
 **Integration tests** — Split by feature in `tests/integration/`. Shared helpers in `tests/integration/common/mod.rs`:
 - `compile_and_run(source) -> i32` — compiles source string and returns exit code
@@ -137,7 +145,7 @@ See `docs/design/visitor-phase4-assessment.md` for the full analysis of which wa
 - `compile_should_fail(source)` — asserts compilation produces an error
 - `compile_should_fail_with(source, msg)` — asserts compilation fails with specific message
 
-Test files (68 files): `ai_native_e2e`, `analyze`, `arrays`, `arrow_functions`, `basics`, `bytes`, `chained_field_access`, `channels`, `classes`, `closures`, `concurrency`, `contracts`, `control_flow`, `control_flow_extended`, `coverage`, `deterministic`, `di`, `di_lifecycle`, `edge_cases`, `enums`, `error_messages`, `error_recovery`, `error_snapshots`, `errors`, `expression_complexity`, `fs`, `fstrings`, `gc`, `generators`, `generics`, `generics_syntax`, `http_tests`, `if_expression_errors`, `io`, `json_tests`, `lexer_tests`, `literal_parsing`, `manifest`, `maps`, `marshaling`, `match_expression_errors`, `modules`, `mutability`, `nullable`, `numeric`, `operators`, `precedence`, `precedence_extended`, `prelude`, `rpc`, `scope_blocks`, `sets`, `stages`, `statement_boundaries`, `stdlib_tests`, `strings`, `struct_literals`, `sync`, `system`, `testing`, `toolchain`, `traits`, `type_syntax`, `uuid_base64`, `visit`, `warnings`, `wire`.
+Test files (76 files): `ai_native_e2e`, `analyze`, `arrays`, `arrow_functions`, `basics`, `bytes`, `chained_field_access`, `channels`, `classes`, `closures`, `coercion`, `concurrency`, `contracts`, `control_flow`, `control_flow_extended`, `coverage`, `deterministic`, `di`, `di_lifecycle`, `distributed`, `edge_cases`, `entry_points`, `enums`, `error_messages`, `error_recovery`, `error_snapshots`, `errors`, `expression_complexity`, `flow_facts`, `fn_effects`, `fn_refs`, `fs`, `fstrings`, `gc`, `generators`, `generics`, `generics_syntax`, `http_tests`, `if_expression_errors`, `io`, `json_tests`, `lexer_tests`, `literal_parsing`, `manifest`, `maps`, `marshaling`, `match_expression_errors`, `modules`, `mutability`, `nullable`, `nullable_ergonomics`, `numeric`, `objects`, `operators`, `precedence`, `precedence_extended`, `prelude`, `primitive_methods`, `rpc`, `scope_blocks`, `sets`, `stages`, `statement_boundaries`, `stdlib_tests`, `strings`, `struct_literals`, `sync`, `system`, `testing`, `toolchain`, `traits`, `type_syntax`, `uuid_base64`, `visit`, `warnings`, `wire`.
 
 **Module tests** — `tests/integration/modules.rs`. Multi-file test helpers:
 - `run_project(files) -> String` — writes multiple files to temp dir, compiles entry, returns stdout
