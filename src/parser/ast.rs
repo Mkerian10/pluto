@@ -121,6 +121,24 @@ pub struct Field {
     /// is checked identically in every plan.
     #[serde(default)]
     pub is_domain: bool,
+    /// `guarded_by (g: WriteGrant) g.token == self.epoch` — a dominance
+    /// proof obligation on the field's write sites (properties RFC atom 3,
+    /// docs/design/rfc-properties.md): every write to this field must be
+    /// dominated, in its method's control flow, by a conditional the fact
+    /// engine proves implies the predicate instantiated with some in-scope
+    /// value of the binder type. Checked in src/typeck/dominance.rs.
+    #[serde(default)]
+    pub guarded_by: Option<GuardClause>,
+}
+
+/// The clause of a `guarded_by` field annotation: a typed binder plus a
+/// predicate over the binder's int fields and the carrying class's own int
+/// fields (the decidable fragment — validated at declaration).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuardClause {
+    pub binder: Spanned<String>,
+    pub binder_ty: Spanned<TypeExpr>,
+    pub predicate: Spanned<Expr>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

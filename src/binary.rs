@@ -23,7 +23,8 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// v10: ClassDecl.is_object (entity declarations).
 /// v11: ContractKind::MustRelease (must-release typestate annotations, riding
 /// in ClassDecl.invariants).
-const SCHEMA_VERSION: u32 = 11;
+/// v12: Field.guarded_by (dominance guard clauses, properties RFC atom 3).
+const SCHEMA_VERSION: u32 = 12;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;

@@ -440,6 +440,14 @@ impl PrettyPrinter {
             self.write(&field.name.node);
             self.write(": ");
             self.emit_type_expr(&field.ty.node);
+            if let Some(guard) = &field.guarded_by {
+                self.write(" guarded_by (");
+                self.write(&guard.binder.node);
+                self.write(": ");
+                self.emit_type_expr(&guard.binder_ty.node);
+                self.write(") ");
+                self.emit_expr(&guard.predicate.node, 0);
+            }
             self.newline();
         }
 
@@ -2616,6 +2624,21 @@ fn main() {
         let result = pp(src);
         assert!(result.contains("invariant self.value >= 0"));
         assert!(result.contains("invariant self.value <= 100"));
+        assert_roundtrip_stable(src);
+    }
+
+    #[test]
+    fn test_guarded_field_roundtrip() {
+        let src = r#"object Store {
+    data: bytes guarded_by (g: WriteGrant) g.token == self.epoch
+    epoch: int
+}
+
+fn main() {
+}
+"#;
+        let result = pp(src);
+        assert!(result.contains("data: bytes guarded_by (g: WriteGrant) g.token == self.epoch"));
         assert_roundtrip_stable(src);
     }
 

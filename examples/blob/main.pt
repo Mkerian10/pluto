@@ -18,11 +18,15 @@
 //                methods serialize (one message at a time, per instance),
 //                so apply() can never interleave with grant_write() or
 //                another apply(). No torn writes, by construct.
-//   SAFETY     — the fence: `grant.token < self.epoch` checked inside
+//   SAFETY     — the fence: `grant.token != self.epoch` checked inside
 //                apply(), at the authority, at the point of effect. A
 //                client-side "is my grant still valid?" check could never
 //                give this (the world may move between check and act);
 //                the authority's own compare is the only sound gate.
+//                COMPILER-CHECKED: the `guarded_by` clause on `data` makes
+//                "no write escapes the fence" a compile-time dominance
+//                proof — remove the fence (or move the write above it, or
+//                put a call between them) and this file stops compiling.
 //   LIVENESS   — the grant itself. Holding the newest grant means your
 //                writes get through; it promises progress, never safety.
 //                (A lease deadline would also live here — a liveness
@@ -68,7 +72,15 @@ class WriteGrant {
 // one at a time. Its epoch is the fence: grants are minted FROM it and
 // judged AGAINST it.
 object BlobAuthority {
-    data: bytes
+    // The guarded effect target (properties RFC atom 3, `guarded_by`
+    // dominance): every write to `data` — the whole-program closed
+    // write-set — must be DOMINATED by a conditional the compiler proves
+    // implies `g.token == self.epoch` for some in-scope WriteGrant. The
+    // fence in apply() is exactly that conditional: its fall-through fact
+    // `tok == self.epoch` (with `tok` bound from `grant.token`) discharges
+    // the obligation. Writes from outside the authority's own methods are
+    // rejected outright — the fence cannot be bypassed from without.
+    data: bytes guarded_by (g: WriteGrant) g.token == self.epoch
     epoch: int
     applied: int   // token of the last write the fence admitted
 
@@ -82,22 +94,20 @@ object BlobAuthority {
     // arithmetic over the entity's own int fields, the decidable
     // fragment's home turf.
     //
-    // The full theorem the store rests on is stronger, and today's
-    // fragment cannot state it:
-    //   (a) monotonicity — every write to epoch INCREASES it. That is a
-    //       two-state claim (old value vs new value); invariants speak
-    //       only single-state facts, so "epoch never decreases" is not
-    //       expressible. (Tried: there is no old(self.epoch) to name.)
-    //   (b) dominance — no write to data escapes the fence. That is a
-    //       control-flow claim about write sites, not a field predicate.
+    // The full theorem the store rests on is stronger. Where it stands:
+    //   (a) monotonicity — every write to epoch INCREASES it. A two-state
+    //       claim (old value vs new value); single-state invariants cannot
+    //       say it. Properties RFC atom 2 (`old()` in invariants) is the
+    //       designated proof shape; until it lands, (a) holds by
+    //       inspection: epoch is written exactly once, as epoch + 1.
+    //   (b) dominance — no write to data escapes the fence. SHIPPED: the
+    //       `guarded_by` clause on `data` above makes this a compile-time
+    //       proof (properties RFC atom 3). The fence below is the
+    //       dominating conditional that discharges it.
     //   (c) anything off the int fragment — e.g. relating data to the
     //       admitted payload: 'invariant self.data.len() >= 0' is
     //       rejected at declaration ("'.len()' — collection and method
     //       facts are not provable").
-    // (a) and (b) are the verification RFC's phase-4 proof shapes
-    // (monotonic fields, guarded effects); until then they hold here by
-    // inspection: epoch is written exactly once, as epoch + 1; data is
-    // written exactly once, below the fence.
     invariant self.epoch >= 0
     invariant self.applied <= self.epoch
 

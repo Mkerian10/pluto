@@ -82,6 +82,8 @@ pub enum Token {
     Where,
     #[token("must_release")]
     MustRelease,
+    #[token("guarded_by")]
+    GuardedBy,
     #[token("assert")]
     Assert,
     #[token("select")]
@@ -358,6 +360,7 @@ impl std::fmt::Display for Token {
             Token::Requires => write!(f, "requires"),
             Token::Where => write!(f, "where"),
             Token::MustRelease => write!(f, "must_release"),
+            Token::GuardedBy => write!(f, "guarded_by"),
             Token::Assert => write!(f, "assert"),
             Token::Select => write!(f, "select"),
             Token::Default => write!(f, "default"),

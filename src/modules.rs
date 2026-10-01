@@ -552,6 +552,9 @@ fn add_prefixed_items(
         prefixed_class.node.name.node = prefix_name(module_name, &class.node.name.node);
         for field in &mut prefixed_class.node.fields {
             prefix_type_expr(&mut field.ty.node, module_name, module_prog);
+            if let Some(guard) = &mut field.guarded_by {
+                prefix_type_expr(&mut guard.binder_ty.node, module_name, module_prog);
+            }
         }
         for method in &mut prefixed_class.node.methods {
             prefix_function_types(&mut method.node, module_name, module_prog);
@@ -1279,6 +1282,9 @@ fn rewrite_program(program: &mut Program, import_names: &HashSet<String>) {
         // Rewrite class field types
         for field in &mut class.node.fields {
             rewrite_type_expr(&mut field.ty, import_names);
+            if let Some(guard) = &mut field.guarded_by {
+                rewrite_type_expr(&mut guard.binder_ty, import_names);
+            }
         }
     }
     for tr in &mut program.traits {
@@ -1542,6 +1548,13 @@ fn resolve_qualified_access_in_program(program: &mut Program, module_names: &Has
         // Resolve in class invariants
         for invariant in &mut class.node.invariants {
             resolve_qualified_access_in_expr(&mut invariant.node.expr.node, invariant.node.expr.span, module_names, &enum_name_map);
+        }
+        // Resolve in field guard predicates (`g.token == self.epoch` parses
+        // as QualifiedAccess chains, like any dotted path)
+        for field in &mut class.node.fields {
+            if let Some(guard) = &mut field.guarded_by {
+                resolve_qualified_access_in_expr(&mut guard.predicate.node, guard.predicate.span, module_names, &enum_name_map);
+            }
         }
         for method in &mut class.node.methods {
             // Resolve in method contracts (requires)

@@ -261,17 +261,23 @@ its theorem checked (syntax illustrative — see open questions):
 
 ```pluto
 object BlobAuthority {
-    data: bytes
+    // SHIPPED (properties RFC phase 3): the dominance half of the theorem
+    // is real syntax — every write to `data` must be dominated by a check
+    // the fact engine proves implies the predicate for some in-scope
+    // WriteGrant, and foreign writes are rejected outright. See
+    // src/typeck/dominance.rs and examples/blob/main.pt, which discharges
+    // this exact clause against its fence.
+    data: bytes guarded_by (g: WriteGrant) g.token == self.epoch
     epoch: int
 
-    invariant monotonic(self.epoch)          // proven: every write increases it
+    invariant monotonic(self.epoch)          // two-state half: properties RFC atom 2
 
     fn grant_write(mut self) WriteGrant {    // mints token, advances epoch
         ...
     }
 
     fn apply(mut self, g: WriteGrant, d: bytes) {
-        if g.token < self.epoch { raise Degraded }   // the fenced compare
+        if g.token != self.epoch { raise Degraded }  // the fenced compare
         self.data = d                                 // atomic: methods serialize
     }
     // exported theorem: no write to `data` is applied without a valid grant
@@ -293,7 +299,7 @@ The composed guarantee, each layer with a named owner:
 | Guarantee | Owner | Checked by |
 |---|---|---|
 | Atomicity | entity method serialization | object construct (shipped) |
-| Safety (single-writer) | fenced compare in `apply` | dominance proof (this RFC) |
+| Safety (single-writer) | fenced compare in `apply` | dominance proof — **shipped** (`guarded_by`, properties RFC phase 3, `src/typeck/dominance.rs`) |
 | Liveness / efficiency | lease window | runtime; pre-flight deadline check is a courtesy, never load-bearing |
 | Discipline | `Blob<Write>` typestate + mandatory error handling | typestates + error inference (shipped) + degradable states (this RFC) |
 
@@ -336,8 +342,11 @@ then a stdlib import, not a language feature.
    (2026-10-01): proof atoms are `old()` two-state ensures/invariants and a
    `guarded_by` dominance clause; exported names come from the library-defined
    `property` form (`satisfies`/`provides`/`assume`), not builtins —
-   `monotonic` is a stdlib property, not a keyword. Remaining surface
-   questions (binder syntax, namespace) live in that RFC.
+   `monotonic` is a stdlib property, not a keyword. The dominance atom is now
+   **shipped** as a declared field clause (`data: bytes guarded_by
+   (g: WriteGrant) g.token == self.epoch` — properties RFC phase 3,
+   `src/typeck/dominance.rs`), never inferred from the body; theorem
+   naming/export remains that RFC's slice 2.
 2. **Fragment contents.** Exact initial domain: intervals over ints; equalities over
    which types; what of floats (IEEE comparison pitfalls), strings, collections?
    Partially resolved: `len()` facts over collections are in the flow fragment
@@ -403,7 +412,11 @@ then a stdlib import, not a language feature.
 4. **Distribution primitives** — monotonic fields and dominance (guarded effects);
    the proof shapes behind fencing. Spec'd in [rfc-properties.md](rfc-properties.md)
    (slice 1: `old()` ensures, two-state invariants, `guarded_by`; slice 2: the
-   `property` form with provides/requires/assume).
+   `property` form with provides/requires/assume). Dominance **shipped**
+   (`guarded_by` field clauses, properties RFC phase 3,
+   `src/typeck/dominance.rs`): write sites of a guarded field are proven
+   dominated by a fact-engine-implied check over an in-scope binder value;
+   foreign writes rejected. Monotonic fields (two-state invariants) remain.
 5. **Degradable typestates + must-release** — the three transition kinds, error-
    carried state, must-release linearity. (Client: objects RFC phase 3.)
    **Shipped** (rfc-typestates.md phase 3, `src/typeck/linearity.rs`):

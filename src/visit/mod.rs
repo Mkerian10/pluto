@@ -326,6 +326,10 @@ pub fn walk_class<V: Visitor>(v: &mut V, class: &Spanned<ClassDecl>) {
     // Visit field types (includes both regular and injected fields)
     for field in &class.node.fields {
         v.visit_type_expr(&field.ty);
+        if let Some(guard) = &field.guarded_by {
+            v.visit_type_expr(&guard.binder_ty);
+            v.visit_expr(&guard.predicate);
+        }
     }
 
     // Visit methods
@@ -886,6 +890,10 @@ pub fn walk_function_mut<V: VisitMut>(v: &mut V, func: &mut Spanned<Function>) {
 pub fn walk_class_mut<V: VisitMut>(v: &mut V, class: &mut Spanned<ClassDecl>) {
     for field in &mut class.node.fields {
         v.visit_type_expr_mut(&mut field.ty);
+        if let Some(guard) = &mut field.guarded_by {
+            v.visit_type_expr_mut(&mut guard.binder_ty);
+            v.visit_expr_mut(&mut guard.predicate);
+        }
     }
     for method in &mut class.node.methods {
         v.visit_function_mut(method);

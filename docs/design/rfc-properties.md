@@ -1,6 +1,6 @@
 # RFC: Properties — Named, Checkable Claims
 
-**Status:** Draft — direction accepted (design discussion, 2026-10-01): full property system ("option A"), staged; nothing implemented
+**Status:** Draft — direction accepted (design discussion, 2026-10-01): full property system ("option A"), staged. Phase 3 (`guarded_by` dominance, atom 3) **implemented** (`src/typeck/dominance.rs`); phases 1–2 (`old()`/`ensures`, two-state invariants) in progress
 **Author:** Design discussion
 **Date:** 2026-10-01
 **Related:** [rfc-verification.md](rfc-verification.md) (the kernel this extends), [epistemics.md](epistemics.md) (the genericity principle this implements), [contracts.md](contracts.md), [rfc-objects.md](rfc-objects.md), [rfc-distributed-safety.md](rfc-distributed-safety.md)
@@ -114,11 +114,12 @@ write site relative to the pre-write state), the relation must be proven. A
 two-state invariant subsumes "monotonic field" with **no new keyword** —
 `monotonic` becomes a *name* a library binds in slice 2, not a primitive.
 
-### Atom 3 — dominance: `guarded_by`
+### Atom 3 — dominance: `guarded_by` *(IMPLEMENTED)*
 
 The fencing theorem — "no write to `data` is applied without a currently-valid
-grant" — is a control-flow property of write sites. Strawman syntax (the
-roughest part of this RFC — see open question 1):
+grant" — is a control-flow property of write sites. Shipped syntax (the
+strawman survived contact with the parser unchanged — open question 1 is
+resolved):
 
 ```pluto
 object BlobAuthority {
@@ -133,7 +134,43 @@ fact engine proves implies the predicate instantiated with some in-scope value
 of the binder type. The entity's serialized methods are the concurrency
 side-condition (no interleaving between check and write); the reentrancy
 resolution (#348) keeps that sound. This is the proof shape behind fencing and
-idempotency-key checks, and the missing half of the Blob acceptance test.
+idempotency-key checks, and was the missing half of the Blob acceptance test —
+examples/blob/main.pt now carries the clause and discharges it against its
+fence.
+
+Implementation decisions (`src/typeck/dominance.rs`):
+
+- **Structural dominance, no dominator algorithm.** Pluto's control flow is
+  structured, so dominance is decided by the fact engine's assumption
+  discipline itself: a conditional's facts are visible exactly at the points
+  it dominates (taken branch; rest-of-block after a branch whose other path
+  terminates) and are killed by anything that could invalidate them in
+  between — calls that may run user code (builtin collection methods are
+  exempt: they cannot write class int fields), writes to the compared
+  fields, binder reassignment, loop boundaries (conservative havoc),
+  closure barriers. "Predicate provable from the facts live at the write" ≡
+  "dominating check with nothing unsaying it". Unknown ⇒ compile error.
+- **Binder instantiation.** At each write site, every in-scope value of the
+  binder type (parameters and locals; innermost binding per name) is tried;
+  any one proving the predicate discharges the site. A `let` binding of a
+  pure trackable term (`let tok = grant.token`) is tracked as an alias, so
+  fences phrased through a fence local connect to the binder's fields.
+- **Foreign writes rejected outright.** A guarded field may only be written
+  through `self` inside its class's own methods — guarded fields are
+  protocol-internal; the dominance proof is only meaningful under the
+  class's own control flow. Index assignment through the guarded field
+  (`self.data[i] = v`) carries the same obligation as a direct write.
+  Construction is NOT a write site (birth is `invariant` territory).
+- **Fragment.** Predicate: `&&`/`||`/`!` over int comparisons of linear
+  arithmetic whose leaves are `self.<f>` (own int fields) and `<binder>.<f>`
+  (one-level int fields of the binder class). Binder must be a concrete
+  value class (entities rejected — their fields can change concurrently).
+  Generic classes rejected, like invariants.
+- **Classes vs objects.** On an entity, serialization closes the
+  check-then-act window. On a value class the clause is sound for a
+  different reason: values don't share (spawn deep-copies, wire copies), so
+  no concurrent writer exists to race the check. Both are accepted; neither
+  needs extra restrictions.
 
 Slice-1 exit criterion: Blob's theorem is writable **by hand** — a two-state
 invariant plus a `guarded_by` — before any property form exists.
@@ -233,10 +270,15 @@ question 4.)
 
 ## Open questions
 
-1. **`guarded_by` binder syntax.** The field-level clause with a typed binder
-   is the roughest strawman here; alternatives include a method-level guard
-   clause or a type-level theorem block. Semantics (CFG dominance over the
-   closed write-set, fact-engine implication) are settled; surface is not.
+1. **`guarded_by` binder syntax.** RESOLVED (implemented, phase 3): the
+   field-level clause with a typed binder shipped exactly as the strawman —
+   `data: bytes guarded_by (g: WriteGrant) g.token == self.epoch`, parsed
+   after the field's type (binder parenthesized, predicate to end of line).
+   Parsing forced no deviation. The considered alternatives (method-level
+   guard clause, type-level theorem block) were not needed: the field is the
+   natural owner of its write-set, and the clause reads at the declaration
+   it protects. Semantics as settled: structural dominance over the closed
+   write-set via fact-engine implication, foreign writes rejected.
 2. **Foreign-write `old()`.** For two-state invariants at foreign write sites,
    `old` means the pre-write state; for method exits, the entry state. Confirm
    no ambiguity leaks when both apply within one method.
@@ -259,8 +301,11 @@ question 4.)
    precision win lands immediately).
 2. **Two-state invariants** — monotonicity expressible with no new keyword;
    Blob's epoch theorem by hand.
-3. **`guarded_by` dominance** — the fencing proof shape; Blob acceptance
-   test 1 complete.
+3. **`guarded_by` dominance** — the fencing proof shape. **Shipped**
+   (`src/typeck/dominance.rs`, tests/integration/dominance.rs): the Blob
+   example carries the clause and discharges it against its fence; the
+   dominance half of acceptance test 1 is complete (the two-state half
+   waits on phase 2).
 4. **The `property` form** — declaration, meta-parameter typing, substitution,
    `satisfies`/`provides`, two-sided blame diagnostics, body hashing; stdlib
    property module; Blob acceptance test 2.
