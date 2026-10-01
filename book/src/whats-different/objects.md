@@ -101,6 +101,8 @@ fn main() {
 
 Objects invert the rule. The entity is *one thing*; a copy would mint a second identity, which is exactly wrong. So spawn shares entities — and sharing is safe because objects carry a stronger concurrency contract: **an object's methods are serialized**. Each instance processes one message at a time (a per-instance lock; distinct instances of the same type run concurrently). You get shared state without a heuristic "did both threads touch it?" analysis — the guarantee is attached to the construct that means shared identity.
 
+Serialized means one *message* at a time, not one stack frame. An entity method that calls another method on the same instance — directly, through an alias, through mutual recursion, even via `at` placement on itself — is still processing the same message, and the call proceeds. Reentrancy within a message is not a deadlock and not a second message; the serialization boundary sits between messages from *outside* the activation.
+
 ```
 object Counter {
     value: int
