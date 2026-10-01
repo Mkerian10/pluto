@@ -139,7 +139,7 @@ cargo run -- run examples/git-packages/main.pt
 
 ## contracts
 
-Demonstrates Pluto's contract system: `requires` (preconditions), `ensures` (postconditions), `old()` for capturing values at function entry, the `result` keyword in postconditions, and class `invariant` declarations.
+Demonstrates Pluto's contract system: `requires` (preconditions) and class `invariant` declarations as compile-time proof obligations, plus error-set shrinking — a caller guard that refutes a method's raise condition removes the handling obligation at that call site (no `!`, no `catch`).
 
 ```bash
 cargo run -- run examples/contracts/main.pt
@@ -147,7 +147,7 @@ cargo run -- run examples/contracts/main.pt
 
 ## errors
 
-Demonstrates Pluto's typed error system: error declarations with multiple error types, `raise` to throw errors, `!` postfix for error propagation (at call sites only, never in signatures), `catch` with wildcard error handling, shorthand catch with default values, and compiler-inferred error-ability. Shows that error inference works identically for primitives and custom types — no error annotations are ever written in function signatures.
+Demonstrates Pluto's typed error system: error declarations with multiple error types, `raise` to throw errors, `!` postfix for error propagation (at call sites only, never in signatures), `catch` with wildcard error handling, shorthand catch with default values, and compiler-inferred error-ability. Shows that error inference works identically for primitives and custom types — no error annotations are ever written in function signatures — and that caller facts shrink error sets: a guard that refutes every raise condition in the callee makes the call site provably infallible, needing no handling.
 
 ```bash
 cargo run -- run examples/errors/main.pt

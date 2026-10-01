@@ -7,6 +7,15 @@
 // compilation fails. The requires clauses below are exactly what make the
 // method bodies provable (they are runtime-checked at entry, and the
 // prover assumes them).
+//
+// Facts also shrink error sets: when the caller's own guard refutes every
+// raise condition inside a callee, the call needs no `!` and no catch at
+// that site — see try_withdraw below.
+
+// The typed error for the raising withdraw variant.
+error Insufficient {
+    needed: int
+}
 
 // --- Class with invariants ---
 class BankAccount {
@@ -28,6 +37,21 @@ class BankAccount {
         requires amount > 0
         requires self.balance >= amount
     {
+        self.balance = self.balance - amount
+        return self.balance
+    }
+
+    // Raising variant: instead of requiring sufficient funds, it raises
+    // Insufficient when they are missing. Callers without the facts must
+    // handle the error; a caller that has already proven
+    // amount <= self.balance calls it bare — the proof removes the
+    // handling obligation at that site (error-set shrinking).
+    fn try_withdraw(mut self, amount: int) int
+        requires amount > 0
+    {
+        if amount > self.balance {
+            raise Insufficient { needed: amount }
+        }
         self.balance = self.balance - amount
         return self.balance
     }
@@ -66,6 +90,15 @@ fn main() int {
     // the invariant at the method's exit; no runtime invariant check)
     let after_withdraw = account.withdraw(30)
     print(after_withdraw) // 120
+
+    // Error-set shrinking: try_withdraw can raise Insufficient, but the
+    // guard refutes its raise condition, so this call site is proven safe —
+    // no `!`, no catch. Remove the guard and this stops compiling.
+    let amount = 80
+    if amount <= account.balance {
+        let after_try = account.try_withdraw(amount)
+        print(after_try) // 40
+    }
 
     // Clamp (requires low <= high)
     let clamped = clamp(250, 0, 100)
