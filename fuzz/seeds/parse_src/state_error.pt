@@ -1,0 +1,38 @@
+class Idle { tag: int }
+class Held { tag: int }
+class Revoked { tag: int }
+
+class Lease<S> {
+    id: int
+
+    must_release Held
+
+    fn acquire(self) Lease<Held> where S == Idle {
+        return Lease<Held> { id: self.id }
+    }
+
+    fn check(self) int where S == Held {
+        if self.id < 0 {
+            raise Degraded { lease: Lease<Revoked> { id: self.id } }
+        }
+        return self.id
+    }
+
+    fn release(self) Lease<Idle> where S == Held {
+        return Lease<Idle> { id: self.id }
+    }
+}
+
+error Degraded { lease: Lease<Revoked> }
+
+fn main() {
+    let l = Lease<Idle> { id: -3 }
+    let h = l.acquire()
+    let n = h.check() catch e: Degraded {
+        print(e.lease.id)
+        return
+    }
+    print(n)
+    let done = h.release()
+    print(done.id)
+}

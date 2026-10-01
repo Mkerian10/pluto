@@ -1,0 +1,13 @@
+class Lease<S> {
+    id: int
+
+    must_release Nonexistent
+
+    fn get(self) int {
+        return self.id
+    }
+}
+
+fn main() {
+    print(1)
+}

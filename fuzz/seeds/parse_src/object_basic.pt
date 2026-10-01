@@ -1,0 +1,14 @@
+object Vault {
+    secret: int
+
+    fn reveal(self) int {
+        return self.secret
+    }
+}
+
+fn main() {
+    let v = Vault { secret: 5 }
+    let w = v
+    print(v == w)
+    print(v.reveal())
+}

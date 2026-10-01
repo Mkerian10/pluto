@@ -1,0 +1,20 @@
+object Vault {
+    secret: int
+    fn reveal(self) int {
+        return self.secret
+    }
+}
+
+class PayService {
+    fn check(self, v: Vault) int {
+        return v.reveal()
+    }
+}
+
+app A[pay: domain PayService] {
+    fn main(self) {
+        let v = Vault { secret: 5 }
+        let r = at self.pay { check(v) } catch -1
+        print(r)
+    }
+}

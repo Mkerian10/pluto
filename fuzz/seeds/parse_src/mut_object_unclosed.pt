@@ -1,0 +1,7 @@
+object Broken<T> {
+    value: T
+    invariant self.value >= 0
+    guarded_by (g: Grant) g.token == self.epoch
+
+    fn get(self) T {
+        return self.value

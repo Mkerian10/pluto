@@ -1,0 +1,12 @@
+class C {
+    x: int ensures self.x > 0
+    y: int guarded_by (g: int) g == 0
+
+    invariant
+}
+
+error E { lease: }
+
+fn main() {
+    let c = C { x: 1, y: 2 }
+}

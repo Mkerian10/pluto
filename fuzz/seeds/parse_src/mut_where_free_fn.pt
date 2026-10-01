@@ -1,0 +1,7 @@
+fn f() int where S == Held {
+    return 1
+}
+
+fn main() {
+    print(f())
+}

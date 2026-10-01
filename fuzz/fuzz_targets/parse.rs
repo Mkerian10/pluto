@@ -1,62 +1,155 @@
 #![no_main]
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use pluto::lexer::Token;
-use pluto::span::{Span, Spanned};
 
-/// Minimal fuzzing-friendly token representation
-#[derive(Arbitrary, Debug)]
+/// Fuzzing-friendly token vocabulary, rendered to source text and fed
+/// through the real lexer. Rendering (rather than fabricating a
+/// `Vec<Spanned<Token>>` directly) keeps spans honest: the parser resolves
+/// identifiers and contextual keywords (`ensures`, `object`, `old`, `at`,
+/// `remote`, `domain`) by slicing the source at token spans.
+///
+/// The vocabulary deliberately over-weights the newer grammar surface:
+/// typestate `where` constraints, `must_release`, `guarded_by` field
+/// clauses, `ensures`/`old()` contracts, `object` declarations, and `at`
+/// placement.
+#[derive(Arbitrary, Debug, Clone, Copy)]
 enum FuzzToken {
-    Ident,
+    // Identifiers and literals
+    IdentX,
+    IdentState,
+    IdentOld,     // contextual: old
+    IdentEnsures, // contextual: ensures
+    IdentObject,  // contextual: object
+    IdentAt,      // contextual: at
+    IdentDomain,  // contextual: domain
+    IdentRemote,  // contextual: remote
+    TypeName,
     IntLit,
-    FloatLit,
     StringLit,
-    Plus,
-    Minus,
-    Star,
-    Slash,
-    LeftParen,
-    RightParen,
-    LeftBrace,
-    RightBrace,
+    // Declaration keywords
     Fn,
     Let,
+    Mut,
+    Class,
+    Trait,
+    Enum,
+    Impl,
+    App,
+    ErrorKw,
+    Pub,
+    // Contract / typestate keywords
+    Invariant,
+    Requires,
+    Where,
+    MustRelease,
+    GuardedBy,
+    Assert,
+    // Statements / control flow
     Return,
     If,
     Else,
     While,
+    For,
+    In,
+    Match,
+    Raise,
+    Catch,
+    Spawn,
+    SelfVal,
+    // Punctuation / operators
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Eq,
+    EqEq,
+    BangEq,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
+    Bang,
+    Question,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    Comma,
+    Colon,
+    DoubleColon,
+    Dot,
+    FatArrow,
     Newline,
 }
 
 impl FuzzToken {
-    fn to_pluto_token(&self, offset: usize) -> Spanned<Token> {
-        let token = match self {
-            FuzzToken::Ident => Token::Identifier("x".to_string()),
-            FuzzToken::IntLit => Token::IntLit(42),
-            FuzzToken::FloatLit => Token::FloatLit(3.14),
-            FuzzToken::StringLit => Token::StringLit("str".to_string()),
-            FuzzToken::Plus => Token::Plus,
-            FuzzToken::Minus => Token::Minus,
-            FuzzToken::Star => Token::Star,
-            FuzzToken::Slash => Token::Slash,
-            FuzzToken::LeftParen => Token::LeftParen,
-            FuzzToken::RightParen => Token::RightParen,
-            FuzzToken::LeftBrace => Token::LeftBrace,
-            FuzzToken::RightBrace => Token::RightBrace,
-            FuzzToken::Fn => Token::Fn,
-            FuzzToken::Let => Token::Let,
-            FuzzToken::Return => Token::Return,
-            FuzzToken::If => Token::If,
-            FuzzToken::Else => Token::Else,
-            FuzzToken::While => Token::While,
-            FuzzToken::Newline => Token::Newline,
-        };
-        Spanned {
-            node: token,
-            span: Span {
-                start: offset,
-                end: offset + 1,
-            },
+    fn text(self) -> &'static str {
+        match self {
+            FuzzToken::IdentX => "x",
+            FuzzToken::IdentState => "Held",
+            FuzzToken::IdentOld => "old",
+            FuzzToken::IdentEnsures => "ensures",
+            FuzzToken::IdentObject => "object",
+            FuzzToken::IdentAt => "at",
+            FuzzToken::IdentDomain => "domain",
+            FuzzToken::IdentRemote => "remote",
+            FuzzToken::TypeName => "T",
+            FuzzToken::IntLit => "42",
+            FuzzToken::StringLit => "\"s\"",
+            FuzzToken::Fn => "fn",
+            FuzzToken::Let => "let",
+            FuzzToken::Mut => "mut",
+            FuzzToken::Class => "class",
+            FuzzToken::Trait => "trait",
+            FuzzToken::Enum => "enum",
+            FuzzToken::Impl => "impl",
+            FuzzToken::App => "app",
+            FuzzToken::ErrorKw => "error",
+            FuzzToken::Pub => "pub",
+            FuzzToken::Invariant => "invariant",
+            FuzzToken::Requires => "requires",
+            FuzzToken::Where => "where",
+            FuzzToken::MustRelease => "must_release",
+            FuzzToken::GuardedBy => "guarded_by",
+            FuzzToken::Assert => "assert",
+            FuzzToken::Return => "return",
+            FuzzToken::If => "if",
+            FuzzToken::Else => "else",
+            FuzzToken::While => "while",
+            FuzzToken::For => "for",
+            FuzzToken::In => "in",
+            FuzzToken::Match => "match",
+            FuzzToken::Raise => "raise",
+            FuzzToken::Catch => "catch",
+            FuzzToken::Spawn => "spawn",
+            FuzzToken::SelfVal => "self",
+            FuzzToken::Plus => "+",
+            FuzzToken::Minus => "-",
+            FuzzToken::Star => "*",
+            FuzzToken::Slash => "/",
+            FuzzToken::Eq => "=",
+            FuzzToken::EqEq => "==",
+            FuzzToken::BangEq => "!=",
+            FuzzToken::Lt => "<",
+            FuzzToken::Gt => ">",
+            FuzzToken::LtEq => "<=",
+            FuzzToken::GtEq => ">=",
+            FuzzToken::Bang => "!",
+            FuzzToken::Question => "?",
+            FuzzToken::LParen => "(",
+            FuzzToken::RParen => ")",
+            FuzzToken::LBrace => "{",
+            FuzzToken::RBrace => "}",
+            FuzzToken::LBracket => "[",
+            FuzzToken::RBracket => "]",
+            FuzzToken::Comma => ",",
+            FuzzToken::Colon => ":",
+            FuzzToken::DoubleColon => "::",
+            FuzzToken::Dot => ".",
+            FuzzToken::FatArrow => "=>",
+            FuzzToken::Newline => "\n",
         }
     }
 }
@@ -67,28 +160,23 @@ struct FuzzTokens {
 }
 
 fuzz_target!(|input: FuzzTokens| {
-    // Generate token stream
-    let mut tokens: Vec<Spanned<Token>> = input
+    // Cap the token count: nesting tokens (`(`, `{`) recurse in the parser,
+    // and production parses on a 16MB stack (see pluto::compile_to_object);
+    // the default fuzz thread is smaller.
+    if input.tokens.len() > 512 {
+        return;
+    }
+    let source: String = input
         .tokens
         .iter()
-        .enumerate()
-        .map(|(i, t)| t.to_pluto_token(i))
-        .collect();
+        .map(|t| t.text())
+        .collect::<Vec<_>>()
+        .join(" ");
 
-    // Always add EOF
-    let last_offset = tokens.len();
-    tokens.push(Spanned {
-        node: Token::Eof,
-        span: Span {
-            start: last_offset,
-            end: last_offset,
-        },
-    });
-
-    // Create a dummy source string for the parser
-    let source = "x ".repeat(tokens.len());
-
-    // Feed to parser - should never panic
+    let Ok(tokens) = pluto::lexer::lex(&source) else {
+        return;
+    };
+    // Feed to parser — must never panic.
     let mut parser = pluto::parser::Parser::new(&tokens, &source);
     let _ = parser.parse_program();
 });

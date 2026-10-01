@@ -1,0 +1,12 @@
+class C {
+    x: int
+
+    fn f(mut self) requires old(self.x) > 0 {
+        self.x = self.x - 1
+    }
+}
+
+fn main() {
+    let mut c = C { x: 3 }
+    c.f()
+}

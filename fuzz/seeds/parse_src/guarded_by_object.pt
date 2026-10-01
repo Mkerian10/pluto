@@ -1,0 +1,39 @@
+error StaleGrant {
+    token: int
+    epoch: int
+}
+
+class WriteGrant {
+    token: int
+}
+
+object BlobAuthority {
+    data: bytes guarded_by (g: WriteGrant) g.token == self.epoch
+    epoch: int
+    applied: int
+
+    invariant self.epoch >= 0
+    invariant self.applied <= self.epoch
+
+    fn grant_write(mut self) WriteGrant {
+        self.epoch = self.epoch + 1
+        return WriteGrant { token: self.epoch }
+    }
+
+    fn apply(mut self, grant: WriteGrant, d: string) {
+        let tok = grant.token
+        if tok != self.epoch {
+            raise StaleGrant { token: tok, epoch: self.epoch }
+        }
+        self.applied = tok
+        self.data = d.to_bytes()
+    }
+}
+
+fn main() {
+    let mut blob = BlobAuthority { data: "genesis".to_bytes(), epoch: 0, applied: 0 }
+    let g = blob.grant_write()
+    blob.apply(g, "fenced") catch err {
+        print("rejected")
+    }
+}

@@ -1,0 +1,11 @@
+class Lease<S> {
+    id: int
+
+    fn acquire(self) Lease<Held> where S == Idle ensures self.id == old(self.id) where S == Held {
+        return Lease<Held> { id: self.id }
+    }
+
+    fn weird(self) where == {
+        return
+    }
+}

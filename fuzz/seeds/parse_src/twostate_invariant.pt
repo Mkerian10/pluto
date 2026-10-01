@@ -1,0 +1,15 @@
+class Ledger {
+    e: int
+
+    invariant self.e >= old(self.e)
+
+    fn bump(mut self) {
+        self.e = self.e + 1
+    }
+}
+
+fn main() {
+    let mut l = Ledger { e: 0 }
+    l.bump()
+    print(l.e)
+}
