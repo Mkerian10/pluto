@@ -10,11 +10,20 @@
 object Counter {
     value: int
 
-    fn increment(mut self) {
+    // A two-state invariant (rfc-properties.md atom 2): the counter is
+    // MONOTONE. Proven at every mut-self method boundary against its entry
+    // state and at every foreign write against the pre-write state — a
+    // decrement anywhere would be a compile error, so "counts only go up"
+    // is part of the entity's checked contract, not a comment.
+    invariant self.value >= old(self.value)
+
+    // The exact relation, proven at every normal exit and assumed by
+    // callers (atom 1): one increment, exactly one more.
+    fn increment(mut self) ensures self.value == old(self.value) + 1 {
         self.value = self.value + 1
     }
 
-    fn work(mut self) {
+    fn work(mut self) ensures self.value >= old(self.value) {
         let mut i = 0
         while i < 1000 {
             self.value = self.value + 1

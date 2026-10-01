@@ -6,6 +6,12 @@ import std.socket
 pub object TcpListener {
     fd: int
 
+    // The descriptor is fixed for the entity's life (two-state frame
+    // invariant, rfc-properties.md atom 2): the listener never rebinds.
+    // (fd >= 0 does NOT hold here — listen() constructs a sentinel
+    // listener with fd: -1 on failure instead of raising.)
+    invariant self.fd == old(self.fd)
+
     fn accept(self) TcpConnection {
         let client_fd = socket.accept(self.fd)
         return TcpConnection { fd: client_fd }
@@ -25,6 +31,11 @@ pub object TcpListener {
 // interleaving mid-operation.
 pub object TcpConnection {
     fd: int
+
+    // One connection, one socket, forever: the fd never re-points
+    // (two-state frame invariant; the -1 sentinel from connect() failure
+    // is a construction value, which two-state clauses do not constrain).
+    invariant self.fd == old(self.fd)
 
     fn read(self, max_bytes: int) string {
         return socket.read(self.fd, max_bytes)

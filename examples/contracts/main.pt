@@ -1,16 +1,21 @@
 // Contracts Example
-// Demonstrates requires (preconditions) and class invariants.
-// Postconditions are handled by invariants in Pluto.
+// Demonstrates requires (preconditions), class invariants, and ensures
+// (two-state postconditions, docs/design/rfc-properties.md atom 1).
 //
-// Invariants are compile-time proof obligations: the compiler proves at
-// every construction and write site that the invariant is preserved, or
-// compilation fails. The requires clauses below are exactly what make the
-// method bodies provable (they are runtime-checked at entry, and the
-// prover assumes them).
+// Invariants and ensures are compile-time proof obligations: the compiler
+// proves at every construction/write site (invariants) and at every normal
+// method exit (ensures) that the claim holds, or compilation fails. The
+// requires clauses below are exactly what make the method bodies provable
+// (they are runtime-checked at entry, and the prover assumes them).
+// `old(expr)` in an ensures names the value at method ENTRY, so
+// `self.balance == old(self.balance) + amount` is the exact bookkeeping
+// relation — not just "balance changed".
 //
-// Facts also shrink error sets: when the caller's own guard refutes every
-// raise condition inside a callee, the call needs no `!` and no catch at
-// that site — see try_withdraw below.
+// Facts also shrink error sets: when the caller's facts refute every raise
+// condition inside a callee, the call needs no `!` and no catch at that
+// site. The facts can come from the caller's own guard (first try_withdraw
+// below) or from a previous callee's declared ensures (second
+// try_withdraw) — contracts composing across call boundaries.
 
 // The typed error for the raising withdraw variant.
 error Insufficient {
@@ -24,9 +29,12 @@ class BankAccount {
 
     invariant self.balance >= 0
 
-    // requires: amount must be positive
+    // requires: amount must be positive.
+    // ensures: deposits credit exactly what was handed over — proven at
+    // every normal exit, assumed by every caller.
     fn deposit(mut self, amount: int) int
         requires amount > 0
+        ensures self.balance == old(self.balance) + amount
     {
         self.balance = self.balance + amount
         return self.balance
@@ -36,6 +44,7 @@ class BankAccount {
     fn withdraw(mut self, amount: int) int
         requires amount > 0
         requires self.balance >= amount
+        ensures self.balance == old(self.balance) - amount
     {
         self.balance = self.balance - amount
         return self.balance
@@ -46,8 +55,11 @@ class BankAccount {
     // handle the error; a caller that has already proven
     // amount <= self.balance calls it bare — the proof removes the
     // handling obligation at that site (error-set shrinking).
+    // The ensures is owed only on the normal exit — the raise path is
+    // governed by the error contract, not the postcondition.
     fn try_withdraw(mut self, amount: int) int
         requires amount > 0
+        ensures self.balance == old(self.balance) - amount
     {
         if amount > self.balance {
             raise Insufficient { needed: amount }
@@ -91,9 +103,21 @@ fn main() int {
     let after_withdraw = account.withdraw(30)
     print(after_withdraw) // 120
 
-    // Error-set shrinking: try_withdraw can raise Insufficient, but the
-    // guard refutes its raise condition, so this call site is proven safe —
-    // no `!`, no catch. Remove the guard and this stops compiling.
+    // Error-set shrinking with NO runtime guard: the caller's facts come
+    // entirely from declared contracts composing. The invariant gives
+    // balance >= 0 before the deposit, deposit's ensures then gives
+    // balance == old + 80 >= 80, which refutes try_withdraw's raise
+    // condition (amount > balance) — so this call site is proven safe with
+    // no `!`, no catch, and no `if`. Delete the deposit line (or weaken its
+    // ensures) and this stops compiling: the proof rides on the callee's
+    // declared relation, not on anything this function checked itself.
+    account.deposit(80)
+    let after_bare = account.try_withdraw(80)
+    print(after_bare) // 120
+
+    // The classic guard-based shrinking still works: the caller's own
+    // branch refutes the raise condition. Remove the guard and this stops
+    // compiling.
     let amount = 80
     if amount <= account.balance {
         let after_try = account.try_withdraw(amount)
