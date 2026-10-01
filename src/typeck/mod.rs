@@ -91,8 +91,16 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     env.errors.entry("TaskCancelled".to_string()).or_insert(ErrorInfo {
         fields: vec![("message".to_string(), PlutoType::String)],
     });
+    // NetworkError carries the boundary-failure classification (epistemics.md,
+    // rfc-distributed-safety.md "Failure classification"): `definite == true`
+    // means the request is KNOWN not to have been dispatched — the effect did
+    // not apply; `definite == false` means the request left the process and no
+    // response returned — the effect may or may not have applied (ambiguous).
     env.errors.entry("NetworkError".to_string()).or_insert(ErrorInfo {
-        fields: vec![("message".to_string(), PlutoType::String)],
+        fields: vec![
+            ("message".to_string(), PlutoType::String),
+            ("definite".to_string(), PlutoType::Bool),
+        ],
     });
     env.errors.entry("TimeoutError".to_string()).or_insert(ErrorInfo {
         fields: vec![("millis".to_string(), PlutoType::Int)],

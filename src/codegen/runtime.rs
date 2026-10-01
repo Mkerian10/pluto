@@ -93,6 +93,10 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_set_error_type", &[types::I64], &[])?;
         reg.declare(module, "__pluto_error_type", &[], &[types::I64])?;
 
+        // Boundary-failure classification (definite vs ambiguous)
+        reg.declare(module, "__pluto_boundary_failure_definite", &[], &[types::I64])?;
+        reg.declare(module, "__pluto_boundary_failure_reason", &[], &[types::I64])?;
+
         // Time
         reg.declare(module, "__pluto_time_ns", &[], &[types::I64])?;
         reg.declare(module, "__pluto_time_wall_ns", &[], &[types::I64])?;

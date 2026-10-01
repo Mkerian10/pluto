@@ -779,8 +779,17 @@ impl<'a> LowerContext<'a> {
             let id = self.call_runtime("__pluto_parse_long", &[id_field]);
             let entity = self.call_runtime("__pluto_entity_resolve_local", &[id]);
             let live_bb = self.builder.create_block();
+            let no_entity_bb = self.builder.create_block();
             let is_null = self.builder.ins().icmp(IntCC::Equal, entity, zero);
-            self.builder.ins().brif(is_null, close_bb, &[], live_bb, &[]);
+            self.builder.ins().brif(is_null, no_entity_bb, &[], live_bb, &[]);
+            // Unknown entity id: reply with a pre-dispatch rejection so the
+            // client classifies the failure as definite (not dispatched)
+            // rather than ambiguous.
+            self.builder.switch_to_block(no_entity_bb);
+            self.builder.seal_block(no_entity_bb);
+            let rej = self.make_string_literal("ERR\n__rejected\nunknown entity at its home domain")?;
+            self.call_runtime("__pluto_write_framed", &[conn, rej]);
+            self.builder.ins().jump(close_bb, &[]);
             self.builder.switch_to_block(live_bb);
             self.builder.seal_block(live_bb);
 
@@ -797,7 +806,12 @@ impl<'a> LowerContext<'a> {
             self.builder.seal_block(next_bb);
         }
 
-        // No match (incl. hash mismatch): close; client sees a failed call.
+        // No match (incl. interface-hash mismatch): reply with a pre-dispatch
+        // rejection before closing. The server KNOWS it never dispatched the
+        // request; without a response the client could only classify the
+        // failure as ambiguous — this converts it to a definite one.
+        let rej = self.make_string_literal("ERR\n__rejected\nunknown method or interface-hash mismatch")?;
+        self.call_runtime("__pluto_write_framed", &[conn, rej]);
         self.builder.ins().jump(close_bb, &[]);
 
         self.builder.switch_to_block(close_bb);
@@ -2599,6 +2613,24 @@ impl<'a> LowerContext<'a> {
         Ok(payload)
     }
 
+    /// Raise a NetworkError whose fields are already-lowered values:
+    /// `msg` a pluto string, `definite` an I64 0/1 classification flag
+    /// (true = the request is known not to have been dispatched). Sets the
+    /// error type tag so typed `catch err: NetworkError` handlers match.
+    fn emit_raise_network_error(&mut self, msg: Value, definite: Value) -> Result<(), CompileError> {
+        let nfields = self.env.errors.get("NetworkError").map_or(2, |e| e.fields.len());
+        let size = (nfields as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
+        let size_val = self.builder.ins().iconst(types::I64, size);
+        let err_ptr = self.call_runtime("__pluto_alloc", &[size_val]);
+        self.builder.ins().store(MemFlags::new(), msg, err_ptr, Offset32::new(0));
+        // Bool slots are I64-width in error objects; readers load the low byte.
+        self.builder.ins().store(MemFlags::new(), definite, err_ptr, Offset32::new(POINTER_SIZE));
+        self.call_runtime_void("__pluto_raise_error", &[err_ptr]);
+        let type_str = self.make_string_literal("NetworkError")?;
+        self.call_runtime_void("__pluto_set_error_type", &[type_str]);
+        Ok(())
+    }
+
     /// Handle a boundary response: null -> NetworkError; OK -> decode payload;
     /// ERR -> reconstruct a typed error from `err_key`'s inferred error set.
     /// Every exit jumps to `cont_bb` (one ret_cl param).
@@ -2619,17 +2651,17 @@ impl<'a> LowerContext<'a> {
         let is_null = self.builder.ins().icmp(IntCC::Equal, resp, zero);
         self.builder.ins().brif(is_null, fail_bb, &[], ok_bb, &[]);
 
-        // Failure: raise NetworkError, yield a dummy value.
+        // Failure: raise NetworkError carrying the runtime's classification of
+        // the failure (definite = known-not-dispatched vs ambiguous = sent, no
+        // response). Only the runtime knows whether the frame left the
+        // process, so the flag and the reason are read back from it.
         self.builder.switch_to_block(fail_bb);
         self.builder.seal_block(fail_bb);
-        let nfields = self.env.errors.get("NetworkError").map_or(1, |e| e.fields.len());
-        let size = (nfields as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
-        let size_val = self.builder.ins().iconst(types::I64, size);
-        let err_ptr = self.call_runtime("__pluto_alloc", &[size_val]);
-        let msg = format!("boundary call to {err_label} failed");
-        let mstr = self.make_string_literal(&msg)?;
-        self.builder.ins().store(MemFlags::new(), mstr, err_ptr, Offset32::new(0));
-        self.call_runtime_void("__pluto_raise_error", &[err_ptr]);
+        let prefix = self.make_string_literal(&format!("boundary call to {err_label} failed: "))?;
+        let reason = self.call_runtime("__pluto_boundary_failure_reason", &[]);
+        let msg = self.call_runtime("__pluto_string_concat", &[prefix, reason]);
+        let definite = self.call_runtime("__pluto_boundary_failure_definite", &[]);
+        self.emit_raise_network_error(msg, definite)?;
         let dflt = if ret_cl == types::F64 {
             self.builder.ins().f64const(0.0)
         } else {
@@ -2668,6 +2700,36 @@ impl<'a> LowerContext<'a> {
         self.builder.switch_to_block(err_status_bb);
         self.builder.seal_block(err_status_bb);
         let err_type = self.call_runtime("__pluto_request_field", &[resp, one]);
+
+        // Pre-dispatch rejection: the server answered `ERR\n__rejected\n<why>`
+        // without dispatching (unknown method, interface-hash mismatch, or
+        // unknown entity). The authority itself reports the request never ran,
+        // so this is a DEFINITE failure — the effect did not apply.
+        {
+            let rejected_bb = self.builder.create_block();
+            let not_rejected_bb = self.builder.create_block();
+            let rej_lit = self.make_string_literal("__rejected")?;
+            let is_rej = self.call_runtime("__pluto_string_eq", &[err_type, rej_lit]);
+            self.builder.ins().brif(is_rej, rejected_bb, &[], not_rejected_bb, &[]);
+            self.builder.switch_to_block(rejected_bb);
+            self.builder.seal_block(rejected_bb);
+            let two = self.builder.ins().iconst(types::I64, 2);
+            let why = self.call_runtime("__pluto_request_field", &[resp, two]);
+            let prefix = self.make_string_literal(
+                &format!("boundary call to {err_label} rejected before dispatch: "))?;
+            let msg = self.call_runtime("__pluto_string_concat", &[prefix, why]);
+            let definite = self.builder.ins().iconst(types::I64, 1);
+            self.emit_raise_network_error(msg, definite)?;
+            let d = if ret_cl == types::F64 {
+                self.builder.ins().f64const(0.0)
+            } else {
+                self.builder.ins().iconst(ret_cl, 0)
+            };
+            self.builder.ins().jump(cont_bb, &[d]);
+            self.builder.switch_to_block(not_rejected_bb);
+            self.builder.seal_block(not_rejected_bb);
+        }
+
         let mut error_types: Vec<String> = self.env.fn_errors.get(err_key)
             .map(|s| s.iter().filter(|e| *e != "NetworkError").cloned().collect())
             .unwrap_or_default();
@@ -2692,14 +2754,15 @@ impl<'a> LowerContext<'a> {
             self.builder.switch_to_block(next_bb);
             self.builder.seal_block(next_bb);
         }
-        // Fallback: unrecognized error type -> NetworkError.
-        let nf = self.env.errors.get("NetworkError").map_or(1, |e| e.fields.len());
-        let nsize = (nf as i64 * POINTER_SIZE as i64).max(POINTER_SIZE as i64);
-        let nsize_val = self.builder.ins().iconst(types::I64, nsize);
-        let nptr = self.call_runtime("__pluto_alloc", &[nsize_val]);
-        let nmsg = self.make_string_literal("remote error")?;
-        self.builder.ins().store(MemFlags::new(), nmsg, nptr, Offset32::new(0));
-        self.call_runtime_void("__pluto_raise_error", &[nptr]);
+        // Fallback: the server DID dispatch and reported an error type this
+        // client cannot reconstruct (error-set skew, or a multi-error method's
+        // `__unknown` response). The method ran, so its effects up to the
+        // raise may persist — classify as ambiguous, never definite.
+        let nmsg = self.make_string_literal(
+            &format!("boundary call to {err_label} failed: server reported an \
+                      unrecognized error (outcome unknown)"))?;
+        let ndef = self.builder.ins().iconst(types::I64, 0);
+        self.emit_raise_network_error(nmsg, ndef)?;
         let d2 = if ret_cl == types::F64 {
             self.builder.ins().f64const(0.0)
         } else {
