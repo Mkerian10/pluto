@@ -1963,30 +1963,120 @@ void __pluto_assert_failure(long assert_desc) {
 }
 
 // ── Rwlock synchronization ─────────────────────────────────────────────────
+//
+// Owner-aware read/write lock used ONLY for class-method serialization:
+// per-type globals for synchronized singletons/served classes, and the
+// per-instance hidden slot of each entity allocation. NOT a user-facing
+// sync primitive.
+//
+// Why not pthread_rwlock_t: it is not reentrant, and an entity method
+// calling another method on the SAME instance from the SAME thread is part
+// of processing the same message — it must proceed (rfc-objects.md open
+// question 6). pthread recursion is deadlock on glibc and silent breakage
+// on macOS (wrlock returns EDEADLK, which unchecked callers ignore; the
+// nested unlock then releases the OUTER hold mid-method).
+//
+// Semantics:
+//   - Write holds are exclusive and owner-tracked with a depth count. Any
+//     reacquisition (rd or wr) by the owning thread bumps the depth: once a
+//     thread holds the write side it has exclusive access, so a nested
+//     "read" inside it is just another level of the same message.
+//   - Reads are shared and counted, with NO writer preference: a new reader
+//     only waits on an ACTIVE writer, never on a queued one, so rd-within-rd
+//     on one thread can never deadlock against a waiting writer. (Writers
+//     can starve under continuous read load — accepted for simplicity.)
+//   - Write-within-read (upgrade) is NOT supported and would self-deadlock;
+//     it is unreachable from Pluto because typeck rejects calling a
+//     `mut self` method from a non-mut context (directly or via aliases).
+//   - Cross-thread acquisition on a held lock blocks: that is the genuine
+//     mutual exclusion entities promise (one message at a time).
+//
+// GC: every blocking wait is bracketed in a safe region (mirroring
+// chan_lock/chan_cond_wait): a lock holder can be parked for a whole
+// collection, so threads blocked acquiring the metadata mutex or waiting on
+// the condvar must count as stopped for stop-the-world. The collector never
+// takes these locks, so parking while holding one is fine.
 
 #ifndef PLUTO_TEST_MODE
+typedef struct {
+    pthread_mutex_t mu;   // guards the fields below (held only for metadata ops)
+    pthread_cond_t cv;    // signaled when the lock may have become available
+    long readers;         // active shared (read) holds
+    long write_depth;     // nested holds by the owning thread (0 = not write-held)
+    pthread_t owner;      // valid iff write_depth > 0
+} PlutoRwlock;
+
+// Acquire the metadata mutex, counting the wait as a GC-safe region (a
+// holder of mu can itself be parked in leave_safe_region for a collection).
+static void rwlock_mu_lock(PlutoRwlock *l) {
+    __pluto_gc_enter_safe_region();
+    pthread_mutex_lock(&l->mu);
+    __pluto_gc_leave_safe_region();
+}
+
+static void rwlock_cond_wait(PlutoRwlock *l) {
+    __pluto_gc_enter_safe_region();
+    pthread_cond_wait(&l->cv, &l->mu);
+    __pluto_gc_leave_safe_region();
+}
+
 long __pluto_rwlock_init(void) {
-    pthread_rwlock_t *lock = (pthread_rwlock_t *)malloc(sizeof(pthread_rwlock_t));
-    pthread_rwlock_init(lock, NULL);
-    return (long)lock;
+    PlutoRwlock *l = (PlutoRwlock *)calloc(1, sizeof(PlutoRwlock));
+    pthread_mutex_init(&l->mu, NULL);
+    pthread_cond_init(&l->cv, NULL);
+    return (long)l;
 }
 
 void __pluto_rwlock_rdlock(long lock_ptr) {
-    pthread_rwlock_rdlock((pthread_rwlock_t *)lock_ptr);
+    PlutoRwlock *l = (PlutoRwlock *)lock_ptr;
+    rwlock_mu_lock(l);
+    if (l->write_depth > 0 && pthread_equal(l->owner, pthread_self())) {
+        l->write_depth++;  // read nested in our own write hold
+        pthread_mutex_unlock(&l->mu);
+        return;
+    }
+    while (l->write_depth > 0) {
+        rwlock_cond_wait(l);
+    }
+    l->readers++;
+    pthread_mutex_unlock(&l->mu);
 }
 
 void __pluto_rwlock_wrlock(long lock_ptr) {
-    pthread_rwlock_wrlock((pthread_rwlock_t *)lock_ptr);
+    PlutoRwlock *l = (PlutoRwlock *)lock_ptr;
+    rwlock_mu_lock(l);
+    if (l->write_depth > 0 && pthread_equal(l->owner, pthread_self())) {
+        l->write_depth++;  // reentrant write (same-message self-call)
+        pthread_mutex_unlock(&l->mu);
+        return;
+    }
+    while (l->write_depth > 0 || l->readers > 0) {
+        rwlock_cond_wait(l);
+    }
+    l->owner = pthread_self();
+    l->write_depth = 1;
+    pthread_mutex_unlock(&l->mu);
 }
 
 void __pluto_rwlock_unlock(long lock_ptr) {
-    pthread_rwlock_unlock((pthread_rwlock_t *)lock_ptr);
+    PlutoRwlock *l = (PlutoRwlock *)lock_ptr;
+    rwlock_mu_lock(l);
+    if (l->write_depth > 0 && pthread_equal(l->owner, pthread_self())) {
+        l->write_depth--;
+        if (l->write_depth == 0) pthread_cond_broadcast(&l->cv);
+    } else if (l->readers > 0) {
+        l->readers--;
+        if (l->readers == 0) pthread_cond_broadcast(&l->cv);
+    }
+    pthread_mutex_unlock(&l->mu);
 }
 
 void __pluto_rwlock_destroy(long lock_ptr) {
     if (!lock_ptr) return;
-    pthread_rwlock_destroy((pthread_rwlock_t *)lock_ptr);
-    free((void *)lock_ptr);
+    PlutoRwlock *l = (PlutoRwlock *)lock_ptr;
+    pthread_mutex_destroy(&l->mu);
+    pthread_cond_destroy(&l->cv);
+    free(l);
 }
 
 // ── Per-instance entity locks ──────────────────────────────────────────────
@@ -1997,41 +2087,35 @@ void __pluto_rwlock_destroy(long lock_ptr) {
 // backends). Two instances of one object type run methods concurrently;
 // concurrent calls to the SAME instance serialize.
 //
-// Acquisition brackets the wait in a GC safe region, mirroring chan_lock:
-// the lock holder can be parked (at a safepoint or in a safe region, e.g.
-// blocked on a channel inside a method body) for a whole collection, so a
-// thread blocked acquiring an entity lock must count as stopped for
-// stop-the-world or the collector would wait on it forever. The collector
-// never takes entity locks, so parking while holding one is fine.
+// The lock is the owner-aware PlutoRwlock above: same-thread reacquisition
+// (a method self-call, directly or through an alias — same message) bumps
+// the depth and proceeds; cross-thread acquisition blocks (one message at a
+// time). Blocking waits are safe-region bracketed inside the lock itself.
 
-static pthread_rwlock_t *entity_lock_of(void *entity) {
-    if (!entity) return NULL;
+static long entity_lock_of(void *entity) {
+    if (!entity) return 0;
     GCHeader *h = (GCHeader *)((char *)entity - sizeof(GCHeader));
-    if (h->type_tag != GC_TAG_ENTITY || h->size < 8) return NULL;
+    if (h->type_tag != GC_TAG_ENTITY || h->size < 8) return 0;
     long *slots = (long *)entity;
-    return (pthread_rwlock_t *)slots[h->size / 8 - 1];
+    return slots[h->size / 8 - 1];
 }
 
 void __pluto_entity_rdlock(void *entity) {
-    pthread_rwlock_t *lock = entity_lock_of(entity);
+    long lock = entity_lock_of(entity);
     if (!lock) return;
-    __pluto_gc_enter_safe_region();
-    pthread_rwlock_rdlock(lock);
-    __pluto_gc_leave_safe_region();
+    __pluto_rwlock_rdlock(lock);
 }
 
 void __pluto_entity_wrlock(void *entity) {
-    pthread_rwlock_t *lock = entity_lock_of(entity);
+    long lock = entity_lock_of(entity);
     if (!lock) return;
-    __pluto_gc_enter_safe_region();
-    pthread_rwlock_wrlock(lock);
-    __pluto_gc_leave_safe_region();
+    __pluto_rwlock_wrlock(lock);
 }
 
 void __pluto_entity_unlock(void *entity) {
-    pthread_rwlock_t *lock = entity_lock_of(entity);
+    long lock = entity_lock_of(entity);
     if (!lock) return;
-    pthread_rwlock_unlock(lock);
+    __pluto_rwlock_unlock(lock);
 }
 #else
 // Test mode: single-threaded fiber scheduler — locks are no-ops. (The
