@@ -16,6 +16,12 @@ pub error HttpError {
 
 Raised by `listen()` and `HttpConnection.read_request()`.
 
+## Entities and Invariants
+
+`HttpServer` and `HttpConnection` are **objects** — entities owning live sockets. They compare by identity, are shared (not deep-copied) across `spawn`, and their methods serialize per instance. `Request` and `Response` stay classes: they are wire-shaped data, copied and compared structurally. See [Objects and Entities](../whats-different/objects.md).
+
+Both entities carry a compile-time-proven invariant: `self.fd >= 0`. A `HttpServer` or `HttpConnection` can never exist around a bad descriptor — `listen()` raises `HttpError` on any socket/bind/listen failure instead of constructing a broken server, and `accept()` raises instead of wrapping a failed descriptor. The invariant is discharged statically (see [Contracts](../whats-different/contracts.md)); no runtime check exists.
+
 ## Server
 
 ### listen

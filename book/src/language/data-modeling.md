@@ -2,6 +2,8 @@
 
 Pluto has three data modeling primitives: classes, traits, and enums. There is no inheritance. Composition happens through dependency injection and embedding. Polymorphism happens through traits. This is intentional.
 
+Classes model **values** — data, compared by content. For things with identity — services, resources, shared state — Pluto has a fourth construct, `object`, covered in [Objects and Entities](../whats-different/objects.md). This chapter is about values.
+
 ## Classes
 
 A class is a named collection of fields with methods.
@@ -30,6 +32,23 @@ let p = Point { x: 1.0, y: 2.0 }
 let q = p.translate(3.0, 4.0)
 print(p.distance(q))
 ```
+
+### Equality Is Structural
+
+Values are their content, and `==` says so. Two class instances with equal fields are equal, recursively — through nested classes, enums, arrays, maps, sets, and nullables (maps and sets compare order-independently):
+
+```
+class Address { city: string }
+class Person { name: string, address: Address }
+
+fn main() {
+    let a = Person { name: "alice", address: Address { city: "nyc" } }
+    let b = Person { name: "alice", address: Address { city: "nyc" } }
+    print(a == b)    // true — same content, same value
+}
+```
+
+This is the rule for every value shape in the language. The one thing compared by *identity* inside a structural comparison is an entity (`object`) — equal state in a different entity is still a different entity.
 
 ### Mutation
 
@@ -150,13 +169,12 @@ This uses vtable-based dynamic dispatch. You can also declare variables with tra
 
 ### Traits with Contracts
 
-Trait methods can carry `requires` and `ensures` clauses, enforced at runtime on all implementors:
+Trait methods can carry `requires` clauses, enforced at runtime on all implementors:
 
 ```
 trait Validator {
     fn validate(self, x: int) int
         requires x > 0
-        ensures result > 0
 }
 
 class Doubler impl Validator {
@@ -165,7 +183,7 @@ class Doubler impl Validator {
 }
 ```
 
-Calling `validate(-1)` aborts with a requires violation. Implementors cannot weaken the contract (Liskov substitution principle).
+Calling `validate(-1)` aborts with a requires violation. Implementations cannot add `requires` of their own — demanding more than the trait promised would break substitutability (Liskov substitution principle), and the compiler rejects it. See [Contracts](../whats-different/contracts.md).
 
 ## Enums
 

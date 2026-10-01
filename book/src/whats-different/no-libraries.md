@@ -96,44 +96,11 @@ app PaymentService[db: Database, cache: Cache] {
 
 The compiler generates a native binary for this app. The binary is **self-contained**: all dependencies are compiled in, all wiring is done, all error handling is checked. There's no external configuration file that changes the dependency graph. There's no classpath. There's no dynamic linking. It's a single binary that does one thing.
 
-## Stages: The Future of Deployment
+## Source-Level Composition Extends Across Services
 
-*(This section is aspirational — stages are designed but not fully implemented.)*
+The same principle scales past one process. A `system` declaration composes multiple modules into a distributed application, and because every member is source, the compiler checks them *against each other*: an `orders` service's dependency on a `billing` interface is verified against the billing service that actually serves it — types, error contracts, interface hashes — before either binary is built. Placement expressions (`at domain { ... }`) carry computation across boundaries with the transport synthesized from the deployment binding, not written by hand.
 
-Right now, a Pluto program is one app. In the future, a Pluto program will be a collection of **stages** — independently deployable units that communicate via function calls.
-
-```
-stage api {
-    pub fn handle_request(req: Request) Response {
-        let user = db_stage.fetch_user(req.user_id)!
-        return build_response(user)
-    }
-}
-
-stage db_stage {
-    pub fn fetch_user(id: int) User {
-        return query("SELECT * FROM users WHERE id = {id}")!
-    }
-}
-```
-
-The compiler sees both stages. It sees that `api` calls `db_stage.fetch_user`. It knows this crosses a stage boundary. **It generates RPC code automatically.**
-
-From your perspective, it's a function call. From the compiler's perspective, it's:
-1. Serialize the arguments (`id: int`)
-2. Make an HTTP request to the `db_stage` service
-3. Deserialize the response (`User`)
-4. Propagate any errors (network failure, remote raise, deserialization failure)
-
-You write:
-
-```
-let user = db_stage.fetch_user(42)!
-```
-
-The compiler generates the serialization, the HTTP client, the error handling, the retry logic (based on your configuration), and the deserialization. **Because it sees the whole program, it knows which calls cross stage boundaries.**
-
-This is the opposite of libraries. Libraries hide details from the compiler. Stages expose details to the compiler so it can generate the right code for cross-service communication.
+This is the opposite of libraries. Libraries hide details from the compiler. Source-level composition exposes details to the compiler so it can generate and check cross-service communication. See the [Distribution chapter](stages.md) for the full model.
 
 ## No Dynamic Linking, Ever
 

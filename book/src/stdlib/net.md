@@ -6,6 +6,8 @@ TCP networking: server and client sockets.
 import std.net
 ```
 
+`TcpListener` and `TcpConnection` are **objects** — entities owning OS resources (a bound port, a live socket). They compare by identity, are *shared* (not deep-copied) across `spawn` — handing a listener to a task never forks the descriptor — and their methods serialize per instance, so concurrent users of one connection cannot interleave mid-read or mid-write. See [Objects and Entities](../whats-different/objects.md).
+
 ## TCP Server
 
 ### listen
