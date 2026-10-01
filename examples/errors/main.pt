@@ -55,6 +55,17 @@ fn fetch_with_default(id: int) string {
     return user
 }
 
+// Facts shrink error sets: when the caller's guard refutes every raise
+// condition inside the callee, the handling obligation disappears at that
+// site. Both of fetch_user's raises are impossible for a guarded id, so
+// this call compiles with no ! and no catch — the guard IS the handler.
+fn fetch_validated(id: int) string {
+    if id >= 0 && id != 999 {
+        return fetch_user(id)  // proven infallible at this site
+    }
+    return "rejected before fetch"
+}
+
 // Demonstration of error propagation through call chain
 fn process_user(id: int) string {
     let name = get_user_name(id)!
@@ -98,6 +109,13 @@ fn main() {
 
     let config2 = safe_create_config(-1)
     print(f"Config: id={config2.id}, name={config2.name}")
+
+    print("\n=== Facts shrink error sets ===")
+
+    // The guard inside fetch_validated proves both errors impossible,
+    // so its fetch_user call carries no ! and no catch.
+    print(fetch_validated(42))
+    print(fetch_validated(999))
 
     // Propagation chain - errors flow through call stack
     // Uncommenting these would require ! at call site in main:
