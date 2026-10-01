@@ -639,3 +639,301 @@ fn main() {
     assert!(!obj.is_empty(), "object bytes should not be empty");
     assert_eq!(warnings.len(), 1, "expected exactly one warning: {warnings:?}");
 }
+
+// ── Length terms (`xs.len()`) ────────────────────────────────────────────────
+
+#[test]
+fn len_comparison_narrows() {
+    // i < xs.len() establishes a relation; the affine form xs.len() - 1
+    // participates, so i <= xs.len() - 1 is decided.
+    assert_single_warning(
+        r#"
+fn f(xs: [int], i: int) int {
+    if i < xs.len() {
+        if i <= xs.len() - 1 {
+            return 1
+        }
+        return 2
+    }
+    return 0
+}
+
+fn main() {
+    print(f([1, 2], 0))
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn len_automatic_nonnegative_is_always_true() {
+    assert_single_warning(
+        r#"
+fn f(xs: [int]) int {
+    if xs.len() >= 0 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f([1]))
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn len_negative_is_always_false() {
+    assert_single_warning(
+        r#"
+fn f(s: string) int {
+    if s.len() < 0 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f("abc"))
+}
+"#,
+        "condition is always false",
+    );
+}
+
+#[test]
+fn map_and_set_len_terms_work() {
+    assert_single_warning(
+        r#"
+fn f(m: Map<string, int>) int {
+    if m.len() >= 0 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    let m = Map<string, int> { "a": 1 }
+    print(f(m))
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn mut_method_call_kills_len_fact() {
+    // push between the two checks may change the length: no warning.
+    assert_no_warnings(
+        r#"
+fn f(mut xs: [int], i: int) int {
+    if i < xs.len() {
+        xs.push(9)
+        if i < xs.len() {
+            return 1
+        }
+        return 2
+    }
+    return 0
+}
+
+fn main() {
+    print(f([1, 2], 0))
+}
+"#,
+    );
+}
+
+#[test]
+fn reassignment_kills_len_fact() {
+    assert_no_warnings(
+        r#"
+fn f(i: int) int {
+    let mut xs = [1, 2, 3, 4, 5]
+    if 3 < xs.len() {
+        xs = [1]
+        if 3 < xs.len() {
+            return 1
+        }
+        return 2
+    }
+    return 0
+}
+
+fn main() {
+    print(f(0))
+}
+"#,
+    );
+}
+
+#[test]
+fn unrelated_call_kills_len_fact() {
+    // A call may reach the array through an alias and mutate it: the
+    // conservative kill drops the length fact.
+    assert_no_warnings(
+        r#"
+fn g() int {
+    return 1
+}
+
+fn f(xs: [int]) int {
+    if 3 < xs.len() {
+        let v = g()
+        if 3 < xs.len() {
+            return v
+        }
+        return 2
+    }
+    return 0
+}
+
+fn main() {
+    print(f([1, 2, 3, 4, 5]))
+}
+"#,
+    );
+}
+
+#[test]
+fn pure_reads_do_not_kill_len_fact() {
+    // Indexing and len() itself are not calls: the fact survives.
+    assert_single_warning(
+        r#"
+fn f(xs: [int]) int {
+    if 3 < xs.len() {
+        let v = xs[0]
+        if 3 < xs.len() {
+            return v
+        }
+        return 2
+    }
+    return 0
+}
+
+fn main() {
+    print(f([1, 2, 3, 4, 5]))
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn len_binding_transfers_nonnegative_fact() {
+    assert_single_warning(
+        r#"
+fn f(s: string) int {
+    let n = s.len()
+    if n >= 0 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f("abc"))
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn len_binding_equality_relates_to_term() {
+    assert_single_warning(
+        r#"
+fn f(s: string) int {
+    let n = s.len()
+    if n == s.len() {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f("abc"))
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn len_binding_fact_killed_by_reassignment() {
+    assert_no_warnings(
+        r#"
+fn f(s: string) int {
+    let mut n = s.len()
+    n = 0 - 1
+    if n >= 0 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f("abc"))
+}
+"#,
+    );
+}
+
+#[test]
+fn class_len_method_is_not_a_length_term() {
+    // A user-defined `len` method is an ordinary call: no automatic facts,
+    // and it stays effectful (no extraction from the condition).
+    assert_no_warnings(
+        r#"
+class Weird {
+    n: int
+
+    fn len(self) int {
+        return self.n
+    }
+}
+
+fn f(w: Weird) int {
+    if w.len() >= 0 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f(Weird { n: 0 - 5 }))
+}
+"#,
+    );
+}
+
+// ── Field paths mixed with length terms ──────────────────────────────────────
+
+#[test]
+fn field_path_relates_to_len_term() {
+    assert_single_warning(
+        r#"
+class Grant {
+    token: int
+}
+
+fn f(g: Grant, xs: [int]) int {
+    if g.token < xs.len() {
+        if g.token <= xs.len() - 1 {
+            return 1
+        }
+        return 2
+    }
+    return 0
+}
+
+fn main() {
+    print(f(Grant { token: 0 }, [1, 2]))
+}
+"#,
+        "condition is always true",
+    );
+}

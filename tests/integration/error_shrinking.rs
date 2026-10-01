@@ -742,3 +742,225 @@ fn callee_mutation_before_guard_never_shrinks() {
         "call to fallible method 'fee_then_withdraw' must be handled",
     );
 }
+
+// ── Callee guards over `param.len()` (fact-fragment extension) ───────────────
+
+/// A callee guard over a collection parameter's length is summarizable,
+/// and a caller fact over the actual's length term refutes it.
+#[test]
+fn param_len_guard_shrinks_with_caller_len_fact() {
+    let out = compile_and_run_stdout(
+        r#"
+        error Empty {}
+
+        fn head(xs: [int]) int {
+            if xs.len() == 0 {
+                raise Empty {}
+            }
+            return xs[0]
+        }
+
+        fn main() {
+            let xs = [7, 8]
+            if xs.len() > 0 {
+                print(head(xs))
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "7");
+}
+
+/// Without the caller guard the site still requires handling.
+#[test]
+fn param_len_guard_without_caller_fact_requires_handling() {
+    compile_should_fail_with(
+        r#"
+        error Empty {}
+
+        fn head(xs: [int]) int {
+            if xs.len() == 0 {
+                raise Empty {}
+            }
+            return xs[0]
+        }
+
+        fn main() {
+            let xs = [7, 8]
+            print(head(xs))
+        }
+        "#,
+        "must be handled",
+    );
+}
+
+/// A mutating method call between the guard and the call kills the
+/// caller's length fact: handling is required again.
+#[test]
+fn mut_call_between_len_guard_and_call_restores_handling() {
+    compile_should_fail_with(
+        r#"
+        error Empty {}
+
+        fn head(xs: [int]) int {
+            if xs.len() == 0 {
+                raise Empty {}
+            }
+            return xs[0]
+        }
+
+        fn main() {
+            let mut xs = [7, 8]
+            if xs.len() > 0 {
+                xs.pop()
+                print(head(xs))
+            }
+        }
+        "#,
+        "must be handled",
+    );
+}
+
+/// Reassigning the collection between guard and call also kills the fact.
+#[test]
+fn reassignment_between_len_guard_and_call_restores_handling() {
+    compile_should_fail_with(
+        r#"
+        error Empty {}
+
+        fn head(xs: [int]) int {
+            if xs.len() == 0 {
+                raise Empty {}
+            }
+            return xs[0]
+        }
+
+        fn main() {
+            let mut xs = [7, 8]
+            if xs.len() > 0 {
+                xs = []
+                print(head(xs))
+            }
+        }
+        "#,
+        "must be handled",
+    );
+}
+
+/// A string-length guard works the same way (the automatic >= 0 bound
+/// refutes a negative-length guard with no caller fact at all).
+#[test]
+fn len_auto_nonneg_refutes_impossible_guard() {
+    let out = compile_and_run_stdout(
+        r#"
+        error Impossible {}
+
+        fn check(s: string) int {
+            if s.len() < 0 {
+                raise Impossible {}
+            }
+            return s.len()
+        }
+
+        fn main() {
+            let s = "abc"
+            print(check(s))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "3");
+}
+
+// ── Callee guards over `param.field` (fact-fragment extension) ───────────────
+
+/// A callee guard over a one-level field path of a class parameter is
+/// summarizable; the caller's fact about the actual's field refutes it.
+#[test]
+fn param_field_guard_shrinks_with_caller_fact() {
+    let out = compile_and_run_stdout(
+        r#"
+        error BadToken {}
+
+        class Grant {
+            token: int
+        }
+
+        fn redeem(g: Grant) int {
+            if g.token <= 0 {
+                raise BadToken {}
+            }
+            return g.token
+        }
+
+        fn main() {
+            let g = Grant { token: 5 }
+            if g.token > 0 {
+                print(redeem(g))
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "5");
+}
+
+/// Without the caller's field fact the site still requires handling.
+#[test]
+fn param_field_guard_without_caller_fact_requires_handling() {
+    compile_should_fail_with(
+        r#"
+        error BadToken {}
+
+        class Grant {
+            token: int
+        }
+
+        fn redeem(g: Grant) int {
+            if g.token <= 0 {
+                raise BadToken {}
+            }
+            return g.token
+        }
+
+        fn main() {
+            let g = Grant { token: 5 }
+            print(redeem(g))
+        }
+        "#,
+        "must be handled",
+    );
+}
+
+/// An interleaved call between the field guard and the call kills the
+/// caller's field fact (an alias may have mutated the object).
+#[test]
+fn interleaved_call_kills_param_field_guard() {
+    compile_should_fail_with(
+        r#"
+        error BadToken {}
+
+        class Grant {
+            token: int
+        }
+
+        fn noop() int {
+            return 0
+        }
+
+        fn redeem(g: Grant) int {
+            if g.token <= 0 {
+                raise BadToken {}
+            }
+            return g.token
+        }
+
+        fn main() {
+            let g = Grant { token: 5 }
+            if g.token > 0 {
+                let x = noop()
+                print(redeem(g) + x)
+            }
+        }
+        "#,
+        "must be handled",
+    );
+}

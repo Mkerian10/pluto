@@ -80,8 +80,9 @@ use crate::visit::{walk_expr, walk_stmt, Visitor};
 
 use super::env::TypeEnv;
 use super::facts::{
-    condition_facts, condition_facts_with, contains_call, eval_condition_with, immediate_exprs,
-    to_affine, to_affine_with, typed_path, Affine, FactEnv, Verdict,
+    condition_facts, condition_facts_with, contains_impure_call, eval_condition_with,
+    immediate_exprs, to_affine, to_affine_with, typed_path, Affine, Fact, FactEnv, Interval,
+    RelOp, Verdict,
 };
 use super::types::PlutoType;
 
@@ -352,7 +353,9 @@ impl InvariantScope {
 
     /// Resolve a leaf expression into the ghost vocabulary: `self.f` reads
     /// its current symbolic value, an int local reads its current version
-    /// ghost. Anything else (foreign paths, calls) is unresolvable.
+    /// ghost, and `xs.len()` on a collection-typed local reads an
+    /// epoch-stamped length term. Anything else (foreign paths, calls) is
+    /// unresolvable.
     pub(crate) fn resolve(&self, env: &TypeEnv, e: &Expr) -> Option<Affine> {
         match e {
             Expr::FieldAccess { object, field }
@@ -371,8 +374,52 @@ impl InvariantScope {
                     None
                 }
             }
-            _ => None,
+            _ => self.resolve_len(env, e),
         }
+    }
+
+    /// `xs.len()` on a collection-typed local, as a ghost term. Ghost facts
+    /// are never killed, so the term is stamped with the current anchor
+    /// epoch (`next_ghost`): every call boundary re-anchors and bumps the
+    /// epoch, making facts recorded about the old term inert — sound even
+    /// though a callee may grow or shrink the collection through an alias.
+    /// The `.len()` marker keeps the automatic `>= 0` bound
+    /// (facts.rs::is_len_term). Length of `self` fields is out of scope
+    /// (their collection identity has no ghost tracking).
+    fn resolve_len(&self, env: &TypeEnv, e: &Expr) -> Option<Affine> {
+        let Expr::MethodCall { object, method, args, .. } = e else {
+            return None;
+        };
+        if method.node != "len" || !args.is_empty() {
+            return None;
+        }
+        let Expr::Ident(name) = &object.node else {
+            return None;
+        };
+        if name == "self" {
+            return None;
+        }
+        let is_collection = |t: &PlutoType| {
+            matches!(
+                t,
+                PlutoType::Array(_)
+                    | PlutoType::String
+                    | PlutoType::Bytes
+                    | PlutoType::Map(_, _)
+                    | PlutoType::Set(_)
+            )
+        };
+        let ok = match env.narrowed_vars.lookup(name) {
+            Some(t) => is_collection(t),
+            None => env.lookup(name).is_some_and(is_collection),
+        };
+        ok.then(|| {
+            Affine::term(format!(
+                "{}.len()@{}",
+                self.local_ghost(name),
+                self.next_ghost
+            ))
+        })
     }
 }
 
@@ -658,7 +705,7 @@ pub(crate) fn function_entry(
     // and class-typed parameters satisfy their invariants.
     let mut assume = Vec::new();
     for c in &func.contracts {
-        if c.node.kind != ContractKind::Requires || contains_call(&c.node.expr) {
+        if c.node.kind != ContractKind::Requires || contains_impure_call(&c.node.expr, env) {
             continue;
         }
         assume.extend(condition_facts(&c.node.expr.node, env).then_facts);
@@ -727,7 +774,7 @@ pub(crate) fn function_entry(
                 .extend(condition_facts_with(&spec.expr, &|e| s.resolve(env, e)).then_facts);
         }
         for c in &func.contracts {
-            if c.node.kind != ContractKind::Requires || contains_call(&c.node.expr) {
+            if c.node.kind != ContractKind::Requires || contains_impure_call(&c.node.expr, env) {
                 continue;
             }
             ghost_assume
@@ -764,7 +811,7 @@ pub(crate) fn pre_stmt(stmt: &Stmt, span: Span, env: &mut TypeEnv) -> Result<(),
     // anyone holding an alias) observe the object — the invariant must hold
     // here, and afterwards only invariant-level facts survive.
     if env.invariant_scope.is_some()
-        && immediate_exprs(stmt).iter().any(|e| contains_call(e))
+        && immediate_exprs(stmt).iter().any(|e| contains_impure_call(e, env))
     {
         checkpoint_scope(env, span, "this call (the callee may observe the object)")?;
         re_anchor_scope(env);
@@ -821,14 +868,17 @@ pub(crate) fn post_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileErr
     if env.class_invariants.is_empty() || is_exempt_fn(env) {
         return Ok(());
     }
-    let had_call = immediate_exprs(stmt).iter().any(|e| contains_call(e));
+    let had_call = immediate_exprs(stmt)
+        .iter()
+        .any(|e| contains_impure_call(e, env));
     match stmt {
-        Stmt::Let { name, .. } => {
+        Stmt::Let { name, value, .. } => {
             // A fresh class-typed binding satisfies its invariants (its
             // construction or producing call was proven/validated).
             if had_call {
                 reassume_invariants_main(env);
             }
+            ghost_len_binding(env, &name.node, &value.node);
             let cls = match env.lookup(&name.node) {
                 Some(PlutoType::Class(c)) => c.clone(),
                 _ => return Ok(()),
@@ -854,7 +904,7 @@ pub(crate) fn post_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileErr
         Stmt::Assert { expr } => {
             // A passed assert establishes its condition for the rest of the
             // block — the documented escape hatch when proof falls short.
-            if !contains_call(expr) {
+            if !contains_impure_call(expr, env) {
                 let cf = condition_facts(&expr.node, env);
                 for f in cf.then_facts {
                     env.facts.assume(f);
@@ -873,8 +923,13 @@ pub(crate) fn post_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileErr
             re_anchor_scope(env);
             reassume_invariants_main(env);
         }
-        Stmt::Assign { .. }
-        | Stmt::Return(_)
+        Stmt::Assign { target, value } => {
+            if had_call {
+                reassume_invariants_main(env);
+            }
+            ghost_len_binding(env, &target.node, &value.node);
+        }
+        Stmt::Return(_)
         | Stmt::If { .. }
         | Stmt::While { .. }
         | Stmt::For { .. }
@@ -893,6 +948,33 @@ pub(crate) fn post_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileErr
         }
     }
     Ok(())
+}
+
+/// Ghost binding transfer: a direct `xs.len()` binding gives the bound
+/// local's current ghost the automatic `>= 0` bound and an equality to the
+/// epoch-stamped length term (mirror of the main-env transfer in
+/// facts.rs::binding_facts; the local's version was already bumped in
+/// `pre_stmt`).
+fn ghost_len_binding(env: &mut TypeEnv, name: &str, value: &Expr) {
+    let Some(mut scope) = env.invariant_scope.take() else {
+        return;
+    };
+    if let Some(a) = scope.resolve_len(env, value) {
+        let ghost = scope.local_ghost(name);
+        scope
+            .ghost_facts
+            .assume(Fact::Bound(ghost.clone(), Interval::at_least(0)));
+        if a.terms.len() == 1 && a.k == 0 {
+            if let Some((term, &c)) = a.terms.iter().next() {
+                if c == 1 {
+                    scope
+                        .ghost_facts
+                        .assume(Fact::Rel(ghost, RelOp::Eq, term.clone()));
+                }
+            }
+        }
+    }
+    env.invariant_scope = Some(scope);
 }
 
 /// Field-write obligations. Inside the class's own `mut self` method a
