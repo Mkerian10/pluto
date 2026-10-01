@@ -125,7 +125,14 @@ object BlobAuthority {
     // do: it does not contact the old holder, revoke anything, or wait.
     // Fencing is constructive knowledge — the old write *cannot* land, so
     // nobody needs to learn whether it was attempted.
-    fn grant_write(mut self) WriteGrant {
+    //
+    // The `ensures` (properties RFC atom 1) pins the exact relation, proven
+    // at every normal exit: minting advances the epoch by precisely one —
+    // never zero (a mint that invalidated nothing), never more (token
+    // gaps). The two-state invariant above says the epoch never goes back;
+    // this says a mint always moves it forward. Callers assume the relation
+    // at the call boundary without re-deriving it.
+    fn grant_write(mut self) WriteGrant ensures self.epoch == old(self.epoch) + 1 {
         self.epoch = self.epoch + 1
         return WriteGrant { token: self.epoch }
     }

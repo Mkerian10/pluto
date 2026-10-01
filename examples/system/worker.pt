@@ -2,6 +2,10 @@
 object JobRunner {
     jobs_done: int
 
+    // The completed-jobs tally never goes down — proven at every mut-self
+    // method boundary and foreign write site.
+    invariant self.jobs_done >= old(self.jobs_done)
+
     fn run_job(mut self, name: string) {
         self.jobs_done = self.jobs_done + 1
         print("completed job: " + name)

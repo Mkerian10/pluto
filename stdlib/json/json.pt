@@ -239,6 +239,22 @@ class Parser {
     invariant self.pos >= 0
     invariant self.src_len >= 0
 
+    // Two-state claims (rfc-properties.md atom 2), proven at every mut-self
+    // method boundary and foreign write site:
+    //   - the cursor is MONOTONE: no parser method ever moves it backwards.
+    //     This is the termination/progress backbone of the whole parser --
+    //     every recovery path, every escape branch, every loop body either
+    //     holds position or advances. A future "optimization" that rewound
+    //     pos (and could loop forever on malformed input) is a compile error.
+    //   - the source view is FROZEN: parsing never swaps or truncates the
+    //     input out from under the cursor, so byte offsets taken earlier
+    //     (e.g. parse_number's `start`) remain valid indices into the same
+    //     string.
+    // Both relations are transitivity-safe (>=, ==), so they survive the
+    // helper calls (skip_whitespace, parse_hex4, ...) each method makes.
+    invariant self.pos >= old(self.pos)
+    invariant self.src_len == old(self.src_len)
+
     fn peek(mut self) int {
         self.skip_whitespace()
         if self.pos >= self.src_len {

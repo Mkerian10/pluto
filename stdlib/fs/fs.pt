@@ -34,6 +34,15 @@ extern fn __pluto_fs_seek_end() int
 pub object File {
     fd: int
 
+    // The descriptor is fixed for the entity's whole life (a two-state
+    // frame invariant, proven at every mut-self boundary and foreign write
+    // site): a File never re-points at a different OS file. Note what this
+    // deliberately rules out: the "-1 after close" sentinel pattern. close()
+    // releases the OS resource but does NOT rewrite fd — staleness after
+    // close is the OS's error (read/write/seek report it), not a mutated
+    // handle.
+    invariant self.fd == old(self.fd)
+
     fn read(self, max_bytes: int) string {
         return __pluto_fs_read(self.fd, max_bytes)
     }
