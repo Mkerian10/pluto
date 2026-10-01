@@ -167,6 +167,7 @@ fn create_simple_program() -> Program {
         test_info: vec![],
         tests: None,
         fallible_extern_fns: vec![],
+        properties: vec![],
     }
 }
 
@@ -210,6 +211,7 @@ fn create_nested_program() -> Program {
         test_info: vec![],
         tests: None,
         fallible_extern_fns: vec![],
+        properties: vec![],
     }
 }
 
@@ -260,6 +262,7 @@ fn create_program_with_types() -> Program {
         test_info: vec![],
         tests: None,
         fallible_extern_fns: vec![],
+        properties: vec![],
     }
 }
 
