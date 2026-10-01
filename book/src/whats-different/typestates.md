@@ -113,6 +113,8 @@ The diagnostic computes the suggested exits from the class's own transitions. Th
 - **Field and container stores are rejected.** The obligation would escape the analysis.
 - **Discharge** is a consuming transition out of the state, moving the value onward, or returning it.
 
+> **The pattern in the wild.** Electrical lockout-tagout is must-release linearity made of steel. Before working on a circuit, a worker hangs a personal padlock and tag on the breaker: a token you hold in your hand, and re-energization is impossible until *you* remove it — nobody else's key fits. The multi-padlock hasp goes further: every worker on the job locks the same hasp, and the breaker cannot close until **all** locks come off. That shape — conjunctive linear obligations, N holders, all must release — is one Pluto does not have yet; `must_release` tracks a single owner. Breaker interlocks ("cannot close unless proven de-energized") are the other half of the pattern: the effect site dominated by a validity check. [Verified Distribution](../vision/verified-distribution.md) traces both shapes across the industries that invented them.
+
 ## Degradation: when the world moves you out of a state
 
 Transitions so far are things *you* do. Distribution adds transitions the world does: the coordinator revokes your lease between two instructions, and no local type can prevent it. Pluto's answer is **state-carrying errors** — a fallible transition whose error carries the value in its post-failure state:

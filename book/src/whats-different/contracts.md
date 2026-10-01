@@ -236,6 +236,8 @@ So wire decode is the single place invariant validation runs at runtime: decodin
 
 One trust boundary, one check, typed and catchable. Everywhere else: proofs.
 
+> **The pattern in the wild.** You already know this bug — the web ships it. A TLS certificate is a lease: evidence with a validity window. Web revocation is famously broken precisely because it is poll-based — browsers act on beliefs that outlive their warrants, and when the revocation check doesn't answer, they soft-fail and trust the stale belief anyway. OCSP stapling is the fix with the right shape: carry fresh evidence *with the effect* instead of hoping a cached belief still holds. Certificate Transparency logs are monotone append-only facts — safe to cache and gossip because nothing is ever retracted. And the CA's issuance validation is the authority's fence: judged by the party that owns the namespace, at the point of effect. Pluto's wire check above is the same move at program scale — testimony validated where it enters, proofs everywhere inside — and [Verified Distribution](../vision/verified-distribution.md) is the chapter-length version of "here is that bug as a type error."
+
 ## Proofs have consequences
 
 Facts do not just gate writes — they flow into error inference. A guard that makes a callee's `raise` impossible removes the handling obligation at that call site entirely. See [error-set shrinking](errors.md#proofs-shrink-error-sets) in the Error Handling chapter.

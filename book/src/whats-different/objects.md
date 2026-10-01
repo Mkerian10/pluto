@@ -72,6 +72,8 @@ fn main() {
 
 This composes: a structural comparison of two class values that each hold a `Counter` field compares those fields *by identity*. Equal state in a different entity is not the same entity.
 
+> **The pattern in the wild.** Transfusion medicine enforces entity-not-description with a wristband: blood is crossmatched for *the patient wearing the band*, not for anyone matching the chart's description — identity, never field equality. The type-and-crossmatch result expires after 72 hours (evidence with a validity window, not a permanent fact about the patient), and the two-person bedside check is validation at the point of effect — the moment the blood hangs, not the moment it was ordered. Every piece of that protocol is a construct in this book; [Verified Distribution](../vision/verified-distribution.md) makes the case that this is no coincidence.
+
 ## Spawn: values copy, entities share
 
 Pluto's baseline concurrency rule is that `spawn` deep-copies its arguments. Each task gets its own world; data races on values are impossible by construction:
@@ -136,6 +138,8 @@ fn main() {
 Write this with a `class` and the spawned task increments a private copy: you get 1000 and 1000, isolated. Write it with an `object` and you get one entity, 2000, and no data race — serialization is the construct's guarantee, not your discipline.
 
 The sharing rule follows the entity wherever it is nested: deep-copying a class value into a task *shares* any entity stored inside it. Values copy; entities ride along by reference.
+
+> **The pattern in the wild.** The famous LMAX architecture — an entire financial exchange matched on a single thread — is entity method serialization deployed at world scale. The matching engine is one entity: every order, every cancel, from every trader on earth, is a message to the same referent, processed one at a time. That is exactly why it needs no locks and loses no updates — the industry arrived at "serialize the authority, don't lock the data" through measurement and production pain, and here it is the semantics of the `object` keyword. [Verified Distribution](../vision/verified-distribution.md) collects this pattern library across industries.
 
 ## Generic objects
 

@@ -247,6 +247,8 @@ let result = task.get() catch -1    // TaskCancelled surfaces here if it won the
 
 Cancellation races with completion — if the task finished first, `.get()` returns its result normally.
 
+> **The pattern in the wild.** Electronic trading runs this entire chapter by hand, at nanosecond stakes. Client order IDs are idempotency keys verbatim — the exchange dedups on them so a retried submit cannot double-fill. The cancel/fill race is the definite/ambiguous split every trader knows: "did my cancel win?" has three answers — cancelled, filled, *unknown yet* — and rounding the third to either of the others loses real money. Market data arrives sequence-numbered with gap-recovery protocols: monotone facts, safe to cache and share precisely because sequence numbers only grow. And every participant knows their market view is stale testimony by the time they act on it — the book moved while the packet flew. The constructs these desks enforce by convention are the subject of [Verified Distribution](../vision/verified-distribution.md).
+
 ## The Full Picture
 
 Pluto's concurrency model is layered:
