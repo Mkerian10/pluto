@@ -1,295 +1,186 @@
-# Stages: Distributed Systems as Programs
+# Distribution: Placement, Domains, and Stages
 
-*(This chapter is aspirational — stages are designed but not fully implemented.)*
+Pluto is not an RPC language. It does not try to make network calls look local — that trick papers over exactly the things distributed programmers must design for: placement, data movement, partial failure, and the call that fails without telling you whether it executed.
 
-Right now, building a distributed system means building multiple services in multiple repos, with hand-written RPC code, manual serialization, and orchestration scripts to wire them together. Pluto's vision is to make the distributed system **the program**, with stages as independently deployable units and the compiler generating all the wiring.
+Pluto is a **distributed language**. The central principle:
 
-## The Problem with Microservices
+> **Logical distribution is part of the program. Physical deployment is not.**
 
-When you build a distributed backend today, you're really building several systems:
+Most systems collapse three concerns: what computation happens, which domain owns it, and which process/pod/region runs it. Pluto puts the first two in the program and leaves the third to the deployment binding — the way a database separates the logical query from its physical execution plan. A program can be split apart or collapsed together without rewriting business logic, because the code never said "make an HTTP call"; it said *where the computation belongs*.
 
-**The services themselves.** Order service, payment service, inventory service. Each is a separate codebase, separate repo, separate deployment.
+## Placement: `at`
 
-**The communication layer.** gRPC schemas, REST APIs, message queues. You write the same serialization code in every service. You handle network errors manually. You retry, you add circuit breakers, you log everything.
-
-**The orchestration.** Kubernetes manifests, Terraform configs, deployment scripts. These define how services discover each other, how they scale, where they run. This configuration is *separate* from your code — the compiler never sees it.
-
-The result: your distributed system is **implicit**. The compiler sees isolated services. It doesn't know they communicate. It can't check that a function call across service boundaries has compatible types. It can't generate the RPC code. It can't verify that your error handling is complete.
-
-## Pluto's Approach: Stages
-
-In Pluto, a **stage** is a unit of deployment. It's like a service, but it's declared in your program, not in YAML:
+A placement expression evaluates its body in another logical execution domain:
 
 ```
-stage api {
-    fn handle_order(req: OrderRequest) OrderResponse {
-        let user = auth.verify_token(req.token)!
-        let order = orders.create_order(user.id, req.items)!
-        let payment = billing.charge(user.id, order.total)!
-        return OrderResponse { order_id: order.id }
-    }
+import std.wire
+
+error PaymentDeclined {
+    code: int
 }
 
-stage auth {
-    pub fn verify_token(token: string) User {
-        // validate JWT, look up user
-    }
-}
-
-stage orders {
-    pub fn create_order(user_id: int, items: Array<Item>) Order {
-        // persist order to database
-    }
-}
-
-stage billing {
-    pub fn charge(user_id: int, amount: int) Payment {
-        // call Stripe, record transaction
-    }
-}
-```
-
-This is **one program**. The compiler sees all four stages. It sees that `api` calls `auth.verify_token`, `orders.create_order`, and `billing.charge`. It knows these calls cross stage boundaries.
-
-**The compiler generates RPC code automatically.**
-
-## What the Compiler Generates
-
-When you call a function in another stage, the compiler sees the call and generates:
-
-**Serialization.** The arguments are serialized into a wire format (JSON, Protobuf, or a future Pluto binary format). The compiler knows the types of the arguments, so it generates the exact serialization code needed.
-
-**HTTP transport.** The compiler generates an HTTP client call to the target stage. The endpoint is discovered from configuration (environment variables, service discovery, etc.).
-
-**Deserialization.** The response is deserialized back into the return type. The compiler knows the return type, so it generates the exact deserialization code needed.
-
-**Error propagation.** If the remote function can raise errors, the compiler includes those errors in the call site's error set. Network errors (timeout, connection failure) are automatically added as a built-in `NetworkError` type. The `!` operator handles both remote errors and network errors uniformly.
-
-From your perspective, it's a function call:
-
-```
-let user = auth.verify_token(req.token)!
-```
-
-From the compiler's perspective, it generates (pseudocode):
-
-```
-let request_body = serialize_json({ token: req.token })
-let response = http_post("http://auth-service/verify_token", request_body) catch err {
-    raise NetworkError { reason: "auth service unreachable" }
-}
-let user = deserialize_json(response.body, User) catch err {
-    raise DeserializationError { reason: "invalid user format" }
-}
-if response.has_error {
-    raise deserialize_error(response.error)  // remote raised an error
-}
-return user!  // propagate to caller
-```
-
-You write one line. The compiler generates 10+ lines of serialization, HTTP, error handling, and deserialization. **Because it sees the whole program, it knows what to generate.**
-
-## Stages Define Deployment Boundaries
-
-When you compile a Pluto program with stages, the compiler generates **one binary per stage**:
-
-```
-$ pluto compile-stages my_app.pluto --output-dir ./build
-
-Generated:
-  build/api
-  build/auth
-  build/orders
-  build/billing
-```
-
-Each binary is a self-contained native executable. You deploy them independently:
-
-```
-# Deploy to separate containers
-docker build -t my_app/api ./build/api
-docker build -t my_app/auth ./build/auth
-docker build -t my_app/orders ./build/orders
-docker build -t my_app/billing ./build/billing
-
-# Or deploy to different regions
-api -> us-east-1
-auth -> us-east-1
-orders -> us-west-2
-billing -> eu-west-1
-```
-
-But here's the key: **they were compiled from one program**. The compiler saw all four stages, type-checked all the cross-stage calls, inferred all the error sets, and generated all the RPC code. There's no manual gRPC schema. There's no Swagger spec that might be out of date. The types are guaranteed to match because the compiler checked them.
-
-## Configuration Separates Code from Environment
-
-The stages above call each other by name (`auth.verify_token`), but they don't hardcode URLs. The compiler generates code that reads endpoint locations from configuration:
-
-```
-# config/production.toml
-[stages.auth]
-endpoint = "https://auth.prod.mycompany.com"
-
-[stages.orders]
-endpoint = "https://orders.prod.mycompany.com"
-
-[stages.billing]
-endpoint = "https://billing.prod.mycompany.com"
-```
-
-At runtime, the `api` binary reads this config and knows where to send RPC calls. In dev, you might point everything to `localhost`. In staging, you might point to staging URLs. In production, you might use service discovery (Consul, Kubernetes DNS) to find endpoints dynamically.
-
-**The code is the same. The config changes.**
-
-This is the "environment opacity" principle: the same compiled binary works in dev, staging, and prod. Only the configuration changes.
-
-## Error Handling Across Stages
-
-Errors compose naturally across stage boundaries. If a remote stage can raise `NotFound`, that error flows through the RPC layer and into the caller's error set:
-
-```
-stage orders {
-    error OrderNotFound { order_id: string }
-
-    pub fn get_order(id: string) Order {
-        if !exists(id) {
-            raise OrderNotFound { order_id: id }
+// The payment service is an entity — THE payment domain's capability,
+// not a copyable value — so it is an object (see Objects and Entities).
+object PaymentService {
+    fn charge(self, amount: int) int {
+        if amount > 100 {
+            raise PaymentDeclined { code: 402 }
         }
-        return load_order(id)
+        return amount * 2
     }
 }
 
-stage api {
-    fn handle_get_order(id: string) Response {
-        let order = orders.get_order(id)!  // might raise OrderNotFound or NetworkError
-        return Response { body: order }
-    }
-}
-```
-
-The compiler sees that `orders.get_order` can raise `OrderNotFound`. When `api` calls `get_order` across the stage boundary, the compiler:
-1. Generates serialization of `OrderNotFound` in the `orders` binary
-2. Generates deserialization of `OrderNotFound` in the `api` binary
-3. Adds `OrderNotFound` to the error set of `handle_get_order`
-4. Enforces that `api` handles the error with `!` or `catch`
-
-Network errors (timeout, connection refused) are added automatically as a built-in error type. You don't handle them separately — they're just part of the error set.
-
-## Stages vs. Pods vs. Services
-
-A stage is **not** a Kubernetes pod. A stage is **not** a Docker container. A stage is a **logical unit of deployment** in your program.
-
-How you deploy stages is up to you:
-- One stage per container (microservices)
-- Multiple stages in one container (monolith)
-- Stages spread across regions (geo-distributed)
-- Stages scaled independently (autoscaling)
-
-The compiler doesn't dictate deployment topology. It just generates the binaries and the RPC code. You decide where to run them.
-
-## Stages and Dependency Injection
-
-Stages integrate with Pluto's dependency injection system. Each stage is an `app` with its own dependency graph:
-
-```
-stage api[db: Database, cache: Cache] {
-    fn handle_request(req: Request) Response {
-        let user = self.db.query("SELECT * FROM users WHERE id = {req.user_id}")!
-        return build_response(user)
-    }
-}
-
-stage workers[db: Database, queue: JobQueue] {
-    fn process_jobs() {
-        for job in self.queue.poll() {
-            self.db.update(job.id, job.result)!
+app Shop[pay: domain PaymentService] {
+    fn main(self) {
+        let charged = at self.pay {
+            charge(21)
+        } catch err: PaymentDeclined {
+            0 - err.code
+        } catch err {
+            -1
         }
+        print(f"charged: {charged}")
     }
 }
 ```
 
-Each stage has its own `Database` instance, its own `Cache` instance. They're allocated when the stage's binary starts. The DI system is per-stage, not global.
+`pay: domain PaymentService` declares a dependency on the payment domain. `at self.pay { charge(21) }` means: evaluate this call *in that domain*. It does not mean "make an RPC call."
 
-This means you can:
-- Use different database configs per stage
-- Use different cache backends per stage
-- Inject mocks for testing individual stages
-
-The stages communicate via `pub` functions (RPC), not via shared DI state. This is deliberate: stages are **loosely coupled** at runtime, but **tightly coupled** at compile time (the compiler sees all of them).
-
-## Orchestration: The Layer Above Pluto
-
-Pluto compiles stages into binaries. It doesn't deploy them. It doesn't manage their lifecycle. That's the job of an **orchestration layer** built on top of Pluto.
-
-The vision:
-1. **Pluto compiles your program** into per-stage binaries with all RPC generated
-2. **You write deployment specs** (YAML, HCL, or a future Pluto-native format) that define:
-   - Which stages run where (regions, availability zones)
-   - How they scale (replicas, autoscaling rules)
-   - What resources they need (CPU, memory, disk)
-3. **An orchestrator deploys them** (Kubernetes, Nomad, a future Pluto-native orchestrator)
-4. **Service discovery wires them together** at runtime (DNS, Consul, environment variables)
-
-The key: **the orchestrator is not part of the language**. It's a separate system. Pluto's job is to compile correct, efficient binaries. The orchestrator's job is to run them.
-
-This is the opposite of frameworks like Spring Cloud or Akka, where deployment concerns leak into your code via annotations and framework APIs. In Pluto, deployment is **configuration**, not code.
-
-## The Stages You Don't Write
-
-Eventually, Pluto will support **generated stages** — stages that the compiler creates automatically based on your program structure.
-
-Example: database migrations. Instead of writing migration scripts, you declare your schema in your program:
+How the boundary is physically crossed is the deployment binding's decision, made at startup — not a code change:
 
 ```
-stage db {
-    schema User {
-        id: int primary key
-        email: string unique
-        created_at: timestamp
+# Plan A — colocated: the domain is wired in-process, at is a direct call
+$ ./shop
+
+# Plan B — distributed: the domain lives in another process
+$ PLUTO_DOMAIN_PAYMENTSERVICE=127.0.0.1:9000 ./shop
+```
+
+Same binary. Same semantics. The compiler checks the boundary contract identically in both plans: values crossing must be wire-shaped, errors are typed and inferred across the boundary, and the `at` **must** be handled with `!` or `catch` — because a domain boundary can fail in *some* deployment plan, even one that happens to be colocated today. Distribution is explicit — `at` is a visible, syntactic boundary — but transport is never the programming model.
+
+## Serving a domain
+
+The other side of Plan B is a process that serves the domain's entity:
+
+```
+import std.wire
+
+error PaymentDeclined {
+    code: int
+}
+
+object PaymentService {
+    fn charge(self, amount: int) int {
+        if amount > 100 {
+            raise PaymentDeclined { code: 402 }
+        }
+        return amount * 2
+    }
+}
+
+fn main() {
+    let svc = PaymentService {}
+    serve svc on 0    // port 0: OS-assigned, printed at startup
+}
+```
+
+`serve` runs one thread per connection, so state mutated by a handler sticks — which is the point of calling an entity at home. The served object's methods serialize per instance (they always do — it is an entity), so concurrent connections cannot interleave mid-method.
+
+Typed errors cross the boundary: the client's `catch err: PaymentDeclined` above works identically whether the decline came from an in-process call or over a socket. And every boundary is guarded by **interface hashing** — a caller and callee built from skewed versions of the interface are rejected at the boundary instead of silently mis-decoding each other's data.
+
+## Entities cross as handles
+
+Wire-shaped class values cross a boundary by copy. Entities cross **by reference**: what serializes is an identity handle (home process, type, id), and calling through a handle is placement — `at entity { method() }` runs the call where the entity lives. A server can accept an entity handle, store it, hand it back, and the caller gets the same entity — identity survives the round trip. Plain method calls on a foreign handle outside `at` are runtime errors: the boundary stays visible. See [Objects and Entities](objects.md).
+
+## Stages: lifecycle shells
+
+A `stage` is a declaration for a deployable unit's lifecycle: a shell with DI dependencies and a `main`, but no state of its own. Stages support `requires fn` members — lifecycle templates that concrete stages fill in:
+
+```
+class Config {
+    fn db_url(self) string {
+        return "postgres://localhost/mydb"
+    }
+}
+
+class Database[config: Config] {
+    fn query(self, sql: string) string {
+        return f"result: {sql} (db={self.config.db_url()})"
+    }
+}
+
+// Abstract base stage — defines the lifecycle template
+stage Daemon {
+    requires fn start(self)
+    requires fn run(self)
+    requires fn stop(self)
+
+    fn main(self) {
+        self.start()
+        self.run()
+        self.stop()
+    }
+}
+
+// Concrete stage — inherits the lifecycle, adds DI
+stage Worker : Daemon [db: Database] {
+    override fn start(self) {
+        print("Worker starting...")
     }
 
-    pub fn get_user(id: int) User {
-        return query("SELECT * FROM users WHERE id = {id}")!
+    override fn run(self) {
+        print(self.db.query("SELECT * FROM jobs"))
+    }
+
+    override fn stop(self) {
+        print("Worker stopped.")
     }
 }
 ```
 
-The compiler sees the `schema` declaration and generates:
-1. A migration stage that creates/updates the `users` table
-2. SQL queries for `get_user` that match the schema
-3. Type-checked queries (if you try to access a field that doesn't exist, compilation fails)
+Each stage gets its own dependency graph, allocated when its process starts. Stages are one piece of the distribution story — the lifecycle/packaging piece — not the whole of it; the programming model for crossing boundaries is `at` over domains.
 
-You never write SQL. You declare the schema in Pluto. The compiler generates the SQL, the migrations, and the query code. **Because it sees the whole program, it can do this safely.**
+## Systems: the whole program, checked
 
-## The End Goal: One Program, Many Deployments
+A `system` declaration names a set of modules that deploy together, and the compiler checks them *against each other* before any binary exists:
 
-The vision is a world where:
-- You write **one program** with multiple stages
-- The compiler **sees all of it** and generates per-stage binaries with all RPC code
-- You write **deployment configuration** (not code) to define where stages run
-- An orchestrator **deploys the binaries** and wires them together
-- Service discovery and config management **connect the stages** at runtime
+```
+// main.pt
+import billing
+import orders
 
-From your perspective, you wrote a program with function calls. The compiler turned it into a distributed system.
+system Shop {
+    billing: billing
+    orders: orders
+}
+```
 
-No gRPC schemas. No manual serialization. No out-of-date API docs. No wondering if a service's error handling changed. **The compiler checked it all.**
+The `orders` module declares a remote dependency (`app OrdersApp[billing: remote BillingService]`) against a local interface mirror; the `billing` module serves the real `BillingService`. Compiling the system verifies that the dependency is actually served, that the interfaces match, and that the error contracts line up — then produces one binary per member:
 
-This is what whole-program compilation enables at scale: distributed systems that are **programs**, not collections of loosely coordinated services.
+```
+$ pluto compile main.pt -o build --stdlib stdlib
+  compiled billing → build/billing
+  compiled orders → build/orders
+system: 2 member(s) compiled
+```
 
-## Where We Are Today
+There is no gRPC schema to drift out of date, no Swagger spec to trust. The types match because one compiler checked both sides.
 
-Stages are designed but not implemented. Here's what exists:
-- The `app` model (one app per program)
-- Whole-program compilation and analysis
-- Package dependencies (source-level composition)
-- Error inference across function calls
-- Dependency injection
+A note on `remote`: it is the first physical transport, shipped and working — but it couples the transport decision into the code, which is exactly what the placement model removes. `at` over logical domains is the target programming model; expect `remote`-style explicit wiring to be subsumed by it.
 
-Here's what's coming:
-- The `stage` keyword and multi-stage programs
-- Cross-stage RPC generation
-- Per-stage binary output
-- Configuration-based endpoint resolution
-- Orchestration integration
+## What `at` buys you that RPC frameworks don't
 
-The foundation is in place. Stages are the next step. And when they land, Pluto will be the first language where **your distributed system is your program, and the compiler is your infrastructure.**
+Because the boundary is a language construct, the compiler checks what programmers otherwise track by convention:
+
+- **Value transfer** — only wire-shaped data crosses by copy; entities cross as handles; anything else is rejected at compile time.
+- **Typed failure** — the callee's error set flows into the caller's, plus the boundary's own failure modes, and handling is mandatory. There is no "forgot to handle the network error."
+- **Version skew** — interface hashes are checked at the boundary, not discovered as corrupted decodes.
+- **Semantics under colocation** — fusing two domains into one process is an optimization, and it is only legal if it preserves boundary semantics: no shared mutable references appear across a boundary that would have copied, and code written to survive an unreachable domain keeps that failure mode in its contract.
+
+An `at` boundary can also fail *ambiguously* — the request left, no answer returned, and the effect may or may not have applied. No local check can resolve that; it is part of the boundary's contract, and it is precisely what "RPC looks local" hides. Pluto's direction for making ambiguity a first-class, checkable concept — definite vs. ambiguous failure, fencing, idempotency as a library property — is the subject of [Verified Distribution](../vision/verified-distribution.md).
+
+## Where this is going
+
+Shipped and tested today: whole-program compilation across service code, `at` placement over domain dependencies with deployment-plan binding, `serve`, typed errors across boundaries, the schema-level wire format, interface hashing, entity handles, stages, and systems.
+
+Deliberately open, and stated as such: what exactly declares a logical domain, the deployment-plan artifact that binds domains to physical placement, deadline and cancellation propagation, the precise legality rules for fusing domains, and structured distributed computation (parallel `at`, scatter/gather). The model these will land in — logical placement, physical execution — is settled; the pieces arrive incrementally, each checked by the same compiler that sees both sides of every boundary.
