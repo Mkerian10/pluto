@@ -5,9 +5,13 @@ use crate::span::{Span, Spanned};
 /// Validate that every contract in a list is within the decidable fragment.
 fn validate_contract_list(contracts: &[Spanned<ContractClause>]) -> Result<(), CompileError> {
     for contract in contracts {
-        // StateWhere is a compile-time typestate constraint, not a value
-        // predicate — typeck validates it against the class's type params.
-        if contract.node.kind == ContractKind::StateWhere {
+        // StateWhere and MustRelease are compile-time typestate constraints,
+        // not value predicates — typeck validates them against the class's
+        // type params and states.
+        if matches!(
+            contract.node.kind,
+            ContractKind::StateWhere | ContractKind::MustRelease
+        ) {
             continue;
         }
         validate_decidable_fragment(&contract.node.expr.node, contract.node.expr.span, contract.node.kind)?;

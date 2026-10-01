@@ -1,0 +1,96 @@
+// A lease protocol with degradable typestates and a must-release state
+// (docs/design/rfc-typestates.md phase 3, docs/design/rfc-verification.md).
+//
+// The epistemics (docs/design/epistemics.md): a `Lease<Held>` value is
+// EVIDENCE — a snapshot of a past interaction with the issuing authority,
+// honest about its own staleness. It claims session discipline ("I acquired
+// and have not released"), never remote truth ("the coordinator still
+// agrees"). The world can revoke between any two instructions; when that
+// surfaces, it surfaces as a DEFINITE, typed failure carrying the value in
+// its post-failure state — never as silent corruption.
+
+// State markers: plain classes used as phantom type arguments.
+class Idle { tag: int }
+class Held { tag: int }
+class Revoked { tag: int }
+
+// A degradation error: its payload is the lease in its post-failure state.
+// Because `Lease<Revoked>` differs from the receiver's state (`Held`) at a
+// state position, the compiler discriminates this as a degradation error —
+// catching it consumes the old `Held` binding (the value now lives in the
+// payload), exactly mirroring how transition calls consume their receiver.
+error Degraded { lease: Lease<Revoked> }
+
+class Lease<S> {
+    id: int
+    epoch: int
+
+    // `Held` is a MUST-RELEASE state: a binding holding a Lease<Held> is an
+    // OBLIGATION, not just a value. It cannot be dropped, captured by a
+    // closure/spawn (that would duplicate the evidence), or stored into a
+    // field (the obligation would escape the analysis). It must be
+    // transitioned out, moved onward, or returned. "Clean up your local
+    // belief" is the one duty the world cannot revoke.
+    must_release Held
+
+    // Transition: Idle -> Held. The returned value carries the obligation.
+    fn acquire(self) Lease<Held> where S == Idle {
+        return Lease<Held> { id: self.id, epoch: self.epoch + 1 }
+    }
+
+    // A fallible transition: renewing may discover the world moved on. On
+    // success the lease stays Held (new epoch); on failure the error CARRIES
+    // the lease as Revoked, so the obligation survives the raise and the
+    // handler decides what the degraded evidence is worth.
+    fn renew(self) Lease<Held> where S == Held {
+        if self.epoch > 2 {
+            raise Degraded { lease: Lease<Revoked> { id: self.id, epoch: self.epoch } }
+        }
+        return Lease<Held> { id: self.id, epoch: self.epoch + 1 }
+    }
+
+    // The discharge: Held -> Idle. After this the binding is consumed and
+    // the obligation is gone.
+    fn release(self) Lease<Idle> where S == Held {
+        return Lease<Idle> { id: self.id, epoch: self.epoch }
+    }
+
+    // Available in every state: no `where` clause.
+    fn describe(self) string {
+        return f"lease {self.id} (epoch {self.epoch})"
+    }
+}
+
+// Moves transfer the single obligation: after `work(h)` the caller is clean
+// and THIS function must discharge — return the lease, raise it inside a
+// payload, or release it on every path.
+fn work(h: Lease<Held>) Lease<Held> {
+    print(f"working under {h.describe()}")
+    return h
+}
+
+fn main() {
+    let l = Lease<Idle> { id: 7, epoch: 0 }
+
+    // acquire() consumes `l`'s Idle view and returns the Held evidence.
+    // From here on, `h` is an obligation the compiler tracks.
+    let h = l.acquire()
+
+    // Passing `h` moves it; the returned lease carries the obligation back.
+    let h2 = work(h)
+
+    // A fallible transition under `catch`: the handler path owns the
+    // DEGRADED payload. `Revoked` is droppable (not must-release) — degraded
+    // states are the expected common case, so recovery stays ceremony-free.
+    // The handler terminates, so the success path keeps `h3` valid.
+    let h3 = h2.renew() catch e: Degraded {
+        print(f"degraded: {e.lease.describe()}")
+        return
+    }
+
+    // Definite failure epistemics: had we dropped `h3` here, the compiler
+    // would reject the program — "still holds Lease<Held> ... transition it
+    // out of 'Held' (e.g. .release())". Try deleting the next two lines.
+    let done = h3.release()
+    print(f"released: {done.describe()}")
+}

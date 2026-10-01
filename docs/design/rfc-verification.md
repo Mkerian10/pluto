@@ -176,22 +176,32 @@ Typestates today only know transitions the caller performs. Distribution adds
 world-driven ones. Three transition kinds:
 
 1. **Caller transitions** — `release()` (shipped: phases 1–2).
-2. **Fallible transitions** — `refresh()` can raise. *Decided 2026-09-28*: the
+2. **Fallible transitions** — `refresh()` can raise. *Decided 2026-09-28,
+   IMPLEMENTED (rfc-typestates.md phase 3)*: the
    error **carries** the value in its post-failure state
    (`Degraded { blob: Blob<Unknown> }`) so obligations — notably must-release —
-   survive the raise. Catch-binding ergonomics and linearity accounting for the
-   consumed receiver are implementation questions (open question 4).
+   survive the raise. Shipped mechanics: errors with a payload field whose type is
+   the receiver's class at a changed state are auto-discriminated as degradation
+   errors (mirror of the transition rule); catching one consumes the receiver on
+   the error path only (terminating handlers keep the success binding; fall-through
+   joins consume); recovery is extracting the payload (`let stale = e.lease`).
 3. **Degradation** — the world moves you out of a state. Surfaces as typed errors on
    *use* (every effectful method of a degradable state has the degradation error in
    its set; `at`'s mandatory-handling contract makes it unignorable). The protocol
    author programs what degrades, to what, and what evidence renews it.
 
-**Must-release** (decided with this direction; marking is an **explicit state-level
-annotation** on the class — decided 2026-09-28, exact syntax TBD): a binding in a
-marked must-release state (e.g. `Lease<Held>`) may not go out of scope un-transitioned — compile error,
-powered by the existing moved-binding linearity analysis. Deterministic, no runtime
-magic. Release must be legal (and idempotent) from degraded states — "clean up your
-local belief" is an obligation the world cannot revoke.
+**Must-release** (decided 2026-09-28, IMPLEMENTED): the marking is the explicit
+state-level annotation `must_release Held` in the class body (general form
+`must_release S == Held` for multi-state-param classes). A binding in a marked
+state is fully linear, powered by the moved-binding linearity analysis: moves
+(let/argument/return/raise payloads) travel the single obligation, closure/spawn
+capture and field/container stores are rejected, and scope exit un-transitioned
+is a compile error suggesting the transitions out. Wildcard/shorthand catches of
+errors carrying a must-release payload are rejected; typed handlers take on the
+payload's obligation. Deterministic, no runtime magic. Release must be legal (and
+idempotent) from degraded states — "clean up your local belief" is an obligation
+the world cannot revoke — and degraded states themselves are typically droppable
+(only `Held`-like states carry obligations).
 
 ### Authorities and evidence (resolves "typestated objects")
 
@@ -308,13 +318,16 @@ then a stdlib import, not a language feature.
 3. **Facts across the wire.** A proven invariant on a schema type — does the receiver
    assume it (same compilation unit, interface hash guards skew) or recheck at the
    boundary as defense in depth? Interaction with schema evolution rules.
-4. **Fallible-transition mechanics.** (Errors carrying the post-failure-state value
-   is DECIDED — remaining:) what does `catch` binding look like for a typestated
-   payload, and how does linearity account for the consumed receiver on the raise
-   path?
-5. **Must-release syntax.** (Explicit state-level annotation is DECIDED — remaining:)
-   the concrete surface, e.g. `must_release Held` in the class body vs a marker on
-   the state type.
+4. **Fallible-transition mechanics.** RESOLVED (implemented, rfc-typestates.md
+   phase 3): a typed `catch` binds the error and the payload is an ordinary field
+   read (`e.lease`) that moves the value out; linearity consumes the receiver on
+   the error path only (terminating handlers keep the success binding). One
+   deliberate gap: `!` propagation does not check unrelated live obligations —
+   the error path is ambient; a literal `raise` is definite and is checked.
+5. **Must-release syntax.** RESOLVED (implemented): `must_release Held` in the
+   class body, with `must_release S == Held` as the general multi-param form
+   (simple form legal only with exactly one state parameter). The named state
+   must be a state of that class (a `where` RHS or a transition target).
 6. **Reentrancy vs dominance.** Entity self-calls (rfc-objects.md open question 6)
    interact with "methods serialize" as a proof precondition — a reentrant call
    observing a half-updated invariant would be unsound. Needs a story before
@@ -347,6 +360,11 @@ then a stdlib import, not a language feature.
    the proof shapes behind fencing.
 5. **Degradable typestates + must-release** — the three transition kinds, error-
    carried state, must-release linearity. (Client: objects RFC phase 3.)
+   **Shipped** (rfc-typestates.md phase 3, `src/typeck/linearity.rs`):
+   state-carrying errors auto-discriminated against the receiver, error-edge
+   consumption composed with the phase-2 flow rules, `must_release` state
+   annotations with full move/capture/store/scope-exit linearity, and
+   catch-obligation handling for must-release payloads.
 6. **Blob in stdlib** — the acceptance test, end to end.
 
 Phases 1–3 are pure compiler work with no language-surface change beyond diagnostics,

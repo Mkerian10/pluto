@@ -75,6 +75,36 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
 
     env.closure_call_sites = closure_call_sites;
 
+    // A caller's edge to a method of an instantiated generic class points at
+    // the instance-mangled name (`Lease$$Held$check`), while the template's
+    // effects were collected under the template key (`Lease$check`). Bridge
+    // instance -> template before the fixed point so template errors
+    // propagate through instance-name edges into transitive callers (`!`
+    // propagation chains), not just to direct call sites via the
+    // post-fixpoint copies below.
+    for inst in &env.instantiations {
+        match &inst.kind {
+            InstKind::Class(name) => {
+                if let Some(info) = env.generic_classes.get(name) {
+                    let mangled = mangle_name(name, &inst.type_args);
+                    for m in &info.methods {
+                        propagation_edges
+                            .entry(mangle_method(&mangled, m))
+                            .or_default()
+                            .insert(mangle_method(name, m));
+                    }
+                }
+            }
+            InstKind::Function(name) => {
+                propagation_edges
+                    .entry(mangle_name(name, &inst.type_args))
+                    .or_default()
+                    .insert(name.clone());
+            }
+            InstKind::Enum(_) => {}
+        }
+    }
+
     // Fixed-point iteration: propagate error sets through call edges.
     // Start from pre-existing fn_errors (e.g. seeded FFI fallible functions).
     let mut fn_errors: HashMap<String, HashSet<String>> = env.fn_errors.clone();
@@ -201,7 +231,7 @@ pub(crate) fn copy_class_method_error_sets(
 /// functions, Class-resolved methods — not `at` placement) read the site's
 /// *required* set: variants proven unreachable here by the caller's flow
 /// facts (shrink.rs) need no coverage.
-fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<String> {
+pub(crate) fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<String> {
     match inner {
         Expr::Call { name, .. } => {
             if env.fallible_value_calls.contains(&(current_fn.to_string(), name.span.start)) {

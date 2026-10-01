@@ -514,6 +514,12 @@ pub enum ContractKind {
     /// `where S == Owned` on a generic-class method: a compile-time typestate
     /// constraint (expr is `Ident == Ident`), never a runtime check.
     StateWhere,
+    /// `must_release Held` (expr is `Ident`) or `must_release S == Held`
+    /// (expr is `Ident == Ident`) in a typestate class body: bindings whose
+    /// state parameter is bound to the named state are fully linear and may
+    /// not go out of scope un-transitioned (docs/design/rfc-typestates.md
+    /// phase 3). Rides in `ClassDecl::invariants`; never a runtime check.
+    MustRelease,
 }
 
 /// A trait named in a class's `impl` list; generic traits carry type

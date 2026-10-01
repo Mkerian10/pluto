@@ -1385,6 +1385,39 @@ impl<'a> Parser<'a> {
                     Span::new(inv_start, inv_end),
                 ));
                 self.consume_statement_end()?;
+            } else if matches!(self.peek().expect("token should exist after is_some check").node, Token::MustRelease) {
+                // Must-release state annotation (docs/design/rfc-typestates.md
+                // phase 3): `must_release Held` (single state param) or the
+                // general form `must_release S == Held`. Rides in `invariants`
+                // as a MustRelease clause; validated during registration.
+                let mr_tok = self.advance().expect("token should exist after peek");
+                let mr_start = mr_tok.span.start;
+                let first = self.expect_ident()?;
+                let (expr, mr_end) = if self.peek().is_some_and(|t| matches!(t.node, Token::EqEq)) {
+                    self.advance(); // consume '=='
+                    let state = self.expect_ident()?;
+                    let end = state.span.end;
+                    let clause_span = Span::new(first.span.start, end);
+                    (
+                        Spanned::new(
+                            Expr::BinOp {
+                                lhs: Box::new(Spanned::new(Expr::Ident(first.node.clone()), first.span)),
+                                op: BinOp::Eq,
+                                rhs: Box::new(Spanned::new(Expr::Ident(state.node.clone()), state.span)),
+                            },
+                            clause_span,
+                        ),
+                        end,
+                    )
+                } else {
+                    let end = first.span.end;
+                    (Spanned::new(Expr::Ident(first.node.clone()), first.span), end)
+                };
+                invariants.push(Spanned::new(
+                    ContractClause { kind: ContractKind::MustRelease, expr },
+                    Span::new(mr_start, mr_end),
+                ));
+                self.consume_statement_end()?;
             } else {
                 let fname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;

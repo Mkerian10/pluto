@@ -1438,3 +1438,530 @@ fn typestate_linearity_state_vs_data_params() {
         "'d' was consumed by the transition '.finalize()'",
     );
 }
+
+// ── Typestates phase 3: must-release linearity (rfc-typestates.md) ──
+
+/// Shared lease protocol for the must-release tests: `Held` is marked
+/// must_release; `Idle` and `Revoked` are droppable.
+fn lease_src(body: &str) -> String {
+    format!(
+        r#"
+        class Idle {{ tag: int }}
+        class Held {{ tag: int }}
+        class Revoked {{ tag: int }}
+
+        class Lease<S> {{
+            id: int
+
+            must_release Held
+
+            fn acquire(self) Lease<Held> where S == Idle {{
+                return Lease<Held> {{ id: self.id }}
+            }}
+
+            fn release(self) Lease<Idle> where S == Held {{
+                return Lease<Idle> {{ id: self.id }}
+            }}
+
+            fn describe(self) string {{
+                return f"lease {{self.id}}"
+            }}
+        }}
+
+        {body}
+        "#
+    )
+}
+
+/// The full lifecycle discharges the obligation: acquire, use, release.
+#[test]
+fn must_release_full_lifecycle() {
+    let out = compile_and_run_stdout(&lease_src(
+        r#"
+        fn main() {
+            let l = Lease<Idle> { id: 7 }
+            let h = l.acquire()
+            print(h.describe())
+            let done = h.release()
+            print(done.describe())
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "lease 7\nlease 7");
+}
+
+/// Dropping a binding in a must-release state is a compile error naming the
+/// state and suggesting the transition out.
+#[test]
+fn must_release_dropped_binding_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let l = Lease<Idle> { id: 7 }
+                let h = l.acquire()
+                print(h.describe())
+            }
+            "#,
+        ),
+        "'h' still holds Lease<Held>, a must_release state, when it goes out of scope; transition it out of 'Held' (e.g. .release())",
+    );
+}
+
+/// Passing a must-release binding as an argument moves it: the caller is
+/// clean, the callee owns (and here discharges) the single obligation.
+#[test]
+fn must_release_move_transfers_obligation() {
+    let out = compile_and_run_stdout(&lease_src(
+        r#"
+        fn finish(h: Lease<Held>) int {
+            let done = h.release()
+            return done.id
+        }
+
+        fn main() {
+            let l = Lease<Idle> { id: 3 }
+            let h = l.acquire()
+            print(finish(h))
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "3");
+}
+
+/// The moved-to callee must discharge: returning while the parameter still
+/// holds the state is a leak in the callee.
+#[test]
+fn must_release_callee_must_discharge() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn peek(h: Lease<Held>) int {
+                return h.id
+            }
+
+            fn main() {
+                let l = Lease<Idle> { id: 3 }
+                let h = l.acquire()
+                print(peek(h))
+                let done = h.release()
+                print(done.id)
+            }
+            "#,
+        ),
+        "cannot return while 'h' still holds Lease<Held>",
+    );
+}
+
+/// Returning the binding moves the obligation to the caller.
+#[test]
+fn must_release_return_discharges() {
+    let out = compile_and_run_stdout(&lease_src(
+        r#"
+        fn make() Lease<Held> {
+            let l = Lease<Idle> { id: 9 }
+            return l.acquire()
+        }
+
+        fn main() {
+            let h = make()
+            let done = h.release()
+            print(done.id)
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "9");
+}
+
+/// A second use after a move is a use-after-consume naming the move.
+#[test]
+fn must_release_double_move_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn finish(h: Lease<Held>) int {
+                let done = h.release()
+                return done.id
+            }
+
+            fn main() {
+                let l = Lease<Idle> { id: 3 }
+                let h = l.acquire()
+                print(finish(h))
+                print(finish(h))
+            }
+            "#,
+        ),
+        "'h' was moved (passed to 'finish()'); a must_release value has a single owner",
+    );
+}
+
+/// Capturing a must-release binding in a closure would duplicate the
+/// obligation — rejected.
+#[test]
+fn must_release_closure_capture_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                let f = () => h.describe()
+                let done = h.release()
+                print(done.id)
+            }
+            "#,
+        ),
+        "'h' holds Lease<Held>, a must_release state, and cannot be captured by a closure or spawned task",
+    );
+}
+
+/// Spawn desugars to a capturing closure: same duplication, same rejection.
+#[test]
+fn must_release_spawn_capture_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn finish(h: Lease<Held>) int {
+                let done = h.release()
+                return done.id
+            }
+
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                let t = spawn finish(h)
+                print(t.get())
+            }
+            "#,
+        ),
+        "cannot be captured by a closure or spawned task",
+    );
+}
+
+/// Storing a must-release value into a field would let the obligation escape
+/// the analysis — rejected.
+#[test]
+fn must_release_field_store_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            class Holder {
+                kept: Lease<Held>
+            }
+
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                let holder = Holder { kept: h }
+                print(1)
+            }
+            "#,
+        ),
+        "a value in the must_release state Lease<Held> may not be stored in a field",
+    );
+}
+
+/// Container literals are equally untrackable.
+#[test]
+fn must_release_container_store_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                let xs = [h]
+                print(1)
+            }
+            "#,
+        ),
+        "may not be stored in a container literal",
+    );
+}
+
+/// Producing a must-release value at statement position drops it on the
+/// floor — rejected.
+#[test]
+fn must_release_statement_drop_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                l.acquire()
+                print(1)
+            }
+            "#,
+        ),
+        "this expression produces Lease<Held>, a must_release state, and immediately drops it",
+    );
+}
+
+/// Branch joins are conservative: releasing on only one path leaves the
+/// obligation live after the join.
+#[test]
+fn must_release_branch_join_conservative() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                if h.id > 0 {
+                    let done = h.release()
+                    print(done.id)
+                } else {
+                    print(0)
+                }
+            }
+            "#,
+        ),
+        "'h' still holds Lease<Held>",
+    );
+}
+
+/// Releasing on every path discharges the obligation at the join.
+#[test]
+fn must_release_all_paths_discharge() {
+    let out = compile_and_run_stdout(&lease_src(
+        r#"
+        fn main() {
+            let l = Lease<Idle> { id: 1 }
+            let h = l.acquire()
+            if h.id > 0 {
+                let done = h.release()
+                print(done.id)
+            } else {
+                let dropped = h.release()
+                print(dropped.id)
+            }
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "1");
+}
+
+/// A loop body is a scope: acquiring in an iteration without releasing
+/// leaks at the body's end.
+#[test]
+fn must_release_loop_leak_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                for i in 0..3 {
+                    let src = Lease<Idle> { id: i }
+                    let h = src.acquire()
+                    print(h.id)
+                }
+            }
+            "#,
+        ),
+        "'h' still holds Lease<Held>",
+    );
+}
+
+/// `break` exits the loop body's scope: bindings acquired since the body
+/// began must be discharged first.
+#[test]
+fn must_release_break_with_live_obligation_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                while true {
+                    let src = Lease<Idle> { id: 1 }
+                    let h = src.acquire()
+                    break
+                }
+                print(1)
+            }
+            "#,
+        ),
+        "cannot break while 'h' still holds Lease<Held>",
+    );
+}
+
+/// `raise` is a definite exit: leaving while holding is a leak (the error
+/// does not carry the value).
+#[test]
+fn must_release_raise_with_live_obligation_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            error Boom { code: int }
+
+            fn run() int {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                raise Boom { code: 1 }
+            }
+
+            fn main() {
+                print(run() catch 0)
+            }
+            "#,
+        ),
+        "cannot raise 'Boom' while 'h' still holds Lease<Held>",
+    );
+}
+
+/// Moving the binding into a raised error's payload discharges it — the
+/// obligation rides in the error.
+#[test]
+fn must_release_raise_payload_discharges() {
+    let out = compile_and_run_stdout(&lease_src(
+        r#"
+        error Interrupted { lease: Lease<Held> }
+
+        fn run(flag: int) int {
+            let l = Lease<Idle> { id: 5 }
+            let h = l.acquire()
+            if flag > 0 {
+                raise Interrupted { lease: h }
+            }
+            let done = h.release()
+            return done.id
+        }
+
+        fn main() {
+            let n = run(1) catch e: Interrupted {
+                let back = e.lease
+                let done = back.release()
+                done.id * 100
+            }
+            print(n)
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "500");
+}
+
+/// The general form names the state parameter on a multi-param class and is
+/// enforced the same way.
+#[test]
+fn must_release_general_form_multi_param() {
+    compile_should_fail_with(
+        r#"
+        class Open { tag: int }
+        class Closed { tag: int }
+        class Leader { tag: int }
+        class Follower { tag: int }
+
+        class Conn<S, R> {
+            id: int
+
+            must_release S == Open
+
+            fn close(self) Conn<Closed, R> where S == Open {
+                return Conn<Closed, R> { id: self.id }
+            }
+
+            fn promote(self) Conn<S, Leader> where R == Follower {
+                return Conn<S, Leader> { id: self.id }
+            }
+        }
+
+        fn main() {
+            let c = Conn<Open, Follower> { id: 1 }
+            print(c.id)
+        }
+        "#,
+        "'c' still holds Conn<Open, Follower>, a must_release state",
+    );
+}
+
+/// The simple form is only legal with exactly one state parameter.
+#[test]
+fn must_release_simple_form_needs_single_state_param() {
+    compile_should_fail_with(
+        r#"
+        class Open { tag: int }
+        class Closed { tag: int }
+        class A { t: int }
+        class B { t: int }
+
+        class Conn<S, R> {
+            id: int
+
+            must_release Open
+
+            fn close(self) Conn<Closed, R> where S == Open {
+                return Conn<Closed, R> { id: self.id }
+            }
+
+            fn flip(self) Conn<S, B> where R == A {
+                return Conn<S, B> { id: self.id }
+            }
+        }
+
+        fn main() {
+            print(1)
+        }
+        "#,
+        "'must_release Open': class 'Conn' has 2 state parameters (S, R); name one with the general form `must_release <Param> == Open`",
+    );
+}
+
+/// Typos in the state name are caught at the declaration, with the known
+/// states listed.
+#[test]
+fn must_release_unknown_state_rejected() {
+    compile_should_fail_with(
+        r#"
+        class Idle { tag: int }
+        class Held { tag: int }
+
+        class Lease<S> {
+            id: int
+
+            must_release Helb
+
+            fn acquire(self) Lease<Held> where S == Idle {
+                return Lease<Held> { id: self.id }
+            }
+        }
+
+        fn main() {
+            print(1)
+        }
+        "#,
+        "'Helb' is not a state of 'Lease' for parameter 'S'",
+    );
+}
+
+/// must_release needs a typestate class: no type params, no states.
+#[test]
+fn must_release_requires_typestate_class() {
+    compile_should_fail_with(
+        r#"
+        class Thing {
+            id: int
+
+            must_release Held
+        }
+
+        fn main() {
+            print(1)
+        }
+        "#,
+        "'must_release' requires a typestate class",
+    );
+}
+
+/// Non-must-release states keep the relaxed rules: droppable states can go
+/// out of scope freely, and classes without `where` clauses are untouched.
+#[test]
+fn must_release_droppable_states_stay_relaxed() {
+    let out = compile_and_run_stdout(&lease_src(
+        r#"
+        fn main() {
+            let a = Lease<Idle> { id: 1 }
+            let b = Lease<Revoked> { id: 2 }
+            print(a.id + b.id)
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "3");
+}

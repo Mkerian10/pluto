@@ -21,7 +21,9 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// v8: Expr::At placement expressions; Field.is_domain.
 /// v9: ContractKind::StateWhere (typestate method constraints).
 /// v10: ClassDecl.is_object (entity declarations).
-const SCHEMA_VERSION: u32 = 10;
+/// v11: ContractKind::MustRelease (must-release typestate annotations, riding
+/// in ClassDecl.invariants).
+const SCHEMA_VERSION: u32 = 11;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;

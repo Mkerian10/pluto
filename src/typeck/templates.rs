@@ -250,10 +250,17 @@ fn check_class_template(class: &ClassDecl, env: &mut TypeEnv) -> Result<(), Comp
     }
 
     // Invariants on generic classes were previously never type-checked.
-    if result.is_ok() && !class.invariants.is_empty() {
+    // (`must_release` clauses ride in `invariants` but are typestate markers,
+    // not bool predicates — they are validated during registration.)
+    let value_invariants: Vec<_> = class
+        .invariants
+        .iter()
+        .filter(|i| i.node.kind == crate::parser::ast::ContractKind::Invariant)
+        .collect();
+    if result.is_ok() && !value_invariants.is_empty() {
         env.push_scope();
         env.define_unchecked("self".to_string(), PlutoType::Class(mangled.clone()));
-        for inv in &class.invariants {
+        for inv in value_invariants {
             match super::infer::infer_expr(&inv.node.expr.node, inv.node.expr.span, env, None) {
                 Ok(inv_type) => {
                     if inv_type != PlutoType::Bool {

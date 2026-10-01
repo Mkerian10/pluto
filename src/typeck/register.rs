@@ -476,12 +476,30 @@ pub(crate) fn register_errors(program: &Program, env: &mut TypeEnv) -> Result<()
             ));
         }
 
+        // Fields are resolved later (resolve_error_fields): error payloads
+        // may be class-typed — including generic instantiations such as
+        // `Lease<Revoked>` for degradation errors — and classes are not
+        // registered yet at this point.
+        env.errors.insert(e.name.node.clone(), ErrorInfo { fields: Vec::new() });
+    }
+    Ok(())
+}
+
+/// Resolve error payload field types. Runs in the resolution pass, after
+/// class/enum/trait names are registered, so error fields may reference any
+/// declared type — notably typestate class instantiations carried by
+/// degradation errors (`error Degraded { lease: Lease<Revoked> }`).
+pub(crate) fn resolve_error_fields(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for error_decl in &program.errors {
+        let e = &error_decl.node;
         let mut fields = Vec::new();
         for f in &e.fields {
             let ty = resolve_type(&f.ty, env)?;
             fields.push((f.name.node.clone(), ty));
         }
-        env.errors.insert(e.name.node.clone(), ErrorInfo { fields });
+        if let Some(info) = env.errors.get_mut(&e.name.node) {
+            info.fields = fields;
+        }
     }
     Ok(())
 }
@@ -582,6 +600,7 @@ pub(crate) fn register_class_names(program: &Program, env: &mut TypeEnv) -> Resu
                 generic_impl_traits: c.impl_traits.iter().filter(|t| !t.type_args.is_empty()).map(|t| (t.name.node.clone(), t.type_args.clone())).collect(),
                 mut_self_methods: HashSet::new(),
                 method_state_constraints: HashMap::new(),
+                must_release: Vec::new(),
                 lifecycle: c.lifecycle,
             });
             continue;
@@ -746,6 +765,8 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                         .push((param.clone(), state.clone()));
                 }
             }
+            let must_release =
+                validate_must_release(c, &method_state_constraints, &method_sigs)?;
             env.generic_classes.insert(c.name.node.clone(), GenericClassInfo {
                 type_params: c.type_params.iter().map(|tp| tp.node.clone()).collect(),
                 type_param_bounds: bounds,
@@ -756,9 +777,20 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                 generic_impl_traits: c.impl_traits.iter().filter(|t| !t.type_args.is_empty()).map(|t| (t.name.node.clone(), t.type_args.clone())).collect(),
                 mut_self_methods: generic_mut_self,
                 method_state_constraints,
+                must_release,
                 lifecycle: c.lifecycle,
             });
             continue;
+        }
+        if let Some(mr) = c.invariants.iter().find(|i| i.node.kind == crate::parser::ast::ContractKind::MustRelease) {
+            return Err(CompileError::type_err(
+                format!(
+                    "'must_release' requires a typestate class: '{}' has no type \
+                     parameters, so it has no states to mark",
+                    c.name.node
+                ),
+                mr.span,
+            ));
         }
         // Check for duplicate field names
         let mut seen_fields = HashSet::new();
@@ -804,6 +836,135 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
         }
     }
     Ok(())
+}
+
+/// Validate `must_release` annotations on a typestate class and return the
+/// (state param, state) pairs (docs/design/rfc-typestates.md phase 3).
+///
+/// The simple form `must_release Held` is legal only when the class has
+/// exactly one state parameter; `must_release S == Held` names the parameter
+/// explicitly. The named state must actually be a state of that parameter —
+/// the right-hand side of some `where` clause or a transition target — so
+/// typos are caught at the declaration.
+fn validate_must_release(
+    c: &ClassDecl,
+    method_state_constraints: &HashMap<String, Vec<(String, String)>>,
+    method_sigs: &HashMap<String, FuncSig>,
+) -> Result<Vec<(String, String)>, CompileError> {
+    let clauses: Vec<_> = c
+        .invariants
+        .iter()
+        .filter(|i| i.node.kind == ContractKind::MustRelease)
+        .collect();
+    if clauses.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let type_params: Vec<String> = c.type_params.iter().map(|tp| tp.node.clone()).collect();
+    // State parameters: named on the left of any `where` clause in the class.
+    let state_params: Vec<String> = type_params
+        .iter()
+        .filter(|tp| {
+            method_state_constraints
+                .values()
+                .flatten()
+                .any(|(p, _)| p == *tp)
+        })
+        .cloned()
+        .collect();
+    if state_params.is_empty() {
+        return Err(CompileError::type_err(
+            format!(
+                "'must_release' requires a typestate class: no method of '{}' \
+                 carries a `where` state constraint, so '{}' has no state parameters",
+                c.name.node, c.name.node
+            ),
+            clauses[0].span,
+        ));
+    }
+
+    // Known states per parameter: the right-hand side of `where P == State`
+    // clauses, plus concrete types at P's position in transition returns.
+    let mut states_of: HashMap<String, Vec<String>> = HashMap::new();
+    for (p, s) in method_state_constraints.values().flatten() {
+        states_of.entry(p.clone()).or_default().push(s.clone());
+    }
+    for sig in method_sigs.values() {
+        if let PlutoType::GenericInstance(_, base, args) = &sig.return_type
+            && base == &c.name.node
+            && args.len() == type_params.len()
+        {
+            for (i, tp) in type_params.iter().enumerate() {
+                if !state_params.contains(tp) {
+                    continue;
+                }
+                match &args[i] {
+                    PlutoType::Class(n) | PlutoType::Enum(n) => {
+                        states_of.entry(tp.clone()).or_default().push(n.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for clause in clauses {
+        let (param, state) = match &clause.node.expr.node {
+            Expr::Ident(state) => {
+                if state_params.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "'must_release {state}': class '{}' has {} state parameters ({}); \
+                             name one with the general form `must_release <Param> == {state}`",
+                            c.name.node,
+                            state_params.len(),
+                            state_params.join(", ")
+                        ),
+                        clause.span,
+                    ));
+                }
+                (state_params[0].clone(), state.clone())
+            }
+            Expr::BinOp { lhs, rhs, .. } => {
+                let (Expr::Ident(param), Expr::Ident(state)) = (&lhs.node, &rhs.node) else {
+                    continue;
+                };
+                if !state_params.contains(param) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "'must_release {param} == {state}': '{param}' is not a state \
+                             parameter of class '{}' (state parameters are named in `where` \
+                             clauses: {})",
+                            c.name.node,
+                            state_params.join(", ")
+                        ),
+                        clause.span,
+                    ));
+                }
+                (param.clone(), state.clone())
+            }
+            _ => continue,
+        };
+        let known = states_of.get(&param).cloned().unwrap_or_default();
+        if !known.contains(&state) {
+            let mut unique = known;
+            unique.sort();
+            unique.dedup();
+            return Err(CompileError::type_err(
+                format!(
+                    "'must_release': '{state}' is not a state of '{}' for parameter \
+                     '{param}' — it never appears in a `where {param} == ...` clause or \
+                     as a transition target (known states: {})",
+                    c.name.node,
+                    unique.join(", ")
+                ),
+                clause.span,
+            ));
+        }
+        out.push((param, state));
+    }
+    Ok(out)
 }
 
 pub(crate) fn register_extern_fns(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
@@ -2245,6 +2406,18 @@ pub(crate) fn normalize_registered_types(env: &mut TypeEnv) {
             .map(|(f, t, inj)| (f.clone(), resolve_generic_instances(t, env), *inj))
             .collect();
         if let Some(info) = env.classes.get_mut(&name) {
+            info.fields = resolved;
+        }
+    }
+
+    let error_names: Vec<String> = env.errors.keys().cloned().collect();
+    for name in error_names {
+        let fields = env.errors[&name].fields.clone();
+        let resolved: Vec<(String, PlutoType)> = fields
+            .iter()
+            .map(|(f, t)| (f.clone(), resolve_generic_instances(t, env)))
+            .collect();
+        if let Some(info) = env.errors.get_mut(&name) {
             info.fields = resolved;
         }
     }

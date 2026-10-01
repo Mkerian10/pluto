@@ -319,6 +319,14 @@ State as a type parameter (docs/design/rfc-typestates.md): `Partition<Unowned>` 
 cargo run -- run examples/typestates/main.pt
 ```
 
+## lease
+
+Degradable typestates and must-release obligations (rfc-typestates.md phase 3): `must_release Held` makes a `Lease<Held>` binding fully linear — it cannot be dropped, captured, or stored in a field; moves transfer the single obligation and a transition out of `Held` discharges it. A fallible transition raises a degradation error that *carries the lease in its post-failure state* (`Degraded { lease: Lease<Revoked> }`), so catching it consumes the stale binding and recovery is just extracting the payload. Comments tie each rule to the epistemics: evidence, definite failure, obligation.
+
+```bash
+cargo run -- run examples/lease/main.pt
+```
+
 ## objects
 
 The object construct (docs/design/rfc-objects.md): `object` declares an entity rather than a data structure — reference identity (`==` is identity), spawn shares the entity instead of deep-copying it, and sharing is safe because an object's methods are serialized. Objects never cross domain boundaries as values — they cross by reference, as identity handles (rfc-objects.md phase 2).
