@@ -12,6 +12,7 @@ mod closures;
 pub(crate) mod errors;
 mod linearity;
 pub(crate) mod shrink;
+pub(crate) mod requires;
 mod templates;
 
 // Re-exports for external use
@@ -153,6 +154,11 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // visited in program order — can evaluate callee guards against the
     // caller's live flow facts.
     shrink::extract_raise_summaries(program, &mut env);
+    // Static requires discharge (contracts.md phase 6, slice 1): summarize
+    // each callee's requires clauses before any body is checked, so call
+    // sites — visited in program order — can prove them against the
+    // caller's live flow facts (codegen elides the entry check per site).
+    requires::extract_requires_summaries(program, &mut env);
     register::check_all_bodies(program, &mut env)?;
     templates::check_generic_templates(program, &mut env)?;
     check::enforce_mut_self(program, &env)?;

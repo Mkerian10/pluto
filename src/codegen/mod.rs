@@ -401,6 +401,74 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
         }
     }
 
+    // Static requires discharge (contracts.md phase 6, slice 1): for every
+    // callee that carries requires checks AND has at least one call site
+    // whose clauses typeck proved, declare an *unchecked twin*
+    // `<name>$nochk` — the same body lowered without the entry checks.
+    // Proven call sites route to the twin; every other caller (unproven
+    // sites, fn refs, trait dispatch, spawn, serve/RPC entries, wire
+    // boundaries) keeps the checked symbol, so runtime behavior at
+    // unproven sites is exactly as before. Defensive gates: the typeck
+    // clause count must match the emitted check count (a divergence
+    // between the two collections suppresses elision, never a check), and
+    // generators are excluded (their checks live in the generator-next
+    // body).
+    let proven_callees: HashSet<&String> = env.proven_requires_sites.values().collect();
+    let mut nochk_fns: HashSet<String> = HashSet::new();
+    for func in &program.functions {
+        let f = &func.node;
+        let name = &f.name.node;
+        if env.generators.contains(name) || spawn_closure_fns.contains(name) {
+            continue;
+        }
+        if !proven_callees.contains(name) {
+            continue;
+        }
+        let Some(fc) = fn_contracts.get(name) else { continue };
+        if env.requires_summaries.get(name).map(|s| s.clauses.len()) != Some(fc.requires.len()) {
+            continue;
+        }
+        let twin = format!("{name}$nochk");
+        if func_ids.contains_key(&twin) {
+            continue;
+        }
+        let sig = build_signature(f, &module, env);
+        let twin_id = module
+            .declare_function(&twin, Linkage::Local, &sig)
+            .map_err(|e| CompileError::codegen(format!("declare unchecked twin error: {e}")))?;
+        func_ids.insert(twin, twin_id);
+        nochk_fns.insert(name.clone());
+    }
+    for class in &program.classes {
+        let c = &class.node;
+        for method in &c.methods {
+            let m = &method.node;
+            let mangled = mangle_method(&c.name.node, &m.name.node);
+            if !proven_callees.contains(&mangled) {
+                continue;
+            }
+            let Some(fc) = fn_contracts.get(&mangled) else { continue };
+            if env.requires_summaries.get(&mangled).map(|s| s.clauses.len())
+                != Some(fc.requires.len())
+            {
+                continue;
+            }
+            let twin = format!("{mangled}$nochk");
+            if func_ids.contains_key(&twin) {
+                continue;
+            }
+            let sig = build_method_signature(m, &module, &c.name.node, env);
+            let twin_id = module
+                .declare_function(&twin, Linkage::Local, &sig)
+                .map_err(|e| CompileError::codegen(format!("declare unchecked twin error: {e}")))?;
+            func_ids.insert(twin, twin_id);
+            nochk_fns.insert(mangled);
+        }
+    }
+    // Twins are lowered against an empty contracts map (the map's only use
+    // is prologue check emission).
+    let empty_contracts: HashMap<String, FnContracts> = HashMap::new();
+
     // Pass 2: Define all top-level functions
     for func in &program.functions {
         let f = &func.node;
@@ -458,6 +526,22 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             module
                 .define_function(func_id, &mut fn_ctx)
                 .map_err(|e| CompileError::codegen(format!("define function error for '{}': {e}", f.name.node)))?;
+
+            // Unchecked twin: same body, no entry requires checks.
+            if nochk_fns.contains(&f.name.node) {
+                let twin_id = func_ids[&format!("{}$nochk", f.name.node)];
+                let sig = build_signature(f, &module, env);
+                let mut twin_ctx = Context::new();
+                twin_ctx.func.signature = sig;
+                let mut twin_builder_ctx = FunctionBuilderContext::new();
+                {
+                    let builder = cranelift_frontend::FunctionBuilder::new(&mut twin_ctx.func, &mut twin_builder_ctx);
+                    lower_function(f, builder, env, &mut module, &func_ids, &runtime, None, &vtable_ids, source, &spawn_closure_fns, &empty_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
+                }
+                module
+                    .define_function(twin_id, &mut twin_ctx)
+                    .map_err(|e| CompileError::codegen(format!("define unchecked twin error for '{}': {e}", f.name.node)))?;
+            }
         }
     }
 
@@ -482,6 +566,22 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             module
                 .define_function(func_id, &mut fn_ctx)
                 .map_err(|e| CompileError::codegen(format!("define method error for '{mangled}': {e}")))?;
+
+            // Unchecked twin: same body, no entry requires checks.
+            if nochk_fns.contains(&mangled) {
+                let twin_id = func_ids[&format!("{mangled}$nochk")];
+                let sig = build_method_signature(m, &module, &c.name.node, env);
+                let mut twin_ctx = Context::new();
+                twin_ctx.func.signature = sig;
+                let mut twin_builder_ctx = FunctionBuilderContext::new();
+                {
+                    let builder = cranelift_frontend::FunctionBuilder::new(&mut twin_ctx.func, &mut twin_builder_ctx);
+                    lower_function(m, builder, env, &mut module, &func_ids, &runtime, Some(&c.name.node), &vtable_ids, source, &spawn_closure_fns, &empty_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
+                }
+                module
+                    .define_function(twin_id, &mut twin_ctx)
+                    .map_err(|e| CompileError::codegen(format!("define unchecked twin error for '{mangled}': {e}")))?;
+            }
         }
     }
 

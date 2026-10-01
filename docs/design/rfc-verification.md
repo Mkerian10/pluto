@@ -88,11 +88,24 @@ ladder means different things for different fact carriers:
   gradual fallback for invariants — the diagnostic names the invariant, the site,
   the symbolic state, and the missing fact, so unprovability costs a guard or a
   `requires` clause, not a crash path.
-- **`requires` and boundary validation keep the full ladder**: `requires` is
-  runtime-checked at entry today (static call-site discharge is future work), and
-  data entering the compilation unit through wire/marshal decode is *testimony,
-  not proof* — decode re-checks the invariants of the target type and raises the
-  existing wire error (a typed error, mandatory to handle) on violation. That
+- **`requires` keeps the full ladder, with static call-site discharge
+  shipped** *(2026-10-01, `src/typeck/requires.rs`)*: a direct call site
+  (named non-generic free function, or method on a class/object-typed
+  receiver — the same scope as error-set shrinking slice 1) whose *every*
+  requires clause the caller's live flow facts prove routes to an unchecked
+  twin of the callee body (`<name>$nochk`), so the entry check is not
+  executed for that site. Every other caller — unproven sites, generic
+  callees, fn-typed values, trait dispatch, spawn, serve/RPC entries —
+  keeps the checked entry, so the runtime check (hard abort on violation)
+  fires exactly as before. Proof uses the shrinking kill discipline: facts
+  must be live at the call (interleaved calls drop field facts, loop
+  headers never prove). Unprovable sites are *not* errors — the ladder's
+  runtime rung remains; strict proof-or-reject for `requires` is still
+  future work.
+- **Boundary validation stays runtime**: data entering the compilation unit
+  through wire/marshal decode is *testimony, not proof* — decode re-checks
+  the invariants of the target type and raises the existing wire error (a
+  typed error, mandatory to handle) on violation. That
   boundary check is the one place runtime invariant validation remains.
 
 ## Facts have consequences: proofs shrink error sets
