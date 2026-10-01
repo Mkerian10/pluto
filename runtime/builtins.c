@@ -1367,6 +1367,33 @@ void __pluto_entity_guard(void *ptr) {
     }
 }
 
+// ── Boundary-failure classification (docs/design/epistemics.md) ──────────────
+// Every failed boundary call is classified at the transport layer — the only
+// layer that knows whether the request frame left the process:
+//   definite = 1  the request is KNOWN not to have been dispatched: nothing was
+//                 sent, or the length-framed request frame cannot have been
+//                 completed (the server dispatches only after reading a full
+//                 frame, so an incomplete frame is never executed).
+//   definite = 0  the full request frame was handed to the kernel and no
+//                 response came back. The effect may or may not have applied;
+//                 no local information can say. (Ambiguous.)
+// The default is 0: when in doubt, the runtime claims ignorance, never
+// knowledge. Thread-local like the error registers: each handler thread/task
+// classifies its own boundary calls.
+static __thread long boundary_definite = 0;
+static __thread const char *boundary_reason = "";
+
+static void pluto_boundary_fail(long definite, const char *reason) {
+    boundary_definite = definite;
+    boundary_reason = reason;
+}
+
+long __pluto_boundary_failure_definite(void) { return boundary_definite; }
+
+void *__pluto_boundary_failure_reason(void) {
+    return __pluto_string_new(boundary_reason, (long)strlen(boundary_reason));
+}
+
 static void *pluto_request_to_addr(const char *addr, void *method_str, void *payload_str);
 
 static void *pluto_boundary_request(const char *prefix, void *service_str, void *method_str, void *payload_str) {
@@ -1385,7 +1412,10 @@ static void *pluto_boundary_request(const char *prefix, void *service_str, void 
     envname[n] = 0;
 
     const char *addr = getenv(envname);
-    if (!addr) return NULL;
+    if (!addr) {
+        pluto_boundary_fail(1, "service address not configured (nothing sent)");
+        return NULL;
+    }
     return pluto_request_to_addr(addr, method_str, payload_str);
 }
 
@@ -1396,7 +1426,10 @@ void *__pluto_entity_request(void *home_str, void *method_str, void *payload_str
     long hlen;
     __pluto_string_data(home_str, &home, &hlen);
     char addr[160];
-    if (hlen <= 0 || hlen >= (long)sizeof(addr)) return NULL;
+    if (hlen <= 0 || hlen >= (long)sizeof(addr)) {
+        pluto_boundary_fail(1, "invalid entity home address (nothing sent)");
+        return NULL;
+    }
     memcpy(addr, home, (size_t)hlen);
     addr[hlen] = 0;
     return pluto_request_to_addr(addr, method_str, payload_str);
@@ -1404,29 +1437,50 @@ void *__pluto_entity_request(void *home_str, void *method_str, void *payload_str
 
 static void *pluto_request_to_addr(const char *addr, void *method_str, void *payload_str) {
     const char *colon = strchr(addr, ':');
-    if (!colon) return NULL;
+    if (!colon) {
+        pluto_boundary_fail(1, "malformed service address (nothing sent)");
+        return NULL;
+    }
     size_t hlen = (size_t)(colon - addr);
     char host[128];
-    if (hlen == 0 || hlen >= sizeof(host)) return NULL;
+    if (hlen == 0 || hlen >= sizeof(host)) {
+        pluto_boundary_fail(1, "malformed service address (nothing sent)");
+        return NULL;
+    }
     memcpy(host, addr, hlen);
     host[hlen] = 0;
     long port = atol(colon + 1);
 
     long fd = __pluto_socket_create(2, 1, 0);
-    if (fd < 0) return NULL;
+    if (fd < 0) {
+        pluto_boundary_fail(1, "socket creation failed (nothing sent)");
+        return NULL;
+    }
     void *host_ps = __pluto_string_new(host, (long)hlen);
     if (__pluto_socket_connect(fd, host_ps, port) < 0) {
+        // Covers refusal, unreachability, and connect-phase timeouts alike:
+        // the connection never opened, so the request was never sent.
         __pluto_socket_close(fd);
+        pluto_boundary_fail(1, "connect failed (nothing sent)");
         return NULL;
     }
     void *nl = __pluto_string_new("\n", 1);
     void *req = __pluto_string_concat(__pluto_string_concat(method_str, nl), payload_str);
     if (__pluto_write_framed(fd, req) < 0) {
+        // The frame is length-prefixed and was not fully written, so the
+        // server can never read a complete frame and never dispatches.
         __pluto_socket_close(fd);
+        pluto_boundary_fail(1, "send failed before the request frame completed (not dispatched)");
         return NULL;
     }
     void *resp = __pluto_read_framed(fd);
     __pluto_socket_close(fd);
+    if (!resp) {
+        // The full request frame was handed off and no response returned
+        // (reset, EOF, or a truncated response). The effect may or may not
+        // have applied — the one honest classification is ambiguity.
+        pluto_boundary_fail(0, "request sent, no response (outcome unknown)");
+    }
     return resp; // NULL on read failure -> caller raises NetworkError
 }
 

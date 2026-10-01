@@ -190,7 +190,7 @@ F0 01 00 00 01           // null header
 Error types are serialized as classes with special naming convention:
 
 ```
-class NetworkError { message: string }
+class NetworkError { message: string, definite: bool }
 // Encodes as class "error_NetworkError"
 ```
 

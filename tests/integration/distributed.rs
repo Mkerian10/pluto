@@ -663,6 +663,135 @@ fn remote_call_rejected_on_interface_skew() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "result:-1\n");
 }
 
+// ── Failure classification: Definite vs Ambiguous (epistemics.md) ───────────────
+//
+// Every failed boundary call carries an epistemic classification in
+// NetworkError's `definite` field — true means the request is KNOWN not to have
+// been dispatched (the effect did not apply; safe to react freely), false means
+// the request left the process and no response returned (the effect may or may
+// not have applied). These tests verify the classification EMPIRICALLY against
+// real transport conditions, not by reading the runtime.
+
+// A client that catches the transport error with a typed handler and reports
+// the classification. Also pins the typed-catch path itself: transport
+// NetworkErrors must match `catch err: NetworkError` (they once carried no
+// type tag and silently escaped typed handlers).
+const CLASSIFY_CLIENT_SRC: &str = "\
+import billing
+
+app Payments[billing: remote billing.BillingService] {
+    fn main(self) {
+        let x = self.billing.charge(21) catch err: NetworkError {
+            print(f\"definite:{err.definite}\")
+            return
+        }
+        print(f\"result:{x}\")
+    }
+}";
+
+/// Connection refused (nothing listening): the connection never opened, so the
+/// request was never sent — a DEFINITE failure. Likewise when no service
+/// address is bound at all.
+#[test]
+fn boundary_failure_definite_when_never_sent() {
+    let (_cd, client_bin) =
+        build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLASSIFY_CLIENT_SRC)]);
+
+    // Port 1: connect() is refused before anything is sent.
+    let refused = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BILLINGSERVICE", "127.0.0.1:1")
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&refused.stdout), "definite:true\n");
+
+    // No address bound: nothing was ever dialed.
+    let unbound = Command::new(&client_bin).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&unbound.stdout), "definite:true\n");
+}
+
+/// The server consumes the full request frame and closes without replying —
+/// indistinguishable (to the client) from a crash after dispatch. The request
+/// left the process and no response returned: the effect may or may not have
+/// applied, so the classification must be AMBIGUOUS.
+#[test]
+fn boundary_failure_ambiguous_when_request_consumed_without_reply() {
+    use std::io::{Read, Write as _};
+    use std::net::TcpListener;
+
+    let (_cd, client_bin) =
+        build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLASSIFY_CLIENT_SRC)]);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let srv = std::thread::spawn(move || {
+        let (mut conn, _) = listener.accept().unwrap();
+        // Read the complete length-framed request so the send provably
+        // succeeded, then drop the connection without any response.
+        let mut hdr = [0u8; 4];
+        conn.read_exact(&mut hdr).unwrap();
+        let len = u32::from_be_bytes(hdr) as usize;
+        let mut body = vec![0u8; len];
+        conn.read_exact(&mut body).unwrap();
+        let _ = conn.flush();
+        // conn dropped here: EOF at the client, no response ever written.
+    });
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    srv.join().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "definite:false\n");
+}
+
+// The classify client compiled against a skewed interface (string instead of
+// int), so the server's interface-hash check refuses to dispatch it.
+const CLASSIFY_SKEW_CLIENT_SRC: &str = "\
+import billing
+
+app Payments[billing: remote billing.BillingService] {
+    fn main(self) {
+        let x = self.billing.charge(\"hi\") catch err: NetworkError {
+            print(f\"definite:{err.definite}\")
+            print(f\"msg:{err.message}\")
+            return
+        }
+        print(f\"result:{x}\")
+    }
+}";
+
+/// A version-skewed client is refused by the server's interface-hash check
+/// BEFORE dispatch, and the server says so in its reply — the authority itself
+/// reports the request never ran, converting what would otherwise be an
+/// ambiguous no-reply close into a DEFINITE failure.
+#[test]
+fn boundary_failure_definite_on_interface_skew_rejection() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", SERVE_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("billing.pluto", SKEW_IFACE), ("main.pluto", CLASSIFY_SKEW_CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut lines = stdout.lines();
+    assert_eq!(lines.next(), Some("definite:true"));
+    let msg = lines.next().unwrap_or_default();
+    assert!(
+        msg.contains("rejected before dispatch"),
+        "rejection message should say the request was not dispatched: {msg}"
+    );
+}
+
 /// The forked server handles connections concurrently: a real client is served
 /// promptly even while another client holds a stuck, half-open request. Under
 /// the old single-threaded server the real client would wait behind the stuck

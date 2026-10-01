@@ -89,22 +89,73 @@ fn process(order: OrderData) string {
 }
 ```
 
-When the compiler determines that `order_service.create()` is a remote call (the stage runs in a different app/process), it automatically adds `NetworkError` to the inferred error set. `NetworkError` includes:
+When the compiler determines that `order_service.create()` is a remote call (the stage runs in a different app/process), it automatically adds `NetworkError` to the inferred error set. `NetworkError` is a single builtin error type whose payload carries the failure's epistemic classification (see "Failure classification" below):
 
 ```
 error NetworkError {
-    Timeout,
-    ConnectionRefused,
-    ConnectionReset,
-    Unreachable,
+    message: string    // human-readable cause ("connect failed (nothing sent)", ...)
+    definite: bool     // true: the request is KNOWN not to have been dispatched
 }
 ```
+
+An earlier draft of this RFC listed cause variants (`Timeout`, `ConnectionRefused`, `ConnectionReset`, `Unreachable`). That catalog was dropped: a cause taxonomy invites untruthful precision (a "timeout" during connect and a "timeout" awaiting a response are epistemically opposite), and the load-bearing distinction for callers is not the cause but what is *known* about the attempted effect. The `definite` field carries exactly that bit; the cause stays in `message` as diagnostic detail.
 
 This means:
 - **Local calls** within the same process infer the callee's direct error set (same as today)
 - **Remote calls** across processes infer the callee's error set PLUS `NetworkError`
 - The caller must handle both — `catch` handles all, `!` propagates all
 - No annotation needed — the compiler infers it from the deployment topology
+
+### Failure classification
+
+Every failure of an effectful boundary call is one of exactly two kinds
+([epistemics.md](epistemics.md), "Actions have knowledge preconditions"):
+
+- **Definite** — the effect is known not to have applied. The world is in a
+  known state; the caller may react freely (including retrying a
+  non-idempotent call).
+- **Ambiguous** — the request left the process and no response returned. The
+  effect applied or it didn't; no local information can say. Ambiguity has
+  exactly four legitimate exits: idempotent retry, read-back, self-fencing,
+  or honest escalation.
+
+The runtime is the only layer that knows whether bytes left the socket, so the
+runtime draws the line and `NetworkError.definite` carries it to the caller.
+
+**The guarantee.** `definite == true` is only ever set with a warrant — the
+runtime proves to itself that the request cannot have been dispatched. When in
+doubt, the runtime claims ignorance: the default classification is ambiguous.
+Concretely:
+
+| Transport condition | Classification | Warrant |
+|---|---|---|
+| No service address bound (`PLUTO_REMOTE_`/`PLUTO_DOMAIN_` unset) | Definite | never dialed |
+| Malformed service address / invalid entity home | Definite | never dialed |
+| Socket creation failure | Definite | never dialed |
+| `connect()` failure — refused, unreachable, or connect-phase timeout | Definite | the connection never opened; nothing was sent |
+| Send failure mid-request (reset/EPIPE during write) | Definite | the request is length-framed and the frame was not completed; the server dispatches only after reading a complete frame, so an incomplete frame is never executed |
+| Request frame fully written, then reset / EOF / truncated response | **Ambiguous** | the frame was handed to the kernel; delivery, dispatch, and execution are all unknowable locally |
+| Server replies `ERR __rejected` (unknown method, interface-hash mismatch, unknown entity) | Definite | the authority itself reports it refused the request before dispatch |
+| Server replies with an error type the client cannot reconstruct (error-set skew, multi-error `__unknown` response) | **Ambiguous** | the method *ran* and raised; its effects up to the raise may persist |
+| Server replies with a recognized typed error | (reconstructed as that typed error, not `NetworkError`) | the authority reports the method's outcome; effect semantics are the method's own |
+
+Two consequences worth naming:
+
+- A server that refuses to dispatch (version skew, unknown method) *says so*
+  in its reply rather than silently closing the connection. Without that
+  reply the client could only classify the failure as ambiguous; the
+  rejection converts it to definite — an ambiguity→definiteness conversion
+  performed by the authority, which is the only party with the warrant.
+- The transport performs **no hidden retries**. Each boundary call dials,
+  sends, and reads exactly once. Retry policy belongs to the caller, who has
+  the classification in hand — a runtime-level resend of an ambiguous call
+  would be acting on knowledge nobody has.
+
+Timeouts: the client transport currently has no response deadline of its own
+(the server's 5s receive timeout bounds half-open *requests*). When client-side
+deadlines are added, the same rule decides their classification: a
+connect-phase timeout is definite; any timeout after the request frame
+completed is ambiguous.
 
 ### Wire Type Validation
 

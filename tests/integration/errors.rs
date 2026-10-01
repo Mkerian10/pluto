@@ -401,9 +401,9 @@ fn catch_wildcard_multi_stmt_no_error() {
 #[test]
 fn builtin_network_error() {
     let out = compile_and_run_stdout(
-        "fn test_network() {\n    raise NetworkError { message: \"connection failed\" }\n}\n\nfn main() {\n    test_network() catch NetworkError {\n        print(\"caught network error\")\n    }\n}",
+        "fn test_network() {\n    raise NetworkError { message: \"connection failed\", definite: true }\n}\n\nfn main() {\n    test_network() catch err: NetworkError {\n        print(f\"caught network error definite:{err.definite}\")\n    }\n}",
     );
-    assert_eq!(out, "caught network error\n");
+    assert_eq!(out, "caught network error definite:true\n");
 }
 
 #[test]

@@ -92,6 +92,9 @@ effectful boundary call is one of exactly two kinds:
 
 The runtime owns the classification (only it knows whether bytes left the
 socket); everything built *on* the classification is library policy — see below.
+Implemented: `NetworkError.definite` carries the classification, with the
+condition→class table and guarantee in
+[rfc-distributed-safety.md](rfc-distributed-safety.md) ("Failure classification").
 
 ## The value/entity split is the belief/fact split
 
@@ -255,9 +258,14 @@ Consequences, mapped:
 3. **Assumption syntax.** The `extern` declaration form and its granularity
    (per-endpoint? per-property?). Interaction with rfc-distributed-safety.md's
    open question on third-party services.
-4. **Classification mechanics.** Where exactly the runtime draws
-   definite/ambiguous (send-buffer handoff? TCP ack? response header?), and how
-   the classification rides on the existing NetworkError surface.
+4. **Classification mechanics.** ~~Where exactly the runtime draws
+   definite/ambiguous, and how the classification rides on the existing
+   NetworkError surface.~~ Resolved: the line is drawn at completion of the
+   length-framed request write (an incomplete frame is never dispatched), and
+   the classification rides as `NetworkError.definite` — see
+   rfc-distributed-safety.md "Failure classification". Still open: client-side
+   response deadlines (none exist yet) and their interaction with the
+   classification.
 5. **Property evolution.** A provider dropping or weakening a property is a
    breaking change for requirers — how does this interact with interface hashing
    and the migration rules?
