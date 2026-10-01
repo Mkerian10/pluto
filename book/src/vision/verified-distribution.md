@@ -1,6 +1,6 @@
 # Verified Distribution
 
-> **This chapter is direction, not documentation.** The foundations described here — entities, typestates, compile-time invariant proofs, error-set shrinking — are shipped and covered in Part 2. The destination they point at — a proof kernel that makes distributed-systems correctness a library concern — is not. Code blocks marked *illustrative* do not parse today. Everything else is shipped syntax, verified against the current compiler — including the one snippet the compiler rejects, which is the point of that snippet — and every quoted diagnostic is real output.
+> **This chapter is direction, not documentation.** The foundations described here — entities, typestates, compile-time invariant proofs (single- and two-state), `ensures` postconditions, `guarded_by` dominance, error-set shrinking, definite/ambiguous failure classification — are shipped and covered in Part 2. The destination they point at — a proof kernel that makes distributed-systems correctness a library concern — is not. Code blocks marked *illustrative* do not parse today. Everything else is shipped syntax, verified against the current compiler — including the one snippet the compiler rejects, which is the point of that snippet — and every quoted diagnostic is real output.
 
 ## A brass token, 1850
 
@@ -40,7 +40,7 @@ Two structural observations fall out:
 
 **A sound type is a claim at level 1 or 2.** "I acquired and have not released" survives from check to use because only you can change it — which is exactly what a `Lease<Held>` typestate claims, and why it is honest. "The coordinator currently considers me the holder" is level 5 — the world can falsify it between any two instructions — and any design that encodes it statically is lying. This is why typestate never lives on a shared entity in Pluto, and why the lease example's revocation arrives as a typed `Degraded` error rather than being promised away by a type.
 
-**Monotone facts are the exception that proves the ladder.** A claim that once true can never be false — "the epoch is at least 42," "the set contains x" — can be cached and shared at level-5 warrant *forever*, because nothing can invalidate it. This is the CALM insight (monotone means coordination-free), and it is why monotonic fields are slated to be a kernel primitive.
+**Monotone facts are the exception that proves the ladder.** A claim that once true can never be false — "the epoch is at least 42," "the set contains x" — can be cached and shared at level-5 warrant *forever*, because nothing can invalidate it. This is the CALM insight (monotone means coordination-free), and it is why monotonicity was the first two-state proof shape to ship: `invariant self.epoch >= old(self.epoch)` is a compile-time theorem today, not a roadmap item.
 
 No domain makes the gradient more honest than spaceflight, because there the staleness is enforced by physics. A Mars rover driver's belief about the vehicle is fourteen light-minutes old *at best* — there is no "just check again." So the discipline is total: commands are armed through a typestate chain (build, validate, arm, execute — each step gated on the one before, exactly a `Command<Armed>` that cannot exist without a `Command<Validated>`); a lost command acknowledgment is ambiguity with no fast resolution, and operations treats it as its own state, never rounded to "it failed"; and onboard fault protection is the perfect fence — the rover rejects unsafe commands *at the point of effect*, regardless of what ground believes, because ground's beliefs are known to be testimony. Nobody argues with light-speed. The rest of us have the same problem with the speed of a datacenter hop; we just lie to ourselves about it.
 
@@ -230,6 +230,23 @@ fn main() {
 
 Remove the guard and it is the usual compile error. The guard is not defensive programming; it is the proof, and the compiler read it. (`examples/contracts` in the repository is the runnable version.)
 
+**Receipt three: the movement itself is a theorem.** With the proof-form `ensures` shipped, the withdrawal can state exactly what it did to the balance, and the compiler proves it at every normal exit:
+
+```
+fn try_withdraw(mut self, amount: int) int
+    requires amount > 0
+    ensures self.balance == old(self.balance) - amount
+{
+    if amount > self.balance {
+        raise Insufficient { needed: amount }
+    }
+    self.balance = self.balance - amount
+    return self.balance
+}
+```
+
+This compiles today, and callers *assume* the relation: after a proven `try_withdraw(amount)`, the caller's facts carry `balance == old(balance) - amount`, feeding construction proofs and error-set shrinking downstream. A debit that debits exactly what it says is no longer a comment — it is the per-method half of conservation, checked. (Receipt three's sibling shipped too: `invariant self.epoch >= old(self.epoch)` makes monotone fields a one-line theorem — see the blob store below.)
+
 The rest of the ledger is the shipped vocabulary applied straight: **accounts are entities** — one referent per account, methods serialized, so a transfer's debit-credit pair cannot interleave with another transfer mid-method; **transfers carry idempotency keys on the wire** and wear their protocol as a typestate:
 
 ```
@@ -264,33 +281,33 @@ The acceptance test for this direction has been built: `examples/blob` is a lock
 | Guarantee | Owner | Status |
 |-----------|-------|--------|
 | Atomicity | entity method serialization | shipped (the object construct) |
-| Safety (single-writer) | the fenced compare in `apply` | holds by inspection; *proving* it is the roadmap |
+| Safety (single-writer) | the fenced compare in `apply` | **shipped — compiler-checked**: `guarded_by` dominance + the monotone epoch invariant |
 | Liveness | holding the newest grant; lease windows | runtime courtesy, never load-bearing |
 | Discipline | typestates + mandatory typed-error handling | shipped |
 
 Note where safety lives: not in the client checking "is my grant still valid?" — a process can pause between the check and the write landing, and no client-side check closes that gap. The provable theorem is not "no write is *attempted* without a valid grant" (physics forbids proving that) but the one that matters: **no write is *applied* without a currently-valid grant.** Fencing is constructive knowledge — level 3 on the gradient. You don't learn whether the stale write was attempted; you act so that it cannot land, which is why fencing is robust to message loss while "asking again" never is.
 
-What the verification engine adds is the missing column. Today the store's invariants (`epoch >= 0`, `applied <= epoch`) are proven at compile time, but *monotonicity* ("every write to epoch increases it" — a two-state claim) and *dominance* ("no write to data escapes the fence" — a control-flow claim about write sites) hold by inspection, not by proof. Those are the two proof shapes on the roadmap:
-
-- **Monotonic field** — every write site provably increases the field (epochs, versions, sequence numbers, high-water marks).
-- **Guarded effect** — every effect site provably dominated by a validity check (fencing, readbacks, idempotency keys).
+When this chapter was first written, that column had a hole: the store's single-state invariants (`epoch >= 0`, `applied <= epoch`) were proven at compile time, but *monotonicity* ("every write to epoch increases it" — a two-state claim) and *dominance* ("no write to data escapes the fence" — a control-flow claim about write sites) held by inspection, not by proof. Those were the two proof shapes on the roadmap. **Both have shipped**, and `examples/blob` now carries them as clauses — this is shipped syntax, not an illustration:
 
 ```
-// ILLUSTRATIVE — not shipped
 object BlobAuthority {
-    data: bytes
+    data: bytes guarded_by (g: WriteGrant) g.token == self.epoch
     epoch: int
 
-    invariant monotonic(self.epoch)      // proven: every write increases it
+    invariant self.epoch >= old(self.epoch)   // proven: no write decreases it
 
-    fn apply(mut self, g: WriteGrant, d: bytes) {
-        if g.token != self.epoch { raise StaleGrant }
-        self.data = d                    // proven: dominated by the fence
+    fn apply(mut self, grant: WriteGrant, d: string) {
+        if grant.token != self.epoch {
+            raise StaleGrant { token: grant.token, epoch: self.epoch }
+        }
+        self.data = d.to_bytes()              // proven: dominated by the fence
     }
 }
 ```
 
-With those two shapes, the authority's comment "exported theorem: no write is applied without a valid grant" becomes a checked artifact that downstream code can *assume* without reading the internals — and a "lockless distributed file with provably single-writer writes" is an import, not a language feature. They are also the on-ramp to the cross-entity horizon: separation and conservation decompose into exactly these per-entity pieces plus a quantified sum.
+The two-state invariant is monotonicity with no keyword: every method exit and every write site must prove the epoch did not decrease, so a minted token can never become current again. The `guarded_by` clause makes the fence structural: every write to `data`, across the whole program's closed write-set, must be dominated by a conditional the prover can show implies `g.token == self.epoch` — remove the fence, move the write above it, or slip a call between them, and the store stops compiling. (Both shapes are documented in [Contracts](../whats-different/contracts.md); the full runnable protocol is `examples/blob`.)
+
+So the safety theorem — **no write is applied without a currently-valid grant** — is now a checked artifact, not an inspection note. What remains is the naming layer: a *property form* that binds theorems like these to names (`monotonic`, `fenced`, `idempotent`) a library can export and downstream code can require without reading the internals — making "a lockless distributed file with provably single-writer writes" an import, not a language feature. The shipped shapes are also the on-ramp to the cross-entity horizon: separation and conservation decompose into exactly these per-entity pieces plus a quantified sum.
 
 ## Properties are someone's responsibility
 
@@ -304,7 +321,7 @@ Instead, named properties are planned as *library* definitions whose meaning bot
 
 So "retry from ambiguity" is not a language rule about idempotency. A retry combinator *requires* `idempotent(key)` of its callee; the ledger's transfer authority *provides* it — by proof if the dedup table is in the compilation unit, by assumption if the processor is extern; the compiler matches requirement to provision and never loses track of who vouched. And the assumption surface becomes an artifact: `pluto analyze` reporting every claim discharged by assumption rather than proof — the complete list of things your deployment rests on that nobody proved. A deployment's honesty, as a report.
 
-Failure classification gets the same treatment. Every failure of an effectful boundary call is one of exactly two kinds — **definite** (the effect is known not to have applied: connection refused before send, the authority's fence rejected it) or **ambiguous** (the request left; nothing came back; no local information can say). Ambiguity has exactly four legitimate exits: idempotent retry, read-back, self-fencing, or honest escalation — the same four aviation wrote into its lost-comm regulations. The runtime owns the classification — only it knows whether bytes left the socket; everything built on it is library policy with property requirements.
+Failure classification gets the same treatment — and this piece has shipped. Every failure of an effectful boundary call is one of exactly two kinds — **definite** (the effect is known not to have applied: connection refused before send, the authority's fence rejected it) or **ambiguous** (the request left; nothing came back; no local information can say). Ambiguity has exactly four legitimate exits: idempotent retry, read-back, self-fencing, or honest escalation — the same four aviation wrote into its lost-comm regulations. The runtime owns the classification — only it knows whether bytes left the socket — and today it delivers it on every boundary failure as [`NetworkError.definite`](../whats-different/errors.md#errors-at-a-distance-networkerrordefinite), set truthfully: definite only with a warrant, ambiguous whenever in doubt. What stays library policy with property requirements is everything built on top — the retry combinator that demands idempotency before consuming an ambiguous failure, the read-back, the escalation.
 
 ## Why this and not a framework
 

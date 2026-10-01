@@ -232,10 +232,44 @@ Contracts stop being documentation and start removing handling obligations: fact
 
 **What shrinks.** The shipped analysis is deliberately conservative — soundness is absolute, because a wrongly-dropped variant would be an unhandled runtime error. A variant shrinks only when:
 
-- the `raise` is **direct** in the callee's body, with a dominating guard over the callee's parameters and the receiver's direct int fields, still holding their entry values when the guard is evaluated;
-- the call is **direct** — a named non-generic function or a method resolved on a concrete class.
+- the `raise` is **direct** in the callee's body, with a dominating guard over the callee's parameters and the receiver's direct int fields, still holding their entry values when the guard is evaluated (a raise inside a loop qualifies too, if its guard is loop-invariant — nothing in the loop body disturbs the guarded paths);
+- the call is **direct** — a named function or a method resolved on a concrete class, including generic ones.
 
-**What never shrinks.** Variants that arrive via propagation (`!` edges), closures, fn-typed values, trait dispatch, generic callees, channel operations, and remote boundaries are untouched. And the caller's facts must still be alive at the call: a reassignment, a field write, or an interleaved call that could mutate the receiver kills the guard, and the obligation comes back —
+Generic callees shrink via the template: a generic function's guard chains are syntactic and hold verbatim for every instantiation, so one summary serves all of them — provided no guard mentions a type-parameter-dependent field or parameter. That proviso is what admits the *typestate* pattern, whose state parameters are phantom and whose guards are over plain int fields:
+
+```
+error Degraded {
+    code: int
+}
+
+class Held {
+    tag: int
+}
+
+class Lease<S> {
+    id: int
+    epoch: int
+
+    fn renew(self) Lease<Held> where S == Held {
+        if self.epoch > 2 {
+            raise Degraded { code: self.epoch }
+        }
+        return Lease<Held> { id: self.id, epoch: self.epoch + 1 }
+    }
+}
+
+fn main() {
+    let h = Lease<Held> { id: 7, epoch: 1 }
+    if h.epoch <= 2 {
+        let h2 = h.renew()      // no ! — Degraded is proven impossible here
+        print(h2.epoch)         // 2
+    }
+}
+```
+
+`renew` is a `where`-constrained transition on a generic class, and it still shrinks: the caller's fact on `h.epoch` refutes the raise condition, so the transition needs no handler exactly where the lease is provably fresh. Typestates and error shrinking compose — the protocol keeps its state machine and its call sites get simpler.
+
+**What never shrinks.** Variants that arrive via propagation (`!` edges), closures, fn-typed values, trait dispatch, channel operations, and remote boundaries are untouched, and a generic *caller* never shrinks its own sites. And the caller's facts must still be alive at the call: a reassignment, a field write, or an interleaved call that could mutate the receiver kills the guard, and the obligation comes back —
 
 ```
 if amt <= account.balance {
@@ -318,6 +352,41 @@ fn main() {
 ```
 
 The compiler knows that `.get()` on a task wrapping a fallible function is itself fallible. You must handle it with `!` or `catch` -- the same rules apply.
+
+## Errors at a Distance: `NetworkError.definite`
+
+When a call crosses a process boundary — a `remote` dependency, an `at` placement bound to another process — the compiler adds `NetworkError` to the call's inferred error set, and handling it is mandatory like any other variant. `NetworkError` carries two fields: `message`, the human-readable cause, and `definite`, the one bit that actually governs what you may do next.
+
+Every failed boundary call is one of exactly two kinds:
+
+- **Definite** (`definite == true`) — the request is *known* not to have been dispatched: no address bound, connection refused, the request frame never completed, or the server itself replied that it refused to dispatch (unknown method, interface-hash mismatch). The world is in a known state. You may react freely — including retrying a non-idempotent call, because the effect did not happen.
+- **Ambiguous** (`definite == false`) — the request left the process and no response came back. The effect applied, or it didn't; no local information can tell you which. A blind retry of a non-idempotent effect here is the classic double-charge bug. The legitimate exits are the careful ones: retry only through an idempotency key, read the state back, fence the old attempt out, or escalate honestly.
+
+```
+import billing
+
+app Payments[billing: remote billing.BillingService] {
+    fn main(self) {
+        let x = self.billing.charge(21) catch err: NetworkError {
+            if err.definite {
+                // The request was never dispatched. The world is in a known
+                // state — react freely, including retrying a non-idempotent call.
+                print("charge did not happen; safe to retry")
+            } else {
+                // The request left and nothing came back. The charge may or
+                // may not exist. Do NOT blind-retry a non-idempotent effect.
+                print("charge outcome unknown; reconcile before retrying")
+            }
+            return
+        }
+        print(f"charged: {x}")
+    }
+}
+```
+
+The classification is drawn by the runtime — the only layer that knows whether the bytes left the socket — and it is truthful by construction: `definite == true` is only ever set with a warrant (the connection never opened; the length-framed request was never completed, and the server dispatches only on a complete frame; the authority itself reported the refusal). When in doubt, the runtime claims ignorance: the default is ambiguous. There are no hidden transport retries, either — each boundary call dials, sends, and reads exactly once, so retry policy stays with the caller, who is the only party holding the classification.
+
+Two fixes worth knowing rode in with this feature. A typed `catch err: NetworkError` now matches transport-raised failures — previously they carried no type tag, silently fell through typed handlers, and escaped (only a wildcard `catch` caught them). And a server refusing to dispatch now *says so* in its reply instead of closing the connection — converting what the client could only have called ambiguous into a definite rejection, a conversion only the authority has the warrant to make.
 
 ## Comparison
 
