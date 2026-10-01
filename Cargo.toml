@@ -189,6 +189,10 @@ name = "dominance"
 path = "tests/integration/dominance.rs"
 
 [[test]]
+name = "twostate"
+path = "tests/integration/twostate.rs"
+
+[[test]]
 name = "coercion"
 path = "tests/integration/coercion.rs"
 

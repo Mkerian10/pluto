@@ -83,7 +83,7 @@ fn generic_fn_dispatch() { compile_should_fail_with(r#"trait T{fn foo(self)} fn 
 
 // Dispatch with contract violation
 #[test]
-fn dispatch_contract() { compile_should_fail_with(r#"trait T{fn foo(self)int ensures result>0} class C{} impl T{fn foo(self)int{return -1}} fn use_t(t:T){t.foo()} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn dispatch_contract() { compile_should_fail_with(r#"trait T{fn foo(self)int ensures result>0} class C{} impl T{fn foo(self)int{return -1}} fn use_t(t:T){t.foo()} fn main(){}"#, "'ensures' clauses are only supported on methods of classes and objects"); }
 
 // Dispatch ambiguity
 #[test]

@@ -1,7 +1,7 @@
 //! Temporal contract tests - 15 tests
 #[path = "../common.rs"]
 mod common;
-use common::compile_should_fail_with;
+use common::{compile_and_run, compile_should_fail_with};
 
 // Requires references old value
 #[test]
@@ -11,19 +11,21 @@ requires old(self.x)>0 {self.x=v}
 }
 fn main(){}"#, "expected newline after statement"); }
 
-// Ensures references old value
+// Ensures references old value — the proof form (rfc-properties.md): legal
+// on class methods and discharged by the two-state machinery.
 #[test]
-fn ensures_old_value() { compile_should_fail_with(r#"class C{x:int
+fn ensures_old_value() { assert_eq!(compile_and_run(r#"class C{x:int
 fn inc(mut self) ensures self.x>old(self.x) {self.x=self.x+1}
 }
-fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn main(){let mut c=C{x:0}
+c.inc()}"#), 0); }
 
 // Old value on non-mut method
 #[test]
 fn old_non_mut() { compile_should_fail_with(r#"class C{x:int
 fn get(self) ensures result==old(self.x) int{return self.x}
 }
-fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn main(){}"#, "expected newline after statement"); }
 
 // Old value on undefined field
 #[test]
@@ -42,11 +44,11 @@ fn old_in_invariant() { compile_should_fail_with(r#"class C{x:int invariant self
 fn nested_old() { compile_should_fail_with(r#"class C{x:int
 fn set(mut self,v:int) ensures self.x>old(old(self.x)) {self.x=v}
 }
-fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn main(){}"#, "nested 'old(...)' is not allowed"); }
 
 // Old value on parameter
 #[test]
-fn old_param() { compile_should_fail_with(r#"fn f(x:int) ensures x>old(x) int{return x+1} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn old_param() { compile_should_fail_with(r#"fn f(x:int) ensures x>old(x) int{return x+1} fn main(){}"#, "expected newline after statement"); }
 
 // Old value on local variable
 #[test]
@@ -64,28 +66,28 @@ fn main(){}"#, "expected newline after statement"); }
 fn old_type_mismatch() { compile_should_fail_with(r#"class C{x:int
 fn set(mut self,v:int) ensures self.x>old(self.x)+"hi" {self.x=v}
 }
-fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn main(){}"#, "string literals are not allowed in contract expressions"); }
 
 // Old value on generic field
 #[test]
 fn old_generic_field() { compile_should_fail_with(r#"class C<T>{x:T
 fn set(mut self,v:T) ensures self.x>old(self.x) {self.x=v}
 }
-fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn main(){}"#, "ensures clauses on methods of generic classes are not yet supported"); }
 
 // Old value on array element
 #[test]
 fn old_array_elem() { compile_should_fail_with(r#"class C{arr:Array<int>
 fn set(mut self,i:int,v:int) ensures self.arr[i]>old(self.arr[i]) {self.arr[i]=v}
 }
-fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn main(){}"#, "index expressions are not allowed in contract expressions"); }
 
 // Old value on map entry
 #[test]
 fn old_map_entry() { compile_should_fail_with(r#"class C{m:Map<string,int>
 fn set(mut self,k:string,v:int) ensures self.m[k]>old(self.m[k]) {self.m[k]=v}
 }
-fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn main(){}"#, "index expressions are not allowed in contract expressions"); }
 
 // Old value in requires and ensures
 #[test]
@@ -97,9 +99,6 @@ fn main(){}"#, "expected newline after statement"); }
 
 // Old value on trait method
 #[test]
-fn old_trait_method() { compile_should_fail_with(r#"trait T{fn update(mut self,v:int) ensures self.get()>old(self.get())}
-class C{x:int
-fn get(self)int{return self.x}
+fn old_trait_method() { compile_should_fail_with(r#"trait T{fn update(mut self,v:int) ensures v>old(v)
 }
-impl T{fn update(mut self,v:int) ensures self.get()>old(self.get()) {self.x=v}}
-fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn main(){}"#, "'ensures' clauses are only supported on methods of classes and objects"); }

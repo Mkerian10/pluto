@@ -122,7 +122,7 @@ s.insert(42)}"#, "cannot be used as a map/set key"); }
 
 // Trait object with contracts
 #[test]
-fn trait_object_violates_ensures() { compile_should_fail_with(r#"trait T{fn foo(self)int ensures result>0} class C{x:int} impl T{fn foo(self)int{return -1}} fn main(){let t:T=C{x:1}}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn trait_object_violates_ensures() { compile_should_fail_with(r#"trait T{fn foo(self)int ensures result>0} class C{x:int} impl T{fn foo(self)int{return -1}} fn main(){let t:T=C{x:1}}"#, "'ensures' clauses are only supported on methods of classes and objects"); }
 
 // Trait objects in match
 #[test]

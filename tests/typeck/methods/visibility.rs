@@ -63,4 +63,4 @@ fn main(self){self.helper()}}"#).is_ok()); }
 fn contract_method_visibility() { compile_should_fail_with(r#"class C{
 fn foo(self)int ensures result>0{return 1}
 }
-fn main(){let c=C{} c.foo()}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn main(){let c=C{} c.foo()}"#, "undefined variable"); }
