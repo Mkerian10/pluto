@@ -1,6 +1,6 @@
 # RFC: Properties — Named, Checkable Claims
 
-**Status:** Draft — direction accepted (design discussion, 2026-10-01): full property system ("option A"), staged. Phase 3 (`guarded_by` dominance, atom 3) **implemented** (`src/typeck/dominance.rs`); phases 1–2 (`old()`/`ensures`, two-state invariants) in progress
+**Status:** Draft — direction accepted (design discussion, 2026-10-01): full property system ("option A"), staged. **Phases 1–3 implemented** (`ensures` with `old()`, two-state invariants, `guarded_by` dominance — slice 1 complete); see Phasing for deviations
 **Author:** Design discussion
 **Date:** 2026-10-01
 **Related:** [rfc-verification.md](rfc-verification.md) (the kernel this extends), [epistemics.md](epistemics.md) (the genericity principle this implements), [contracts.md](contracts.md), [rfc-objects.md](rfc-objects.md), [rfc-distributed-safety.md](rfc-distributed-safety.md)
@@ -84,6 +84,10 @@ fn withdraw(mut self, amt: int) requires amt > 0
 - `old(expr)` denotes `expr` evaluated in the method's **entry state**. The
   expression fragment is the engine's current decidable vocabulary (linear int
   arithmetic over own fields, one-level paths, `len()` terms).
+  *(As implemented: own int fields and int parameters, plus `old(...)` of
+  those. `len()` terms and one-level foreign paths are excluded from the
+  ensures fragment for now — every collection mutation is an opaque call that
+  severs the entry relation, so no `len()` ensures could be proven today.)*
 - This is the **proof form of `ensures`** promised since contracts.md rejected
   the runtime form: a compile-time obligation at every normal exit, discharged
   by the same symbolic machinery as invariants — which already tracks
@@ -298,14 +302,42 @@ question 4.)
 
 1. **`old()` in `ensures`** — method-level two-state postconditions, strict
    discharge, caller-side assumption of the relation (the call-boundary
-   precision win lands immediately).
+   precision win lands immediately). ✅ **Implemented** (branch
+   `twostate-proofs`): `ContractKind::Ensures`, registration/fragment
+   validation in `discharge::register_ensures`, obligations at every normal
+   exit via the ghost proof scope (raise paths exempt), caller-side
+   assumption in `discharge::stage_call_ensures` (main fact env, receiver
+   and argument substitution shrink.rs-style) and
+   `discharge::apply_self_call_ensures` (ghost vocabulary — equality clauses
+   pin symbolic field values, which makes sibling-method ensures compose,
+   e.g. `double_bump` proving `+2` through two `bump()` calls).
+   *Deviations:* the ensures fragment excludes `len()` terms and foreign
+   paths (see atom 1 note); ensures is restricted to class/object methods
+   (no free functions — there is no receiver state to relate) and rejected
+   on generic classes (mirroring invariants-on-generics); a call inside a
+   method conservatively severs exact two-state knowledge unless the callee
+   is a sibling method with declared ensures (any callee may reach the
+   receiver through an alias).
 2. **Two-state invariants** — monotonicity expressible with no new keyword;
-   Blob's epoch theorem by hand.
-3. **`guarded_by` dominance** — the fencing proof shape. **Shipped**
+   Blob's epoch theorem by hand. ✅ **Implemented** (same branch): obligation
+   sites are every `mut self` method boundary (relation to the method's
+   entry) and every foreign write site (relation to the pre-write state —
+   open question 2 resolved: within one method, `old` always means the
+   enclosing method's entry at method boundaries and the pre-write state at
+   foreign-write sites; the two never collide because a method's own writes
+   are symbolic updates, not foreign-write obligations). Construction, DI
+   synthesis, and wire decode have no pre-state: two-state clauses are
+   code-path-only obligations there (decode validates single-state clauses
+   only). Across call boundaries the relation survives by composition, so
+   only transitivity-safe cross-state facts (`<`, `<=`, `==`) are carried —
+   non-transitive two-state invariants become unprovable after a call
+   (strict, conservative). Blob acceptance (the two-state half):
+   `invariant self.epoch >= old(self.epoch)` discharges on
+3. **`guarded_by` dominance** — the fencing proof shape. ✅ **Implemented**
    (`src/typeck/dominance.rs`, tests/integration/dominance.rs): the Blob
-   example carries the clause and discharges it against its fence; the
-   dominance half of acceptance test 1 is complete (the two-state half
-   waits on phase 2).
+   example carries the clause and discharges it against its fence; together
+   with phase 2's monotone invariant, **acceptance test 1 is complete** —
+   the Blob safety theorem is fully compiler-checked.
 4. **The `property` form** — declaration, meta-parameter typing, substitution,
    `satisfies`/`provides`, two-sided blame diagnostics, body hashing; stdlib
    property module; Blob acceptance test 2.

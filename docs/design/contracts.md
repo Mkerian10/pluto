@@ -20,26 +20,31 @@ With whole-program compilation, the compiler sees:
 
 This enables static verification that most languages can't achieve. Contracts guide the verifier by specifying what must be true.
 
-## The Three Primitives
+## The Four Primitives
 
-Pluto's contract system has exactly three primitives:
+Pluto's contract system has exactly four primitives:
 
 | Primitive | Purpose | When Checked |
 |-----------|---------|--------------|
-| **`invariant`** | Class properties that always hold | **Compile-time proof (strict — shipped).** Runtime validation only at wire decode boundaries |
+| **`invariant`** | Class properties that always hold — single-state, or two-state with `old()` | **Compile-time proof (strict — shipped).** Runtime validation only at wire decode boundaries (single-state clauses only) |
 | **`requires`** | Preconditions — what caller must prove | Compile-time at call sites (future); runtime at entry (current) |
+| **`ensures`** | Postconditions — the proof form only (rfc-properties.md) | **Compile-time proof at every normal exit (strict — shipped).** Never a runtime check |
 | **`assert`** | Explicit runtime check | Always runtime (and establishes the fact for the prover) |
 
-**Why just three?**
+**Why these four?**
 - `invariant` expresses "always true" properties of data
 - `requires` expresses "must be true to call" preconditions
+- `ensures` expresses what a method's exit state guarantees relative to its entry state
 - `assert` bridges gaps when static proof isn't possible
 
-**What about postconditions (`ensures`)?** Eliminated — they're redundant. With whole-program compilation:
-- Return types + invariants express what a function guarantees
-- Callers can see implementations
-- Invariants are checked after mutations
-- No need for a separate postcondition mechanism
+**What about runtime postconditions?** Eliminated, permanently — and that
+rejection is unchanged. The `ensures` that exists today is a *compile-time
+proof obligation* (docs/design/rfc-properties.md, atom 1), discharged by the
+same symbolic machinery as invariants and never emitted into the binary. The
+runtime-checked form ("evaluate the clause when the function returns, abort
+on failure") remains rejected by design: with whole-program compilation,
+anything a runtime postcondition could catch, the prover either discharges
+statically or rejects at compile time.
 
 ---
 
@@ -295,22 +300,55 @@ fn main() {
 
 ---
 
-## Why No `ensures`?
+## `ensures` — The Proof Form
 
-**Postconditions are redundant with invariants + whole-program compilation.**
+**The runtime form stays dead; the proof form shipped** (rfc-properties.md
+phases 1–2).
 
-Traditional contracts have `ensures` to specify what a function guarantees:
+An `ensures` clause on a class/object method is a *two-state postcondition*:
+a relation between the method's exit state and its entry state, with
+`old(expr)` denoting the entry value. It is a compile-time proof obligation
+at every **normal** exit — returns and reachable fall-through; raise paths
+owe nothing (the error contract governs those edges):
+
 ```pluto
-fn increment(mut c: Counter)
-ensures c.value == old(c.value) + 1  // Awkward!
+class Counter {
+    value: int
+
+    fn increment(mut self) ensures self.value == old(self.value) + 1 {
+        self.value = self.value + 1
+    }
+}
 ```
 
-But in Pluto:
-1. **Invariants cover state:** Classes have invariants that must hold after `mut self` methods
-2. **Whole-program compilation:** Callers can see implementations
-3. **No need for `old()`:** We don't need to compare pre/post values — invariants express what's always true
+- **Strict:** an exit the prover cannot discharge is a compile error (same
+  policy as invariants). The relation may be broken *between* writes — only
+  exits matter.
+- **Fragment:** `&&`/`||`/`!` over integer comparisons of linear arithmetic
+  over the class's own int fields, the method's int parameters, and
+  `old(...)` of those. Out-of-fragment clauses are rejected at declaration.
+- **Callers assume the relation.** After a direct call, the caller's fact
+  state gains the instantiated ensures (receiver and arguments substituted) —
+  feeding invariant proofs, flow-fact narrowing, and error-set shrinking
+  downstream. Inside a method, a call to a sibling method with ensures keeps
+  the symbolic proof state exact, which is what lets a method's own ensures
+  see through such calls.
+- **Context:** class/object methods only (a receiver is the state being
+  related). Free functions, app/stage/trait methods, and generic classes
+  reject it with a diagnostic.
+- **Never at runtime:** codegen only ever extracts `requires` clauses; an
+  `ensures` never reaches the binary.
 
-**Instead of `ensures`, use invariants:**
+`invariant` clauses may also use `old()` — a **two-state invariant** — making
+monotonicity a checked claim with no new keyword
+(`invariant self.epoch >= old(self.epoch)`). Obligation sites are the same as
+single-state invariants where a pre-state exists: every `mut self` method
+boundary (relative to the method's entry) and every foreign write (relative
+to the pre-write state). Construction, DI synthesis, and wire-decode have no
+pre-state: two-state clauses are code-path-only obligations there, and decode
+validates single-state clauses only.
+
+**For simple "always true" properties, still prefer invariants:**
 ```pluto
 class Counter {
     value: int
@@ -347,7 +385,9 @@ requires x >= 0.0
 |---------|--------|-------|
 | **`invariant` (static discharge)** | ✅ Implemented (strict) | Verification RFC phase 2 |
 | **`requires` (runtime)** | ✅ Implemented | Phase 2 |
-| **`ensures` (runtime)** | ❌ Removed (rejected at parse) | Phase 4 |
+| **`ensures` (runtime)** | ❌ Removed — permanently | Phase 4 |
+| **`ensures` (proof form, `old()`)** | ✅ Implemented (strict) | rfc-properties phase 1 |
+| **Two-state invariants (`old()`)** | ✅ Implemented (strict) | rfc-properties phase 2 |
 | **Trait contracts** | ✅ Implemented | Phase 3 |
 | **`assert`** | ✅ Implemented (runtime check + prover fact) | Phase 4 |
 | **Static verification of `requires`** | ⬜ Not started | Phase 6 |
@@ -647,8 +687,9 @@ Pluto's contract system is simple and powerful:
   runtime validation only at wire decode boundaries
 - `requires`: runtime-enforced at entry (Phases 2-3 done)
 - `assert`: runtime check that also feeds the prover (Phase 4 done)
-- `ensures`: removed (runtime form rejected at parse; the proof form is the
-  verification RFC)
+- `ensures`: runtime form removed permanently; proof form shipped
+  (two-state postconditions with `old()`, strict discharge, caller-side
+  assumption — rfc-properties.md phases 1–2)
 
 **Next steps:**
 - Static `requires` discharge at call sites (Phase 6)
