@@ -16,9 +16,15 @@
 //! arithmetic (constant coefficients) over the class's *own* int fields.
 //! Anything else — floats, strings, booleans, collections, `.len()`,
 //! nested fields, non-linear arithmetic — is rejected at declaration
-//! ("invariant is outside the provable fragment"). Invariants on generic
-//! classes are not yet supported (their bodies are checked against skolem
-//! types and their instantiations are never re-checked).
+//! ("invariant is outside the provable fragment"). Generic classes may
+//! carry contracts whose vocabulary is *independent of the type
+//! parameters* (int fields / int method parameters whose declared type
+//! does not mention any parameter): validated once on the template,
+//! proven once on the template body under skolem substitution, stamped
+//! onto every instantiation (`instantiate_generic_contracts`), and not
+//! re-proven per monomorphized copy (`assume_discharged`). A contract
+//! mentioning a param-typed field or parameter is rejected with a
+//! dedicated diagnostic.
 //!
 //! # Obligation sites
 //!
@@ -135,7 +141,7 @@ pub struct EnsuresSpec {
 
 /// Rewrite `old(e)` to `e` for type-checking purposes: `old(e)` has the type
 /// of `e` (placement/fragment validity is checked separately).
-fn strip_old(expr: &Expr) -> Expr {
+pub(crate) fn strip_old(expr: &Expr) -> Expr {
     if let Some(inner) = old_call_arg(expr) {
         return strip_old(&inner.node);
     }
@@ -156,6 +162,20 @@ fn strip_old(expr: &Expr) -> Expr {
 /// Type-check and fragment-validate every class invariant, and register the
 /// provable specs in `env.class_invariants`. Runs before any body checking
 /// so obligations can be enforced at every site.
+///
+/// Generic classes are supported for contracts whose vocabulary is
+/// *independent of the type parameters* (int fields whose declared type does
+/// not mention any parameter — exactly the restriction that makes generic
+/// raise-summaries sound in `shrink.rs`): the clause is validated once
+/// against the template's field vocabulary, registered under the template
+/// name in `env.generic_class_invariants`, and stamped verbatim onto every
+/// instantiation by `ensure_generic_class_instantiated`. The proof
+/// obligations on the template's method bodies are then discharged ONCE,
+/// under skolem substitution (`templates::check_class_template` checks each
+/// method as a member of `C$$%T`, whose `class_invariants` entry is the
+/// stamped copy) — since the vocabulary cannot mention the parameters, one
+/// proof covers every instantiation, and monomorphized copies do not
+/// re-prove (`env.assume_discharged`).
 pub(crate) fn register_invariants(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     for class in &program.classes {
         let c = &class.node;
@@ -171,16 +191,31 @@ pub(crate) fn register_invariants(program: &Program, env: &mut TypeEnv) -> Resul
             continue;
         }
         if !c.type_params.is_empty() {
-            return Err(CompileError::type_err(
-                format!(
-                    "invariants on generic classes are not yet supported: invariants are \
-                     compile-time proof obligations, and generic bodies are checked against \
-                     opaque type parameters. Declare the invariant on a concrete class \
-                     wrapping '{}' instead",
-                    c.name.node
-                ),
-                invariants[0].span,
-            ));
+            // Template registration: fragment-validate against the template's
+            // own field vocabulary (type-param-dependent fields rejected with
+            // a dedicated diagnostic). Bool-ness is implied by the fragment
+            // (the top level must be a boolean combination of comparisons);
+            // the skolem template check re-types the expression as well.
+            let fields = env
+                .generic_classes
+                .get(&c.name.node)
+                .map(|g| g.fields.clone())
+                .unwrap_or_default();
+            let mut specs = Vec::new();
+            for inv in &invariants {
+                let desc = crate::codegen::format_invariant_expr(&inv.node.expr.node);
+                validate_provable(&inv.node.expr, &c.name.node, &fields, true, &desc)
+                    .map_err(|e| append_blame(e, &inv.node.provenance))?;
+                specs.push(InvariantSpec {
+                    expr: inv.node.expr.node.clone(),
+                    desc,
+                    span: inv.node.expr.span,
+                    two_state: expr_contains_old(&inv.node.expr.node),
+                    provenance: inv.node.provenance.clone(),
+                });
+            }
+            env.generic_class_invariants.insert(c.name.node.clone(), specs);
+            continue;
         }
         // Type-check the invariant expressions with `self` in scope.
         env.push_scope();
@@ -207,10 +242,15 @@ pub(crate) fn register_invariants(program: &Program, env: &mut TypeEnv) -> Resul
         // Provable-fragment validation. For property-injected clauses the
         // fragment error gains the property-side blame suffix (two-sided
         // blame also covers instantiation-time validation failures).
+        let fields = env
+            .classes
+            .get(&c.name.node)
+            .map(|ci| ci.fields.clone())
+            .unwrap_or_default();
         let mut specs = Vec::new();
         for inv in &invariants {
             let desc = crate::codegen::format_invariant_expr(&inv.node.expr.node);
-            validate_provable(&inv.node.expr, &c.name.node, &desc, env)
+            validate_provable(&inv.node.expr, &c.name.node, &fields, false, &desc)
                 .map_err(|e| append_blame(e, &inv.node.provenance))?;
             specs.push(InvariantSpec {
                 expr: inv.node.expr.node.clone(),
@@ -222,7 +262,77 @@ pub(crate) fn register_invariants(program: &Program, env: &mut TypeEnv) -> Resul
         }
         env.class_invariants.insert(c.name.node.clone(), specs);
     }
+    // Instantiations minted before this pass (eager field/signature
+    // resolution during registration) predate the copy hook in
+    // `ensure_generic_class_instantiated`; stamp their specs now.
+    backfill_generic_contracts(env);
     Ok(())
+}
+
+/// Does a type's structure mention any type parameter?
+fn type_involves_param(ty: &PlutoType) -> bool {
+    matches!(ty, PlutoType::TypeParam(_)) || ty.any_inner_type(&type_involves_param)
+}
+
+/// Copy a generic template's validated contract specs onto one instantiation:
+/// invariants under the mangled class name, ensures under the instantiation's
+/// mangled method names (only the methods the instantiation actually has —
+/// the typestate gate may exclude `where`-constrained methods). The specs are
+/// cloned verbatim: their vocabulary is param-independent by construction, so
+/// no substitution is needed. Covers skolem instantiations too (`C$$%T`),
+/// which is what puts the proof obligations on the template's own method
+/// bodies during `templates::check_class_template`.
+pub(crate) fn instantiate_generic_contracts(
+    base: &str,
+    mangled: &str,
+    included_methods: &[String],
+    env: &mut TypeEnv,
+) {
+    if let Some(specs) = env.generic_class_invariants.get(base) {
+        let specs = specs.clone();
+        env.class_invariants.entry(mangled.to_string()).or_insert(specs);
+    }
+    if let Some(by_method) = env.generic_class_ensures.get(base) {
+        let by_method = by_method.clone();
+        for m in included_methods {
+            if let Some(specs) = by_method.get(m) {
+                env.fn_ensures
+                    .entry(mangle_method(mangled, m))
+                    .or_insert_with(|| specs.clone());
+            }
+        }
+    }
+}
+
+/// Stamp contract specs onto every already-recorded class instantiation of a
+/// contract-carrying generic template (see `instantiate_generic_contracts`).
+fn backfill_generic_contracts(env: &mut TypeEnv) {
+    if env.generic_class_invariants.is_empty() && env.generic_class_ensures.is_empty() {
+        return;
+    }
+    let insts: Vec<(String, String)> = env
+        .instantiations
+        .iter()
+        .filter_map(|inst| {
+            let super::env::InstKind::Class(base) = &inst.kind else {
+                return None;
+            };
+            if !env.generic_class_invariants.contains_key(base)
+                && !env.generic_class_ensures.contains_key(base)
+            {
+                return None;
+            }
+            Some((base.clone(), super::env::mangle_name(base, &inst.type_args)))
+        })
+        .collect();
+    for (base, mangled) in insts {
+        let methods = env
+            .classes
+            .get(&mangled)
+            .map(|ci| ci.methods.clone())
+            .unwrap_or_default();
+        instantiate_generic_contracts(&base, &mangled, &methods, env);
+    }
 }
 
 /// Append the property-side blame suffix to a diagnostic about a
@@ -256,27 +366,31 @@ fn fragment_err(reason: String, desc: &str, span: Span) -> CompileError {
 }
 
 /// Validate that an invariant condition is within the provable fragment.
+/// `fields` is the declaring class's field vocabulary; `generic` marks a
+/// generic template, whose contracts may only mention fields with
+/// param-independent types.
 fn validate_provable(
     expr: &Spanned<Expr>,
     class_name: &str,
+    fields: &[(String, PlutoType, bool)],
+    generic: bool,
     desc: &str,
-    env: &TypeEnv,
 ) -> Result<(), CompileError> {
     match &expr.node {
         Expr::BinOp { op: BinOp::And | BinOp::Or, lhs, rhs } => {
-            validate_provable(lhs, class_name, desc, env)?;
-            validate_provable(rhs, class_name, desc, env)
+            validate_provable(lhs, class_name, fields, generic, desc)?;
+            validate_provable(rhs, class_name, fields, generic, desc)
         }
         Expr::UnaryOp { op: UnaryOp::Not, operand } => {
-            validate_provable(operand, class_name, desc, env)
+            validate_provable(operand, class_name, fields, generic, desc)
         }
         Expr::BinOp {
             op: BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq | BinOp::Eq | BinOp::Neq,
             lhs,
             rhs,
         } => {
-            validate_affine_side(lhs, class_name, desc, env)?;
-            validate_affine_side(rhs, class_name, desc, env)
+            validate_affine_side(lhs, class_name, fields, generic, desc)?;
+            validate_affine_side(rhs, class_name, fields, generic, desc)
         }
         _ => Err(fragment_err(
             "it is not an integer comparison (boolean fields, bare literals, and \
@@ -289,19 +403,23 @@ fn validate_provable(
 }
 
 /// Validate one side of an invariant comparison: linear integer arithmetic
-/// over direct int fields of `self`.
+/// over direct int fields of `self`. On a generic template (`generic`),
+/// fields whose declared type involves a type parameter are rejected — the
+/// contract must hold for every instantiation, so its vocabulary must be
+/// independent of the parameters.
 fn validate_affine_side(
     expr: &Spanned<Expr>,
     class_name: &str,
+    fields: &[(String, PlutoType, bool)],
+    generic: bool,
     desc: &str,
-    env: &TypeEnv,
 ) -> Result<(), CompileError> {
     // `old(<affine over own int fields>)` — the pre-state value of its
     // argument (rfc-properties.md atom 2). Nested old() is rejected by
     // contract validation before this runs; validate the argument with the
     // same side grammar.
     if let Some(inner) = old_call_arg(&expr.node) {
-        return validate_affine_side(inner, class_name, desc, env);
+        return validate_affine_side(inner, class_name, fields, generic, desc);
     }
     match &expr.node {
         Expr::IntLit(_) => Ok(()),
@@ -321,13 +439,25 @@ fn validate_affine_side(
                     expr.span,
                 ));
             }
-            let fty = env
-                .classes
-                .get(class_name)
-                .and_then(|ci| ci.fields.iter().find(|(n, _, _)| *n == field.node))
+            let fty = fields
+                .iter()
+                .find(|(n, _, _)| *n == field.node)
                 .map(|(_, t, _)| t.clone());
             match fty {
                 Some(PlutoType::Int) => Ok(()),
+                Some(other) if generic && type_involves_param(&other) => {
+                    Err(CompileError::type_err(
+                        format!(
+                            "this invariant mentions field '{}' whose type involves a type \
+                             parameter of '{class_name}' (its declared type is {other}): \
+                             contracts on a generic class must hold for every \
+                             instantiation, so they may only use int fields whose declared \
+                             type does not mention any type parameter",
+                            field.node,
+                        ),
+                        expr.span,
+                    ))
+                }
                 Some(other) => Err(fragment_err(
                     format!(
                         "field '{}' has type {other} — only int fields are provable",
@@ -351,11 +481,11 @@ fn validate_affine_side(
             expr.span,
         )),
         Expr::UnaryOp { op: UnaryOp::Neg, operand } => {
-            validate_affine_side(operand, class_name, desc, env)
+            validate_affine_side(operand, class_name, fields, generic, desc)
         }
         Expr::BinOp { op: BinOp::Add | BinOp::Sub, lhs, rhs } => {
-            validate_affine_side(lhs, class_name, desc, env)?;
-            validate_affine_side(rhs, class_name, desc, env)
+            validate_affine_side(lhs, class_name, fields, generic, desc)?;
+            validate_affine_side(rhs, class_name, fields, generic, desc)
         }
         Expr::BinOp { op: BinOp::Mul, lhs, rhs } => {
             if !is_const_int_expr(&lhs.node) && !is_const_int_expr(&rhs.node) {
@@ -366,8 +496,8 @@ fn validate_affine_side(
                     expr.span,
                 ));
             }
-            validate_affine_side(lhs, class_name, desc, env)?;
-            validate_affine_side(rhs, class_name, desc, env)
+            validate_affine_side(lhs, class_name, fields, generic, desc)?;
+            validate_affine_side(rhs, class_name, fields, generic, desc)
         }
         Expr::BinOp { op: BinOp::Div | BinOp::Mod, .. } => Err(fragment_err(
             "division and modulo are not linear arithmetic".to_string(),
@@ -417,18 +547,6 @@ pub(crate) fn register_ensures(program: &Program, env: &mut TypeEnv) -> Result<(
             if clauses.is_empty() {
                 continue;
             }
-            if !c.type_params.is_empty() {
-                return Err(CompileError::type_err(
-                    format!(
-                        "ensures clauses on methods of generic classes are not yet supported: \
-                         they are compile-time proof obligations, and generic bodies are \
-                         checked against opaque type parameters. Declare the ensures on a \
-                         concrete class wrapping '{}' instead",
-                        c.name.node
-                    ),
-                    clauses[0].span,
-                ));
-            }
             if !m.params.iter().any(|p| p.name.node == "self") {
                 return Err(CompileError::type_err(
                     "'ensures' requires a 'self' receiver: the clause relates the \
@@ -436,6 +554,70 @@ pub(crate) fn register_ensures(program: &Program, env: &mut TypeEnv) -> Result<(
                         .to_string(),
                     clauses[0].span,
                 ));
+            }
+            let generic = !c.type_params.is_empty();
+            if generic {
+                // Template registration (see register_invariants): validate
+                // against the template's field and parameter vocabulary —
+                // param-typed terms rejected with dedicated diagnostics —
+                // and register under the template name; instantiation
+                // copies happen in ensure_generic_class_instantiated.
+                // Bool-ness is implied by the fragment; the skolem template
+                // check re-types the method bodies.
+                let fields = env
+                    .generic_classes
+                    .get(&c.name.node)
+                    .map(|g| g.fields.clone())
+                    .unwrap_or_default();
+                let type_param_names: std::collections::HashSet<String> =
+                    c.type_params.iter().map(|tp| tp.node.clone()).collect();
+                let mut int_params: Vec<String> = Vec::new();
+                let mut param_typed: Vec<String> = Vec::new();
+                for p in &m.params {
+                    if p.name.node == "self" {
+                        continue;
+                    }
+                    let ty = super::resolve::resolve_type_with_params(
+                        &p.ty,
+                        env,
+                        &type_param_names,
+                    )?;
+                    if ty == PlutoType::Int {
+                        int_params.push(p.name.node.clone());
+                    } else if type_involves_param(&ty) {
+                        param_typed.push(p.name.node.clone());
+                    }
+                }
+                let params: Vec<String> = m
+                    .params
+                    .iter()
+                    .filter(|p| p.name.node != "self")
+                    .map(|p| p.name.node.clone())
+                    .collect();
+                let mut specs = Vec::new();
+                for cl in &clauses {
+                    let desc = crate::codegen::format_invariant_expr(&cl.node.expr.node);
+                    validate_ensures_provable(
+                        &cl.node.expr,
+                        &c.name.node,
+                        &fields,
+                        &int_params,
+                        &param_typed,
+                        true,
+                        &desc,
+                    )?;
+                    specs.push(EnsuresSpec {
+                        expr: cl.node.expr.node.clone(),
+                        desc,
+                        span: cl.node.expr.span,
+                        params: params.clone(),
+                    });
+                }
+                env.generic_class_ensures
+                    .entry(c.name.node.clone())
+                    .or_default()
+                    .insert(m.name.node.clone(), specs);
+                continue;
             }
             // Type-check the clauses with self and parameters in scope
             // (`old(e)` types as `e`).
@@ -473,6 +655,11 @@ pub(crate) fn register_ensures(program: &Program, env: &mut TypeEnv) -> Result<(
             env.pop_scope();
 
             // Provable-fragment validation.
+            let fields = env
+                .classes
+                .get(&c.name.node)
+                .map(|ci| ci.fields.clone())
+                .unwrap_or_default();
             let mut specs = Vec::new();
             let params: Vec<String> = m
                 .params
@@ -482,7 +669,15 @@ pub(crate) fn register_ensures(program: &Program, env: &mut TypeEnv) -> Result<(
                 .collect();
             for cl in &clauses {
                 let desc = crate::codegen::format_invariant_expr(&cl.node.expr.node);
-                validate_ensures_provable(&cl.node.expr, &c.name.node, &int_params, &desc, env)?;
+                validate_ensures_provable(
+                    &cl.node.expr,
+                    &c.name.node,
+                    &fields,
+                    &int_params,
+                    &[],
+                    false,
+                    &desc,
+                )?;
                 specs.push(EnsuresSpec {
                     expr: cl.node.expr.node.clone(),
                     desc,
@@ -494,6 +689,9 @@ pub(crate) fn register_ensures(program: &Program, env: &mut TypeEnv) -> Result<(
                 .insert(mangle_method(&c.name.node, &m.name.node), specs);
         }
     }
+    // Stamp specs onto instantiations that predate this pass (see
+    // register_invariants).
+    backfill_generic_contracts(env);
     Ok(())
 }
 
@@ -521,25 +719,27 @@ fn ensures_fragment_err(reason: String, desc: &str, span: Span) -> CompileError 
 fn validate_ensures_provable(
     expr: &Spanned<Expr>,
     class_name: &str,
+    fields: &[(String, PlutoType, bool)],
     int_params: &[String],
+    param_typed: &[String],
+    generic: bool,
     desc: &str,
-    env: &TypeEnv,
 ) -> Result<(), CompileError> {
     match &expr.node {
         Expr::BinOp { op: BinOp::And | BinOp::Or, lhs, rhs } => {
-            validate_ensures_provable(lhs, class_name, int_params, desc, env)?;
-            validate_ensures_provable(rhs, class_name, int_params, desc, env)
+            validate_ensures_provable(lhs, class_name, fields, int_params, param_typed, generic, desc)?;
+            validate_ensures_provable(rhs, class_name, fields, int_params, param_typed, generic, desc)
         }
         Expr::UnaryOp { op: UnaryOp::Not, operand } => {
-            validate_ensures_provable(operand, class_name, int_params, desc, env)
+            validate_ensures_provable(operand, class_name, fields, int_params, param_typed, generic, desc)
         }
         Expr::BinOp {
             op: BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq | BinOp::Eq | BinOp::Neq,
             lhs,
             rhs,
         } => {
-            validate_ensures_side(lhs, class_name, int_params, desc, env)?;
-            validate_ensures_side(rhs, class_name, int_params, desc, env)
+            validate_ensures_side(lhs, class_name, fields, int_params, param_typed, generic, desc)?;
+            validate_ensures_side(rhs, class_name, fields, int_params, param_typed, generic, desc)
         }
         _ => Err(ensures_fragment_err(
             "it is not an integer comparison (boolean fields, bare literals, and \
@@ -554,19 +754,32 @@ fn validate_ensures_provable(
 fn validate_ensures_side(
     expr: &Spanned<Expr>,
     class_name: &str,
+    fields: &[(String, PlutoType, bool)],
     int_params: &[String],
+    param_typed: &[String],
+    generic: bool,
     desc: &str,
-    env: &TypeEnv,
 ) -> Result<(), CompileError> {
     if let Some(inner) = old_call_arg(&expr.node) {
         // Nested old() is rejected during contract validation.
-        return validate_ensures_side(inner, class_name, int_params, desc, env);
+        return validate_ensures_side(inner, class_name, fields, int_params, param_typed, generic, desc);
     }
     match &expr.node {
         Expr::IntLit(_) => Ok(()),
         Expr::Ident(name) => {
             if int_params.iter().any(|p| p == name) {
                 Ok(())
+            } else if param_typed.iter().any(|p| p == name) {
+                Err(CompileError::type_err(
+                    format!(
+                        "this ensures clause mentions parameter '{name}' whose type \
+                         involves a type parameter of '{class_name}': contracts on a \
+                         generic class must hold for every instantiation, so they may \
+                         only use int parameters whose declared type does not mention \
+                         any type parameter"
+                    ),
+                    expr.span,
+                ))
             } else {
                 Err(ensures_fragment_err(
                     format!(
@@ -588,13 +801,25 @@ fn validate_ensures_side(
                     expr.span,
                 ));
             }
-            let fty = env
-                .classes
-                .get(class_name)
-                .and_then(|ci| ci.fields.iter().find(|(n, _, _)| *n == field.node))
+            let fty = fields
+                .iter()
+                .find(|(n, _, _)| *n == field.node)
                 .map(|(_, t, _)| t.clone());
             match fty {
                 Some(PlutoType::Int) => Ok(()),
+                Some(other) if generic && type_involves_param(&other) => {
+                    Err(CompileError::type_err(
+                        format!(
+                            "this ensures clause mentions field '{}' whose type involves \
+                             a type parameter of '{class_name}' (its declared type is \
+                             {other}): contracts on a generic class must hold for every \
+                             instantiation, so they may only use int fields whose \
+                             declared type does not mention any type parameter",
+                            field.node,
+                        ),
+                        expr.span,
+                    ))
+                }
                 Some(other) => Err(ensures_fragment_err(
                     format!(
                         "field '{}' has type {other} — only int fields are provable",
@@ -619,11 +844,11 @@ fn validate_ensures_side(
             expr.span,
         )),
         Expr::UnaryOp { op: UnaryOp::Neg, operand } => {
-            validate_ensures_side(operand, class_name, int_params, desc, env)
+            validate_ensures_side(operand, class_name, fields, int_params, param_typed, generic, desc)
         }
         Expr::BinOp { op: BinOp::Add | BinOp::Sub, lhs, rhs } => {
-            validate_ensures_side(lhs, class_name, int_params, desc, env)?;
-            validate_ensures_side(rhs, class_name, int_params, desc, env)
+            validate_ensures_side(lhs, class_name, fields, int_params, param_typed, generic, desc)?;
+            validate_ensures_side(rhs, class_name, fields, int_params, param_typed, generic, desc)
         }
         Expr::BinOp { op: BinOp::Mul, lhs, rhs } => {
             if !is_const_int_expr(&lhs.node) && !is_const_int_expr(&rhs.node) {
@@ -635,8 +860,8 @@ fn validate_ensures_side(
                     expr.span,
                 ));
             }
-            validate_ensures_side(lhs, class_name, int_params, desc, env)?;
-            validate_ensures_side(rhs, class_name, int_params, desc, env)
+            validate_ensures_side(lhs, class_name, fields, int_params, param_typed, generic, desc)?;
+            validate_ensures_side(rhs, class_name, fields, int_params, param_typed, generic, desc)
         }
         Expr::BinOp { op: BinOp::Div | BinOp::Mod, .. } => Err(ensures_fragment_err(
             "division and modulo are not linear arithmetic".to_string(),
@@ -926,6 +1151,13 @@ fn checkpoint(
     if !scope.dirty() {
         return Ok(());
     }
+    if env.assume_discharged {
+        // Monomorphize re-check of a template-proven body: the obligation
+        // was already discharged under skolems (same param-independent
+        // vocabulary), so treat the boundary as proven.
+        scope.touched.clear();
+        return Ok(());
+    }
     for spec in &scope.invariants {
         let fields = spec_fields(spec);
         if fields.is_disjoint(&scope.touched) {
@@ -1092,6 +1324,10 @@ fn prove_ensures(
     span: Span,
     site: &str,
 ) -> Result<(), CompileError> {
+    if env.assume_discharged {
+        // Template-proven (see checkpoint).
+        return Ok(());
+    }
     for spec in &scope.ensures {
         let verdict = eval_condition_with(
             &spec.expr,
@@ -1974,6 +2210,11 @@ fn pre_field_assign(
         }
     }
 
+    if env.assume_discharged {
+        // Foreign-write obligations in monomorphized copies were proven at
+        // the template (see checkpoint).
+        return Ok(());
+    }
     let Some(specs) = env.class_invariants.get(&cls) else {
         return Ok(());
     };
@@ -2397,7 +2638,9 @@ pub(crate) fn check_construction(
     let Some(specs) = env.class_invariants.get(class_name) else {
         return Ok(());
     };
-    if is_exempt_fn(env) {
+    if is_exempt_fn(env) || env.assume_discharged {
+        // Exempt: marshal/wire glue validates at runtime instead; monomorphize
+        // re-checks were proven at the template (see checkpoint).
         return Ok(());
     }
     let specs = specs.clone();

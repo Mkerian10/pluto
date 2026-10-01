@@ -75,7 +75,14 @@ pub fn monomorphize(program: &mut Program, env: &mut TypeEnv) -> Result<(), Comp
         }
     }
 
-    // Phase 1: Instantiate generic bodies (fixed-point loop)
+    // Phase 1: Instantiate generic bodies (fixed-point loop). The body
+    // checks below exist to discover transitive instantiations — contract
+    // obligations (invariants/ensures) were already proven ONCE on the
+    // template under skolem substitution, and the contract vocabulary is
+    // param-independent, so per-copy proofs are redundant: verdict sites
+    // treat every obligation as discharged while this flag is set (fact
+    // production still runs, so requires-elision/shrink behavior matches).
+    env.assume_discharged = true;
     let mut processed: HashSet<Instantiation> = HashSet::new();
     let mut iteration = 0;
 
@@ -116,6 +123,7 @@ pub fn monomorphize(program: &mut Program, env: &mut TypeEnv) -> Result<(), Comp
             processed.insert(inst);
         }
     }
+    env.assume_discharged = false;
 
     // Phase 2: Rewrite call sites using the rewrite map
     rewrite_program(program, &env.generic_rewrites);

@@ -699,7 +699,9 @@ fn instantiate_generic_class(template: &ClassDecl, mangled_name: &str, type_arg_
         uses: template.uses.clone(),
         is_pub: template.is_pub,
         lifecycle: template.lifecycle,
-        satisfies: vec![], // satisfies is rejected on generic classes
+        // Already desugared into `invariants` by properties::instantiate_properties
+        // (which runs first in the frontend); the clause list itself is metadata.
+        satisfies: vec![],
     })
 }
 
