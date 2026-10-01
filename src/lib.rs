@@ -722,7 +722,13 @@ fn store_disk_cache(cache_key: &str, object_path: &Path) -> Result<(), CompileEr
     std::fs::create_dir_all(&cache_dir)
         .map_err(|e| CompileError::link(format!("failed to create runtime cache dir: {e}")))?;
     let final_path = cache_dir.join(format!("{cache_key}.o"));
-    let tmp_path = cache_dir.join(format!("{cache_key}.o.tmp"));
+    // The tmp name must be unique PER PROCESS: on a cold cache many compiler
+    // processes (e.g. a parallel test run right after a runtime change rotated
+    // the hash) race to populate the same key, and a shared tmp path lets one
+    // writer truncate another's half-written copy before the rename publishes
+    // it — a reader then links against a torn runtime.o and every __pluto_*
+    // symbol comes up undefined. Rename within the same dir stays atomic.
+    let tmp_path = cache_dir.join(format!("{cache_key}.o.tmp.{}", std::process::id()));
     std::fs::copy(object_path, &tmp_path)
         .map_err(|e| CompileError::link(format!("failed to write runtime cache: {e}")))?;
     std::fs::rename(&tmp_path, &final_path)
