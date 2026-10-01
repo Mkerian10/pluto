@@ -170,7 +170,7 @@ self.n = old(self.n) + 1
 
 Raise paths are exempt — a method that raises did not do what it promised, and the error contract governs those edges instead.
 
-**Callers assume the relation.** This is the half that pays rent. Before `ensures`, a method call was opaque to the prover: afterward, all it knew about the receiver was its invariant. With a declared `ensures`, the caller keeps the exact two-state relation across the call — and that fact feeds every downstream proof:
+**Callers assume the relation.** This is the half that pays rent. Without `ensures`, a method call is opaque to the prover — once it returns, all the caller knows about the receiver is its invariant. With a declared `ensures`, the caller keeps the exact two-state relation across the call, and that fact feeds every downstream proof:
 
 ```
 class Pos {
