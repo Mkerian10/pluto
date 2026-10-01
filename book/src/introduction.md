@@ -120,18 +120,18 @@ Pluto is transparent about its maturity. The following features are implemented 
 - Dependency injection (bracket deps and ambient deps), compile-time wired
 - Error handling with compiler-inferred fallibility, enforced handling, and proof-based error-set shrinking at call sites
 - The `app` construct with synthetic main generation
-- Contracts: invariants proven at compile time (strict), `requires` runtime-checked at entry, `assert` as prover input
+- Contracts: invariants proven at compile time (strict), including two-state relations via `old()`; proof-form `ensures` postconditions assumed by callers; `guarded_by` write-fencing dominance proofs; `requires` runtime-checked at entry; `assert` as prover input
 - Objects (entities): identity `==`, spawn-sharing with per-instance serialized methods, generic objects, identity handles across boundaries
 - Typestates: `where S == State` method gating, transition linearity, `must_release` states, degradation errors carrying post-failure state
 - Concurrency via `spawn`, `Task<T>` (must-use, detach, cancel), channels, copy-on-spawn, and inferred synchronization for DI singletons
-- Distribution: `at` placement over domain dependencies, `serve`, `stage` declarations, `system` compilation (one binary per member), schema-level wire format, interface hashing
+- Distribution: `at` placement over domain dependencies, `serve`, `stage` declarations, `system` compilation (one binary per member), schema-level wire format, interface hashing, definite/ambiguous boundary-failure classification (`NetworkError.definite`)
 - Nullable types (`T?`, `none`, `?` propagation) and flow narrowing
 - Modules, packages, and visibility (`pub`)
 - Generics (monomorphized)
 - Test framework (`test "name" { ... }` with expect assertions)
 - Standard library: base64, collections, env, fs, http, io, json, log, math, net, path, random, regex, rpc, socket, strings, time, uuid, wire
 
-Still direction, not implementation: the deployment-plan artifact that binds domains to physical placement, deadline/cancellation propagation across boundaries, the distributed proof shapes (monotonic fields, guarded effects), and library-defined properties like `idempotent` — see the Vision chapters.
+Still direction, not implementation: the deployment-plan artifact that binds domains to physical placement, deadline/cancellation propagation across boundaries, cross-entity invariants, and the `property` form that lets libraries name and export proof bundles like `idempotent` — see the Vision chapters.
 
 The language is real, compiles to real binaries, and runs real programs. The unimplemented features represent the roadmap, not the reality.
 
