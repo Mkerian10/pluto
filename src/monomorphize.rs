@@ -404,7 +404,7 @@ fn substitute_in_type_expr(te: &mut TypeExpr, bindings: &HashMap<String, TypeExp
         }
         TypeExpr::Qualified { .. } => {}
         TypeExpr::Infer => {}
-        TypeExpr::Fn { params, return_type, fallible: _ } => {
+        TypeExpr::Fn { params, return_type, fallible: _, provides: _ } => {
             for p in params.iter_mut() {
                 substitute_in_type_expr(&mut p.node, bindings);
             }
@@ -1032,7 +1032,7 @@ fn resolve_generic_te(te: &mut TypeExpr, env: &mut TypeEnv) -> Result<(), Compil
             *te = TypeExpr::Named(mangled);
         }
         TypeExpr::Array(inner) => resolve_generic_te(&mut inner.node, env)?,
-        TypeExpr::Fn { params, return_type, fallible: _ } => {
+        TypeExpr::Fn { params, return_type, fallible: _, provides: _ } => {
             for p in params.iter_mut() {
                 resolve_generic_te(&mut p.node, env)?;
             }
@@ -1074,12 +1074,12 @@ fn type_expr_to_pluto_type(te: &TypeExpr, env: &TypeEnv) -> Result<PlutoType, Co
         TypeExpr::Array(inner) => {
             Ok(PlutoType::Array(Box::new(type_expr_to_pluto_type(&inner.node, env)?)))
         }
-        TypeExpr::Fn { params, return_type, fallible } => {
+        TypeExpr::Fn { params, return_type, fallible, provides } => {
             let param_types: Vec<PlutoType> = params.iter()
                 .map(|p| type_expr_to_pluto_type(&p.node, env))
                 .collect::<Result<Vec<_>, _>>()?;
             let ret = type_expr_to_pluto_type(&return_type.node, env)?;
-            Ok(PlutoType::Fn(param_types, Box::new(ret), *fallible))
+            Ok(PlutoType::Fn(param_types, Box::new(ret), *fallible, provides.clone()))
         }
         TypeExpr::Qualified { module, name } => {
             Ok(PlutoType::Class(format!("{}.{}", module, name)))
@@ -1235,6 +1235,7 @@ mod tests {
     fn test_substitute_fn_types() {
         let mut te = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![Box::new(spanned(TypeExpr::Named("T".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("U".to_string()))),
         };
@@ -1243,7 +1244,7 @@ mod tests {
         bindings.insert("U".to_string(), TypeExpr::Named("string".to_string()));
 
         substitute_in_type_expr(&mut te, &bindings);
-        if let TypeExpr::Fn { params, return_type, fallible: _ } = te {
+        if let TypeExpr::Fn { params, return_type, fallible: _, provides: _ } = te {
             assert!(matches!(&params[0].node, TypeExpr::Named(n) if n == "int"));
             assert!(matches!(&return_type.node, TypeExpr::Named(n) if n == "string"));
         } else {
@@ -1302,6 +1303,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: vec![],
         };
 
         reassign_function_uuids(&mut func);
@@ -1344,6 +1346,7 @@ mod tests {
                     contracts: vec![],
                     is_pub: false,
                     is_override: false,
+                    provides: vec![],
                     is_generator: false,
                 }),
             ],
@@ -1439,11 +1442,12 @@ mod tests {
         let env = TypeEnv::new();
         let te = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("string".to_string()))),
         };
 
-        if let Ok(PlutoType::Fn(params, ret, _)) = type_expr_to_pluto_type(&te, &env) {
+        if let Ok(PlutoType::Fn(params, ret, _, _)) = type_expr_to_pluto_type(&te, &env) {
             assert_eq!(params.len(), 1);
             assert!(matches!(params[0], PlutoType::Int));
             assert!(matches!(*ret, PlutoType::String));
@@ -1554,6 +1558,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: vec![],
         };
 
         let mut bindings = HashMap::new();
@@ -1592,6 +1597,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: vec![],
         };
 
         let mut bindings = HashMap::new();
@@ -1618,6 +1624,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: vec![],
         };
 
         let mut bindings = HashMap::new();
@@ -1696,6 +1703,7 @@ mod tests {
                     contracts: vec![],
                     is_pub: false,
                     is_override: false,
+                    provides: vec![],
                     is_generator: false,
                 }),
             ],
@@ -1893,6 +1901,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: vec![],
         };
 
         offset_function_spans(&mut func, 1000);
@@ -1920,6 +1929,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: vec![],
         };
 
         offset_function_spans(&mut func, 500);
@@ -3159,6 +3169,7 @@ mod tests {
                         is_pub: false,
                         is_override: false,
                         is_generator: false,
+                        provides: vec![],
                     },
                     span: Span { start: 15, end: 30, file_id: 0 },
                 },
@@ -3214,6 +3225,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: vec![],
         };
 
         let mut env = TypeEnv::new();
@@ -3258,6 +3270,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: vec![],
         };
 
         let mut env = TypeEnv::new();
@@ -3294,6 +3307,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: vec![],
         };
 
         let mut bindings = HashMap::new();
@@ -3327,6 +3341,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: vec![],
         };
 
         let mut bindings = HashMap::new();
@@ -3475,6 +3490,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: vec![],
         };
 
         offset_function_spans(&mut func, 1000);

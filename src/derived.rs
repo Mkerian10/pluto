@@ -56,6 +56,36 @@ pub struct DerivedInfo {
     /// Used for staleness detection. Empty string if not computed.
     #[serde(default)]
     pub source_hash: String,
+    /// The assumption surface (rfc-properties.md phase 5, epistemics.md):
+    /// every property claim discharged by ASSUMPTION rather than proof or
+    /// check — the complete list of things the program rests on that
+    /// nobody proved. Rendered by `pluto analyze`.
+    #[serde(default)]
+    pub assumptions: Vec<AssumedClaim>,
+}
+
+/// One assumed claim: owner (the declaration that vouches), the property,
+/// its instantiation bindings, and the owner's 1-based source line.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AssumedClaim {
+    /// The vouching declaration, e.g. `extern fn __pluto_string_len`.
+    pub owner: String,
+    /// Resolved property name, e.g. `verify.idempotent`.
+    pub property: String,
+    /// Rendered instantiation bindings, e.g. `key = s`.
+    pub instantiation: String,
+    /// 1-based source line of the assume clause in its declaring file.
+    pub line: usize,
+}
+
+impl std::fmt::Display for AssumedClaim {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "assume {}({}) — {} (line {})",
+            self.property, self.instantiation, self.owner, self.line
+        )
+    }
 }
 
 /// A reference to an error declaration.
@@ -534,6 +564,23 @@ impl DerivedInfo {
         // Compute source hash for staleness detection
         let source_hash = Self::compute_source_hash(source);
 
+        // The assumption surface: every extern `assume` clause, attributed
+        // to its declaration. (In-unit provides are PROVEN or rejected at
+        // compile time, so externs are the only assumption source today.)
+        let mut assumptions: Vec<AssumedClaim> = program
+            .extern_fns
+            .iter()
+            .flat_map(|ext| {
+                ext.node.assumes.iter().map(|clause| AssumedClaim {
+                    owner: format!("extern fn {}", ext.node.name.node),
+                    property: clause.node.name.node.clone(),
+                    instantiation: crate::properties::render_provides_args(&clause.node),
+                    line: clause.node.line,
+                })
+            })
+            .collect();
+        assumptions.sort_by(|a, b| (&a.owner, &a.property).cmp(&(&b.owner, &b.property)));
+
         DerivedInfo {
             fn_error_sets,
             fn_signatures,
@@ -545,6 +592,7 @@ impl DerivedInfo {
             trait_implementors,
             test_dep_hashes,
             source_hash,
+            assumptions,
         }
     }
 

@@ -658,7 +658,9 @@ fn add_prefixed_items(
                 )));
             }
         } else {
-            target.extern_fns.push(ext_fn.clone());
+            let mut prefixed_ext = ext_fn.clone();
+            prefix_provides_clauses(&mut prefixed_ext.node.assumes, module_name, module_prog);
+            target.extern_fns.push(prefixed_ext);
         }
     }
 
@@ -693,8 +695,9 @@ fn type_expr_eq(a: &TypeExpr, b: &TypeExpr) -> bool {
         (TypeExpr::Qualified { module: ma, name: na }, TypeExpr::Qualified { module: mb, name: nb }) => {
             ma == mb && na == nb
         }
-        (TypeExpr::Fn { params: pa, return_type: ra, fallible: fa }, TypeExpr::Fn { params: pb, return_type: rb, fallible: fb }) => {
+        (TypeExpr::Fn { params: pa, return_type: ra, fallible: fa, provides: va }, TypeExpr::Fn { params: pb, return_type: rb, fallible: fb, provides: vb }) => {
             fa == fb
+                && va == vb
                 && pa.len() == pb.len()
                 && pa.iter().zip(pb.iter()).all(|(a, b)| type_expr_eq(&a.node, &b.node))
                 && type_expr_eq(&ra.node, &rb.node)
@@ -1073,20 +1076,40 @@ fn validate_module_visibility(graph: &ModuleGraph) -> Result<(), CompileError> {
     }
 
     // `satisfies verify.monotonic(...)` references a property across the
-    // module boundary; the property must be pub.
+    // module boundary; the property must be pub. The same rule covers
+    // fn-level `provides` and extern `assume` references (phase 5).
+    let check_property_ref = |name: &str, span: crate::span::Span| -> Result<(), CompileError> {
+        if let Some((module, item)) = name.split_once('.') {
+            if imports.contains(module)
+                && all_items.get(module).is_some_and(|a| a.contains(item))
+                && !pub_items.get(module).is_some_and(|p| p.contains(item))
+            {
+                return Err(CompileError::type_err(
+                    format!("'{item}' is private to module '{module}'; declare it `pub` to use it from another module"),
+                    span,
+                ));
+            }
+        }
+        Ok(())
+    };
     for class in &graph.root.classes {
         for clause in &class.node.satisfies {
-            if let Some((module, item)) = clause.node.name.node.split_once('.') {
-                if imports.contains(module)
-                    && all_items.get(module).is_some_and(|a| a.contains(item))
-                    && !pub_items.get(module).is_some_and(|p| p.contains(item))
-                {
-                    return Err(CompileError::type_err(
-                        format!("'{item}' is private to module '{module}'; declare it `pub` to use it from another module"),
-                        clause.node.name.span,
-                    ));
-                }
+            check_property_ref(&clause.node.name.node, clause.node.name.span)?;
+        }
+        for method in &class.node.methods {
+            for clause in &method.node.provides {
+                check_property_ref(&clause.node.name.node, clause.node.name.span)?;
             }
+        }
+    }
+    for func in &graph.root.functions {
+        for clause in &func.node.provides {
+            check_property_ref(&clause.node.name.node, clause.node.name.span)?;
+        }
+    }
+    for ext in &graph.root.extern_fns {
+        for clause in &ext.node.assumes {
+            check_property_ref(&clause.node.name.node, clause.node.name.span)?;
         }
     }
 
@@ -1172,11 +1195,18 @@ fn prefix_type_expr(ty: &mut TypeExpr, module_name: &str, module_prog: &Program)
             // Already qualified, leave alone
         }
         TypeExpr::Infer => {}
-        TypeExpr::Fn { params, return_type, fallible: _ } => {
+        TypeExpr::Fn { params, return_type, fallible: _, provides } => {
             for p in params {
                 prefix_type_expr(&mut p.node, module_name, module_prog);
             }
             prefix_type_expr(&mut return_type.node, module_name, module_prog);
+            // Property requirements naming module-internal properties get
+            // the module prefix, like any declaration reference.
+            for pname in provides {
+                if module_prog.properties.iter().any(|pr| pr.node.name.node == *pname) {
+                    *pname = prefix_name(module_name, pname);
+                }
+            }
         }
         TypeExpr::Generic { name, type_args } => {
             if is_module_type(name, module_prog) {
@@ -1205,8 +1235,33 @@ fn prefix_function_types(func: &mut Function, module_name: &str, module_prog: &P
     if let Some(ret) = &mut func.return_type {
         prefix_type_expr(&mut ret.node, module_name, module_prog);
     }
+    // Provides clauses referencing module-internal properties / types
+    prefix_provides_clauses(&mut func.provides, module_name, module_prog);
     // Also rewrite expressions inside the body that reference internal types
     rewrite_block_for_module(&mut func.body.node, module_name, module_prog);
+}
+
+/// Prefix provides/assume clauses (rfc-properties.md phase 5) when
+/// flattening a module: property names declared in the module get the
+/// module prefix, like satisfies clauses; bare type-name arguments
+/// referencing module-internal types are prefixed too.
+fn prefix_provides_clauses(
+    clauses: &mut [Spanned<ProvidesClause>],
+    module_name: &str,
+    module_prog: &Program,
+) {
+    for clause in clauses {
+        if module_prog.properties.iter().any(|p| p.node.name.node == clause.node.name.node) {
+            clause.node.name.node = prefix_name(module_name, &clause.node.name.node);
+        }
+        for arg in &mut clause.node.args {
+            if let Expr::Ident(name) = &mut arg.value.node {
+                if is_module_type(name, module_prog) {
+                    *name = prefix_name(module_name, name);
+                }
+            }
+        }
+    }
 }
 
 /// Rewrite expressions inside a block for module-internal references.
@@ -1429,7 +1484,7 @@ fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, import_names: &HashSet<String>)
         }
         TypeExpr::Named(_) => {}
         TypeExpr::Infer => {}
-        TypeExpr::Fn { params, return_type, fallible: _ } => {
+        TypeExpr::Fn { params, return_type, fallible: _, provides: _ } => {
             for p in params {
                 rewrite_type_expr(p, import_names);
             }
@@ -1604,6 +1659,12 @@ fn resolve_qualified_access_in_program(program: &mut Program, module_names: &Has
         for contract in &mut func.node.contracts {
             resolve_qualified_access_in_expr(&mut contract.node.expr.node, contract.node.expr.span, module_names, &enum_name_map);
         }
+        // Provides arguments (`req.id` parses as a dotted path)
+        for clause in &mut func.node.provides {
+            for arg in &mut clause.node.args {
+                resolve_qualified_access_in_expr(&mut arg.value.node, arg.value.span, module_names, &enum_name_map);
+            }
+        }
         resolve_qualified_access_in_block(&mut func.node.body.node, module_names, &enum_name_map);
     }
     for class in &mut program.classes {
@@ -1629,6 +1690,12 @@ fn resolve_qualified_access_in_program(program: &mut Program, module_names: &Has
             // Resolve in method contracts (requires)
             for contract in &mut method.node.contracts {
                 resolve_qualified_access_in_expr(&mut contract.node.expr.node, contract.node.expr.span, module_names, &enum_name_map);
+            }
+            // Provides arguments (`req.id` parses as a dotted path)
+            for clause in &mut method.node.provides {
+                for arg in &mut clause.node.args {
+                    resolve_qualified_access_in_expr(&mut arg.value.node, arg.value.span, module_names, &enum_name_map);
+                }
             }
             resolve_qualified_access_in_block(&mut method.node.body.node, module_names, &enum_name_map);
         }
@@ -1657,6 +1724,9 @@ fn resolve_qualified_access_in_program(program: &mut Program, module_names: &Has
         for atom in &mut prop.node.atoms {
             match &mut atom.node.kind {
                 PropertyAtomKind::Invariant { expr } => {
+                    resolve_qualified_access_in_expr(&mut expr.node, expr.span, module_names, &enum_name_map);
+                }
+                PropertyAtomKind::Ensures { expr } => {
                     resolve_qualified_access_in_expr(&mut expr.node, expr.span, module_names, &enum_name_map);
                 }
                 PropertyAtomKind::Guarded { clause, .. } => {
@@ -2060,6 +2130,7 @@ mod tests {
     fn test_type_expr_eq_fn_same() {
         let a = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![
                 Box::new(spanned(TypeExpr::Named("int".to_string()))),
                 Box::new(spanned(TypeExpr::Named("string".to_string()))),
@@ -2068,6 +2139,7 @@ mod tests {
         };
         let b = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![
                 Box::new(spanned(TypeExpr::Named("int".to_string()))),
                 Box::new(spanned(TypeExpr::Named("string".to_string()))),
@@ -2081,11 +2153,13 @@ mod tests {
     fn test_type_expr_eq_fn_different_param_count() {
         let a = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
         let b = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![
                 Box::new(spanned(TypeExpr::Named("int".to_string()))),
                 Box::new(spanned(TypeExpr::Named("string".to_string()))),
@@ -2099,11 +2173,13 @@ mod tests {
     fn test_type_expr_eq_fn_different_param_type() {
         let a = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
         let b = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![Box::new(spanned(TypeExpr::Named("float".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
@@ -2114,11 +2190,13 @@ mod tests {
     fn test_type_expr_eq_fn_different_return_type() {
         let a = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("bool".to_string()))),
         };
         let b = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![Box::new(spanned(TypeExpr::Named("int".to_string())))],
             return_type: Box::new(spanned(TypeExpr::Named("string".to_string()))),
         };
@@ -2210,12 +2288,14 @@ mod tests {
             params: vec![],
             return_type: None,
             is_pub: false,
+            assumes: vec![],
         };
         let b = ExternFnDecl {
             name: spanned("foo".to_string()),
             params: vec![],
             return_type: None,
             is_pub: false,
+            assumes: vec![],
         };
         assert!(extern_fn_sigs_match(&a, &b));
     }
@@ -2242,6 +2322,7 @@ mod tests {
             ],
             return_type: Some(spanned(TypeExpr::Named("bool".to_string()))),
             is_pub: false,
+            assumes: vec![],
         };
         let b = ExternFnDecl {
             name: spanned("foo".to_string()),
@@ -2261,6 +2342,7 @@ mod tests {
             ],
             return_type: Some(spanned(TypeExpr::Named("bool".to_string()))),
             is_pub: false,
+            assumes: vec![],
         };
         assert!(extern_fn_sigs_match(&a, &b));
     }
@@ -2279,12 +2361,14 @@ mod tests {
             }],
             return_type: None,
             is_pub: false,
+            assumes: vec![],
         };
         let b = ExternFnDecl {
             name: spanned("foo".to_string()),
             params: vec![],
             return_type: None,
             is_pub: false,
+            assumes: vec![],
         };
         assert!(!extern_fn_sigs_match(&a, &b));
     }
@@ -2303,6 +2387,7 @@ mod tests {
             }],
             return_type: None,
             is_pub: false,
+            assumes: vec![],
         };
         let b = ExternFnDecl {
             name: spanned("foo".to_string()),
@@ -2314,6 +2399,7 @@ mod tests {
             }],
             return_type: None,
             is_pub: false,
+            assumes: vec![],
         };
         assert!(!extern_fn_sigs_match(&a, &b));
     }
@@ -2325,12 +2411,14 @@ mod tests {
             params: vec![],
             return_type: Some(spanned(TypeExpr::Named("int".to_string()))),
             is_pub: false,
+            assumes: vec![],
         };
         let b = ExternFnDecl {
             name: spanned("foo".to_string()),
             params: vec![],
             return_type: Some(spanned(TypeExpr::Named("string".to_string()))),
             is_pub: false,
+            assumes: vec![],
         };
         assert!(!extern_fn_sigs_match(&a, &b));
     }
@@ -2342,12 +2430,14 @@ mod tests {
             params: vec![],
             return_type: Some(spanned(TypeExpr::Named("int".to_string()))),
             is_pub: false,
+            assumes: vec![],
         };
         let b = ExternFnDecl {
             name: spanned("foo".to_string()),
             params: vec![],
             return_type: None,
             is_pub: false,
+            assumes: vec![],
         };
         assert!(!extern_fn_sigs_match(&a, &b));
     }

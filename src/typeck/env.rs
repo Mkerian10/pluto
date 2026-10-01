@@ -409,6 +409,35 @@ pub struct TypeEnv {
     /// DerivedInfo) so downstream requires/assume matching (phase 5) can
     /// consume it without re-reading property bodies.
     pub class_properties: HashMap<String, Vec<ProvidedProperty>>,
+    /// Fn-level provided properties (rfc-properties.md phase 5): function
+    /// name (top-level fn, extern fn, or mangled `Class$method`) → the
+    /// claims its declaration discharges, each with its discharge mode.
+    /// Consumed by fn-type requires-matching (a bare reference's type
+    /// carries these names) and surfaced through DerivedInfo.
+    pub fn_properties: HashMap<String, Vec<FnProvidedProperty>>,
+}
+
+/// How a fn-level property claim was discharged (epistemics.md): every
+/// claim has exactly one warrant, and ASSUMED claims are reported on the
+/// assumption surface, never silently promoted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DischargeMode {
+    /// The kernel discharged the instantiated atoms (an ensures-shaped
+    /// body desugared into proven postconditions on the providing method).
+    Proven,
+    /// Declared at an extern trust boundary via `assume`.
+    Assumed,
+}
+
+/// One property a function provides: resolved name, rendered instantiation
+/// bindings, the discharge mode, and the clause's 1-based source line (the
+/// assumption surface reports owner locations).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FnProvidedProperty {
+    pub name: String,
+    pub args: String,
+    pub mode: DischargeMode,
+    pub line: usize,
 }
 
 /// One property a type provides: the resolved property name and the
@@ -529,6 +558,7 @@ impl TypeEnv {
             assume_discharged: false,
             pending_call_ensures: Vec::new(),
             class_properties: HashMap::new(),
+            fn_properties: HashMap::new(),
         }
     }
 
@@ -665,6 +695,20 @@ impl TypeEnv {
         self.fn_errors.get(name).is_some_and(|e| !e.is_empty())
     }
 
+    /// The sorted, deduped property names a function's declaration provides
+    /// (rfc-properties.md phase 5) — the `provides` component of a bare
+    /// reference's fn type.
+    pub fn fn_property_names(&self, name: &str) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .fn_properties
+            .get(name)
+            .map(|props| props.iter().map(|p| p.name.clone()).collect())
+            .unwrap_or_default();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     pub fn is_trait_method_potentially_fallible(&self, trait_name: &str, method_name: &str) -> bool {
         for (class_name, info) in &self.classes {
             if info.impl_traits.iter().any(|t| t == trait_name) {
@@ -744,10 +788,12 @@ fn mangle_type(ty: &PlutoType) -> String {
         PlutoType::Void => "void".into(),
         PlutoType::Class(n) | PlutoType::Enum(n) => n.clone(),
         PlutoType::Array(inner) => format!("arr${}", mangle_type(inner)),
-        PlutoType::Fn(ps, r, fallible) => {
+        PlutoType::Fn(ps, r, fallible, provides) => {
             let ps: Vec<_> = ps.iter().map(mangle_type).collect();
             let suffix = if *fallible { "$err" } else { "" };
-            format!("fn${}$ret${}{}", ps.join("$"), mangle_type(r), suffix)
+            let prov: std::string::String =
+                provides.iter().map(|p| format!("$prov${p}")).collect();
+            format!("fn${}$ret${}{}{}", ps.join("$"), mangle_type(r), suffix, prov)
         }
         PlutoType::Map(k, v) => format!("map${}${}", mangle_type(k), mangle_type(v)),
         PlutoType::Set(t) => format!("set${}", mangle_type(t)),
@@ -920,13 +966,13 @@ mod tests {
 
     #[test]
     fn test_mangle_type_fn_no_params() {
-        let fn_type = PlutoType::Fn(vec![], Box::new(PlutoType::Void), false);
+        let fn_type = PlutoType::Fn(vec![], Box::new(PlutoType::Void), false, vec![]);
         assert_eq!(mangle_type(&fn_type), "fn$$ret$void");
     }
 
     #[test]
     fn test_mangle_type_fn_one_param() {
-        let fn_type = PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::String), false);
+        let fn_type = PlutoType::Fn(vec![PlutoType::Int], Box::new(PlutoType::String), false, vec![]);
         assert_eq!(mangle_type(&fn_type), "fn$int$ret$string");
     }
 
@@ -935,7 +981,7 @@ mod tests {
         let fn_type = PlutoType::Fn(
             vec![PlutoType::Int, PlutoType::Float, PlutoType::Bool],
             Box::new(PlutoType::String),
-            false,);
+            false, vec![]);
         assert_eq!(mangle_type(&fn_type), "fn$int$float$bool$ret$string");
     }
 
@@ -980,7 +1026,7 @@ mod tests {
                 PlutoType::Map(Box::new(PlutoType::String), Box::new(PlutoType::Float)),
             ],
             Box::new(PlutoType::Bool),
-            false,);
+            false, vec![]);
         assert_eq!(mangle_type(&fn_type), "fn$arr$int$map$string$float$ret$bool");
     }
 }

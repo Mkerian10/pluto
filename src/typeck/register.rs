@@ -2514,7 +2514,7 @@ pub(crate) fn check_expanding_reference_cycles(env: &TypeEnv) -> Result<(), Comp
                 collect_refs(k, out);
                 collect_refs(v, out);
             }
-            PlutoType::Fn(ps, r, _) => {
+            PlutoType::Fn(ps, r, _, _) => {
                 for p in ps {
                     collect_refs(p, out);
                 }
@@ -2695,6 +2695,7 @@ pub(crate) fn check_all_bodies(program: &Program, env: &mut TypeEnv) -> Result<(
                                 is_pub: false,
                                 is_override: false,
                                 is_generator: false,
+                                provides: Vec::new(),
                             };
                             check_function(&tmp_func, env, Some(class_name))?;
                         }

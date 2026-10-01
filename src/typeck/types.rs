@@ -12,7 +12,12 @@ pub enum PlutoType {
     Array(Box<PlutoType>),
     Trait(std::string::String),
     Enum(std::string::String),
-    Fn(Vec<PlutoType>, Box<PlutoType>, bool),
+    /// A function value type: (params, return, fallible, provides).
+    /// `fallible` is the fallibility contract (`fn(int) int!`); `provides`
+    /// is the sorted list of resolved property names the value's declaration
+    /// provides (docs/design/rfc-properties.md phase 5) — a value flows into
+    /// a fn type requiring properties only if its own set includes them.
+    Fn(Vec<PlutoType>, Box<PlutoType>, bool, Vec<std::string::String>),
     Map(Box<PlutoType>, Box<PlutoType>),
     Set(Box<PlutoType>),
     Range,
@@ -44,10 +49,11 @@ impl PlutoType {
     pub fn map_inner_types(&self, f: &impl Fn(&PlutoType) -> PlutoType) -> PlutoType {
         match self {
             PlutoType::Array(inner) => PlutoType::Array(Box::new(f(inner))),
-            PlutoType::Fn(params, ret, fallible) => PlutoType::Fn(
+            PlutoType::Fn(params, ret, fallible, provides) => PlutoType::Fn(
                 params.iter().map(|p| f(p)).collect(),
                 Box::new(f(ret)),
                 *fallible,
+                provides.clone(),
             ),
             PlutoType::Map(k, v) => PlutoType::Map(Box::new(f(k)), Box::new(f(v))),
             PlutoType::Set(t) => PlutoType::Set(Box::new(f(t))),
@@ -70,7 +76,7 @@ impl PlutoType {
     pub fn any_inner_type(&self, pred: &impl Fn(&PlutoType) -> bool) -> bool {
         match self {
             PlutoType::Array(inner) => pred(inner),
-            PlutoType::Fn(params, ret, _) => params.iter().any(|p| pred(p)) || pred(ret),
+            PlutoType::Fn(params, ret, _, _) => params.iter().any(|p| pred(p)) || pred(ret),
             PlutoType::Map(k, v) => pred(k) || pred(v),
             PlutoType::Set(t) | PlutoType::Task(t) | PlutoType::Sender(t)
             | PlutoType::Receiver(t) | PlutoType::Nullable(t) => pred(t),
@@ -94,7 +100,7 @@ impl std::fmt::Display for PlutoType {
             PlutoType::Array(inner) => write!(f, "[{inner}]"),
             PlutoType::Trait(name) => write!(f, "trait {name}"),
             PlutoType::Enum(name) => write!(f, "{}", name.replace('%', "")),
-            PlutoType::Fn(params, ret, fallible) => {
+            PlutoType::Fn(params, ret, fallible, provides) => {
                 write!(f, "fn(")?;
                 let fallible = *fallible;
                 for (i, p) in params.iter().enumerate() {
@@ -104,6 +110,9 @@ impl std::fmt::Display for PlutoType {
                 write!(f, ") {}", ret)?;
                 if fallible {
                     write!(f, "!")?;
+                }
+                for p in provides {
+                    write!(f, " provides {p}")?;
                 }
                 Ok(())
             }
@@ -146,13 +155,14 @@ pub fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
         }
         PlutoType::Trait(name) => TypeExpr::Named(name.clone()),
         PlutoType::Enum(name) => TypeExpr::Named(name.clone()),
-        PlutoType::Fn(params, ret, fallible) => TypeExpr::Fn {
+        PlutoType::Fn(params, ret, fallible, provides) => TypeExpr::Fn {
             params: params
                 .iter()
                 .map(|p| Box::new(Spanned::dummy(pluto_type_to_type_expr(p))))
                 .collect(),
             return_type: Box::new(Spanned::dummy(pluto_type_to_type_expr(ret))),
             fallible: *fallible,
+            provides: provides.clone(),
         },
         PlutoType::Map(k, v) => TypeExpr::Generic {
             name: "Map".to_string(),
@@ -221,7 +231,7 @@ mod tests {
         let ty = PlutoType::Fn(
             vec![PlutoType::Int, PlutoType::Bool],
             Box::new(PlutoType::String),
-            false,);
+            false, vec![]);
         let result = ty.map_inner_types(&|t| {
             if matches!(t, PlutoType::Int) {
                 PlutoType::Float
@@ -234,7 +244,7 @@ mod tests {
             PlutoType::Fn(
                 vec![PlutoType::Float, PlutoType::Bool],
                 Box::new(PlutoType::String)
-            , false)
+            , false, vec![])
         );
     }
 
@@ -350,7 +360,7 @@ mod tests {
         let ty = PlutoType::Fn(
             vec![PlutoType::Int, PlutoType::Bool],
             Box::new(PlutoType::String),
-            false,);
+            false, vec![]);
         assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::Int)));
         assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::Bool)));
     }
@@ -360,7 +370,7 @@ mod tests {
         let ty = PlutoType::Fn(
             vec![PlutoType::Int],
             Box::new(PlutoType::String),
-            false,);
+            false, vec![]);
         assert!(ty.any_inner_type(&|t| matches!(t, PlutoType::String)));
     }
 
@@ -439,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_display_fn_no_params() {
-        let ty = PlutoType::Fn(vec![], Box::new(PlutoType::Int), false);
+        let ty = PlutoType::Fn(vec![], Box::new(PlutoType::Int), false, vec![]);
         assert_eq!(ty.to_string(), "fn() int");
     }
 
@@ -448,7 +458,7 @@ mod tests {
         let ty = PlutoType::Fn(
             vec![PlutoType::Int, PlutoType::String],
             Box::new(PlutoType::Bool),
-            false,);
+            false, vec![]);
         assert_eq!(ty.to_string(), "fn(int, string) bool");
     }
 
@@ -544,10 +554,10 @@ mod tests {
         let ty = PlutoType::Fn(
             vec![PlutoType::Int, PlutoType::Bool],
             Box::new(PlutoType::String),
-            false,);
+            false, vec![]);
         let expr = pluto_type_to_type_expr(&ty);
         match expr {
-            TypeExpr::Fn { params, return_type, fallible: _ } => {
+            TypeExpr::Fn { params, return_type, fallible: _, provides: _ } => {
                 assert_eq!(params.len(), 2);
                 assert!(matches!(return_type.node, TypeExpr::Named(s) if s == "string"));
             }
@@ -656,7 +666,7 @@ mod tests {
         let ty = PlutoType::Fn(
             vec![PlutoType::Int, PlutoType::String],
             Box::new(PlutoType::Bool),
-            false,);
+            false, vec![]);
         let cloned = ty.clone();
         assert_eq!(ty, cloned);
     }

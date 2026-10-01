@@ -233,6 +233,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: vec![],
         })
     }
 
@@ -630,6 +631,7 @@ mod tests {
                 is_pub: false,
                 is_override: false,
                 is_generator: false,
+                provides: vec![],
             })],
             invariants: vec![],
             impl_traits: vec![],

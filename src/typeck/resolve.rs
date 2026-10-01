@@ -87,12 +87,12 @@ pub(crate) fn resolve_type(ty: &Spanned<TypeExpr>, env: &mut TypeEnv) -> Result<
                 ))
             }
         }
-        TypeExpr::Fn { params, return_type, fallible } => {
+        TypeExpr::Fn { params, return_type, fallible, provides } => {
             let param_types = params.iter()
                 .map(|p| resolve_type(p, env))
                 .collect::<Result<Vec<_>, _>>()?;
             let ret = resolve_type(return_type, env)?;
-            Ok(PlutoType::Fn(param_types, Box::new(ret), *fallible))
+            Ok(PlutoType::Fn(param_types, Box::new(ret), *fallible, provides.clone()))
         }
         TypeExpr::Generic { name, type_args } => {
             // Resolve type args
@@ -176,12 +176,12 @@ pub(crate) fn resolve_type_with_params(
             let elem = resolve_type_with_params(inner, env, type_param_names)?;
             Ok(PlutoType::Array(Box::new(elem)))
         }
-        TypeExpr::Fn { params, return_type, fallible } => {
+        TypeExpr::Fn { params, return_type, fallible, provides } => {
             let param_types = params.iter()
                 .map(|p| resolve_type_with_params(p, env, type_param_names))
                 .collect::<Result<Vec<_>, _>>()?;
             let ret = resolve_type_with_params(return_type, env, type_param_names)?;
-            Ok(PlutoType::Fn(param_types, Box::new(ret), *fallible))
+            Ok(PlutoType::Fn(param_types, Box::new(ret), *fallible, provides.clone()))
         }
         TypeExpr::Generic { name, type_args } => {
             let resolved_args: Vec<PlutoType> = type_args.iter()
@@ -315,12 +315,15 @@ pub(crate) fn unify(pattern: &PlutoType, concrete: &PlutoType, bindings: &mut Ha
                 false
             }
         }
-        PlutoType::Fn(pp, pr, p_fallible) => {
-            if let PlutoType::Fn(cp, cr, c_fallible) = concrete {
+        PlutoType::Fn(pp, pr, p_fallible, p_provides) => {
+            if let PlutoType::Fn(cp, cr, c_fallible, c_provides) = concrete {
                 if pp.len() != cp.len() { return false; }
                 // An infallible contract only accepts infallible values; a
                 // fallible contract accepts both.
                 if !p_fallible && *c_fallible { return false; }
+                // A provides-requiring contract only accepts values whose
+                // declarations provide every required property.
+                if !p_provides.iter().all(|p| c_provides.contains(p)) { return false; }
                 for (p, c) in pp.iter().zip(cp.iter()) {
                     if !unify(p, c, bindings, env) { return false; }
                 }
@@ -433,10 +436,11 @@ pub(crate) fn resolve_generic_instances(ty: &PlutoType, env: &mut TypeEnv) -> Pl
             }
         }
         PlutoType::Array(inner) => PlutoType::Array(Box::new(resolve_generic_instances(inner, env))),
-        PlutoType::Fn(ps, r, fallible) => PlutoType::Fn(
+        PlutoType::Fn(ps, r, fallible, provides) => PlutoType::Fn(
             ps.iter().map(|p| resolve_generic_instances(p, env)).collect(),
             Box::new(resolve_generic_instances(r, env)),
             *fallible,
+            provides.clone(),
         ),
         PlutoType::Map(k, v) => PlutoType::Map(
             Box::new(resolve_generic_instances(k, env)),

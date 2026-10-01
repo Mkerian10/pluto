@@ -190,10 +190,13 @@ fn non_int_field_param_in_invariant_atom_rejected() {
 }
 
 #[test]
-fn empty_property_body_rejected() {
+fn declared_only_property_cannot_be_satisfied() {
+    // Phase 5: an empty body is a DECLARED-ONLY property — legal to
+    // declare (no in-unit proof shape exists yet), but never vacuously
+    // satisfiable: 'satisfies' of it is an instantiation-site error.
     compile_should_fail_with(
-        "property empty(f: field<int>) {\n}\n\nfn main() {}\n",
-        "empty body",
+        "property opaque(f: field<int>) {\n}\n\nclass C satisfies opaque(self.n) {\n    n: int\n}\n\nfn main() {}\n",
+        "no checkable atoms",
     );
 }
 

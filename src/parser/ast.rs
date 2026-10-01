@@ -64,6 +64,35 @@ pub struct ExternFnDecl {
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub is_pub: bool,
+    /// `assume idempotent(key = key)` — property claims declared at the
+    /// trust boundary (docs/design/rfc-properties.md phase 5). The compiler
+    /// cannot see an extern's body, so the claim's discharge mode is
+    /// ASSUMED: explicit, attributed, and reported on the assumption
+    /// surface (`pluto analyze`), never silently promoted.
+    #[serde(default)]
+    pub assumes: Vec<Spanned<ProvidesClause>>,
+}
+
+/// A `provides <property>(<args>)` clause on a function/method declaration,
+/// or an `assume <property>(<args>)` clause on an extern declaration
+/// (docs/design/rfc-properties.md phase 5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvidesClause {
+    /// Property name as written (possibly module-qualified: `verify.idempotent`).
+    pub name: Spanned<String>,
+    pub args: Vec<ProvidesArg>,
+    /// 1-based source line of the clause in its declaring file, recorded at
+    /// parse time so the assumption surface can report owner locations
+    /// without re-reading files.
+    pub line: usize,
+}
+
+/// One meta-argument of a provides/assume clause. `expr` parameters take the
+/// named form (`key = req.id`); every other kind is positional.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvidesArg {
+    pub name: Option<Spanned<String>>,
+    pub value: Spanned<Expr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -155,6 +184,13 @@ pub enum PropertyParamKind {
     Type,
     /// `const int` — an integer literal constant.
     ConstInt,
+    /// `expr` — an expression over the providing function's parameters
+    /// (one-level paths allowed, e.g. `req.id`), instantiated with the
+    /// named-argument form at fn-level `provides` / extern `assume` sites
+    /// (docs/design/rfc-properties.md phase 5). Not usable inside the
+    /// property's own atoms in slice 1, and not accepted by type-level
+    /// `satisfies`.
+    Expr,
 }
 
 /// One atom of a property body: a conjunction member. The body language is
@@ -177,6 +213,13 @@ pub enum PropertyAtomKind {
     /// `<field-param> guarded_by (b: <type>) <predicate>` — a dominance
     /// obligation on the named field parameter's write sites.
     Guarded { target: Spanned<String>, clause: GuardClause },
+    /// `ensures <expr>` — a method-level two-state postcondition over the
+    /// property's parameters (docs/design/rfc-properties.md phase 5). A
+    /// property whose atoms are all `ensures`-shaped is provided by a
+    /// class/object method via `provides`, instantiated by substitution
+    /// into ordinary `ensures` contracts and discharged by the standard
+    /// machinery — the PROVEN fn-level discharge path.
+    Ensures { expr: Spanned<Expr> },
 }
 
 /// Provenance of a proof obligation that was injected by a property
@@ -317,6 +360,15 @@ pub struct Function {
     pub is_pub: bool,
     pub is_override: bool,
     pub is_generator: bool,
+    /// `provides idempotent(key = req.id)` — property claims this function
+    /// discharges (docs/design/rfc-properties.md phase 5). Every clause must
+    /// be discharged or compilation fails: in slice 1 the only proven path
+    /// is a class/object method providing an `ensures`-bodied property
+    /// (desugared into ordinary ensures contracts); declared-only
+    /// properties (no atoms) have no in-unit discharge and are rejected
+    /// with a pointer at extern `assume`.
+    #[serde(default)]
+    pub provides: Vec<Spanned<ProvidesClause>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,6 +391,14 @@ pub enum TypeExpr {
         /// must be handled. Only annotations carry this; closure literals and
         /// function references have inferred fallibility.
         fallible: bool,
+        /// `fn(TransferReq) Receipt! provides idempotent` — property
+        /// requirements of the fn type (docs/design/rfc-properties.md
+        /// phase 5). A function value flows into this type only if its
+        /// declaration provides every named property (matched by resolved
+        /// name; instantiation arguments live on the providing declaration,
+        /// never on the type).
+        #[serde(default)]
+        provides: Vec<String>,
     },
     Generic {
         name: String,

@@ -52,6 +52,7 @@ mod tests {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: Vec::new(),
         })
     }
 

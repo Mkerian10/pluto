@@ -27,14 +27,17 @@ fn types_equal(t1: &Spanned<TypeExpr>, t2: &Spanned<TypeExpr>) -> bool {
                 params: p1,
                 return_type: r1,
                 fallible: f1,
+                provides: v1,
             },
             TypeExpr::Fn {
                 params: p2,
                 return_type: r2,
                 fallible: f2,
+                provides: v2,
             },
         ) => {
             f1 == f2
+                && v1 == v2
                 && p1.len() == p2.len()
                 && p1.iter().zip(p2.iter()).all(|(a, b)| types_equal(a, b))
                 && types_equal(r1, r2)
@@ -588,6 +591,7 @@ mod tests {
                 is_pub: false,
                 is_override: false,
                 is_generator: false,
+                provides: vec![],
             },
             Span::dummy(),
         )
