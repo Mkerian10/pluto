@@ -1,0 +1,15 @@
+class A { t: int }
+class B { t: int }
+
+class Pair<S, T> {
+    n: int
+
+    fn cross(self) int where S == A, T == B {
+        return self.n
+    }
+}
+
+fn main() {
+    let p = Pair<A, B> { n: 2 }
+    print(p.cross())
+}

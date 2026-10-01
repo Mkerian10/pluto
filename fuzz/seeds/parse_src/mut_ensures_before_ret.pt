@@ -1,0 +1,13 @@
+class Counter {
+    n: int
+
+    fn bump(mut self) ensures self.n == old(self.n) + 1 int {
+        self.n = self.n + 1
+        return self.n
+    }
+}
+
+fn main() {
+    let mut c = Counter { n: 0 }
+    print(c.bump())
+}

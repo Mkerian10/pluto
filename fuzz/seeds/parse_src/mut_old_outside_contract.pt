@@ -1,0 +1,12 @@
+class C {
+    x: int
+
+    fn f(self) int {
+        return old(self.x)
+    }
+}
+
+fn main() {
+    let c = C { x: 1 }
+    print(old(c.x))
+}

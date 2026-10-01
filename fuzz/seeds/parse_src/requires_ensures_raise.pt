@@ -1,0 +1,22 @@
+error Insufficient {
+}
+
+class Account {
+    balance: int
+
+    fn withdraw(mut self, amt: int) requires amt > 0
+        ensures self.balance == old(self.balance) - amt {
+        if amt > self.balance {
+            raise Insufficient { }
+        }
+        self.balance = self.balance - amt
+    }
+}
+
+fn main() {
+    let mut a = Account { balance: 100 }
+    a.withdraw(30) catch err {
+        print("no funds")
+    }
+    print(a.balance)
+}

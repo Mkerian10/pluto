@@ -1,0 +1,7 @@
+class Box { v: int }
+
+fn main() {
+    let b = Box { v: 1 }
+    let r = at b { v } catch -1
+    print(r)
+}

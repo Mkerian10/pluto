@@ -1,0 +1,10 @@
+class Grant { token: int }
+
+object Blob {
+    data: int guarded_by g.token == self.epoch
+    epoch: int
+}
+
+fn main() {
+    let b = Blob { data: 0, epoch: 0 }
+}

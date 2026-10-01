@@ -1,0 +1,14 @@
+class Plain {
+    id: int
+
+    must_release Held
+
+    fn get(self) int {
+        return self.id
+    }
+}
+
+fn main() {
+    let p = Plain { id: 1 }
+    print(p.get())
+}

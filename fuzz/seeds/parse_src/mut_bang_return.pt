@@ -1,0 +1,11 @@
+error Boom {
+}
+
+fn f() int! {
+    raise Boom { }
+}
+
+fn main() {
+    let x = f() catch 0
+    print(x)
+}

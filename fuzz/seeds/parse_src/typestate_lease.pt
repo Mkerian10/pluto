@@ -1,0 +1,23 @@
+class Idle { tag: int }
+class Held { tag: int }
+
+class Lease<S> {
+    id: int
+
+    must_release Held
+
+    fn acquire(self) Lease<Held> where S == Idle {
+        return Lease<Held> { id: self.id }
+    }
+
+    fn release(self) Lease<Idle> where S == Held {
+        return Lease<Idle> { id: self.id }
+    }
+}
+
+fn main() {
+    let l = Lease<Idle> { id: 7 }
+    let h = l.acquire()
+    let done = h.release()
+    print(done.id)
+}
