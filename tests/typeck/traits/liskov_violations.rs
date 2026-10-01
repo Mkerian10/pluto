@@ -8,7 +8,7 @@
 mod common;
 use common::compile_should_fail_with;
 
-const ENSURES_MSG: &str = "'ensures' clauses are not supported";
+const ENSURES_MSG: &str = "'ensures' clauses are only supported on methods of classes and objects";
 
 // Adding requires to implementation (violates LSP)
 #[test]
