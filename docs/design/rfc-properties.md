@@ -1,6 +1,6 @@
 # RFC: Properties — Named, Checkable Claims
 
-**Status:** Draft — direction accepted (design discussion, 2026-10-01): full property system ("option A"), staged. **Phases 1–3 implemented** (`ensures` with `old()`, two-state invariants, `guarded_by` dominance — slice 1 complete); see Phasing for deviations
+**Status:** Draft — direction accepted (design discussion, 2026-10-01): full property system ("option A"), staged. **Phases 1–4 implemented** (`ensures` with `old()`, two-state invariants, `guarded_by` dominance — slice 1 complete; the `property` form, `satisfies`, two-sided blame, `std.verify` — phase 4); see Phasing for deviations
 **Author:** Design discussion
 **Date:** 2026-10-01
 **Related:** [rfc-verification.md](rfc-verification.md) (the kernel this extends), [epistemics.md](epistemics.md) (the genericity principle this implements), [contracts.md](contracts.md), [rfc-objects.md](rfc-objects.md), [rfc-distributed-safety.md](rfc-distributed-safety.md)
@@ -205,6 +205,19 @@ property-to-property abstraction in slice 2; every atom in the decidable
 fragment; the quantifier vocabulary is **fixed** (over write sites of a field,
 over exits of a method — never arbitrary syntax queries).
 
+*(As implemented, phase 4: kinds shipped are `field<T>`, bare `field` — a
+field of any type, usable only as a guarded_by target — `type`, and
+`const int`. `expr` / predicate parameters did not fall out naturally and are
+deferred to phase 4.5: they need a binder/substitution design of their own,
+and nothing in `monotonic`/`fenced` requires them. Bodies are strictly
+parametric: a direct `self.x` reference is rejected — fields are named
+through `field` parameters; invariant atoms may use `field<int>` and
+`const int` parameters plus `old(...)`; guard predicates may additionally use
+one-level int fields of the binder. Satisfies arguments are positional — the
+named-argument form `idempotent(key = order_id)` arrives with the phase-5
+`provides` surface. A field carries at most one guard clause, so a second
+`fenced`-style instantiation on an already-guarded field is rejected.)*
+
 ### Use
 
 ```pluto
@@ -250,6 +263,13 @@ Every claim has exactly one warrant, per epistemics.md:
 - Property **bodies hash into interface hashes**: changing a body changes every
   downstream proof's meaning, so it is a visible API change, subject to the
   same evolution rules as wire schemas.
+  *(Phase-4 finding: today's only interface hash is the RPC dispatch hash
+  (`compute_interface_hash`, codegen) over method names and wire signatures —
+  no type-level contract clause participates: invariants, `ensures`, and
+  `guarded_by` are all absent from it. Property bodies therefore do not hash
+  yet either — consistency over ambition. When contract clauses enter the
+  schema-evolution surface (rfc-evolution-rules.md), property bodies enter
+  with them, by the rule above.)*
 - Names are documentation; bodies are the contract. A property named
   `idempotent` with a vacuous body is a lie the type system cannot catch —
   same risk class as a misleading function name, but trusted at a distance.
@@ -264,6 +284,15 @@ Every claim has exactly one warrant, per epistemics.md:
 2. **Blob, slice 2**: the same theorem via
    `satisfies monotonic(self.epoch)` and a `fenced` instantiation from the
    stdlib property module, exported by name, assumable downstream.
+   ✅ **Passes** (phase 4): examples/blob declares
+   `satisfies verify.monotonic(self.epoch), verify.fenced(self.data,
+   self.epoch, WriteGrant)` in place of the hand-written atoms; `fenced`'s
+   parameterization covers the blob predicate exactly (`g.token ==
+   authority` with `authority = self.epoch`, `grant = WriteGrant`), so
+   nothing stayed hand-written but the two protocol-specific single-state
+   invariants. The example compiles and runs identically; a violating
+   variant fails with the two-sided blame diagnostic
+   (tests/integration/properties.rs).
 3. **Retry combinator**: `with_retry` requires `idempotent` of its fn argument;
    a providing function flows in, a non-providing one is rejected at the
    boundary; an `assume`-discharged extern shows up in the analyze report.
@@ -295,8 +324,10 @@ question 4.)
    roadmap; named here so its absence is a decision, not an oversight.
 5. **Honesty lint.** Flag properties whose body is trivially true or unused
    parameters — the vacuous-`idempotent` case.
-6. **Namespace.** Where do the standard properties live (`std.verify`?) and
-   does the prelude re-export any.
+6. **Namespace.** RESOLVED (phase 4): the standard properties live in
+   `std.verify` (`stdlib/verify/verify.pt`), imported explicitly like any
+   module — the prelude re-exports nothing (a proof bundle should be named
+   at its import, not ambient).
 
 ## Phasing
 
@@ -340,7 +371,30 @@ question 4.)
    the Blob safety theorem is fully compiler-checked.
 4. **The `property` form** — declaration, meta-parameter typing, substitution,
    `satisfies`/`provides`, two-sided blame diagnostics, body hashing; stdlib
-   property module; Blob acceptance test 2.
+   property module; Blob acceptance test 2. ✅ **Implemented** (branch
+   `property-form`): top-level `property name(params) { atoms }`
+   declarations (importable, `pub`-able, module-prefixed like any
+   declaration) with kinds `field<T>` / `field` / `type` / `const int`;
+   `satisfies name(args)` clauses on class/object headers, desugared by
+   pure substitution (`src/properties.rs`) into ordinary invariant /
+   guarded_by clauses that the existing discharge/dominance machinery
+   checks unchanged — the property layer never forks the provers.
+   Declaration-time validation covers structure/arity/kinds (bodies are
+   parametric; invariant atoms over `field<int>`/`const int` terms only);
+   instantiation-time validation is the standard fragment validation on
+   the substituted clauses. Every injected clause carries provenance
+   (property name, atom's source line, instantiation bindings), and every
+   diagnostic about it appends the blame suffix — e.g. `required by
+   property 'monotonic' (defined at verify, line 20), instantiated with
+   f = self.epoch` — under the standard failing-site diagnostic. The
+   provided names are retained per type (`TypeEnv.class_properties`) and
+   surfaced in DerivedInfo (`provided_properties`), ready for phase-5
+   matching. `std.verify` ships `monotonic` and `fenced`.
+   *Deviations:* `expr` params deferred (4.5, see above); `provides` on
+   fns and body hashing deferred (see Use / Evolution notes); `satisfies`
+   rejected on generic classes (mirroring invariants-on-generics); blame
+   names the defining module as referenced in code (the import binding,
+   `verify`), not the import path.
 5. **Requirements and assumptions** — properties on fn types, `requires`
    matching, `assume` at extern boundaries, the analyze assumption-surface
    report; retry-combinator acceptance test.

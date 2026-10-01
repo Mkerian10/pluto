@@ -97,12 +97,14 @@ pub fn instantiate_properties(program: &mut Program) -> Result<(), CompileError>
 // Declaration-time validation
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn param_kind_name(kind: &PropertyParamKind) -> &'static str {
+fn param_kind_name(kind: &PropertyParamKind) -> String {
     match kind {
-        PropertyParamKind::Field { ty: Some(_) } => "field<T>",
-        PropertyParamKind::Field { ty: None } => "field",
-        PropertyParamKind::Type => "type",
-        PropertyParamKind::ConstInt => "const int",
+        PropertyParamKind::Field { ty: Some(ty) } => {
+            format!("field<{}>", format_type_expr(&ty.node))
+        }
+        PropertyParamKind::Field { ty: None } => "field".to_string(),
+        PropertyParamKind::Type => "type".to_string(),
+        PropertyParamKind::ConstInt => "const int".to_string(),
     }
 }
 

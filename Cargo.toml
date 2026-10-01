@@ -129,6 +129,10 @@ name = "prelude"
 path = "tests/integration/prelude.rs"
 
 [[test]]
+name = "properties"
+path = "tests/integration/properties.rs"
+
+[[test]]
 name = "gc"
 path = "tests/integration/gc.rs"
 
