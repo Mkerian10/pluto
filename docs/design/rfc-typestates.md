@@ -1,6 +1,6 @@
 # RFC: Typestates via Generics
 
-**Status:** Phases 1 and 2 implemented
+**Status:** Phases 1–3 implemented
 **Author:** Matt Kerian
 **Date:** 2026-09-04
 **Related:** [v1-vision.md](../v1-vision.md) (Static Verification), [contracts.md](contracts.md), [rfc-distributed-safety.md](rfc-distributed-safety.md)
@@ -96,11 +96,38 @@ The stale-alias gap is closed by a *moved-binding* analysis (`src/typeck/lineari
 - Closure/spawn bodies are checked against a snapshot (capturing a consumed value is a use); their consumption doesn't escape (captures are by-value).
 - Only simple local receivers consume (`u.acquire()`); transitions through fields or temporaries are outside the analysis (documented gap, aligned with the class-level granularity of other analyses).
 
-## Phase 3: distributed contract predicates (planned)
+## Phase 3: degradable typestates + must-release (implemented)
 
-The vision's `owns` / `holds_lease` / `is_leader` stdlib patterns become typestate classes plus `requires` clauses bridging value-level facts to type-level states — fencing tokens carried in `Owned`-state fields, leases as `Lease<Held>` with must-release cleanup.
+*(Direction settled 2026-09-28, spec in [rfc-verification.md](rfc-verification.md).)* Typestate stays on **values**, never entities: entities are authorities that issue linear, typestated *evidence* (grants, tokens); the authority validates evidence at the point of effect (rfc-objects.md, "Typestate and entities: resolved"). Note the epistemics: `Lease<Held>` claims *session discipline* ("I acquired and have not released"), never remote truth ("the coordinator agrees") — lease windows are liveness, safety lives in the authority's fenced check.
 
-*(Direction settled 2026-09-28, spec in [rfc-verification.md](rfc-verification.md).)* Typestate stays on **values**, never entities: entities are authorities that issue linear, typestated *evidence* (grants, tokens); the authority validates evidence at the point of effect (rfc-objects.md, "Typestate and entities: resolved"). Phase 3's concrete work is degradable typestates (world-driven transitions surfacing as typed errors that carry the post-failure-state value) and must-release states enforced by the phase-2 linearity analysis. Note the epistemics: `Lease<Held>` claims *session discipline* ("I acquired and have not released"), never remote truth ("the coordinator agrees") — lease windows are liveness, safety lives in the authority's fenced check.
+### State-carrying (degradation) errors, auto-discriminated
+
+Error declarations can carry class-typed payload fields, including typestate instantiations. An error with a field whose type is a typestate class with a state parameter **changed relative to a method's receiver** is a *degradation error* for that method — the exact mirror of the transition discrimination rule:
+
+```pluto
+error Degraded { lease: Lease<Revoked> }   // degradation error for methods of Lease<S> where S == Held
+
+fn renew(self) Lease<Held> where S == Held {
+    if stale { raise Degraded { lease: Lease<Revoked> { ... } } }
+    return Lease<Held> { ... }
+}
+```
+
+**Error-edge consumption.** Raising a degradation error moves the receiver into the payload, so catching it consumes the receiver **on the error path only**: inside the catch body (and after a fall-through catch join, per phase-2's conservative join rules) the receiver binding is consumed, with a diagnostic pointing at the payload; a terminating catch (`return`/`raise`/`break`) leaves the success path's binding valid with no ceremony. Recovery is extracting the payload (`let stale = e.lease`). Propagation (`!`) exits on the error path with the payload riding in the error, so the success path keeps its binding.
+
+### Must-release states
+
+`must_release Held` in the class body (or the general form `must_release S == Held`; the simple form is legal only with exactly one state parameter) marks a state whose bindings are **fully linear**, enforced by the phase-2 flow analysis:
+
+- **Moves consume** — `let b = a`, passing as an argument, returning, and raise payloads move the value; the single obligation travels (caller clean, callee/handler must discharge). Parameters carry the obligation in; `self` is exempt (the class's own methods define the protocol and are the discharge points).
+- **Capture is rejected** — a closure or `spawn` capturing a live must-release binding would duplicate the evidence.
+- **Field and container stores are rejected** — the obligation would escape the analysis.
+- **Scope exit with a live obligation is rejected** — including fall-through, `return`, a literal `raise`, `break`/`continue` past the binding's scope, rebinding, and statement-position drops. Diagnostics name the state and suggest the transitions out (computed from the class's own `where`-constrained transitions). Branch joins are conservative (live on any path stays live; discharged on every fall-through path is discharged); loops analyze to the phase-2 two-pass fixpoint.
+- **Discharge** = a consuming transition out of the state, moving the value onward, or returning it.
+
+**Catch obligations.** An error carrying a must-release payload cannot be handled by a wildcard or shorthand catch (the payload would be unreachable); a typed handler takes on the obligation as `var.field`, discharged by extracting the payload. Errors whose payload states are droppable keep the relaxed rules — degradation to a droppable state is the expected common case. Declaration validation rejects `must_release` on non-typestate classes, unknown state names (listing the known states), and the simple form on multi-state-param classes.
+
+**Deliberate gap:** `!` propagation does not check live obligations — the error path is ambient (any carried state rides in the payload), while a literal `raise` is definite and author-visible, and is checked. This mirrors the exceptions-vs-linearity precedent; revisit if leaked obligations on propagation paths bite in practice.
 
 ## Implementation notes (phase 1)
 
@@ -108,3 +135,9 @@ The vision's `owns` / `holds_lease` / `is_leader` stdlib patterns become typesta
 - Constraints ride in the existing `contracts: Vec<Spanned<ContractClause>>` on `Function` as a new `ContractKind::StateWhere` whose expr is `Ident == Ident` — no new `Function` fields, so every existing constructor site is untouched. Binary schema bumps for the enum variant.
 - The per-instantiation gate lives in `ensure_generic_class_instantiated` (typeck/resolve.rs), which is the single choke point where an instantiation's methods are registered; monomorphize applies the same predicate when copying method bodies.
 - Runtime contract emission skips `StateWhere` clauses — they are compile-time-only.
+
+## Implementation notes (phase 3)
+
+- `must_release` is a keyword token (no identifier in stdlib/examples/tests used it). Clauses ride in the existing `invariants: Vec<Spanned<ContractClause>>` on `ClassDecl` as `ContractKind::MustRelease` (expr is `Ident` or `Ident == Ident`) — the StateWhere precedent, no constructor churn. Every value-invariant consumer (static discharge, wire boundary guards, template checking, fragment validation) filters by kind. Binary schema bumps to v11 for the enum variant.
+- Error payload fields resolve in a dedicated `resolve_error_fields` pass after class registration (errors used to resolve in pass 0, before classes existed), and are normalized with the other registered types so `Lease<Revoked>` becomes a concrete instantiation.
+- Degradation discrimination, error-edge consumption, and the whole must-release analysis live in `src/typeck/linearity.rs`, extending the phase-2 moved-binding pass: same conservative joins and two-pass loop fixpoint, with a consumed-cause enum (transition / move / error path) and an obligation map keyed by binding (or `var.field` for caught payloads). The pass runs after error inference — degradation needs the per-method `fn_errors` sets.
