@@ -176,7 +176,9 @@ fn multiple_traits_on_enum() { compile_should_fail_with(r#"trait T1{fn foo(self)
 
 // Trait with invariant vs impl method
 #[test]
-fn trait_method_violates_invariant() { compile_should_fail_with(r#"trait T{fn foo(self)int ensures result>0} class C impl T{x:int invariant self.x<0
+fn trait_method_violates_invariant() { compile_should_fail_with(r#"trait T{fn foo(self)int
+ensures result>0} class C impl T{x:int
+invariant self.x<0
 fn foo(self)int{return self.x}} fn main(){}"#, "'ensures' clauses are only supported on methods of classes and objects"); }
 
 // Partial overlap in method sets

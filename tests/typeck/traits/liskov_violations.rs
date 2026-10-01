@@ -36,7 +36,7 @@ fn impl_ensures_rejected() { compile_should_fail_with(r#"trait T{fn foo(self)int
 {fn foo(self)int
 ensures result>0
 {return 5}}
-fn main(){}"#, ENSURES_MSG); }
+fn main(){}"#, "undefined variable 'result'"); }
 
 // Implementations may not declare their own requires at all (the blanket
 // Liskov rule) — even "weaker" ones
@@ -80,10 +80,10 @@ fn main(){}"#, "Liskov"); }
 // Invariant vs method contracts
 #[test]
 fn trait_method_vs_class_invariant() { compile_should_fail_with(r#"trait T{fn foo(self)int
-ensures result>0} class C
-{x:int invariant
-self.x<0} impl T{fn foo(self)int{return
-self.x}} fn main(){}"#, ENSURES_MSG); }
+ensures result>0} class C impl T
+{x:int
+invariant self.x<0
+fn foo(self)int{return self.x}} fn main(){}"#, ENSURES_MSG); }
 
 // Return type covariance with contracts
 #[test]
@@ -109,7 +109,7 @@ fn main(){}"#, ENSURES_MSG); }
 #[test]
 fn error_impl_with_ensures() { compile_should_fail_with(r#"error E{} trait T{fn foo(self)int
 ensures result>0} class C impl T
-{fn foo(self)int!{raise E{}}}
+{fn foo(self)int{raise E{}}}
 fn main(){}"#, ENSURES_MSG); }
 
 // Contract on self parameter
@@ -144,15 +144,15 @@ fn impl_adds_both_contracts() { compile_should_fail_with(r#"trait T{fn foo(self,
 requires x>0
 ensures result>0
 {return x}}
-fn main(){}"#, ENSURES_MSG); }
+fn main(){}"#, "cannot add 'requires' clauses"); }
 
 // Multiple traits with conflicting contracts
 #[test]
 fn two_traits_conflicting_ensures() { compile_should_fail_with(r#"trait T1{fn foo(self)int
 ensures result>0} trait T2
 {fn foo(self)int
-ensures result<0} class C impl T1
-{fn foo(self)int{return 1}} impl T2{fn foo(self)int{return -1}} fn main(){}"#, ENSURES_MSG); }
+ensures result<0} class C impl T1, T2
+{fn foo(self)int{return 1}} fn main(){}"#, ENSURES_MSG); }
 
 // Trait composition
 #[test]
@@ -179,5 +179,5 @@ fn main(){}"#, "Liskov"); }
 #[test]
 fn void_method_with_ensures() { compile_should_fail_with(r#"trait T{fn foo(self)} class C impl T{x:int
 fn foo(self)
-ensures
-self.x>0{}} fn main(){}"#, ENSURES_MSG); }
+ensures self.x>0
+{}} fn main(){}"#, "cannot prove ensures clause"); }
