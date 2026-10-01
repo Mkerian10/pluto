@@ -547,12 +547,15 @@ mod tests {
 
     #[test]
     fn interleaved_call_kills_receiver_field_facts() {
-        // noise() may mutate `a` through an alias: field facts die, the
-        // runtime check is retained.
+        // noise() takes an Account, so it may mutate `a` through an alias:
+        // field facts die, the runtime check is retained. (A reach-free
+        // interleaved call — no class-reaching params — would no longer
+        // kill: the purity-aware severing rule, facts::call_severity.)
         let env = check(&format!(
-            "{ACCOUNT}fn noise() int {{\n    return 1\n}}\n\n\
+            "{ACCOUNT}fn noise(acct: Account) int {{\n    return acct.balance\n}}\n\n\
              fn main() {{\n    let mut a = Account {{ balance: 100 }}\n    \
-             if a.balance >= 10 {{\n        noise()\n        print(a.withdraw(10))\n    }}\n}}"
+             let mut b = Account {{ balance: 50 }}\n    \
+             if a.balance >= 10 {{\n        noise(b)\n        print(a.withdraw(10))\n    }}\n}}"
         ))
         .unwrap();
         assert!(env.proven_requires_sites.is_empty());

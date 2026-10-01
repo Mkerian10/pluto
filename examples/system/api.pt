@@ -4,12 +4,13 @@ object OrderService {
     count: int
 
     // Order numbers only move forward — a two-state invariant, proven at
-    // every mut-self boundary. (The exact `ensures count == old(count) + 1`
-    // does not prove here: the print() call severs exact two-state
-    // knowledge; the transitive >= relation composes through it.)
+    // every mut-self boundary. The exact `ensures count == old(count) + 1`
+    // also proves: the trailing print() call provably cannot reach the
+    // receiver, so it no longer severs exact two-state knowledge (the
+    // purity-aware severing rule).
     invariant self.count >= old(self.count)
 
-    fn process_order(mut self) {
+    fn process_order(mut self) ensures self.count == old(self.count) + 1 {
         self.count = self.count + 1
         print(f"processed order #{self.count}")
     }

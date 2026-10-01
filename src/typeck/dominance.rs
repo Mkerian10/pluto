@@ -668,9 +668,13 @@ impl<'a> Analyzer<'a> {
 
     /// Does this expression contain a call that may run user code (and thus
     /// mutate int fields reachable through aliases)? Builtin collection
-    /// methods are exempt: they never touch class fields. Closure bodies are
-    /// not scanned (creation runs nothing); they are analyzed separately
-    /// under a fact barrier.
+    /// methods are exempt: they never touch class fields (the load-bearing
+    /// survey lives on `facts::CallSeverity::Collections` — the shared
+    /// purity predicate this pass's exemptions defer to). Direct calls to
+    /// free functions whose declared parameters cannot reach any class
+    /// value are exempt for the same reason (`facts::free_call_severity`).
+    /// Closure bodies are not scanned (creation runs nothing); they are
+    /// analyzed separately under a fact barrier.
     fn has_unsafe_call(&self, expr: &Expr) -> bool {
         match expr {
             Expr::MethodCall { object, method, args, .. } => {
@@ -687,8 +691,16 @@ impl<'a> Analyzer<'a> {
                 self.has_unsafe_call(&object.node)
                     || args.iter().any(|a| self.has_unsafe_call(&a.node))
             }
-            Expr::Call { .. }
-            | Expr::StaticTraitCall { .. }
+            Expr::Call { name, args, .. } => {
+                let leaf = |e: &Expr| self.path_of(e).map(|(_, t)| t);
+                if super::facts::free_call_severity(&name.node, args, self.env, None, &leaf)
+                    == super::facts::CallSeverity::All
+                {
+                    return true;
+                }
+                args.iter().any(|a| self.has_unsafe_call(&a.node))
+            }
+            Expr::StaticTraitCall { .. }
             | Expr::At { .. }
             | Expr::Spawn { .. } => true,
             Expr::Closure { .. } | Expr::ClosureCreate { .. } => false,

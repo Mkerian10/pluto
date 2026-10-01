@@ -163,7 +163,17 @@ object BlobAuthority satisfies verify.monotonic(self.epoch), verify.fenced(self.
     // (The store keeps raw bytes; the boundary carries string, the closest
     // wire-transferable carrier today — `bytes` cannot cross a placement
     // boundary yet.)
-    fn apply(mut self, grant: WriteGrant, d: string) {
+    //
+    // The frame ensures pins what apply must NOT do: writing never moves
+    // the fence. Only grant_write mints epochs — an apply that advanced
+    // (or rewound) the epoch would silently invalidate or resurrect
+    // grants. Provable because the body's only call (`d.to_bytes()`, a
+    // builtin on a parameter) provably cannot reach the receiver, so
+    // exact two-state knowledge of `epoch` survives it (the purity-aware
+    // severing rule).
+    fn apply(mut self, grant: WriteGrant, d: string)
+        ensures self.epoch == old(self.epoch)
+    {
         // (The token is read into a local so the guard fact `tok == epoch`
         // is a named term the prover can carry to the write below.)
         let tok = grant.token

@@ -215,12 +215,73 @@ fn main() {
 
 #[test]
 fn ensures_call_severs_two_state_knowledge() {
-    // An intermediate call may mutate the receiver through an alias — the
-    // exact relation does not survive it (conservative by design).
+    // An intermediate call that may reach the receiver — here a free
+    // function whose declared parameter is the receiver's class (an alias,
+    // coarse by type) — may mutate it, so the exact relation does not
+    // survive (conservative by design). Reach-free calls are exempt; see
+    // the purity-aware severing tests below.
     compile_should_fail_with(
         r#"
-fn note() {
-    print("mid")
+class Holder {
+    n: int
+
+    fn bump(mut self, peer: Holder) ensures self.n == old(self.n) + 1 {
+        self.n = self.n + 1
+        observe(peer)
+    }
+}
+
+fn observe(h: Holder) {
+    print(h.n)
+}
+
+fn main() {
+    let mut c = Holder { n: 0 }
+    let p = Holder { n: 5 }
+    c.bump(p)
+}
+"#,
+        "cannot prove ensures clause",
+    );
+}
+
+// ── Purity-aware severing (phase 4.5 precision) ─────────────────────────────
+
+#[test]
+fn ensures_proves_through_trailing_print() {
+    // print() provably cannot reach the receiver (its argument is a
+    // string), so exact two-state knowledge survives it — the #357 census
+    // case (`OrderService: ensures count == old(count) + 1`).
+    let out = compile_and_run_stdout(
+        r#"
+class Counter {
+    n: int
+
+    fn bump(mut self) ensures self.n == old(self.n) + 1 {
+        self.n = self.n + 1
+        print(f"now {self.n}")
+    }
+}
+
+fn main() {
+    let mut c = Counter { n: 0 }
+    c.bump()
+    print(c.n)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "now 1\n1");
+}
+
+#[test]
+fn ensures_proves_through_reach_free_fn() {
+    // A free function whose declared parameters cannot reach the
+    // receiver's class cannot mutate (or observe) it.
+    assert_eq!(
+        compile_and_run(
+            r#"
+fn note(x: int) int {
+    return x + 1
 }
 
 class Counter {
@@ -228,7 +289,8 @@ class Counter {
 
     fn bump(mut self) ensures self.n == old(self.n) + 1 {
         self.n = self.n + 1
-        note()
+        let v = note(self.n)
+        print(v)
     }
 }
 
@@ -237,7 +299,214 @@ fn main() {
     c.bump()
 }
 "#,
+        ),
+        0
+    );
+}
+
+#[test]
+fn frame_ensures_proves_through_builtin_on_param() {
+    // The blob census case: a builtin primitive method on a *parameter*
+    // (`d.to_bytes()`) cannot reach the receiver — the frame ensures
+    // (`epoch == old(epoch)`) survives it.
+    assert_eq!(
+        compile_and_run(
+            r#"
+class Store {
+    data: bytes
+    epoch: int
+    applied: int
+
+    fn apply(mut self, tok: int, d: string)
+        ensures self.epoch == old(self.epoch)
+    {
+        self.applied = tok
+        self.data = d.to_bytes()
+    }
+}
+
+fn main() {
+    let mut s = Store { data: "x".to_bytes(), epoch: 0, applied: 0 }
+    s.apply(1, "payload")
+}
+"#,
+        ),
+        0
+    );
+}
+
+#[test]
+fn ensures_proves_through_builtin_on_own_collection_field() {
+    // A builtin collection mutator on the receiver's own collection field
+    // cannot write int fields (builtins move references and change
+    // lengths, never the fields of class instances — the load-bearing
+    // survey on facts::CallSeverity::Collections) — the exact int relation
+    // survives the push.
+    assert_eq!(
+        compile_and_run(
+            r#"
+class Log {
+    entries: [int]
+    count: int
+
+    fn add(mut self, v: int) ensures self.count == old(self.count) + 1 {
+        self.count = self.count + 1
+        self.entries.push(v)
+    }
+}
+
+fn main() {
+    let mut l = Log { entries: [], count: 0 }
+    l.add(7)
+}
+"#,
+        ),
+        0
+    );
+}
+
+#[test]
+fn ensures_severed_by_free_fn_taking_receiver() {
+    // Passing the receiver itself to a free function severs: the callee
+    // can reach and mutate it.
+    compile_should_fail_with(
+        r#"
+class Counter {
+    n: int
+
+    fn bump(mut self) ensures self.n == old(self.n) + 1 {
+        self.n = self.n + 1
+        audit(self)
+    }
+}
+
+fn audit(c: Counter) {
+    print(c.n)
+}
+
+fn main() {
+    let mut c = Counter { n: 0 }
+    c.bump()
+}
+"#,
         "cannot prove ensures clause",
+    );
+}
+
+#[test]
+fn ensures_severed_by_mut_method_on_same_class_alias() {
+    // A mut method on another binding of the same class may be a method on
+    // an alias of the receiver — severs.
+    compile_should_fail_with(
+        r#"
+class Counter {
+    n: int
+
+    fn poke(mut self) {
+        self.n = self.n + 1
+    }
+
+    fn bump(mut self, other: Counter) ensures self.n == old(self.n) + 1 {
+        self.n = self.n + 1
+        let mut o = other
+        o.poke()
+    }
+}
+
+fn main() {
+    let mut c = Counter { n: 0 }
+    let d = Counter { n: 5 }
+    c.bump(d)
+}
+"#,
+        "cannot prove ensures clause",
+    );
+}
+
+#[test]
+fn ensures_severed_by_fn_taking_wrapper_of_receiver() {
+    // Reachability is transitive: a free function whose signature mentions
+    // a class that *contains* the receiver's class can reach the receiver
+    // — severs.
+    compile_should_fail_with(
+        r#"
+class Counter {
+    n: int
+
+    fn bump(mut self, w: Wrapper) ensures self.n == old(self.n) + 1 {
+        self.n = self.n + 1
+        touch_wrapper(w)
+    }
+}
+
+class Wrapper {
+    inner: Counter
+}
+
+fn touch_wrapper(w: Wrapper) {
+    print(w.inner.n)
+}
+
+fn main() {
+    let mut c = Counter { n: 0 }
+    let w = Wrapper { inner: Counter { n: 1 } }
+    c.bump(w)
+}
+"#,
+        "cannot prove ensures clause",
+    );
+}
+
+#[test]
+fn ensures_severed_by_closure_call() {
+    // A call through a fn-typed value is opaque — its captures may hold an
+    // alias of the receiver.
+    compile_should_fail_with(
+        r#"
+class Counter {
+    n: int
+
+    fn bump(mut self, f: fn() int) ensures self.n == old(self.n) + 1 {
+        self.n = self.n + 1
+        let v = f()
+        print(v)
+    }
+}
+
+fn main() {
+    let mut c = Counter { n: 0 }
+    c.bump(() => 3)
+}
+"#,
+        "cannot prove ensures clause",
+    );
+}
+
+#[test]
+fn two_state_invariant_exact_increment_through_print() {
+    // The purity exemption also benefits two-state invariants: an exact
+    // equality ensures (which non-transitive composition would lose at a
+    // composed boundary) survives a reach-free call.
+    assert_eq!(
+        compile_and_run(
+            r#"
+object Epoch {
+    e: int
+    invariant self.e >= old(self.e)
+
+    fn advance(mut self) ensures self.e == old(self.e) + 1 {
+        self.e = self.e + 1
+        print("advanced")
+    }
+}
+
+fn main() {
+    let mut x = Epoch { e: 0 }
+    x.advance()
+}
+"#,
+        ),
+        0
     );
 }
 
