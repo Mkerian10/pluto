@@ -490,7 +490,7 @@ impl Linearity<'_> {
     fn expr_instance(&self, expr: &Spanned<Expr>) -> Option<String> {
         match &expr.node {
             Expr::Ident(name) => self.var_instances.get(name).cloned(),
-            Expr::StructLit { name, type_args, .. } => {
+            Expr::StructLit { type_args, .. } => {
                 if type_args.is_empty() {
                     return None; // non-generic classes are never typestates
                 }
@@ -866,6 +866,24 @@ impl Linearity<'_> {
             self.obligations.entry(k).or_insert(v);
         }
     }
+
+    /// Join for exhaustive branch sets (if/else, match): control continues
+    /// only through the fall-through branches, so obligations after the join
+    /// are exactly those live on SOME fall-through path — an obligation
+    /// discharged on every path is discharged. Consumption stays
+    /// conservative (consumed on any path, before or inside, stays
+    /// consumed).
+    fn join_exclusive(&mut self, fallthroughs: Vec<FlowState>) {
+        self.obligations.clear();
+        for ft in fallthroughs {
+            for (k, v) in ft.consumed {
+                self.consumed.entry(k).or_insert(v);
+            }
+            for (k, v) in ft.obligations {
+                self.obligations.entry(k).or_insert(v);
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -967,13 +985,14 @@ impl Visitor for Linearity<'_> {
                     Some(eb) => self.branch(&entry, &eb.node, false),
                     None => BranchResult { state: entry, terminated: false },
                 };
-                // Conservative join over the paths that fall through.
+                let mut fallthroughs = Vec::new();
                 if !after_then.terminated {
-                    self.union_into(after_then.state);
+                    fallthroughs.push(after_then.state);
                 }
                 if !after_else.terminated {
-                    self.union_into(after_else.state);
+                    fallthroughs.push(after_else.state);
                 }
+                self.join_exclusive(fallthroughs);
             }
             Stmt::While { condition, body } => {
                 self.visit_expr(condition);
@@ -1003,16 +1022,16 @@ impl Visitor for Linearity<'_> {
             Stmt::Match { expr, arms } => {
                 self.visit_expr(expr);
                 let entry = self.snapshot();
-                let mut joined: Vec<FlowState> = Vec::new();
+                let mut fallthroughs: Vec<FlowState> = Vec::new();
                 for arm in arms {
                     let r = self.branch(&entry, &arm.body.node, false);
                     if !r.terminated {
-                        joined.push(r.state);
+                        fallthroughs.push(r.state);
                     }
                 }
-                for j in joined {
-                    self.union_into(j);
-                }
+                // Match is exhaustive: control continues only through the
+                // fall-through arms.
+                self.join_exclusive(fallthroughs);
             }
             Stmt::Expr(e) => {
                 self.visit_expr(e);
