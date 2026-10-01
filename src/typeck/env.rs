@@ -73,6 +73,12 @@ pub struct GenericClassInfo {
     /// exists only on instantiations whose binding for each named type param
     /// equals the named state type (docs/design/rfc-typestates.md).
     pub method_state_constraints: HashMap<String, Vec<(String, String)>>,
+    /// Must-release states (`must_release Held` / `must_release S == Held`):
+    /// (state param, state) pairs. A binding instantiated with a state param
+    /// bound to a must-release state is fully linear — it may not be dropped,
+    /// captured, or stored in a field, and must be transitioned out, moved
+    /// onward, or returned (docs/design/rfc-typestates.md phase 3).
+    pub must_release: Vec<(String, String)>,
     pub lifecycle: Lifecycle,
 }
 

@@ -846,7 +846,12 @@ fn generate_unmarshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>,
     let field_inits: Vec<_> = data_fields.iter()
         .map(|f| (f.name.node.clone(), mk_var(&f.name.node)))
         .collect();
-    if class_decl.invariants.is_empty() {
+    // `must_release` typestate annotations ride in `invariants` but are not
+    // value predicates — only true invariants become boundary guards.
+    let value_invariants: Vec<_> = class_decl.invariants.iter()
+        .filter(|i| i.node.kind == crate::parser::ast::ContractKind::Invariant)
+        .collect();
+    if value_invariants.is_empty() {
         stmts.push(mk_return(mk_struct_lit(class_name, field_inits)));
     } else {
         // Boundary validation: class invariants are statically discharged
@@ -857,7 +862,7 @@ fn generate_unmarshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>,
         //   if !(<invariant with self -> __out>) { raise wire.WireError { ... } }
         //   return __out
         stmts.push(mk_let("__out", None, mk_struct_lit(class_name, field_inits)));
-        for inv in &class_decl.invariants {
+        for inv in &value_invariants {
             stmts.push(mk_invariant_guard(class_name, &inv.node.expr.node));
         }
         stmts.push(mk_return(mk_var("__out")));

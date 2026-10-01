@@ -109,6 +109,7 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     register::resolve_trait_signatures(program, &mut env)?;
     register::resolve_enum_fields(program, &mut env)?;
     register::resolve_class_fields(program, &mut env)?;
+    register::resolve_error_fields(program, &mut env)?;
     register::register_extern_fns(program, &mut env)?;
     register::register_functions(program, &mut env)?;
     register::register_method_sigs(program, &mut env)?;

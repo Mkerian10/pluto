@@ -103,7 +103,15 @@ pub struct InvariantSpec {
 pub(crate) fn register_invariants(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     for class in &program.classes {
         let c = &class.node;
-        if c.invariants.is_empty() {
+        // `must_release` annotations ride in `invariants` but are typestate
+        // markers, not value predicates — they are validated during class
+        // registration, not here.
+        let invariants: Vec<_> = c
+            .invariants
+            .iter()
+            .filter(|i| i.node.kind == crate::parser::ast::ContractKind::Invariant)
+            .collect();
+        if invariants.is_empty() {
             continue;
         }
         if !c.type_params.is_empty() {
@@ -115,13 +123,13 @@ pub(crate) fn register_invariants(program: &Program, env: &mut TypeEnv) -> Resul
                      wrapping '{}' instead",
                     c.name.node
                 ),
-                c.invariants[0].span,
+                invariants[0].span,
             ));
         }
         // Type-check the invariant expressions with `self` in scope.
         env.push_scope();
         env.define_unchecked("self".to_string(), PlutoType::Class(c.name.node.clone()));
-        for inv in &c.invariants {
+        for inv in &invariants {
             let inv_type =
                 super::infer::infer_expr(&inv.node.expr.node, inv.node.expr.span, env, None)?;
             if inv_type != PlutoType::Bool {
@@ -136,7 +144,7 @@ pub(crate) fn register_invariants(program: &Program, env: &mut TypeEnv) -> Resul
 
         // Provable-fragment validation.
         let mut specs = Vec::new();
-        for inv in &c.invariants {
+        for inv in &invariants {
             let desc = crate::codegen::format_invariant_expr(&inv.node.expr.node);
             validate_provable(&inv.node.expr, &c.name.node, &desc, env)?;
             specs.push(InvariantSpec {

@@ -443,13 +443,16 @@ impl PrettyPrinter {
             self.newline();
         }
 
-        // Invariants
+        // Invariants and must-release annotations
         for inv in &cls.invariants {
             if !regular_fields.is_empty() {
                 self.newline();
             }
             self.write_indent();
-            self.write("invariant ");
+            match inv.node.kind {
+                ContractKind::MustRelease => self.write("must_release "),
+                _ => self.write("invariant "),
+            }
             self.emit_expr(&inv.node.expr.node, 0);
             self.newline();
         }
@@ -520,6 +523,7 @@ impl PrettyPrinter {
                 ContractKind::Requires => self.write("requires "),
                 ContractKind::Invariant => self.write("invariant "),
                 ContractKind::StateWhere => self.write("where "),
+                ContractKind::MustRelease => self.write("must_release "),
             }
             self.emit_expr(&contract.node.expr.node, 0);
         }
