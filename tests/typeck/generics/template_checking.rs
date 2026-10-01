@@ -60,8 +60,9 @@ fn main() {}
 
 #[test]
 fn generic_class_invariant_rejected() {
-    // Static discharge rejects invariants on generic classes outright
-    // (before the template's expression is even type-checked).
+    // Generic-class invariants get the same fragment validation as concrete
+    // ones (at the template, before any instantiation): a non-comparison
+    // expression is outside the provable fragment.
     compile_should_fail_with(
         r#"
 class Counter<T> {
@@ -76,7 +77,7 @@ class Counter<T> {
 }
 fn main() {}
 "#,
-        "invariants on generic classes are not yet supported",
+        "invariant 'self.count + 1' is outside the provable fragment",
     );
 }
 

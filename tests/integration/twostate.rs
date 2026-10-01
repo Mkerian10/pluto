@@ -352,10 +352,10 @@ fn main() {
 }
 
 #[test]
-fn ensures_on_generic_class_rejected() {
-    // Generic bodies are checked against skolem type parameters; ensures on
-    // them is rejected at declaration (template checking must never see it).
-    compile_should_fail_with(
+fn ensures_on_generic_class_param_independent_accepted() {
+    // Ensures on generic class methods are supported when the vocabulary is
+    // param-independent: proven once on the template under skolems.
+    let out = compile_and_run_stdout(
         r#"
 class Box<T> {
     v: T
@@ -367,12 +367,13 @@ class Box<T> {
 }
 
 fn main() {
-    let mut b = Box { v: 1, n: 0 }
+    let mut b = Box<int> { v: 1, n: 0 }
     b.tick()
+    print(b.n)
 }
 "#,
-        "ensures clauses on methods of generic classes are not yet supported",
     );
+    assert_eq!(out.trim(), "1");
 }
 
 #[test]
@@ -665,10 +666,10 @@ fn main() {
 }
 
 #[test]
-fn two_state_invariant_on_generic_rejected() {
-    // Invariants on generic classes were already rejected; old() does not
-    // change that.
-    compile_should_fail_with(
+fn two_state_invariant_on_generic_accepted() {
+    // Two-state invariants on generic classes are supported (template-proven,
+    // param-independent vocabulary); construction owes nothing (no pre-state).
+    let out = compile_and_run_stdout(
         r#"
 class Box<T> {
     v: T
@@ -677,12 +678,12 @@ class Box<T> {
 }
 
 fn main() {
-    let b = Box { v: 1, n: 0 }
+    let b = Box<int> { v: 1, n: 0 }
     print(b.n)
 }
 "#,
-        "invariants on generic classes are not yet supported",
     );
+    assert_eq!(out.trim(), "0");
 }
 
 #[test]
@@ -704,4 +705,203 @@ fn main() {
 "#,
         "construction of 'Epoch' violates its invariant 'self.e >= 0'",
     );
+}
+
+// ── Two-state contracts on generic classes (template-proven) ────────────────
+// Param-independent vocabulary only; one skolem proof covers every
+// instantiation (docs/design/contracts.md "Generics").
+
+#[test]
+fn generic_two_state_invariant_monotone_object() {
+    // The PR #357 census case: Topic<T>.published is a true monotone claim.
+    // The proof composes through the self-call inside the loop.
+    let out = compile_and_run_stdout(
+        r#"
+object Topic<T> {
+    latest: T?
+    published: int
+
+    invariant self.published >= old(self.published)
+
+    fn publish(mut self, msg: T) {
+        self.latest = msg
+        self.published = self.published + 1
+    }
+
+    fn flood(mut self, msg: T) {
+        let mut i = 0
+        while i < 100 {
+            self.publish(msg)
+            i = i + 1
+        }
+    }
+}
+
+fn main() {
+    let mut t = Topic<string> { latest: none, published: 0 }
+    t.publish("a")
+    t.flood("b")
+    print(t.published)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "101");
+}
+
+#[test]
+fn generic_two_state_invariant_violating_template_rejected() {
+    compile_should_fail_with(
+        r#"
+object Topic<T> {
+    latest: T?
+    published: int
+
+    invariant self.published >= old(self.published)
+
+    fn rewind(mut self) {
+        self.published = self.published - 1
+    }
+}
+
+fn main() {
+    let mut t = Topic<int> { latest: none, published: 0 }
+    t.rewind()
+}
+"#,
+        "invariant 'self.published >= old(self.published)' of class 'Topic<T>' is violated",
+    );
+}
+
+#[test]
+fn generic_ensures_proven_and_caller_assumes_relation() {
+    // The ensures proof runs once on the template; the caller-side
+    // assumption works through the instantiation's stamped specs: after
+    // deposit(80) the exact relation refutes nothing and proves the
+    // downstream construction (balance - 50 >= 0).
+    let out = compile_and_run_stdout(
+        r#"
+class Acc<T> {
+    tag: T?
+    balance: int
+
+    invariant self.balance >= 0
+
+    fn deposit(mut self, amt: int)
+        requires amt >= 0
+        ensures self.balance == old(self.balance) + amt {
+        self.balance = self.balance + amt
+    }
+}
+
+class Floor {
+    v: int
+    invariant self.v >= 0
+}
+
+fn main() {
+    let mut a = Acc<string> { tag: none, balance: 0 }
+    a.deposit(80)
+    let f = Floor { v: a.balance - 50 }
+    print(f.v)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "30");
+}
+
+#[test]
+fn generic_ensures_violating_template_rejected() {
+    compile_should_fail_with(
+        r#"
+class Acc<T> {
+    tag: T?
+    balance: int
+
+    fn bump(mut self)
+        ensures self.balance == old(self.balance) + 1 {
+        self.balance = self.balance + 2
+    }
+}
+
+fn main() {
+    let mut a = Acc<int> { tag: none, balance: 0 }
+    a.bump()
+}
+"#,
+        "ensures clause 'self.balance == old(self.balance) + 1' of method 'bump' of class 'Acc<T>' is violated",
+    );
+}
+
+#[test]
+fn generic_ensures_param_typed_parameter_rejected() {
+    compile_should_fail_with(
+        r#"
+class Acc<T> {
+    tag: T
+    balance: int
+
+    fn bad(mut self, x: T)
+        ensures self.balance == x {
+        self.balance = 0
+    }
+}
+
+fn main() {
+    print(1)
+}
+"#,
+        "mentions parameter 'x' whose type involves a type parameter of 'Acc'",
+    );
+}
+
+#[test]
+fn generic_ensures_param_typed_field_rejected() {
+    compile_should_fail_with(
+        r#"
+class Acc<T> {
+    held: T
+
+    fn bad(mut self)
+        ensures self.held == old(self.held) {
+    }
+}
+
+fn main() {
+    print(1)
+}
+"#,
+        "mentions field 'held' whose type involves a type parameter of 'Acc'",
+    );
+}
+
+#[test]
+fn generic_sibling_ensures_compose_in_template() {
+    // apply_self_call_ensures works under skolems: double_bump's exact +2
+    // proof sees through the two bump() calls via their stamped ensures.
+    let out = compile_and_run_stdout(
+        r#"
+class Acc<T> {
+    tag: T?
+    balance: int
+
+    fn bump(mut self)
+        ensures self.balance == old(self.balance) + 1 {
+        self.balance = self.balance + 1
+    }
+
+    fn double_bump(mut self)
+        ensures self.balance == old(self.balance) + 2 {
+        self.bump()
+        self.bump()
+    }
+}
+
+fn main() {
+    let mut a = Acc<int> { tag: none, balance: 0 }
+    a.double_bump()
+    print(a.balance)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "2");
 }

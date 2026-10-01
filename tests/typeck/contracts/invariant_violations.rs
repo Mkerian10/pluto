@@ -87,11 +87,12 @@ fn main(){}"#, "expected newline after statement"); }
 
 // Invariant on generic type param
 #[test]
-fn invariant_generic_param() { // Generic-class invariants are rejected outright under static
-    // discharge (instantiations are never re-checked)
+fn invariant_generic_param() { // Generic-class invariants are template-proven, but only over
+    // param-independent vocabulary: a field whose type involves a type
+    // parameter gets a dedicated rejection
     compile_should_fail_with(r#"class C<T>{x:T
 invariant self.x>0}
-fn main(){}"#, "invariants on generic classes are not yet supported"); }
+fn main(){}"#, "mentions field 'x' whose type involves a type parameter of 'C'"); }
 
 // Invariant with nested field access
 #[test]

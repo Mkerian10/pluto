@@ -61,18 +61,12 @@ pub fn instantiate_properties(program: &mut Program) -> Result<(), CompileError>
         if class.node.satisfies.is_empty() {
             continue;
         }
-        if !class.node.type_params.is_empty() {
-            return Err(CompileError::type_err(
-                format!(
-                    "'satisfies' on generic classes is not yet supported: property \
-                     instantiations are compile-time proof obligations, and generic bodies \
-                     are checked against opaque type parameters. Instantiate the property \
-                     on a concrete class wrapping '{}' instead",
-                    class.node.name.node
-                ),
-                class.node.satisfies[0].span,
-            ));
-        }
+        // Generic classes are allowed: the substituted atoms are ordinary
+        // clauses and get the generic contract validation (param-independent
+        // vocabulary only) in discharge::register_invariants /
+        // dominance::register_guards. Param-dependent arguments already fail
+        // here: `field<int>` requires the field's declared type to be `int`,
+        // which a param-typed field is not.
         let clauses = class.node.satisfies.clone();
         for clause in &clauses {
             let Some(&idx) = table.get(&clause.node.name.node) else {
@@ -762,12 +756,25 @@ mod tests {
     }
 
     #[test]
-    fn generic_class_satisfies_rejected() {
+    fn generic_class_satisfies_injects_invariant() {
         let src = "property monotonic(f: field<int>) {\n    invariant f >= old(f)\n}\n\nclass Box<T> satisfies monotonic(self.n) {\n    n: int\n}\n";
+        let mut program = parse(src);
+        instantiate_properties(&mut program).expect("generic instantiation succeeds");
+        let class = &program.classes[0].node;
+        assert_eq!(class.invariants.len(), 1);
+        let rendered = crate::codegen::format_invariant_expr(&class.invariants[0].node.expr.node);
+        assert_eq!(rendered, "self.n >= old(self.n)");
+    }
+
+    #[test]
+    fn generic_class_satisfies_param_typed_field_rejected() {
+        // The kind check carries the param-independence rule: a field whose
+        // declared type is a type parameter is not a field of type int.
+        let src = "property monotonic(f: field<int>) {\n    invariant f >= old(f)\n}\n\nclass Box<T> satisfies monotonic(self.x) {\n    x: T\n}\n";
         let mut program = parse(src);
         let err = instantiate_properties(&mut program).unwrap_err();
         assert!(
-            err.to_string().contains("'satisfies' on generic classes"),
+            err.to_string().contains("requires a field of type int"),
             "got: {err}"
         );
     }

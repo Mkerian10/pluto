@@ -139,7 +139,9 @@ fact engine can decide:
 - `.len()` and any method call, indexing, nested field access
   (`self.child.value`)
 - Non-linear arithmetic (`self.x * self.y`), division, modulo
-- Invariants on generic classes (their instantiations are never re-checked)
+- On a generic class: any field whose declared type involves a type
+  parameter (the contract must hold for every instantiation, so its
+  vocabulary must be independent of the parameters — see Generics below)
 
 This keeps verification decidable without an SMT solver. The fragment grows
 deliberately (e.g. `x != const` facts were added so `invariant self.x != 0`
@@ -150,8 +152,8 @@ scope.
 
 - Invariants apply to classes and objects (not enums, traits, modules)
 - Multiple invariants are conjoined (all must hold)
-- Invariants must be in the provable fragment (see above); generic classes are
-  rejected for now
+- Invariants must be in the provable fragment (see above); on generic classes
+  it is further restricted to param-independent vocabulary (see Generics)
 - A write to a field no invariant mentions carries no obligation
 
 ---
@@ -550,18 +552,39 @@ class OrderService[gateway: PaymentGateway] {
 
 ### Generics
 
-Invariants work with generics after monomorphization:
+Generic classes and objects carry invariants and ensures under one rule:
+the contract's **vocabulary must be independent of the type parameters** —
+int fields and int method parameters whose declared type mentions no
+parameter, and `old(...)` of those. A clause naming a param-typed field or
+parameter is rejected at declaration with a dedicated diagnostic (the same
+restriction that makes generic raise-summaries sound).
 
 ```pluto
 class Box<T> {
     value: T
     count: int
-    invariant self.count >= 0
+    invariant self.count >= 0          // OK: count's type is int, no T
+    // invariant self.value >= 0       // rejected: value's type involves T
 }
-
-// After monomorphization: Box__int, Box__string, etc.
-// Each gets the invariant check
 ```
+
+Because the vocabulary cannot mention the parameters, the proof is
+**template-level**: the obligations on the template's method bodies are
+discharged once, under skolem substitution (the same pass that type-checks
+generic bodies), and that one proof covers every instantiation.
+Monomorphized copies do not re-prove. Per-instantiation obligations work
+exactly like concrete classes: each construction site (`Box<int>{...}`),
+foreign write, and DI synthesis of an instantiation is proven against the
+template's clauses, and wire decode of a monomorphized instantiation
+re-checks its single-state invariants at the trust boundary.
+
+Typestate interaction: `where S == State`-gated methods exist only on the
+instantiations their constraint names, and obligations apply to whichever
+methods an instantiation has. A transition method *constructs* a new value
+(often a different instantiation), and construction has no pre-state —
+single-state invariants apply to the new value; two-state clauses do not
+relate across the transition (relating the pre- and post-transition values
+is future work, not a two-state invariant).
 
 ---
 

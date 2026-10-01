@@ -363,6 +363,13 @@ pub struct TypeEnv {
     /// before body checking; every construction/write site is proven against
     /// these. See `src/typeck/discharge.rs`.
     pub class_invariants: HashMap<String, Vec<super::discharge::InvariantSpec>>,
+    /// Invariant specs declared on generic class *templates* (param-independent
+    /// vocabulary only — see `discharge::register_invariants`). Keyed by the
+    /// template name (`Topic`); copied into `class_invariants` under each
+    /// instantiation's mangled name by `ensure_generic_class_instantiated`, so
+    /// every obligation site (constructions of `Topic<int>`, foreign writes,
+    /// template method boundaries under skolems) sees them.
+    pub generic_class_invariants: HashMap<String, Vec<super::discharge::InvariantSpec>>,
     /// Active proof scope while checking a `mut self` method body of an
     /// invariant-carrying class (symbolic field state + ghost facts).
     pub invariant_scope: Option<super::discharge::InvariantScope>,
@@ -377,6 +384,20 @@ pub struct TypeEnv {
     /// normal exit of the method, and *assumed* by callers after a direct
     /// call (the call-boundary precision win).
     pub fn_ensures: HashMap<String, Vec<super::discharge::EnsuresSpec>>,
+    /// Ensures specs declared on methods of generic class templates
+    /// (param-independent vocabulary only): template name → method name →
+    /// specs. Copied into `fn_ensures` under each instantiation's mangled
+    /// method names (typestate-gated methods only where they exist) by
+    /// `ensure_generic_class_instantiated`.
+    pub generic_class_ensures: HashMap<String, HashMap<String, Vec<super::discharge::EnsuresSpec>>>,
+    /// Set while monomorphization re-checks instantiated bodies (which exist
+    /// to discover transitive instantiations): contract obligations were
+    /// already proven on the template under skolem substitution, and the
+    /// contract vocabulary is param-independent, so per-copy proofs are
+    /// redundant — verdict sites treat every obligation as discharged. Fact
+    /// *production* (entry assumptions, ensures staging, invariant
+    /// reassumption) still runs, so requires/shrink behavior is unchanged.
+    pub assume_discharged: bool,
     /// Caller-side ensures assumption staged by `discharge::pre_stmt` (the
     /// facts are computed against the pre-call fact state, before this
     /// statement's kills) and assumed by `discharge::post_stmt` once the
@@ -500,9 +521,12 @@ impl TypeEnv {
             facts: super::facts::FactEnv::new(),
             degenerate_conditions: Vec::new(),
             class_invariants: HashMap::new(),
+            generic_class_invariants: HashMap::new(),
             invariant_scope: None,
             guarded_fields: HashMap::new(),
             fn_ensures: HashMap::new(),
+            generic_class_ensures: HashMap::new(),
+            assume_discharged: false,
             pending_call_ensures: Vec::new(),
             class_properties: HashMap::new(),
         }

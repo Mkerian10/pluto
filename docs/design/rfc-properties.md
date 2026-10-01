@@ -169,7 +169,9 @@ Implementation decisions (`src/typeck/dominance.rs`):
   arithmetic whose leaves are `self.<f>` (own int fields) and `<binder>.<f>`
   (one-level int fields of the binder class). Binder must be a concrete
   value class (entities rejected — their fields can change concurrently).
-  Generic classes rejected, like invariants.
+  Guards on generic classes remain rejected (unlike invariants/ensures,
+  which are template-proven on generics when their vocabulary is
+  param-independent — see contracts.md "Generics").
 - **Classes vs objects.** On an entity, serialization closes the
   check-then-act window. On a value class the clause is sound for a
   different reason: values don't share (spawn deep-copies, wire copies), so
@@ -344,8 +346,10 @@ question 4.)
    e.g. `double_bump` proving `+2` through two `bump()` calls).
    *Deviations:* the ensures fragment excludes `len()` terms and foreign
    paths (see atom 1 note); ensures is restricted to class/object methods
-   (no free functions — there is no receiver state to relate) and rejected
-   on generic classes (mirroring invariants-on-generics); a call inside a
+   (no free functions — there is no receiver state to relate); on generic
+   classes the vocabulary must be param-independent (template-proven once
+   under skolems, stamped onto every instantiation — contracts.md
+   "Generics"); a call inside a
    method conservatively severs exact two-state knowledge unless the callee
    is a sibling method with declared ensures (any callee may reach the
    receiver through an alias).
@@ -392,7 +396,11 @@ question 4.)
    matching. `std.verify` ships `monotonic` and `fenced`.
    *Deviations:* `expr` params deferred (4.5, see above); `provides` on
    fns and body hashing deferred (see Use / Evolution notes); `satisfies`
-   rejected on generic classes (mirroring invariants-on-generics); blame
+   on generic classes is allowed when the substituted atoms pass the
+   param-independence validation (a `field<int>` argument must name a
+   field whose declared type is literally `int`, so param-typed fields
+   are rejected at instantiation; guarded atoms still hit the
+   guards-on-generics rejection); blame
    names the defining module as referenced in code (the import binding,
    `verify`), not the import path.
 5. **Requirements and assumptions** — properties on fn types, `requires`

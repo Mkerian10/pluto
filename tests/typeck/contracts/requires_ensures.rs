@@ -130,12 +130,14 @@ fn requires_generic() { compile_should_fail_with(r#"fn f<T>(x:T) requires x>0 T{
 
 // Ensures on generic function
 #[test]
-fn ensures_generic() { compile_should_fail_with(r#"class Box<T>{v:T
+fn ensures_generic() { // Param-independent ensures on a generic class method is accepted:
+    // validated and proven once on the template under skolems
+    assert!(pluto::compile_to_object(r#"class Box<T>{v:T
 n:int
 fn set(mut self, k:int) ensures self.n == old(self.n) + k {self.n = self.n + k}
 }
-fn main(){let mut b = Box{v:1, n:0}
-b.set(2)}"#, "ensures clauses on methods of generic classes are not yet supported"); }
+fn main(){let mut b = Box<int>{v:1, n:0}
+b.set(2)}"#).is_ok()); }
 
 // Requires with cast
 #[test]

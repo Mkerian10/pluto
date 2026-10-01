@@ -25,6 +25,20 @@ class Lease<S> {
     id: int
     epoch: int
 
+    // Epochs are never negative — a single-state contract, proven once on
+    // the template (the vocabulary mentions no type parameter) and enforced
+    // at every construction of every instantiation, including the fresh
+    // values transitions mint below.
+    //
+    // Note what is deliberately NOT declared: `epoch >= old(epoch)` across
+    // acquire/renew. A two-state clause relates a mutation of one value to
+    // its own pre-state, but a transition CONSTRUCTS a new value (a new
+    // instantiation, even) — construction has no pre-state, so the new
+    // lease owes only the single-state invariants. Monotonicity across a
+    // transition is a relation between two distinct values; that is future
+    // work (transition postconditions), not a two-state invariant.
+    invariant self.epoch >= 0
+
     // `Held` is a MUST-RELEASE state: a binding holding a Lease<Held> is an
     // OBLIGATION, not just a value. It cannot be dropped, captured by a
     // closure/spawn (that would duplicate the evidence), or stored into a

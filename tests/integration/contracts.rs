@@ -539,11 +539,11 @@ fn main() {
 }
 
 #[test]
-fn invariant_on_generic_class_rejected() {
-    // Generic bodies are checked against opaque type parameters and their
-    // instantiations are never re-checked, so invariants on generic
-    // classes are rejected for now.
-    compile_should_fail_with(
+fn invariant_on_generic_class_param_independent_accepted() {
+    // Invariants on generic classes are supported when their vocabulary is
+    // independent of the type parameters: validated and proven once on the
+    // template, stamped onto every instantiation.
+    let out = compile_and_run_stdout(
         r#"
 class Box<T> {
     value: T
@@ -557,8 +557,8 @@ fn main() {
     print(b.count)
 }
 "#,
-        "invariants on generic classes are not yet supported",
     );
+    assert_eq!(out.trim(), "0");
 }
 
 #[test]
@@ -2251,4 +2251,257 @@ fn main() {
 "#,
     );
     assert_eq!(out.trim(), "0");
+}
+
+// ── Contracts on generic classes (template-proven, param-independent) ───────
+// Contracts whose vocabulary is independent of the type parameters are
+// validated once on the template, proven once on the template body under
+// skolem substitution, and stamped onto every instantiation (see
+// docs/design/contracts.md "Generics").
+
+#[test]
+fn generic_invariant_template_proven_and_runs() {
+    let out = compile_and_run_stdout(
+        r#"
+class Gauge<T> {
+    tag: T?
+    v: int
+
+    invariant self.v >= 0
+
+    fn add(mut self, d: int) {
+        if d >= 0 {
+            self.v = self.v + d
+        }
+    }
+}
+
+fn main() {
+    let mut a = Gauge<int> { tag: none, v: 1 }
+    let mut b = Gauge<string> { tag: none, v: 2 }
+    a.add(10)
+    b.add(20)
+    print(a.v)
+    print(b.v)
+}
+"#,
+    );
+    assert_eq!(out, "11\n22\n");
+}
+
+#[test]
+fn generic_invariant_violating_template_rejected() {
+    // The violating write is caught at the TEMPLATE, under skolem
+    // substitution — one proof covers every instantiation, so the error
+    // fires even though only Gauge<string> is ever constructed.
+    compile_should_fail_with(
+        r#"
+class Gauge<T> {
+    tag: T?
+    v: int
+
+    invariant self.v >= 0
+
+    fn bad(mut self) {
+        self.v = self.v - 1
+    }
+}
+
+fn main() {
+    let g = Gauge<string> { tag: none, v: 1 }
+    print(g.v)
+}
+"#,
+        "cannot prove invariant 'self.v >= 0' of class 'Gauge<T>'",
+    );
+}
+
+#[test]
+fn generic_invariant_violating_uninstantiated_template_rejected() {
+    // Template-proven means proven even when the template is never used.
+    compile_should_fail_with(
+        r#"
+class Gauge<T> {
+    v: int
+
+    invariant self.v >= 0
+
+    fn bad(mut self) {
+        self.v = 0 - 1
+    }
+}
+
+fn main() {
+    print(1)
+}
+"#,
+        "invariant 'self.v >= 0' of class 'Gauge<T>' is violated",
+    );
+}
+
+#[test]
+fn generic_invariant_param_typed_field_rejected() {
+    compile_should_fail_with(
+        r#"
+class Box<T> {
+    x: T
+
+    invariant self.x >= 0
+}
+
+fn main() {
+    print(1)
+}
+"#,
+        "mentions field 'x' whose type involves a type parameter of 'Box'",
+    );
+}
+
+#[test]
+fn generic_invariant_nested_param_typed_field_rejected() {
+    // The param-dependence check sees through structure ([T], T?, ...).
+    compile_should_fail_with(
+        r#"
+class Box<T> {
+    xs: [T]
+
+    invariant self.xs >= 0
+}
+
+fn main() {
+    print(1)
+}
+"#,
+        "mentions field 'xs' whose type involves a type parameter of 'Box'",
+    );
+}
+
+#[test]
+fn generic_construction_violating_initializer_rejected() {
+    // Construction sites name instantiations; the initializer proof
+    // evaluates against the template's clauses.
+    compile_should_fail_with(
+        r#"
+class Gauge<T> {
+    tag: T?
+    v: int
+
+    invariant self.v >= 0
+}
+
+fn main() {
+    let g = Gauge<int> { tag: none, v: 0 - 5 }
+    print(g.v)
+}
+"#,
+        "construction of 'Gauge<int>' violates its invariant 'self.v >= 0'",
+    );
+}
+
+#[test]
+fn generic_construction_unproven_initializer_rejected() {
+    compile_should_fail_with(
+        r#"
+class Gauge<T> {
+    tag: T?
+    v: int
+
+    invariant self.v >= 0
+}
+
+fn main(args: [string]) {
+    let n = args.len() - 3
+    let g = Gauge<int> { tag: none, v: n }
+    print(g.v)
+}
+"#,
+        "cannot prove invariant 'self.v >= 0' of class 'Gauge<int>' for this construction",
+    );
+}
+
+#[test]
+fn generic_foreign_write_obligation_enforced() {
+    compile_should_fail_with(
+        r#"
+class Gauge<T> {
+    tag: T?
+    v: int
+
+    invariant self.v >= 0
+}
+
+fn main() {
+    let mut g = Gauge<int> { tag: none, v: 5 }
+    g.v = 0 - 2
+    print(g.v)
+}
+"#,
+        "violates invariant 'self.v >= 0'",
+    );
+}
+
+#[test]
+fn generic_typestate_invariant_proven_across_transitions() {
+    // State-gated methods (`where S == ...`) are registered per
+    // instantiation; the invariant obligation applies to whichever methods
+    // each instantiation has, and the fresh values transitions construct
+    // carry the construction obligation (single-state only — a transition
+    // has no pre-state for two-state clauses to relate across).
+    let out = compile_and_run_stdout(
+        r#"
+class Idle { tag: int }
+class Held { tag: int }
+
+class Lease<S> {
+    id: int
+    epoch: int
+
+    invariant self.epoch >= 0
+
+    fn acquire(self) Lease<Held> where S == Idle {
+        return Lease<Held> { id: self.id, epoch: self.epoch + 1 }
+    }
+
+    fn release(self) Lease<Idle> where S == Held {
+        return Lease<Idle> { id: self.id, epoch: self.epoch }
+    }
+}
+
+fn main() {
+    let l = Lease<Idle> { id: 7, epoch: 0 }
+    let h = l.acquire()
+    let done = h.release()
+    print(done.epoch)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1");
+}
+
+#[test]
+fn generic_typestate_violating_transition_construction_rejected() {
+    compile_should_fail_with(
+        r#"
+class Idle { tag: int }
+class Held { tag: int }
+
+class Lease<S> {
+    id: int
+    epoch: int
+
+    invariant self.epoch >= 0
+
+    fn acquire(self) Lease<Held> where S == Idle {
+        return Lease<Held> { id: self.id, epoch: 0 - 1 }
+    }
+}
+
+fn main() {
+    let l = Lease<Idle> { id: 7, epoch: 0 }
+    let h = l.acquire()
+    print(h.epoch)
+}
+"#,
+        "violates its invariant 'self.epoch >= 0'",
+    );
 }

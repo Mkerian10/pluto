@@ -570,10 +570,18 @@ pub(crate) fn ensure_generic_class_instantiated(
         .collect();
     env.classes.insert(mangled.clone(), ClassInfo {
         fields: Vec::new(),
-        methods: included_methods,
+        methods: included_methods.clone(),
         impl_traits: gen_info.impl_traits.clone(),
         lifecycle: gen_info.lifecycle,
     });
+    // Contract specs declared on the template apply to every instantiation
+    // verbatim (their vocabulary is param-independent by construction):
+    // stamp them under the mangled names so construction/write obligations,
+    // method proof scopes (including the skolem template check itself),
+    // caller-side ensures assumption, and marshal decode validation all see
+    // them. No-op before contract registration; `backfill_generic_contracts`
+    // covers instantiations minted earlier.
+    super::discharge::instantiate_generic_contracts(base_name, &mangled, &included_methods, env);
     // Generic OBJECT instantiations are entity types in their own right
     // (rfc-objects.md phase 3): each gets its own identity space (distinct
     // monomorphized type), entity allocation tag, and per-type method lock.

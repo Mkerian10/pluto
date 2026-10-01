@@ -70,10 +70,12 @@ fn main(){}"#, "string literals are not allowed in contract expressions"); }
 
 // Old value on generic field
 #[test]
-fn old_generic_field() { compile_should_fail_with(r#"class C<T>{x:T
+fn old_generic_field() { // Ensures on generics are template-proven, but only over
+    // param-independent vocabulary: a param-typed field is rejected
+    compile_should_fail_with(r#"class C<T>{x:T
 fn set(mut self,v:T) ensures self.x>old(self.x) {self.x=v}
 }
-fn main(){}"#, "ensures clauses on methods of generic classes are not yet supported"); }
+fn main(){}"#, "mentions field 'x' whose type involves a type parameter of 'C'"); }
 
 // Old value on array element
 #[test]

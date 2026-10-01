@@ -1965,3 +1965,69 @@ fn must_release_droppable_states_stay_relaxed() {
     ));
     assert_eq!(out.trim(), "3");
 }
+
+// ── Contracts on generic classes interact with monomorphization ─────────────
+
+#[test]
+fn generic_contracts_not_reproven_per_instantiation() {
+    // The proof runs once on the template; multiple instantiations (plus the
+    // transitive one from the generic function) compile and run — the
+    // monomorphized copies are not re-proven, and every construction site of
+    // every instantiation still carries its obligation.
+    let out = compile_and_run_stdout(
+        r#"
+class Gauge<T> {
+    tag: T?
+    v: int
+
+    invariant self.v >= 0
+
+    fn add(mut self, d: int)
+        requires d >= 0
+        ensures self.v == old(self.v) + d {
+        self.v = self.v + d
+    }
+}
+
+fn fresh<T>() Gauge<T> {
+    return Gauge<T> { tag: none, v: 0 }
+}
+
+fn main() {
+    let mut a = fresh<int>()
+    let mut b = fresh<string>()
+    let mut c = Gauge<float> { tag: none, v: 7 }
+    a.add(1)
+    b.add(2)
+    c.add(3)
+    print(a.v + b.v + c.v)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "13");
+}
+
+#[test]
+fn generic_template_contract_checked_without_instantiation() {
+    // Skolem template checking carries the obligations even when no code
+    // ever instantiates the class.
+    compile_should_fail_with(
+        r#"
+class Gauge<T> {
+    tag: T?
+    v: int
+
+    invariant self.v >= 0
+
+    fn drain(mut self) {
+        self.v = self.v - 10
+    }
+}
+
+fn main() {
+    print(1)
+}
+"#,
+        "cannot prove invariant 'self.v >= 0' of class 'Gauge<T>'",
+    );
+}
