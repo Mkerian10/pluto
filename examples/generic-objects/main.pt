@@ -11,6 +11,14 @@ object Topic<T> {
     latest: T?
     published: int
 
+    // A contract on a generic class: the publish counter is monotone. The
+    // vocabulary is param-independent (an int field, no T anywhere), so the
+    // obligation is proven ONCE on the template — under opaque type
+    // parameters — and the one proof covers every instantiation
+    // (Topic<int>, Topic<string>, ...). A change that rewound the counter
+    // would stop compiling at the template.
+    invariant self.published >= old(self.published)
+
     fn publish(mut self, msg: T) {
         self.latest = msg
         self.published = self.published + 1

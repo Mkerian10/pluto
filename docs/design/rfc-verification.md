@@ -413,8 +413,10 @@ then a stdlib import, not a language feature.
    variables inside `mut self` methods with proofs at boundaries (exits, raises,
    calls, loops, branch joins), immediate proofs for foreign writes and
    constructions, and a small fragment extension (`x != const` facts). Invariants
-   on generic classes are rejected for now (their instantiations are never
-   re-checked); entity reentrancy is handled conservatively (any call while the
+   and ensures on generic classes are supported when their vocabulary is
+   param-independent: validated and proven once on the template under skolem
+   substitution, stamped onto every instantiation (contracts.md "Generics");
+   entity reentrancy is handled conservatively (any call while the
    invariant may be broken is rejected — rfc-objects.md open question 6).
 3. **Error-set shrinking** — fact-sensitive error inference: a `raise` proven
    unreachable at a call site removes the variant from that site's inferred set.
