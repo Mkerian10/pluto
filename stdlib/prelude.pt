@@ -5,6 +5,8 @@ pub class FieldInfo {
     name: string
     type_name: string
     offset: int
+
+    invariant self.offset >= 0
 }
 
 pub class ClassInfo {
