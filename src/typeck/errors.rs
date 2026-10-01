@@ -201,7 +201,7 @@ pub(crate) fn copy_class_method_error_sets(
 /// functions, Class-resolved methods — not `at` placement) read the site's
 /// *required* set: variants proven unreachable here by the caller's flow
 /// facts (shrink.rs) need no coverage.
-fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<String> {
+pub(crate) fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<String> {
     match inner {
         Expr::Call { name, .. } => {
             if env.fallible_value_calls.contains(&(current_fn.to_string(), name.span.start)) {
