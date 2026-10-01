@@ -538,6 +538,48 @@ pub enum ContractKind {
     /// not go out of scope un-transitioned (docs/design/rfc-typestates.md
     /// phase 3). Rides in `ClassDecl::invariants`; never a runtime check.
     MustRelease,
+    /// `ensures <expr>` on a class/object method: a two-state postcondition
+    /// relating the method's exit state to its entry state (`old(expr)`
+    /// denotes the entry value). A compile-time proof obligation discharged
+    /// by the symbolic invariant machinery (docs/design/rfc-properties.md
+    /// atom 1); never emitted at runtime.
+    Ensures,
+}
+
+/// Is this expression the `old(...)` intrinsic (legal only inside `ensures`
+/// and `invariant` clauses, where it denotes the entry/pre-state value of
+/// its argument)? Returns the wrapped argument.
+pub fn old_call_arg(expr: &Expr) -> Option<&Spanned<Expr>> {
+    match expr {
+        Expr::Call { name, args, type_args, .. }
+            if name.node == "old" && args.len() == 1 && type_args.is_empty() =>
+        {
+            Some(&args[0])
+        }
+        _ => None,
+    }
+}
+
+/// Does this expression contain the `old(...)` intrinsic anywhere? Marks a
+/// contract clause as *two-state*: it relates two program states, so it can
+/// only be checked where both states exist (method exits, write sites) —
+/// never at construction or wire-decode boundaries.
+pub fn expr_contains_old(expr: &Expr) -> bool {
+    if old_call_arg(expr).is_some() {
+        return true;
+    }
+    match expr {
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_contains_old(&lhs.node) || expr_contains_old(&rhs.node)
+        }
+        Expr::UnaryOp { operand, .. } => expr_contains_old(&operand.node),
+        Expr::FieldAccess { object, .. } => expr_contains_old(&object.node),
+        Expr::MethodCall { object, args, .. } => {
+            expr_contains_old(&object.node) || args.iter().any(|a| expr_contains_old(&a.node))
+        }
+        Expr::Call { args, .. } => args.iter().any(|a| expr_contains_old(&a.node)),
+        _ => false,
+    }
 }
 
 /// A trait named in a class's `impl` list; generic traits carry type

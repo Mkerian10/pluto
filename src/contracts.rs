@@ -36,6 +36,30 @@ fn reject_state_where(contracts: &[Spanned<ContractClause>], context: &str) -> R
     Ok(())
 }
 
+/// Reject `ensures` clauses anywhere except class/object methods. The proof
+/// form of `ensures` (docs/design/rfc-properties.md) is a two-state claim
+/// about a receiver's entry and exit states; without a receiver there is no
+/// state to relate, and the runtime form of postconditions remains rejected
+/// by design (docs/design/contracts.md).
+fn reject_ensures(contracts: &[Spanned<ContractClause>], context: &str) -> Result<(), CompileError> {
+    for c in contracts {
+        if c.node.kind == ContractKind::Ensures {
+            return Err(CompileError::type_err(
+                format!(
+                    "'ensures' clauses are only supported on methods of classes and \
+                     objects (they are compile-time proof obligations relating the \
+                     receiver's exit state to its entry state — see \
+                     docs/design/rfc-properties.md); not on {context}. Runtime \
+                     postconditions remain rejected by design \
+                     (docs/design/contracts.md)"
+                ),
+                c.span,
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Validate that all contract expressions in the program are within the decidable fragment.
 /// Called after parsing, before typeck.
 pub fn validate_contracts(program: &Program) -> Result<(), CompileError> {
@@ -48,24 +72,31 @@ pub fn validate_contracts(program: &Program) -> Result<(), CompileError> {
             }
         }
     }
+    // Context rejections run before fragment validation so an `ensures` in
+    // an unsupported position reports its real problem, not an incidental
+    // fragment violation inside the clause.
     for func in &program.functions {
+        reject_ensures(&func.node.contracts, "free functions")?;
         validate_contract_list(&func.node.contracts)?;
         reject_state_where(&func.node.contracts, "free functions")?;
     }
     if let Some(app) = &program.app {
         for method in &app.node.methods {
+            reject_ensures(&method.node.contracts, "app methods")?;
             validate_contract_list(&method.node.contracts)?;
             reject_state_where(&method.node.contracts, "app methods")?;
         }
     }
     for stage in &program.stages {
         for method in &stage.node.methods {
+            reject_ensures(&method.node.contracts, "stage methods")?;
             validate_contract_list(&method.node.contracts)?;
             reject_state_where(&method.node.contracts, "stage methods")?;
         }
     }
     for tr in &program.traits {
         for method in &tr.node.methods {
+            reject_ensures(&method.contracts, "trait methods")?;
             validate_contract_list(&method.contracts)?;
             reject_state_where(&method.contracts, "trait methods")?;
         }
@@ -134,8 +165,33 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
             }
         }
 
-        // Function calls — rejected
+        // Function calls — rejected, except the `old(...)` intrinsic inside
+        // two-state-capable clauses (ensures and invariant), where it denotes
+        // the entry/pre-state value of its argument.
         Expr::Call { name, .. } => {
+            if let Some(inner) = old_call_arg(expr) {
+                return match kind {
+                    ContractKind::Ensures | ContractKind::Invariant => {
+                        if expr_contains_old(&inner.node) {
+                            Err(CompileError::syntax(
+                                "nested 'old(...)' is not allowed: 'old' already denotes the \
+                                 entry-state value of its whole argument"
+                                    .to_string(),
+                                inner.span,
+                            ))
+                        } else {
+                            validate_decidable_fragment(&inner.node, inner.span, kind)
+                        }
+                    }
+                    _ => Err(CompileError::syntax(
+                        "'old(...)' is only meaningful in 'ensures' and 'invariant' clauses \
+                         (it denotes the value of its argument in the pre-state); a 'requires' \
+                         clause is already evaluated in the entry state"
+                            .to_string(),
+                        span,
+                    )),
+                };
+            }
             Err(CompileError::syntax(
                 format!("function call '{}()' is not allowed in contract expressions", name.node),
                 span,
