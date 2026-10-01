@@ -40,6 +40,8 @@ fs.open_write(path: string) File      // creates or truncates; raises FileError
 fs.open_append(path: string) File     // raises FileError
 ```
 
+`File` is an **object** — an entity, not a value. It owns an OS file descriptor and a cursor, so copying one would mean a shared offset and a double close. As an entity it compares by identity, is *shared* (not deep-copied) when it crosses a `spawn`, and its methods are serialized per instance — two tasks using the same `File` cannot interleave mid-operation. See [Objects and Entities](../whats-different/objects.md).
+
 ### File Methods
 
 ```

@@ -24,7 +24,7 @@ class OrderService[validator: OrderValidator] {
 
     fn process(self, id: string, amount: int) string {
         self.validator.validate(amount)!
-        return "Order {id} processed for {amount}"
+        return f"Order {id} processed for {amount}"
     }
 }
 
@@ -39,10 +39,10 @@ app OrderSystem[svc: OrderService] {
 }
 ```
 
-Save this as `main.pluto` and run it:
+Save this as `main.pt` and run it:
 
 ```
-$ pluto run main.pluto
+$ pluto run main.pt
 Order ORD-1 processed for 100
 ```
 
@@ -78,14 +78,14 @@ class OrderService[validator: OrderValidator] {
 
     fn process(self, id: string, amount: int) string {
         self.validator.validate(amount)!
-        return "Order {id} processed for {amount}"
+        return f"Order {id} processed for {amount}"
     }
 }
 ```
 
 **Error propagation with `!`.** The `!` after `self.validator.validate(amount)` means: if this call raises an error, propagate it to my caller. The compiler knows that `validate` can raise `OrderError` (it inferred this), and it knows that `process` now can too (it inferred this as well). The `!` is the only annotation you write, and it is an explicit decision to propagate rather than handle.
 
-**String interpolation.** `"Order {id} processed for {amount}"` embeds expressions directly in the string. Any expression works inside the braces.
+**String interpolation.** `f"Order {id} processed for {amount}"` embeds expressions directly in the string. Any expression works inside the braces — but only in f-strings. A plain `"{id}"` is literal text; interpolation requires the `f` prefix.
 
 **The app declaration.** `app OrderSystem[svc: OrderService]` is the root of the program. It declares its dependencies in brackets, just like a class. The compiler builds the full dependency graph -- `OrderSystem` needs `OrderService`, which needs `OrderValidator` -- performs a topological sort, allocates everything, wires it together, and calls `main`.
 
@@ -188,7 +188,7 @@ No container. No reflection. No service locator. Just allocation and wiring, all
 - `OrderService.process` calls `validate!` → propagates errors → inferred as fallible, error set = `{OrderError}`
 - `OrderSystem.main` calls `process` with `catch` → handles errors → inferred as non-fallible
 
-The compiler enforced that every fallible call site has either `!` (propagate) or `catch` (handle). If you removed the `!` from line 24 or the `catch` from line 31, compilation would fail with: `error: unhandled fallible call to 'validate'`.
+The compiler enforced that every fallible call site has either `!` (propagate) or `catch` (handle). If you removed the `!` from the `validate` call, compilation would fail with: `error: call to fallible method 'validate' must be handled with ! or catch`.
 
 **Dead code elimination:** If you added a `BillingService` class but never referenced it in `OrderSystem`'s dependencies, it wouldn't be in the final binary. The compiler only allocates and wires what you actually use.
 

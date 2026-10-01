@@ -15,8 +15,10 @@
 - [Dependency Injection](whats-different/di.md)
 - [The App Model](whats-different/app.md)
 - [Concurrency](whats-different/concurrency.md)
+- [Objects and Entities](whats-different/objects.md)
+- [Typestates](whats-different/typestates.md)
 - [Contracts](whats-different/contracts.md)
-- [Stages: Distributed as Programs](whats-different/stages.md)
+- [Distribution: Placement, Domains, and Stages](whats-different/stages.md)
 
 # The Language
 
@@ -31,6 +33,7 @@
 # The Vision
 
 - [AI-Native Development](vision.md)
+- [Verified Distribution](vision/verified-distribution.md)
 
 # Standard Library
 

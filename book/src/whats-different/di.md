@@ -238,8 +238,6 @@ A singleton class explicitly depending on a scoped class is a compile error -- t
 
 ## Scope Blocks
 
-> **Status: Designed.** Scope block syntax is parsed but runtime behavior is not yet fully implemented.
-
 Scoped instances are created inside `scope` blocks:
 
 ```

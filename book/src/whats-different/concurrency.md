@@ -2,7 +2,7 @@
 
 Go popularized the idea that concurrency should be cheap and communication should use channels. Rust proved that compile-time analysis can eliminate data races. Java continues to evolve threading models with virtual threads and structured concurrency APIs. Each made a different tradeoff between safety, ergonomics, and performance.
 
-Pluto takes a different position: **you write normal classes, and the compiler figures out what needs synchronization.** Tasks give you lightweight concurrency. Channels give you communication. And for shared state -- DI singletons accessed from concurrent contexts -- the compiler infers reader/writer locks from `self` vs `mut self` method signatures. No `sync.Mutex`, no `Arc<RwLock<T>>`, no `synchronized` blocks.
+Pluto takes a different position: **you write normal classes, and the compiler figures out what needs synchronization.** Tasks give you lightweight concurrency. Channels give you communication. Spawn arguments are deep-copied, so tasks cannot race on values. For shared state there are two mechanisms: DI singletons get compiler-inferred reader/writer locks from `self` vs `mut self` method signatures, and [objects](objects.md) — entities — are shared by construct with serialized methods. No `sync.Mutex`, no `Arc<RwLock<T>>`, no `synchronized` blocks.
 
 ## Tasks
 
@@ -40,7 +40,7 @@ fn fetch(url: string) string {
     if url == "" {
         raise NetworkError { message: "empty url" }
     }
-    return "response from {url}"
+    return f"response from {url}"
 }
 
 fn main() {
@@ -142,15 +142,13 @@ select {
 
 ## Inferred Synchronization
 
-> **Status: Designed.** The inferred synchronization model is fully designed but not yet implemented. Today, shared mutable state across tasks is the programmer's responsibility.
-
 Tasks and channels handle most concurrency needs. But real backend systems also need shared state: a session cache, a rate limiter, configuration that updates at runtime.
 
 Go solves this with `sync.Mutex` and discipline. Rust solves it with `Arc<RwLock<T>>`. Java solves it with `synchronized`. Pluto's approach: the compiler already knows everything it needs to solve this automatically.
 
 ### The Motivating Example
 
-A service registry that syncs with discovery and serves lookups to concurrent handlers:
+A service registry that syncs with discovery and serves lookups to concurrent handlers (a sketch — `DiscoveryClient` and `RequestHandler` left to the imagination):
 
 ```
 class ServiceRegistry[discovery: DiscoveryClient] {
@@ -168,7 +166,7 @@ class ServiceRegistry[discovery: DiscoveryClient] {
     fn start_sync(mut self) {
         while true {
             self.refresh() catch err {
-                print("sync failed: {err}")
+                print("sync failed")
             }
             sleep(30000)
         }
@@ -203,60 +201,63 @@ Compare what you write in Go -- `sync.RWMutex` field, `RLock()`/`RUnlock()` in e
 
 ### Channels vs Shared State
 
-| | Channels | DI Singletons (auto-synchronized) |
-|---|---------|----------------------------------|
-| **Model** | Message passing | Shared memory with auto-locking |
-| **Best for** | Pipelines, streaming, producer-consumer | Caches, config, counters, registries |
+| | Channels | DI Singletons (auto-synchronized) | Objects (entities) |
+|---|---------|----------------------------------|--------------------|
+| **Model** | Message passing | Shared memory with inferred locks | Shared identity, serialized methods |
+| **Best for** | Pipelines, streaming, producer-consumer | Caches, config, registries wired by DI | Anything that *is* one thing: resources, services, shared counters |
 
-Use channels when data flows in one direction. Use DI singletons when multiple tasks need to read and occasionally write the same shared state.
+Use channels when data flows in one direction. Use DI singletons when wiring provides the shared state. Use an [object](objects.md) when the sharing is the point — the entity is one thing, every task talks to the same one, and serialization is guaranteed by the construct rather than inferred from usage.
 
 ### Copy on Spawn
 
-> **Status: Designed.** Not yet implemented.
-
-When you `spawn func(args)`, every argument will be **deep-copied** into the spawned task. The task gets its own independent world:
+When you `spawn func(args)`, every argument is **deep-copied** into the spawned task. The task gets its own independent world:
 
 ```
-let data = [1, 2, 3]
+let mut data = [1, 2, 3]
 let task = spawn process(data)   // data is deep-copied
 data.push(4)                     // caller's copy, unaffected
-let result = task.get()!         // task worked on its own copy
+let result = task.get()          // task worked on its own copy
 ```
 
-This eliminates data races by construction. Exceptions: channels are shared by reference (that is the point), DI singletons are shared and auto-synchronized, and strings are pointer-copied because they are immutable.
+This eliminates data races on values by construction. The exceptions are the things that *mean* sharing:
+
+- **Objects are shared, never copied.** An [object](objects.md) is an entity — copying it would mint a second identity. Spawn hands the task the same entity, and sharing is safe because an entity's methods are serialized per instance. This applies recursively: deep-copying a class value shares any entity nested inside it.
+- **Channels are shared by reference** — that is the point of a channel.
+- **DI singletons are shared** and auto-synchronized (above).
+- **Strings are pointer-copied** because they are immutable.
 
 ### Structured Concurrency
 
-> **Status: Designed.** Not yet implemented.
-
-`Task<T>` will be must-use. A task handle must be consumed via `.get()` or `.detach()`. Dropping a handle is a compile error:
+`Task<T>` is must-use. A task handle must be consumed via `.get()`, `.detach()`, or assignment. Dropping a handle is a compile error:
 
 ```
-spawn work()                     // COMPILE ERROR: task handle dropped
+spawn work()                     // COMPILE ERROR: Task handle must be used
 
 let task = spawn fire_and_forget()
 task.detach()                    // OK: explicitly detached
 ```
 
-Cancellation is cooperative. `.cancel()` sets a flag; the task checks at I/O, channel operations, and explicit checkpoints:
+Cancellation is cooperative. `.cancel()` sets a flag; a task that is cancelled before producing a result raises the built-in `TaskCancelled` error from `.get()`:
 
 ```
 let task = spawn long_work()
 task.cancel()
-task.get() catch {
-    TaskCancelled => print("cancelled")
-}
+let result = task.get() catch -1    // TaskCancelled surfaces here if it won the race
 ```
+
+Cancellation races with completion — if the task finished first, `.get()` returns its result normally.
+
+> **The pattern in the wild.** Electronic trading runs this entire chapter by hand, at nanosecond stakes. Client order IDs are idempotency keys verbatim — the exchange dedups on them so a retried submit cannot double-fill. The cancel/fill race is the definite/ambiguous split every trader knows: "did my cancel win?" has three answers — cancelled, filled, *unknown yet* — and rounding the third to either of the others loses real money. Market data arrives sequence-numbered with gap-recovery protocols: monotone facts, safe to cache and share precisely because sequence numbers only grow. And every participant knows their market view is stale testimony by the time they act on it — the book moved while the packet flew. The constructs these desks enforce by convention are the subject of [Verified Distribution](../vision/verified-distribution.md).
 
 ## The Full Picture
 
 Pluto's concurrency model is layered:
 
-1. **`spawn` + `Task<T>`** -- lightweight concurrency with error propagation. Available today.
-2. **Channels** -- typed, directional communication between tasks. Available today.
-3. **Copy-on-spawn** (designed) -- deep-copy arguments to eliminate data races.
-4. **`mut self` enforcement** (designed) -- compiler distinguishes reads from writes.
-5. **Inferred synchronization** (designed) -- compiler auto-wraps DI singletons with locks.
-6. **Distributed replication** (future) -- same `mut self` distinction extends to cross-pod state.
+1. **`spawn` + `Task<T>`** -- lightweight concurrency with error propagation, must-use handles, detach, and cooperative cancel.
+2. **Channels** -- typed, directional communication between tasks.
+3. **Copy-on-spawn** -- arguments deep-copied; data races on values are impossible by construction.
+4. **Inferred synchronization** -- the compiler auto-wraps concurrently-reachable DI singletons: reader locks on `self` methods, writer locks on `mut self`.
+5. **Objects** -- entities shared across tasks with per-instance serialized methods, by construct. See [Objects and Entities](objects.md).
+6. **Distributed replication** (future) -- the same `mut self` distinction extends to cross-pod state.
 
 The goal is that adding concurrency to a Pluto program never requires restructuring your code. You do not wrap types in `Arc<Mutex<T>>`, you do not add `synchronized` blocks, you do not sprinkle `sync.RWMutex` fields into structs. You mark which methods mutate with `mut self`, and the compiler handles the rest.

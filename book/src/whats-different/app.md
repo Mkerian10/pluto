@@ -134,8 +134,6 @@ Overrides can shorten a lifecycle (singleton to scoped) but not lengthen it (sco
 
 ## Project Kinds
 
-> **Status: Partially implemented.** Today, the compiler supports `app` programs (with DI) and plain programs with a `fn main()`. The script and system kinds described below are designed but not yet implemented.
-
 Not every Pluto program needs an `app`. The compiler supports several project kinds:
 
 | Kind | Contains | Entry Point | DI? | Status |
@@ -143,16 +141,17 @@ Not every Pluto program needs an `app`. The compiler supports several project ki
 | **Plain program** | Declarations + `fn main()` | `fn main()` | No | Implemented |
 | **App** | Declarations + `app` | `app.main(self)` | Yes | Implemented |
 | **Library** | Declarations only | None | No | Implemented |
+| **Stage** | Declarations + `stage` | `stage.main(self)` | Yes | Implemented |
+| **System** | Module composition | One binary per member | Yes | Implemented |
 | **Script** | Declarations + top-level statements | Auto-generated `main()` | No | Designed |
-| **System** | Stage composition | Orchestration entry | Yes | Designed |
 
 A **plain program** has a `fn main()` function as its entry point. No DI, no ceremony.
 
 A **library** is declarations only -- functions, classes, traits, enums. Libraries are imported by other programs and cannot have entry points.
 
-A **script** (future) would support top-level statements that execute in order, with the compiler wrapping them in a synthetic `main()`.
+A **system** composes multiple modules into a distributed application, checked as one program and compiled to one binary per member. See the [Distribution chapter](stages.md).
 
-A **system** (future) composes multiple stages into a distributed application. See the stages section below.
+A **script** (future) would support top-level statements that execute in order, with the compiler wrapping them in a synthetic `main()`.
 
 ## The Three-Layer Model
 
@@ -168,11 +167,11 @@ Pluto programs are organized around three layers, each addressing a different co
 
 **Layer 2: Stages** define how a program runs. They wire together the classes that do the actual work. The critical constraint: stages have DI but no fields. They cannot hold state. All state lives in the injected classes. This prevents stages from becoming god objects.
 
-**Layer 3: System** (future) defines the topology of a distributed application -- which stages exist, how they communicate, where they deploy.
+**Layer 3: System** defines the topology of a distributed application -- which members exist and how they relate. `system` declarations are implemented: the compiler checks members against each other and emits one binary per member (see the [Distribution chapter](stages.md)). Where members physically deploy remains configuration, not code.
 
 ## Stages: Programmable Entry Points
 
-> **Status: Designed.** Stages are fully designed but not yet implemented. Today, `app` is the only entry point kind. The design below represents the planned direction.
+> **Status: Partially implemented.** `stage` declarations work today: `requires fn` lifecycle templates, inheritance (`stage Worker : Daemon`), `override`, and DI bracket deps merged across levels. Still planned: `App` as a stdlib-defined stage template, and instantiating a stage by its lowercased name (`http_server UserApi { ... }`). Examples below that use lowercased instantiation show the planned direction.
 
 The `app` you have seen so far is actually the simplest stage. In the planned design, `App` is defined in the standard library:
 

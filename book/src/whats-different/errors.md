@@ -106,7 +106,7 @@ fn main() {
 
 ## Handling Errors with `catch`
 
-The `catch` keyword handles errors at the call site. There are two forms.
+The `catch` keyword handles errors at the call site. There are three forms.
 
 **Shorthand catch** provides a default value:
 
@@ -135,6 +135,38 @@ let result = find_user(-1) catch err {
 }
 ```
 
+**Typed catch** handles specific error types, with coverage checking. Chain typed handlers, and finish with a wildcard (or `!`) for anything not named:
+
+```
+error NotFound {
+    id: int
+}
+
+error Timeout {}
+
+fn lookup(id: int) int {
+    if id < 0 {
+        raise NotFound { id: id }
+    }
+    if id > 1000 {
+        raise Timeout {}
+    }
+    return id * 2
+}
+
+fn main() {
+    let v = lookup(-1) catch err: NotFound {
+        print(f"missing id {err.id}")
+        0
+    } catch err {
+        -1
+    }
+    print(v)
+}
+```
+
+Inside a typed handler, the error binding has that error's type — its fields are directly accessible. The compiler checks coverage against the call's error set: name every variant and no wildcard is needed; leave one unnamed without a fallback and compilation fails.
+
 ## The Compiler Enforces Handling
 
 This is the part that matters most. In Pluto, **you cannot call a fallible function without handling the error**. It is a compile error:
@@ -156,6 +188,65 @@ fn main() {
     let x = safe() catch 0    // COMPILE ERROR: safe() is infallible
 }
 ```
+
+## Proofs Shrink Error Sets
+
+Error inference is not just per-function — it is sensitive to what the compiler can *prove* at each call site. If your guard makes a callee's `raise` impossible, the handling obligation disappears at that site:
+
+```
+error Insufficient {
+    needed: int
+}
+
+class Account {
+    balance: int
+
+    fn withdraw(mut self, amt: int)
+        requires amt > 0
+    {
+        if amt > self.balance {
+            raise Insufficient { needed: amt }
+        }
+        self.balance = self.balance - amt
+    }
+}
+
+fn main() {
+    let mut account = Account { balance: 100 }
+    let amt = 30
+    if amt <= account.balance {
+        account.withdraw(amt)        // no ! — Insufficient is proven impossible here
+        print(account.balance)       // 70
+    }
+}
+```
+
+`withdraw` is fallible — but at this call site, the caller's guard (`amt <= account.balance`) refutes the raise's condition (`amt > self.balance`), so `Insufficient` vanishes from the site's required-handling set. The same call without the guard is the usual compile error:
+
+```
+account.withdraw(30)
+// COMPILE ERROR: call to fallible method 'withdraw' must be handled with ! or catch
+```
+
+Contracts stop being documentation and start removing handling obligations: facts flow in through guards and `requires`, and the visible payoff is code that gets *simpler* as it gets more proven.
+
+**What shrinks.** The shipped analysis is deliberately conservative — soundness is absolute, because a wrongly-dropped variant would be an unhandled runtime error. A variant shrinks only when:
+
+- the `raise` is **direct** in the callee's body, with a dominating guard over the callee's parameters and the receiver's direct int fields, still holding their entry values when the guard is evaluated;
+- the call is **direct** — a named non-generic function or a method resolved on a concrete class.
+
+**What never shrinks.** Variants that arrive via propagation (`!` edges), closures, fn-typed values, trait dispatch, generic callees, channel operations, and remote boundaries are untouched. And the caller's facts must still be alive at the call: a reassignment, a field write, or an interleaved call that could mutate the receiver kills the guard, and the obligation comes back —
+
+```
+if amt <= account.balance {
+    account.withdraw(90) catch err {   // this call may change balance...
+        print(0)
+    }
+    account.withdraw(amt)              // COMPILE ERROR: guard no longer trusted
+}
+```
+
+Shrinking narrows individual call sites only. The callee's canonical error set — and therefore what `!` propagates — never changes, and handling a provably-impossible error stays legal: a `catch` on a shrunk-to-empty site still compiles, so defensive handlers survive refactors that make them unnecessary.
 
 ## Method Error Handling
 
