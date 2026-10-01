@@ -10,6 +10,7 @@ mod check;
 mod closures;
 pub(crate) mod errors;
 mod linearity;
+pub(crate) mod shrink;
 mod templates;
 
 // Re-exports for external use
@@ -129,6 +130,11 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // transients) zero-initializes non-dep fields without a struct literal;
     // the invariants must hold for that initial state.
     discharge::check_di_constructions(program, &env)?;
+    // Error-set shrinking (verification RFC phase 3): summarize each direct
+    // raise's dominating guard before any body is checked, so call sites —
+    // visited in program order — can evaluate callee guards against the
+    // caller's live flow facts.
+    shrink::extract_raise_summaries(program, &mut env);
     register::check_all_bodies(program, &mut env)?;
     templates::check_generic_templates(program, &mut env)?;
     check::enforce_mut_self(program, &env)?;
