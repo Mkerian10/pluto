@@ -140,6 +140,10 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // field's `guarded_by` before body checking; the write-site dominance
     // pass runs after bodies are checked (it needs method resolutions).
     dominance::register_guards(program, &mut env)?;
+    // Ensures postconditions (rfc-properties.md atom 1): validate and
+    // register before body checking, so every method exit carries its proof
+    // obligation and every caller can assume the relation.
+    discharge::register_ensures(program, &mut env)?;
     // DI-synthesized construction (startup singletons, per-injection
     // transients) zero-initializes non-dep fields without a struct literal;
     // the invariants must hold for that initial state.

@@ -716,6 +716,18 @@ pub(crate) fn to_affine(expr: &Expr, env: &TypeEnv) -> Option<Affine> {
     to_affine_with(expr, &|e| fact_term(e, env).map(Affine::term))
 }
 
+/// Difference `l - r` of two affine forms (`None` on overflow).
+pub(crate) fn diff_affine(l: &Affine, r: &Affine) -> Option<Affine> {
+    l.clone().checked_add(&r.clone().checked_neg()?)
+}
+
+/// `a + k`, with checked arithmetic (`None` on overflow).
+pub(crate) fn affine_add_const(a: &Affine, k: i128) -> Option<Affine> {
+    let mut out = a.clone();
+    out.k = out.k.checked_add(k)?;
+    Some(out)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Bounding
 // ─────────────────────────────────────────────────────────────────────────────
@@ -835,7 +847,7 @@ pub(crate) fn affine_bounds(a: &Affine, facts: &FactEnv) -> Result<(Option<i128>
 // Condition evaluation (the `implies` API)
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn is_comparison(op: BinOp) -> bool {
+pub(crate) fn is_comparison(op: BinOp) -> bool {
     matches!(
         op,
         BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq | BinOp::Eq | BinOp::Neq
@@ -1103,7 +1115,7 @@ fn lower_to_interval(l: i128) -> Interval {
 ///   rounding (strict comparisons are first normalized to non-strict).
 /// - Pure difference `x - y` (coefficients +1/-1, no constant): a relation
 ///   fact. Constant offsets between two paths are out of scope for phase 1.
-fn facts_from_diff(op: BinOp, d: &Affine) -> Vec<Fact> {
+pub(crate) fn facts_from_diff(op: BinOp, d: &Affine) -> Vec<Fact> {
     // Single-variable interval facts.
     if d.terms.len() == 1 {
         let (path, &c) = d.terms.iter().next().expect("len checked");

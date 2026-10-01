@@ -133,8 +133,10 @@ fn check_function_body(func: &Function, env: &mut TypeEnv, class_name: Option<&s
     // Check body
     check_block(&func.body.node, env, &effective_return)?;
 
-    // Invariant discharge: the invariant must hold at the fall-through exit.
-    super::discharge::function_exit(env, func.body.span)?;
+    // Invariant discharge: the invariant must hold at the fall-through exit,
+    // and (when that exit is reachable) the ensures postconditions too.
+    let fall_through = !all_paths_return(&func.body.node);
+    super::discharge::function_exit(env, func.body.span, fall_through)?;
 
     // Verify non-void functions have a return or raise on every control flow path.
     if !matches!(effective_return, PlutoType::Void) && !all_paths_return(&func.body.node) {
@@ -460,6 +462,11 @@ fn check_stmt(
                 then_terminates,
                 then_block.span,
             )?;
+            // Surviving branch end-states, for the symbolic join below.
+            let mut surviving: Vec<super::discharge::SymSnapshot> = Vec::new();
+            if !then_terminates {
+                surviving.extend(super::discharge::branch_snapshot(env));
+            }
             env.pop_scope();
             let mut else_changed = false;
             if let Some(else_blk) = else_block {
@@ -485,7 +492,13 @@ fn check_stmt(
                     else_terminates,
                     else_blk.span,
                 )?;
+                if !else_terminates {
+                    surviving.extend(super::discharge::branch_snapshot(env));
+                }
                 env.pop_scope();
+            } else {
+                // Implicit fall-through path: the pre-branch state survives.
+                surviving.extend(disc_snap.clone());
             }
             // Merge the symbolic field state across the branches.
             let any_surviving_changed = then_changed || else_changed;
@@ -495,6 +508,7 @@ fn check_stmt(
             super::discharge::branch_join(
                 env,
                 disc_snap,
+                surviving,
                 any_surviving_changed,
                 unchanged_survivor,
                 span,
@@ -1334,6 +1348,7 @@ fn check_match_stmt(
     let disc_snap = super::discharge::branch_snapshot(env);
     let mut any_surviving_changed = false;
     let mut unchanged_survivor = false;
+    let mut surviving: Vec<super::discharge::SymSnapshot> = Vec::new();
     for arm in arms {
         let (enum_name_sp, variant_name_sp, bindings) = match &arm.pattern {
             MatchPattern::Wildcard { span: wspan } => {
@@ -1350,6 +1365,9 @@ fn check_match_stmt(
                 check_block(&arm.body.node, env, return_type)?;
                 let changed =
                     super::discharge::branch_end(env, &disc_snap, terminates, arm.body.span)?;
+                if !terminates {
+                    surviving.extend(super::discharge::branch_snapshot(env));
+                }
                 env.pop_scope();
                 if changed {
                     any_surviving_changed = true;
@@ -1424,6 +1442,9 @@ fn check_match_stmt(
         }
         check_block(&arm.body.node, env, return_type)?;
         let changed = super::discharge::branch_end(env, &disc_snap, terminates, arm.body.span)?;
+        if !terminates {
+            surviving.extend(super::discharge::branch_snapshot(env));
+        }
         env.pop_scope();
         if changed {
             any_surviving_changed = true;
@@ -1431,7 +1452,7 @@ fn check_match_stmt(
             unchanged_survivor = true;
         }
     }
-    super::discharge::branch_join(env, disc_snap, any_surviving_changed, unchanged_survivor, span)?;
+    super::discharge::branch_join(env, disc_snap, surviving, any_surviving_changed, unchanged_survivor, span)?;
     // Exhaustiveness check: a wildcard arm covers every remaining variant
     if wildcard_span.is_none() {
         for (variant_name, _) in &enum_info.variants {
