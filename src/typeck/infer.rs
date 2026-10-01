@@ -93,7 +93,7 @@ pub(crate) fn infer_expr(
                         arg.span,
                     ));
                 }
-                if !is_top_level_entity && !super::types::wire_supported(&arg_ty) {
+                if !is_top_level_entity && !super::types::wire_transferable(&arg_ty, env) {
                     return Err(CompileError::type_err(
                         format!(
                             "value of type {arg_ty} cannot enter domain '{cname}': \
@@ -121,7 +121,7 @@ pub(crate) fn infer_expr(
                     method.span,
                 ));
             }
-            if !ret_is_entity && sig.return_type != PlutoType::Void && !super::types::wire_supported(&sig.return_type) {
+            if !ret_is_entity && sig.return_type != PlutoType::Void && !super::types::wire_transferable(&sig.return_type, env) {
                 return Err(CompileError::type_err(
                     format!(
                         "value of type {} cannot leave domain '{cname}': \

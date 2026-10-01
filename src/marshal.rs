@@ -8,6 +8,7 @@ use crate::parser::ast::{
 };
 use crate::span::{Span, Spanned};
 use crate::typeck::env::TypeEnv;
+use crate::typeck::types::PlutoType;
 
 /// Generate marshal/unmarshal functions for types crossing stage boundaries.
 ///
@@ -91,6 +92,11 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
                     Ok((instantiated_class, marshal_fn, unmarshal_fn)) => {
                         generated_functions.push(marshal_fn);
                         generated_functions.push(unmarshal_fn);
+                        // Wire wrappers, as for non-generic classes below:
+                        // entity placement and RPC codegen reference
+                        // __wire_encode_/__wire_decode_ for instantiations too.
+                        generated_functions.push(generate_wire_encode(type_name));
+                        generated_functions.push(generate_wire_decode(type_name));
                         // Add instantiated class to program so type checking knows about Box$$int
                         instantiated_classes.push(Spanned {
                             node: instantiated_class,
@@ -116,6 +122,8 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
                     Ok((instantiated_enum, marshal_fn, unmarshal_fn)) => {
                         generated_functions.push(marshal_fn);
                         generated_functions.push(unmarshal_fn);
+                        generated_functions.push(generate_wire_encode(type_name));
+                        generated_functions.push(generate_wire_decode(type_name));
                         // Add instantiated enum to program so type checking knows about Result__int
                         instantiated_enums.push(Spanned {
                             node: instantiated_enum,
@@ -194,14 +202,25 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
 
 /// Phase B: Generate marshalers for generic instantiations after monomorphize.
 ///
-/// After monomorphization creates concrete types (Box__int, Pair__string_float),
-/// generates marshal/unmarshal functions for each instantiation.
-/// These skip typeck (their types are known to be correct).
+/// After monomorphization creates concrete types (Box$$int, Pair$$string$float),
+/// generates marshal/unmarshal functions (and `__wire_encode_/__wire_decode_`
+/// wrappers) for each instantiation that phase A couldn't produce — phase A
+/// only sees instantiations spelled out in signatures (`Box<int>`), while
+/// instantiations minted by monomorphization itself (a generic object's
+/// `Box<T>` param at `Vault<int>`) only exist now. These skip typeck (their
+/// types are known to be correct).
 pub fn generate_marshalers_phase_b(
     program: &mut Program,
-    _env: &TypeEnv,
+    env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    if program.stages.is_empty() {
+    // Post-monomorphize, every surviving object declaration is concrete, so
+    // the entity collector now sees the per-instantiation method signatures
+    // (`publish(b: Box$$int)`) that were only symbolic in phase A.
+    let entity_sig_types = collect_entity_signature_types(program);
+    if program.stages.is_empty()
+        && collect_rpc_interface_classes(program).is_empty()
+        && entity_sig_types.is_empty()
+    {
         return Ok(());
     }
 
@@ -214,42 +233,121 @@ pub fn generate_marshalers_phase_b(
         return Ok(());
     }
 
-    // Collect types from stage methods (now includes monomorphized names like Box$$int)
-    let types_to_marshal = collect_types_from_stage_methods(program)?;
+    // Stage/RPC-seeded types are required (generation failures are compile
+    // errors); entity-seeded types are best-effort, as in phase A.
+    let required_types = collect_types_from_stage_methods(program)?;
+    let mut types_to_marshal = required_types.clone();
+    types_to_marshal.extend(entity_sig_types);
+
+    let existing: HashSet<String> = program
+        .functions
+        .iter()
+        .map(|f| f.node.name.node.clone())
+        .collect();
 
     let mut generated_functions = Vec::new();
 
     for type_name in &types_to_marshal {
-        // Check if it's a monomorphized type (contains $$) that doesn't have a marshaler yet
-        if type_name.contains("$$") {
-            // Convert $$ to __ in function name for valid identifier syntax
-            let marshal_fn_name = format!("__marshal_{}", type_name.replace("$$", "__"));
-            let has_marshal = program.functions.iter()
-                .any(|f| f.node.name.node == marshal_fn_name);
+        let best_effort = !required_types.contains(type_name);
+        let sanitized = type_name.replace("$$", "__");
+        let has_marshal = existing.contains(&format!("__marshal_{sanitized}"));
+        let has_wrappers = existing.contains(&format!("__wire_encode_{sanitized}"));
+        if has_marshal && has_wrappers {
+            continue; // Phase A covered this type
+        }
 
-            if has_marshal {
-                continue; // Already generated
-            }
+        // Find the concrete declaration (monomorphize adds instantiated
+        // classes/enums under their mangled names and removes templates).
+        // No declaration (primitives filtered upstream, traits, builtins)
+        // means nothing to generate.
+        let class_decl = program
+            .classes
+            .iter()
+            .find(|c| &c.node.name.node == type_name && c.node.type_params.is_empty());
+        let enum_decl = program
+            .enums
+            .iter()
+            .find(|e| &e.node.name.node == type_name && e.node.type_params.is_empty());
+        let value_ty = if class_decl.is_some() {
+            PlutoType::Class(type_name.clone())
+        } else if enum_decl.is_some() {
+            PlutoType::Enum(type_name.clone())
+        } else {
+            continue;
+        };
 
-            // Look for the class in program.classes (monomorphize adds concrete classes)
-            if let Some(class_decl) = program.classes.iter().find(|c| &c.node.name.node == type_name) {
-                generated_functions.push(generate_marshal_class(&class_decl.node)?);
-                generated_functions.push(generate_unmarshal_class(&class_decl.node)?);
-                continue;
+        let generated = (|| -> Result<Vec<Spanned<Function>>, CompileError> {
+            let mut fns = Vec::new();
+            if !has_marshal {
+                if let Some(cd) = class_decl {
+                    fns.push(generate_marshal_class(&cd.node)?);
+                    fns.push(generate_unmarshal_class(&cd.node)?);
+                } else if let Some(ed) = enum_decl {
+                    fns.push(generate_marshal_enum(&ed.node)?);
+                    fns.push(generate_unmarshal_enum(&ed.node)?);
+                }
             }
-
-            // Look for the enum in program.enums (monomorphize adds concrete enums)
-            if let Some(enum_decl) = program.enums.iter().find(|e| &e.node.name.node == type_name) {
-                generated_functions.push(generate_marshal_enum(&enum_decl.node)?);
-                generated_functions.push(generate_unmarshal_enum(&enum_decl.node)?);
-                continue;
+            if !has_wrappers {
+                fns.push(generate_wire_encode(type_name));
+                fns.push(generate_wire_decode(type_name));
             }
+            Ok(fns)
+        })();
+        match generated {
+            Ok(fns) => {
+                // Phase B functions skip typeck, which is what registers
+                // phase A's signatures — register them here so codegen sees
+                // them (implicit void returns, propagate default-return
+                // typing, call-result inference).
+                for f in &fns {
+                    env.functions.insert(
+                        f.node.name.node.clone(),
+                        phase_b_func_sig(&f.node.name.node, &sanitized, &value_ty),
+                    );
+                }
+                generated_functions.extend(fns);
+            }
+            Err(_) if best_effort => {}
+            Err(e) => return Err(e),
         }
     }
 
     program.functions.extend(generated_functions);
 
     Ok(())
+}
+
+/// The TypeEnv signature for a phase-B generated function, by name shape.
+fn phase_b_func_sig(
+    fn_name: &str,
+    sanitized: &str,
+    value_ty: &PlutoType,
+) -> crate::typeck::env::FuncSig {
+    use crate::typeck::env::FuncSig;
+    let enc_ty = PlutoType::Class("wire.WireValueEncoder".to_string());
+    let dec_ty = PlutoType::Class("wire.WireValueDecoder".to_string());
+    if fn_name == format!("__marshal_{sanitized}") {
+        FuncSig {
+            params: vec![value_ty.clone(), enc_ty],
+            return_type: PlutoType::Void,
+        }
+    } else if fn_name == format!("__unmarshal_{sanitized}") {
+        FuncSig {
+            params: vec![dec_ty],
+            return_type: value_ty.clone(),
+        }
+    } else if fn_name == format!("__wire_encode_{sanitized}") {
+        FuncSig {
+            params: vec![value_ty.clone()],
+            return_type: PlutoType::String,
+        }
+    } else {
+        // __wire_decode_<sanitized>
+        FuncSig {
+            params: vec![PlutoType::String],
+            return_type: value_ty.clone(),
+        }
+    }
 }
 
 /// Collects all types that cross stage boundaries (stage pub method parameters and returns).
@@ -406,30 +504,42 @@ fn retain_non_object_touching(program: &Program, types: &mut HashSet<String>) {
     });
 }
 
-/// Types appearing in non-generic object (entity) method signatures. Entity
-/// placement — `at <entity> { method(args) }` — may route the call to the
-/// entity's home (rfc-objects.md phase 2 slice 2), so the values those
-/// methods exchange need wire codecs even when no stage/serve/domain
-/// boundary exists in the program. The entity types themselves never
-/// marshal (they cross as identity handles); marshaler generation for
-/// these seeds is best-effort — a signature type that cannot marshal is
-/// skipped, and if a program actually sends such a value across a
-/// boundary, typeck's transferability check reports the real error.
+/// Types appearing in object (entity) method signatures. Entity placement —
+/// `at <entity> { method(args) }` — may route the call to the entity's home
+/// (rfc-objects.md phase 2 slice 2), so the values those methods exchange
+/// need wire codecs even when no stage/serve/domain boundary exists in the
+/// program. The entity types themselves never marshal (they cross as
+/// identity handles); marshaler generation for these seeds is best-effort —
+/// a signature type that cannot marshal is skipped, and if a program
+/// actually sends such a value across a boundary, typeck's transferability
+/// check reports the real error.
+///
+/// Generic objects contribute too: signature types that don't mention the
+/// object's own type params (`fn put(self, d: Deposit)` on `Vault<T>`) are
+/// concrete and collected here in phase A. Types that DO mention a param
+/// (`Box<T>`) only exist per instantiation — phase B re-runs this collector
+/// after monomorphize, when every surviving object declaration is concrete.
 fn collect_entity_signature_types(program: &Program) -> HashSet<String> {
     let mut types = HashSet::new();
-    for class_decl in program
-        .classes
-        .iter()
-        .filter(|c| c.node.is_object && c.node.type_params.is_empty())
-    {
+    for class_decl in program.classes.iter().filter(|c| c.node.is_object) {
+        let own_params: HashSet<&str> = class_decl
+            .node
+            .type_params
+            .iter()
+            .map(|tp| tp.node.as_str())
+            .collect();
         for method in &class_decl.node.methods {
             for param in &method.node.params {
                 if param.name.node == "self" {
                     continue;
                 }
-                collect_types_from_type_expr(&param.ty.node, &mut types);
+                if !type_expr_mentions_params(&param.ty.node, &own_params) {
+                    collect_types_from_type_expr(&param.ty.node, &mut types);
+                }
             }
-            if let Some(ret_type) = &method.node.return_type {
+            if let Some(ret_type) = &method.node.return_type
+                && !type_expr_mentions_params(&ret_type.node, &own_params)
+            {
                 collect_types_from_type_expr(&ret_type.node, &mut types);
             }
         }
@@ -437,6 +547,30 @@ fn collect_entity_signature_types(program: &Program) -> HashSet<String> {
     expand_nested_types(program, &mut types);
     retain_non_object_touching(program, &mut types);
     types
+}
+
+/// Whether a type expression mentions any of the given type parameter names.
+fn type_expr_mentions_params(ty: &TypeExpr, params: &HashSet<&str>) -> bool {
+    if params.is_empty() {
+        return false;
+    }
+    match ty {
+        TypeExpr::Named(n) => params.contains(n.as_str()),
+        TypeExpr::Array(inner) | TypeExpr::Nullable(inner) | TypeExpr::Stream(inner) => {
+            type_expr_mentions_params(&inner.node, params)
+        }
+        TypeExpr::Generic { name, type_args } => {
+            params.contains(name.as_str())
+                || type_args
+                    .iter()
+                    .any(|a| type_expr_mentions_params(&a.node, params))
+        }
+        TypeExpr::Fn { params: ps, return_type, fallible: _ } => {
+            ps.iter().any(|p| type_expr_mentions_params(&p.node, params))
+                || type_expr_mentions_params(&return_type.node, params)
+        }
+        TypeExpr::Qualified { .. } | TypeExpr::Infer => false,
+    }
 }
 
 fn collect_types_from_stage_methods_inner(program: &Program) -> Result<HashSet<String>, CompileError> {
@@ -1974,8 +2108,15 @@ fn mk_encode_value_at(ty: &TypeExpr, value_expr: Expr, depth: usize) -> Result<V
         }
 
         _ => {
-            // Other types: Qualified, Fn, Stream
-            unimplemented!("Encoding for this type not yet implemented")
+            // Other types: Qualified, Fn, Stream. Must be an Err, not a
+            // panic: entity-seeded types are generated best-effort, and a
+            // signature type that cannot marshal (e.g. a class with a
+            // closure field) is skipped — if the program actually sends
+            // such a value across a boundary, the boundary check owns the
+            // error.
+            Err(CompileError::codegen(
+                "Encoding for this type not yet implemented",
+            ))
         }
     }
 }

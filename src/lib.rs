@@ -85,7 +85,7 @@ fn run_frontend(program: &mut Program, test_mode: bool) -> Result<FrontendResult
     let (mut env, warnings) = typeck::type_check(program)?;
     reflection::generate_type_info_impls(program, &env)?;
     monomorphize::monomorphize(program, &mut env)?;
-    marshal::generate_marshalers_phase_b(program, &env)?;
+    marshal::generate_marshalers_phase_b(program, &mut env)?;
     typeck::check_trait_conformance(program, &mut env)?;
     typeck::serializable::validate_serializable_types(program, &env)?;
     closures::lift_closures(program, &mut env)?;
