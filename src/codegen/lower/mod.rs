@@ -346,6 +346,26 @@ impl<'a> LowerContext<'a> {
         Ok(())
     }
 
+    /// Static requires discharge (contracts.md phase 6): resolve a direct
+    /// call to the callee's unchecked twin (`<callee>$nochk`) when typeck
+    /// proved every requires clause at this exact site. The twin only
+    /// exists when codegen's clause count matched typeck's, so a hit here
+    /// can never skip an unproven check; a miss (no twin, key mismatch,
+    /// unrecorded site) falls back to the checked symbol.
+    fn requires_elided_target(&self, callee: &str, name_span_start: usize) -> Option<FuncId> {
+        if self.env.proven_requires_sites.is_empty() {
+            return None;
+        }
+        let recorded = self
+            .env
+            .proven_requires_sites
+            .get(&(self.fn_display_name.clone(), name_span_start))?;
+        if recorded != callee {
+            return None;
+        }
+        self.func_ids.get(&format!("{callee}$nochk")).copied()
+    }
+
     // ── lower_stmt dispatch ──────────────────────────────────────────────
 
     fn lower_stmt(
@@ -3574,11 +3594,14 @@ impl<'a> LowerContext<'a> {
             });
         }
 
-        let func_id = self.func_ids.get(&name.node).ok_or_else(|| {
-            CompileError::codegen(format!("undefined function '{}'", name.node))
-        })?;
+        let func_id = match self.requires_elided_target(&name.node, name.span.start) {
+            Some(twin_id) => twin_id,
+            None => *self.func_ids.get(&name.node).ok_or_else(|| {
+                CompileError::codegen(format!("undefined function '{}'", name.node))
+            })?,
+        };
 
-        let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
 
         // Look up the function signature to check for trait params
         let param_types: Vec<PlutoType> = self.env.functions.get(&name.node)
@@ -4711,10 +4734,15 @@ impl<'a> LowerContext<'a> {
             }
 
             let mangled = mangle_method(&class_name, &method.node);
-            let func_id = self.func_ids.get(&mangled).ok_or_else(|| {
-                CompileError::codegen(format!("undefined method '{}'", method.node))
-            })?;
-            let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+            // Static requires discharge: a proven site calls the unchecked
+            // twin (lock/guard handling below keeps using `mangled`).
+            let func_id = match self.requires_elided_target(&mangled, method.span.start) {
+                Some(twin_id) => twin_id,
+                None => *self.func_ids.get(&mangled).ok_or_else(|| {
+                    CompileError::codegen(format!("undefined method '{}'", method.node))
+                })?,
+            };
+            let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
 
             // Look up the method signature to check parameter types
             let method_sig = self.env.functions.get(&mangled).cloned();

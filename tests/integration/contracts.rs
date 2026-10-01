@@ -1979,3 +1979,276 @@ fn main() {
     );
     assert_eq!(out.trim(), "10\n7");
 }
+
+// ── Static requires discharge at call sites (contracts.md phase 6) ───────────
+//
+// A direct call site whose requires clauses the caller's live flow facts
+// prove routes to the callee's unchecked twin (`<name>$nochk`); every other
+// site keeps the checked entry, so runtime behavior at unproven sites is
+// exactly as before. The twin's presence in the object's symbol table is the
+// observable surface for elision (a proven site can never fire its check).
+
+/// Does the compiled object contain the given symbol name?
+fn object_contains_symbol(source: &str, symbol: &str) -> bool {
+    let obj = pluto::compile_to_object(source).expect("program should compile");
+    obj.windows(symbol.len()).any(|w| w == symbol.as_bytes())
+}
+
+#[test]
+fn proven_requires_site_emits_unchecked_twin() {
+    assert!(object_contains_symbol(
+        r#"
+fn positive(x: int) int
+    requires x > 0
+{
+    return x * 2
+}
+
+fn main() {
+    let a = 5
+    if a > 0 {
+        print(positive(a))
+    }
+}
+"#,
+        "positive$nochk",
+    ));
+}
+
+#[test]
+fn unproven_requires_site_emits_no_twin() {
+    // `let a = 5` deliberately transfers no constant fact (binding_facts is
+    // narrow); without a guard the site is unproven and no twin exists —
+    // the only call target is the checked entry.
+    assert!(!object_contains_symbol(
+        r#"
+fn positive(x: int) int
+    requires x > 0
+{
+    return x * 2
+}
+
+fn main(a: int) {
+    print(positive(a))
+}
+"#,
+        "positive$nochk",
+    ));
+}
+
+#[test]
+fn generic_callee_requires_never_elides() {
+    assert!(!object_contains_symbol(
+        r#"
+fn pick<T>(v: T, n: int) T
+    requires n > 0
+{
+    return v
+}
+
+fn main() {
+    print(pick(7, 3))
+}
+"#,
+        "$nochk",
+    ));
+}
+
+#[test]
+fn requires_proven_site_runs_and_violating_site_still_aborts() {
+    // Same callee, two sites: the guarded one is proven (elided), the
+    // violating one keeps the runtime check and aborts exactly as before.
+    let (stdout, stderr, code) = compile_and_run_output(
+        r#"
+fn positive(x: int) int
+    requires x > 0
+{
+    return x * 2
+}
+
+fn main() {
+    let a = 5
+    if a > 0 {
+        print(positive(a))
+    }
+    print(positive(0 - 1))
+}
+"#,
+    );
+    assert_eq!(stdout.trim(), "10");
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+    assert!(stderr.contains("x > 0"), "stderr: {stderr}");
+}
+
+#[test]
+fn requires_facts_killed_by_interleaved_call_keep_runtime_check() {
+    // The guard proves `a.balance >= 50` before `drain` runs, but the
+    // interleaved call may mutate the receiver through its alias — the
+    // facts are dead at the `withdraw` site, the check is retained, and
+    // the actual (violated) state aborts at runtime.
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+class Account {
+    balance: int
+
+    fn withdraw(mut self, amt: int) int
+        requires self.balance >= amt
+    {
+        self.balance = self.balance - amt
+        return self.balance
+    }
+}
+
+fn drain(mut a: Account) {
+    a.balance = 0
+}
+
+fn main() {
+    let mut a = Account { balance: 100 }
+    if a.balance >= 50 {
+        drain(a)
+        print(a.withdraw(50))
+    }
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+    assert!(stderr.contains("self.balance >= amt"), "stderr: {stderr}");
+}
+
+#[test]
+fn requires_partial_conjunct_proof_keeps_runtime_check() {
+    // The guard proves `x > 0` but not `x < 100`: the site is unproven
+    // (all-or-nothing) and the retained check catches the violation.
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+fn bounded(x: int) int
+    requires x > 0
+    requires x < 100
+{
+    return x
+}
+
+fn main() {
+    let v = 200
+    if v > 0 {
+        print(bounded(v))
+    }
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+    assert!(stderr.contains("x < 100"), "stderr: {stderr}");
+}
+
+#[test]
+fn requires_proven_method_site_runs_correctly() {
+    let out = compile_and_run_stdout(
+        r#"
+class Account {
+    balance: int
+
+    fn withdraw(mut self, amt: int) int
+        requires self.balance >= amt
+        requires amt > 0
+    {
+        self.balance = self.balance - amt
+        return self.balance
+    }
+}
+
+fn main() {
+    let mut a = Account { balance: 100 }
+    if a.balance >= 10 {
+        print(a.withdraw(10))
+    }
+    print(a.balance)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "90\n90");
+}
+
+#[test]
+fn requires_fn_ref_call_keeps_checked_entry() {
+    // A function reference eta-expands into a wrapper whose call site was
+    // never proven: calls through the value hit the checked entry.
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+fn positive(x: int) int
+    requires x > 0
+{
+    return x * 2
+}
+
+fn apply(f: fn(int) int, v: int) int {
+    return f(v)
+}
+
+fn main() {
+    print(apply(positive, 0 - 3))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+}
+
+#[test]
+fn requires_trait_dispatch_keeps_checked_entry() {
+    // Dynamic dispatch goes through the vtable, which only ever holds the
+    // checked entry; the trait-propagated requires still aborts.
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+trait Sink {
+    fn put(mut self, n: int)
+        requires n > 0
+}
+
+class Box impl Sink {
+    total: int
+
+    fn put(mut self, n: int) {
+        self.total = self.total + n
+    }
+}
+
+fn feed(mut s: Sink, n: int) {
+    s.put(n)
+}
+
+fn main() {
+    let mut b = Box { total: 0 }
+    feed(b, 0 - 1)
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+}
+
+#[test]
+fn requires_recursive_proven_site_elides_and_runs() {
+    // The recursive site proves (`x > 0` implies `x - 1 >= 0`), so the twin
+    // calls itself; the top-level literal site proves too.
+    let out = compile_and_run_stdout(
+        r#"
+fn count_down(x: int) int
+    requires x >= 0
+{
+    if x > 0 {
+        return count_down(x - 1)
+    }
+    return x
+}
+
+fn main() {
+    print(count_down(3))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "0");
+}

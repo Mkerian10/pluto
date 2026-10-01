@@ -225,6 +225,16 @@ pub struct TypeEnv {
     /// site). Recorded during body checking; consumed by enforcement, which
     /// re-filters against propagation and deferred runtime-raise poisons.
     pub call_site_shrunk: HashMap<(String, usize), (String, HashSet<String>)>,
+    /// Requires-clause summaries per callee (static requires discharge —
+    /// contracts.md phase 6). Keyed like `fn_errors`; built by a syntactic
+    /// pre-pass before body checking (`requires::extract_requires_summaries`).
+    pub requires_summaries: HashMap<String, crate::typeck::requires::RequiresSummary>,
+    /// (enclosing fn, callee-name span start) -> callee key whose *every*
+    /// requires clause the caller's live flow facts prove at this site.
+    /// Recorded during body checking; consumed by codegen, which routes the
+    /// call to the callee's unchecked twin (`<name>$nochk`), eliding the
+    /// entry-time requires check for this site only.
+    pub proven_requires_sites: HashMap<(String, usize), String>,
     /// Per-node union of edge-carried (propagated) errors, computed after the
     /// inference fixed point. A variant that can arrive via propagation
     /// never shrinks (slice 1: only direct raises shrink).
@@ -424,6 +434,8 @@ impl TypeEnv {
             fallible_value_calls: HashSet::new(),
             raise_summaries: HashMap::new(),
             call_site_shrunk: HashMap::new(),
+            requires_summaries: HashMap::new(),
+            proven_requires_sites: HashMap::new(),
             fn_propagated_errors: HashMap::new(),
             fn_value_boundaries: Vec::new(),
             fn_value_provenance: ScopeTracker::new(),

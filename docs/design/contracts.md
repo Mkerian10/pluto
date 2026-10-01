@@ -27,7 +27,7 @@ Pluto's contract system has exactly four primitives:
 | Primitive | Purpose | When Checked |
 |-----------|---------|--------------|
 | **`invariant`** | Class properties that always hold — single-state, or two-state with `old()` | **Compile-time proof (strict — shipped).** Runtime validation only at wire decode boundaries (single-state clauses only) |
-| **`requires`** | Preconditions — what caller must prove | Compile-time at call sites (future); runtime at entry (current) |
+| **`requires`** | Preconditions — what caller must prove | Compile-time at proven direct call sites (check elided); runtime at entry for every other site |
 | **`ensures`** | Postconditions — the proof form only (rfc-properties.md) | **Compile-time proof at every normal exit (strict — shipped).** Never a runtime check |
 | **`assert`** | Explicit runtime check | Always runtime (and establishes the fact for the prover) |
 
@@ -182,11 +182,13 @@ A `requires` clause creates a **proof obligation** for the caller:
 - OR the caller must use `assert` to establish it at runtime
 - Once proven/asserted, the callee can assume it's true (no check needed inside the function)
 
-### Current Implementation (Phase 2)
+### Current Implementation (Phase 2 + Phase 6 slice 1)
 
-**Status:** Runtime checks at function entry.
+**Status:** Runtime checks at function entry, with **static call-site
+discharge shipped** (2026-10-01, `src/typeck/requires.rs`): a proven direct
+call site skips the entry check.
 
-**Behavior:**
+**Baseline behavior (every unproven site):**
 - `requires` expressions evaluated at function entry
 - If any returns false, program aborts (hard abort, like invariants)
 
@@ -195,48 +197,45 @@ A `requires` clause creates a **proof obligation** for the caller:
 requires violation in transfer: from.balance >= amount
 ```
 
-### Future Implementation (Phase 6)
+**Static discharge (proven sites):** at a *direct* call — a named
+non-generic free function, or a method on a class/object-typed receiver
+(the same scope as error-set shrinking slice 1) — the caller's live flow
+facts are evaluated against every requires clause of the callee, with the
+actual arguments and the receiver path substituted in (`p` ↦ the actual's
+affine form, `self.f` ↦ `recv.f`, one-level `p.field` and `p.len()` leaves
+supported). If **every** clause is Proven, codegen routes the call to an
+unchecked twin of the callee body (`<name>$nochk`), eliding the entry
+check for that site only:
 
-**Static verification via obligation propagation:**
-
-When function `A` calls function `B`:
-1. `A` must **prove** `B`'s `requires` clauses hold at the call site
-2. If the compiler can prove it (from control flow, known values, etc.), no runtime check
-3. If the compiler cannot prove it, compile error: "cannot prove requires clause"
-
-**Example (provable):**
 ```pluto
-fn caller() {
-    let a = Account { balance: 100 }
-    transfer(a, b, 50)  // Compiler proves: 100 >= 50 ✓
+fn caller(mut a: Account, mut b: Account, amount: int) {
+    if a.balance >= amount && amount > 0 {
+        transfer(a, b, amount)   // proven: no runtime requires check here
+    }
+    transfer(a, b, amount)       // unproven: checked entry, aborts on violation
 }
 ```
 
-**Example (not provable, needs assert):**
-```pluto
-fn caller(amount: int) {
-    let a = Account { balance: 100 }
-    transfer(a, b, amount)  // Compile error: can't prove 100 >= amount
-}
-```
+**Scope and soundness rules (conservative by construction):**
+- All-or-nothing: a partially proven conjunction keeps the check.
+- Facts must be live *at the call*: an interleaved call drops field facts
+  (aliases may mutate), loop headers (`while` conditions, `for` iterables)
+  never prove, generic callers never record (skolem-checked once).
+- Generic callees never elide (their call names are rewritten per
+  instantiation at monomorphization); the entry check stays.
+- Calls through fn-typed values, closures, trait objects (vtables hold the
+  checked entry), spawn, `at` placement, and serve/RPC entries always hit
+  the checked entry — wire data is testimony, not proof.
+- Entity (object) receivers prove parameter clauses only (`self.field`
+  facts are never tracked for concurrently-mutating entities).
+- Trait-propagated requires are part of the proof obligation: the site
+  proves the trait clauses plus the method's own, or keeps the check.
 
-**Example (with assert):**
-```pluto
-fn caller(amount: int) {
-    assert amount <= 100  // Explicit runtime check
-    let a = Account { balance: 100 }
-    transfer(a, b, amount)  // Compiler accepts: assert established amount <= 100
-}
-```
-
-### Proof Strategy (Phase 6)
-
-The compiler uses lightweight abstract interpretation:
-1. Track known constraints at each program point (from `requires`, `if` guards, `assert`)
-2. At each call site, check if callee's `requires` are entailed by current constraints
-3. If not provable, compile error
-
-Not a full SMT solver — handles linear arithmetic, comparisons, field access. Complex expressions that can't be proven require explicit `assert` or refactoring.
+**Unprovable sites are not errors.** The strict proof-or-reject form of
+phase 6 ("cannot prove requires clause" as a compile error) remains future
+work; today the ladder's runtime rung simply stays in place. `assert` still
+establishes facts the prover uses, so an `assert amount <= 100` before a
+call can turn an unproven site into a proven one.
 
 ### Rules
 
@@ -390,7 +389,7 @@ requires x >= 0.0
 | **Two-state invariants (`old()`)** | ✅ Implemented (strict) | rfc-properties phase 2 |
 | **Trait contracts** | ✅ Implemented | Phase 3 |
 | **`assert`** | ✅ Implemented (runtime check + prover fact) | Phase 4 |
-| **Static verification of `requires`** | ⬜ Not started | Phase 6 |
+| **Static `requires` discharge at call sites** | ✅ Implemented (slice 1: proven direct sites elide the entry check) | Phase 6 |
 
 ### Phase 1: Invariants — Done (upgraded to static discharge)
 
@@ -461,19 +460,19 @@ Contracts on trait methods, enforced on implementations.
 
 ### Phase 6: Static Verification of `requires`
 
-**Scope:**
-- Prove `requires` clauses at call sites (obligation propagation)
-- Eliminate the entry-time runtime checks where proven
+**Slice 1 shipped** (`src/typeck/requires.rs` + codegen unchecked twins):
+proven direct call sites elide the entry-time runtime check; see "Current
+Implementation" above for the exact scope. Invariant discharge — originally
+part of this phase — shipped earlier as verification RFC phase 2 (strict
+mode), providing the constraint tracking (flow facts) this slice reuses.
 
-Invariant discharge — originally part of this phase — shipped separately as
-verification RFC phase 2 (strict mode), including the constraint tracking
-(flow facts + ghost symbolic state) and proof-failure diagnostics that
-call-site `requires` discharge will reuse.
-
-**Dependencies:** Phase 4 (simplified contract model)
-
-**Estimated complexity:** Medium — the proof engine exists; the remaining work
-is call-site obligation propagation.
+**Remaining:**
+- Strict obligation propagation (unprovable site ⇒ compile error) — a
+  policy decision, not an engine gap
+- Generic callees (per-instantiation twins or template-level proofs)
+- Facts that survive call boundaries / loop headers (would unlock the
+  stdlib/json `pos <= src_len` cross-method case)
+- Proof-coverage reporting in `pluto analyze`
 
 ---
 
@@ -685,12 +684,14 @@ Pluto's contract system is simple and powerful:
 **Current status:**
 - `invariant`: statically discharged, strict mode (verification RFC phase 2);
   runtime validation only at wire decode boundaries
-- `requires`: runtime-enforced at entry (Phases 2-3 done)
+- `requires`: runtime-enforced at entry (Phases 2-3 done), with proven
+  direct call sites statically discharged — the entry check is elided per
+  site (Phase 6 slice 1)
 - `assert`: runtime check that also feeds the prover (Phase 4 done)
 - `ensures`: runtime form removed permanently; proof form shipped
   (two-state postconditions with `old()`, strict discharge, caller-side
   assumption — rfc-properties.md phases 1–2)
 
 **Next steps:**
-- Static `requires` discharge at call sites (Phase 6)
+- Strict `requires` obligation propagation + generic callees (Phase 6 remainder)
 - Concurrency safety (Phase 5)

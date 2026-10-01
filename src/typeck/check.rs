@@ -196,6 +196,10 @@ fn check_stmt(
     // valid when each call executes (within the statement, later calls see
     // field facts dropped once an earlier call may have run).
     super::shrink::record_call_site_shrinking(stmt, env);
+    // Static requires discharge (requires.rs): prove callee requires
+    // clauses for this statement's direct calls against the same pre-kill
+    // fact state; proven sites elide the callee's entry check in codegen.
+    super::requires::record_requires_discharge(stmt, env);
     // Flow facts (facts.rs): apply this statement's kills before checking it
     // (reassignments, field writes, calls that may mutate, loop havoc).
     super::facts::apply_stmt_kills(stmt, env);
