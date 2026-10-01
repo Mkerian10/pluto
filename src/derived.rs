@@ -83,6 +83,11 @@ pub struct ResolvedClassInfo {
     pub impl_traits: Vec<String>,
     pub lifecycle: Lifecycle,
     pub is_pub: bool,
+    /// Properties the type provides via `satisfies` (rfc-properties.md
+    /// slice 2), rendered as `name(arg, ...)` — the exported names
+    /// downstream requires/assume matching (phase 5) consumes.
+    #[serde(default)]
+    pub provided_properties: Vec<String>,
 }
 
 /// A single resolved field with its concrete type.
@@ -403,6 +408,12 @@ impl DerivedInfo {
                     })
                     .collect();
 
+                let provided_properties = env
+                    .class_properties
+                    .get(class_name)
+                    .map(|props| props.iter().map(|p| p.to_string()).collect())
+                    .unwrap_or_default();
+
                 class_infos.insert(
                     class.node.id,
                     ResolvedClassInfo {
@@ -411,6 +422,7 @@ impl DerivedInfo {
                         impl_traits: ci.impl_traits.clone(),
                         lifecycle: ci.lifecycle,
                         is_pub: class.node.is_pub,
+                        provided_properties,
                     },
                 );
             }

@@ -1,0 +1,33 @@
+// std.verify — named proof bundles over the verification atoms
+// (docs/design/rfc-properties.md slice 2).
+//
+// A `property` is a named, parameterized conjunction of proof atoms —
+// invariant clauses (single- or two-state) and guarded_by clauses. A
+// `satisfies` clause on a class or object instantiates the bundle by pure
+// substitution, and the compiler discharges the instantiated atoms exactly
+// as if they were hand-written; the property NAME survives as the type's
+// exported fact. The compiler knows nothing about monotonicity or fencing —
+// it knows how to check the atoms these bodies name (epistemics.md,
+// "Properties are someone's responsibility").
+
+// The field never decreases. A two-state invariant proven at every
+// `mut self` method boundary (relative to the method's entry state) and at
+// every foreign write site (relative to the pre-write state). Monotone
+// facts are the invalidation-free corner of the warrant gradient
+// (docs/design/epistemics.md): once true, never false — safe to cache and
+// share at any distance.
+pub property monotonic(f: field<int>) {
+    invariant f >= old(f)
+}
+
+// Fencing: no write to `f` escapes the authority's check. Every write site
+// of the instantiated field must be dominated, in its method's control
+// flow, by a conditional the prover can carry to the write, showing that
+// some in-scope grant's `token` equals the current authority value. The
+// grant type must be a concrete value class carrying a `token: int` field;
+// the authority is an int field of the carrying type. Pairs with
+// `monotonic(authority)`: a fence is only sound if a minted token can
+// never become current again.
+pub property fenced(f: field, authority: field<int>, grant: type) {
+    f guarded_by (g: grant) g.token == authority
+}

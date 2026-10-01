@@ -70,6 +70,7 @@ mod tests {
             test_info: vec![],
             tests: None,
             fallible_extern_fns: vec![],
+            properties: vec![],
         }
     }
 
@@ -261,6 +262,7 @@ fn main() {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
         }));
 
         let lit_span = PlutoSpan::new(200, 220);

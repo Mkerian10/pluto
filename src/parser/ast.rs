@@ -19,6 +19,11 @@ pub struct Program {
     pub test_info: Vec<TestInfo>,
     pub tests: Option<Spanned<TestsDecl>>,
     pub fallible_extern_fns: Vec<String>,
+    /// `property` declarations (docs/design/rfc-properties.md slice 2):
+    /// named, parameterized bundles of proof atoms, instantiated on types
+    /// via `satisfies` clauses.
+    #[serde(default)]
+    pub properties: Vec<Spanned<PropertyDecl>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +103,114 @@ pub struct ClassDecl {
     /// later phase). The body is syntactically identical to a class body.
     #[serde(default)]
     pub is_object: bool,
+    /// `satisfies monotonic(self.epoch), fenced(self.data, self.epoch, Grant)`
+    /// — property instantiations (docs/design/rfc-properties.md slice 2).
+    /// Each clause is desugared by pure substitution into the class's own
+    /// invariant / guarded_by sets (src/properties.rs) and checked by the
+    /// standard discharge/dominance machinery; the clause itself is retained
+    /// as the type's exported provided-property fact.
+    #[serde(default)]
+    pub satisfies: Vec<Spanned<SatisfiesClause>>,
+}
+
+/// A `satisfies <property>(<args>)` clause on a class/object header.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SatisfiesClause {
+    /// Property name as written (possibly module-qualified: `verify.monotonic`).
+    pub name: Spanned<String>,
+    /// Positional meta-arguments: `self.<field>` for field parameters, a bare
+    /// type name for type parameters, an int literal for const parameters.
+    pub args: Vec<Spanned<Expr>>,
+}
+
+/// A top-level `property` declaration (rfc-properties.md slice 2): a named,
+/// parameterized bundle of proof atoms. Judgmental only — instantiating a
+/// property can reject a program, never change what it does.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropertyDecl {
+    pub id: Uuid,
+    pub name: Spanned<String>,
+    pub params: Vec<PropertyParam>,
+    pub atoms: Vec<Spanned<PropertyAtom>>,
+    pub is_pub: bool,
+}
+
+/// A meta-parameter of a property declaration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropertyParam {
+    pub name: Spanned<String>,
+    pub kind: Spanned<PropertyParamKind>,
+}
+
+/// The kind of a property meta-parameter. Shipped kinds (phase 4):
+/// `field<T>` / `field`, `type`, `const int`. `expr` / predicate parameters
+/// are deferred to phase 4.5 (see rfc-properties.md).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PropertyParamKind {
+    /// `field<T>` — a field of the carrying type whose declared type is `T`;
+    /// bare `field` — a field of any type (usable only as a guarded_by
+    /// target, never inside an invariant atom's int fragment).
+    Field { ty: Option<Spanned<TypeExpr>> },
+    /// `type` — a concrete type name (usable as a guarded_by binder type).
+    Type,
+    /// `const int` — an integer literal constant.
+    ConstInt,
+}
+
+/// One atom of a property body: a conjunction member. The body language is
+/// exactly the shipped slice-1 atoms — single-/two-state invariant clauses
+/// and guarded_by clauses — with the property's parameters as free names.
+/// No recursion, no property-referencing-property.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropertyAtom {
+    pub kind: PropertyAtomKind,
+    /// 1-based source line of the atom inside the property's defining file,
+    /// recorded at parse time for two-sided blame diagnostics.
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PropertyAtomKind {
+    /// `invariant <expr>` — a (possibly two-state, via `old()`) invariant
+    /// over the property's parameters.
+    Invariant { expr: Spanned<Expr> },
+    /// `<field-param> guarded_by (b: <type>) <predicate>` — a dominance
+    /// obligation on the named field parameter's write sites.
+    Guarded { target: Spanned<String>, clause: GuardClause },
+}
+
+/// Provenance of a proof obligation that was injected by a property
+/// instantiation (rfc-properties.md slice 2, two-sided blame): when the
+/// obligation fails, the diagnostic names both the property body and the
+/// failing site in user code.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PropertyProvenance {
+    /// Fully resolved property name (`verify.monotonic` after flattening).
+    pub property: String,
+    /// 1-based line of the originating atom in the property's defining file.
+    pub line: usize,
+    /// Rendered instantiation bindings, e.g. `f = self.epoch`.
+    pub bindings: String,
+}
+
+impl PropertyProvenance {
+    /// The blame suffix appended to every diagnostic about the injected
+    /// obligation — the property-body side of the two-sided attribution.
+    pub fn blame(&self) -> String {
+        let (loc, short) = match self.property.rsplit_once('.') {
+            Some((module, short)) => (format!("defined at {module}, line {}", self.line), short),
+            None => (format!("defined at line {}", self.line), self.property.as_str()),
+        };
+        format!(
+            "\nrequired by property '{short}' ({loc}), instantiated with {}",
+            self.bindings
+        )
+    }
+}
+
+/// Render the blame suffix of an optional provenance ("" when hand-written).
+pub fn provenance_blame(p: &Option<PropertyProvenance>) -> String {
+    p.as_ref().map(|p| p.blame()).unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +252,11 @@ pub struct GuardClause {
     pub binder: Spanned<String>,
     pub binder_ty: Spanned<TypeExpr>,
     pub predicate: Spanned<Expr>,
+    /// Set when this clause was injected by a property instantiation
+    /// (`satisfies fenced(...)`) — carried into every dominance diagnostic
+    /// for two-sided blame. `None` for hand-written clauses.
+    #[serde(default)]
+    pub provenance: Option<PropertyProvenance>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -523,6 +641,11 @@ pub enum UnaryOp {
 pub struct ContractClause {
     pub kind: ContractKind,
     pub expr: Spanned<Expr>,
+    /// Set when this clause was injected by a property instantiation
+    /// (`satisfies monotonic(...)`) — carried into every discharge
+    /// diagnostic for two-sided blame. `None` for hand-written clauses.
+    #[serde(default)]
+    pub provenance: Option<PropertyProvenance>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

@@ -10,8 +10,8 @@ use crate::parser::Parser;
 use crate::span::{Span, Spanned};
 use crate::visit::{
     walk_app_mut, walk_block_mut, walk_class_mut, walk_enum_mut, walk_error_mut, walk_expr_mut,
-    walk_extern_fn_mut, walk_function_mut, walk_program_mut, walk_stage_mut, walk_stmt_mut,
-    walk_system_mut, walk_trait_mut, walk_type_expr_mut, VisitMut,
+    walk_extern_fn_mut, walk_function_mut, walk_program_mut, walk_property_mut, walk_stage_mut,
+    walk_stmt_mut, walk_system_mut, walk_trait_mut, walk_type_expr_mut, VisitMut,
 };
 
 /// Maps file_id -> (path, source_text).
@@ -69,7 +69,20 @@ impl VisitMut for FileIdSetter {
         for field in &mut class.node.fields {
             field.name.span.file_id = self.file_id;
         }
+        for clause in &mut class.node.satisfies {
+            clause.span.file_id = self.file_id;
+            clause.node.name.span.file_id = self.file_id;
+        }
         walk_class_mut(self, class);
+    }
+
+    fn visit_property_mut(&mut self, property: &mut Spanned<PropertyDecl>) {
+        property.span.file_id = self.file_id;
+        property.node.name.span.file_id = self.file_id;
+        for atom in &mut property.node.atoms {
+            atom.span.file_id = self.file_id;
+        }
+        walk_property_mut(self, property);
     }
 
     fn visit_trait_mut(&mut self, trait_decl: &mut Spanned<TraitDecl>) {
@@ -262,12 +275,14 @@ fn load_directory_module(
             test_info: Vec::new(),
             tests: None,
             fallible_extern_fns: Vec::new(),
+            properties: Vec::new(),
         };
 
         let source_files = collect_source_files(dir)?;
 
         for file_path in source_files {
             let (program, _file_id) = load_file_auto(&file_path, source_map)?;
+            merged.properties.extend(program.properties);
             merged.functions.extend(program.functions);
             merged.extern_fns.extend(program.extern_fns);
             merged.classes.extend(program.classes);
@@ -564,7 +579,34 @@ fn add_prefixed_items(
                 trait_name.name.node = prefix_name(module_name, &trait_name.name.node);
             }
         }
+        // Satisfies clauses referencing module-internal properties / types
+        for clause in &mut prefixed_class.node.satisfies {
+            if module_prog.properties.iter().any(|p| p.node.name.node == clause.node.name.node) {
+                clause.node.name.node = prefix_name(module_name, &clause.node.name.node);
+            }
+            for arg in &mut clause.node.args {
+                if let Expr::Ident(name) = &mut arg.node {
+                    if is_module_type(name, module_prog) {
+                        *name = prefix_name(module_name, name);
+                    }
+                }
+            }
+        }
         target.classes.push(prefixed_class);
+    }
+
+    // Properties (docs/design/rfc-properties.md slice 2): the name is
+    // prefixed like any declaration; guard-atom binder types referencing
+    // module-internal classes are prefixed too.
+    for prop in &module_prog.properties {
+        let mut prefixed_prop = prop.clone();
+        prefixed_prop.node.name.node = prefix_name(module_name, &prop.node.name.node);
+        for atom in &mut prefixed_prop.node.atoms {
+            if let PropertyAtomKind::Guarded { clause, .. } = &mut atom.node.kind {
+                prefix_type_expr(&mut clause.binder_ty.node, module_name, module_prog);
+            }
+        }
+        target.properties.push(prefixed_prop);
     }
 
     // Traits
@@ -804,6 +846,7 @@ fn resolve_modules_inner(
             root.stages.extend(program.stages);
             root.errors.extend(program.errors);
             root.test_info.extend(program.test_info);
+            root.properties.extend(program.properties);
         }
     }
 
@@ -1023,9 +1066,28 @@ fn validate_module_visibility(graph: &ModuleGraph) -> Result<(), CompileError> {
         for e in &prog.enums { add(&e.node.name.node, e.node.is_pub); }
         for e in &prog.errors { add(&e.node.name.node, e.node.is_pub); }
         for t in &prog.traits { add(&t.node.name.node, t.node.is_pub); }
+        for p in &prog.properties { add(&p.node.name.node, p.node.is_pub); }
         drop(add);
         all_items.insert(name.clone(), all);
         pub_items.insert(name.clone(), pubs);
+    }
+
+    // `satisfies verify.monotonic(...)` references a property across the
+    // module boundary; the property must be pub.
+    for class in &graph.root.classes {
+        for clause in &class.node.satisfies {
+            if let Some((module, item)) = clause.node.name.node.split_once('.') {
+                if imports.contains(module)
+                    && all_items.get(module).is_some_and(|a| a.contains(item))
+                    && !pub_items.get(module).is_some_and(|p| p.contains(item))
+                {
+                    return Err(CompileError::type_err(
+                        format!("'{item}' is private to module '{module}'; declare it `pub` to use it from another module"),
+                        clause.node.name.span,
+                    ));
+                }
+            }
+        }
     }
 
     let mut v = VisibilityValidator {
@@ -1556,6 +1618,13 @@ fn resolve_qualified_access_in_program(program: &mut Program, module_names: &Has
                 resolve_qualified_access_in_expr(&mut guard.predicate.node, guard.predicate.span, module_names, &enum_name_map);
             }
         }
+        // Satisfies arguments: `self.epoch` parses as FieldAccess already,
+        // but a dotted field path written another way stays consistent.
+        for clause in &mut class.node.satisfies {
+            for arg in &mut clause.node.args {
+                resolve_qualified_access_in_expr(&mut arg.node, arg.span, module_names, &enum_name_map);
+            }
+        }
         for method in &mut class.node.methods {
             // Resolve in method contracts (requires)
             for contract in &mut method.node.contracts {
@@ -1580,6 +1649,20 @@ fn resolve_qualified_access_in_program(program: &mut Program, module_names: &Has
                 resolve_qualified_access_in_expr(&mut contract.node.expr.node, contract.node.expr.span, module_names, &enum_name_map);
             }
             resolve_qualified_access_in_block(&mut method.node.body.node, module_names, &enum_name_map);
+        }
+    }
+    // Property bodies: `g.token == authority` in a guard atom parses as a
+    // QualifiedAccess chain, like any dotted path.
+    for prop in &mut program.properties {
+        for atom in &mut prop.node.atoms {
+            match &mut atom.node.kind {
+                PropertyAtomKind::Invariant { expr } => {
+                    resolve_qualified_access_in_expr(&mut expr.node, expr.span, module_names, &enum_name_map);
+                }
+                PropertyAtomKind::Guarded { clause, .. } => {
+                    resolve_qualified_access_in_expr(&mut clause.predicate.node, clause.predicate.span, module_names, &enum_name_map);
+                }
+            }
         }
     }
     // Trait method contracts and default bodies were previously skipped —

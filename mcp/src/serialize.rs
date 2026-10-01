@@ -594,6 +594,7 @@ fn pretty_print_function(func: &Function) -> String {
         test_info: vec![],
         tests: None,
         fallible_extern_fns: vec![],
+        properties: vec![],
     };
     pluto::pretty::pretty_print(&program, false)
 }
@@ -613,6 +614,7 @@ fn pretty_print_class(cls: &ClassDecl) -> String {
         test_info: vec![],
         tests: None,
         fallible_extern_fns: vec![],
+        properties: vec![],
     };
     pluto::pretty::pretty_print(&program, false)
 }
@@ -632,6 +634,7 @@ fn pretty_print_enum(en: &EnumDecl) -> String {
         test_info: vec![],
         tests: None,
         fallible_extern_fns: vec![],
+        properties: vec![],
     };
     pluto::pretty::pretty_print(&program, false)
 }
@@ -651,6 +654,7 @@ fn pretty_print_trait(tr: &TraitDecl) -> String {
         test_info: vec![],
         tests: None,
         fallible_extern_fns: vec![],
+        properties: vec![],
     };
     pluto::pretty::pretty_print(&program, false)
 }
@@ -670,6 +674,7 @@ fn pretty_print_error_decl(err: &ErrorDecl) -> String {
         test_info: vec![],
         tests: None,
         fallible_extern_fns: vec![],
+        properties: vec![],
     };
     pluto::pretty::pretty_print(&program, false)
 }
@@ -689,6 +694,7 @@ fn pretty_print_app(app: &AppDecl) -> String {
         test_info: vec![],
         tests: None,
         fallible_extern_fns: vec![],
+        properties: vec![],
     };
     pluto::pretty::pretty_print(&program, false)
 }

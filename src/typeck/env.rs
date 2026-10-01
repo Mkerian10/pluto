@@ -382,6 +382,26 @@ pub struct TypeEnv {
     /// statement's kills) and assumed by `discharge::post_stmt` once the
     /// statement — including its field-fact kills — has been processed.
     pub pending_call_ensures: Vec<super::facts::Fact>,
+    /// Provided properties (rfc-properties.md slice 2): class name → the
+    /// `satisfies` instantiations it carries. The property NAME is the
+    /// type's exported fact — recorded here (and surfaced through
+    /// DerivedInfo) so downstream requires/assume matching (phase 5) can
+    /// consume it without re-reading property bodies.
+    pub class_properties: HashMap<String, Vec<ProvidedProperty>>,
+}
+
+/// One property a type provides: the resolved property name and the
+/// rendered instantiation arguments (e.g. `self.epoch`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProvidedProperty {
+    pub name: String,
+    pub args: Vec<String>,
+}
+
+impl std::fmt::Display for ProvidedProperty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}({})", self.name, self.args.join(", "))
+    }
 }
 
 impl Default for TypeEnv {
@@ -484,6 +504,7 @@ impl TypeEnv {
             guarded_fields: HashMap::new(),
             fn_ensures: HashMap::new(),
             pending_call_ensures: Vec::new(),
+            class_properties: HashMap::new(),
         }
     }
 

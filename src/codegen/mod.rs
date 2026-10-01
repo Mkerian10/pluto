@@ -1621,6 +1621,7 @@ mod tests {
                     lhs: Box::new(sp(Expr::Ident("x".to_string()))),
                     rhs: Box::new(sp(Expr::IntLit(0))),
                 }),
+                provenance: None,
             }),
         ];
         let result = extract_fn_contracts(&contracts).unwrap();
@@ -1634,10 +1635,12 @@ mod tests {
             sp(ContractClause {
                 kind: ContractKind::Invariant,
                 expr: sp(Expr::BoolLit(true)),
+                provenance: None,
             }),
             sp(ContractClause {
                 kind: ContractKind::Requires,
                 expr: sp(Expr::BoolLit(true)),
+                provenance: None,
             }),
         ];
         let result = extract_fn_contracts(&contracts).unwrap();
@@ -1654,6 +1657,7 @@ mod tests {
                     lhs: Box::new(sp(Expr::Ident("x".to_string()))),
                     rhs: Box::new(sp(Expr::IntLit(0))),
                 }),
+                provenance: None,
             }),
             sp(ContractClause {
                 kind: ContractKind::Requires,
@@ -1662,6 +1666,7 @@ mod tests {
                     lhs: Box::new(sp(Expr::Ident("x".to_string()))),
                     rhs: Box::new(sp(Expr::IntLit(100))),
                 }),
+                provenance: None,
             }),
         ];
         let result = extract_fn_contracts(&contracts).unwrap();

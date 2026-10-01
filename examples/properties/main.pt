@@ -1,0 +1,62 @@
+// The property form (docs/design/rfc-properties.md slice 2): named,
+// parameterized bundles of proof atoms.
+//
+// The genericity principle (docs/design/epistemics.md) says the language
+// hardcodes no specific epistemic property — the compiler knows nothing
+// about "monotonic" or "bounded"; it knows how to check the atoms a
+// property's body names. A `property` declaration gives that
+// responsibility a syntax: libraries name bundles of the shipped proof
+// atoms (invariant clauses, guarded_by clauses), and a `satisfies` clause
+// instantiates a bundle on a type by pure substitution. The instantiated
+// atoms are discharged by the SAME machinery as hand-written ones; the
+// property NAME survives as the type's exported fact.
+//
+// Judgmental only, generative never: a property can reject a program; it
+// can never change what a program does.
+
+// std.verify ships the standard bundles (monotonic, fenced).
+import std.verify
+
+// Properties are ordinary declarations — local ones work too. Parameters
+// are meta-typed: `field<int>` names an int field of the carrying type,
+// `const int` an integer literal. (`field` names a field of any type,
+// `type` a concrete class — see verify.fenced.)
+property bounded_below(f: field<int>, lo: const int) {
+    invariant f >= lo
+}
+
+// Instantiation: each clause substitutes the arguments into the body and
+// joins the type's own invariant set. `monotonic(self.score)` becomes
+// `invariant self.score >= old(self.score)` — a two-state invariant proven
+// at every mut-self method boundary and every foreign write site.
+// `bounded_below(self.score, 0)` becomes `invariant self.score >= 0`,
+// proven at every construction and write site.
+//
+// Break either one — construct with a negative score, or add a method
+// that decreases it — and the compile error blames BOTH sides: the
+// property body ("required by property 'monotonic' (defined at ...),
+// instantiated with f = self.score") and the failing site in this file.
+class Scoreboard satisfies verify.monotonic(self.score), bounded_below(self.score, 0) {
+    score: int
+
+    // The guard is what discharges the proofs: on the taken branch the
+    // prover knows points > 0, so score + points >= score (monotonic) and
+    // score + points >= 0 (bounded) both follow; on the skipped branch
+    // nothing changed.
+    fn award(mut self, points: int) {
+        if points > 0 {
+            self.score = self.score + points
+        }
+    }
+
+    fn total(self) int {
+        return self.score
+    }
+}
+
+fn main() {
+    let mut board = Scoreboard { score: 0 }
+    board.award(10)
+    board.award(5)
+    print(f"total: {board.total()}")
+}

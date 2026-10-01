@@ -26,7 +26,10 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// v12: Field.guarded_by (dominance guard clauses, properties RFC atom 3).
 /// v13: ContractKind::Ensures (two-state postconditions with old(), proof
 /// form — docs/design/rfc-properties.md atoms 1–2).
-const SCHEMA_VERSION: u32 = 13;
+/// v14: the property form (docs/design/rfc-properties.md slice 2):
+/// Program.properties, ClassDecl.satisfies, and provenance fields on
+/// ContractClause / GuardClause.
+const SCHEMA_VERSION: u32 = 14;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;
