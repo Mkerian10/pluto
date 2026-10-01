@@ -395,6 +395,15 @@ The `property` form (docs/design/rfc-properties.md slice 2): named, parameterize
 cargo run -- run examples/properties/main.pt --stdlib stdlib
 ```
 
+## retry
+
+Ambiguous-failure retry licensed by a property (docs/design/rfc-properties.md phase 5 — the epistemics payoff). A `with_retry` combinator requires idempotency of its function-typed argument — `fn(string) int! provides verify.idempotent`, the same type surface that carries the fallibility contract `!` — and only provably-providing values flow in: pass a plain function or a closure and the boundary rejects it at compile time. `std.verify.idempotent(key: expr)` is DECLARED-ONLY (its proof shape — a dedup check dominating the effect — is not yet expressible in the kernel, phase 5.5), so an in-unit `provides idempotent(...)` is a compile error explaining the discharge gap; the one honest claim is at the trust boundary, `extern fn ... assume verify.idempotent(key = s)`, discharged as ASSUMED. The combinator reads `NetworkError.definite` and retries only from AMBIGUOUS failures — the retry the property licenses — and `pluto analyze` prints the program's complete assumption surface (`assume verify.idempotent(key = s) — extern fn __pluto_string_len (line N)`): everything the program rests on that nobody proved, each claim with a named owner.
+
+```bash
+cargo run -- run examples/retry/main.pt --stdlib stdlib
+cargo run -- analyze examples/retry/main.pt --stdlib stdlib   # prints the assumption surface
+```
+
 ## function-references
 
 Named functions as first-class values: bind them to variables, pass them to
