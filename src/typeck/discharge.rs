@@ -1759,11 +1759,20 @@ pub(crate) fn post_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileErr
             }
             ghost_len_binding(env, &target.node, &value.node);
         }
+        Stmt::If { .. } | Stmt::Match { .. } | Stmt::While { .. } | Stmt::For { .. } => {
+            // Branch-join / loop-exit anchoring: kills are flow events that
+            // remove facts from *every* frame, but the invariant-level
+            // reassumption a call triggers lands in the then-current
+            // (branch-local) frame and pops with it. Without this, a call
+            // inside a branch leaves the post-join state with no facts at
+            // all about invariant-carrying objects — so a subsequent call's
+            // ensures instantiation has no usable pre-state. Every object's
+            // invariant holds at every statement boundary, so re-anchoring
+            // the join (and the loop exit, whose havoc dropped everything)
+            // at invariant level is sound.
+            reassume_invariants_main(env);
+        }
         Stmt::Return(_)
-        | Stmt::If { .. }
-        | Stmt::While { .. }
-        | Stmt::For { .. }
-        | Stmt::Match { .. }
         | Stmt::IndexAssign { .. }
         | Stmt::Raise { .. }
         | Stmt::LetChan { .. }
