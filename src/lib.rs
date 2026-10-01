@@ -13,6 +13,7 @@ pub mod reflection;
 pub mod ambient;
 pub mod spawn;
 pub mod contracts;
+pub mod properties;
 pub mod marshal;
 pub mod concurrency;
 pub mod manifest;
@@ -54,6 +55,7 @@ struct FrontendResult {
 /// Stops BEFORE transformations (spawn desugar, monomorphize, closure lift, reflection).
 /// This preserves the canonical (pre-transformation) AST for emit-ast and analyze.
 fn run_frontend_for_editing(program: &mut Program) -> Result<FrontendResult, CompileError> {
+    properties::instantiate_properties(program)?;
     prelude::inject_prelude(program)?;
     stages::flatten_stage_hierarchy(program)?;
     ambient::desugar_ambient(program)?;
@@ -67,6 +69,11 @@ fn run_frontend_for_editing(program: &mut Program) -> Result<FrontendResult, Com
 /// Run the full frontend pipeline for compilation: editing pipeline + transformations.
 /// This mutates the AST with spawn desugaring, monomorphization, closure lifting, etc.
 fn run_frontend(program: &mut Program, test_mode: bool) -> Result<FrontendResult, CompileError> {
+    // Property instantiation (rfc-properties.md slice 2) runs first: it
+    // desugars `satisfies` clauses into ordinary invariant / guarded_by
+    // clauses (with provenance), which every later pass treats as
+    // hand-written.
+    properties::instantiate_properties(program)?;
     prelude::inject_prelude(program)?;
     stages::flatten_stage_hierarchy(program)?;
     ambient::desugar_ambient(program)?;

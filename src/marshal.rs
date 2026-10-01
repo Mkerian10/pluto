@@ -699,6 +699,7 @@ fn instantiate_generic_class(template: &ClassDecl, mangled_name: &str, type_arg_
         uses: template.uses.clone(),
         is_pub: template.is_pub,
         lifecycle: template.lifecycle,
+        satisfies: vec![], // satisfies is rejected on generic classes
     })
 }
 
@@ -3377,6 +3378,7 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
         };
 
         let result = instantiate_generic_class(&template, "Box$$int", "int").unwrap();
@@ -3430,6 +3432,7 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
         };
 
         let result = instantiate_generic_class(&template, "Container$$string", "string").unwrap();

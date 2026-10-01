@@ -395,6 +395,7 @@ impl<'a> Parser<'a> {
         let mut errors = Vec::new();
         let mut test_info: Vec<TestInfo> = Vec::new();
         let mut tests: Option<Spanned<TestsDecl>> = None;
+        let mut properties = Vec::new();
         self.skip_newlines();
 
         // Parse imports first
@@ -486,6 +487,20 @@ impl<'a> Parser<'a> {
                     class.node.lifecycle = lifecycle;
                     class.node.is_object = true;
                     classes.push(class);
+                }
+                // Contextual `property` declaration (docs/design/
+                // rfc-properties.md slice 2): a named, parameterized bundle
+                // of proof atoms.
+                Token::Ident if &self.source[tok.span.start..tok.span.end] == "property" => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
+                    let mut prop = self.parse_property_decl()?;
+                    prop.node.is_pub = is_pub;
+                    properties.push(prop);
                 }
                 Token::Fn => {
                     if lifecycle != Lifecycle::Singleton {
@@ -689,7 +704,7 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        Ok(Program { imports, functions, extern_fns,  classes, traits, enums, app, stages, system, errors, test_info, tests, fallible_extern_fns: Vec::new() })
+        Ok(Program { imports, functions, extern_fns,  classes, traits, enums, app, stages, system, errors, test_info, tests, fallible_extern_fns: Vec::new(), properties })
     }
 
     /// Parse a bare `test "name" { body }` block into a TestInfo + synthetic Function.
@@ -1364,6 +1379,20 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
 
+        // Contextual `satisfies prop(args), other.prop(args)` — property
+        // instantiations (docs/design/rfc-properties.md slice 2).
+        let satisfies = if self.eat_contextual_keyword("satisfies") {
+            let mut clauses = Vec::new();
+            clauses.push(self.parse_satisfies_clause()?);
+            while self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
+                self.advance(); // consume ','
+                clauses.push(self.parse_satisfies_clause()?);
+            }
+            clauses
+        } else {
+            Vec::new()
+        };
+
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
@@ -1381,7 +1410,7 @@ impl<'a> Parser<'a> {
                 let expr = self.parse_expr(0)?;
                 let inv_end = expr.span.end;
                 invariants.push(Spanned::new(
-                    ContractClause { kind: ContractKind::Invariant, expr },
+                    ContractClause { kind: ContractKind::Invariant, expr, provenance: None },
                     Span::new(inv_start, inv_end),
                 ));
                 self.consume_statement_end()?;
@@ -1414,7 +1443,7 @@ impl<'a> Parser<'a> {
                     (Spanned::new(Expr::Ident(first.node.clone()), first.span), end)
                 };
                 invariants.push(Spanned::new(
-                    ContractClause { kind: ContractKind::MustRelease, expr },
+                    ContractClause { kind: ContractKind::MustRelease, expr, provenance: None },
                     Span::new(mr_start, mr_end),
                 ));
                 self.consume_statement_end()?;
@@ -1434,7 +1463,7 @@ impl<'a> Parser<'a> {
                     let binder_ty = self.parse_type()?;
                     self.expect(&Token::RParen)?;
                     let predicate = self.parse_expr(0)?;
-                    Some(GuardClause { binder, binder_ty, predicate })
+                    Some(GuardClause { binder, binder_ty, predicate, provenance: None })
                 } else {
                     None
                 };
@@ -1452,7 +1481,172 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, type_param_bounds, fields, methods, invariants, impl_traits, uses, is_pub: false, lifecycle: Lifecycle::Singleton, is_object: false }, Span::new(start, end)))
+        Ok(Spanned::new(ClassDecl { id: Uuid::new_v4(), name, type_params, type_param_bounds, fields, methods, invariants, impl_traits, uses, is_pub: false, lifecycle: Lifecycle::Singleton, is_object: false, satisfies }, Span::new(start, end)))
+    }
+
+    /// The 1-based source line containing byte `offset` — recorded on
+    /// property atoms at parse time so blame diagnostics can name the
+    /// property body's location without re-reading the defining file.
+    fn line_of(&self, offset: usize) -> usize {
+        let end = offset.min(self.source.len());
+        self.source.as_bytes()[..end].iter().filter(|b| **b == b'\n').count() + 1
+    }
+
+    /// One `name(args)` instantiation inside a `satisfies` clause. The name
+    /// may be module-qualified (`verify.monotonic`); arguments are ordinary
+    /// expressions, validated against the property's parameter kinds during
+    /// instantiation (src/properties.rs).
+    fn parse_satisfies_clause(&mut self) -> Result<Spanned<SatisfiesClause>, CompileError> {
+        let first = self.expect_ident()?;
+        let mut name = first.node;
+        let name_start = first.span.start;
+        let mut name_end = first.span.end;
+        while self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Dot) {
+            self.advance(); // consume '.'
+            let seg = self.expect_ident()?;
+            name.push('.');
+            name.push_str(&seg.node);
+            name_end = seg.span.end;
+        }
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+        let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_expr(0))?;
+        let close = self.expect(&Token::RParen)?;
+        let span = Span::new(name_start, close.span.end);
+        Ok(Spanned::new(
+            SatisfiesClause { name: Spanned::new(name, Span::new(name_start, name_end)), args },
+            span,
+        ))
+    }
+
+    /// `property name(p: field<int>, g: type, k: const int) { <atoms> }` —
+    /// the property declaration form (docs/design/rfc-properties.md slice
+    /// 2). The `property` keyword is contextual and already consumed-checked
+    /// by the caller; the cursor sits on it.
+    fn parse_property_decl(&mut self) -> Result<Spanned<PropertyDecl>, CompileError> {
+        let kw = self.advance().expect("caller checked 'property' is next");
+        let start = kw.span.start;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+        let params = self.parse_comma_list(&Token::RParen, true, |p| p.parse_property_param())?;
+        self.expect(&Token::RParen)?;
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut atoms = Vec::new();
+        while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
+            let tok = self.peek().expect("checked above");
+            if matches!(tok.node, Token::Invariant) {
+                let inv_tok = self.advance().expect("token should exist after peek");
+                let atom_start = inv_tok.span.start;
+                let expr = self.parse_expr(0)?;
+                let atom_span = Span::new(atom_start, expr.span.end);
+                atoms.push(Spanned::new(
+                    PropertyAtom {
+                        kind: PropertyAtomKind::Invariant { expr },
+                        line: self.line_of(atom_start),
+                    },
+                    atom_span,
+                ));
+                self.consume_statement_end()?;
+            } else if matches!(tok.node, Token::Ident) {
+                // `<field-param> guarded_by (b: Type) <predicate>`
+                let target = self.expect_ident()?;
+                let atom_start = target.span.start;
+                self.expect(&Token::GuardedBy).map_err(|_| {
+                    CompileError::syntax(
+                        "expected 'invariant <expr>' or '<field-param> guarded_by (b: Type) \
+                         <predicate>' in property body: a property is a conjunction of the \
+                         shipped proof atoms",
+                        target.span,
+                    )
+                })?;
+                self.expect(&Token::LParen)?;
+                let binder = self.expect_ident()?;
+                self.expect(&Token::Colon)?;
+                let binder_ty = self.parse_type()?;
+                self.expect(&Token::RParen)?;
+                let predicate = self.parse_expr(0)?;
+                let atom_span = Span::new(atom_start, predicate.span.end);
+                atoms.push(Spanned::new(
+                    PropertyAtom {
+                        kind: PropertyAtomKind::Guarded {
+                            target,
+                            clause: GuardClause { binder, binder_ty, predicate, provenance: None },
+                        },
+                        line: self.line_of(atom_start),
+                    },
+                    atom_span,
+                ));
+                self.consume_statement_end()?;
+            } else {
+                return Err(CompileError::syntax(
+                    format!(
+                        "expected 'invariant <expr>' or '<field-param> guarded_by (b: Type) \
+                         <predicate>' in property body, found {}",
+                        tok.node
+                    ),
+                    tok.span,
+                ));
+            }
+            self.skip_newlines();
+        }
+        let close = self.expect(&Token::RBrace)?;
+        Ok(Spanned::new(
+            PropertyDecl { id: Uuid::new_v4(), name, params, atoms, is_pub: false },
+            Span::new(start, close.span.end),
+        ))
+    }
+
+    /// One property meta-parameter: `name: field<T>` / `name: field` /
+    /// `name: type` / `name: const int`. The kind words are contextual
+    /// identifiers (except `type`, spelled as a plain identifier too).
+    fn parse_property_param(&mut self) -> Result<PropertyParam, CompileError> {
+        let name = self.expect_ident()?;
+        self.expect(&Token::Colon)?;
+        let kind_word = self.expect_ident()?;
+        let kind = match kind_word.node.as_str() {
+            "field" => {
+                let ty = if self.peek().is_some()
+                    && matches!(self.peek().expect("token should exist after is_some check").node, Token::Lt)
+                {
+                    self.advance(); // consume '<'
+                    let ty = self.parse_type()?;
+                    self.expect_closing_gt()?;
+                    Some(ty)
+                } else {
+                    None
+                };
+                let end = ty.as_ref().map(|t| t.span.end).unwrap_or(kind_word.span.end);
+                Spanned::new(PropertyParamKind::Field { ty }, Span::new(kind_word.span.start, end))
+            }
+            "type" => Spanned::new(PropertyParamKind::Type, kind_word.span),
+            "const" => {
+                let base = self.expect_ident()?;
+                if base.node != "int" {
+                    return Err(CompileError::syntax(
+                        format!(
+                            "unsupported const parameter type '{}': only 'const int' is \
+                             supported (the proof fragment is integer-only)",
+                            base.node
+                        ),
+                        base.span,
+                    ));
+                }
+                Spanned::new(PropertyParamKind::ConstInt, Span::new(kind_word.span.start, base.span.end))
+            }
+            other => {
+                return Err(CompileError::syntax(
+                    format!(
+                        "unknown property parameter kind '{other}': expected 'field<T>', \
+                         'field', 'type', or 'const int'"
+                    ),
+                    kind_word.span,
+                ));
+            }
+        };
+        Ok(PropertyParam { name, kind })
     }
 
     fn parse_method(&mut self) -> Result<Spanned<Function>, CompileError> {
@@ -1614,7 +1808,7 @@ impl<'a> Parser<'a> {
                     let expr = self.parse_expr(0)?;
                     let req_end = expr.span.end;
                     contracts.push(Spanned::new(
-                        ContractClause { kind: ContractKind::Requires, expr },
+                        ContractClause { kind: ContractKind::Requires, expr, provenance: None },
                         Span::new(req_start, req_end),
                     ));
                     self.consume_statement_end()?;
@@ -1641,7 +1835,7 @@ impl<'a> Parser<'a> {
                             clause_span,
                         );
                         contracts.push(Spanned::new(
-                            ContractClause { kind: ContractKind::StateWhere, expr },
+                            ContractClause { kind: ContractKind::StateWhere, expr, provenance: None },
                             Span::new(where_start, state.span.end),
                         ));
                         if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Comma) {
@@ -1676,7 +1870,7 @@ impl<'a> Parser<'a> {
                     self.restrict_struct_lit = old_restrict;
                     let ens_end = expr.span.end;
                     contracts.push(Spanned::new(
-                        ContractClause { kind: ContractKind::Ensures, expr },
+                        ContractClause { kind: ContractKind::Ensures, expr, provenance: None },
                         Span::new(ens_start, ens_end),
                     ));
                     // Inline form `... ensures <expr> {` — the body brace may

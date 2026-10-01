@@ -145,6 +145,10 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // register before body checking, so every method exit carries its proof
     // obligation and every caller can assume the relation.
     discharge::register_ensures(program, &mut env)?;
+    // Provided properties (rfc-properties.md slice 2): the atoms were
+    // already desugared into the invariant/guard sets above; here the
+    // property NAME is retained per type as its exported fact.
+    register_provided_properties(program, &mut env);
     // DI-synthesized construction (startup singletons, per-injection
     // transients) zero-initializes non-dep fields without a struct literal;
     // the invariants must hold for that initial state.
@@ -204,6 +208,33 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     }
 
     Ok((env, warnings))
+}
+
+/// Record each class's `satisfies` instantiations in the TypeEnv
+/// (rfc-properties.md slice 2): the property name is the type's exported
+/// fact, consumed by phase-5 requires/assume matching and surfaced through
+/// DerivedInfo for `pluto analyze`.
+fn register_provided_properties(program: &Program, env: &mut TypeEnv) {
+    for class in &program.classes {
+        if class.node.satisfies.is_empty() {
+            continue;
+        }
+        let provided: Vec<env::ProvidedProperty> = class
+            .node
+            .satisfies
+            .iter()
+            .map(|clause| env::ProvidedProperty {
+                name: clause.node.name.node.clone(),
+                args: clause
+                    .node
+                    .args
+                    .iter()
+                    .map(|a| crate::properties::render_satisfies_arg(&a.node))
+                    .collect(),
+            })
+            .collect();
+        env.class_properties.insert(class.node.name.node.clone(), provided);
+    }
 }
 
 fn generate_warnings(env: &TypeEnv, program: &Program) -> Vec<CompileWarning> {

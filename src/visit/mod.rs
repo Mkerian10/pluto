@@ -233,6 +233,10 @@ pub trait Visitor: Sized {
         walk_import(self, import);
     }
 
+    fn visit_property(&mut self, property: &Spanned<PropertyDecl>) {
+        walk_property(self, property);
+    }
+
     // Statement/Expression-level
     fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
         walk_stmt(self, stmt);
@@ -283,7 +287,27 @@ pub fn walk_program<V: Visitor>(v: &mut V, program: &Program) {
     for error_decl in &program.errors {
         v.visit_error(error_decl);
     }
+    for property in &program.properties {
+        v.visit_property(property);
+    }
     // Note: test_info and tests are synthetic metadata, not walked
+}
+
+pub fn walk_property<V: Visitor>(v: &mut V, property: &Spanned<PropertyDecl>) {
+    for param in &property.node.params {
+        if let PropertyParamKind::Field { ty: Some(ty) } = &param.kind.node {
+            v.visit_type_expr(ty);
+        }
+    }
+    for atom in &property.node.atoms {
+        match &atom.node.kind {
+            PropertyAtomKind::Invariant { expr } => v.visit_expr(expr),
+            PropertyAtomKind::Guarded { target: _, clause } => {
+                v.visit_type_expr(&clause.binder_ty);
+                v.visit_expr(&clause.predicate);
+            }
+        }
+    }
 }
 
 pub fn walk_import<V: Visitor>(_v: &mut V, _import: &Spanned<ImportDecl>) {
@@ -340,6 +364,13 @@ pub fn walk_class<V: Visitor>(v: &mut V, class: &Spanned<ClassDecl>) {
     // Visit invariants
     for invariant in &class.node.invariants {
         v.visit_expr(&invariant.node.expr);
+    }
+
+    // Visit satisfies-clause arguments
+    for clause in &class.node.satisfies {
+        for arg in &clause.node.args {
+            v.visit_expr(arg);
+        }
     }
 }
 
@@ -810,6 +841,10 @@ pub trait VisitMut: Sized {
         walk_import_mut(self, import);
     }
 
+    fn visit_property_mut(&mut self, property: &mut Spanned<PropertyDecl>) {
+        walk_property_mut(self, property);
+    }
+
     // Statement/Expression-level
     fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
         walk_stmt_mut(self, stmt);
@@ -859,6 +894,26 @@ pub fn walk_program_mut<V: VisitMut>(v: &mut V, program: &mut Program) {
     for error_decl in &mut program.errors {
         v.visit_error_mut(error_decl);
     }
+    for property in &mut program.properties {
+        v.visit_property_mut(property);
+    }
+}
+
+pub fn walk_property_mut<V: VisitMut>(v: &mut V, property: &mut Spanned<PropertyDecl>) {
+    for param in &mut property.node.params {
+        if let PropertyParamKind::Field { ty: Some(ty) } = &mut param.kind.node {
+            v.visit_type_expr_mut(ty);
+        }
+    }
+    for atom in &mut property.node.atoms {
+        match &mut atom.node.kind {
+            PropertyAtomKind::Invariant { expr } => v.visit_expr_mut(expr),
+            PropertyAtomKind::Guarded { target: _, clause } => {
+                v.visit_type_expr_mut(&mut clause.binder_ty);
+                v.visit_expr_mut(&mut clause.predicate);
+            }
+        }
+    }
 }
 
 pub fn walk_import_mut<V: VisitMut>(_v: &mut V, _import: &mut Spanned<ImportDecl>) {
@@ -900,6 +955,11 @@ pub fn walk_class_mut<V: VisitMut>(v: &mut V, class: &mut Spanned<ClassDecl>) {
     }
     for invariant in &mut class.node.invariants {
         v.visit_expr_mut(&mut invariant.node.expr);
+    }
+    for clause in &mut class.node.satisfies {
+        for arg in &mut clause.node.args {
+            v.visit_expr_mut(arg);
+        }
     }
 }
 

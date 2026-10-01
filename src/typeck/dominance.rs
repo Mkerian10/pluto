@@ -145,6 +145,18 @@ pub struct GuardSpec {
     /// `guarded_by (g: WriteGrant) g.token == self.epoch`.
     pub desc: String,
     pub span: Span,
+    /// Set when the clause was injected by a property instantiation
+    /// (`satisfies fenced(...)`, rfc-properties.md slice 2). Every
+    /// diagnostic about the obligation appends `blame()` so the failure
+    /// shows BOTH the property body and the failing site.
+    pub provenance: Option<crate::parser::ast::PropertyProvenance>,
+}
+
+impl GuardSpec {
+    /// The property-side blame suffix ("" for hand-written clauses).
+    fn blame(&self) -> String {
+        crate::parser::ast::provenance_blame(&self.provenance)
+    }
 }
 
 fn guard_desc(field: &str, clause: &GuardClause, binder_class: &str) -> String {
@@ -183,6 +195,27 @@ pub(crate) fn register_guards(program: &Program, env: &mut TypeEnv) -> Result<()
         }
         let mut specs = Vec::new();
         for (field, clause) in guarded {
+            // Declaration-time validation; property-injected clauses carry
+            // the property-side blame suffix on every failure (two-sided
+            // blame also covers instantiation-time validation).
+            let spec = validate_guard_clause(c, field, clause, env)
+                .map_err(|e| super::discharge::append_blame(e, &clause.provenance))?;
+            specs.push(spec);
+        }
+        env.guarded_fields.insert(c.name.node.clone(), specs);
+    }
+    Ok(())
+}
+
+/// Validate one `guarded_by` clause and build its spec.
+fn validate_guard_clause(
+    c: &crate::parser::ast::ClassDecl,
+    field: &crate::parser::ast::Field,
+    clause: &GuardClause,
+    env: &mut TypeEnv,
+) -> Result<GuardSpec, CompileError> {
+    {
+        {
             let binder_class = match &clause.binder_ty.node {
                 TypeExpr::Named(n) if env.classes.contains_key(n) => n.clone(),
                 TypeExpr::Named(n) => {
@@ -252,7 +285,7 @@ pub(crate) fn register_guards(program: &Program, env: &mut TypeEnv) -> Result<()
                 &desc,
                 env,
             )?;
-            specs.push(GuardSpec {
+            Ok(GuardSpec {
                 class_name: c.name.node.clone(),
                 field_name: field.name.node.clone(),
                 binder_name: clause.binder.node.clone(),
@@ -260,11 +293,10 @@ pub(crate) fn register_guards(program: &Program, env: &mut TypeEnv) -> Result<()
                 predicate: clause.predicate.clone(),
                 desc,
                 span: clause.predicate.span,
-            });
+                provenance: clause.provenance.clone(),
+            })
         }
-        env.guarded_fields.insert(c.name.node.clone(), specs);
     }
-    Ok(())
 }
 
 fn fragment_err(reason: String, desc: &str, span: Span) -> CompileError {
@@ -1220,8 +1252,8 @@ impl<'a> Analyzer<'a> {
                             "cannot verify that this write to '{}' does not target the \
                              guarded field {} of class '{}': the assignment target is not \
                              a trackable path. Bind the object to a local variable first \
-                             (let o = ...; o.{} = ...), or rename the field",
-                            field.node, spec.desc, spec.class_name, field.node
+                             (let o = ...; o.{} = ...), or rename the field{}",
+                            field.node, spec.desc, spec.class_name, field.node, spec.blame()
                         ),
                         span,
                     ));
@@ -1272,8 +1304,8 @@ impl<'a> Analyzer<'a> {
                 "guarded field '{}' of class '{}' may only be written through 'self' \
                  inside the class's own methods: it is protected by {}, and the \
                  dominance proof is only meaningful under the class's own control flow. \
-                 Add a method on '{}' that takes the evidence and performs the write",
-                spec.field_name, spec.class_name, spec.desc, spec.class_name
+                 Add a method on '{}' that takes the evidence and performs the write{}",
+                spec.field_name, spec.class_name, spec.desc, spec.class_name, spec.blame()
             ),
             span,
         ));
@@ -1304,8 +1336,8 @@ impl<'a> Analyzer<'a> {
                 format!(
                     "cannot prove guard {} of class '{}' at this write: no value of the \
                      binder type '{}' is in scope. The guard needs evidence — take a \
-                     '{}' parameter (or bind one) and check it before the write",
-                    spec.desc, spec.class_name, spec.binder_class, spec.binder_class
+                     '{}' parameter (or bind one) and check it before the write{}",
+                    spec.desc, spec.class_name, spec.binder_class, spec.binder_class, spec.blame()
                 ),
                 span,
             ));
@@ -1343,10 +1375,11 @@ impl<'a> Analyzer<'a> {
                  path raises or returns, placed before the write — and the facts it \
                  establishes must survive to the write site (they are invalidated by \
                  calls that may run user code, loop boundaries, and writes to the \
-                 compared fields)",
+                 compared fields){}",
                 spec.desc,
                 spec.class_name,
                 spec.binder_class,
+                spec.blame(),
                 cand0 = candidates[0]
             ),
             span,

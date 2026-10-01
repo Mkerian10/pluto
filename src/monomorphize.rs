@@ -1344,6 +1344,7 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
             invariants: vec![],
         };
 
@@ -1648,6 +1649,7 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
             invariants: vec![],
         };
 
@@ -1694,6 +1696,7 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
             invariants: vec![],
         };
 
@@ -1739,6 +1742,7 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
             invariants: vec![],
         };
 
@@ -3107,6 +3111,7 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
             invariants: vec![],
         };
 
@@ -3155,6 +3160,7 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
             invariants: vec![],
         };
 
@@ -3308,6 +3314,7 @@ mod tests {
             contracts: vec![spanned(ContractClause {
                 kind: ContractKind::Requires,
                 expr: spanned(Expr::BoolLit(true)),
+                provenance: None,
             })],
             is_pub: false,
             is_override: false,
@@ -3344,9 +3351,11 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
             invariants: vec![spanned(ContractClause {
                 kind: ContractKind::Invariant,
                 expr: spanned(Expr::BoolLit(true)),
+                provenance: None,
             })],
         };
 
@@ -3379,6 +3388,7 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
             invariants: vec![],
         };
 
@@ -3450,6 +3460,7 @@ mod tests {
                         node: Expr::BoolLit(true),
                         span: Span { start: 30, end: 34, file_id: 0 },
                     },
+                    provenance: None,
                 },
                 span: Span { start: 20, end: 35, file_id: 0 },
             }],
@@ -3486,6 +3497,7 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
             invariants: vec![Spanned {
                 node: ContractClause {
                     kind: ContractKind::Invariant,
@@ -3493,6 +3505,7 @@ mod tests {
                         node: Expr::BoolLit(true),
                         span: Span { start: 30, end: 34, file_id: 0 },
                     },
+                    provenance: None,
                 },
                 span: Span { start: 20, end: 35, file_id: 0 },
             }],

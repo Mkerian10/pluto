@@ -104,6 +104,18 @@ pub struct InvariantSpec {
     /// at construction, DI synthesis, or wire-decode (no pre-state exists
     /// there).
     pub two_state: bool,
+    /// Set when the invariant was injected by a property instantiation
+    /// (`satisfies`, rfc-properties.md slice 2). Every diagnostic about the
+    /// obligation appends `blame()` so the failure shows BOTH the property
+    /// body and the failing site (two-sided blame).
+    pub provenance: Option<crate::parser::ast::PropertyProvenance>,
+}
+
+impl InvariantSpec {
+    /// The property-side blame suffix ("" for hand-written invariants).
+    fn blame(&self) -> String {
+        crate::parser::ast::provenance_blame(&self.provenance)
+    }
 }
 
 /// A validated, provable `ensures` postcondition of a method
@@ -181,29 +193,53 @@ pub(crate) fn register_invariants(program: &Program, env: &mut TypeEnv) -> Resul
                 super::infer::infer_expr(&stripped, inv.node.expr.span, env, None)?;
             if inv_type != PlutoType::Bool {
                 env.pop_scope();
-                return Err(CompileError::type_err(
-                    format!("invariant expression must be bool, found {inv_type}"),
-                    inv.node.expr.span,
+                return Err(append_blame(
+                    CompileError::type_err(
+                        format!("invariant expression must be bool, found {inv_type}"),
+                        inv.node.expr.span,
+                    ),
+                    &inv.node.provenance,
                 ));
             }
         }
         env.pop_scope();
 
-        // Provable-fragment validation.
+        // Provable-fragment validation. For property-injected clauses the
+        // fragment error gains the property-side blame suffix (two-sided
+        // blame also covers instantiation-time validation failures).
         let mut specs = Vec::new();
         for inv in &invariants {
             let desc = crate::codegen::format_invariant_expr(&inv.node.expr.node);
-            validate_provable(&inv.node.expr, &c.name.node, &desc, env)?;
+            validate_provable(&inv.node.expr, &c.name.node, &desc, env)
+                .map_err(|e| append_blame(e, &inv.node.provenance))?;
             specs.push(InvariantSpec {
                 expr: inv.node.expr.node.clone(),
                 desc,
                 span: inv.node.expr.span,
                 two_state: expr_contains_old(&inv.node.expr.node),
+                provenance: inv.node.provenance.clone(),
             });
         }
         env.class_invariants.insert(c.name.node.clone(), specs);
     }
     Ok(())
+}
+
+/// Append the property-side blame suffix to a diagnostic about a
+/// property-injected clause (no-op for hand-written clauses).
+pub(crate) fn append_blame(
+    err: CompileError,
+    provenance: &Option<crate::parser::ast::PropertyProvenance>,
+) -> CompileError {
+    let suffix = crate::parser::ast::provenance_blame(provenance);
+    if suffix.is_empty() {
+        return err;
+    }
+    match err {
+        CompileError::Type { msg, span } => CompileError::Type { msg: format!("{msg}{suffix}"), span },
+        CompileError::Syntax { msg, span } => CompileError::Syntax { msg: format!("{msg}{suffix}"), span },
+        other => other,
+    }
 }
 
 fn fragment_err(reason: String, desc: &str, span: Span) -> CompileError {
@@ -904,11 +940,12 @@ fn checkpoint(
             Verdict::Refuted => {
                 return Err(CompileError::type_err(
                     format!(
-                        "invariant '{}' of class '{}' is violated at {site} in method '{}': {}",
+                        "invariant '{}' of class '{}' is violated at {site} in method '{}': {}{}",
                         spec.desc,
                         scope.class_name,
                         scope.method_name,
                         symbolic_state(scope, &fields),
+                        spec.blame(),
                     ),
                     span,
                 ));
@@ -921,11 +958,12 @@ fn checkpoint(
                          writes, but must be re-established at every boundary (method \
                          exits, raises, calls, loops, branch joins). Establish the missing \
                          bound before this point with a guard, a 'requires' clause, or an \
-                         'assert' (e.g. 'if amt <= self.balance {{ ... }}')",
+                         'assert' (e.g. 'if amt <= self.balance {{ ... }}'){}",
                         spec.desc,
                         scope.class_name,
                         scope.method_name,
                         symbolic_state(scope, &fields),
+                        spec.blame(),
                     ),
                     span,
                 ));
@@ -1998,8 +2036,8 @@ fn pre_field_assign(
             Verdict::Refuted => {
                 return Err(CompileError::type_err(
                     format!(
-                        "this write to '{opath}.{}' violates invariant '{}' of class '{cls}'",
-                        field.node, spec.desc
+                        "this write to '{opath}.{}' violates invariant '{}' of class '{cls}'{}",
+                        field.node, spec.desc, spec.blame()
                     ),
                     span,
                 ));
@@ -2012,8 +2050,8 @@ fn pre_field_assign(
                          preserve the invariant immediately; add a guard or 'assert' \
                          establishing the needed bound before the write (e.g. \
                          'if v >= 0 {{ {opath}.{} = v }}'), or move the write into a \
-                         'mut self' method of '{cls}'",
-                        spec.desc, field.node, field.node
+                         'mut self' method of '{cls}'{}",
+                        spec.desc, field.node, field.node, spec.blame()
                     ),
                     span,
                 ));
@@ -2387,8 +2425,9 @@ pub(crate) fn check_construction(
             Verdict::Refuted => {
                 return Err(CompileError::type_err(
                     format!(
-                        "construction of '{class_name}' violates its invariant '{}'",
-                        spec.desc
+                        "construction of '{class_name}' violates its invariant '{}'{}",
+                        spec.desc,
+                        spec.blame()
                     ),
                     span,
                 ));
@@ -2401,8 +2440,9 @@ pub(crate) fn check_construction(
                          satisfy it. Establish the needed facts before constructing — a \
                          guard ('if x >= 0 {{ ... }}'), an 'assert', or a 'requires' clause \
                          on the enclosing function — or simplify the initializers to \
-                         expressions the prover can bound",
-                        spec.desc
+                         expressions the prover can bound{}",
+                        spec.desc,
+                        spec.blame()
                     ),
                     span,
                 ));
@@ -2464,8 +2504,9 @@ pub(crate) fn check_di_construction(
                          the zero state satisfies (e.g. 'self.count >= 0'), or take \
                          '{class_name}' out of DI wiring: give it a 'scoped' lifecycle and \
                          seed it with proven initial values in a scope block \
-                         ('scope({class_name} {{ ... }}) |x: {class_name}| {{ ... }}')",
-                        spec.desc
+                         ('scope({class_name} {{ ... }}) |x: {class_name}| {{ ... }}'){}",
+                        spec.desc,
+                        spec.blame()
                     ),
                     spec.span,
                 ));

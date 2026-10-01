@@ -251,6 +251,7 @@ mod tests {
             test_info: vec![],
             tests: None,
             fallible_extern_fns: vec![],
+            properties: vec![],
         }
     }
 
@@ -303,6 +304,7 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
         }));
 
         let mut caller = make_function("main");
@@ -635,6 +637,7 @@ mod tests {
             is_pub: false,
             lifecycle: Lifecycle::Singleton,
             is_object: false,
+            satisfies: vec![],
         }));
 
         // After codegen method mangling, calls use "Greeter$hello"

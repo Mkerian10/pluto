@@ -155,6 +155,14 @@ impl PrettyPrinter {
             self.newline();
         }
 
+        // 6b. Properties
+        for prop in &program.properties {
+            sep!(self, has_output);
+            self.emit_uuid_hint(&prop.node.id);
+            self.emit_property_decl(&prop.node);
+            self.newline();
+        }
+
         // 7. Classes
         for cls in &program.classes {
             sep!(self, has_output);
@@ -429,11 +437,31 @@ impl PrettyPrinter {
             }
         }
 
+        // satisfies clauses (property instantiations)
+        if !cls.satisfies.is_empty() {
+            self.write(" satisfies ");
+            for (i, clause) in cls.satisfies.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.write(&clause.node.name.node);
+                self.write("(");
+                for (j, arg) in clause.node.args.iter().enumerate() {
+                    if j > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(&arg.node, 0);
+                }
+                self.write(")");
+            }
+        }
+
         self.write(" {");
         self.newline();
         self.indent();
 
-        // Non-injected fields
+        // Non-injected fields. Property-injected guard clauses are derived
+        // (they re-materialize from the satisfies clause) — not printed.
         let regular_fields: Vec<&Field> = cls.fields.iter().filter(|f| !f.is_injected).collect();
         for field in &regular_fields {
             self.write_indent();
@@ -441,18 +469,25 @@ impl PrettyPrinter {
             self.write(": ");
             self.emit_type_expr(&field.ty.node);
             if let Some(guard) = &field.guarded_by {
-                self.write(" guarded_by (");
-                self.write(&guard.binder.node);
-                self.write(": ");
-                self.emit_type_expr(&guard.binder_ty.node);
-                self.write(") ");
-                self.emit_expr(&guard.predicate.node, 0);
+                if guard.provenance.is_none() {
+                    self.write(" guarded_by (");
+                    self.write(&guard.binder.node);
+                    self.write(": ");
+                    self.emit_type_expr(&guard.binder_ty.node);
+                    self.write(") ");
+                    self.emit_expr(&guard.predicate.node, 0);
+                }
             }
             self.newline();
         }
 
-        // Invariants and must-release annotations
+        // Invariants and must-release annotations. Property-injected
+        // invariants are derived (they re-materialize from the satisfies
+        // clause) — not printed.
         for inv in &cls.invariants {
+            if inv.node.provenance.is_some() {
+                continue;
+            }
             if !regular_fields.is_empty() {
                 self.newline();
             }
@@ -492,6 +527,58 @@ impl PrettyPrinter {
     }
 
     // ── Function ─────────────────────────────────────────────────────
+
+    fn emit_property_decl(&mut self, prop: &PropertyDecl) {
+        if prop.is_pub {
+            self.write("pub ");
+        }
+        self.write("property ");
+        self.write(&prop.name.node);
+        self.write("(");
+        for (i, param) in prop.params.iter().enumerate() {
+            if i > 0 {
+                self.write(", ");
+            }
+            self.write(&param.name.node);
+            self.write(": ");
+            match &param.kind.node {
+                PropertyParamKind::Field { ty: Some(ty) } => {
+                    self.write("field<");
+                    self.emit_type_expr(&ty.node);
+                    self.write(">");
+                }
+                PropertyParamKind::Field { ty: None } => self.write("field"),
+                PropertyParamKind::Type => self.write("type"),
+                PropertyParamKind::ConstInt => self.write("const int"),
+            }
+        }
+        self.write(") {");
+        self.newline();
+        self.indent();
+        for atom in &prop.atoms {
+            self.write_indent();
+            match &atom.node.kind {
+                PropertyAtomKind::Invariant { expr } => {
+                    self.write("invariant ");
+                    self.emit_expr(&expr.node, 0);
+                }
+                PropertyAtomKind::Guarded { target, clause } => {
+                    self.write(&target.node);
+                    self.write(" guarded_by (");
+                    self.write(&clause.binder.node);
+                    self.write(": ");
+                    self.emit_type_expr(&clause.binder_ty.node);
+                    self.write(") ");
+                    self.emit_expr(&clause.predicate.node, 0);
+                }
+            }
+            self.newline();
+        }
+        self.dedent();
+        self.write_indent();
+        self.write("}");
+        self.newline();
+    }
 
     fn emit_function(&mut self, func: &Function) {
         self.emit_function_header(func);
