@@ -890,7 +890,7 @@ impl<'a> Parser<'a> {
                 // placed in it with `at` (docs/design/rfc-at-placement.md).
                 let is_domain = !is_remote && p.eat_contextual_keyword("domain");
                 let ty = p.parse_type()?;
-                Ok(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false, is_remote, is_domain })
+                Ok(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false, is_remote, is_domain, guarded_by: None })
             })?;
             self.expect(&Token::RBracket)?;
             Ok(deps)
@@ -1146,7 +1146,7 @@ impl<'a> Parser<'a> {
                     let fname = p.expect_ident()?;
                     p.expect(&Token::Colon)?;
                     let fty = p.parse_type()?;
-                    Ok(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false })
+                    Ok(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false, guarded_by: None })
                 })?;
                 self.expect(&Token::RBrace)?;
                 fields
@@ -1184,7 +1184,7 @@ impl<'a> Parser<'a> {
             let fname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type()?;
-            fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false });
+            fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false, guarded_by: None });
             self.skip_newlines();
         }
 
@@ -1422,7 +1422,23 @@ impl<'a> Parser<'a> {
                 let fname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
-                fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false });
+                // Optional dominance guard (properties RFC atom 3):
+                //   data: bytes guarded_by (g: WriteGrant) g.token == self.epoch
+                let guarded_by = if self.peek().is_some()
+                    && matches!(self.peek().expect("token should exist after is_some check").node, Token::GuardedBy)
+                {
+                    self.advance(); // consume 'guarded_by'
+                    self.expect(&Token::LParen)?;
+                    let binder = self.expect_ident()?;
+                    self.expect(&Token::Colon)?;
+                    let binder_ty = self.parse_type()?;
+                    self.expect(&Token::RParen)?;
+                    let predicate = self.parse_expr(0)?;
+                    Some(GuardClause { binder, binder_ty, predicate })
+                } else {
+                    None
+                };
+                fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false, guarded_by });
                 // Allow comma-separated fields: x: int, y: int
                 if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Comma) {
                     self.advance(); // consume comma
@@ -4224,6 +4240,18 @@ mod tests {
     fn parse_multiple_functions() {
         let prog = parse("fn foo() {\n}\n\nfn bar() {\n}");
         assert_eq!(prog.functions.len(), 2);
+    }
+
+    #[test]
+    fn parse_guarded_field() {
+        let prog = parse(
+            "object Store {\n    data: bytes guarded_by (g: WriteGrant) g.token == self.epoch\n    epoch: int\n}",
+        );
+        let c = &prog.classes[0].node;
+        let guard = c.fields[0].guarded_by.as_ref().expect("guard clause parsed");
+        assert_eq!(guard.binder.node, "g");
+        assert!(matches!(&guard.binder_ty.node, TypeExpr::Named(n) if n == "WriteGrant"));
+        assert!(c.fields[1].guarded_by.is_none());
     }
 
     #[test]

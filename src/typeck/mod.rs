@@ -1,5 +1,6 @@
 pub mod env;
 pub mod discharge;
+pub mod dominance;
 pub mod facts;
 pub mod types;
 pub mod serializable;
@@ -135,6 +136,10 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // register provable class invariants before any body is checked, so
     // every construction and write site carries its proof obligation.
     discharge::register_invariants(program, &mut env)?;
+    // Guard clauses (properties RFC atom 3): validate and register every
+    // field's `guarded_by` before body checking; the write-site dominance
+    // pass runs after bodies are checked (it needs method resolutions).
+    dominance::register_guards(program, &mut env)?;
     // DI-synthesized construction (startup singletons, per-injection
     // transients) zero-initializes non-dep fields without a struct literal;
     // the invariants must hold for that initial state.
@@ -160,6 +165,11 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // before sweep_skolems — generic templates' resolutions are keyed under
     // skolem-instance names this pass reconstructs.
     linearity::check_transition_linearity(program, &env)?;
+    // `guarded_by` dominance proofs (properties RFC atom 3): every write
+    // site of a guarded field must be dominated by a check implying the
+    // guard predicate. Needs the method resolutions recorded during body
+    // checking, so it runs here, before skolem sweep.
+    dominance::check_guard_dominance(program, &env)?;
     // Skolem artifacts served error inference/enforcement above; they must not
     // reach monomorphization, reflection, or marshaling.
     templates::sweep_skolems(&mut env);

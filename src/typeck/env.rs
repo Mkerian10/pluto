@@ -356,6 +356,11 @@ pub struct TypeEnv {
     /// Active proof scope while checking a `mut self` method body of an
     /// invariant-carrying class (symbolic field state + ghost facts).
     pub invariant_scope: Option<super::discharge::InvariantScope>,
+    /// Validated `guarded_by` clauses (properties RFC atom 3): class name →
+    /// guard specs. Populated by `dominance::register_guards`; every write
+    /// site of a guarded field is proven dominated by
+    /// `dominance::check_guard_dominance`. See `src/typeck/dominance.rs`.
+    pub guarded_fields: HashMap<String, Vec<super::dominance::GuardSpec>>,
 }
 
 impl Default for TypeEnv {
@@ -453,6 +458,7 @@ impl TypeEnv {
             degenerate_conditions: Vec::new(),
             class_invariants: HashMap::new(),
             invariant_scope: None,
+            guarded_fields: HashMap::new(),
         }
     }
 
