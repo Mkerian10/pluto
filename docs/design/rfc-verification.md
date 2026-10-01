@@ -128,14 +128,31 @@ an unhandled runtime error):
   at the site), or parameter length terms (`p.len()` on declared collection
   params — a pure read, substituted to the actual's length term), still holding
   their *entry* values at evaluation (any preceding impure call, parameter
-  assignment, or field write invalidates it; raises inside loops, match arms, select/scope blocks, catch
-  handlers, and expression-level blocks are never summarized). Variants arriving
+  assignment, or field write invalidates it; raises inside match arms,
+  select/scope blocks, catch handlers, and expression-level blocks are never
+  summarized). Variants arriving
   via propagation (`!` edges, escaped closures, dynamic dispatch) and runtime
   raise sources (channel ops, unknown task origins, fallible fn-values, remote
   boundaries) never shrink.
-- **Direct calls only.** Named non-generic free functions and Class-resolved
-  method calls on trackable receivers; calls through fn-typed values, closures,
-  trait objects, `at` placement, and generic callees are untouched.
+- **Direct calls only.** Named free functions and Class-resolved method calls
+  on trackable receivers; calls through fn-typed values, closures, trait
+  objects, and `at` placement are untouched.
+- **Scope expansion (phase 3.5).** Generic callees shrink via *template
+  summaries*: a template's guard chains are syntactic and hold verbatim for
+  every instantiation, so one summary (under the template key) serves all
+  instance call sites — provided no guard mentions a type-param-dependent
+  leaf (a param or `self` field whose declared type mentions a type param);
+  such guards never validate. This admits the typestate pattern, whose state
+  params are phantom and whose guards are over plain int fields
+  (`Lease<S>.renew`'s `self.epoch > 2`). Generic *callers* still never
+  shrink their own sites (skolem-checked once, facts are per-instantiation).
+  Granularity is per raise site, loop-tolerantly: a loop-resident raise
+  summarizes when its guard chain survives the whole loop body's kills
+  applied at loop entry (any iteration may rerun the body first), so
+  entry-stable guards no longer lose to a loop-resident raise of the same
+  variant. Guards over call-produced values (stdlib json's byte-wise
+  parsers) remain correctly unshrinkable — those are runtime facts, not
+  entry facts.
 - **The global graph is untouched.** Shrinking narrows the *required-handling*
   set at individual call sites (enforcement and typed-catch coverage); the
   callee's canonical inferred error set — and therefore propagation through `!` —
