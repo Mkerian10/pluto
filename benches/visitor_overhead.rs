@@ -156,6 +156,13 @@ fn count_exprs_in_stmt_manual(stmt: &Stmt) -> usize {
         Stmt::Yield { value } => {
             count += count_exprs_manual_expr(&value.node);
         }
+        Stmt::Assert { expr } => {
+            count += count_exprs_manual_expr(&expr.node);
+        }
+        Stmt::Serve { service, port } => {
+            count += count_exprs_manual_expr(&service.node);
+            count += count_exprs_manual_expr(&port.node);
+        }
     }
     count
 }
@@ -222,14 +229,19 @@ fn count_exprs_manual_expr(expr: &Expr) -> usize {
         Expr::Propagate { expr } => {
             count += count_exprs_manual_expr(&expr.node);
         }
-        Expr::Catch { expr, handler } => {
+        Expr::Catch { expr, handlers } => {
             count += count_exprs_manual_expr(&expr.node);
-            match handler {
-                CatchHandler::Wildcard { body, .. } => {
-                    count += count_exprs_in_block_manual(&body.node);
-                }
-                CatchHandler::Shorthand(shorthand_expr) => {
-                    count += count_exprs_manual_expr(&shorthand_expr.node);
+            for handler in handlers {
+                match handler {
+                    CatchHandler::Wildcard { body, .. } => {
+                        count += count_exprs_in_block_manual(&body.node);
+                    }
+                    CatchHandler::Typed { body, .. } => {
+                        count += count_exprs_in_block_manual(&body.node);
+                    }
+                    CatchHandler::Shorthand(shorthand_expr) => {
+                        count += count_exprs_manual_expr(&shorthand_expr.node);
+                    }
                 }
             }
         }
@@ -278,6 +290,31 @@ fn count_exprs_manual_expr(expr: &Expr) -> usize {
             }
         }
         Expr::QualifiedAccess { .. } => {}
+        Expr::NullCoalesce { lhs, rhs } => {
+            count += count_exprs_manual_expr(&lhs.node);
+            count += count_exprs_manual_expr(&rhs.node);
+        }
+        Expr::If {
+            condition,
+            then_block,
+            else_block,
+        } => {
+            count += count_exprs_manual_expr(&condition.node);
+            count += count_exprs_in_block_manual(&then_block.node);
+            count += count_exprs_in_block_manual(&else_block.node);
+        }
+        Expr::At { domain, args, .. } => {
+            count += count_exprs_manual_expr(&domain.node);
+            for arg in args {
+                count += count_exprs_manual_expr(&arg.node);
+            }
+        }
+        Expr::Match { expr, arms } => {
+            count += count_exprs_manual_expr(&expr.node);
+            for arm in arms {
+                count += count_exprs_manual_expr(&arm.value.node);
+            }
+        }
     }
 
     count
