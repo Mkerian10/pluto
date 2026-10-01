@@ -683,11 +683,12 @@ fn relational_guard_shrinks() {
     assert_eq!(out.trim(), "40");
 }
 
-/// Raises nested inside loops are never summarized: the callee's guard may
-/// be evaluated after arbitrary mutation across iterations.
+/// A loop-resident raise whose guard is loop-invariant and entry-stable
+/// summarizes: the loop never disturbs `x`, so the guard means the same
+/// thing on every iteration and the caller's fact refutes it.
 #[test]
-fn callee_raise_inside_loop_never_shrinks() {
-    compile_should_fail_with(
+fn loop_invariant_guard_shrinks() {
+    let out = compile_and_run_stdout(
         r#"
         error Negative {}
 
@@ -707,7 +708,174 @@ fn callee_raise_inside_loop_never_shrinks() {
             }
         }
         "#,
+    );
+    assert_eq!(out.trim(), "5");
+}
+
+/// A loop body that writes a guard-mentioned field invalidates the guard
+/// for every iteration (an earlier iteration may have run the write before
+/// a later iteration's raise), so the variant never shrinks.
+#[test]
+fn loop_mutated_field_guard_never_shrinks() {
+    compile_should_fail_with(
+        r#"
+        error Overflow {}
+
+        class Counter {
+            c: int
+
+            fn bump(mut self) {
+                for i in 0..3 {
+                    if self.c > 10 {
+                        raise Overflow {}
+                    }
+                    self.c = self.c + 1
+                }
+            }
+        }
+
+        fn main() {
+            let mut k = Counter { c: 0 }
+            if k.c <= 10 {
+                k.bump()
+            }
+        }
+        "#,
+        "call to fallible method 'bump' must be handled",
+    );
+}
+
+/// A call anywhere in the loop body taints every loop guard (an alias may
+/// mutate reachable state between iterations), so the variant never shrinks.
+#[test]
+fn call_in_loop_body_poisons_guard() {
+    compile_should_fail_with(
+        r#"
+        error Big {}
+
+        fn helper() int {
+            return 1
+        }
+
+        fn scan(x: int) int {
+            for i in 0..3 {
+                let h = helper()
+                if x > 100 {
+                    raise Big {}
+                }
+            }
+            return x
+        }
+
+        fn main() {
+            let a = 5
+            if a <= 100 {
+                print(scan(a))
+            }
+        }
+        "#,
         "call to fallible function 'scan' must be handled",
+    );
+}
+
+/// Per-raise-site granularity across regions: a variant with an
+/// entry-guarded site AND a loop-resident loop-invariant site drops when
+/// the caller refutes both sites.
+#[test]
+fn entry_site_plus_loop_site_both_refuted() {
+    let out = compile_and_run_stdout(
+        r#"
+        error OutOfRange {}
+
+        fn check(x: int) int {
+            if x < 0 {
+                raise OutOfRange {}
+            }
+            for i in 0..3 {
+                if x > 100 {
+                    raise OutOfRange {}
+                }
+            }
+            return x
+        }
+
+        fn main() {
+            let a = 5
+            if a >= 0 && a <= 100 {
+                print(check(a))
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "5");
+}
+
+/// A while loop whose body only mutates a local counter leaves a
+/// param-only guard usable.
+#[test]
+fn while_loop_param_guard_shrinks() {
+    let out = compile_and_run_stdout(
+        r#"
+        error Negative {}
+
+        fn count(n: int) int {
+            let mut i = 0
+            while i < 3 {
+                if n < 0 {
+                    raise Negative {}
+                }
+                i = i + 1
+            }
+            return n
+        }
+
+        fn main() {
+            let a = 4
+            if a >= 0 {
+                print(count(a))
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "4");
+}
+
+/// An unguarded raise of the same variant inside a match arm still poisons
+/// the variant: refuting the entry-guarded site is not enough.
+#[test]
+fn match_arm_raise_still_poisons_variant() {
+    compile_should_fail_with(
+        r#"
+        error Bad {}
+
+        enum Mode {
+            Fast
+            Slow
+        }
+
+        fn run(m: Mode, x: int) int {
+            if x < 0 {
+                raise Bad {}
+            }
+            match m {
+                Mode.Fast {
+                    raise Bad {}
+                }
+                Mode.Slow {
+                    print(0)
+                }
+            }
+            return x
+        }
+
+        fn main() {
+            let a = 5
+            if a >= 0 {
+                print(run(Mode.Slow, a))
+            }
+        }
+        "#,
+        "call to fallible function 'run' must be handled",
     );
 }
 
@@ -962,5 +1130,321 @@ fn interleaved_call_kills_param_field_guard() {
         }
         "#,
         "must be handled",
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Generic callees (template summaries)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A generic free function's guard over a type-param-independent parameter
+/// shrinks at a concrete call site, exactly like concrete code.
+#[test]
+fn generic_free_fn_shrinks() {
+    let out = compile_and_run_stdout(
+        r#"
+        error BadIndex {}
+
+        fn nth<T>(xs: [T], i: int, fallback: T) T {
+            if i < 0 {
+                raise BadIndex {}
+            }
+            return fallback
+        }
+
+        fn main() {
+            let i = 2
+            if i >= 0 {
+                print(nth([1, 2, 3], i, 0))
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "0");
+}
+
+/// Without the caller guard the generic call still requires handling.
+#[test]
+fn generic_free_fn_unrefuted_requires_handling() {
+    compile_should_fail_with(
+        r#"
+        error BadIndex {}
+
+        fn nth<T>(xs: [T], i: int, fallback: T) T {
+            if i < 0 {
+                raise BadIndex {}
+            }
+            return fallback
+        }
+
+        fn main() {
+            let i = 2
+            print(nth([1, 2, 3], i, 0))
+        }
+        "#,
+        "call to fallible function 'nth' must be handled",
+    );
+}
+
+/// The typestate pattern (census category a): a state-generic class whose
+/// state param is phantom and whose guard is over a plain int field. The
+/// caller's fact on the receiver's field refutes the raise condition — the
+/// `where`-constrained transition call needs no handling.
+#[test]
+fn typestate_method_shrinks() {
+    let out = compile_and_run_stdout(
+        r#"
+        error Degraded {
+            code: int
+        }
+
+        class Held {
+            tag: int
+        }
+
+        class Lease<S> {
+            id: int
+            epoch: int
+
+            fn renew(self) Lease<Held> where S == Held {
+                if self.epoch > 2 {
+                    raise Degraded { code: self.epoch }
+                }
+                return Lease<Held> { id: self.id, epoch: self.epoch + 1 }
+            }
+        }
+
+        fn main() {
+            let h = Lease<Held> { id: 7, epoch: 1 }
+            if h.epoch <= 2 {
+                let h2 = h.renew()
+                print(h2.epoch)
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "2");
+}
+
+/// A plain (unconstrained) generic class method shrinks on guards over
+/// type-param-independent fields and params; both variants refuted here.
+#[test]
+fn generic_method_shrinks() {
+    let out = compile_and_run_stdout(
+        r#"
+        error TooSmall {}
+        error TooBig {}
+
+        class Box<T> {
+            v: T
+            n: int
+
+            fn take(self, amt: int) int {
+                if amt < 0 {
+                    raise TooSmall {}
+                }
+                if amt > self.n {
+                    raise TooBig {}
+                }
+                return self.n - amt
+            }
+        }
+
+        fn main() {
+            let b = Box<int> { v: 1, n: 10 }
+            let amt = 3
+            if amt >= 0 && amt <= b.n {
+                print(b.take(amt))
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "7");
+}
+
+/// A guard mentioning a type-param-dependent leaf (here a `[T]` parameter's
+/// length) never yields a summary: the fragment vocabulary does not survive
+/// instantiation, so the call still requires handling.
+#[test]
+fn skolem_dependent_guard_never_shrinks() {
+    compile_should_fail_with(
+        r#"
+        error TooLong {}
+
+        fn cap<T>(xs: [T]) int {
+            if xs.len() > 10 {
+                raise TooLong {}
+            }
+            return xs.len()
+        }
+
+        fn main() {
+            let xs = [1, 2, 3]
+            if xs.len() <= 10 {
+                print(cap(xs))
+            }
+        }
+        "#,
+        "call to fallible function 'cap' must be handled",
+    );
+}
+
+/// Typed-catch coverage on a generic method call uses the shrunk set: the
+/// refuted variant needs no handler; covering the remaining one suffices.
+#[test]
+fn generic_typed_catch_coverage_narrows() {
+    let out = compile_and_run_stdout(
+        r#"
+        error TooSmall {}
+        error TooBig {}
+
+        class Box<T> {
+            v: T
+            n: int
+
+            fn take(self, amt: int) int {
+                if amt < 0 {
+                    raise TooSmall {}
+                }
+                if amt > self.n {
+                    raise TooBig {}
+                }
+                return self.n - amt
+            }
+        }
+
+        fn main() {
+            let b = Box<int> { v: 1, n: 10 }
+            let amt = 3
+            if amt >= 0 {
+                let r = b.take(amt) catch e: TooBig {
+                    print(-1)
+                    return
+                }
+                print(r)
+            }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "7");
+}
+
+/// Handling a provably-impossible error on a generic call stays legal: the
+/// `!`-applied-to-infallible check keeps using the full inferred set.
+#[test]
+fn propagate_on_shrunk_generic_call_stays_legal() {
+    let out = compile_and_run_stdout(
+        r#"
+        error Degraded {
+            code: int
+        }
+
+        class Held {
+            tag: int
+        }
+
+        class Lease<S> {
+            id: int
+            epoch: int
+
+            fn renew(self) Lease<Held> where S == Held {
+                if self.epoch > 2 {
+                    raise Degraded { code: self.epoch }
+                }
+                return Lease<Held> { id: self.id, epoch: self.epoch + 1 }
+            }
+        }
+
+        fn use_lease(h: Lease<Held>) int {
+            if h.epoch <= 2 {
+                let h2 = h.renew()!
+                return h2.epoch
+            }
+            return 0
+        }
+
+        fn main() {
+            let h = Lease<Held> { id: 7, epoch: 1 }
+            print(use_lease(h) catch -1)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "2");
+}
+
+/// A generic callee whose caller does not refute the guard still requires
+/// handling (method form).
+#[test]
+fn typestate_method_unrefuted_requires_handling() {
+    compile_should_fail_with(
+        r#"
+        error Degraded {
+            code: int
+        }
+
+        class Held {
+            tag: int
+        }
+
+        class Lease<S> {
+            id: int
+            epoch: int
+
+            fn renew(self) Lease<Held> where S == Held {
+                if self.epoch > 2 {
+                    raise Degraded { code: self.epoch }
+                }
+                return Lease<Held> { id: self.id, epoch: self.epoch + 1 }
+            }
+        }
+
+        fn main() {
+            let h = Lease<Held> { id: 7, epoch: 1 }
+            let h2 = h.renew()
+            print(h2.epoch)
+        }
+        "#,
+        "call to fallible method 'renew' must be handled",
+    );
+}
+
+/// A variant that can also arrive through a `!` propagation edge inside the
+/// generic template body never shrinks, even when the guarded direct raise
+/// is refuted (propagation filtering uses the template's own edge set, not
+/// the instance->template bridge artifact).
+#[test]
+fn generic_method_propagated_variant_never_shrinks() {
+    compile_should_fail_with(
+        r#"
+        error Boom {}
+
+        fn helper(n: int) int {
+            if n > 1000 {
+                raise Boom {}
+            }
+            return n
+        }
+
+        class Box<T> {
+            v: T
+            n: int
+
+            fn poke(self, amt: int) int {
+                if amt < 0 {
+                    raise Boom {}
+                }
+                return helper(self.n)!
+            }
+        }
+
+        fn main() {
+            let b = Box<int> { v: 1, n: 2 }
+            let amt = 3
+            if amt >= 0 {
+                print(b.poke(amt))
+            }
+        }
+        "#,
+        "call to fallible method 'poke' must be handled",
     );
 }

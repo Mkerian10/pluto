@@ -9,19 +9,32 @@
 //! set (`env.fn_errors`, the global fixed point) is never changed — only
 //! what enforcement demands at an individual site.
 //!
-//! # Slice-1 scope (conservative by construction)
+//! # Scope (conservative by construction)
 //!
-//! - **Summaries cover direct raises only.** For each non-generic free
-//!   function and non-generic class/object method, each `raise X` statement
-//!   is summarized by its dominating guard chain (the `if` conditions on the
-//!   path from entry, with polarity). Variants whose raises arrive via
-//!   propagation (`!` edges, escaped closures, dynamic dispatch) never
-//!   shrink — they are subtracted via `env.fn_propagated_errors`.
-//! - **Direct calls only.** Shrinking applies to calls of named non-generic
-//!   free functions and method calls whose receiver is a trackable path of
-//!   concrete class (or object) type. Calls through fn-typed values,
-//!   closures, trait objects, `at` placement, and generic callees never
-//!   shrink (no summary exists / the site is not evaluated).
+//! - **Summaries cover direct raises only.** For each free function and
+//!   class/object method — generic templates included — each `raise X`
+//!   statement is summarized by its dominating guard chain (the `if`
+//!   conditions on the path from entry, with polarity). Variants whose
+//!   raises arrive via propagation (`!` edges, escaped closures, dynamic
+//!   dispatch) never shrink — they are subtracted via
+//!   `env.fn_propagated_errors`.
+//! - **Generic callees summarize at the template.** A template's guard
+//!   chains are syntactic and instantiation rewrites only type annotations,
+//!   so one summary (under the template key: `id`, `Lease$renew`) holds for
+//!   every instance; call sites on instance-mangled methods
+//!   (`Lease$$Held$renew`) resolve back to it. The scope rule is *fragment
+//!   survival*: a guard mentioning a type-param-dependent leaf (a param or
+//!   `self` field whose declared type mentions a type param) is never
+//!   usable. Guards over int params and int fields independent of the type
+//!   params — the typestate pattern, whose state params are phantom — work
+//!   exactly like concrete code. Generic *callers* still never shrink their
+//!   own call sites (their bodies are checked under skolems, per
+//!   instantiation facts don't exist).
+//! - **Direct calls only.** Shrinking applies to calls of named free
+//!   functions and method calls whose receiver is a trackable path of class
+//!   (or object) type. Calls through fn-typed values, closures, trait
+//!   objects, and `at` placement never shrink (no summary exists / the site
+//!   is not evaluated).
 //! - **Entry-value semantics.** A summary guard is only usable if, at its
 //!   evaluation point, every path it mentions still holds its
 //!   function-entry value: the extraction walker invalidates a guard once a
@@ -31,11 +44,17 @@
 //!   type — a pure builtin read; at the call site it substitutes to the
 //!   actual's length term, and guards over one-level parameter field paths
 //!   (`p.field`, non-entity class params) substitute to the actual's field
-//!   path, usable when the caller holds facts about it. Raises
-//!   inside loops, match arms, select/scope blocks, catch handlers, and
-//!   expression-level blocks are never summarized (control reaches them
-//!   under conditions outside the decidable fragment, or after an unknown
-//!   number of mutations).
+//!   path, usable when the caller holds facts about it.
+//! - **Per-raise-site granularity, loop-tolerant.** A variant drops at a
+//!   call site iff *every* one of its raise sites is individually refuted.
+//!   A loop-resident raise summarizes when its surviving guard chain is
+//!   loop-invariant and entry-stable: the whole loop body's kills
+//!   (assignments, field writes, call taint) are applied at loop entry —
+//!   any iteration may rerun the body before a later iteration's raise —
+//!   and guards over paths the loop never disturbs stay usable. Raises
+//!   inside match arms, select/scope blocks, catch handlers, and
+//!   expression-level blocks are still never summarized (control reaches
+//!   them under conditions outside the decidable fragment).
 //! - **Runtime raise sources poison their variants.** Direct raises that do
 //!   not come from a `raise` statement — `select` without default
 //!   (ChannelClosed), propagated `at` (NetworkError), channel ops, unknown
@@ -77,11 +96,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::parser::ast::{Block, ClassDecl, Expr, Function, Program, Stmt};
+use crate::parser::ast::{Block, ClassDecl, Expr, Function, Program, Stmt, TypeExpr};
 use crate::span::Spanned;
 use crate::visit::{walk_expr, walk_stmt, Visitor};
 
-use super::env::{mangle_method, MethodResolution, TypeEnv};
+use super::env::{mangle_method, mangle_name, InstKind, MethodResolution, TypeEnv};
 use super::facts::{
     contains_call, eval_condition_with, immediate_exprs, len_path, to_affine, typed_path, Affine,
     FactEnv, Verdict,
@@ -134,8 +153,16 @@ pub struct FnRaiseSummary {
     pub variants: HashMap<String, VariantRaises>,
     /// Deferred poison sites, keyed by the span start that
     /// `method_resolutions` / `fallible_value_calls` /
-    /// `fallible_builtin_calls` use ((callee fn key, span start)).
+    /// `fallible_builtin_calls` use ((resolution_fn, span start)).
     pub deferred: Vec<(DeferredKind, usize)>,
+    /// The `current_fn` key under which typecheck recorded this body's
+    /// span-keyed records (method resolutions, fallible value/builtin
+    /// calls). Equal to the summary key for non-generic functions and
+    /// methods; for generic class template methods it is the skolem-check
+    /// instance key (`Lease$$%S$describe`, or the state-bound
+    /// `Lease$$Held$renew` for `where`-constrained methods — mirrors
+    /// templates.rs::check_class_template).
+    pub resolution_fn: String,
 }
 
 impl FnRaiseSummary {
@@ -167,43 +194,140 @@ impl FnRaiseSummary {
 // Extraction (syntactic pre-pass)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Build raise summaries for every non-generic free function and every
-/// method of a non-generic class/object (app and stage methods are skipped —
+/// Build raise summaries for every free function and every class/object
+/// method, generic templates included (app and stage methods are skipped —
 /// their calls never shrink in slice 1). Purely syntactic; runs before body
 /// checking so summaries exist for callers visited in any order.
+///
+/// Generic templates are summarized once, under their template key (`id`,
+/// `Lease$renew`): the guard chains are syntactic and `substitute_in_function`
+/// rewrites only type annotations, so a template's chains hold verbatim for
+/// every instantiation. The one scoping rule is *fragment survival*: a guard
+/// that mentions a type-param-dependent leaf (a parameter whose declared type
+/// mentions a type param, or a `self` field whose declared type does) is
+/// never usable — its value vocabulary changes per instantiation. Int fields
+/// and int params independent of the type params — the common typestate
+/// shape, where state params are phantom — summarize exactly like concrete
+/// code.
 pub(crate) fn extract_raise_summaries(program: &Program, env: &mut TypeEnv) {
     let mut out: HashMap<String, FnRaiseSummary> = HashMap::new();
     for func in &program.functions {
-        if !func.node.type_params.is_empty() {
-            continue;
-        }
-        out.insert(func.node.name.node.clone(), summarize_fn(&func.node));
+        let type_params: HashSet<String> =
+            func.node.type_params.iter().map(|tp| tp.node.clone()).collect();
+        let name = func.node.name.node.clone();
+        let mut summary = summarize_fn(&func.node, &type_params, &HashSet::new());
+        // Free-function templates are skolem-checked under their own name
+        // (templates.rs::check_function_template), so the resolution key is
+        // the summary key for concrete and generic functions alike.
+        summary.resolution_fn = name.clone();
+        out.insert(name, summary);
     }
     for class in &program.classes {
-        if !class.node.type_params.is_empty() {
-            continue;
-        }
-        summarize_class(&class.node, &mut out);
+        summarize_class(&class.node, env, &mut out);
     }
     env.raise_summaries = out;
 }
 
-fn summarize_class(class: &ClassDecl, out: &mut HashMap<String, FnRaiseSummary>) {
+fn summarize_class(class: &ClassDecl, env: &TypeEnv, out: &mut HashMap<String, FnRaiseSummary>) {
+    let type_params: HashSet<String> =
+        class.type_params.iter().map(|tp| tp.node.clone()).collect();
+    // Fields whose declared type mentions a class type param: guards over
+    // them leave the surviving fragment vocabulary (their meaning changes
+    // per instantiation), so they never validate a guard.
+    let dependent_fields: HashSet<String> = class
+        .fields
+        .iter()
+        .filter(|f| type_mentions_params(&f.ty.node, &type_params))
+        .map(|f| f.name.node.clone())
+        .collect();
     for method in &class.methods {
-        out.insert(
-            mangle_method(&class.name.node, &method.node.name.node),
-            summarize_fn(&method.node),
-        );
+        let key = mangle_method(&class.name.node, &method.node.name.node);
+        let mut summary = summarize_fn(&method.node, &type_params, &dependent_fields);
+        summary.resolution_fn = if class.type_params.is_empty() {
+            key.clone()
+        } else {
+            template_resolution_key(class, &method.node.name.node, env)
+        };
+        out.insert(key, summary);
     }
 }
 
-fn summarize_fn(func: &Function) -> FnRaiseSummary {
+/// The `current_fn` key under which a generic-class template method's
+/// span-keyed typecheck records (method resolutions, fallible value/builtin
+/// calls) were made: the class instantiated at skolem args, except
+/// `where`-constrained params, which were bound to their state types.
+/// Mirrors templates.rs::check_class_template (and
+/// linearity.rs::template_method_key).
+fn template_resolution_key(class: &ClassDecl, method_name: &str, env: &TypeEnv) -> String {
+    let type_params: Vec<String> = class.type_params.iter().map(|tp| tp.node.clone()).collect();
+    let mut args: Vec<PlutoType> = type_params
+        .iter()
+        .map(|tp| PlutoType::Class(format!("%{tp}")))
+        .collect();
+    if let Some(gen_info) = env.generic_classes.get(&class.name.node)
+        && let Some(cs) = gen_info.method_state_constraints.get(method_name)
+    {
+        for (param, state) in cs {
+            if let Some(idx) = type_params.iter().position(|p| p == param) {
+                args[idx] = if env.enums.contains_key(state) {
+                    PlutoType::Enum(state.clone())
+                } else {
+                    PlutoType::Class(state.clone())
+                };
+            }
+        }
+    }
+    mangle_method(&mangle_name(&class.name.node, &args), method_name)
+}
+
+/// Does this declared type mention any of the in-scope type params?
+fn type_mentions_params(ty: &TypeExpr, params: &HashSet<String>) -> bool {
+    if params.is_empty() {
+        return false;
+    }
+    match ty {
+        TypeExpr::Named(n) => params.contains(n),
+        TypeExpr::Qualified { .. } => false,
+        TypeExpr::Array(t) | TypeExpr::Nullable(t) | TypeExpr::Stream(t) => {
+            type_mentions_params(&t.node, params)
+        }
+        TypeExpr::Fn {
+            params: ps,
+            return_type,
+            ..
+        } => {
+            ps.iter().any(|p| type_mentions_params(&p.node, params))
+                || type_mentions_params(&return_type.node, params)
+        }
+        TypeExpr::Generic { type_args, .. } => type_args
+            .iter()
+            .any(|a| type_mentions_params(&a.node, params)),
+        // Should not appear in declared types; be conservative.
+        TypeExpr::Infer => true,
+    }
+}
+
+fn summarize_fn(
+    func: &Function,
+    type_params: &HashSet<String>,
+    dependent_fields: &HashSet<String>,
+) -> FnRaiseSummary {
     let mut summary = FnRaiseSummary {
         params: func.params.iter().map(|p| p.name.node.clone()).collect(),
         variants: HashMap::new(),
         deferred: Vec::new(),
+        resolution_fn: String::new(),
     };
     let collections = collection_params(func);
+    // Params whose declared type mentions a type param (`x: T`, `b: Box<T>`):
+    // guards mentioning them never validate. `self` is judged per-field via
+    // `dependent_fields`, not here (its own type always mentions the params).
+    let dependent_params: HashSet<String> = func
+        .params
+        .iter()
+        .filter(|p| p.name.node != "self" && type_mentions_params(&p.ty.node, type_params))
+        .map(|p| p.name.node.clone())
+        .collect();
     let mut b = SummaryBuilder {
         out: &mut summary,
         guards: Vec::new(),
@@ -212,6 +336,8 @@ fn summarize_fn(func: &Function) -> FnRaiseSummary {
         fields_killed: false,
         poison_raises: false,
         collections,
+        dependent_params,
+        dependent_fields,
     };
     b.walk_block(&func.body.node);
     summary
@@ -305,12 +431,19 @@ struct SummaryBuilder<'a> {
     killed: HashSet<String>,
     /// Any field assignment happened (aliasing: kills all `self.*` reads).
     fields_killed: bool,
-    /// Raises in this region are never summarized (loops, match arms,
-    /// select/scope bodies).
+    /// Raises in this region are never summarized (match arms, select/scope
+    /// bodies — regions whose reachability conditions leave the fragment).
     poison_raises: bool,
     /// Params of declared collection type: `.len()` on one is a pure read,
     /// exempt from call taint.
     collections: HashSet<String>,
+    /// Params whose declared type mentions a type param: guards mentioning
+    /// them are never usable (fragment vocabulary does not survive
+    /// instantiation).
+    dependent_params: HashSet<String>,
+    /// Fields of the enclosing generic class whose declared type mentions a
+    /// class type param: `self.field` guards over them are never usable.
+    dependent_fields: &'a HashSet<String>,
 }
 
 impl SummaryBuilder<'_> {
@@ -359,6 +492,115 @@ impl SummaryBuilder<'_> {
         scan.found
     }
 
+    /// Does `expr` mention a type-param-dependent leaf (a dependent param,
+    /// or `self.field` on a dependent field)? Such guards never validate: a
+    /// template summary must hold for every instantiation, and only leaves
+    /// whose types are independent of the type params keep a stable meaning
+    /// in the fact fragment.
+    fn mentions_dependent(&self, expr: &Expr) -> bool {
+        if self.dependent_params.is_empty() && self.dependent_fields.is_empty() {
+            return false;
+        }
+        struct Scan<'a> {
+            params: &'a HashSet<String>,
+            fields: &'a HashSet<String>,
+            found: bool,
+        }
+        impl Visitor for Scan<'_> {
+            fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+                if self.found {
+                    return;
+                }
+                match &expr.node {
+                    Expr::Ident(n) if self.params.contains(n) => {
+                        self.found = true;
+                        return;
+                    }
+                    Expr::FieldAccess { object, field }
+                        if matches!(&object.node, Expr::Ident(s) if s == "self")
+                            && self.fields.contains(&field.node) =>
+                    {
+                        self.found = true;
+                        return;
+                    }
+                    _ => {}
+                }
+                walk_expr(self, expr);
+            }
+        }
+        let mut scan = Scan {
+            params: &self.dependent_params,
+            fields: self.dependent_fields,
+            found: false,
+        };
+        scan.visit_expr(&Spanned::new(expr.clone(), crate::span::Span::dummy()));
+        scan.found
+    }
+
+    /// Apply every kill a region may perform — at the region's *entry*. Used
+    /// for loop bodies: any iteration may rerun the whole body before a
+    /// later iteration's raise, so assignments, field writes, and call taint
+    /// anywhere in the body invalidate guards from the first iteration on.
+    /// Conservative by construction (closure subtrees included).
+    fn apply_region_kills(&mut self, block: &Block) {
+        struct Scan<'a> {
+            collections: &'a HashSet<String>,
+            killed: HashSet<String>,
+            fields_killed: bool,
+            call_tainted: bool,
+        }
+        impl Visitor for Scan<'_> {
+            fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+                match &stmt.node {
+                    Stmt::Let { name, .. } => {
+                        self.killed.insert(name.node.clone());
+                    }
+                    Stmt::Assign { target, .. } => {
+                        self.killed.insert(target.node.clone());
+                    }
+                    Stmt::For { var, .. } => {
+                        self.killed.insert(var.node.clone());
+                    }
+                    Stmt::LetChan { sender, receiver, .. } => {
+                        self.killed.insert(sender.node.clone());
+                        self.killed.insert(receiver.node.clone());
+                    }
+                    Stmt::FieldAssign { .. } => self.fields_killed = true,
+                    // Channel ops / DI construction / serve behave like calls.
+                    Stmt::Select { .. } | Stmt::Scope { .. } | Stmt::Serve { .. } => {
+                        self.call_tainted = true
+                    }
+                    _ => {}
+                }
+                walk_stmt(self, stmt);
+            }
+            fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+                match &expr.node {
+                    Expr::MethodCall { .. } if is_param_len(&expr.node, self.collections) => {}
+                    Expr::Call { .. }
+                    | Expr::MethodCall { .. }
+                    | Expr::StaticTraitCall { .. }
+                    | Expr::At { .. }
+                    | Expr::Spawn { .. } => self.call_tainted = true,
+                    _ => {}
+                }
+                walk_expr(self, expr);
+            }
+        }
+        let mut scan = Scan {
+            collections: &self.collections,
+            killed: HashSet::new(),
+            fields_killed: false,
+            call_tainted: false,
+        };
+        for stmt in &block.stmts {
+            scan.visit_stmt(stmt);
+        }
+        self.killed.extend(scan.killed);
+        self.fields_killed |= scan.fields_killed;
+        self.call_tainted |= scan.call_tainted;
+    }
+
     /// Scan an expression for deferred poison sites and raise-like content
     /// nested in expression-level blocks (always poisoned), and taint on
     /// call-like content.
@@ -404,7 +646,8 @@ impl SummaryBuilder<'_> {
                 // before the branches run, after everything above.
                 let valid = !self.call_tainted
                     && !self.mentions_killed(&condition.node)
-                    && !contains_call_except_param_len(condition, &self.collections);
+                    && !contains_call_except_param_len(condition, &self.collections)
+                    && !self.mentions_dependent(&condition.node);
                 self.scan_expr(condition);
                 self.guards.push((
                     GuardAtEval {
@@ -427,19 +670,29 @@ impl SummaryBuilder<'_> {
                     self.guards.pop();
                 }
             }
+            // Loop-resident raises summarize when their surviving guard
+            // chain is loop-invariant and entry-stable: the whole body's
+            // kills (assignments, field writes, call taint) are applied at
+            // loop ENTRY — any iteration may rerun the body before a later
+            // iteration's raise — and then the body is walked normally.
+            // Guards over paths the loop never disturbs stay usable; a raise
+            // whose every conjunct is disturbed poisons as before. The loop
+            // condition / iterable is never recorded as a guard (dropping
+            // conjuncts only weakens the chain, which is sound).
             Stmt::While { condition, body } => {
                 self.scan_expr(condition);
-                let prev = self.poison_raises;
-                self.poison_raises = true;
+                self.apply_region_kills(&body.node);
                 self.walk_block(&body.node);
-                self.poison_raises = prev;
             }
-            Stmt::For { iterable, body, .. } => {
+            Stmt::For {
+                var,
+                iterable,
+                body,
+            } => {
                 self.scan_expr(iterable);
-                let prev = self.poison_raises;
-                self.poison_raises = true;
+                self.killed.insert(var.node.clone());
+                self.apply_region_kills(&body.node);
                 self.walk_block(&body.node);
-                self.poison_raises = prev;
             }
             Stmt::Match { expr, arms } => {
                 self.scan_expr(expr);
@@ -601,9 +854,10 @@ pub(crate) fn record_call_site_shrinking(stmt: &Stmt, env: &mut TypeEnv) {
     let Some(current_fn) = env.current_fn.clone() else {
         return;
     };
-    // Generic template bodies are checked under skolem types; keep slice 1
-    // concrete-only (instance call sites are enforced via copied error sets
-    // and never shrink).
+    // Generic CALLERS never shrink their own call sites: their bodies are
+    // checked once under skolem types, while facts (and enforcement) would
+    // have to hold per instantiation. Generic callees called from concrete
+    // code are handled via template summaries (see lookup_summary).
     if current_fn.contains('%') || env.generic_functions.contains_key(&current_fn) {
         return;
     }
@@ -648,7 +902,7 @@ impl ShrinkScan<'_> {
         args: &[Spanned<Expr>],
         receiver: Option<(&str, bool)>,
     ) {
-        let Some(summary) = self.env.raise_summaries.get(callee) else {
+        let Some((summary, _)) = lookup_summary(self.env, callee) else {
             return;
         };
         if !summary.has_guarded() {
@@ -919,13 +1173,61 @@ enum PoisonSet {
     Named(HashSet<String>),
 }
 
+/// Find the raise summary for a call-site callee key. Direct lookup covers
+/// concrete functions/methods and generic free-function templates (whose
+/// call sites and error sets both use the template name). An
+/// instance-mangled generic method (`Lease$$Held$renew`) maps back to its
+/// template's summary (`Lease$renew`): the template body is identical for
+/// every instantiation up to type annotations, and guards never mention
+/// type-param-dependent leaves, so the chains hold verbatim. Returns the
+/// summary and its error-inference *node key* (the key effect collection
+/// used — for propagation-set lookups).
+fn lookup_summary<'e>(env: &'e TypeEnv, callee: &str) -> Option<(&'e FnRaiseSummary, String)> {
+    if let Some(s) = env.raise_summaries.get(callee) {
+        return Some((s, callee.to_string()));
+    }
+    let template = instance_template_method(env, callee)?;
+    env.raise_summaries.get(&template).map(|s| (s, template))
+}
+
+/// `Lease$$Held$renew` → `Lease$renew`, via the instantiation registry: the
+/// callee must be `<mangled instance class>$<method>` for a recorded class
+/// instantiation, with a '$'-free method segment (method names cannot
+/// contain '$'; nested-generic argument manglings can, and are rejected by
+/// that requirement rather than mis-split).
+fn instance_template_method(env: &TypeEnv, callee: &str) -> Option<String> {
+    if !callee.contains("$$") {
+        return None;
+    }
+    for inst in &env.instantiations {
+        if let InstKind::Class(name) = &inst.kind {
+            let mangled_class = mangle_name(name, &inst.type_args);
+            if let Some(rest) = callee.strip_prefix(mangled_class.as_str())
+                && let Some(method) = rest.strip_prefix('$')
+                && !method.is_empty()
+                && !method.contains('$')
+            {
+                return Some(mangle_method(name, method));
+            }
+        }
+    }
+    None
+}
+
 /// Resolve the callee's deferred poison sites now that typecheck recorded
 /// resolutions. Returns the set of variants that may be raised directly by
-/// non-`raise` sources (or All when the set is unbounded).
-fn deferred_poisons(env: &TypeEnv, callee: &str, summary: &FnRaiseSummary) -> PoisonSet {
+/// non-`raise` sources (or All when the set is unbounded). Typecheck-keyed
+/// records (resolutions, fallible value/builtin calls) live under the
+/// summary's `resolution_fn`; closure call sites were recorded during effect
+/// collection under the inference `node_key`.
+fn deferred_poisons(
+    env: &TypeEnv,
+    summary: &FnRaiseSummary,
+    node_key: &str,
+) -> PoisonSet {
     let mut named: HashSet<String> = HashSet::new();
     for (kind, span_start) in &summary.deferred {
-        let key = (callee.to_string(), *span_start);
+        let key = (summary.resolution_fn.clone(), *span_start);
         match kind {
             DeferredKind::Call => {
                 if env.fallible_value_calls.contains(&key) {
@@ -933,7 +1235,11 @@ fn deferred_poisons(env: &TypeEnv, callee: &str, summary: &FnRaiseSummary) -> Po
                     // every declared error.
                     return PoisonSet::All;
                 }
-                if env.closure_call_sites.contains_key(&key) {
+                if env.closure_call_sites.contains_key(&key)
+                    || env
+                        .closure_call_sites
+                        .contains_key(&(node_key.to_string(), *span_start))
+                {
                     // Closure edge: propagation, covered by
                     // fn_propagated_errors.
                     continue;
@@ -980,6 +1286,13 @@ fn deferred_poisons(env: &TypeEnv, callee: &str, summary: &FnRaiseSummary) -> Po
 /// inferred set minus the variants proven unreachable at this site —
 /// re-filtered against propagation (a variant that can also arrive through a
 /// `!` edge never shrinks) and deferred runtime-raise poisons.
+///
+/// For an instance-mangled generic callee (`Lease$$Held$renew`) the summary,
+/// propagation set, and deferred sites all live under the template's keys:
+/// the instance node's only propagation edge is the instance→template bridge
+/// (whose propagated set is the template's *full* error set — an artifact of
+/// error-set copying, not a real `!` edge), so the template node's own
+/// propagated set is the correct filter.
 pub(crate) fn required_errors(
     env: &TypeEnv,
     current_fn: &str,
@@ -999,12 +1312,12 @@ pub(crate) fn required_errors(
     if recorded_callee != callee {
         return full;
     }
-    let Some(summary) = env.raise_summaries.get(callee) else {
+    let Some((summary, node_key)) = lookup_summary(env, callee) else {
         return full;
     };
-    let poisons = deferred_poisons(env, callee, summary);
+    let poisons = deferred_poisons(env, summary, &node_key);
     let empty = HashSet::new();
-    let propagated = env.fn_propagated_errors.get(callee).unwrap_or(&empty);
+    let propagated = env.fn_propagated_errors.get(&node_key).unwrap_or(&empty);
     full.into_iter()
         .filter(|v| {
             let removable = refuted.contains(v)
