@@ -863,6 +863,8 @@ fn main() {
 
 #[test]
 fn two_state_invariant_foreign_write_rejected() {
+    // Construction facts carry `x.e == 1` into the caller, so the
+    // rewinding write is *refuted* outright (not merely unprovable).
     compile_should_fail_with(
         r#"
 class Epoch {
@@ -872,6 +874,30 @@ class Epoch {
 
 fn main() {
     let mut x = Epoch { e: 1 }
+    x.e = 0
+}
+"#,
+        "this write to 'x.e' violates invariant 'self.e >= old(self.e)' of class 'Epoch'",
+    );
+}
+
+#[test]
+fn two_state_invariant_foreign_write_unprovable() {
+    // With no exact construction knowledge (opaque initializer), the same
+    // write is Unknown — the "cannot prove" diagnostic.
+    compile_should_fail_with(
+        r#"
+fn seed() int {
+    return 1
+}
+
+class Epoch {
+    e: int
+    invariant self.e >= old(self.e)
+}
+
+fn main() {
+    let mut x = Epoch { e: seed() }
     x.e = 0
 }
 "#,

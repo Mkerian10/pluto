@@ -349,10 +349,30 @@ question 4.)
    (no free functions — there is no receiver state to relate); on generic
    classes the vocabulary must be param-independent (template-proven once
    under skolems, stamped onto every instantiation — contracts.md
-   "Generics"); a call inside a
-   method conservatively severs exact two-state knowledge unless the callee
-   is a sibling method with declared ensures (any callee may reach the
-   receiver through an alias).
+   "Generics"); the call-severing
+   rule is **purity-aware** (phase 4.5): a call severs exact two-state
+   knowledge only when the callee may *reach* the receiver — sibling
+   self-calls compose through their declared ensures, while
+   builtin/primitive methods and direct calls to functions none of whose
+   declared parameter types can transitively reach the receiver's class
+   (alias-coarse by type; `facts::call_severity`, the one exemption
+   predicate shared by the fact kills, invariant/ensures discharge, and
+   `guarded_by` dominance) do not sever at all. Builtin collection
+   mutators still invalidate *length* terms (they change lengths through
+   aliases), but can never write a class's int field — the load-bearing
+   survey lives on `facts::CallSeverity::Collections`. This is what makes
+   `ensures count == old(count) + 1` prove through a trailing `print()`,
+   and frame ensures (`self.epoch == old(self.epoch)`) provable in methods
+   that call builtins on parameters (the #357 census cases). Two further
+   4.5 precision fixes landed alongside: branch joins and loop exits
+   re-anchor *invariant-level* field knowledge in the caller's fact env
+   (kills are flow events that empty every frame; without the re-anchor,
+   an `if` containing any call left later ensures instantiation with no
+   usable pre-state — the #357 "arguably a bug" item), and construction is
+   *transparent* — a struct literal's exact int-field initializers flow
+   into the caller's fact env (`acc.balance == 100` after
+   `let acc = Account { balance: 100 }`), killed by the usual rules
+   thereafter; entities excluded (entity fields never carry facts).
 2. **Two-state invariants** — monotonicity expressible with no new keyword;
    Blob's epoch theorem by hand. ✅ **Implemented** (same branch): obligation
    sites are every `mut self` method boundary (relation to the method's

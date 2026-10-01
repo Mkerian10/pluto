@@ -1655,29 +1655,105 @@ pub fn apply_stmt_kills(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) {
         | Stmt::Expr(_) => {}
     }
 
-    if immediate_exprs(stmt)
+    // Call kills, scaled by the shared severity classification (see the
+    // module docs): Pure kills nothing, Collections kills length terms
+    // (builtin mutators change lengths through aliases), All kills every
+    // field-path fact (length terms are dotted paths, so they die too).
+    let sev = immediate_exprs(stmt)
         .iter()
-        .any(|e| contains_impure_call(e, env))
-    {
-        env.facts.kill_fields();
+        .map(|e| call_severity(e, env, None))
+        .max()
+        .unwrap_or(CallSeverity::Pure);
+    match sev {
+        CallSeverity::Pure => {}
+        CallSeverity::Collections => env.facts.kill_len_terms(),
+        CallSeverity::All => env.facts.kill_fields(),
     }
 }
 
 /// Facts a `let`/`=` binding establishes about its target. Deliberately
-/// narrow: only a direct `xs.len()` value transfers (the bound variable
-/// inherits the automatic `>= 0` and an equality to the length term, which
-/// dies with the usual kills while the `>= 0` bound — true of the captured
-/// value forever — survives them). General value-to-binding fact transfer
-/// is out of scope. Callers assume these after the binding is defined; the
-/// statement's own kill (of the target's stale facts) has already run.
+/// narrow — two shapes transfer:
+///
+/// - a direct `xs.len()` value (the bound variable inherits the automatic
+///   `>= 0` and an equality to the length term, which dies with the usual
+///   kills while the `>= 0` bound — true of the captured value forever —
+///   survives them);
+/// - a struct literal of a (non-entity) class: construction is fully
+///   transparent — the construction proof obligation already evaluated the
+///   initializers, so the caller's fact env learns the exact int-field
+///   values (`acc.balance == 100` after `let acc = Account { balance: 100 }`).
+///   The usual kill rules take over from there. Entities are excluded
+///   (entity fields never carry flow facts).
+///
+/// General value-to-binding fact transfer is out of scope. Callers assume
+/// these after the binding is defined; the statement's own kill (of the
+/// target's stale facts) has already run.
 pub(crate) fn binding_facts(name: &str, value: &Expr, env: &TypeEnv) -> Vec<Fact> {
-    match len_path(value, env) {
-        Some(lp) => vec![
+    if let Some(lp) = len_path(value, env) {
+        return vec![
             Fact::Bound(name.to_string(), Interval::at_least(0)),
             Fact::Rel(name.to_string(), RelOp::Eq, lp),
-        ],
-        None => Vec::new(),
+        ];
     }
+    if let Expr::StructLit { name: cls, fields, .. } = value {
+        return construction_facts(name, &cls.node, fields, env);
+    }
+    Vec::new()
+}
+
+/// Exact post-construction facts for a struct-literal binding: for every
+/// int field whose initializer normalizes to an affine form,
+/// `root.field == <initializer affine>`. When the literal contains an
+/// impure call, only call-stable affines (constants and caller locals — no
+/// dotted terms) are kept: field initializers evaluate in order, so a
+/// sibling initializer's call may have mutated the object a dotted term
+/// reads through.
+fn construction_facts(
+    root: &str,
+    cls: &str,
+    lit_fields: &[(Spanned<String>, Spanned<Expr>)],
+    env: &TypeEnv,
+) -> Vec<Fact> {
+    // Entities mutate concurrently — their fields never carry flow facts.
+    if env.object_types.contains(cls)
+        || env.remote_types.contains(cls)
+        || env.domain_types.contains(cls)
+    {
+        return Vec::new();
+    }
+    let Some(info) = env.classes.get(cls) else {
+        return Vec::new();
+    };
+    let had_call = lit_fields
+        .iter()
+        .any(|(_, v)| contains_impure_call(v, env));
+    let mut out = Vec::new();
+    for (fname, fexpr) in lit_fields {
+        let is_int_field = info
+            .fields
+            .iter()
+            .any(|(n, t, _)| n == &fname.node && *t == PlutoType::Int);
+        if !is_int_field {
+            continue;
+        }
+        let Some(aff) = to_affine(&fexpr.node, env) else {
+            continue;
+        };
+        // Call-stability and self-reference guards: dotted terms are
+        // dropped when any initializer called out, and terms rooted at the
+        // binding itself (an `x = C { f: x.f }` rebinding) are never valid
+        // post-binding.
+        if aff.terms.keys().any(|t| path_under(t, root))
+            || (had_call && aff.terms.keys().any(|t| t.contains('.')))
+        {
+            continue;
+        }
+        let path = Affine::term(format!("{root}.{}", fname.node));
+        if let Some(d) = diff_affine(&path, &aff) {
+            out.extend(facts_from_diff(BinOp::Eq, &d));
+        }
+    }
+    out
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
