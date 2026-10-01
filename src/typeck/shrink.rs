@@ -26,7 +26,12 @@
 //!   evaluation point, every path it mentions still holds its
 //!   function-entry value: the extraction walker invalidates a guard once a
 //!   call-like expression may have run (aliases could mutate the receiver)
-//!   or a mentioned parameter / any `self` field was assigned. Raises
+//!   or a mentioned parameter / any `self` field was assigned. The one
+//!   exempt call shape is `p.len()` on a parameter of declared collection
+//!   type — a pure builtin read; at the call site it substitutes to the
+//!   actual's length term, and guards over one-level parameter field paths
+//!   (`p.field`, non-entity class params) substitute to the actual's field
+//!   path, usable when the caller holds facts about it. Raises
 //!   inside loops, match arms, select/scope blocks, catch handlers, and
 //!   expression-level blocks are never summarized (control reaches them
 //!   under conditions outside the decidable fragment, or after an unknown
@@ -78,8 +83,8 @@ use crate::visit::{walk_expr, walk_stmt, Visitor};
 
 use super::env::{mangle_method, MethodResolution, TypeEnv};
 use super::facts::{
-    contains_call, eval_condition_with, immediate_exprs, to_affine, typed_path, Affine, FactEnv,
-    Verdict,
+    contains_call, eval_condition_with, immediate_exprs, len_path, to_affine, typed_path, Affine,
+    FactEnv, Verdict,
 };
 use super::types::PlutoType;
 
@@ -198,6 +203,7 @@ fn summarize_fn(func: &Function) -> FnRaiseSummary {
         variants: HashMap::new(),
         deferred: Vec::new(),
     };
+    let collections = collection_params(func);
     let mut b = SummaryBuilder {
         out: &mut summary,
         guards: Vec::new(),
@@ -205,9 +211,79 @@ fn summarize_fn(func: &Function) -> FnRaiseSummary {
         killed: HashSet::new(),
         fields_killed: false,
         poison_raises: false,
+        collections,
     };
     b.walk_block(&func.body.node);
     summary
+}
+
+/// Parameters whose *declared* type is a builtin collection (`[T]`,
+/// `string`, `bytes`, `Map<..>`, `Set<..>`). A `.len()` call on one is a
+/// pure read of builtin state — exempt from the call-taint rules during
+/// extraction, so guards like `if p.len() == 0 { raise Empty }` stay
+/// summarizable. Judged syntactically: extraction runs before typecheck.
+fn collection_params(func: &Function) -> HashSet<String> {
+    use crate::parser::ast::TypeExpr;
+    func.params
+        .iter()
+        .filter(|p| match &p.ty.node {
+            TypeExpr::Array(_) => true,
+            TypeExpr::Named(n) => n == "string" || n == "bytes",
+            TypeExpr::Generic { name, .. } => name == "Map" || name == "Set",
+            _ => false,
+        })
+        .map(|p| p.name.node.clone())
+        .collect()
+}
+
+/// Is this expression a `.len()` call on one of the given collection
+/// parameters (`p.len()`)? The one call shape extraction treats as pure.
+fn is_param_len(expr: &Expr, collections: &HashSet<String>) -> bool {
+    let Expr::MethodCall { object, method, args, .. } = expr else {
+        return false;
+    };
+    method.node == "len"
+        && args.is_empty()
+        && matches!(&object.node, Expr::Ident(p) if collections.contains(p))
+}
+
+/// Like `facts::contains_call`, but exempts `p.len()` on declared
+/// collection params (see [`is_param_len`]). Purely syntactic — the
+/// env-aware twin is `facts::contains_impure_call`, which callers with a
+/// `TypeEnv` use instead.
+fn contains_call_except_param_len(
+    expr: &Spanned<Expr>,
+    collections: &HashSet<String>,
+) -> bool {
+    struct Scan<'a> {
+        collections: &'a HashSet<String>,
+        found: bool,
+    }
+    impl Visitor for Scan<'_> {
+        fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+            if self.found {
+                return;
+            }
+            match &expr.node {
+                Expr::MethodCall { .. } if is_param_len(&expr.node, self.collections) => {
+                    return;
+                }
+                Expr::Call { .. }
+                | Expr::MethodCall { .. }
+                | Expr::StaticTraitCall { .. }
+                | Expr::At { .. }
+                | Expr::Spawn { .. } => {
+                    self.found = true;
+                    return;
+                }
+                _ => {}
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut scan = Scan { collections, found: false };
+    scan.visit_expr(expr);
+    scan.found
 }
 
 /// A guard on the stack: condition, polarity for the branch being walked,
@@ -232,6 +308,9 @@ struct SummaryBuilder<'a> {
     /// Raises in this region are never summarized (loops, match arms,
     /// select/scope bodies).
     poison_raises: bool,
+    /// Params of declared collection type: `.len()` on one is a pure read,
+    /// exempt from call taint.
+    collections: HashSet<String>,
 }
 
 impl SummaryBuilder<'_> {
@@ -286,7 +365,7 @@ impl SummaryBuilder<'_> {
     fn scan_expr(&mut self, expr: &Spanned<Expr>) {
         let mut scan = ExprScan { out: self.out };
         scan.visit_expr(expr);
-        if contains_call(expr) {
+        if contains_call_except_param_len(expr, &self.collections) {
             self.call_tainted = true;
         }
     }
@@ -325,7 +404,7 @@ impl SummaryBuilder<'_> {
                 // before the branches run, after everything above.
                 let valid = !self.call_tainted
                     && !self.mentions_killed(&condition.node)
-                    && !contains_call(condition);
+                    && !contains_call_except_param_len(condition, &self.collections);
                 self.scan_expr(condition);
                 self.guards.push((
                     GuardAtEval {
@@ -590,16 +669,62 @@ impl ShrinkScan<'_> {
         for (p, a) in formals.iter().zip(args.iter()) {
             arg_aff.insert(p.as_str(), to_affine(&a.node, self.env));
         }
+        // Trackable-path views of the actuals, for substituting the
+        // callee's `p.field` / `p.len()` guard leaves into the caller's
+        // vocabulary: the callee's `p` aliases the actual, so at call time
+        // (facts are consulted pre-kill, in execution order) the callee's
+        // entry `p.field` equals the caller's `a.field`. Field substitution
+        // needs a non-entity class-typed actual (entities never carry field
+        // facts); `len()` substitution needs a collection-typed actual.
+        let mut arg_field_base: HashMap<&str, String> = HashMap::new();
+        let mut arg_len_base: HashMap<&str, String> = HashMap::new();
+        for (p, a) in formals.iter().zip(args.iter()) {
+            if let Some((apath, aty)) = typed_path(&a.node, self.env) {
+                match aty {
+                    PlutoType::Class(c)
+                        if !self.env.object_types.contains(&c)
+                            && !self.env.remote_types.contains(&c)
+                            && !self.env.domain_types.contains(&c) =>
+                    {
+                        arg_field_base.insert(p.as_str(), apath);
+                    }
+                    PlutoType::Array(_)
+                    | PlutoType::String
+                    | PlutoType::Bytes
+                    | PlutoType::Map(_, _)
+                    | PlutoType::Set(_) => {
+                        arg_len_base.insert(p.as_str(), apath);
+                    }
+                    _ => {}
+                }
+            }
+        }
         let resolve = |e: &Expr| -> Option<Affine> {
             match e {
                 Expr::Ident(name) => arg_aff.get(name.as_str()).cloned().flatten(),
-                Expr::FieldAccess { object, field }
-                    if matches!(&object.node, Expr::Ident(s) if s == "self") =>
-                {
-                    match receiver {
+                Expr::FieldAccess { object, field } => match &object.node {
+                    Expr::Ident(s) if s == "self" => match receiver {
                         Some((rpath, true)) => {
                             Some(Affine::term(format!("{rpath}.{}", field.node)))
                         }
+                        _ => None,
+                    },
+                    // One-level field path on a parameter: `p.field` reads
+                    // the actual's field in the caller's vocabulary.
+                    Expr::Ident(p) => arg_field_base
+                        .get(p.as_str())
+                        .map(|b| Affine::term(format!("{b}.{}", field.node))),
+                    _ => None,
+                },
+                // `p.len()` on a collection parameter: the actual's length
+                // term (carries the automatic >= 0 bound).
+                Expr::MethodCall { object, method, args, .. }
+                    if method.node == "len" && args.is_empty() =>
+                {
+                    match &object.node {
+                        Expr::Ident(p) if p != "self" => arg_len_base
+                            .get(p.as_str())
+                            .map(|b| Affine::term(format!("{b}.len()"))),
                         _ => None,
                     }
                 }
@@ -718,6 +843,12 @@ impl Visitor for ShrinkScan<'_> {
                 args,
                 ..
             } => {
+                // Builtin `len()` on a collection-typed path is a pure read:
+                // it cannot have mutated anything, so it neither shrinks nor
+                // invalidates field facts for later calls in the statement.
+                if len_path(&expr.node, self.env).is_some() {
+                    return;
+                }
                 if let Some((rpath, PlutoType::Class(cname))) =
                     typed_path(&object.node, self.env)
                 {

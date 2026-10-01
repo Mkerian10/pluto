@@ -1774,3 +1774,208 @@ fn di_scope_auto_created_constant_invariant_refuted() {
         "class 'Flag' is constructed by dependency injection when auto-created in this scope block",
     );
 }
+
+// ── Length terms in invariant discharge (fact-fragment extension) ────────────
+
+#[test]
+fn len_guard_discharges_invariant_write() {
+    // `s.len()` resolves to a ghost length term carrying the automatic
+    // `>= 0` bound, so writing it into the field is proven directly.
+    let out = compile_and_run_stdout(
+        r#"
+class Cursor {
+    pos: int
+
+    invariant self.pos >= 0
+
+    fn clamp(mut self, s: string) {
+        if self.pos > s.len() {
+            self.pos = s.len()
+        }
+    }
+}
+
+fn main() {
+    let mut c = Cursor { pos: 9 }
+    c.clamp("ab")
+    print(c.pos)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "2");
+}
+
+#[test]
+fn len_binding_discharges_arithmetic_write() {
+    // The json match_word shape: a `let n = s.len()` binding carries the
+    // automatic >= 0 into the ghost vocabulary, proving pos + n >= 0 with
+    // no bridging assert.
+    let out = compile_and_run_stdout(
+        r#"
+class Cursor {
+    pos: int
+
+    invariant self.pos >= 0
+
+    fn advance(mut self, w: string) {
+        let wlen = w.len()
+        self.pos = self.pos + wlen
+    }
+}
+
+fn main() {
+    let mut c = Cursor { pos: 1 }
+    c.advance("xyz")
+    print(c.pos)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "4");
+}
+
+#[test]
+fn len_binding_discharges_construction() {
+    // The json parse shape: the binding's >= 0 fact flows into the
+    // construction proof of the invariant.
+    let out = compile_and_run_stdout(
+        r#"
+class Cursor {
+    pos: int
+
+    invariant self.pos >= 0
+
+    fn get(self) int {
+        return self.pos
+    }
+}
+
+fn main() {
+    let s = "abc"
+    let n = s.len()
+    let c = Cursor { pos: n }
+    print(c.get())
+}
+"#,
+    );
+    assert_eq!(out.trim(), "3");
+}
+
+#[test]
+fn len_minus_one_is_not_provable() {
+    // >= 0 is all a length term carries: len() - 1 may be negative.
+    compile_should_fail_with(
+        r#"
+class Cursor {
+    pos: int
+
+    invariant self.pos >= 0
+
+    fn set_last(mut self, s: string) {
+        self.pos = s.len() - 1
+    }
+}
+
+fn main() {
+    let mut c = Cursor { pos: 0 }
+    c.set_last("abc")
+    print(c.pos)
+}
+"#,
+        "cannot prove invariant",
+    );
+}
+
+#[test]
+fn len_guard_bounds_subtraction() {
+    // An upper-bound guard composes with the automatic lower bound:
+    // len() <= 10 and len() >= 0 prove 10 - len() >= 0.
+    let out = compile_and_run_stdout(
+        r#"
+class Budget {
+    left: int
+
+    invariant self.left >= 0
+
+    fn consume(mut self, xs: [int]) {
+        if xs.len() <= 10 {
+            self.left = 10 - xs.len()
+        }
+    }
+}
+
+fn main() {
+    let mut b = Budget { left: 10 }
+    b.consume([1, 2, 3])
+    print(b.left)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "7");
+}
+
+#[test]
+fn len_guard_goes_stale_across_call() {
+    // Ghost length terms are epoch-stamped: a call boundary (the callee
+    // may mutate the collection through an alias) re-anchors and the guard
+    // fact no longer applies to the post-call length.
+    compile_should_fail_with(
+        r#"
+class Budget {
+    left: int
+
+    invariant self.left >= 0
+
+    fn touch(mut self) {
+        print(self.left)
+    }
+
+    fn consume(mut self, xs: [int]) {
+        if xs.len() <= 10 {
+            self.touch()
+            self.left = 10 - xs.len()
+        }
+    }
+}
+
+fn main() {
+    let mut b = Budget { left: 10 }
+    b.consume([1, 2, 3])
+    print(b.left)
+}
+"#,
+        "cannot prove invariant",
+    );
+}
+
+#[test]
+fn post_call_len_guard_uses_fresh_epoch() {
+    // A guard evaluated after the call boundary speaks about the current
+    // epoch's length term, so it discharges the write it dominates.
+    let out = compile_and_run_stdout(
+        r#"
+class Budget {
+    left: int
+
+    invariant self.left >= 0
+
+    fn touch(mut self) {
+        print(self.left)
+    }
+
+    fn consume(mut self, xs: [int]) {
+        self.touch()
+        if xs.len() <= 10 {
+            self.left = 10 - xs.len()
+        }
+    }
+}
+
+fn main() {
+    let mut b = Budget { left: 10 }
+    b.consume([1, 2, 3])
+    print(b.left)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "10\n7");
+}

@@ -123,9 +123,12 @@ an unhandled runtime error):
 
 - **Direct raises only.** A callee summary records, for each `raise X` statement,
   its dominating guard chain — usable only when the guard is over the callee's
-  parameters and the receiver's direct int fields, still holding their *entry*
-  values at evaluation (any preceding call, parameter assignment, or field write
-  invalidates it; raises inside loops, match arms, select/scope blocks, catch
+  parameters, the receiver's direct int fields, one-level parameter field paths
+  (`p.field`, non-entity class params — substituted to the actual's field path
+  at the site), or parameter length terms (`p.len()` on declared collection
+  params — a pure read, substituted to the actual's length term), still holding
+  their *entry* values at evaluation (any preceding impure call, parameter
+  assignment, or field write invalidates it; raises inside loops, match arms, select/scope blocks, catch
   handlers, and expression-level blocks are never summarized). Variants arriving
   via propagation (`!` edges, escaped closures, dynamic dispatch) and runtime
   raise sources (channel ops, unknown task origins, fallible fn-values, remote
@@ -296,7 +299,11 @@ then a stdlib import, not a language feature.
    invariant site is a compile error — no demotion to per-site runtime residuals,
    no runtime checks at code sites, no opt-in modes. Consequences, all intended:
    invariants outside the provable fragment (floats, strings, booleans,
-   collections, `.len()`, nested fields) are rejected at declaration; every
+   collections, `.len()`, nested fields) are rejected at declaration —
+   length terms live in the *flow* fragment (guards, asserts, bindings feed
+   the prover, including the ghost vocabulary inside `mut self` methods,
+   where they are epoch-stamped and go stale across call boundaries), but a
+   declared invariant still names only the class's own int fields; every
    construction and write site is proven or rejected with a diagnostic that
    teaches the fix; runtime invariant-check emission is removed from codegen;
    wire/marshal decode keeps (gains) runtime validation at the trust boundary,
@@ -313,8 +320,10 @@ then a stdlib import, not a language feature.
    dominance written — a builtin predicate vocabulary (`monotonic(...)`,
    `guarded_by(...)`) or structural inference from the body?
 2. **Fragment contents.** Exact initial domain: intervals over ints; equalities over
-   which types; what of floats (IEEE comparison pitfalls), strings, collections
-   (`len()` facts)?
+   which types; what of floats (IEEE comparison pitfalls), strings, collections?
+   Partially resolved: `len()` facts over collections are in the flow fragment
+   (opaque terms with an automatic `>= 0`, conservative kills — see phasing
+   item 1); floats and string contents remain open.
 3. **Facts across the wire.** A proven invariant on a schema type — does the receiver
    assume it (same compilation unit, interface hash guards skew) or recheck at the
    boundary as defense in depth? Interaction with schema evolution rules.
@@ -340,6 +349,22 @@ then a stdlib import, not a language feature.
 1. **Flow-fact generalization** — extend narrowing from nullability to comparisons /
    intervals on ints. Self-contained; immediately useful (dead-check elimination,
    better diagnostics). No new syntax. **Shipped** (`src/typeck/facts.rs`).
+   The fragment's term vocabulary covers local int variables, field paths
+   rooted at a local (`grant.token`, `self.balance` — entity bases never
+   carry field facts), and **length terms**: `xs.len()` over a trackable
+   path of collection type (array, string, bytes, map, set) is an opaque
+   term with an automatic `>= 0` bound, participating in affine forms
+   (`xs.len() - 1`) and relations (`if i < xs.len()` narrows), and a direct
+   `let n = xs.len()` binding transfers the term's facts to `n`. Kill
+   conservatism is deliberate: reassigning the base kills everything under
+   it, any field write kills all field paths, and any statement containing
+   an impure call kills every field path *and* length term (the callee may
+   reach the object or collection through an alias — mutating uses like
+   `push`/`pop`/mut-arg passes are calls and need no special casing). The
+   one call exempted from these rules is builtin collection `len()` itself,
+   a pure read; indexing and iteration are not calls and kill nothing.
+   Deeper nesting than these shapes, and value-to-binding transfer beyond
+   direct `len()` bindings, stay out of fragment.
 2. **Invariant static discharge** — prove declared class invariants at every
    construction and write site; unprovable sites are compile errors (strict mode,
    see design decision 2); runtime validation only at wire decode boundaries.

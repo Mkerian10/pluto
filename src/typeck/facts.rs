@@ -8,11 +8,21 @@
 //!
 //! # Fact domain
 //!
-//! Facts are tracked about *paths*: local `int` variables (`x`) and simple
+//! Facts are tracked about *paths*: local `int` variables (`x`), simple
 //! field paths rooted at a local (`self.balance`, `p.x.y`) whose every step
-//! is a plain class field and whose final type is `int`. Entities (`object`
-//! types), remote types, and domain deps are excluded — their fields can
-//! change concurrently, so a flow fact about them is never sound.
+//! is a plain class field and whose final type is `int`, and *length terms*
+//! (`xs.len()`) over a trackable path of collection type (array, string,
+//! bytes, map, set). Entities (`object` types), remote types, and domain
+//! deps are excluded — their fields can change concurrently, so a flow fact
+//! about them is never sound.
+//!
+//! A length term is opaque (nothing relates `xs.len()` to the elements of
+//! `xs`) but carries one automatic fact: `xs.len() >= 0`, baked into
+//! [`FactEnv::interval_of`] so every bound query sees it. The builtin `len`
+//! call on a collection-typed path runs no user code and mutates nothing,
+//! so it is exempt from the call rules below ([`contains_impure_call`]);
+//! `len` on anything else (class receivers, untrackable objects) stays
+//! call-like.
 //!
 //! Two fact shapes are tracked:
 //!
@@ -31,21 +41,27 @@
 //! - `&&` decomposition (both conjuncts' facts in the then-branch) and, by
 //!   De Morgan, `||` decomposition in the else-branch.
 //!
-//! No facts are extracted from a condition that contains a call-like
-//! expression (the call could mutate state between evaluation and use).
+//! No facts are extracted from a condition that contains an impure
+//! call-like expression (the call could mutate state between evaluation
+//! and use); builtin `len` on a collection-typed path is pure and exempt.
 //!
 //! # What kills facts
 //!
 //! - Reassignment of a variable kills its facts and facts about paths
-//!   rooted at it (`x` kills `x` and `x.f`).
+//!   rooted at it (`x` kills `x`, `x.f`, and `x.len()`).
 //! - Any field assignment kills *all* field-path facts (aliasing: two locals
 //!   can point at the same object, so a write through one invalidates facts
 //!   about the other).
-//! - Any statement whose immediate expressions contain a call-like node
-//!   (call, method call, static trait call, `at`, `spawn`) kills all
-//!   field-path facts — the callee may mutate any reachable object. Local
-//!   variables survive calls: parameters are passed by value and `mut`
-//!   params are local copies, so no call can change a caller's local.
+//! - Any statement whose immediate expressions contain an *impure*
+//!   call-like node (call, method call other than builtin collection `len`,
+//!   static trait call, `at`, `spawn`) kills all field-path facts *and all
+//!   length terms* — the callee may mutate any reachable object, including
+//!   a collection an alias shares (`push`/`pop`/`clear`/`insert` are method
+//!   calls and mut-arg passes are calls, so every mutating use of `xs` is
+//!   covered; indexing, iteration, and `len` itself are not calls and kill
+//!   nothing). Local int variables survive calls: parameters are passed by
+//!   value and `mut` params are local copies, so no call can change a
+//!   caller's local.
 //! - Loop entry (`while` / `for`) drops **all** facts, and they stay dropped
 //!   after the loop. This is deliberately conservative for phase 1 — the
 //!   alternative (analyze loop bodies with facts that survive a fixpoint) is
@@ -259,6 +275,14 @@ fn path_under(key: &str, root: &str) -> bool {
     key == root || (key.len() > root.len() && key.starts_with(root) && key.as_bytes()[root.len()] == b'.')
 }
 
+/// Is this path a length term (`xs.len()`, `p.items.len()`, or an
+/// epoch-stamped ghost form like `s@0.len()@2`)? Length terms carry an
+/// automatic `>= 0` lower bound. The `.len()` marker cannot collide with a
+/// field path: identifiers never contain `(`.
+pub(crate) fn is_len_term(path: &str) -> bool {
+    path.contains(".len()")
+}
+
 impl FactEnv {
     pub fn new() -> Self {
         FactEnv {
@@ -363,8 +387,13 @@ impl FactEnv {
 
     /// The tightest interval known for `path` (TOP when nothing is known,
     /// possibly empty when facts contradict — i.e. the code is unreachable).
+    /// Length terms start from their automatic `>= 0` bound instead of TOP.
     pub fn interval_of(&self, path: &str) -> Interval {
-        let mut iv = Interval::TOP;
+        let mut iv = if is_len_term(path) {
+            Interval::at_least(0)
+        } else {
+            Interval::TOP
+        };
         for frame in &self.frames {
             if let Some(fiv) = frame.intervals.get(path) {
                 iv = iv.intersect(fiv);
@@ -436,9 +465,43 @@ fn int_path(expr: &Expr, env: &TypeEnv) -> Option<String> {
     }
 }
 
-/// Does this expression mention any trackable int path? Used to gate the
-/// degenerate-condition warning: constant-only conditions (`if true`,
-/// `if 1 < 2`) are common as scaffolding and never warned about.
+/// Is this a collection type with a pure builtin `len()`?
+fn is_collection(ty: &PlutoType) -> bool {
+    matches!(
+        ty,
+        PlutoType::Array(_)
+            | PlutoType::String
+            | PlutoType::Bytes
+            | PlutoType::Map(_, _)
+            | PlutoType::Set(_)
+    )
+}
+
+/// Resolve `expr` to a length term: `xs.len()` where `xs` is a trackable
+/// path of collection type (array, string, bytes, map, set). The builtin
+/// `len` runs no user code, so the term is a pure read; class receivers
+/// (which may define their own `len` method) never match.
+pub(crate) fn len_path(expr: &Expr, env: &TypeEnv) -> Option<String> {
+    let Expr::MethodCall { object, method, args, .. } = expr else {
+        return None;
+    };
+    if method.node != "len" || !args.is_empty() {
+        return None;
+    }
+    let (opath, oty) = typed_path(&object.node, env)?;
+    is_collection(&oty).then(|| format!("{opath}.len()"))
+}
+
+/// Resolve `expr` to any trackable fact term: an int path or a length term.
+/// The shared leaf vocabulary of the default resolvers below.
+fn fact_term(expr: &Expr, env: &TypeEnv) -> Option<String> {
+    int_path(expr, env).or_else(|| len_path(expr, env))
+}
+
+/// Does this expression mention any trackable fact term (int path or
+/// length term)? Used to gate the degenerate-condition warning:
+/// constant-only conditions (`if true`, `if 1 < 2`) are common as
+/// scaffolding and never warned about.
 pub fn mentions_int_path(expr: &Spanned<Expr>, env: &TypeEnv) -> bool {
     struct PathScan<'a> {
         env: &'a TypeEnv,
@@ -449,7 +512,7 @@ pub fn mentions_int_path(expr: &Spanned<Expr>, env: &TypeEnv) -> bool {
             if self.found {
                 return;
             }
-            if int_path(&expr.node, self.env).is_some() {
+            if fact_term(&expr.node, self.env).is_some() {
                 self.found = true;
                 return;
             }
@@ -489,6 +552,45 @@ pub fn contains_call(expr: &Spanned<Expr>) -> bool {
         }
     }
     let mut scan = CallScan { found: false };
+    scan.visit_expr(expr);
+    scan.found
+}
+
+/// Like [`contains_call`], but exempts builtin `len()` on a trackable
+/// collection-typed path: it runs no user code and mutates nothing, so it
+/// neither invalidates facts nor makes a condition effectful. Everything
+/// else call-like (including `len` on class receivers or untrackable
+/// objects) still counts.
+pub fn contains_impure_call(expr: &Spanned<Expr>, env: &TypeEnv) -> bool {
+    struct CallScan<'a> {
+        env: &'a TypeEnv,
+        found: bool,
+    }
+    impl Visitor for CallScan<'_> {
+        fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+            if self.found {
+                return;
+            }
+            match &expr.node {
+                Expr::MethodCall { .. } if len_path(&expr.node, self.env).is_some() => {
+                    // Pure length read; its object is a trackable path and
+                    // cannot itself contain calls.
+                    return;
+                }
+                Expr::Call { .. }
+                | Expr::MethodCall { .. }
+                | Expr::StaticTraitCall { .. }
+                | Expr::At { .. }
+                | Expr::Spawn { .. } => {
+                    self.found = true;
+                    return;
+                }
+                _ => {}
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut scan = CallScan { env, found: false };
     scan.visit_expr(expr);
     scan.found
 }
@@ -608,9 +710,10 @@ pub fn to_affine_with(expr: &Expr, resolve: &AffineResolver) -> Option<Affine> {
 }
 
 /// Normalize an integer-typed expression into affine form over trackable
-/// paths. Returns `None` for anything outside the fragment.
+/// fact terms (int paths and length terms). Returns `None` for anything
+/// outside the fragment.
 pub(crate) fn to_affine(expr: &Expr, env: &TypeEnv) -> Option<Affine> {
-    to_affine_with(expr, &|e| int_path(e, env).map(Affine::term))
+    to_affine_with(expr, &|e| fact_term(e, env).map(Affine::term))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -742,7 +845,7 @@ fn is_comparison(op: BinOp) -> bool {
 /// Decide a boolean condition against the current facts. See the module docs
 /// for the fragment; anything outside it is `Unknown`.
 pub fn eval_condition(cond: &Expr, env: &TypeEnv) -> Verdict {
-    eval_condition_with(cond, &|e| int_path(e, env).map(Affine::term), &env.facts)
+    eval_condition_with(cond, &|e| fact_term(e, env).map(Affine::term), &env.facts)
 }
 
 /// Decide a boolean condition with leaf paths resolved through `resolve`
@@ -911,9 +1014,9 @@ fn negate_cmp(op: BinOp) -> BinOp {
 }
 
 /// Extract branch facts from a condition. Callers must ensure the condition
-/// contains no call-like expressions (see [`contains_call`]).
+/// contains no impure call-like expressions (see [`contains_impure_call`]).
 pub fn condition_facts(cond: &Expr, env: &TypeEnv) -> CondFacts {
-    condition_facts_with(cond, &|e| int_path(e, env).map(Affine::term))
+    condition_facts_with(cond, &|e| fact_term(e, env).map(Affine::term))
 }
 
 /// Extract branch facts from a condition with leaf paths resolved through
@@ -1182,8 +1285,28 @@ pub fn apply_stmt_kills(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) {
         | Stmt::Expr(_) => {}
     }
 
-    if immediate_exprs(stmt).iter().any(|e| contains_call(e)) {
+    if immediate_exprs(stmt)
+        .iter()
+        .any(|e| contains_impure_call(e, env))
+    {
         env.facts.kill_fields();
+    }
+}
+
+/// Facts a `let`/`=` binding establishes about its target. Deliberately
+/// narrow: only a direct `xs.len()` value transfers (the bound variable
+/// inherits the automatic `>= 0` and an equality to the length term, which
+/// dies with the usual kills while the `>= 0` bound — true of the captured
+/// value forever — survives them). General value-to-binding fact transfer
+/// is out of scope. Callers assume these after the binding is defined; the
+/// statement's own kill (of the target's stale facts) has already run.
+pub(crate) fn binding_facts(name: &str, value: &Expr, env: &TypeEnv) -> Vec<Fact> {
+    match len_path(value, env) {
+        Some(lp) => vec![
+            Fact::Bound(name.to_string(), Interval::at_least(0)),
+            Fact::Rel(name.to_string(), RelOp::Eq, lp),
+        ],
+        None => Vec::new(),
     }
 }
 
@@ -1536,6 +1659,109 @@ mod tests {
         f.assume(Fact::Bound("x".into(), Interval::EMPTY));
         let d = single("x", 1, 0);
         assert_eq!(affine_bounds(&d, &f), Err(()));
+    }
+
+    // ── Length terms ─────────────────────────────────────────────────────
+
+    #[test]
+    fn len_term_detection() {
+        assert!(is_len_term("xs.len()"));
+        assert!(is_len_term("p.items.len()"));
+        assert!(is_len_term("s@0.len()@2")); // epoch-stamped ghost form
+        assert!(!is_len_term("xs"));
+        assert!(!is_len_term("p.length"));
+        assert!(!is_len_term("len"));
+    }
+
+    #[test]
+    fn len_term_auto_nonnegative() {
+        let f = FactEnv::new();
+        // With no recorded facts, a length term is still known >= 0.
+        assert_eq!(f.interval_of("xs.len()"), Interval::at_least(0));
+        assert_eq!(f.interval_of("xs"), Interval::TOP);
+    }
+
+    #[test]
+    fn len_term_bound_intersects_auto_nonneg() {
+        let mut f = FactEnv::new();
+        f.assume(Fact::Bound("xs.len()".into(), Interval::at_most(5)));
+        assert_eq!(f.interval_of("xs.len()"), Interval { lo: 0, hi: 5 });
+        // A contradictory upper bound empties against the automatic >= 0.
+        f.assume(Fact::Bound("xs.len()".into(), Interval::at_most(-1)));
+        assert!(f.interval_of("xs.len()").is_empty());
+    }
+
+    #[test]
+    fn len_nonneg_decides_comparisons() {
+        // xs.len() >= 0 is Proven and xs.len() < 0 is Refuted with no facts.
+        let f = FactEnv::new();
+        let d = single("xs.len()", 1, 0);
+        assert_eq!(affine_bounds(&d, &f), Ok((Some(0), None)));
+    }
+
+    #[test]
+    fn len_term_affine_participation() {
+        // d = xs.len() - 1 with xs.len() <= 10: bounds [-1, 9].
+        let mut f = FactEnv::new();
+        f.assume(Fact::Bound("xs.len()".into(), Interval::at_most(10)));
+        let d = single("xs.len()", 1, -1);
+        assert_eq!(affine_bounds(&d, &f), Ok((Some(-1), Some(9))));
+    }
+
+    #[test]
+    fn len_narrows_through_relations() {
+        // i < xs.len() recorded as a relation: i - xs.len() + 1 <= 0, i.e.
+        // `i <= xs.len() - 1` is provable from the pair decomposition.
+        let mut f = FactEnv::new();
+        f.assume(Fact::Rel("i".into(), RelOp::Lt, "xs.len()".into()));
+        let mut terms = BTreeMap::new();
+        terms.insert("i".to_string(), 1i128);
+        terms.insert("xs.len()".to_string(), -1i128);
+        let d = Affine { terms, k: 1 };
+        let (_, hi) = affine_bounds(&d, &f).unwrap();
+        assert_eq!(hi, Some(0));
+    }
+
+    #[test]
+    fn reassigning_base_kills_len_term() {
+        let mut f = FactEnv::new();
+        f.assume(Fact::Bound("xs.len()".into(), Interval::at_most(5)));
+        f.kill_path("xs");
+        // Back to only the automatic bound.
+        assert_eq!(f.interval_of("xs.len()"), Interval::at_least(0));
+    }
+
+    #[test]
+    fn call_kill_drops_len_terms() {
+        // Length terms are dotted paths: the conservative field kill (any
+        // impure call — including mut method calls and mut-arg passes on
+        // the base) drops them too.
+        let mut f = FactEnv::new();
+        f.assume(Fact::Bound("xs.len()".into(), Interval::at_most(5)));
+        f.assume(Fact::Rel("i".into(), RelOp::Lt, "xs.len()".into()));
+        f.kill_fields();
+        assert_eq!(f.interval_of("xs.len()"), Interval::at_least(0));
+        assert!(!f.rel_holds("i", RelOp::Lt, "xs.len()"));
+        // Facts on plain locals survive.
+        f.assume(Fact::Bound("i".into(), Interval::at_most(3)));
+        f.kill_fields();
+        assert_eq!(f.interval_of("i"), Interval::at_most(3));
+    }
+
+    #[test]
+    fn kill_mark_sees_len_kills() {
+        let mut f = FactEnv::new();
+        let fact = Fact::Bound("xs.len()".into(), Interval::at_most(5));
+        f.assume(fact.clone());
+        let mark = f.kill_mark();
+        f.kill_fields();
+        assert!(f.killed_since(mark, &fact));
+        let mark2 = f.kill_mark();
+        f.kill_path("xs");
+        assert!(f.killed_since(mark2, &fact));
+        let mark3 = f.kill_mark();
+        f.kill_path("ys");
+        assert!(!f.killed_since(mark3, &fact));
     }
 
     #[test]

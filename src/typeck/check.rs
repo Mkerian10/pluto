@@ -265,6 +265,11 @@ fn check_stmt(
             if !env.scope_tainted.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
                 env.scope_tainted.insert(name.node.clone(), ());
             }
+            // Flow facts: a direct `xs.len()` binding transfers the length
+            // term's facts to the new variable (facts.rs::binding_facts).
+            for f in super::facts::binding_facts(&name.node, &value.node, env) {
+                env.facts.assume(f);
+            }
         }
         Stmt::Return(value) => {
             // Generators: bare return is allowed (means "done"), return with value is not
@@ -368,6 +373,11 @@ fn check_stmt(
                     }
                 }
             }
+            // Flow facts: a direct `xs.len()` reassignment transfers the
+            // length term's facts (the old facts were killed above).
+            for f in super::facts::binding_facts(&target.node, &value.node, env) {
+                env.facts.assume(f);
+            }
         }
         Stmt::FieldAssign { object, field, value } => {
             check_field_assign(object, field, value, env)?;
@@ -388,7 +398,7 @@ fn check_stmt(
             // Flow facts (facts.rs): extract int-comparison facts from the
             // condition — unless it contains a call, which could mutate
             // state between evaluation and use.
-            let cond_effectful = super::facts::contains_call(condition);
+            let cond_effectful = super::facts::contains_impure_call(condition, env);
             let cond_facts = if cond_effectful {
                 super::facts::CondFacts::default()
             } else {

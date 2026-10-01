@@ -292,10 +292,9 @@ class Parser {
     }
 
     fn match_word(mut self, word: string) bool {
+        // .len() carries an automatic >= 0 fact the prover uses to
+        // discharge `pos >= 0` across `pos + wlen`.
         let wlen = word.len()
-        // .len() is outside the provable fragment; assert feeds the prover
-        // the fact it needs to discharge `pos >= 0` across `pos + wlen`.
-        assert wlen >= 0
         if self.pos + wlen > self.src_len {
             return false
         }
@@ -731,9 +730,9 @@ fn parse_float_value(s: string) float {
 }
 
 pub fn parse(s: string) Json {
+    // .len() carries an automatic >= 0 fact; the construction proof of
+    // `src_len >= 0` reads it through the binding.
     let n = s.len()
-    // .len() results are opaque to the invariant prover; assert bridges it.
-    assert n >= 0
     let mut p = Parser { src: s, pos: 0, src_len: n }
     let mut result = p.parse_value()!
     p.skip_whitespace()
