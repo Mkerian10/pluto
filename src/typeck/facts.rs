@@ -1796,3 +1796,478 @@ mod tests {
         assert_eq!(hi, None);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Property tests — soundness of the implies API against brute-force
+// evaluation, affine consistency, and saturation at i64 bounds
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use crate::span::Spanned;
+    use proptest::prelude::*;
+
+    /// The variable vocabulary for model-checked tests.
+    const VARS: [&str; 3] = ["x", "y", "z"];
+    /// Brute-force domain per variable: small enough to enumerate the full
+    /// cube (9^3 = 729 assignments), large enough to exercise strict/
+    /// non-strict boundaries and integer rounding.
+    const DOM_LO: i64 = -4;
+    const DOM_HI: i64 = 4;
+
+    /// The leaf resolver used throughout: identifiers become single-term
+    /// affines, mirroring how trackable int paths resolve in production.
+    fn ident_resolver(e: &Expr) -> Option<Affine> {
+        match e {
+            Expr::Ident(name) => Some(Affine::term(name.clone())),
+            _ => None,
+        }
+    }
+
+    // ── Model facts ──────────────────────────────────────────────────────
+
+    #[derive(Debug, Clone)]
+    enum GFact {
+        Bound(usize, i64, i64),
+        Rel(usize, RelOp, usize),
+        Ne(usize, i64),
+    }
+
+    fn arb_relop() -> impl Strategy<Value = RelOp> {
+        prop_oneof![
+            Just(RelOp::Lt),
+            Just(RelOp::Le),
+            Just(RelOp::Eq),
+            Just(RelOp::Ne),
+        ]
+    }
+
+    fn arb_gfact() -> impl Strategy<Value = GFact> {
+        prop_oneof![
+            (0..3usize, DOM_LO..=DOM_HI, DOM_LO..=DOM_HI)
+                .prop_map(|(v, a, b)| GFact::Bound(v, a.min(b), a.max(b))),
+            (0..3usize, arb_relop(), 0..3usize).prop_map(|(a, op, b)| GFact::Rel(a, op, b)),
+            (0..3usize, DOM_LO..=DOM_HI).prop_map(|(v, c)| GFact::Ne(v, c)),
+        ]
+    }
+
+    fn gfact_to_fact(f: &GFact) -> Fact {
+        match f {
+            GFact::Bound(v, lo, hi) => {
+                Fact::Bound(VARS[*v].to_string(), Interval { lo: *lo, hi: *hi })
+            }
+            GFact::Rel(a, op, b) => Fact::Rel(VARS[*a].to_string(), *op, VARS[*b].to_string()),
+            GFact::Ne(v, c) => Fact::NeConst(VARS[*v].to_string(), *c),
+        }
+    }
+
+    fn gfact_holds(f: &GFact, asg: &[i64; 3]) -> bool {
+        match f {
+            GFact::Bound(v, lo, hi) => asg[*v] >= *lo && asg[*v] <= *hi,
+            GFact::Rel(a, op, b) => match op {
+                RelOp::Lt => asg[*a] < asg[*b],
+                RelOp::Le => asg[*a] <= asg[*b],
+                RelOp::Eq => asg[*a] == asg[*b],
+                RelOp::Ne => asg[*a] != asg[*b],
+            },
+            GFact::Ne(v, c) => asg[*v] != *c,
+        }
+    }
+
+    /// Does an engine `Fact` hold under a model assignment? (Used to check
+    /// the facts *extracted* from a condition against the model.)
+    fn fact_holds_model(f: &Fact, asg: &[i64; 3]) -> bool {
+        let val = |p: &str| {
+            VARS.iter()
+                .position(|v| *v == p)
+                .map(|i| asg[i])
+                .expect("extracted fact mentions an unknown path")
+        };
+        match f {
+            Fact::Bound(p, iv) => {
+                let v = val(p);
+                v >= iv.lo && v <= iv.hi
+            }
+            Fact::Rel(a, op, b) => {
+                let (x, y) = (val(a), val(b));
+                match op {
+                    RelOp::Lt => x < y,
+                    RelOp::Le => x <= y,
+                    RelOp::Eq => x == y,
+                    RelOp::Ne => x != y,
+                }
+            }
+            Fact::NeConst(p, c) => val(p) != *c,
+        }
+    }
+
+    // ── Model expressions (the affine fragment) ──────────────────────────
+
+    #[derive(Debug, Clone)]
+    enum GExpr {
+        Var(usize),
+        Const(i64),
+        Add(Box<GExpr>, Box<GExpr>),
+        Sub(Box<GExpr>, Box<GExpr>),
+        Mul(i64, Box<GExpr>),
+        Neg(Box<GExpr>),
+    }
+
+    fn arb_gexpr() -> impl Strategy<Value = GExpr> {
+        let leaf = prop_oneof![
+            (0..3usize).prop_map(GExpr::Var),
+            (-6..=6i64).prop_map(GExpr::Const),
+        ];
+        leaf.prop_recursive(3, 16, 2, |inner| {
+            prop_oneof![
+                (inner.clone(), inner.clone())
+                    .prop_map(|(a, b)| GExpr::Add(Box::new(a), Box::new(b))),
+                (inner.clone(), inner.clone())
+                    .prop_map(|(a, b)| GExpr::Sub(Box::new(a), Box::new(b))),
+                (-4..=4i64, inner.clone()).prop_map(|(c, e)| GExpr::Mul(c, Box::new(e))),
+                inner.prop_map(|e| GExpr::Neg(Box::new(e))),
+            ]
+        })
+    }
+
+    fn gexpr_to_ast(e: &GExpr) -> Spanned<Expr> {
+        let node = match e {
+            GExpr::Var(v) => Expr::Ident(VARS[*v].to_string()),
+            GExpr::Const(c) => Expr::IntLit(*c),
+            GExpr::Add(a, b) => Expr::BinOp {
+                op: BinOp::Add,
+                lhs: Box::new(gexpr_to_ast(a)),
+                rhs: Box::new(gexpr_to_ast(b)),
+            },
+            GExpr::Sub(a, b) => Expr::BinOp {
+                op: BinOp::Sub,
+                lhs: Box::new(gexpr_to_ast(a)),
+                rhs: Box::new(gexpr_to_ast(b)),
+            },
+            GExpr::Mul(c, a) => Expr::BinOp {
+                op: BinOp::Mul,
+                lhs: Box::new(Spanned::dummy(Expr::IntLit(*c))),
+                rhs: Box::new(gexpr_to_ast(a)),
+            },
+            GExpr::Neg(a) => Expr::UnaryOp {
+                op: UnaryOp::Neg,
+                operand: Box::new(gexpr_to_ast(a)),
+            },
+        };
+        Spanned::dummy(node)
+    }
+
+    fn gexpr_eval(e: &GExpr, asg: &[i64; 3]) -> i128 {
+        match e {
+            GExpr::Var(v) => asg[*v] as i128,
+            GExpr::Const(c) => *c as i128,
+            GExpr::Add(a, b) => gexpr_eval(a, asg) + gexpr_eval(b, asg),
+            GExpr::Sub(a, b) => gexpr_eval(a, asg) - gexpr_eval(b, asg),
+            GExpr::Mul(c, a) => (*c as i128) * gexpr_eval(a, asg),
+            GExpr::Neg(a) => -gexpr_eval(a, asg),
+        }
+    }
+
+    // ── Model conditions ─────────────────────────────────────────────────
+
+    #[derive(Debug, Clone)]
+    enum GCond {
+        Cmp(GExpr, BinOp, GExpr),
+        And(Box<GCond>, Box<GCond>),
+        Or(Box<GCond>, Box<GCond>),
+        Not(Box<GCond>),
+    }
+
+    fn arb_cmp_op() -> impl Strategy<Value = BinOp> {
+        prop_oneof![
+            Just(BinOp::Lt),
+            Just(BinOp::LtEq),
+            Just(BinOp::Gt),
+            Just(BinOp::GtEq),
+            Just(BinOp::Eq),
+            Just(BinOp::Neq),
+        ]
+    }
+
+    fn arb_gcond() -> impl Strategy<Value = GCond> {
+        let leaf = (arb_gexpr(), arb_cmp_op(), arb_gexpr())
+            .prop_map(|(l, op, r)| GCond::Cmp(l, op, r));
+        leaf.prop_recursive(2, 8, 2, |inner| {
+            prop_oneof![
+                (inner.clone(), inner.clone())
+                    .prop_map(|(a, b)| GCond::And(Box::new(a), Box::new(b))),
+                (inner.clone(), inner.clone())
+                    .prop_map(|(a, b)| GCond::Or(Box::new(a), Box::new(b))),
+                inner.prop_map(|c| GCond::Not(Box::new(c))),
+            ]
+        })
+    }
+
+    fn gcond_to_ast(c: &GCond) -> Spanned<Expr> {
+        let node = match c {
+            GCond::Cmp(l, op, r) => Expr::BinOp {
+                op: *op,
+                lhs: Box::new(gexpr_to_ast(l)),
+                rhs: Box::new(gexpr_to_ast(r)),
+            },
+            GCond::And(a, b) => Expr::BinOp {
+                op: BinOp::And,
+                lhs: Box::new(gcond_to_ast(a)),
+                rhs: Box::new(gcond_to_ast(b)),
+            },
+            GCond::Or(a, b) => Expr::BinOp {
+                op: BinOp::Or,
+                lhs: Box::new(gcond_to_ast(a)),
+                rhs: Box::new(gcond_to_ast(b)),
+            },
+            GCond::Not(a) => Expr::UnaryOp {
+                op: UnaryOp::Not,
+                operand: Box::new(gcond_to_ast(a)),
+            },
+        };
+        Spanned::dummy(node)
+    }
+
+    fn gcond_eval(c: &GCond, asg: &[i64; 3]) -> bool {
+        match c {
+            GCond::Cmp(l, op, r) => {
+                let (lv, rv) = (gexpr_eval(l, asg), gexpr_eval(r, asg));
+                match op {
+                    BinOp::Lt => lv < rv,
+                    BinOp::LtEq => lv <= rv,
+                    BinOp::Gt => lv > rv,
+                    BinOp::GtEq => lv >= rv,
+                    BinOp::Eq => lv == rv,
+                    BinOp::Neq => lv != rv,
+                    _ => unreachable!("only comparisons are generated"),
+                }
+            }
+            GCond::And(a, b) => gcond_eval(a, asg) && gcond_eval(b, asg),
+            GCond::Or(a, b) => gcond_eval(a, asg) || gcond_eval(b, asg),
+            GCond::Not(a) => !gcond_eval(a, asg),
+        }
+    }
+
+    fn all_assignments() -> impl Iterator<Item = [i64; 3]> {
+        (DOM_LO..=DOM_HI).flat_map(move |x| {
+            (DOM_LO..=DOM_HI).flat_map(move |y| (DOM_LO..=DOM_HI).map(move |z| [x, y, z]))
+        })
+    }
+
+    fn affine_eval(a: &Affine, asg: &[i64; 3]) -> i128 {
+        a.k + a
+            .terms
+            .iter()
+            .map(|(p, c)| {
+                let i = VARS
+                    .iter()
+                    .position(|v| *v == p)
+                    .expect("affine term over an unknown path");
+                c * (asg[i] as i128)
+            })
+            .sum::<i128>()
+    }
+
+    proptest! {
+        /// SOUNDNESS: `eval_condition_with` vs brute force. Any assignment
+        /// in the (sub)domain satisfying every assumed fact also satisfies
+        /// the full-i64 semantics of those facts, so:
+        ///   Proven  ⇒ the condition holds on every satisfying assignment;
+        ///   Refuted ⇒ the condition fails on every satisfying assignment.
+        /// Unknown is always acceptable. A violation here is a soundness
+        /// bug in the fact engine (discharge/shrinking/dominance all trust
+        /// these verdicts).
+        #[test]
+        fn implies_sound_vs_bruteforce(
+            gfacts in prop::collection::vec(arb_gfact(), 0..5),
+            gcond in arb_gcond(),
+        ) {
+            let mut env = FactEnv::new();
+            for f in &gfacts {
+                env.assume(gfact_to_fact(f));
+            }
+            let cond = gcond_to_ast(&gcond);
+            let verdict = eval_condition_with(&cond.node, &ident_resolver, &env);
+            if verdict == Verdict::Unknown {
+                return Ok(());
+            }
+            for asg in all_assignments() {
+                if !gfacts.iter().all(|f| gfact_holds(f, &asg)) {
+                    continue;
+                }
+                let actual = gcond_eval(&gcond, &asg);
+                match verdict {
+                    Verdict::Proven => prop_assert!(
+                        actual,
+                        "SOUNDNESS BUG: Proven, but condition is false at {:?}\nfacts: {:?}\ncond: {:?}",
+                        asg, gfacts, gcond
+                    ),
+                    Verdict::Refuted => prop_assert!(
+                        !actual,
+                        "SOUNDNESS BUG: Refuted, but condition is true at {:?}\nfacts: {:?}\ncond: {:?}",
+                        asg, gfacts, gcond
+                    ),
+                    Verdict::Unknown => unreachable!(),
+                }
+            }
+        }
+
+        /// SOUNDNESS: facts extracted from a condition must be implied by
+        /// it. For every assignment where the condition is true, every
+        /// then-fact must hold; where false, every else-fact must hold.
+        #[test]
+        fn condition_facts_sound(gcond in arb_gcond()) {
+            let cond = gcond_to_ast(&gcond);
+            let cf = condition_facts_with(&cond.node, &ident_resolver);
+            for asg in all_assignments() {
+                let truth = gcond_eval(&gcond, &asg);
+                let owed = if truth { &cf.then_facts } else { &cf.else_facts };
+                for f in owed {
+                    prop_assert!(
+                        fact_holds_model(f, &asg),
+                        "SOUNDNESS BUG: extracted fact {:?} does not hold at {:?} \
+                         (condition {:?} is {})",
+                        f, asg, gcond, truth
+                    );
+                }
+            }
+        }
+
+        /// Affine normalization agrees with direct evaluation: when an
+        /// expression is inside the fragment, its affine form evaluates to
+        /// the same value as the expression itself at every assignment.
+        #[test]
+        fn affine_eval_consistency(gexpr in arb_gexpr()) {
+            let ast = gexpr_to_ast(&gexpr);
+            let Some(aff) = to_affine_with(&ast.node, &ident_resolver) else {
+                // Outside the fragment (checked-arithmetic bail) — fine.
+                return Ok(());
+            };
+            for asg in all_assignments() {
+                prop_assert_eq!(
+                    affine_eval(&aff, &asg),
+                    gexpr_eval(&gexpr, &asg),
+                    "affine form {:?} disagrees with {:?} at {:?}",
+                    aff, gexpr, asg
+                );
+            }
+        }
+
+        /// Substitution consistency: resolving each variable to an offset
+        /// alias (`x ↦ x' + d`) commutes with evaluation — the substituted
+        /// affine at `x' = v` equals the plain affine at `x = v + d`.
+        #[test]
+        fn affine_substitution_consistency(
+            gexpr in arb_gexpr(),
+            deltas in [-5..=5i64, -5..=5i64, -5..=5i64],
+        ) {
+            let ast = gexpr_to_ast(&gexpr);
+            let subst = move |e: &Expr| -> Option<Affine> {
+                match e {
+                    Expr::Ident(name) => {
+                        let i = VARS.iter().position(|v| v == name)?;
+                        let mut a = Affine::term(name.clone());
+                        a.k = deltas[i] as i128;
+                        Some(a)
+                    }
+                    _ => None,
+                }
+            };
+            let (Some(plain), Some(substituted)) = (
+                to_affine_with(&ast.node, &ident_resolver),
+                to_affine_with(&ast.node, &subst),
+            ) else {
+                return Ok(());
+            };
+            for asg in all_assignments() {
+                let shifted = [
+                    asg[0] + deltas[0],
+                    asg[1] + deltas[1],
+                    asg[2] + deltas[2],
+                ];
+                prop_assert_eq!(
+                    affine_eval(&substituted, &asg),
+                    affine_eval(&plain, &shifted),
+                    "substitution does not commute for {:?} with deltas {:?} at {:?}",
+                    gexpr, deltas, asg
+                );
+            }
+        }
+    }
+
+    // ── Saturation at i64 bounds ─────────────────────────────────────────
+
+    fn arb_extreme_const() -> impl Strategy<Value = i64> {
+        prop_oneof![
+            Just(i64::MIN),
+            Just(i64::MIN + 1),
+            Just(i64::MAX),
+            Just(i64::MAX - 1),
+            Just(-1i64),
+            Just(0i64),
+            Just(1i64),
+            any::<i64>(),
+        ]
+    }
+
+    fn arb_extreme_interval() -> impl Strategy<Value = Interval> {
+        (arb_extreme_const(), arb_extreme_const())
+            .prop_map(|(a, b)| Interval { lo: a.min(b), hi: a.max(b) })
+    }
+
+    proptest! {
+        /// Interval arithmetic and condition evaluation never panic at the
+        /// i64 boundaries: extreme constants, extreme interval endpoints,
+        /// and coefficients that force checked-arithmetic bailouts must all
+        /// degrade to Unknown / no-facts, not overflow.
+        #[test]
+        fn extremes_never_panic(
+            iv_x in arb_extreme_interval(),
+            iv_y in arb_extreme_interval(),
+            c1 in arb_extreme_const(),
+            c2 in arb_extreme_const(),
+            m in arb_extreme_const(),
+            op in arb_cmp_op(),
+            ne_c in arb_extreme_const(),
+        ) {
+            let mut env = FactEnv::new();
+            env.assume(Fact::Bound("x".to_string(), iv_x));
+            env.assume(Fact::Bound("y".to_string(), iv_y));
+            env.assume(Fact::NeConst("x".to_string(), ne_c));
+            env.assume(Fact::Rel("x".to_string(), RelOp::Le, "y".to_string()));
+
+            // (m * x + c1) op (y + c2) — exercises affine normalization,
+            // bounding, relation tightening, and integer rounding in
+            // facts_from_diff, all at the saturation edges.
+            let lhs = Expr::BinOp {
+                op: BinOp::Add,
+                lhs: Box::new(Spanned::dummy(Expr::BinOp {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Spanned::dummy(Expr::IntLit(m))),
+                    rhs: Box::new(Spanned::dummy(Expr::Ident("x".to_string()))),
+                })),
+                rhs: Box::new(Spanned::dummy(Expr::IntLit(c1))),
+            };
+            let rhs = Expr::BinOp {
+                op: BinOp::Add,
+                lhs: Box::new(Spanned::dummy(Expr::Ident("y".to_string()))),
+                rhs: Box::new(Spanned::dummy(Expr::IntLit(c2))),
+            };
+            let cond = Expr::BinOp {
+                op,
+                lhs: Box::new(Spanned::dummy(lhs)),
+                rhs: Box::new(Spanned::dummy(rhs)),
+            };
+
+            // Must not panic; any verdict / fact set is acceptable here.
+            let _ = eval_condition_with(&cond, &ident_resolver, &env);
+            let _ = condition_facts_with(&cond, &ident_resolver);
+
+            // Interval ops themselves saturate without panicking.
+            let both = iv_x.intersect(&iv_y);
+            let _ = both.is_empty();
+            let _ = env.interval_of("x");
+        }
+    }
+}
