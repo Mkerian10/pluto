@@ -198,10 +198,59 @@ fn empty_property_body_rejected() {
 }
 
 #[test]
-fn property_on_generic_class_rejected() {
+fn property_on_generic_class_param_independent_accepted() {
+    // `satisfies` on a generic class works when the substituted atoms pass
+    // the param-independence validation: the injected clause is an ordinary
+    // (template-proven) generic invariant.
+    let out = compile_and_run_stdout(
+        r#"
+property monotonic(f: field<int>) {
+    invariant f >= old(f)
+}
+
+object Topic<T> satisfies monotonic(self.published) {
+    latest: T?
+    published: int
+
+    fn publish(mut self, msg: T) {
+        self.latest = msg
+        self.published = self.published + 1
+    }
+}
+
+fn main() {
+    let mut t = Topic<int> { latest: none, published: 0 }
+    t.publish(5)
+    print(t.published)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1");
+}
+
+#[test]
+fn property_on_generic_class_violating_template_blamed() {
+    // Two-sided blame survives the generic path: the failure names both the
+    // failing template method and the property instantiation.
+    compile_should_fail_with_all(
+        "property monotonic(f: field<int>) {\n    invariant f >= old(f)\n}\n\nobject Topic<T> satisfies monotonic(self.published) {\n    published: int\n\n    fn rewind(mut self) {\n        self.published = self.published - 1\n    }\n}\n\nfn main() {}\n",
+        &[
+            "invariant 'self.published >= old(self.published)' of class 'Topic<T>' is violated",
+            "in method 'rewind'",
+            "required by property 'monotonic'",
+            "instantiated with f = self.published",
+        ],
+    );
+}
+
+#[test]
+fn property_on_generic_class_param_typed_field_rejected() {
+    // Param-dependence carried by the kind check: `field<int>` requires the
+    // field's declared type to be literally `int`, which a param-typed field
+    // is not.
     compile_should_fail_with(
-        "property monotonic(f: field<int>) {\n    invariant f >= old(f)\n}\n\nclass Box<T> satisfies monotonic(self.n) {\n    n: int\n    v: T\n}\n\nfn main() {}\n",
-        "'satisfies' on generic classes is not yet supported",
+        "property monotonic(f: field<int>) {\n    invariant f >= old(f)\n}\n\nclass Box<T> satisfies monotonic(self.v) {\n    n: int\n    v: T\n}\n\nfn main() {}\n",
+        "requires a field of type int",
     );
 }
 

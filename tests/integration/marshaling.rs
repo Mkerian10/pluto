@@ -548,3 +548,53 @@ stage Api {
 "#);
     assert_eq!(out.trim(), "7");
 }
+
+#[test]
+fn unmarshal_validates_generic_instantiation_invariants() {
+    // A generic class's invariant is template-declared; the decode guard is
+    // generated per monomorphized instantiation and re-checks it at the
+    // trust boundary (single-state clauses only, as for concrete classes).
+    let out = run_marshal_test(r#"
+import std.wire
+
+class Gauge<T> {
+    tag: T
+    v: int
+    invariant self.v >= 0
+}
+
+stage Api {
+    pub fn get_gauge(self) Gauge<int> {
+        return Gauge<int> { tag: 1, v: 1 }
+    }
+
+    fn main(self) {
+        // A valid round trip decodes fine.
+        let g = Gauge<int> { tag: 1, v: 100 }
+        let enc = wire.wire_value_encoder()
+        __marshal_Gauge__int(g, enc)
+        let good = enc.result()
+        let mut dec = wire.wire_value_decoder(good)
+        let decoded = __unmarshal_Gauge__int(dec) catch err {
+            print("unexpected decode failure")
+            return
+        }
+        print(decoded.v)
+
+        // Hand-crafted wire data violating the invariant raises WireError.
+        let bad = wire.wire_record(["tag", "v"], [wire.wire_int(1), wire.wire_int(0 - 5)])
+        let mut dec2 = wire.wire_value_decoder(bad)
+        let decoded2 = __unmarshal_Gauge__int(dec2) catch err: wire.WireError {
+            print(err.message)
+            return
+        }
+        print(decoded2.v)
+    }
+}
+"#);
+    assert!(out.contains("100"), "valid decode should succeed, got: {out}");
+    assert!(
+        out.contains("invariant violation on Gauge$$int: self.v >= 0"),
+        "violating decode should raise naming the instantiation, got: {out}"
+    );
+}
