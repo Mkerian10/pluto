@@ -992,6 +992,9 @@ impl<'a> LowerContext<'a> {
                 self.call_runtime("__pluto_entity_encode", &[val, ty_s])
             }
             PlutoType::Class(tn) | PlutoType::Enum(tn) => {
+                // Monomorphized names carry `$$`; generated wrappers are
+                // named with `__` (see marshal.rs).
+                let tn = tn.replace("$$", "__");
                 self.call_named_func(&format!("__wire_encode_{tn}"), &[val])?
             }
             PlutoType::Array(_) | PlutoType::Map(..) | PlutoType::Set(_) => {
@@ -1075,6 +1078,9 @@ impl<'a> LowerContext<'a> {
                 self.call_runtime("__pluto_entity_decode", &[val])
             }
             PlutoType::Class(tn) | PlutoType::Enum(tn) => {
+                // Monomorphized names carry `$$`; generated wrappers are
+                // named with `__` (see marshal.rs).
+                let tn = tn.replace("$$", "__");
                 self.call_named_func(&format!("__wire_decode_{tn}"), &[val])?
             }
             PlutoType::Array(_) | PlutoType::Map(..) | PlutoType::Set(_) => {

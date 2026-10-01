@@ -709,6 +709,63 @@ pub(crate) fn wire_supported(t: &PlutoType) -> bool {
     }
 }
 
+/// Deep transferability for `at` placement boundaries: `wire_supported` plus
+/// a transitive walk of class fields and enum variant fields, so a value
+/// whose SHAPE cannot marshal (a closure field, a trait field) is rejected
+/// by typeck's boundary diagnostic instead of surfacing as a missing
+/// generated function during codegen. Deliberately NOT used by the interface
+/// hash or the serve dispatch filter — their method set (and thus the hash,
+/// PR #335) must stay stable.
+pub(crate) fn wire_transferable(t: &PlutoType, env: &crate::typeck::env::TypeEnv) -> bool {
+    fn shape_ok(
+        t: &PlutoType,
+        env: &crate::typeck::env::TypeEnv,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        match t {
+            PlutoType::Int
+            | PlutoType::Float
+            | PlutoType::Bool
+            | PlutoType::String
+            // Marshalable in FIELD position (encoded as int); top-level args
+            // are still gated by wire_supported.
+            | PlutoType::Byte => true,
+            PlutoType::Nullable(inner)
+            | PlutoType::Array(inner)
+            | PlutoType::Set(inner) => shape_ok(inner, env, visiting),
+            PlutoType::Map(k, v) => shape_ok(k, env, visiting) && shape_ok(v, env, visiting),
+            PlutoType::Class(n) => {
+                if !visiting.insert(n.clone()) {
+                    return true; // recursive type — already being examined
+                }
+                // Unknown class: no field info to falsify — leave it to the
+                // existing (shallow) acceptance rather than reject blind.
+                let ok = env.classes.get(n).is_none_or(|info| {
+                    info.fields
+                        .iter()
+                        .all(|(_, ft, is_injected)| *is_injected || shape_ok(ft, env, visiting))
+                });
+                visiting.remove(n);
+                ok
+            }
+            PlutoType::Enum(n) => {
+                if !visiting.insert(n.clone()) {
+                    return true;
+                }
+                let ok = env.enums.get(n).is_none_or(|info| {
+                    info.variants
+                        .iter()
+                        .all(|(_, fields)| fields.iter().all(|(_, ft)| shape_ok(ft, env, visiting)))
+                });
+                visiting.remove(n);
+                ok
+            }
+            _ => false,
+        }
+    }
+    wire_supported(t) && shape_ok(t, env, &mut std::collections::HashSet::new())
+}
+
 /// Whether a type contains entity (object) types anywhere in its shape —
 /// directly, in containers, or TRANSITIVELY through class/enum fields.
 /// Top-level entities cross boundaries as identity handles; entities nested

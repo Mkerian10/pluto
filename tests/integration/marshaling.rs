@@ -323,6 +323,37 @@ stage Api {
     assert!(out.contains("99"));
 }
 
+/// Wire wrappers (`__wire_encode_/__wire_decode_`) are generated for generic
+/// instantiations alongside their marshalers — entity placement and RPC
+/// codegen reference them by sanitized name (`Box$$int` -> `Box__int`).
+#[test]
+fn wire_wrappers_round_trip_generic_instantiation() {
+    let out = run_marshal_test(r#"
+import std.wire
+
+class Box<T> {
+    value: T
+}
+
+stage Api {
+    pub fn get_box(self) Box<int> {
+        return Box<int> { value: 42 }
+    }
+
+    fn main(self) {
+        let b = Box<int> { value: 7 }
+        let s = __wire_encode_Box__int(b)
+        let decoded = __wire_decode_Box__int(s) catch err {
+            print("decode failed")
+            return
+        }
+        print(decoded.value)
+    }
+}
+"#);
+    assert!(out.contains("7"), "round trip failed, got: {out}");
+}
+
 // ── Nested type tests ─────────────────────────────────────────────────────────────
 
 #[test]
