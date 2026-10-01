@@ -189,6 +189,11 @@ fn check_stmt(
     // pre-statement fact state — field-write proofs/strong updates, call
     // boundaries, exit checkpoints.
     super::discharge::pre_stmt(stmt, span, env)?;
+    // Error-set shrinking (shrink.rs): evaluate callee raise-guards for this
+    // statement's direct calls against the pre-kill fact state — the facts
+    // valid when each call executes (within the statement, later calls see
+    // field facts dropped once an earlier call may have run).
+    super::shrink::record_call_site_shrinking(stmt, env);
     // Flow facts (facts.rs): apply this statement's kills before checking it
     // (reassignments, field writes, calls that may mutate, loop havoc).
     super::facts::apply_stmt_kills(stmt, env);

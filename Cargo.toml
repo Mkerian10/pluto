@@ -105,6 +105,10 @@ name = "errors"
 path = "tests/integration/errors.rs"
 
 [[test]]
+name = "error_shrinking"
+path = "tests/integration/error_shrinking.rs"
+
+[[test]]
 name = "generics"
 path = "tests/integration/generics.rs"
 

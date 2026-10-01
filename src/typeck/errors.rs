@@ -102,6 +102,23 @@ pub(crate) fn infer_error_sets(program: &Program, env: &mut TypeEnv) {
         }
     }
 
+    // Record each node's edge-carried (propagated) contribution for error-set
+    // shrinking: a variant that can also arrive through a propagation edge is
+    // never removable at a call site (slice 1 shrinks direct raises only).
+    let mut propagated: HashMap<String, HashSet<String>> = HashMap::new();
+    for (fn_name, edges) in &propagation_edges {
+        let mut s: HashSet<String> = HashSet::new();
+        for callee in edges {
+            if let Some(callee_errors) = fn_errors.get(callee) {
+                s.extend(callee_errors.iter().cloned());
+            }
+        }
+        if !s.is_empty() {
+            propagated.insert(fn_name.clone(), s);
+        }
+    }
+    env.fn_propagated_errors = propagated;
+
     env.fn_errors = fn_errors;
 
     // Copy template error sets onto the instantiations recorded so far, so
@@ -180,7 +197,10 @@ pub(crate) fn copy_class_method_error_sets(
 /// The set of error types a catch's inner call can raise (used to validate
 /// typed catch). Resolves the callee and reads its inferred error set; a remote
 /// call also adds NetworkError. A call through a closure variable reads the
-/// closure node recorded during effect collection.
+/// closure node recorded during effect collection. Direct calls (named
+/// functions, Class-resolved methods — not `at` placement) read the site's
+/// *required* set: variants proven unreachable here by the caller's flow
+/// facts (shrink.rs) need no coverage.
 fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<String> {
     match inner {
         Expr::Call { name, .. } => {
@@ -193,9 +213,23 @@ fn inner_error_set(inner: &Expr, current_fn: &str, env: &TypeEnv) -> HashSet<Str
             if let Some(node) = env.closure_call_sites.get(&(current_fn.to_string(), name.span.start)) {
                 return env.fn_errors.get(node).cloned().unwrap_or_default();
             }
-            env.fn_errors.get(&name.node).cloned().unwrap_or_default()
+            super::shrink::required_errors(env, current_fn, name.span.start, &name.node)
         }
-        Expr::MethodCall { method, .. } | Expr::At { method, .. } => {
+        Expr::MethodCall { method, .. } => {
+            let key = (current_fn.to_string(), method.span.start);
+            match env.method_resolutions.get(&key) {
+                Some(MethodResolution::Class { mangled_name }) =>
+                    super::shrink::required_errors(env, current_fn, method.span.start, mangled_name),
+                Some(MethodResolution::RemoteClass { mangled_name }) => {
+                    let mut s = env.fn_errors.get(mangled_name).cloned().unwrap_or_default();
+                    s.insert("NetworkError".to_string());
+                    s
+                }
+                _ => HashSet::new(),
+            }
+        }
+        Expr::At { method, .. } => {
+            // Placement boundaries never shrink.
             let key = (current_fn.to_string(), method.span.start);
             match env.method_resolutions.get(&key) {
                 Some(MethodResolution::Class { mangled_name }) =>
@@ -978,7 +1012,16 @@ fn enforce_expr(
                 && env
                     .fallible_builtin_calls
                     .contains(&(current_fn.to_string(), name.span.start));
-            if is_fallible_pow || env.is_fn_fallible(&name.node) {
+            // Error-set shrinking (shrink.rs): the handling obligation is the
+            // site's *required* set — variants whose every raise the caller's
+            // flow facts refuted are dropped; an empty remainder needs no
+            // handling (the canonical inferred set is untouched, so `!` and
+            // `catch` on this call stay legal).
+            if is_fallible_pow
+                || (env.is_fn_fallible(&name.node)
+                    && !super::shrink::required_errors(env, current_fn, name.span.start, &name.node)
+                        .is_empty())
+            {
                 return Err(CompileError::type_err(
                     format!(
                         "call to fallible function '{}' must be handled with ! or catch",
@@ -1018,6 +1061,15 @@ fn enforce_expr(
                 Err(msg) => return Err(CompileError::type_err(msg, method.span)),
             };
             if is_fallible {
+                // Error-set shrinking (shrink.rs): a Class-resolved direct
+                // call whose required set shrank to empty needs no handling.
+                if let Some(MethodResolution::Class { mangled_name }) =
+                    env.method_resolutions.get(&(current_fn.to_string(), method.span.start))
+                    && super::shrink::required_errors(env, current_fn, method.span.start, mangled_name)
+                        .is_empty()
+                {
+                    return Ok(());
+                }
                 return Err(CompileError::type_err(
                     format!("call to fallible method '{}' must be handled with ! or catch", method.node),
                     span,

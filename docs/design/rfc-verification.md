@@ -1,6 +1,6 @@
 # RFC: The Verification Engine
 
-**Status:** Draft — direction accepted in design discussion (2026-09-28); phases 1–2 implemented
+**Status:** Draft — direction accepted in design discussion (2026-09-28); phases 1–3 implemented
 **Author:** Design discussion
 **Date:** 2026-09-28
 **Related:** [epistemics.md](epistemics.md) (the semantic this engine instantiates), [v1-vision.md](../v1-vision.md) (Static Verification), [contracts.md](contracts.md), [rfc-typestates.md](rfc-typestates.md), [rfc-objects.md](rfc-objects.md), [rfc-distributed-safety.md](rfc-distributed-safety.md), [distributed-model.md](distributed-model.md)
@@ -116,6 +116,32 @@ flow in (guards, `requires`), facts flow out (invariants, `ensures`), and the vi
 payoff is code that gets simpler as it gets more proven. This also resolves the
 status of `ensures`: the runtime form stays rejected (contracts.md); the proof form —
 an obligation the compiler discharges and downstream code may assume — is this RFC.
+
+**Implemented (phase 3, slice 1 — `src/typeck/shrink.rs`).** The shipped slice is
+deliberately conservative; soundness is absolute (a wrongly-dropped variant would be
+an unhandled runtime error):
+
+- **Direct raises only.** A callee summary records, for each `raise X` statement,
+  its dominating guard chain — usable only when the guard is over the callee's
+  parameters and the receiver's direct int fields, still holding their *entry*
+  values at evaluation (any preceding call, parameter assignment, or field write
+  invalidates it; raises inside loops, match arms, select/scope blocks, catch
+  handlers, and expression-level blocks are never summarized). Variants arriving
+  via propagation (`!` edges, escaped closures, dynamic dispatch) and runtime
+  raise sources (channel ops, unknown task origins, fallible fn-values, remote
+  boundaries) never shrink.
+- **Direct calls only.** Named non-generic free functions and Class-resolved
+  method calls on trackable receivers; calls through fn-typed values, closures,
+  trait objects, `at` placement, and generic callees are untouched.
+- **The global graph is untouched.** Shrinking narrows the *required-handling*
+  set at individual call sites (enforcement and typed-catch coverage); the
+  callee's canonical inferred error set — and therefore propagation through `!` —
+  is unchanged. Caller facts are consulted at the call's execution point, under
+  the existing kill rules (reassignment, field writes, interleaved calls, loop
+  havoc), so a stale guard never shrinks.
+- **Ergonomics:** handling a provably-impossible error stays legal (`catch`/`!`
+  on a shrunk-to-empty site compiles; the dead handler draws no warning —
+  consistent with the silent tolerance of redundant `?` on a narrowed nullable).
 
 ## The epistemics of distribution
 
@@ -313,6 +339,10 @@ then a stdlib import, not a language feature.
    invariant may be broken is rejected — rfc-objects.md open question 6).
 3. **Error-set shrinking** — fact-sensitive error inference: a `raise` proven
    unreachable at a call site removes the variant from that site's inferred set.
+   **Shipped** (`src/typeck/shrink.rs`), slice 1: direct raises with dominating
+   fragment-expressible guards, direct (non-generic, non-dynamic) calls,
+   site-level required-handling sets only — see the implementation note under
+   "Facts have consequences" above.
 4. **Distribution primitives** — monotonic fields and dominance (guarded effects);
    the proof shapes behind fencing.
 5. **Degradable typestates + must-release** — the three transition kinds, error-

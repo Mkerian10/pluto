@@ -210,6 +210,19 @@ pub struct TypeEnv {
     /// (`f: fn(int) int!`), keyed by (enclosing fn, callee span start). Such
     /// calls must be handled; propagation widens by all declared errors.
     pub fallible_value_calls: HashSet<(String, usize)>,
+    /// Raise-site summaries per function (verification RFC phase 3 —
+    /// error-set shrinking). Keyed like `fn_errors`; built by a syntactic
+    /// pre-pass before body checking (`shrink::extract_raise_summaries`).
+    pub raise_summaries: HashMap<String, crate::typeck::shrink::FnRaiseSummary>,
+    /// (enclosing fn, callee-name span start) -> (callee key, variants whose
+    /// every direct raise is refuted by the caller's flow facts at this
+    /// site). Recorded during body checking; consumed by enforcement, which
+    /// re-filters against propagation and deferred runtime-raise poisons.
+    pub call_site_shrunk: HashMap<(String, usize), (String, HashSet<String>)>,
+    /// Per-node union of edge-carried (propagated) errors, computed after the
+    /// inference fixed point. A variant that can arrive via propagation
+    /// never shrinks (slice 1: only direct raises shrink).
+    pub fn_propagated_errors: HashMap<String, HashSet<String>>,
     /// Function values with known provenance flowing into an *infallible*
     /// fn-typed slot. Validated after error inference: the provenance node's
     /// error set must be empty.
@@ -387,6 +400,9 @@ impl TypeEnv {
             fn_errors: HashMap::new(),
             closure_call_sites: HashMap::new(),
             fallible_value_calls: HashSet::new(),
+            raise_summaries: HashMap::new(),
+            call_site_shrunk: HashMap::new(),
+            fn_propagated_errors: HashMap::new(),
             fn_value_boundaries: Vec::new(),
             fn_value_provenance: ScopeTracker::new(),
             handled_fn_value_escapes: HashSet::new(),
