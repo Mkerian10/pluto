@@ -680,6 +680,253 @@ fn generic_object_instances_do_not_serialize_against_each_other() {
     assert_eq!(out.trim(), "77");
 }
 
+// ── Entity self-call reentrancy (rfc-objects.md open question 6, RESOLVED) ──
+//
+// A self-call is part of processing the SAME message: serialized methods
+// mean one message at a time, not one stack frame. Two layers make it work:
+// codegen skips the lock entirely when the receiver is literally `self`
+// inside a method of the same entity class, and the runtime lock is
+// owner-aware (same-thread reacquisition while write-held bumps a depth
+// count), covering aliases and call chains that reenter the same instance.
+// Before this, pthread rwlocks made these deadlock on glibc and silently
+// break serialization on macOS (EDEADLK ignored; the nested unlock released
+// the OUTER hold). Timeouts turn a deadlock regression into a test failure.
+
+/// (a) A `mut self` method calls another `mut self` method on self.
+#[test]
+fn entity_self_call_mut_in_mut() {
+    let out = compile_and_run_stdout_timeout(
+        r#"
+        object Counter {
+            value: int
+
+            fn bump(mut self) {
+                self.value = self.value + 1
+            }
+
+            fn bump_twice(mut self) {
+                self.bump()
+                self.bump()
+            }
+        }
+
+        fn main() {
+            let mut c = Counter { value: 0 }
+            c.bump_twice()
+            print(c.value)
+        }
+        "#,
+        30,
+    );
+    assert_eq!(out.trim(), "2");
+}
+
+/// (b) A read method calls another read method on self.
+#[test]
+fn entity_self_call_read_in_read() {
+    let out = compile_and_run_stdout_timeout(
+        r#"
+        object Counter {
+            value: int
+
+            fn get(self) int {
+                return self.value
+            }
+
+            fn get_doubled(self) int {
+                return self.get() * 2
+            }
+        }
+
+        fn main() {
+            let c = Counter { value: 21 }
+            print(c.get_doubled())
+        }
+        "#,
+        30,
+    );
+    assert_eq!(out.trim(), "42");
+}
+
+/// (c) A read method calling a `mut self` method on self is rejected at
+/// type-check time — the write-within-read upgrade (which the owner-aware
+/// lock does NOT support) is unreachable from the language.
+#[test]
+fn entity_read_method_cannot_call_mut_method() {
+    compile_should_fail_with(
+        r#"
+        object Counter {
+            value: int
+
+            fn bump(mut self) {
+                self.value = self.value + 1
+            }
+
+            fn weird(self) int {
+                self.bump()
+                return self.value
+            }
+        }
+
+        fn main() {
+            let mut c = Counter { value: 0 }
+            print(c.weird())
+        }
+        "#,
+        "cannot call 'mut self' method 'bump' on self in a non-mut method",
+    );
+}
+
+/// (d) Reentry through an ALIAS: a method passes self to a free function
+/// that calls back into the same instance. The receiver is not literally
+/// `self`, so the codegen fast path cannot fire — this exercises the
+/// owner-aware runtime lock (same thread, write-held → depth bump).
+#[test]
+fn entity_self_call_through_alias() {
+    let out = compile_and_run_stdout_timeout(
+        r#"
+        object Counter {
+            value: int
+
+            fn bump(mut self) {
+                self.value = self.value + 1
+            }
+
+            fn via_helper(mut self) {
+                poke(self)
+            }
+
+            fn get(self) int {
+                return self.value
+            }
+        }
+
+        fn poke(mut c: Counter) {
+            c.bump()
+        }
+
+        fn main() {
+            let mut c = Counter { value: 0 }
+            c.via_helper()
+            print(c.get())
+        }
+        "#,
+        30,
+    );
+    assert_eq!(out.trim(), "1");
+}
+
+/// (e) Mutual recursion between two `mut self` methods (nested reacquisition
+/// several levels deep — the depth count must balance).
+#[test]
+fn entity_self_call_mutual_recursion() {
+    let out = compile_and_run_stdout_timeout(
+        r#"
+        object Walker {
+            n: int
+
+            fn even(mut self, k: int) bool {
+                if k == 0 { return true }
+                return self.odd(k - 1)
+            }
+
+            fn odd(mut self, k: int) bool {
+                if k == 0 { return false }
+                return self.even(k - 1)
+            }
+        }
+
+        fn main() {
+            let mut w = Walker { n: 0 }
+            print(w.even(10))
+        }
+        "#,
+        30,
+    );
+    assert_eq!(out.trim(), "true");
+}
+
+/// Reentry through an entity PLACEMENT on an alias: `at other { get() }`
+/// where `other` is the same instance the running method holds the write
+/// lock on. The colocated plan is a direct locked call — same owner-aware
+/// reacquisition, through the `at` lowering path.
+#[test]
+fn entity_placement_reenters_same_instance() {
+    let out = compile_and_run_stdout_timeout(
+        r#"
+        object Node {
+            tag: int
+
+            fn get(self) int {
+                return self.tag
+            }
+
+            fn probe(mut self, other: Node) int {
+                self.tag = self.tag + 1
+                return at other { get() } catch -1
+            }
+        }
+
+        fn main() {
+            let mut n = Node { tag: 10 }
+            print(n.probe(n))
+        }
+        "#,
+        30,
+    );
+    assert_eq!(out.trim(), "11");
+}
+
+/// Same-instance cross-THREAD serialization still holds with self-calling
+/// methods: racing increments through a self-call double-bump lose no
+/// updates. (Reentrancy is same-thread only; distinct threads still
+/// exclude each other.)
+#[test]
+fn entity_self_calls_keep_cross_thread_serialization() {
+    let out = compile_and_run_stdout_timeout(
+        r#"
+        object Counter {
+            value: int
+
+            fn bump(mut self) {
+                self.value = self.value + 1
+            }
+
+            fn bump_twice(mut self) {
+                self.bump()
+                self.bump()
+            }
+
+            fn work(mut self) {
+                let mut i = 0
+                while i < 500 {
+                    self.bump_twice()
+                    i = i + 1
+                }
+            }
+
+            fn get(self) int {
+                return self.value
+            }
+        }
+
+        fn main() {
+            let mut c = Counter { value: 0 }
+            let t = spawn c.work()
+            let mut i = 0
+            while i < 500 {
+                c.bump_twice()
+                i = i + 1
+            }
+            t.get()
+            print(c.get())
+        }
+        "#,
+        60,
+    );
+    assert_eq!(out.trim(), "2000");
+}
+
 /// `pluto test` binaries with objects link and run: the test-mode runtime
 /// provides no-op lock stubs (the fiber scheduler is single-threaded), and
 /// entity allocations still carry the hidden lock slot.

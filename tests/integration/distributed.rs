@@ -1495,6 +1495,89 @@ fn entity_handle_call_routes_home() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n107\n");
 }
 
+// Shared source for the dispatch-reentrancy test: the served entity's
+// rotate_twice self-calls rotate.
+const REENTRANT_SHARED: &str = r#"
+import std.wire
+
+object Vault {
+    secret: int
+
+    fn reveal(self) int {
+        return self.secret
+    }
+
+    fn rotate(mut self) {
+        self.secret = self.secret + 100
+    }
+
+    fn rotate_twice(mut self) {
+        self.rotate()
+        self.rotate()
+    }
+}
+
+class Registry {
+    v: Vault
+
+    fn vault(self) Vault {
+        return self.v
+    }
+}
+"#;
+
+/// Handle-dispatch reentrancy (rfc-objects.md open question 6): a routed
+/// call lands on a serve connection thread, which takes the entity's write
+/// lock in the generated dispatch and invokes `rotate_twice` — whose body
+/// self-calls `rotate` on the same instance. The self-call is part of the
+/// same message and must proceed (codegen fast path; owner-aware lock
+/// backstop). A deadlock regression hangs the server, so the client is
+/// reaped on a deadline instead of waiting forever.
+#[test]
+fn served_entity_self_call_in_dispatch() {
+    let server_src = format!(
+        "{REENTRANT_SHARED}\nfn main() {{\n    let v = Vault {{ secret: 7 }}\n    let r = Registry {{ v: v }}\n    serve r on 0\n}}"
+    );
+    let app_src = format!(
+        "{REENTRANT_SHARED}\napp A[reg: domain Registry] {{\n    fn main(self) {{\n        let fallback = Vault {{ secret: -1 }}\n        let v = at self.reg {{ vault() }} catch fallback\n        at v {{ rotate_twice() }} catch err {{}}\n        let s = at v {{ reveal() }} catch -2\n        print(s)\n    }}\n}}"
+    );
+    let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
+    let (_ad, app_bin) = build_binary(&[("main.pluto", &app_src)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let mut client = Command::new(&app_bin)
+        .env("PLUTO_DOMAIN_REGISTRY", format!("127.0.0.1:{port}"))
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let status = loop {
+        match client.try_wait().unwrap() {
+            Some(status) => break status,
+            None if std::time::Instant::now() >= deadline => {
+                client.kill().ok();
+                server.kill().ok();
+                panic!("dispatch self-call timed out — possible entity lock deadlock");
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    };
+    let mut stdout = String::new();
+    use std::io::Read as _;
+    client.stdout.take().unwrap().read_to_string(&mut stdout).unwrap();
+    let _ = server.kill();
+    assert!(status.success(), "client exited with non-zero status");
+    assert_eq!(stdout, "207\n");
+}
+
 /// Entity placement can carry CLASS values across the boundary surface:
 /// marshalers are generated for the param/return types of object methods
 /// even when the program has no serve/remote/domain boundary. Pins the

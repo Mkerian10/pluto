@@ -54,6 +54,13 @@ struct LowerContext<'a> {
     fn_display_name: String,
     /// Whether this function is a spawn closure (return values must be I64-encoded)
     is_spawn_closure: bool,
+    /// Set to the class name when lowering a method of an entity (object)
+    /// class. `self.m()` inside such a method is part of processing the SAME
+    /// message, so it skips lock acquisition entirely — the activation
+    /// already holds the instance lock (rfc-objects.md open question 6).
+    /// None for free functions, lifted closures, serve handlers, and
+    /// generator bodies (a generator resumes outside the lock bracket).
+    current_entity_class: Option<String>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -4661,7 +4668,16 @@ impl<'a> LowerContext<'a> {
             // Foreign-entity handles cannot be invoked locally: guard every
             // object method call (routing is a later slice of rfc-objects.md)
             let is_entity = self.env.object_types.contains(&class_name);
-            if is_entity {
+            // Self-call fast path: `self.m()` inside a method of this same
+            // entity class is part of processing the SAME message — the
+            // activation already holds the instance lock, so no guard and
+            // no reacquisition (rfc-objects.md open question 6). The
+            // owner-aware runtime lock covers the general aliased case;
+            // this just skips the round trip for the literal-self case.
+            let is_entity_self_call = is_entity
+                && is_self_call
+                && self.current_entity_class.as_deref() == Some(class_name.as_str());
+            if is_entity && !is_entity_self_call {
                 self.call_runtime_void("__pluto_entity_guard", &[obj_ptr]);
             }
             // Entity methods serialize on the INSTANCE's own lock (hidden
@@ -4671,10 +4687,12 @@ impl<'a> LowerContext<'a> {
             // per-type == per-instance).
             let needs_sync = !is_entity && self.rwlock_globals.contains_key(&class_name);
             if is_entity {
-                if self.env.mut_self_methods.contains(&mangled) {
-                    self.call_runtime_void("__pluto_entity_wrlock", &[obj_ptr]);
-                } else {
-                    self.call_runtime_void("__pluto_entity_rdlock", &[obj_ptr]);
+                if !is_entity_self_call {
+                    if self.env.mut_self_methods.contains(&mangled) {
+                        self.call_runtime_void("__pluto_entity_wrlock", &[obj_ptr]);
+                    } else {
+                        self.call_runtime_void("__pluto_entity_rdlock", &[obj_ptr]);
+                    }
                 }
             } else if needs_sync {
                 let data_id = self.rwlock_globals[&class_name];
@@ -4698,7 +4716,9 @@ impl<'a> LowerContext<'a> {
 
             // Release the lock after the method call
             if is_entity {
-                self.call_runtime_void("__pluto_entity_unlock", &[obj_ptr]);
+                if !is_entity_self_call {
+                    self.call_runtime_void("__pluto_entity_unlock", &[obj_ptr]);
+                }
             } else if needs_sync {
                 let data_id = self.rwlock_globals[&class_name];
                 let gv = self.module.declare_data_in_func(data_id, self.builder.func);
@@ -4987,6 +5007,7 @@ pub fn lower_serve_handler(
         exit_block: None,
         fn_display_name: format!("__pluto_serve_handler_{class_name}"),
         is_spawn_closure: false,
+        current_entity_class: None,
     };
     ctx.emit_serve_dispatch(svc, conn, class_name)?;
     ctx.builder.finalize();
@@ -5153,6 +5174,9 @@ pub fn lower_function(
         exit_block,
         fn_display_name,
         is_spawn_closure,
+        current_entity_class: class_name
+            .filter(|cn| env.object_types.contains(*cn))
+            .map(|cn| cn.to_string()),
     };
 
     // Initialize GC at start of non-app main
@@ -5562,6 +5586,7 @@ pub fn lower_generator_next(
         exit_block: None,
         fn_display_name: func.name.node.clone(),
         is_spawn_closure: false,
+        current_entity_class: None,
     };
 
     // Generator-specific state
