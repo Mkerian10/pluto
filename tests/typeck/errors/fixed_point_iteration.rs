@@ -24,8 +24,12 @@ fn recursion_with_mixed_sigs() { compile_should_fail_with(r#"error E{} fn a(n:in
 // Recursion with conditionals
 #[test]
 fn recursive_only_in_branch() { compile_should_fail_with(r#"error E{} fn fac(n:int)int{if n>0{if n==5{raise E{}}return n*fac(n-1)}return 1} fn main(){}"#, "call to fallible"); }
+// (The raise guard is n==1, not n<0: the recursive sites run under the fact
+// n >= 2, which refutes n-1 < 0, so error-set shrinking legitimately drops E
+// there. n-1 == 1 stays possible, preserving this test's intent: fixed-point
+// convergence over both recursive branches.)
 #[test]
-fn recursive_both_branches() { compile_should_fail_with(r#"error E{} fn fib(n:int)int{if n<=1{if n<0{raise E{}}return 1}return fib(n-1)+fib(n-2)} fn main(){}"#, "call to fallible"); }
+fn recursive_both_branches() { compile_should_fail_with(r#"error E{} fn fib(n:int)int{if n<=1{if n==1{raise E{}}return 1}return fib(n-1)+fib(n-2)} fn main(){}"#, "call to fallible"); }
 
 // Recursion with loops
 #[test]
