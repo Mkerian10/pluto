@@ -79,7 +79,7 @@ fn main(){}"#, "does not match the generic signature declared by trait 'T'"); }
 // Vtable with contracts
 #[test]
 fn vtable_contracts() { compile_should_fail_with(r#"trait T{fn foo(self)int ensures result>0} class C impl T{
-fn foo(self)int{return -1}} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn foo(self)int{return -1}} fn main(){}"#, "'ensures' clauses are only supported on methods of classes and objects"); }
 
 // Vtable with nullable return
 #[test]

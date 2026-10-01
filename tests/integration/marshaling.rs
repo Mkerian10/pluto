@@ -507,3 +507,44 @@ stage Api {
         "error should name class and invariant, got: {out}"
     );
 }
+
+// ── Two-state invariants at the decode boundary ─────────────────────────────
+
+#[test]
+fn marshal_two_state_invariant_skipped_at_decode() {
+    // Two-state invariants (`old(...)`, rfc-properties.md atom 2) relate a
+    // transition to its pre-state; a decoded value has no pre-state, so only
+    // the single-state invariant becomes a decode guard. This program would
+    // not even codegen if the old()-clause were emitted as a boundary check.
+    let out = run_marshal_test(r#"
+import std.wire
+
+class Epoch {
+    e: int
+    invariant self.e >= 0
+    invariant self.e >= old(self.e)
+}
+
+stage Api {
+    pub fn get_epoch(self) Epoch {
+        return Epoch { e: 7 }
+    }
+
+    fn main(self) {
+        let epoch = Epoch { e: 7 }
+        let enc = wire.wire_value_encoder()
+        __marshal_Epoch(epoch, enc)
+        let value = enc.result()
+
+        let dec = wire.wire_value_decoder(value)
+        let decoded = __unmarshal_Epoch(dec) catch err {
+            print("decode failed")
+            return
+        }
+
+        print(decoded.e)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "7");
+}

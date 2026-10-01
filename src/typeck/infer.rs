@@ -1395,10 +1395,24 @@ fn infer_call(
     }
 
     let sig = env.functions.get(&name.node).ok_or_else(|| {
-        CompileError::type_err(
-            format!("undefined function '{}'", name.node),
-            name.span,
-        )
+        if name.node == "old" {
+            // The two-state intrinsic (rfc-properties.md): legal only inside
+            // ensures/invariant clauses, where discharge resolves it against
+            // the entry/pre-state vocabulary. (A user-defined function named
+            // `old` takes the normal path above.)
+            CompileError::type_err(
+                "'old(...)' is only usable inside 'ensures' and 'invariant' clauses, \
+                 where it denotes the value of its argument in the pre-state (method \
+                 entry, or the state before a write) — see docs/design/rfc-properties.md"
+                    .to_string(),
+                name.span,
+            )
+        } else {
+            CompileError::type_err(
+                format!("undefined function '{}'", name.node),
+                name.span,
+            )
+        }
     })?;
 
     if args.len() != sig.params.len() {

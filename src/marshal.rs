@@ -983,9 +983,14 @@ fn generate_unmarshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>,
         .map(|f| (f.name.node.clone(), mk_var(&f.name.node)))
         .collect();
     // `must_release` typestate annotations ride in `invariants` but are not
-    // value predicates — only true invariants become boundary guards.
+    // value predicates — only true invariants become boundary guards. Two-
+    // state invariants (`old(...)`, rfc-properties.md atom 2) are excluded
+    // too: a decoded value has no pre-state to relate to, so they are
+    // code-path-only obligations — decode validates single-state invariants
+    // only.
     let value_invariants: Vec<_> = class_decl.invariants.iter()
-        .filter(|i| i.node.kind == crate::parser::ast::ContractKind::Invariant)
+        .filter(|i| i.node.kind == crate::parser::ast::ContractKind::Invariant
+            && !crate::parser::ast::expr_contains_old(&i.node.expr.node))
         .collect();
     if value_invariants.is_empty() {
         stmts.push(mk_return(mk_struct_lit(class_name, field_inits)));

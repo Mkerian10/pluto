@@ -73,16 +73,17 @@ use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::{
-    BinOp, Block, ContractKind, Expr, Function, Program, Stmt, UnaryOp,
+    expr_contains_old, old_call_arg, BinOp, Block, ContractKind, Expr, Function, Program, Stmt,
+    UnaryOp,
 };
 use crate::span::{Span, Spanned};
 use crate::visit::{walk_expr, walk_stmt, Visitor};
 
-use super::env::TypeEnv;
+use super::env::{mangle_method, TypeEnv};
 use super::facts::{
-    condition_facts, condition_facts_with, contains_impure_call, eval_condition_with,
-    immediate_exprs, to_affine, to_affine_with, typed_path, Affine, Fact, FactEnv, Interval,
-    RelOp, Verdict,
+    affine_add_const, affine_bounds, condition_facts, condition_facts_with, contains_impure_call,
+    diff_affine, eval_condition_with, facts_from_diff, immediate_exprs, is_comparison, len_path,
+    to_affine, to_affine_with, typed_path, Affine, Fact, FactEnv, Interval, RelOp, Verdict,
 };
 use super::types::PlutoType;
 
@@ -96,6 +97,48 @@ pub struct InvariantSpec {
     pub expr: Expr,
     pub desc: String,
     pub span: Span,
+    /// Contains `old(...)` — a *two-state* invariant (rfc-properties.md
+    /// atom 2) relating each state transition to its pre-state. Checked at
+    /// every `mut self` method boundary (relative to the method's entry) and
+    /// at every foreign write site (relative to the pre-write state); never
+    /// at construction, DI synthesis, or wire-decode (no pre-state exists
+    /// there).
+    pub two_state: bool,
+}
+
+/// A validated, provable `ensures` postcondition of a method
+/// (rfc-properties.md atom 1): a two-state relation between the method's
+/// exit and entry states, proven at every normal exit (returns and
+/// fall-through — raise paths are exempt) and *assumed* by callers after a
+/// direct call.
+#[derive(Debug, Clone)]
+pub struct EnsuresSpec {
+    pub expr: Expr,
+    pub desc: String,
+    pub span: Span,
+    /// Parameter names in declaration order, excluding `self` — the
+    /// substitution vocabulary for caller-side assumption.
+    pub params: Vec<String>,
+}
+
+/// Rewrite `old(e)` to `e` for type-checking purposes: `old(e)` has the type
+/// of `e` (placement/fragment validity is checked separately).
+fn strip_old(expr: &Expr) -> Expr {
+    if let Some(inner) = old_call_arg(expr) {
+        return strip_old(&inner.node);
+    }
+    match expr {
+        Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
+            op: *op,
+            lhs: Box::new(Spanned::new(strip_old(&lhs.node), lhs.span)),
+            rhs: Box::new(Spanned::new(strip_old(&rhs.node), rhs.span)),
+        },
+        Expr::UnaryOp { op, operand } => Expr::UnaryOp {
+            op: *op,
+            operand: Box::new(Spanned::new(strip_old(&operand.node), operand.span)),
+        },
+        other => other.clone(),
+    }
 }
 
 /// Type-check and fragment-validate every class invariant, and register the
@@ -131,8 +174,11 @@ pub(crate) fn register_invariants(program: &Program, env: &mut TypeEnv) -> Resul
         env.push_scope();
         env.define_unchecked("self".to_string(), PlutoType::Class(c.name.node.clone()));
         for inv in &invariants {
+            // `old(e)` types as `e`; its placement is validated by the
+            // provable-fragment check below.
+            let stripped = strip_old(&inv.node.expr.node);
             let inv_type =
-                super::infer::infer_expr(&inv.node.expr.node, inv.node.expr.span, env, None)?;
+                super::infer::infer_expr(&stripped, inv.node.expr.span, env, None)?;
             if inv_type != PlutoType::Bool {
                 env.pop_scope();
                 return Err(CompileError::type_err(
@@ -152,6 +198,7 @@ pub(crate) fn register_invariants(program: &Program, env: &mut TypeEnv) -> Resul
                 expr: inv.node.expr.node.clone(),
                 desc,
                 span: inv.node.expr.span,
+                two_state: expr_contains_old(&inv.node.expr.node),
             });
         }
         env.class_invariants.insert(c.name.node.clone(), specs);
@@ -213,6 +260,13 @@ fn validate_affine_side(
     desc: &str,
     env: &TypeEnv,
 ) -> Result<(), CompileError> {
+    // `old(<affine over own int fields>)` — the pre-state value of its
+    // argument (rfc-properties.md atom 2). Nested old() is rejected by
+    // contract validation before this runs; validate the argument with the
+    // same side grammar.
+    if let Some(inner) = old_call_arg(&expr.node) {
+        return validate_affine_side(inner, class_name, desc, env);
+    }
     match &expr.node {
         Expr::IntLit(_) => Ok(()),
         Expr::FloatLit(_) => Err(fragment_err(
@@ -306,6 +360,264 @@ fn is_const_int_expr(expr: &Expr) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Ensures registration (rfc-properties.md atom 1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Type-check and fragment-validate every `ensures` clause on class/object
+/// methods, and register the provable specs in `env.fn_ensures` (keyed by
+/// mangled method name). Runs right after `register_invariants`, before any
+/// body checking, so obligations exist at every exit and callers can assume
+/// the relation.
+pub(crate) fn register_ensures(program: &Program, env: &mut TypeEnv) -> Result<(), CompileError> {
+    for class in &program.classes {
+        let c = &class.node;
+        for method in &c.methods {
+            let m = &method.node;
+            let clauses: Vec<_> = m
+                .contracts
+                .iter()
+                .filter(|cc| cc.node.kind == ContractKind::Ensures)
+                .collect();
+            if clauses.is_empty() {
+                continue;
+            }
+            if !c.type_params.is_empty() {
+                return Err(CompileError::type_err(
+                    format!(
+                        "ensures clauses on methods of generic classes are not yet supported: \
+                         they are compile-time proof obligations, and generic bodies are \
+                         checked against opaque type parameters. Declare the ensures on a \
+                         concrete class wrapping '{}' instead",
+                        c.name.node
+                    ),
+                    clauses[0].span,
+                ));
+            }
+            if !m.params.iter().any(|p| p.name.node == "self") {
+                return Err(CompileError::type_err(
+                    "'ensures' requires a 'self' receiver: the clause relates the \
+                     receiver's exit state to its entry state"
+                        .to_string(),
+                    clauses[0].span,
+                ));
+            }
+            // Type-check the clauses with self and parameters in scope
+            // (`old(e)` types as `e`).
+            env.push_scope();
+            env.define_unchecked("self".to_string(), PlutoType::Class(c.name.node.clone()));
+            let mut int_params: Vec<String> = Vec::new();
+            for p in &m.params {
+                if p.name.node == "self" {
+                    continue;
+                }
+                let ty = super::resolve::resolve_type(&p.ty, env)?;
+                if ty == PlutoType::Int {
+                    int_params.push(p.name.node.clone());
+                }
+                env.define_unchecked(p.name.node.clone(), ty);
+            }
+            for cl in &clauses {
+                let stripped = strip_old(&cl.node.expr.node);
+                let ty = super::infer::infer_expr(&stripped, cl.node.expr.span, env, None);
+                let ty = match ty {
+                    Ok(t) => t,
+                    Err(e) => {
+                        env.pop_scope();
+                        return Err(e);
+                    }
+                };
+                if ty != PlutoType::Bool {
+                    env.pop_scope();
+                    return Err(CompileError::type_err(
+                        format!("ensures expression must be bool, found {ty}"),
+                        cl.node.expr.span,
+                    ));
+                }
+            }
+            env.pop_scope();
+
+            // Provable-fragment validation.
+            let mut specs = Vec::new();
+            let params: Vec<String> = m
+                .params
+                .iter()
+                .filter(|p| p.name.node != "self")
+                .map(|p| p.name.node.clone())
+                .collect();
+            for cl in &clauses {
+                let desc = crate::codegen::format_invariant_expr(&cl.node.expr.node);
+                validate_ensures_provable(&cl.node.expr, &c.name.node, &int_params, &desc, env)?;
+                specs.push(EnsuresSpec {
+                    expr: cl.node.expr.node.clone(),
+                    desc,
+                    span: cl.node.expr.span,
+                    params: params.clone(),
+                });
+            }
+            env.fn_ensures
+                .insert(mangle_method(&c.name.node, &m.name.node), specs);
+        }
+    }
+    Ok(())
+}
+
+fn ensures_fragment_err(reason: String, desc: &str, span: Span) -> CompileError {
+    CompileError::type_err(
+        format!(
+            "ensures clause '{desc}' is outside the provable fragment: {reason}. Ensures \
+             clauses are compile-time proof obligations; they must be built from &&, ||, ! \
+             over integer comparisons of linear arithmetic over the class's own int fields, \
+             the method's int parameters, and old(...) of those \
+             (e.g. 'self.epoch == old(self.epoch) + 1', \
+             'self.balance == old(self.balance) - amt'). Properties outside this fragment \
+             cannot be statically discharged and are rejected"
+        ),
+        span,
+    )
+}
+
+/// Validate that an ensures condition is within the provable fragment:
+/// boolean combinations of integer comparisons whose sides are linear
+/// arithmetic over the class's own int fields, the method's int parameters,
+/// and `old(...)` of those. `len()` terms are deliberately excluded for now:
+/// every mutation of a collection is an opaque call that severs the entry
+/// relation, so no `len()` ensures could be proven today.
+fn validate_ensures_provable(
+    expr: &Spanned<Expr>,
+    class_name: &str,
+    int_params: &[String],
+    desc: &str,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    match &expr.node {
+        Expr::BinOp { op: BinOp::And | BinOp::Or, lhs, rhs } => {
+            validate_ensures_provable(lhs, class_name, int_params, desc, env)?;
+            validate_ensures_provable(rhs, class_name, int_params, desc, env)
+        }
+        Expr::UnaryOp { op: UnaryOp::Not, operand } => {
+            validate_ensures_provable(operand, class_name, int_params, desc, env)
+        }
+        Expr::BinOp {
+            op: BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq | BinOp::Eq | BinOp::Neq,
+            lhs,
+            rhs,
+        } => {
+            validate_ensures_side(lhs, class_name, int_params, desc, env)?;
+            validate_ensures_side(rhs, class_name, int_params, desc, env)
+        }
+        _ => Err(ensures_fragment_err(
+            "it is not an integer comparison (boolean fields, bare literals, and \
+             non-comparison expressions are not provable)"
+                .to_string(),
+            desc,
+            expr.span,
+        )),
+    }
+}
+
+fn validate_ensures_side(
+    expr: &Spanned<Expr>,
+    class_name: &str,
+    int_params: &[String],
+    desc: &str,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    if let Some(inner) = old_call_arg(&expr.node) {
+        // Nested old() is rejected during contract validation.
+        return validate_ensures_side(inner, class_name, int_params, desc, env);
+    }
+    match &expr.node {
+        Expr::IntLit(_) => Ok(()),
+        Expr::Ident(name) => {
+            if int_params.iter().any(|p| p == name) {
+                Ok(())
+            } else {
+                Err(ensures_fragment_err(
+                    format!(
+                        "'{name}' is not an int parameter of this method — only the \
+                         class's own int fields and the method's int parameters are \
+                         provable terms"
+                    ),
+                    desc,
+                    expr.span,
+                ))
+            }
+        }
+        Expr::FieldAccess { object, field } => {
+            if !matches!(&object.node, Expr::Ident(s) if s == "self") {
+                return Err(ensures_fragment_err(
+                    "nested field access — only direct int fields of self are provable"
+                        .to_string(),
+                    desc,
+                    expr.span,
+                ));
+            }
+            let fty = env
+                .classes
+                .get(class_name)
+                .and_then(|ci| ci.fields.iter().find(|(n, _, _)| *n == field.node))
+                .map(|(_, t, _)| t.clone());
+            match fty {
+                Some(PlutoType::Int) => Ok(()),
+                Some(other) => Err(ensures_fragment_err(
+                    format!(
+                        "field '{}' has type {other} — only int fields are provable",
+                        field.node
+                    ),
+                    desc,
+                    expr.span,
+                )),
+                None => Err(CompileError::type_err(
+                    format!("class '{class_name}' has no field '{}'", field.node),
+                    expr.span,
+                )),
+            }
+        }
+        Expr::MethodCall { method, .. } => Err(ensures_fragment_err(
+            format!(
+                "'.{}()' — collection and method facts are not provable (len() terms \
+                 are not yet supported in ensures)",
+                method.node
+            ),
+            desc,
+            expr.span,
+        )),
+        Expr::UnaryOp { op: UnaryOp::Neg, operand } => {
+            validate_ensures_side(operand, class_name, int_params, desc, env)
+        }
+        Expr::BinOp { op: BinOp::Add | BinOp::Sub, lhs, rhs } => {
+            validate_ensures_side(lhs, class_name, int_params, desc, env)?;
+            validate_ensures_side(rhs, class_name, int_params, desc, env)
+        }
+        Expr::BinOp { op: BinOp::Mul, lhs, rhs } => {
+            if !is_const_int_expr(&lhs.node) && !is_const_int_expr(&rhs.node) {
+                return Err(ensures_fragment_err(
+                    "non-linear arithmetic (a product of two non-constant terms) is not \
+                     provable"
+                        .to_string(),
+                    desc,
+                    expr.span,
+                ));
+            }
+            validate_ensures_side(lhs, class_name, int_params, desc, env)?;
+            validate_ensures_side(rhs, class_name, int_params, desc, env)
+        }
+        Expr::BinOp { op: BinOp::Div | BinOp::Mod, .. } => Err(ensures_fragment_err(
+            "division and modulo are not linear arithmetic".to_string(),
+            desc,
+            expr.span,
+        )),
+        _ => Err(ensures_fragment_err(
+            "only int literals, direct int fields of self, int parameters, old(...) of \
+             those, and +, -, * by a constant are provable"
+                .to_string(),
+            desc,
+            expr.span,
+        )),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // The per-method proof scope (ghost vocabulary)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -320,6 +632,9 @@ pub struct InvariantScope {
     pub class_name: String,
     method_name: String,
     invariants: Vec<InvariantSpec>,
+    /// Ensures postconditions of the method being checked: proof obligations
+    /// at every normal exit (returns + reachable fall-through).
+    ensures: Vec<EnsuresSpec>,
     /// Facts over the ghost vocabulary.
     pub ghost_facts: FactEnv,
     /// Current symbolic value of each int field of the class.
@@ -375,6 +690,40 @@ impl InvariantScope {
                 }
             }
             _ => self.resolve_len(env, e),
+        }
+    }
+
+    /// Two-state resolver: like [`Self::resolve`], but additionally maps
+    /// `old(e)` to the affine form of `e` over the *entry* ghost vocabulary
+    /// (`self.f@0`, `p@0`). Entry ghosts are SSA values that are never
+    /// re-anchored, so the mapping stays valid for the whole body.
+    pub(crate) fn resolve_two_state(&self, env: &TypeEnv, e: &Expr) -> Option<Affine> {
+        if let Some(inner) = old_call_arg(e) {
+            return to_affine_with(&inner.node, &|x| self.resolve_entry(env, x));
+        }
+        self.resolve(env, e)
+    }
+
+    /// Resolve a leaf into the *entry* ghost vocabulary: the value a field or
+    /// local had when the method was entered.
+    fn resolve_entry(&self, env: &TypeEnv, e: &Expr) -> Option<Affine> {
+        match e {
+            Expr::FieldAccess { object, field }
+                if matches!(&object.node, Expr::Ident(s) if s == "self") =>
+            {
+                self.fields
+                    .iter()
+                    .any(|f| f == &field.node)
+                    .then(|| Affine::term(format!("self.{}@0", field.node)))
+            }
+            Expr::Ident(name) if name != "self" => {
+                let is_int = match env.narrowed_vars.lookup(name) {
+                    Some(t) => *t == PlutoType::Int,
+                    None => matches!(env.lookup(name), Some(PlutoType::Int)),
+                };
+                is_int.then(|| Affine::term(format!("{name}@0")))
+            }
+            _ => None,
         }
     }
 
@@ -458,8 +807,13 @@ fn render_affine(a: &Affine) -> String {
     parts.join(" ")
 }
 
-/// The fields an expression mentions as `self.<field>`.
+/// The fields an expression mentions as `self.<field>` (including inside
+/// `old(...)`).
 fn mentioned_fields(expr: &Expr, out: &mut HashSet<String>) {
+    if let Some(inner) = old_call_arg(expr) {
+        mentioned_fields(&inner.node, out);
+        return;
+    }
     match expr {
         Expr::FieldAccess { object, field }
             if matches!(&object.node, Expr::Ident(s) if s == "self") =>
@@ -544,7 +898,7 @@ fn checkpoint(
         }
         let s: &InvariantScope = scope;
         let verdict =
-            eval_condition_with(&spec.expr, &|e| s.resolve(env, e), &s.ghost_facts);
+            eval_condition_with(&spec.expr, &|e| s.resolve_two_state(env, e), &s.ghost_facts);
         match verdict {
             Verdict::Proven => {}
             Verdict::Refuted => {
@@ -603,10 +957,31 @@ fn symbolic_state(scope: &InvariantScope, fields: &HashSet<String>) -> String {
     }
 }
 
+/// Is this ghost term an *entry*-state field term (`self.f@0`)? After any
+/// re-anchor the current anchor epoch is >= 1, so `@0` field terms
+/// unambiguously denote the method's entry state.
+fn is_entry_field_term(path: &str) -> bool {
+    path.starts_with("self.") && path.ends_with("@0")
+}
+
 /// Re-anchor every field on fresh ghosts carrying exactly the
 /// invariant-level facts. Used at boundaries after the invariant has been
 /// (re-)established, and after calls (which may invalidate anything finer).
-fn re_anchor(scope: &mut InvariantScope, env: &TypeEnv) {
+///
+/// `composed` distinguishes how the new anchor state arose. At a *composed*
+/// boundary (a call, a yield, a select/scope block) the anchor state is the
+/// result of other code running — code that itself preserves every invariant
+/// *segment-wise* (each mut-self method relative to its own entry, each
+/// foreign write relative to its pre-state). A two-state invariant therefore
+/// survives a composed boundary only through transitivity, so only
+/// composition-safe cross-state relations (`<`, `<=`, `==` between an entry
+/// term and a current term) are assumed, and the two-state specs' fields are
+/// marked touched so the next boundary re-proves the relation from those
+/// facts (strictness: what transitivity cannot carry becomes a compile
+/// error, never a silent hole). At a non-composed boundary (loop entry/exit)
+/// the anchor state is a state the checker itself just proved the full
+/// invariant for, so every extracted fact is sound.
+fn re_anchor(scope: &mut InvariantScope, env: &TypeEnv, composed: bool) {
     scope.next_ghost += 1;
     let n = scope.next_ghost;
     for f in &scope.fields {
@@ -616,16 +991,41 @@ fn re_anchor(scope: &mut InvariantScope, env: &TypeEnv) {
     }
     scope.touched.clear();
     let mut to_assume = Vec::new();
+    let mut touch: HashSet<String> = HashSet::new();
     {
         let s: &InvariantScope = scope;
         for spec in &s.invariants {
-            to_assume
-                .extend(condition_facts_with(&spec.expr, &|e| s.resolve(env, e)).then_facts);
+            let facts =
+                condition_facts_with(&spec.expr, &|e| s.resolve_two_state(env, e)).then_facts;
+            if spec.two_state && composed {
+                to_assume.extend(facts.into_iter().filter(|fact| {
+                    let cross_state = match fact {
+                        Fact::Bound(p, _) => is_entry_field_term(p),
+                        Fact::NeConst(p, _) => is_entry_field_term(p),
+                        Fact::Rel(a, _, b) => {
+                            is_entry_field_term(a) || is_entry_field_term(b)
+                        }
+                    };
+                    if !cross_state {
+                        // Facts over current-anchor terms only: hold at the
+                        // post-boundary state directly (every segment
+                        // preserved the full invariant at its own exit).
+                        return true;
+                    }
+                    // Cross-state facts survive composition only when the
+                    // relation is transitive.
+                    matches!(fact, Fact::Rel(_, RelOp::Lt | RelOp::Le | RelOp::Eq, _))
+                }));
+                touch.extend(spec_fields(spec));
+            } else {
+                to_assume.extend(facts);
+            }
         }
     }
     for f in to_assume {
         scope.ghost_facts.assume(f);
     }
+    scope.touched.extend(touch);
 }
 
 fn checkpoint_scope(env: &mut TypeEnv, span: Span, site: &str) -> Result<(), CompileError> {
@@ -637,12 +1037,98 @@ fn checkpoint_scope(env: &mut TypeEnv, span: Span, site: &str) -> Result<(), Com
     r
 }
 
-fn re_anchor_scope(env: &mut TypeEnv) {
+fn re_anchor_scope(env: &mut TypeEnv, composed: bool) {
     let Some(mut scope) = env.invariant_scope.take() else {
         return;
     };
-    re_anchor(&mut scope, env);
+    re_anchor(&mut scope, env, composed);
     env.invariant_scope = Some(scope);
+}
+
+/// Prove every ensures clause of the current method at a normal exit
+/// (return / reachable fall-through). Raise paths owe nothing — the error
+/// contract governs those edges (rfc-properties.md atom 1).
+fn prove_ensures(
+    scope: &InvariantScope,
+    env: &TypeEnv,
+    span: Span,
+    site: &str,
+) -> Result<(), CompileError> {
+    for spec in &scope.ensures {
+        let verdict = eval_condition_with(
+            &spec.expr,
+            &|e| scope.resolve_two_state(env, e),
+            &scope.ghost_facts,
+        );
+        let fields = {
+            let mut out = HashSet::new();
+            mentioned_fields(&spec.expr, &mut out);
+            out
+        };
+        match verdict {
+            Verdict::Proven => {}
+            Verdict::Refuted => {
+                return Err(CompileError::type_err(
+                    format!(
+                        "ensures clause '{}' of method '{}' of class '{}' is violated at \
+                         {site}: {}",
+                        spec.desc,
+                        scope.method_name,
+                        scope.class_name,
+                        ensures_state(scope, &fields),
+                    ),
+                    span,
+                ));
+            }
+            Verdict::Unknown => {
+                return Err(CompileError::type_err(
+                    format!(
+                        "cannot prove ensures clause '{}' of method '{}' of class '{}' at \
+                         {site}: {}. An ensures clause must hold at every normal exit \
+                         (returns and fall-through; raise paths are exempt). Establish the \
+                         relation before this exit with a guard, a 'requires' clause, or an \
+                         'assert' — and note that a call can invalidate two-state \
+                         knowledge (the callee may reach the receiver through an alias)",
+                        spec.desc,
+                        scope.method_name,
+                        scope.class_name,
+                        ensures_state(scope, &fields),
+                    ),
+                    span,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Render the current symbolic value of every field an ensures clause
+/// mentions (touched or not — the exit relation involves them all).
+fn ensures_state(scope: &InvariantScope, fields: &HashSet<String>) -> String {
+    let mut parts: Vec<String> = fields
+        .iter()
+        .filter_map(|f| {
+            scope
+                .sym
+                .get(f)
+                .map(|a| format!("self.{f} = {}", render_affine(a)))
+        })
+        .collect();
+    parts.sort();
+    if parts.is_empty() {
+        "the known facts do not decide it".to_string()
+    } else {
+        format!("at this point {}", parts.join(", "))
+    }
+}
+
+fn prove_ensures_scope(env: &mut TypeEnv, span: Span, site: &str) -> Result<(), CompileError> {
+    let Some(scope) = env.invariant_scope.take() else {
+        return Ok(());
+    };
+    let r = prove_ensures(&scope, env, span, site);
+    env.invariant_scope = Some(scope);
+    r
 }
 
 /// Re-assume invariant-level facts (in the main fact environment) for every
@@ -731,14 +1217,28 @@ pub(crate) fn function_entry(
         env.facts.assume(f);
     }
 
-    // Ghost proof scope for mut-self methods of invariant-carrying classes.
+    // Ghost proof scope: mut-self methods of invariant-carrying classes, and
+    // any self method carrying ensures postconditions (the ensures proof
+    // needs the symbolic entry vocabulary even when the class has no
+    // invariant; the class invariants ride along as entry assumptions).
     let Some(cn) = class_name else { return Ok(()) };
-    if !func.params.iter().any(|p| p.name.node == "self" && p.is_mut) {
+    let has_self = func.params.iter().any(|p| p.name.node == "self");
+    let has_mut_self = func
+        .params
+        .iter()
+        .any(|p| p.name.node == "self" && p.is_mut);
+    if !has_self {
         return Ok(());
     }
-    let Some(specs) = env.class_invariants.get(cn) else {
+    let ensures_specs = env
+        .fn_ensures
+        .get(&mangle_method(cn, &func.name.node))
+        .cloned()
+        .unwrap_or_default();
+    let inv_specs = env.class_invariants.get(cn).cloned().unwrap_or_default();
+    if ensures_specs.is_empty() && (inv_specs.is_empty() || !has_mut_self) {
         return Ok(());
-    };
+    }
     let fields: Vec<String> = env
         .classes
         .get(cn)
@@ -753,7 +1253,8 @@ pub(crate) fn function_entry(
     let mut scope = InvariantScope {
         class_name: cn.to_string(),
         method_name: func.name.node.clone(),
-        invariants: specs.clone(),
+        invariants: inv_specs,
+        ensures: ensures_specs,
         ghost_facts: FactEnv::new(),
         sym: HashMap::new(),
         fields,
@@ -770,8 +1271,9 @@ pub(crate) fn function_entry(
     {
         let s: &InvariantScope = &scope;
         for spec in &s.invariants {
-            ghost_assume
-                .extend(condition_facts_with(&spec.expr, &|e| s.resolve(env, e)).then_facts);
+            ghost_assume.extend(
+                condition_facts_with(&spec.expr, &|e| s.resolve_two_state(env, e)).then_facts,
+            );
         }
         for c in &func.contracts {
             if c.node.kind != ContractKind::Requires || contains_impure_call(&c.node.expr, env) {
@@ -788,10 +1290,20 @@ pub(crate) fn function_entry(
     Ok(())
 }
 
-/// Prove the invariant at the method's fall-through exit and drop the proof
-/// scope. Called after the body is checked.
-pub(crate) fn function_exit(env: &mut TypeEnv, span: Span) -> Result<(), CompileError> {
-    let r = checkpoint_scope(env, span, "the end of this method");
+/// Prove the invariant — and, when the fall-through exit is reachable, the
+/// ensures postconditions — at the method's end, then drop the proof scope.
+/// Called after the body is checked. `fall_through` is false when every
+/// path through the body returns or raises (the implicit exit is dead, so
+/// no ensures obligation exists there — returns proved theirs already).
+pub(crate) fn function_exit(
+    env: &mut TypeEnv,
+    span: Span,
+    fall_through: bool,
+) -> Result<(), CompileError> {
+    let mut r = checkpoint_scope(env, span, "the end of this method");
+    if r.is_ok() && fall_through {
+        r = prove_ensures_scope(env, span, "the end of this method");
+    }
     env.invariant_scope = None;
     r
 }
@@ -803,18 +1315,26 @@ pub(crate) fn function_exit(env: &mut TypeEnv, span: Span) -> Result<(), Compile
 /// Obligations that need the *pre-statement* fact state. Runs before
 /// `apply_stmt_kills`.
 pub(crate) fn pre_stmt(stmt: &Stmt, span: Span, env: &mut TypeEnv) -> Result<(), CompileError> {
-    if env.class_invariants.is_empty() || is_exempt_fn(env) {
+    if (env.class_invariants.is_empty() && env.fn_ensures.is_empty()) || is_exempt_fn(env) {
         return Ok(());
     }
 
+    // Caller-side ensures assumption (rfc-properties.md atom 1): when this
+    // statement's single direct call targets a method with ensures, stage
+    // the instantiated relation against the *pre-call* fact state (the
+    // statement's kills have not run yet). Assumed by `post_stmt`.
+    stage_call_ensures(stmt, env);
+
     // Call boundary: a statement performing any call may let the callee (or
     // anyone holding an alias) observe the object — the invariant must hold
-    // here, and afterwards only invariant-level facts survive.
+    // here, and afterwards only invariant-level facts survive — plus, for a
+    // single direct self-call with ensures, the callee's declared two-state
+    // relation.
     if env.invariant_scope.is_some()
         && immediate_exprs(stmt).iter().any(|e| contains_impure_call(e, env))
     {
         checkpoint_scope(env, span, "this call (the callee may observe the object)")?;
-        re_anchor_scope(env);
+        apply_self_call_ensures(stmt, env);
     }
 
     match stmt {
@@ -831,13 +1351,16 @@ pub(crate) fn pre_stmt(stmt: &Stmt, span: Span, env: &mut TypeEnv) -> Result<(),
                 *s.local_ver.entry(target.node.clone()).or_insert(0) += 1;
             }
         }
-        Stmt::Return(_) => checkpoint_scope(env, span, "this return")?,
+        Stmt::Return(_) => {
+            checkpoint_scope(env, span, "this return")?;
+            prove_ensures_scope(env, span, "this return")?;
+        }
         Stmt::Raise { .. } => checkpoint_scope(env, span, "this raise")?,
         Stmt::Break => checkpoint_scope(env, span, "this break")?,
         Stmt::Continue => checkpoint_scope(env, span, "this continue")?,
         Stmt::Yield { .. } => {
             checkpoint_scope(env, span, "this yield")?;
-            re_anchor_scope(env);
+            re_anchor_scope(env, true);
         }
         Stmt::Select { .. } | Stmt::Scope { .. } => {
             if env.invariant_scope.is_some() && subtree_writes_self(stmt, span) {
@@ -865,7 +1388,7 @@ pub(crate) fn pre_stmt(stmt: &Stmt, span: Span, env: &mut TypeEnv) -> Result<(),
 /// Fact updates that follow a statement. Runs after the statement is fully
 /// checked (so new bindings exist and branch merges are done).
 pub(crate) fn post_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileError> {
-    if env.class_invariants.is_empty() || is_exempt_fn(env) {
+    if (env.class_invariants.is_empty() && env.fn_ensures.is_empty()) || is_exempt_fn(env) {
         return Ok(());
     }
     let had_call = immediate_exprs(stmt)
@@ -920,7 +1443,7 @@ pub(crate) fn post_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileErr
             }
         }
         Stmt::Select { .. } | Stmt::Scope { .. } => {
-            re_anchor_scope(env);
+            re_anchor_scope(env, true);
             reassume_invariants_main(env);
         }
         Stmt::Assign { target, value } => {
@@ -947,7 +1470,391 @@ pub(crate) fn post_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileErr
             }
         }
     }
+    // Caller-side ensures assumption staged by `pre_stmt`: the statement's
+    // kills (and the invariant-level reassumption above) have run — layer
+    // the callee's declared post-state relation on top.
+    if !env.pending_call_ensures.is_empty() {
+        let staged = std::mem::take(&mut env.pending_call_ensures);
+        for f in staged {
+            env.facts.assume(f);
+        }
+    }
     Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Caller-side ensures assumption (rfc-properties.md atom 1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Marker prefixed to pre-state (old) terms while splitting an instantiated
+/// ensures relation into its pre-state and post-state parts. A control
+/// character can never collide with a real path.
+const OLD_MARK: char = '\u{1}';
+
+/// Flatten a contract expression's top-level `&&` conjunction.
+fn conjuncts(expr: &Expr) -> Vec<&Expr> {
+    match expr {
+        Expr::BinOp { op: BinOp::And, lhs, rhs } => {
+            let mut v = conjuncts(&lhs.node);
+            v.extend(conjuncts(&rhs.node));
+            v
+        }
+        other => vec![other],
+    }
+}
+
+/// The single, unconditionally-executed direct method call of a statement —
+/// if the statement contains exactly one impure call-like node overall.
+/// Conditional contexts (if/match expression blocks, catch), deferred
+/// contexts (closures are exempt from the count — they run later), and
+/// opaque contexts (spawn, at, static trait calls) disqualify the
+/// statement, as do multiple calls (effect order within one statement is
+/// not tracked). Returns a clone of the `Expr::MethodCall` node.
+fn single_direct_method_call(stmt: &Stmt, env: &TypeEnv) -> Option<Expr> {
+    struct Scan<'e> {
+        env: &'e TypeEnv,
+        count: usize,
+        first: Option<Expr>,
+        poisoned: bool,
+    }
+    impl Visitor for Scan<'_> {
+        fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+            if self.poisoned {
+                return;
+            }
+            match &expr.node {
+                // Runs later; its calls are not this statement's.
+                Expr::Closure { .. } => return,
+                Expr::Spawn { .. } | Expr::At { .. } | Expr::StaticTraitCall { .. } => {
+                    self.poisoned = true;
+                    return;
+                }
+                // Conditional execution / conditional continuation.
+                Expr::If { .. } | Expr::Match { .. } | Expr::Catch { .. } => {
+                    if contains_impure_call(expr, self.env) {
+                        self.poisoned = true;
+                    }
+                    return;
+                }
+                Expr::MethodCall { .. } => {
+                    if len_path(&expr.node, self.env).is_none() {
+                        self.count += 1;
+                        if self.first.is_none() {
+                            self.first = Some(expr.node.clone());
+                        }
+                    }
+                }
+                Expr::Call { .. } => {
+                    // A free-function call consumes the single-call budget
+                    // but is never the assumed call (ensures live on methods).
+                    self.count += 1;
+                }
+                _ => {}
+            }
+            walk_expr(self, expr);
+        }
+        fn visit_stmt(&mut self, _stmt: &Spanned<Stmt>) {
+            // Nested statements are visited by the checker in flow order.
+        }
+    }
+    let mut scan = Scan { env, count: 0, first: None, poisoned: false };
+    for e in immediate_exprs(stmt) {
+        scan.visit_expr(e);
+        if scan.poisoned {
+            return None;
+        }
+    }
+    if scan.poisoned || scan.count != 1 {
+        return None;
+    }
+    scan.first.filter(|f| matches!(f, Expr::MethodCall { .. }))
+}
+
+/// Stage the caller-side assumption of a callee's ensures relation (main
+/// fact environment — trackable non-entity receivers). Must run against the
+/// *pre-call* fact state, before `apply_stmt_kills`; `post_stmt` assumes the
+/// staged facts once the statement's kills have been applied.
+///
+/// The relation is instantiated by substitution (receiver path for `self`,
+/// argument affines over caller locals for parameters — mirroring
+/// `shrink.rs`), then each comparison conjunct `C + O cmp 0` (post-state
+/// part `C`, pre-state part `O`) is folded into post-state facts by bounding
+/// `O` against the pre-call facts. Conservative everywhere: unresolvable
+/// conjuncts stage nothing.
+fn stage_call_ensures(stmt: &Stmt, env: &mut TypeEnv) {
+    env.pending_call_ensures.clear();
+    if env.fn_ensures.is_empty() {
+        return;
+    }
+    let Some(call) = single_direct_method_call(stmt, env) else {
+        return;
+    };
+    let Expr::MethodCall { object, method, args, .. } = &call else {
+        return;
+    };
+    let Some((rpath, PlutoType::Class(cname))) = typed_path(&object.node, env) else {
+        return;
+    };
+    // Entities mutate concurrently — their fields never carry flow facts.
+    if env.object_types.contains(&cname)
+        || env.remote_types.contains(&cname)
+        || env.domain_types.contains(&cname)
+    {
+        return;
+    }
+    // The enclosing method's own receiver is handled in the ghost
+    // vocabulary (`apply_self_call_ensures`).
+    if rpath == "self"
+        && env
+            .invariant_scope
+            .as_ref()
+            .is_some_and(|s| s.class_name == cname)
+    {
+        return;
+    }
+    // A statement that rebinds the receiver's root invalidates the path.
+    let root = rpath.split('.').next().unwrap_or(&rpath).to_string();
+    match stmt {
+        Stmt::Let { name, .. } if name.node == root => return,
+        Stmt::Assign { target, .. } if target.node == root => return,
+        _ => {}
+    }
+    let Some(specs) = env.fn_ensures.get(&mangle_method(&cname, &method.node)) else {
+        return;
+    };
+    let specs = specs.clone();
+    let params = &specs[0].params;
+    if params.len() != args.len() {
+        return;
+    }
+    // Arguments evaluate before the call; only affines over caller *locals*
+    // (which no callee can change) are stable across it.
+    let mut arg_aff: HashMap<String, Option<Affine>> = HashMap::new();
+    for (p, a) in params.iter().zip(args.iter()) {
+        let aff = to_affine(&a.node, env)
+            .filter(|af| af.terms.keys().all(|t| !t.contains('.')));
+        arg_aff.insert(p.clone(), aff);
+    }
+    let resolve = |e: &Expr| -> Option<Affine> {
+        if let Some(inner) = old_call_arg(e) {
+            return to_affine_with(&inner.node, &|x| match x {
+                Expr::FieldAccess { object: o, field: f }
+                    if matches!(&o.node, Expr::Ident(s) if s == "self") =>
+                {
+                    Some(Affine::term(format!("{OLD_MARK}{rpath}.{}", f.node)))
+                }
+                Expr::Ident(p) if p != "self" => arg_aff.get(p).cloned().flatten(),
+                _ => None,
+            });
+        }
+        match e {
+            Expr::FieldAccess { object: o, field: f }
+                if matches!(&o.node, Expr::Ident(s) if s == "self") =>
+            {
+                Some(Affine::term(format!("{rpath}.{}", f.node)))
+            }
+            Expr::Ident(p) if p != "self" => arg_aff.get(p).cloned().flatten(),
+            _ => None,
+        }
+    };
+    let mut staged: Vec<Fact> = Vec::new();
+    for spec in &specs {
+        for conj in conjuncts(&spec.expr) {
+            let Expr::BinOp { op, lhs, rhs } = conj else { continue };
+            if !is_comparison(*op) {
+                continue;
+            }
+            let (Some(l), Some(r)) = (
+                to_affine_with(&lhs.node, &resolve),
+                to_affine_with(&rhs.node, &resolve),
+            ) else {
+                continue;
+            };
+            let Some(d) = diff_affine(&l, &r) else { continue };
+            let mut cur = Affine::constant(d.k);
+            let mut pre = Affine::constant(0);
+            for (t, c) in &d.terms {
+                if let Some(stripped) = t.strip_prefix(OLD_MARK) {
+                    pre.terms.insert(stripped.to_string(), *c);
+                } else {
+                    cur.terms.insert(t.clone(), *c);
+                }
+            }
+            if pre.terms.is_empty() {
+                // Pure post-state conjunct — holds verbatim after the call.
+                staged.extend(facts_from_diff(*op, &d));
+                continue;
+            }
+            let Ok((plo, phi)) = affine_bounds(&pre, &env.facts) else {
+                continue;
+            };
+            // `cur + pre cmp 0` with `pre ∈ [plo, phi]` implies the
+            // post-state inequality with the pre-state part replaced by the
+            // appropriate bound.
+            match op {
+                BinOp::Gt | BinOp::GtEq => {
+                    if let Some(hi) = phi {
+                        if let Some(dd) = affine_add_const(&cur, hi) {
+                            staged.extend(facts_from_diff(*op, &dd));
+                        }
+                    }
+                }
+                BinOp::Lt | BinOp::LtEq => {
+                    if let Some(lo) = plo {
+                        if let Some(dd) = affine_add_const(&cur, lo) {
+                            staged.extend(facts_from_diff(*op, &dd));
+                        }
+                    }
+                }
+                BinOp::Eq => {
+                    if plo.is_some() && plo == phi {
+                        if let Some(dd) = affine_add_const(&cur, plo.expect("checked")) {
+                            staged.extend(facts_from_diff(BinOp::Eq, &dd));
+                        }
+                    } else {
+                        if let Some(hi) = phi {
+                            if let Some(dd) = affine_add_const(&cur, hi) {
+                                staged.extend(facts_from_diff(BinOp::GtEq, &dd));
+                            }
+                        }
+                        if let Some(lo) = plo {
+                            if let Some(dd) = affine_add_const(&cur, lo) {
+                                staged.extend(facts_from_diff(BinOp::LtEq, &dd));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    env.pending_call_ensures = staged;
+}
+
+/// Ghost-vocabulary twin of [`stage_call_ensures`]: after the call-boundary
+/// re-anchor inside a proof scope, a single direct `self.m(...)` call whose
+/// callee declares ensures re-establishes the declared relation between the
+/// fresh anchor ghosts and the pre-call symbolic state. Equality clauses
+/// (`self.f == <expr over old()/params>`) become symbolic strong updates —
+/// which is what lets a method's own ensures proof see through calls to
+/// sibling methods; other clauses contribute ghost facts.
+fn apply_self_call_ensures(stmt: &Stmt, env: &mut TypeEnv) {
+    let Some(pre_sym) = env.invariant_scope.as_ref().map(|s| s.sym.clone()) else {
+        return;
+    };
+    re_anchor_scope(env, true);
+    let Some(call) = single_direct_method_call(stmt, env) else {
+        return;
+    };
+    let Expr::MethodCall { object, method, args, .. } = &call else {
+        return;
+    };
+    if !matches!(&object.node, Expr::Ident(s) if s == "self") {
+        return;
+    }
+    let Some(scope_ref) = env.invariant_scope.as_ref() else {
+        return;
+    };
+    let callee = mangle_method(&scope_ref.class_name, &method.node);
+    let Some(specs) = env.fn_ensures.get(&callee).cloned() else {
+        return;
+    };
+    if specs[0].params.len() != args.len() {
+        return;
+    }
+    let mut scope = env.invariant_scope.take().expect("checked above");
+
+    // The callee's entry state is the caller's pre-call state; arguments
+    // evaluate pre-call over caller locals (unchanged by any callee).
+    let mut arg_aff: HashMap<String, Option<Affine>> = HashMap::new();
+    for (p, a) in specs[0].params.iter().zip(args.iter()) {
+        let aff = to_affine_with(&a.node, &|x| match x {
+            Expr::FieldAccess { object: o, field: f }
+                if matches!(&o.node, Expr::Ident(s) if s == "self") =>
+            {
+                pre_sym.get(&f.node).cloned()
+            }
+            Expr::Ident(_) => scope.resolve(env, x),
+            _ => None,
+        });
+        arg_aff.insert(p.clone(), aff);
+    }
+    let old_resolve = |x: &Expr| -> Option<Affine> {
+        match x {
+            Expr::FieldAccess { object: o, field: f }
+                if matches!(&o.node, Expr::Ident(s) if s == "self") =>
+            {
+                pre_sym.get(&f.node).cloned()
+            }
+            Expr::Ident(p) if p != "self" => arg_aff.get(p).cloned().flatten(),
+            _ => None,
+        }
+    };
+
+    // 1) Equality clauses pin the field's post-call symbolic value.
+    for spec in &specs {
+        for conj in conjuncts(&spec.expr) {
+            let Expr::BinOp { op: BinOp::Eq, lhs, rhs } = conj else { continue };
+            let self_field = |e: &Expr| -> Option<String> {
+                match e {
+                    Expr::FieldAccess { object: o, field: f }
+                        if matches!(&o.node, Expr::Ident(s) if s == "self") =>
+                    {
+                        Some(f.node.clone())
+                    }
+                    _ => None,
+                }
+            };
+            let (field, value_side) = match (self_field(&lhs.node), self_field(&rhs.node)) {
+                (Some(f), None) => (f, &rhs.node),
+                (None, Some(f)) => (f, &lhs.node),
+                _ => continue,
+            };
+            if !scope.fields.iter().any(|fl| fl == &field) {
+                continue;
+            }
+            let resolver = |x: &Expr| -> Option<Affine> {
+                if let Some(inner) = old_call_arg(x) {
+                    return to_affine_with(&inner.node, &old_resolve);
+                }
+                match x {
+                    Expr::Ident(p) if p != "self" => arg_aff.get(p).cloned().flatten(),
+                    _ => None,
+                }
+            };
+            if let Some(aff) = to_affine_with(value_side, &resolver) {
+                scope.sym.insert(field, aff);
+                // `touched` stays as the re-anchor left it: fields of
+                // two-state invariants re-prove at the next boundary (now
+                // with an exact symbolic value); single-state-only fields
+                // hold by the callee's proven exit invariant.
+            }
+        }
+    }
+
+    // 2) Every clause contributes ghost facts relating the (possibly pinned)
+    //    current state to the pre-call state.
+    let mut to_assume = Vec::new();
+    {
+        let s: &InvariantScope = &scope;
+        let fact_resolver = |x: &Expr| -> Option<Affine> {
+            if let Some(inner) = old_call_arg(x) {
+                return to_affine_with(&inner.node, &old_resolve);
+            }
+            match x {
+                Expr::FieldAccess { .. } => s.resolve(env, x),
+                Expr::Ident(p) if p != "self" => arg_aff.get(p).cloned().flatten(),
+                _ => None,
+            }
+        };
+        for spec in &specs {
+            to_assume.extend(condition_facts_with(&spec.expr, &fact_resolver).then_facts);
+        }
+    }
+    for f in to_assume {
+        scope.ghost_facts.assume(f);
+    }
+    env.invariant_scope = Some(scope);
 }
 
 /// Ghost binding transfer: a direct `xs.len()` binding gives the bound
@@ -1009,15 +1916,13 @@ fn pre_field_assign(
             }
         }
     };
-    let Some(specs) = env.class_invariants.get(&cls) else {
-        return Ok(());
-    };
-    let specs = specs.clone();
-
-    // Strong update inside the class's own mut-self method.
+    // Strong update inside the class's own mut-self method — also when the
+    // class carries no invariant (an ensures-only proof scope still tracks
+    // field values symbolically).
     if opath.as_deref() == Some("self") {
         if let Some(scope) = env.invariant_scope.as_ref() {
             if scope.class_name == cls {
+                let specs = env.class_invariants.get(&cls).cloned().unwrap_or_default();
                 let mut scope = env.invariant_scope.take().expect("checked above");
                 strong_update(&mut scope, env, &field.node, &value.node, &specs);
                 env.invariant_scope = Some(scope);
@@ -1030,6 +1935,11 @@ fn pre_field_assign(
             return Ok(());
         }
     }
+
+    let Some(specs) = env.class_invariants.get(&cls) else {
+        return Ok(());
+    };
+    let specs = specs.clone();
 
     // A write to a field no invariant mentions cannot break any invariant.
     let mentioned = specs
@@ -1053,20 +1963,35 @@ fn pre_field_assign(
 
     // Immediate obligation: evaluate each invariant with the assigned field
     // substituted by the new value and the other fields read through the
-    // object's path (whose facts are the entry/boundary assumptions).
+    // object's path (whose facts are the entry/boundary assumptions). For
+    // two-state invariants, `old(...)` at a foreign write site denotes the
+    // *pre-write* state (rfc-properties.md open question 2): the current
+    // path values, which is exactly what the pre-kill facts describe.
     let val_aff = to_affine(&value.node, env);
     for spec in &specs {
-        let resolve = |e: &Expr| match e {
-            Expr::FieldAccess { object: o, field: f }
-                if matches!(&o.node, Expr::Ident(s) if s == "self") =>
-            {
-                if f.node == field.node {
-                    val_aff.clone()
-                } else {
-                    Some(Affine::term(format!("{opath}.{}", f.node)))
-                }
+        let resolve = |e: &Expr| {
+            if let Some(inner) = old_call_arg(e) {
+                return to_affine_with(&inner.node, &|x| match x {
+                    Expr::FieldAccess { object: o, field: f }
+                        if matches!(&o.node, Expr::Ident(s) if s == "self") =>
+                    {
+                        Some(Affine::term(format!("{opath}.{}", f.node)))
+                    }
+                    _ => None,
+                });
             }
-            _ => None,
+            match e {
+                Expr::FieldAccess { object: o, field: f }
+                    if matches!(&o.node, Expr::Ident(s) if s == "self") =>
+                {
+                    if f.node == field.node {
+                        val_aff.clone()
+                    } else {
+                        Some(Affine::term(format!("{opath}.{}", f.node)))
+                    }
+                }
+                _ => None,
+            }
         };
         match eval_condition_with(&spec.expr, &resolve, &env.facts) {
             Verdict::Proven => {}
@@ -1173,11 +2098,18 @@ pub(crate) fn branch_end(
 /// Merge the branches of an if/match. If any surviving branch changed the
 /// symbolic state (and proved the invariant at its end), every other
 /// surviving path must also satisfy it — including the implicit
-/// fall-through path — and the state re-anchors on invariant-level facts.
-/// Otherwise the pre-branch state is restored unchanged.
+/// fall-through path. The joined state then keeps as much symbolic precision
+/// as the surviving branch end-states allow (see [`join_syms`]); what cannot
+/// be kept re-anchors on invariant-level facts. If no surviving branch
+/// changed anything, the pre-branch state is restored unchanged.
+///
+/// `surviving` carries the end-state snapshot of every branch that falls
+/// through (callers include the pre-branch snapshot for an implicit
+/// fall-through path, e.g. an `if` without `else`).
 pub(crate) fn branch_join(
     env: &mut TypeEnv,
     snap: Option<SymSnapshot>,
+    surviving: Vec<SymSnapshot>,
     any_surviving_changed: bool,
     unchanged_survivor: bool,
     span: Span,
@@ -1191,12 +2123,109 @@ pub(crate) fn branch_join(
         return Ok(());
     }
     if unchanged_survivor && !sn.touched.is_empty() {
-        branch_restore(env, &Some(sn));
+        branch_restore(env, &Some(sn.clone()));
         checkpoint_scope(env, span, "this branch join")?;
     }
-    re_anchor_scope(env);
+    let mut scope = env.invariant_scope.take().expect("checked above");
+    join_syms(&mut scope, env, &sn, &surviving);
+    env.invariant_scope = Some(scope);
     reassume_invariants_main(env);
     Ok(())
+}
+
+/// Join the symbolic field states of the surviving branches. Every surviving
+/// branch proved the full invariant at its end (`branch_end` /
+/// `branch_join`'s fall-through checkpoint), so the joined state is a
+/// genuine proven state — no composition is involved and every extracted
+/// invariant fact is sound. Per field, in order of precision:
+///
+/// 1. All survivors agree → keep the exact affine value (the subtree-join
+///    twin of subtract-then-add: `if c { x+=1 } else { x+=1 }` stays exact).
+/// 2. Every survivor differs from the pre-branch value by a constant →
+///    either the constants agree (keep `base + k` exactly) or the spread
+///    `[lo, hi]` becomes a relation between the fresh anchor ghost and the
+///    pre-branch term (`base <= f@N`, `f@N <= base`, strict when the bound
+///    excludes zero) — enough to carry monotonicity (`ensures self.x >=
+///    old(self.x)`) through a guarded increment.
+/// 3. Otherwise → a fresh unconstrained anchor ghost.
+fn join_syms(
+    scope: &mut InvariantScope,
+    env: &TypeEnv,
+    base: &SymSnapshot,
+    surviving: &[SymSnapshot],
+) {
+    scope.next_ghost += 1;
+    let n = scope.next_ghost;
+    let mut rels: Vec<Fact> = Vec::new();
+    let fields = scope.fields.clone();
+    for f in &fields {
+        let vals: Vec<Option<&Affine>> = surviving.iter().map(|s| s.sym.get(f)).collect();
+        // 1) Exact agreement across all survivors.
+        if let Some(Some(first)) = vals.first() {
+            if !vals.is_empty() && vals.iter().all(|v| *v == Some(*first)) {
+                scope.sym.insert(f.clone(), (*first).clone());
+                continue;
+            }
+        }
+        let fresh_term = format!("self.{f}@{n}");
+        let mut joined: Option<Affine> = None;
+        if let Some(base_aff) = base.sym.get(f) {
+            let ds: Option<Vec<i128>> = vals
+                .iter()
+                .map(|v| {
+                    v.and_then(|a| diff_affine(a, base_aff))
+                        .and_then(|d| d.terms.is_empty().then_some(d.k))
+                })
+                .collect();
+            if let Some(ds) = ds {
+                if !ds.is_empty() {
+                    let lo = *ds.iter().min().expect("non-empty");
+                    let hi = *ds.iter().max().expect("non-empty");
+                    if lo == hi {
+                        // 2a) Same constant offset on every path.
+                        joined = affine_add_const(base_aff, lo);
+                    } else if base_aff.terms.len() == 1 && base_aff.k == 0 {
+                        // 2b) Constant spread relative to a single-term base.
+                        let (t, &c) = base_aff.terms.iter().next().expect("len checked");
+                        if c == 1 {
+                            if lo >= 1 {
+                                rels.push(Fact::Rel(t.clone(), RelOp::Lt, fresh_term.clone()));
+                            } else if lo >= 0 {
+                                rels.push(Fact::Rel(t.clone(), RelOp::Le, fresh_term.clone()));
+                            }
+                            if hi <= -1 {
+                                rels.push(Fact::Rel(fresh_term.clone(), RelOp::Lt, t.clone()));
+                            } else if hi <= 0 {
+                                rels.push(Fact::Rel(fresh_term.clone(), RelOp::Le, t.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        scope
+            .sym
+            .insert(f.clone(), joined.unwrap_or_else(|| Affine::term(fresh_term)));
+    }
+    scope.touched.clear();
+    for r in rels {
+        scope.ghost_facts.assume(r);
+    }
+    // Invariant-level knowledge holds at the join (every survivor proved it,
+    // and the joined state is one of the survivors) — two-state facts
+    // included, no transitivity filter needed.
+    let mut to_assume = Vec::new();
+    {
+        let s: &InvariantScope = scope;
+        for spec in &s.invariants {
+            to_assume.extend(
+                condition_facts_with(&spec.expr, &|e| s.resolve_two_state(env, e)).then_facts,
+            );
+        }
+    }
+    for f in to_assume {
+        scope.ghost_facts.assume(f);
+    }
 }
 
 /// Does a loop body interact with the proof state (self-field writes or
@@ -1259,7 +2288,10 @@ pub(crate) fn loop_enter(
 ) -> Result<(), CompileError> {
     if affects {
         checkpoint_scope(env, span, "entry to this loop")?;
-        re_anchor_scope(env);
+        // Non-composed: every state an iteration can start from (the
+        // pre-loop state, or a previous iteration's end) has the full
+        // invariant proven against it by a checkpoint.
+        re_anchor_scope(env, false);
     }
     Ok(())
 }
@@ -1277,10 +2309,12 @@ pub(crate) fn loop_body_end(
     Ok(())
 }
 
-/// After the loop: back to invariant-level knowledge.
+/// After the loop: back to invariant-level knowledge. Non-composed — the
+/// post-loop state is the pre-loop state or some iteration's end, each of
+/// which proved the full invariant.
 pub(crate) fn loop_exit(env: &mut TypeEnv, affects: bool) {
     if affects {
-        re_anchor_scope(env);
+        re_anchor_scope(env, false);
         reassume_invariants_main(env);
     }
 }
@@ -1334,6 +2368,12 @@ pub(crate) fn check_construction(
         inits.insert(n.node.clone(), to_affine(&v.node, env));
     }
     for spec in &specs {
+        // A two-state invariant relates a state *transition* to its
+        // pre-state; construction has no pre-state, so there is nothing to
+        // prove here (the clause constrains every later write instead).
+        if spec.two_state {
+            continue;
+        }
         let resolve = |e: &Expr| match e {
             Expr::FieldAccess { object, field }
                 if matches!(&object.node, Expr::Ident(s) if s == "self") =>
@@ -1398,6 +2438,11 @@ pub(crate) fn check_di_construction(
     };
     let no_facts = FactEnv::new();
     for spec in specs {
+        // Two-state invariants constrain transitions, not birth states —
+        // see check_construction.
+        if spec.two_state {
+            continue;
+        }
         let resolve = |e: &Expr| match e {
             Expr::FieldAccess { object, .. }
                 if matches!(&object.node, Expr::Ident(s) if s == "self") =>

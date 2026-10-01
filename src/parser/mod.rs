@@ -222,8 +222,9 @@ impl<'a> Parser<'a> {
     }
 
     /// True when the next significant token is the identifier `ensures` —
-    /// not a keyword, but recognized in contract position to reject it with
-    /// a clear message (postconditions were eliminated by design).
+    /// a contextual keyword, recognized in contract position only (the
+    /// proof-form postcondition, docs/design/rfc-properties.md; `ensures`
+    /// stays a legal identifier everywhere else).
     fn peek_is_ensures(&self) -> bool {
         match self.peek() {
             Some(t) if matches!(t.node, Token::Ident) => {
@@ -1287,8 +1288,7 @@ impl<'a> Parser<'a> {
             && (matches!(next_raw.node, Token::Newline | Token::RBrace | Token::Requires | Token::Where)
                 || self.peek_is_ensures())
         {
-            // Newline, closing brace, or contract - no return type
-            // ("ensures" included so its rejection reports clearly)
+            // Newline, closing brace, or contract keyword - no return type
             None
         } else if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace) {
             // Opening brace (method body) - no return type
@@ -1658,14 +1658,33 @@ impl<'a> Parser<'a> {
                     }
                 }
                 Token::Ident if &self.source[tok.span.start..tok.span.end] == "ensures" => {
-                    // Deliberately not part of the language: postconditions
-                    // were eliminated by design (docs/design/contracts.md)
-                    return Err(CompileError::syntax(
-                        "'ensures' clauses are not supported: Pluto has no postconditions by design; \
-                         express guarantees with class invariants or return types (see docs/design/contracts.md)"
-                            .to_string(),
-                        tok.span,
+                    // Proof-form postcondition (docs/design/rfc-properties.md
+                    // atom 1): a compile-time obligation at every normal exit,
+                    // never a runtime check. The runtime form remains rejected
+                    // by design (docs/design/contracts.md) — typeck restricts
+                    // `ensures` to class/object methods and the decidable
+                    // fragment.
+                    self.skip_newlines();
+                    let ens_tok = self.advance().expect("token should exist after peek");
+                    let ens_start = ens_tok.span.start;
+                    // Like `if` conditions: the clause may be followed inline
+                    // by the body brace, so `x { ... }` must not parse as a
+                    // struct literal.
+                    let old_restrict = self.restrict_struct_lit;
+                    self.restrict_struct_lit = true;
+                    let expr = self.parse_expr(0)?;
+                    self.restrict_struct_lit = old_restrict;
+                    let ens_end = expr.span.end;
+                    contracts.push(Spanned::new(
+                        ContractClause { kind: ContractKind::Ensures, expr },
+                        Span::new(ens_start, ens_end),
                     ));
+                    // Inline form `... ensures <expr> {` — the body brace may
+                    // follow directly; only a standalone clause line needs a
+                    // statement terminator.
+                    if !matches!(self.peek().map(|t| &t.node), Some(Token::LBrace)) {
+                        self.consume_statement_end()?;
+                    }
                 }
                 _ => break,
             }

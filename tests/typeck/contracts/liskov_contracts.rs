@@ -13,7 +13,11 @@ fn weaken_trait_requires() { compile_should_fail_with(r#"trait T{fn f(self,x:int
 
 // Class method strengthens trait ensures
 #[test]
-fn strengthen_trait_ensures() { compile_should_fail_with(r#"trait T{fn f(self,x:int) ensures result>0 int} class C{} impl T{fn f(self,x:int) ensures result>10 int{return x}} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn strengthen_trait_ensures() { compile_should_fail_with(r#"trait T{fn f(self,x:int)int
+ensures result>0} class C impl T
+{fn f(self,x:int)int
+ensures result>10
+{return x}} fn main(){}"#, "'ensures' clauses are only supported on methods of classes and objects"); }
 
 // Class method removes trait requires
 #[test]
@@ -27,7 +31,9 @@ fn main(){}"#).is_ok()); }
 
 // Class method removes trait ensures
 #[test]
-fn remove_trait_ensures() { compile_should_fail_with(r#"trait T{fn f(self,x:int) ensures result>0 int} class C{} impl T{fn f(self,x:int)int{return x}} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn remove_trait_ensures() { compile_should_fail_with(r#"trait T{fn f(self,x:int)int
+ensures result>0} class C impl T
+{fn f(self,x:int)int{return x}} fn main(){}"#, "'ensures' clauses are only supported on methods of classes and objects"); }
 
 // Multiple traits with conflicting contracts
 #[test]
@@ -69,7 +75,11 @@ fn stricter_param_contract() { compile_should_fail_with(r#"trait T{fn f(self,x:i
 
 // Override with weaker return contract
 #[test]
-fn weaker_return_contract() { compile_should_fail_with(r#"trait T{fn f(self,x:int) ensures result>0 int} class C{} impl T{fn f(self,x:int) ensures result>-1 int{return x}} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn weaker_return_contract() { compile_should_fail_with(r#"trait T{fn f(self,x:int)int
+ensures result>0} class C impl T
+{fn f(self,x:int)int
+ensures result>-1
+{return x}} fn main(){}"#, "'ensures' clauses are only supported on methods of classes and objects"); }
 
 // Trait with multiple contract clauses
 #[test]

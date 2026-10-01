@@ -361,6 +361,17 @@ pub struct TypeEnv {
     /// site of a guarded field is proven dominated by
     /// `dominance::check_guard_dominance`. See `src/typeck/dominance.rs`.
     pub guarded_fields: HashMap<String, Vec<super::dominance::GuardSpec>>,
+    /// Ensures specs (two-state postconditions, rfc-properties.md atom 1):
+    /// mangled method name → validated specs. Populated by
+    /// `discharge::register_ensures` before body checking; proven at every
+    /// normal exit of the method, and *assumed* by callers after a direct
+    /// call (the call-boundary precision win).
+    pub fn_ensures: HashMap<String, Vec<super::discharge::EnsuresSpec>>,
+    /// Caller-side ensures assumption staged by `discharge::pre_stmt` (the
+    /// facts are computed against the pre-call fact state, before this
+    /// statement's kills) and assumed by `discharge::post_stmt` once the
+    /// statement — including its field-fact kills — has been processed.
+    pub pending_call_ensures: Vec<super::facts::Fact>,
 }
 
 impl Default for TypeEnv {
@@ -459,6 +470,8 @@ impl TypeEnv {
             class_invariants: HashMap::new(),
             invariant_scope: None,
             guarded_fields: HashMap::new(),
+            fn_ensures: HashMap::new(),
+            pending_call_ensures: Vec::new(),
         }
     }
 

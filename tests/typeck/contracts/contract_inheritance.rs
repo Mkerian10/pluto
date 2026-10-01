@@ -13,7 +13,7 @@ fn main(){}"#, "undefined variable 'x'"); }
 
 // Contract propagation through trait chain
 #[test]
-fn contract_trait_chain() { compile_should_fail_with(r#"trait T1{fn f(self,x:int) requires x>0} trait T2{fn g(self,y:int) ensures result>0 int} class C{} impl T1{fn f(self,x:int) requires x>0 {}} impl T2{fn g(self,y:int)int{return y}} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn contract_trait_chain() { compile_should_fail_with(r#"trait T1{fn f(self,x:int) requires x>0} trait T2{fn g(self,y:int) ensures result>0 int} class C{} impl T1{fn f(self,x:int) requires x>0 {}} impl T2{fn g(self,y:int)int{return y}} fn main(){}"#, "expected newline after statement"); }
 
 // Multiple traits with same method contract
 #[test]
@@ -45,7 +45,7 @@ fn main(){}"#, "cannot access field 'y' through trait 'T': traits have no fields
 
 // Contract on nested trait impl
 #[test]
-fn nested_trait_impl_contract() { compile_should_fail_with(r#"trait T1{fn f(self,x:int) requires x>0} trait T2{fn g(self,y:int) ensures result>0 int} class C{} impl T1{fn f(self,x:int) requires x>0 {}} impl T2{fn g(self,y:int) ensures result>0 int{return self.f(y)}} fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn nested_trait_impl_contract() { compile_should_fail_with(r#"trait T1{fn f(self,x:int) requires x>0} trait T2{fn g(self,y:int) ensures result>0 int} class C{} impl T1{fn f(self,x:int) requires x>0 {}} impl T2{fn g(self,y:int) ensures result>0 int{return self.f(y)}} fn main(){}"#, "expected newline after statement"); }
 
 // REMOVED: invariant_generic_bounds - this code compiles successfully (ACTUALLY_SUCCESS)
 
@@ -83,4 +83,4 @@ fn main(){}"#, "expected newline after statement"); }
 fn contract_nullable_method() { compile_should_fail_with(r#"class C{x:int
 fn get(self) ensures result?>0 int?{if self.x>0{return self.x}return none}
 }
-fn main(){}"#, "'ensures' clauses are not supported: Pluto has no postconditions by design; express guarantees with class invariants or return types (see docs/design/contracts.md)"); }
+fn main(){}"#, "expected newline after statement"); }

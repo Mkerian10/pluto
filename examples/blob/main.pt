@@ -84,31 +84,39 @@ object BlobAuthority {
     epoch: int
     applied: int   // token of the last write the fence admitted
 
-    // Compile-time proof obligations (rfc-verification.md phase 2): the
-    // compiler proves these at every construction and write site — there
-    // is no runtime check. The second one is the interesting one: "no
-    // admitted write ever carried a token newer than the newest grant."
-    // It is provable ONLY because the fence below is an exact match
-    // (token == epoch on the fall-through path), and it survives
-    // grant_write because applied <= epoch < epoch + 1 — linear
-    // arithmetic over the entity's own int fields, the decidable
-    // fragment's home turf.
+    // Compile-time proof obligations (rfc-verification.md phase 2,
+    // rfc-properties.md atoms 1–2): the compiler proves these at every
+    // construction and write site — there is no runtime check. The second
+    // one is the interesting single-state fact: "no admitted write ever
+    // carried a token newer than the newest grant." It is provable ONLY
+    // because the fence below is an exact match (token == epoch on the
+    // fall-through path), and it survives grant_write because
+    // applied <= epoch < epoch + 1 — linear arithmetic over the entity's
+    // own int fields, the decidable fragment's home turf.
     //
-    // The full theorem the store rests on is stronger. Where it stands:
-    //   (a) monotonicity — every write to epoch INCREASES it. A two-state
-    //       claim (old value vs new value); single-state invariants cannot
-    //       say it. Properties RFC atom 2 (`old()` in invariants) is the
-    //       designated proof shape; until it lands, (a) holds by
-    //       inspection: epoch is written exactly once, as epoch + 1.
-    //   (b) dominance — no write to data escapes the fence. SHIPPED: the
+    // The full theorem the store rests on is now compiler-checked on BOTH
+    // axes (rfc-properties.md atoms 2 and 3 — slice 1 complete):
+    //   (a) monotonicity — every write to epoch INCREASES it.
+    //       `old(self.epoch)` names the pre-state (the method's entry
+    //       value at every mut-self boundary, the pre-write value at every
+    //       foreign write site), so "the epoch never decreases" is a
+    //       checked claim, not an inspection note: grant_write discharges
+    //       it (epoch + 1 >= epoch), and any future method that
+    //       decremented the epoch would be a compile error. Fencing's
+    //       safety story rests on exactly this: a minted token can never
+    //       become current again.
+    //   (b) dominance — no write to data escapes the fence. The
     //       `guarded_by` clause on `data` above makes this a compile-time
-    //       proof (properties RFC atom 3). The fence below is the
-    //       dominating conditional that discharges it.
+    //       proof; the fence below is the dominating conditional that
+    //       discharges it.
+    //
+    // What today's fragment still cannot state:
     //   (c) anything off the int fragment — e.g. relating data to the
     //       admitted payload: 'invariant self.data.len() >= 0' is
     //       rejected at declaration ("'.len()' — collection and method
     //       facts are not provable").
     invariant self.epoch >= 0
+    invariant self.epoch >= old(self.epoch)
     invariant self.applied <= self.epoch
 
     // Mint a grant: advance the epoch and hand back a token equal to it.
