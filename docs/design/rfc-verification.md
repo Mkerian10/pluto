@@ -315,10 +315,12 @@ then a stdlib import, not a language feature.
 
 ## Open questions
 
-1. **Fact syntax.** How are exported theorems named and declared? (`ensures
-   no_stale_write` as a named type-level theorem is strawman syntax.) How is
-   dominance written — a builtin predicate vocabulary (`monotonic(...)`,
-   `guarded_by(...)`) or structural inference from the body?
+1. **Fact syntax.** RESOLVED by [rfc-properties.md](rfc-properties.md)
+   (2026-10-01): proof atoms are `old()` two-state ensures/invariants and a
+   `guarded_by` dominance clause; exported names come from the library-defined
+   `property` form (`satisfies`/`provides`/`assume`), not builtins —
+   `monotonic` is a stdlib property, not a keyword. Remaining surface
+   questions (binder syntax, namespace) live in that RFC.
 2. **Fragment contents.** Exact initial domain: intervals over ints; equalities over
    which types; what of floats (IEEE comparison pitfalls), strings, collections?
    Partially resolved: `len()` facts over collections are in the flow fragment
@@ -382,7 +384,9 @@ then a stdlib import, not a language feature.
    site-level required-handling sets only — see the implementation note under
    "Facts have consequences" above.
 4. **Distribution primitives** — monotonic fields and dominance (guarded effects);
-   the proof shapes behind fencing.
+   the proof shapes behind fencing. Spec'd in [rfc-properties.md](rfc-properties.md)
+   (slice 1: `old()` ensures, two-state invariants, `guarded_by`; slice 2: the
+   `property` form with provides/requires/assume).
 5. **Degradable typestates + must-release** — the three transition kinds, error-
    carried state, must-release linearity. (Client: objects RFC phase 3.)
    **Shipped** (rfc-typestates.md phase 3, `src/typeck/linearity.rs`):
