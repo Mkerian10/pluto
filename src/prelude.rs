@@ -15,6 +15,10 @@ struct PreludeData {
     enum_names: HashSet<String>,
     class_names: HashSet<String>,
     trait_names: HashSet<String>,
+    /// Error from validating the prelude's own contract expressions, if any.
+    /// Surfaced as a proper diagnostic by `inject_prelude` instead of letting
+    /// an invalid prelude contract reach (and panic in) later pipeline stages.
+    contract_error: Option<CompileError>,
 }
 
 static PRELUDE: OnceLock<PreludeData> = OnceLock::new();
@@ -23,7 +27,19 @@ fn get_prelude() -> &'static PreludeData {
     PRELUDE.get_or_init(|| {
         let tokens = crate::lexer::lex(PRELUDE_SOURCE).expect("prelude must lex");
         let mut parser = crate::parser::Parser::new_without_prelude(&tokens, PRELUDE_SOURCE);
-        let program = parser.parse_program().expect("prelude must parse");
+        let mut program = parser.parse_program().expect("prelude must parse");
+        // The prelude is injected AFTER module flattening (pipeline stage 5 vs 4),
+        // so it never goes through the QualifiedAccess resolution that user code
+        // gets. Resolve here so prelude declarations (contract expressions like
+        // `self.offset >= 0`, method bodies, defaults) arrive in the same resolved
+        // shape as user code. The prelude imports no modules, so the single-file
+        // resolution (empty module set) is exactly right.
+        crate::modules::resolve_qualified_access_single_file(&mut program)
+            .expect("prelude qualified-access resolution must succeed");
+        // Validate the prelude's own contracts now, while we still know the
+        // expressions came from the prelude. Stage 9 validation runs over the
+        // merged program and would attribute the error to the user's source.
+        let contract_error = crate::contracts::validate_contracts(&program).err();
         let enum_names = program
             .enums
             .iter()
@@ -46,6 +62,7 @@ fn get_prelude() -> &'static PreludeData {
             enum_names,
             class_names,
             trait_names,
+            contract_error,
         }
     })
 }
@@ -59,6 +76,17 @@ pub fn prelude_enum_names() -> &'static HashSet<String> {
 /// Checks for name conflicts across enums, classes, traits, and errors.
 pub fn inject_prelude(program: &mut Program) -> Result<(), CompileError> {
     let data = get_prelude();
+
+    // An invalid contract in the prelude itself is a compiler/stdlib bug, but
+    // it must surface as a diagnostic, not a panic deeper in the pipeline. Its
+    // span points into the prelude source (not the user's file), so report the
+    // message with a synthetic span and name the prelude explicitly.
+    if let Some(err) = &data.contract_error {
+        return Err(CompileError::type_err(
+            format!("invalid contract in prelude (stdlib/prelude.pt): {err}"),
+            crate::span::Span::synthetic(),
+        ));
+    }
 
     // Check if prelude is already injected (idempotency check)
     // If the first enum is a prelude enum, assume prelude is already there
@@ -238,4 +266,54 @@ pub fn inject_prelude(program: &mut Program) -> Result<(), CompileError> {
     program.traits = prelude_traits;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::Expr;
+
+    /// The prelude is injected after module flattening, so its contract
+    /// expressions must already be resolved (no QualifiedAccess left) when
+    /// they reach contract validation — otherwise contracts.rs panics.
+    #[test]
+    fn prelude_contracts_are_resolved_and_valid() {
+        let data = get_prelude();
+        assert!(
+            data.contract_error.is_none(),
+            "shipped prelude has an invalid contract: {:?}",
+            data.contract_error
+        );
+        for class in &data.classes {
+            for inv in &class.node.invariants {
+                assert_resolved(&inv.node.expr.node, &class.node.name.node);
+            }
+            for method in &class.node.methods {
+                for contract in &method.node.contracts {
+                    assert_resolved(&contract.node.expr.node, &class.node.name.node);
+                }
+            }
+        }
+    }
+
+    fn assert_resolved(expr: &Expr, class_name: &str) {
+        struct Checker<'a> {
+            class_name: &'a str,
+        }
+        impl crate::visit::Visitor for Checker<'_> {
+            fn visit_expr(&mut self, expr: &crate::span::Spanned<Expr>) {
+                if let Expr::QualifiedAccess { segments } = &expr.node {
+                    panic!(
+                        "unresolved QualifiedAccess {:?} in a contract of prelude class '{}'",
+                        segments.iter().map(|s| &s.node).collect::<Vec<_>>(),
+                        self.class_name
+                    );
+                }
+                crate::visit::walk_expr(self, expr);
+            }
+        }
+        let spanned = crate::span::Spanned::new(expr.clone(), crate::span::Span::new(0, 0));
+        let mut checker = Checker { class_name };
+        crate::visit::Visitor::visit_expr(&mut checker, &spanned);
+    }
 }
