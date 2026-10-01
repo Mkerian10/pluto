@@ -700,3 +700,264 @@ fn main() {
     );
     assert_eq!(out, "3\n-1\n");
 }
+
+// ── Degradation errors: state-carrying payloads (rfc-typestates.md phase 3) ──
+
+/// Shared lease protocol: `check`/`renew` degrade to `Revoked` (droppable),
+/// `Interrupted` carries a still-`Held` (must_release) lease.
+fn degradable_lease_src(body: &str) -> String {
+    format!(
+        r#"
+        class Idle {{ tag: int }}
+        class Held {{ tag: int }}
+        class Revoked {{ tag: int }}
+
+        class Lease<S> {{
+            id: int
+
+            must_release Held
+
+            fn acquire(self) Lease<Held> where S == Idle {{
+                return Lease<Held> {{ id: self.id }}
+            }}
+
+            fn check(self) int where S == Held {{
+                if self.id < 0 {{
+                    raise Degraded {{ lease: Lease<Revoked> {{ id: self.id }} }}
+                }}
+                return self.id
+            }}
+
+            fn release(self) Lease<Idle> where S == Held {{
+                return Lease<Idle> {{ id: self.id }}
+            }}
+
+            fn describe(self) string {{
+                return f"lease {{self.id}}"
+            }}
+        }}
+
+        error Degraded {{ lease: Lease<Revoked> }}
+        error Interrupted {{ lease: Lease<Held> }}
+
+        {body}
+        "#
+    )
+}
+
+/// Errors can carry class-typed payloads, including typestate
+/// instantiations; a typed catch recovers the payload and can call methods
+/// on it.
+#[test]
+fn error_class_payload_recovery() {
+    let out = compile_and_run_stdout(&degradable_lease_src(
+        r#"
+        fn fetch(id: int) Lease<Revoked> {
+            raise Degraded { lease: Lease<Revoked> { id: id } }
+        }
+
+        fn main() {
+            let r = fetch(4) catch e: Degraded {
+                print(f"recovered: {e.lease.describe()}")
+                e.lease
+            }
+            print(r.describe())
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "recovered: lease 4\nlease 4");
+}
+
+/// A terminating catch of a degradation error keeps the success path's
+/// receiver binding valid with no ceremony.
+#[test]
+fn degradation_terminating_catch_keeps_success_binding() {
+    let out = compile_and_run_stdout(&degradable_lease_src(
+        r#"
+        fn main() {
+            let l = Lease<Idle> { id: 1 }
+            let h = l.acquire()
+            let n = h.check() catch e: Degraded {
+                print(f"lost: {e.lease.describe()}")
+                return
+            }
+            print(n)
+            let done = h.release()
+            print(done.describe())
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "1\nlease 1");
+}
+
+/// A fall-through catch joins the error path into the continuation: the
+/// receiver was consumed (it rides in the error payload), so later uses are
+/// rejected.
+#[test]
+fn degradation_fallthrough_catch_consumes_receiver() {
+    compile_should_fail_with(
+        &degradable_lease_src(
+            r#"
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                let n = h.check() catch e: Degraded {
+                    0
+                }
+                print(n)
+                let done = h.release()
+                print(done.describe())
+            }
+            "#,
+        ),
+        "'h' was consumed on the error path: '.check()' raised 'Degraded' carrying the value as Lease<Revoked>",
+    );
+}
+
+/// An error carrying a must_release payload cannot be handled by a wildcard
+/// catch: the payload (and its obligation) would be unreachable.
+#[test]
+fn must_release_payload_wildcard_catch_rejected() {
+    compile_should_fail_with(
+        &degradable_lease_src(
+            r#"
+            fn risky(h: Lease<Held>) int {
+                raise Interrupted { lease: h }
+            }
+
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                let n = risky(h) catch err {
+                    0
+                }
+                print(n)
+            }
+            "#,
+        ),
+        "the call can raise 'Interrupted', which carries Lease<Held> in field 'lease' — a must_release state",
+    );
+}
+
+/// Same for the shorthand form.
+#[test]
+fn must_release_payload_shorthand_catch_rejected() {
+    compile_should_fail_with(
+        &degradable_lease_src(
+            r#"
+            fn risky(h: Lease<Held>) int {
+                raise Interrupted { lease: h }
+            }
+
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                let n = risky(h) catch -1
+                print(n)
+            }
+            "#,
+        ),
+        "a wildcard or shorthand catch cannot discharge the payload",
+    );
+}
+
+/// A typed catch takes on the payload obligation and discharges it by
+/// extracting and releasing.
+#[test]
+fn must_release_payload_typed_catch_discharges() {
+    let out = compile_and_run_stdout(&degradable_lease_src(
+        r#"
+        fn risky(h: Lease<Held>) int {
+            if h.id > 0 {
+                raise Interrupted { lease: h }
+            }
+            let done = h.release()
+            return done.id
+        }
+
+        fn main() {
+            let l = Lease<Idle> { id: 1 }
+            let h = l.acquire()
+            let n = risky(h) catch e: Interrupted {
+                let back = e.lease
+                let done = back.release()
+                done.id * 10
+            }
+            print(n)
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "10");
+}
+
+/// Binding the error but never discharging the must_release payload is
+/// rejected at the end of the catch block.
+#[test]
+fn must_release_payload_not_discharged_rejected() {
+    compile_should_fail_with(
+        &degradable_lease_src(
+            r#"
+            fn risky(h: Lease<Held>) int {
+                raise Interrupted { lease: h }
+            }
+
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                let n = risky(h) catch e: Interrupted {
+                    0
+                }
+                print(n)
+            }
+            "#,
+        ),
+        "caught 'Interrupted' but its payload 'e.lease' still holds Lease<Held>",
+    );
+}
+
+/// Droppable degraded states are the expected common case: shorthand and
+/// wildcard catches stay legal when the payload state is not must_release.
+#[test]
+fn droppable_payload_shorthand_catch_ok() {
+    let out = compile_and_run_stdout(&degradable_lease_src(
+        r#"
+        fn droppy(x: int) int {
+            if x < 0 {
+                raise Degraded { lease: Lease<Revoked> { id: x } }
+            }
+            return x
+        }
+
+        fn main() {
+            print(droppy(5) catch -1)
+            print(droppy(-3) catch -1)
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "5\n-1");
+}
+
+/// Propagating (`!`) a degradation error exits the function on the error
+/// path — the payload rides in the error — so the success path keeps the
+/// receiver with no ceremony.
+#[test]
+fn degradation_propagate_keeps_success_binding() {
+    let out = compile_and_run_stdout(&degradable_lease_src(
+        r#"
+        fn run() int {
+            let l = Lease<Idle> { id: 2 }
+            let h = l.acquire()
+            let n = h.check()!
+            let done = h.release()
+            return n + done.id
+        }
+
+        fn main() {
+            print(run() catch e: Degraded {
+                -1
+            })
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "4");
+}
