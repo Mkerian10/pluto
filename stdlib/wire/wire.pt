@@ -1,5 +1,6 @@
 import std.json
 import std.strings
+import std.base64
 
 pub error WireError {
     message: string
@@ -10,6 +11,9 @@ pub enum WireValue {
     Float { value: float }
     Bool { value: bool }
     Str { value: string }
+    // Opaque binary payload. A bytes value is ONE blob on the wire — it is
+    // never encoded element-wise (JSON carries it as a single base64 string).
+    Bytes { value: bytes }
     Array { elements: [WireValue] }
     Record { keys: [string], values: [WireValue] }
     Variant { name: string, data: WireValue }
@@ -32,6 +36,10 @@ pub fn wire_bool(v: bool) WireValue {
 
 pub fn wire_string(v: string) WireValue {
     return WireValue.Str { value: v }
+}
+
+pub fn wire_bytes(v: bytes) WireValue {
+    return WireValue.Bytes { value: v }
 }
 
 pub fn wire_array(elems: [WireValue]) WireValue {
@@ -64,6 +72,7 @@ pub trait Encoder {
     fn encode_float(mut self, value: float)
     fn encode_bool(mut self, value: bool)
     fn encode_string(mut self, value: string)
+    fn encode_bytes(mut self, value: bytes)
     fn encode_null(mut self)
     fn encode_array_start(mut self, len: int)
     fn encode_array_end(mut self)
@@ -83,6 +92,7 @@ pub trait Decoder {
     fn decode_float(mut self) float
     fn decode_bool(mut self) bool
     fn decode_string(mut self) string
+    fn decode_bytes(mut self) bytes
     fn decode_null(mut self)
     fn decode_nullable(mut self) bool
     fn decode_array_start(mut self) int
@@ -123,6 +133,10 @@ pub class WireValueEncoder impl Encoder {
 
     fn encode_string(mut self, value: string) {
         self.push_value(wire_string(value))
+    }
+
+    fn encode_bytes(mut self, value: bytes) {
+        self.push_value(wire_bytes(value))
     }
 
     fn encode_null(mut self) {
@@ -290,6 +304,9 @@ pub class WireValueDecoder impl Decoder {
             WireValue.Str { value } {
                 raise WireError { message: "expected int, got string" }
             }
+            WireValue.Bytes { value } {
+                raise WireError { message: "expected int, got bytes" }
+            }
             WireValue.Array { elements } {
                 raise WireError { message: "expected int, got array" }
             }
@@ -313,6 +330,7 @@ pub class WireValueDecoder impl Decoder {
             WireValue.Int { value } { raise WireError { message: "expected float" } }
             WireValue.Bool { value } { raise WireError { message: "expected float" } }
             WireValue.Str { value } { raise WireError { message: "expected float" } }
+            WireValue.Bytes { value } { raise WireError { message: "expected float" } }
             WireValue.Array { elements } { raise WireError { message: "expected float" } }
             WireValue.Record { keys, values } { raise WireError { message: "expected float" } }
             WireValue.Variant { name, data } { raise WireError { message: "expected float" } }
@@ -328,6 +346,7 @@ pub class WireValueDecoder impl Decoder {
             WireValue.Int { value } { raise WireError { message: "expected bool" } }
             WireValue.Float { value } { raise WireError { message: "expected bool" } }
             WireValue.Str { value } { raise WireError { message: "expected bool" } }
+            WireValue.Bytes { value } { raise WireError { message: "expected bool" } }
             WireValue.Array { elements } { raise WireError { message: "expected bool" } }
             WireValue.Record { keys, values } { raise WireError { message: "expected bool" } }
             WireValue.Variant { name, data } { raise WireError { message: "expected bool" } }
@@ -343,10 +362,27 @@ pub class WireValueDecoder impl Decoder {
             WireValue.Int { value } { raise WireError { message: "expected string" } }
             WireValue.Float { value } { raise WireError { message: "expected string" } }
             WireValue.Bool { value } { raise WireError { message: "expected string" } }
+            WireValue.Bytes { value } { raise WireError { message: "expected string" } }
             WireValue.Array { elements } { raise WireError { message: "expected string" } }
             WireValue.Record { keys, values } { raise WireError { message: "expected string" } }
             WireValue.Variant { name, data } { raise WireError { message: "expected string" } }
             WireValue.Null { raise WireError { message: "expected string" } }
+        }
+    }
+
+    fn decode_bytes(mut self) bytes {
+        match self.current {
+            WireValue.Bytes { value } {
+                return value
+            }
+            WireValue.Int { value } { raise WireError { message: "expected bytes" } }
+            WireValue.Float { value } { raise WireError { message: "expected bytes" } }
+            WireValue.Bool { value } { raise WireError { message: "expected bytes" } }
+            WireValue.Str { value } { raise WireError { message: "expected bytes" } }
+            WireValue.Array { elements } { raise WireError { message: "expected bytes" } }
+            WireValue.Record { keys, values } { raise WireError { message: "expected bytes" } }
+            WireValue.Variant { name, data } { raise WireError { message: "expected bytes" } }
+            WireValue.Null { raise WireError { message: "expected bytes" } }
         }
     }
 
@@ -359,6 +395,7 @@ pub class WireValueDecoder impl Decoder {
             WireValue.Float { value } { raise WireError { message: "expected null" } }
             WireValue.Bool { value } { raise WireError { message: "expected null" } }
             WireValue.Str { value } { raise WireError { message: "expected null" } }
+            WireValue.Bytes { value } { raise WireError { message: "expected null" } }
             WireValue.Array { elements } { raise WireError { message: "expected null" } }
             WireValue.Record { keys, values } { raise WireError { message: "expected null" } }
             WireValue.Variant { name, data } { raise WireError { message: "expected null" } }
@@ -374,6 +411,7 @@ pub class WireValueDecoder impl Decoder {
             WireValue.Float { value } { return true }
             WireValue.Bool { value } { return true }
             WireValue.Str { value } { return true }
+            WireValue.Bytes { value } { return true }
             WireValue.Array { elements } { return true }
             WireValue.Record { keys, values } { return true }
             WireValue.Variant { name, data } { return true }
@@ -392,6 +430,7 @@ pub class WireValueDecoder impl Decoder {
             WireValue.Float { value } { raise WireError { message: "expected array" } }
             WireValue.Bool { value } { raise WireError { message: "expected array" } }
             WireValue.Str { value } { raise WireError { message: "expected array" } }
+            WireValue.Bytes { value } { raise WireError { message: "expected array" } }
             WireValue.Record { keys, values } { raise WireError { message: "expected array" } }
             WireValue.Variant { name, data } { raise WireError { message: "expected array" } }
             WireValue.Null { raise WireError { message: "expected array" } }
@@ -427,6 +466,7 @@ pub class WireValueDecoder impl Decoder {
             WireValue.Float { value } { raise WireError { message: "expected record/map" } }
             WireValue.Bool { value } { raise WireError { message: "expected record/map" } }
             WireValue.Str { value } { raise WireError { message: "expected record/map" } }
+            WireValue.Bytes { value } { raise WireError { message: "expected record/map" } }
             WireValue.Array { elements } { raise WireError { message: "expected record/map" } }
             WireValue.Variant { name, data } { raise WireError { message: "expected record/map" } }
             WireValue.Null { raise WireError { message: "expected record/map" } }
@@ -448,6 +488,7 @@ pub class WireValueDecoder impl Decoder {
             WireValue.Float { value } { raise WireError { message: "expected record" } }
             WireValue.Bool { value } { raise WireError { message: "expected record" } }
             WireValue.Str { value } { raise WireError { message: "expected record" } }
+            WireValue.Bytes { value } { raise WireError { message: "expected record" } }
             WireValue.Array { elements } { raise WireError { message: "expected record" } }
             WireValue.Variant { name, data } { raise WireError { message: "expected record" } }
             WireValue.Null { raise WireError { message: "expected record" } }
@@ -502,6 +543,10 @@ pub class WireValueDecoder impl Decoder {
                                 self.current = data
                                 return i
                             }
+                            WireValue.Bytes { value } {
+                                self.current = data
+                                return i
+                            }
                             WireValue.Array { elements } {
                                 self.current = data
                                 return i
@@ -524,6 +569,7 @@ pub class WireValueDecoder impl Decoder {
             WireValue.Float { value } { raise WireError { message: "expected variant" } }
             WireValue.Bool { value } { raise WireError { message: "expected variant" } }
             WireValue.Str { value } { raise WireError { message: "expected variant" } }
+            WireValue.Bytes { value } { raise WireError { message: "expected variant" } }
             WireValue.Array { elements } { raise WireError { message: "expected variant" } }
             WireValue.Record { keys, values } { raise WireError { message: "expected variant" } }
             WireValue.Null { raise WireError { message: "expected variant" } }
@@ -577,6 +623,14 @@ fn wire_to_json(w: WireValue) json.Json {
         }
         WireValue.Str { value } {
             return json.string(value)
+        }
+        WireValue.Bytes { value } {
+            // One blob: base64 of the whole payload in a marker object,
+            // so a bytes value survives the JSON round-trip distinct from
+            // a plain string.
+            let mut obj = json.object()
+            obj.set("__bytes", json.string(base64.encode_bytes(value)))
+            return obj
         }
         WireValue.Array { elements } {
             let mut arr = json.array()
@@ -633,8 +687,12 @@ fn json_to_wire(j: json.Json) WireValue {
         }
         return wire_array(elems)
     }
-    // Object: check for variant encoding
+    // Object: check for bytes encoding (a single base64 blob)
     if j.is_object() {
+        let bytes_tag = j.get("__bytes")
+        if !bytes_tag.is_null() {
+            return wire_bytes(base64.decode_bytes(bytes_tag.get_string()))
+        }
         let variant_tag = j.get("__variant")
         if !variant_tag.is_null() {
             let name = variant_tag.get_string()

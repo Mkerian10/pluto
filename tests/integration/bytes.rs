@@ -568,3 +568,67 @@ fn main() int {
 "#);
     assert_eq!(out, "100\n0\n99\n");
 }
+
+// ── Bytes at the extern boundary (#368 slice 1) ──────────────────────────────
+
+/// Extern fns may take and return `bytes` — previously rejected by the
+/// extern whitelist, which was the hard blocker for stdlib bytes I/O.
+#[test]
+fn extern_fn_accepts_bytes_params_and_return() {
+    let out = compile_and_run_stdout(r#"
+extern fn __pluto_string_to_bytes(s: string) bytes
+extern fn __pluto_bytes_len(b: bytes) int
+
+fn main() int {
+    let b = __pluto_string_to_bytes("hey")
+    print(__pluto_bytes_len(b))
+    return 0
+}
+"#);
+    assert_eq!(out, "3\n");
+}
+
+// ── Type honesty: bytes do not interpolate ────────────────────────────────────
+
+/// A binary frame should not silently become display text: f-string
+/// interpolation of bytes stays rejected (pinned intentionally — use
+/// .to_string() for an explicit conversion).
+#[test]
+fn fstring_interpolation_of_bytes_rejected() {
+    compile_should_fail_with(r#"
+fn main() {
+    let b = bytes_new()
+    b.push(65 as byte)
+    print(f"{b}")
+}
+"#, "cannot interpolate bytes into string");
+}
+
+/// string <-> bytes conversions are total, unchecked, O(n) copies — exact for
+/// all 256 byte values (strings carry no UTF-8 invariant).
+#[test]
+fn string_bytes_round_trip_all_256_values() {
+    let out = compile_and_run_stdout(r#"
+fn main() int {
+    let buf = bytes_new()
+    let mut i = 0
+    while i < 256 {
+        buf.push(i as byte)
+        i = i + 1
+    }
+    let s = buf.to_string()
+    let back = s.to_bytes()
+    let mut ok = back.len() == 256
+    let mut j = 0
+    while j < back.len() {
+        if (back[j] as int) != j {
+            ok = false
+        }
+        j = j + 1
+    }
+    print(ok)
+    return 0
+}
+"#);
+    assert_eq!(out, "true\n");
+}

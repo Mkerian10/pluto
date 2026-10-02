@@ -598,3 +598,121 @@ stage Api {
         "violating decode should raise naming the instantiation, got: {out}"
     );
 }
+
+// ── Bytes fields (#374): serializable and marshal layers agree ─────────────────
+
+/// The #374 repro: a class with a `bytes` field used at a marshal boundary used
+/// to fail with "undefined function '__marshal_bytes'". It now round-trips, with
+/// the payload carried as ONE blob (base64 in JSON), never element-wise.
+#[test]
+fn marshal_bytes_field_round_trips() {
+    let out = run_marshal_test(r#"
+import std.wire
+
+class Frame {
+    payload: bytes
+    count: int
+}
+
+stage Api {
+    pub fn echo(self, f: Frame) Frame {
+        return f
+    }
+
+    fn main(self) {
+        let buf = bytes_new()
+        let mut i = 0
+        while i < 256 {
+            buf.push(i as byte)
+            i = i + 1
+        }
+        let f = Frame { payload: buf, count: 256 }
+        let out = self.echo(f)
+        let mut ok = out.payload.len() == 256
+        let mut j = 0
+        while j < out.payload.len() {
+            if (out.payload[j] as int) != j {
+                ok = false
+            }
+            j = j + 1
+        }
+        print(ok)
+        print(out.count)
+    }
+}
+"#);
+    assert_eq!(out, "true\n256\n");
+}
+
+/// Nullable bytes fields marshal as null / blob.
+#[test]
+fn marshal_nullable_bytes_field() {
+    let out = run_marshal_test(r#"
+import std.wire
+
+class Chunk {
+    data: bytes?
+}
+
+stage Api {
+    pub fn echo(self, c: Chunk) Chunk {
+        return c
+    }
+
+    fn main(self) {
+        let buf = bytes_new()
+        buf.push(255 as byte)
+        buf.push(0 as byte)
+        let some = self.echo(Chunk { data: buf })
+        let d = some.data
+        if d != none {
+            print(d.len())
+            print(d[0] as int)
+        } else {
+            print("missing")
+        }
+
+        let empty: bytes? = none
+        let nothing = self.echo(Chunk { data: empty })
+        if nothing.data == none {
+            print("none")
+        } else {
+            print("unexpected")
+        }
+    }
+}
+"#);
+    assert_eq!(out, "2\n255\nnone\n");
+}
+
+/// Bytes inside an array field: each element is still one blob.
+#[test]
+fn marshal_array_of_bytes_field() {
+    let out = run_marshal_test(r#"
+import std.wire
+
+class Batch {
+    chunks: [bytes]
+}
+
+stage Api {
+    pub fn echo(self, b: Batch) Batch {
+        return b
+    }
+
+    fn main(self) {
+        let a = bytes_new()
+        a.push(1 as byte)
+        let b = bytes_new()
+        b.push(2 as byte)
+        b.push(3 as byte)
+        let chunks = [a, b]
+        let out = self.echo(Batch { chunks: chunks })
+        print(out.chunks.len())
+        print(out.chunks[0].len())
+        print(out.chunks[1][1] as int)
+    }
+}
+"#);
+    assert_eq!(out, "2\n1\n3\n");
+}

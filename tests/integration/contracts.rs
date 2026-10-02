@@ -2765,3 +2765,53 @@ fn main() {
         "call to fallible method 'try_withdraw' must be handled",
     );
 }
+
+// ── Contracts on bytes APIs (#368 §4) ────────────────────────────────────────
+
+/// `requires frame.len() >= 4` on a bytes-taking API: the fact fragment
+/// supports bytes len() terms, so the satisfied call runs and the violated
+/// call aborts with the contract message.
+#[test]
+fn requires_on_bytes_len_satisfied_runs() {
+    let out = compile_and_run_stdout(
+        r#"
+fn header_tag(frame: bytes) int
+    requires frame.len() >= 4
+{
+    return frame[0] as int
+}
+
+fn main() {
+    let frame = bytes_new()
+    frame.push(7 as byte)
+    frame.push(0 as byte)
+    frame.push(0 as byte)
+    frame.push(0 as byte)
+    print(header_tag(frame))
+}
+"#,
+    );
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn requires_on_bytes_len_violated_aborts() {
+    let (_, stderr, code) = compile_and_run_output(
+        r#"
+fn header_tag(frame: bytes) int
+    requires frame.len() >= 4
+{
+    return frame[0] as int
+}
+
+fn main() {
+    let frame = bytes_new()
+    frame.push(7 as byte)
+    print(header_tag(frame))
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("requires violation"), "stderr: {stderr}");
+    assert!(stderr.contains("frame.len() >= 4"), "stderr: {stderr}");
+}
