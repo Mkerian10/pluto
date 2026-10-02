@@ -36,17 +36,32 @@ pub property fenced(f: field, authority: field<int>, grant: type) {
 // effect — the property that licenses retrying from an AMBIGUOUS failure
 // (docs/design/epistemics.md: the retry's outcome becomes knowledge).
 //
-// DECLARED-ONLY (rfc-properties.md phase 5.5): the property's real proof
-// shape — a dedup-check dominating the effect — is not yet expressible in
-// the verification kernel, so this body is intentionally empty and there
-// is NO in-unit discharge: a Pluto function cannot 'provides' it (the
-// compiler rejects the claim with the discharge-gap diagnostic), and a
-// type cannot 'satisfies' it. The only legitimate claim today is at a
-// trust boundary: 'extern fn ... assume idempotent(key = <param>)', which
-// records the claim — owner, instantiation, location — on the assumption
-// surface reported by 'pluto analyze'. Never silently promoted.
+// The body is the dedup-guard proof shape (rfc-properties.md phase 5.5,
+// the CHECKED discharge mode): a class/object method providing this
+// property must guard every externally-visible effect behind an ARMED
+// insert of the key into a monotone (insert-only) Set field of the
+// receiver — an insert itself dominated by a membership check:
+//
+//     fn apply(mut self, k: string, amt: int) int
+//         provides verify.idempotent(key = k) {
+//         if self.seen.contains(k) { return self.total }   // the check
+//         self.seen.insert(k)                              // the armed insert
+//         self.total = self.total + amt                    // the effect
+//         return self.total
+//     }
+//
+// The compiler proves the guard's PLACEMENT (check dominates insert,
+// insert precedes every effect on every path, the set is insert-only
+// whole-program — src/typeck/idempotency.rs); the set's contents are
+// runtime data. On an object (entity), per-instance serialization closes
+// the check→insert→effect window against concurrent messages; on a value
+// class the claim is per-copy (values do not share). At a trust boundary
+// the claim is ASSUMED instead: 'extern fn ... assume idempotent(key =
+// <param>)' records it — owner, instantiation, location — on the
+// assumption surface reported by 'pluto analyze'. Never silently promoted.
 //
 // 'key' names the request identity the dedup is keyed on, as an expression
 // over the providing function's parameters (e.g. 'key = req.id').
 pub property idempotent(key: expr) {
+    dedup key
 }

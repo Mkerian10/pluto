@@ -1288,6 +1288,9 @@ fn re_anchor(scope: &mut InvariantScope, env: &TypeEnv, composed: bool) {
                         Fact::Rel(a, _, b) => {
                             is_entry_field_term(a) || is_entry_field_term(b)
                         }
+                        // Membership facts are produced only by the
+                        // idempotency pass, never by invariant conditions.
+                        Fact::SetNotContains(..) | Fact::SetInserted(..) => false,
                     };
                     if !cross_state {
                         // Facts over current-anchor terms only: hold at the

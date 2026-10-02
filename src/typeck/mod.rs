@@ -10,6 +10,7 @@ mod infer;
 mod check;
 mod closures;
 pub(crate) mod errors;
+mod idempotency;
 mod linearity;
 pub(crate) mod shrink;
 pub(crate) mod requires;
@@ -200,6 +201,12 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // guard predicate. Needs the method resolutions recorded during body
     // checking, so it runs here, before skolem sweep.
     dominance::check_guard_dominance(program, &env)?;
+    // Dedup-guard discharge (rfc-properties.md phase 5.5): every effect
+    // site of a method providing a dedup-shaped property must carry an
+    // armed insert of the claim's key, and the dedup fields must be
+    // globally insert-only. Same timing as dominance (needs method
+    // resolutions, runs before skolem sweep).
+    idempotency::check_idempotency(program, &env)?;
     // Skolem artifacts served error inference/enforcement above; they must not
     // reach monomorphization, reflection, or marshaling.
     templates::sweep_skolems(&mut env);
@@ -254,14 +261,21 @@ fn register_provided_properties(program: &Program, env: &mut TypeEnv) {
 
     // Fn-level claims (rfc-properties.md phase 5). Validation and in-unit
     // discharge decisions already ran in src/properties.rs; what is
-    // recorded here is the exported fact per function: PROVEN provides on
+    // recorded here is the exported fact per function: PROVEN (ensures
+    // bodies) or CHECKED (dedup bodies, phase 5.5) provides on
     // class/object methods, ASSUMED claims on extern declarations. A bare
     // reference's fn type carries these names, which is what fn-type
     // requires-matching consumes.
+    let dedup_props: std::collections::HashSet<&str> = program
+        .properties
+        .iter()
+        .filter(|p| crate::properties::has_dedup_atoms(&p.node))
+        .map(|p| p.node.name.node.as_str())
+        .collect();
     let record = |env: &mut TypeEnv,
                       key: String,
                       clauses: &[crate::span::Spanned<crate::parser::ast::ProvidesClause>],
-                      mode: env::DischargeMode| {
+                      mode: Option<env::DischargeMode>| {
         if clauses.is_empty() {
             return;
         }
@@ -270,14 +284,19 @@ fn register_provided_properties(program: &Program, env: &mut TypeEnv) {
             .map(|c| env::FnProvidedProperty {
                 name: c.node.name.node.clone(),
                 args: crate::properties::render_provides_args(&c.node),
-                mode,
+                // In-unit provides: mode follows the property's body shape.
+                mode: mode.unwrap_or(if dedup_props.contains(c.node.name.node.as_str()) {
+                    env::DischargeMode::Checked
+                } else {
+                    env::DischargeMode::Proven
+                }),
                 line: c.node.line,
             })
             .collect();
         env.fn_properties.insert(key, props);
     };
     for func in &program.functions {
-        record(env, func.node.name.node.clone(), &func.node.provides, env::DischargeMode::Proven);
+        record(env, func.node.name.node.clone(), &func.node.provides, None);
     }
     for class in &program.classes {
         for method in &class.node.methods {
@@ -285,12 +304,17 @@ fn register_provided_properties(program: &Program, env: &mut TypeEnv) {
                 env,
                 env::mangle_method(&class.node.name.node, &method.node.name.node),
                 &method.node.provides,
-                env::DischargeMode::Proven,
+                None,
             );
         }
     }
     for ext in &program.extern_fns {
-        record(env, ext.node.name.node.clone(), &ext.node.assumes, env::DischargeMode::Assumed);
+        record(
+            env,
+            ext.node.name.node.clone(),
+            &ext.node.assumes,
+            Some(env::DischargeMode::Assumed),
+        );
     }
 }
 

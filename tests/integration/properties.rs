@@ -663,7 +663,7 @@ fn free_fn_provides_of_ensures_property_rejected() {
 fn satisfies_of_ensures_property_rejected() {
     compile_should_fail_with_all(
         "property increments(f: field<int>, by: const int) {\n    ensures f == old(f) + by\n}\n\nclass C satisfies increments(self.n, 1) {\n    n: int\n}\n\nfn main() {}\n",
-        &["method-level 'ensures' atoms", "not", "satisfied by a type"],
+        &["method-level atoms (ensures / dedup)", "not", "satisfied by a type"],
     );
 }
 
@@ -897,6 +897,9 @@ fn retry_example_compiles_and_runs() {
     assert!(run_output.status.success());
     let stdout = String::from_utf8_lossy(&run_output.stdout);
     assert!(stdout.contains("stored (receipt 5)"), "stdout:\n{stdout}");
+    // The in-unit CHECKED provider (phase 5.5): same key twice, the second
+    // call performed no additional effect.
+    assert!(stdout.contains("ledger receipts: 1 then 1"), "stdout:\n{stdout}");
 }
 
 #[test]
@@ -914,5 +917,279 @@ fn retry_example_rejects_non_provider() {
             ),
         ],
         &["expected fn(string) int! provides verify.idempotent, found fn(string) int"],
+    );
+}
+
+// ── Phase 5.5: the dedup-guard discharge (CHECKED) ──────────
+
+// A dedup-bodied property shared by the tests below.
+const DEDUP_PROP: &str = "property idempotent(key: expr) {\n    dedup key\n}\n\n";
+
+#[test]
+fn dedup_atom_parses_and_pretty_round_trips() {
+    let src = "property idempotent(key: expr) {\n    dedup key\n}\n\nfn main() {}\n";
+    let program = pluto::parse_source(src).expect("parses");
+    assert_eq!(program.properties.len(), 1);
+    let printed = pluto::pretty::pretty_print(&program, false);
+    assert!(printed.contains("dedup key"), "pretty output:\n{printed}");
+    let reparsed = pluto::parse_source(&printed).expect("pretty output reparses");
+    assert_eq!(reparsed.properties.len(), 1);
+}
+
+#[test]
+fn dedup_happy_path_on_entity() {
+    // The canonical shape: check, armed insert, effect. Entity methods are
+    // serialized, closing the check→insert→effect window. Observable
+    // behavior: same key twice ⇒ no additional effect.
+    let out = compile_and_run_stdout(&format!(
+        "{DEDUP_PROP}object Payments {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string, amt: int) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{\n            return self.total\n        }}\n        self.seen.insert(k)\n        self.total = self.total + amt\n        return self.total\n    }}\n}}\n\nfn main() {{\n    let mut p = Payments {{ seen: Set<string> {{}}, total: 0 }}\n    print(p.apply(\"a\", 5))\n    print(p.apply(\"a\", 5))\n    print(p.apply(\"b\", 2))\n}}\n"
+    ));
+    assert_eq!(out, "5\n5\n7\n");
+}
+
+#[test]
+fn dedup_happy_path_on_value_class_negated_check() {
+    // Value classes are accepted too (the claim is per-copy — values do
+    // not share), and the `if !contains { insert; effect }` then-branch
+    // shape arms inside the branch.
+    let out = compile_and_run_stdout(&format!(
+        "{DEDUP_PROP}class Store {{\n    seen: Set<string>\n    n: int\n\n    fn put(mut self, k: string) int provides idempotent(key = k) {{\n        if !self.seen.contains(k) {{\n            self.seen.insert(k)\n            self.n = self.n + 1\n        }}\n        return self.n\n    }}\n}}\n\nfn main() {{\n    let mut s = Store {{ seen: Set<string> {{}}, n: 0 }}\n    print(s.put(\"x\"))\n    print(s.put(\"x\"))\n}}\n"
+    ));
+    assert_eq!(out, "1\n1\n");
+}
+
+#[test]
+fn dedup_dotted_key_and_raise_on_duplicate() {
+    // One-level field keys (`key = req.id`) work, and the duplicate path
+    // may raise instead of returning a cached value — outcomes are not
+    // effects.
+    let out = compile_and_run_stdout(&format!(
+        "{DEDUP_PROP}error Dup {{\n    message: string\n}}\n\nclass Req {{\n    id: string\n    amt: int\n}}\n\nobject Ledger {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, req: Req) int provides idempotent(key = req.id) {{\n        if self.seen.contains(req.id) {{\n            raise Dup {{ message: req.id }}\n        }}\n        self.seen.insert(req.id)\n        self.total = self.total + req.amt\n        return self.total\n    }}\n}}\n\nfn main() {{\n    let mut l = Ledger {{ seen: Set<string> {{}}, total: 0 }}\n    let r = Req {{ id: \"a\", amt: 3 }}\n    print(l.apply(r) catch e {{ 0 - 1 }})\n    print(l.apply(r) catch e {{ 0 - 1 }})\n}}\n"
+    ));
+    assert_eq!(out, "3\n-1\n");
+}
+
+#[test]
+fn dedup_licenses_call_effects_after_armed_insert() {
+    // Bare-parameter keys survive calls: the armed insert licenses a
+    // SEQUENCE of call-shaped effects (SetInserted is monotone-stable —
+    // the set is globally insert-only, and callees cannot change a
+    // caller's local).
+    let out = compile_and_run_stdout(&format!(
+        "{DEDUP_PROP}extern fn __pluto_string_len(s: string) int\n\nobject P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{\n            return self.total\n        }}\n        self.seen.insert(k)\n        let a = __pluto_string_len(k)\n        let b = __pluto_string_len(k)\n        self.total = self.total + a + b\n        return self.total\n    }}\n}}\n\nfn main() {{\n    let mut p = P {{ seen: Set<string> {{}}, total: 0 }}\n    print(p.apply(\"abc\"))\n    print(p.apply(\"abc\"))\n}}\n"
+    ));
+    assert_eq!(out, "6\n6\n");
+}
+
+#[test]
+fn dedup_effect_without_check_rejected() {
+    compile_should_fail_with_all(
+        &format!(
+            "{DEDUP_PROP}object P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {{\n        self.total = self.total + 1\n        return self.total\n    }}\n}}\n\nfn main() {{}}\n"
+        ),
+        &[
+            "cannot discharge 'provides idempotent'",
+            "not covered by the dedup guard",
+            "ARMED insert",
+            "required by property 'idempotent'",
+            "instantiated with key = k",
+        ],
+    );
+}
+
+#[test]
+fn dedup_check_after_effect_rejected() {
+    // The effect precedes the check: nothing dominates it.
+    compile_should_fail_with(
+        &format!(
+            "{DEDUP_PROP}object P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {{\n        self.total = self.total + 1\n        if self.seen.contains(k) {{ return self.total }}\n        self.seen.insert(k)\n        return self.total\n    }}\n}}\n\nfn main() {{}}\n"
+        ),
+        "not covered by the dedup guard",
+    );
+}
+
+#[test]
+fn dedup_insert_missing_on_effect_path_rejected() {
+    // The insert happens only on one branch; the effect follows on both.
+    compile_should_fail_with(
+        &format!(
+            "{DEDUP_PROP}object P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string, flag: bool) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{ return self.total }}\n        if flag {{\n            self.seen.insert(k)\n        }}\n        self.total = self.total + 1\n        return self.total\n    }}\n}}\n\nfn main() {{}}\n"
+        ),
+        "not covered by the dedup guard",
+    );
+}
+
+#[test]
+fn dedup_unarmed_insert_rejected() {
+    // An insert of the key with no dominating check is just a mutation —
+    // an effect the (nonexistent) guard does not cover.
+    compile_should_fail_with(
+        &format!(
+            "{DEDUP_PROP}object P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {{\n        self.seen.insert(k)\n        self.total = self.total + 1\n        return self.total\n    }}\n}}\n\nfn main() {{}}\n"
+        ),
+        "not covered by the dedup guard",
+    );
+}
+
+#[test]
+fn dedup_effect_in_duplicate_branch_rejected() {
+    // The already-seen branch runs on every duplicate call: an effect
+    // there is exactly the double-apply the property forbids.
+    compile_should_fail_with(
+        &format!(
+            "{DEDUP_PROP}object P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{\n            self.total = self.total + 1\n            return self.total\n        }}\n        self.seen.insert(k)\n        self.total = self.total + 1\n        return self.total\n    }}\n}}\n\nfn main() {{}}\n"
+        ),
+        "not covered by the dedup guard",
+    );
+}
+
+#[test]
+fn dedup_remove_from_seen_rejected() {
+    // Non-monotone use anywhere in the program breaks every claim keyed on
+    // the field — even in a method that provides nothing.
+    compile_should_fail_with_all(
+        &format!(
+            "{DEDUP_PROP}object P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{ return self.total }}\n        self.seen.insert(k)\n        self.total = self.total + 1\n        return self.total\n    }}\n\n    fn forget(mut self, k: string) {{\n        self.seen.remove(k)\n    }}\n}}\n\nfn main() {{}}\n"
+        ),
+        &["dedup field 'seen'", "insert-only", "'remove'"],
+    );
+}
+
+#[test]
+fn dedup_field_alias_rejected() {
+    // Returning (or binding, or passing) the dedup set would reopen the
+    // closed write-set.
+    compile_should_fail_with_all(
+        &format!(
+            "{DEDUP_PROP}object P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{ return self.total }}\n        self.seen.insert(k)\n        self.total = self.total + 1\n        return self.total\n    }}\n\n    fn leak(self) Set<string> {{\n        return self.seen\n    }}\n}}\n\nfn main() {{}}\n"
+        ),
+        &["dedup field 'seen'", "may not be used as a value"],
+    );
+}
+
+#[test]
+fn dedup_foreign_insert_rejected() {
+    compile_should_fail_with_all(
+        &format!(
+            "{DEDUP_PROP}object P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{ return self.total }}\n        self.seen.insert(k)\n        self.total = self.total + 1\n        return self.total\n    }}\n}}\n\nfn main() {{\n    let mut p = P {{ seen: Set<string> {{}}, total: 0 }}\n    p.seen.insert(\"sneak\")\n}}\n"
+        ),
+        &["dedup field 'seen'", "only be inserted through 'self'"],
+    );
+}
+
+#[test]
+fn dedup_shared_init_rejected() {
+    // Construction must not alias the dedup state.
+    compile_should_fail_with_all(
+        &format!(
+            "{DEDUP_PROP}object P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{ return self.total }}\n        self.seen.insert(k)\n        self.total = self.total + 1\n        return self.total\n    }}\n}}\n\nfn main() {{\n    let shared = Set<string> {{}}\n    let mut p = P {{ seen: shared, total: 0 }}\n}}\n"
+        ),
+        &["dedup field 'seen'", "fresh set literal"],
+    );
+}
+
+#[test]
+fn dedup_reassigned_key_rejected() {
+    // A reassigned key no longer denotes the claim's entry value: the
+    // check never arms, so the effect is uncovered.
+    compile_should_fail_with(
+        &format!(
+            "{DEDUP_PROP}object P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, mut k: string) int provides idempotent(key = k) {{\n        k = \"other\"\n        if self.seen.contains(k) {{ return self.total }}\n        self.seen.insert(k)\n        self.total = self.total + 1\n        return self.total\n    }}\n}}\n\nfn main() {{}}\n"
+        ),
+        "not covered by the dedup guard",
+    );
+}
+
+#[test]
+fn dedup_effect_inside_closure_rejected() {
+    // A closure created in the providing method may escape the serialized
+    // dedup window; its effects can never be covered.
+    compile_should_fail_with_all(
+        &format!(
+            "{DEDUP_PROP}object P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{ return self.total }}\n        self.seen.insert(k)\n        let f = (x: int) => {{\n            print(x)\n            x\n        }}\n        self.total = self.total + 1\n        return self.total\n    }}\n}}\n\nfn main() {{}}\n"
+        ),
+        &["not covered by the dedup guard", "inside a closure body"],
+    );
+}
+
+#[test]
+fn dedup_free_fn_provides_rejected() {
+    // No receiver, no dedup state: in-unit discharge is methods-only, and
+    // the diagnostic points at the extern assume alternative.
+    compile_should_fail_with_all(
+        &format!(
+            "{DEDUP_PROP}fn put(k: string) int provides idempotent(key = k) {{\n    return 1\n}}\n\nfn main() {{}}\n"
+        ),
+        &["'dedup' atom", "needs receiver state", "extern fn ... assume idempotent"],
+    );
+}
+
+#[test]
+fn dedup_property_satisfies_rejected() {
+    compile_should_fail_with(
+        &format!(
+            "{DEDUP_PROP}class C satisfies idempotent(self.n) {{\n    n: int\n}}\n\nfn main() {{}}\n"
+        ),
+        "method-level atoms (ensures / dedup)",
+    );
+}
+
+#[test]
+fn dedup_mixed_with_ensures_rejected() {
+    compile_should_fail_with(
+        "property both(f: field<int>, key: expr) {\n    ensures f == old(f)\n    dedup key\n}\n\nfn main() {}\n",
+        "mixes 'dedup' with other atoms",
+    );
+}
+
+#[test]
+fn dedup_key_must_be_expr_param() {
+    compile_should_fail_with(
+        "property bad(f: field<int>) {\n    dedup f\n}\n\nfn main() {}\n",
+        "the key of a dedup atom must be an 'expr' parameter",
+    );
+}
+
+#[test]
+fn dedup_property_still_assumable_at_extern_boundary() {
+    // An external system can implement the dedup internally: the ASSUMED
+    // mode stays legal for dedup-shaped properties, and the claim flows
+    // into requiring fn types as before.
+    let out = compile_and_run_stdout(&format!(
+        "{DEDUP_PROP}extern fn __pluto_string_len(s: string) int assume idempotent(key = s)\n\nfn apply_idem(f: fn(string) int! provides idempotent, s: string) int {{\n    return f(s) catch e {{ 0 - 1 }}\n}}\n\nfn main() {{\n    print(apply_idem(__pluto_string_len, \"hello\"))\n}}\n"
+    ));
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn delegation_closure_carries_method_provides() {
+    // Strict-eta delegation: `(s) => store.put(s)` is observationally the
+    // method with its receiver fixed, so it carries the method's provides
+    // into requiring fn types.
+    let out = compile_and_run_stdout(&format!(
+        "{DEDUP_PROP}object Store {{\n    seen: Set<string>\n    n: int\n\n    fn put(mut self, k: string) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{ return self.n }}\n        self.seen.insert(k)\n        self.n = self.n + 1\n        return self.n\n    }}\n}}\n\nfn go(f: fn(string) int provides idempotent, s: string) int {{\n    return f(s)\n}}\n\nfn main() {{\n    let mut store = Store {{ seen: Set<string> {{}}, n: 0 }}\n    print(go((s: string) => store.put(s), \"a\"))\n    print(go((s: string) => store.put(s), \"a\"))\n}}\n"
+    ));
+    assert_eq!(out, "1\n1\n");
+}
+
+#[test]
+fn non_eta_closure_still_provides_nothing() {
+    // Anything short of the strict eta shape (here: a constant argument
+    // instead of the forwarded parameter) provides nothing.
+    compile_should_fail_with(
+        &format!(
+            "{DEDUP_PROP}object Store {{\n    seen: Set<string>\n    n: int\n\n    fn put(mut self, k: string) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{ return self.n }}\n        self.seen.insert(k)\n        self.n = self.n + 1\n        return self.n\n    }}\n}}\n\nfn go(f: fn(string) int provides idempotent, s: string) int {{\n    return f(s)\n}}\n\nfn main() {{\n    let mut store = Store {{ seen: Set<string> {{}}, n: 0 }}\n    print(go((s: string) => store.put(\"fixed\"), \"a\"))\n}}\n"
+        ),
+        "provides idempotent, found fn(string) int",
+    );
+}
+
+#[test]
+fn delegation_of_non_providing_method_provides_nothing() {
+    compile_should_fail_with(
+        &format!(
+            "{DEDUP_PROP}object Store {{\n    n: int\n\n    fn put(mut self, k: string) int {{\n        self.n = self.n + 1\n        return self.n\n    }}\n}}\n\nfn go(f: fn(string) int provides idempotent, s: string) int {{\n    return f(s)\n}}\n\nfn main() {{\n    let mut store = Store {{ n: 0 }}\n    print(go((s: string) => store.put(s), \"a\"))\n}}\n"
+        ),
+        "provides idempotent, found fn(string) int",
     );
 }

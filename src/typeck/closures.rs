@@ -128,13 +128,75 @@ pub(crate) fn infer_closure(
     // Store return type for closure lifting (fixes Finding 5)
     env.closure_return_types.insert((span.start, span.end), final_ret.clone());
 
+    // Delegation transparency (rfc-properties.md phase 5.5): a closure
+    // that is EXACTLY an eta-wrapper around a method call on a captured
+    // receiver — `(s: string) => store.apply(s)` — carries the method
+    // declaration's provides. Sound because the closure is observationally
+    // the method with its receiver fixed: every invocation calls the same
+    // instance (a captured entity is a shared identity handle; a captured
+    // value class is the closure's own copy), and the closure's parameters
+    // pass through positionally, so the claim's key binding maps onto the
+    // closure's parameters unchanged. Anything short of the strict eta
+    // shape provides nothing, as before.
+    let provides = delegation_provides(&body.node, params, env);
+
     env.pop_scope();
 
     // Restore the outer flow-fact state (see barrier note at the top).
     env.facts = fact_snapshot;
     env.invariant_scope = invariant_scope;
 
-    Ok(PlutoType::Fn(param_types, Box::new(final_ret), false, Vec::new()))
+    Ok(PlutoType::Fn(param_types, Box::new(final_ret), false, provides))
+}
+
+/// The provides a strict-eta delegation closure inherits (see call site).
+/// Shape: a single `return recv.m(p0, ..., pn)` (or bare expression for
+/// void), optionally through `!`, where `recv` is a captured outer binding
+/// (not a closure parameter) and the arguments are exactly the closure's
+/// parameters in declaration order. Returns the delegate's provided
+/// property names, or empty when the shape does not match.
+fn delegation_provides(body: &Block, params: &[Param], env: &TypeEnv) -> Vec<String> {
+    if body.stmts.len() != 1 {
+        return Vec::new();
+    }
+    let expr = match &body.stmts[0].node {
+        Stmt::Return(Some(e)) => e,
+        Stmt::Expr(e) => e,
+        _ => return Vec::new(),
+    };
+    let call = match &expr.node {
+        Expr::Propagate { expr } => &expr.node,
+        other => other,
+    };
+    let Expr::MethodCall { object, method, args, .. } = call else {
+        return Vec::new();
+    };
+    let Expr::Ident(recv) = &object.node else {
+        return Vec::new();
+    };
+    if params.iter().any(|p| p.name.node == *recv) {
+        return Vec::new();
+    }
+    if args.len() != params.len() {
+        return Vec::new();
+    }
+    let positional = args.iter().zip(params).all(|(a, p)| {
+        matches!(&a.node, Expr::Ident(n) if *n == p.name.node)
+    });
+    if !positional {
+        return Vec::new();
+    }
+    // The body was just checked, so the call's resolution is recorded.
+    let Some(current_fn) = env.current_fn.clone() else {
+        return Vec::new();
+    };
+    let key = (current_fn, method.span.start);
+    match env.method_resolutions.get(&key) {
+        Some(super::env::MethodResolution::Class { mangled_name }) => {
+            env.fn_property_names(mangled_name)
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Infer the return type of a closure body by looking for return statements.

@@ -427,6 +427,11 @@ pub enum DischargeMode {
     /// The kernel discharged the instantiated atoms (an ensures-shaped
     /// body desugared into proven postconditions on the providing method).
     Proven,
+    /// The compiler proved a runtime guard's *placement* — the dedup-check
+    /// dominance proof of rfc-properties.md phase 5.5
+    /// (src/typeck/idempotency.rs); the guard's data (the dedup set) is
+    /// evaluated at runtime.
+    Checked,
     /// Declared at an extern trust boundary via `assume`.
     Assumed,
 }

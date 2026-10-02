@@ -228,6 +228,24 @@ pub enum Fact {
     /// The path's value is not a specific constant (`x != 0`). Intervals
     /// cannot express holes, so inequations get their own fact shape.
     NeConst(String, i64),
+    /// Set-membership fact (idempotency proof, rfc-properties.md phase
+    /// 5.5): the key path's value was NOT in the set path's set when the
+    /// dominating membership check ran. `(set_path, key_path)` — e.g.
+    /// `("self.seen", "k")`. Killed like any other field fact: the set
+    /// path is dotted, so any call that may run user code kills it (a
+    /// callee could insert the key), as does any insert into the set
+    /// ([`FactEnv::apply_set_insert`]).
+    SetNotContains(String, String),
+    /// `set.insert(key)` executed on this control path while
+    /// `SetNotContains(set, key)` held — the ARMED insert that licenses
+    /// effects after it (the dedup-guard shape). Carrying this fact across
+    /// calls is sound ONLY because the idempotency pass separately proves
+    /// the set field is globally insert-only (monotone): no reachable code
+    /// can remove the key, so "this call inserted key" stays true. The
+    /// `kill_fields` exemption below encodes exactly that; the fact still
+    /// dies when the KEY path is invalidated (its value identity is what
+    /// the claim keys on) and at loop boundaries (havoc).
+    SetInserted(String, String),
 }
 
 impl Fact {
@@ -235,7 +253,9 @@ impl Fact {
     fn paths(&self) -> impl Iterator<Item = &str> {
         match self {
             Fact::Bound(p, _) | Fact::NeConst(p, _) => std::iter::once(p.as_str()).chain(None),
-            Fact::Rel(a, _, b) => std::iter::once(a.as_str()).chain(Some(b.as_str())),
+            Fact::Rel(a, _, b)
+            | Fact::SetNotContains(a, b)
+            | Fact::SetInserted(a, b) => std::iter::once(a.as_str()).chain(Some(b.as_str())),
         }
     }
 }
@@ -249,6 +269,8 @@ struct Frame {
     intervals: HashMap<String, Interval>,
     relations: Vec<(String, RelOp, String)>,
     ne_consts: Vec<(String, i64)>,
+    /// Set-membership facts (`SetNotContains` / `SetInserted` only).
+    memberships: Vec<Fact>,
 }
 
 /// Record of a kill, for the guard logic: a guard fact may only be assumed
@@ -345,6 +367,11 @@ impl FactEnv {
                     frame.ne_consts.push((p, v));
                 }
             }
+            Fact::SetNotContains(..) | Fact::SetInserted(..) => {
+                if !frame.memberships.contains(&fact) {
+                    frame.memberships.push(fact);
+                }
+            }
         }
     }
 
@@ -356,6 +383,9 @@ impl FactEnv {
                 .relations
                 .retain(|(a, _, b)| !path_under(a, root) && !path_under(b, root));
             frame.ne_consts.retain(|(p, _)| !path_under(p, root));
+            frame
+                .memberships
+                .retain(|f| !f.paths().any(|p| path_under(p, root)));
         }
         self.kill_log.push(KillEvent::Path(root.to_string()));
     }
@@ -370,6 +400,16 @@ impl FactEnv {
                 .relations
                 .retain(|(a, _, b)| !a.contains('.') && !b.contains('.'));
             frame.ne_consts.retain(|(p, _)| !p.contains('.'));
+            // SetNotContains dies with the other field facts (a callee may
+            // insert the key). SetInserted survives on the set side — the
+            // set is globally insert-only, so no callee can unsay the
+            // insert — but dies when the KEY path is a field (the callee
+            // may change what the path denotes).
+            frame.memberships.retain(|f| match f {
+                Fact::SetNotContains(s, k) => !s.contains('.') && !k.contains('.'),
+                Fact::SetInserted(_, k) => !k.contains('.'),
+                _ => true,
+            });
         }
         self.kill_log.push(KillEvent::Fields);
     }
@@ -386,6 +426,12 @@ impl FactEnv {
                 .relations
                 .retain(|(a, _, b)| !is_len_term(a) && !is_len_term(b));
             frame.ne_consts.retain(|(p, _)| !is_len_term(p));
+            // A collections-severity call may insert into any reachable
+            // set through an alias: not-contains facts die. Armed inserts
+            // survive (the dedup set is globally insert-only).
+            frame
+                .memberships
+                .retain(|f| !matches!(f, Fact::SetNotContains(..)));
         }
         self.kill_log.push(KillEvent::LenTerms);
     }
@@ -396,8 +442,58 @@ impl FactEnv {
             frame.intervals.clear();
             frame.relations.clear();
             frame.ne_consts.clear();
+            frame.memberships.clear();
         }
         self.kill_log.push(KillEvent::All);
+    }
+
+    /// Is `SetNotContains(set, key)` recorded?
+    pub fn set_not_contains_holds(&self, set: &str, key: &str) -> bool {
+        self.frames.iter().any(|frame| {
+            frame
+                .memberships
+                .iter()
+                .any(|f| matches!(f, Fact::SetNotContains(s, k) if s == set && k == key))
+        })
+    }
+
+    /// Is an ARMED insert of `key` into any set recorded on this path?
+    /// (The idempotency pass's effect-site query: which set field holds the
+    /// key does not matter — any armed dedup insert of the claim's key
+    /// licenses the effect.)
+    pub fn set_inserted_for_key(&self, key: &str) -> bool {
+        self.frames.iter().any(|frame| {
+            frame
+                .memberships
+                .iter()
+                .any(|f| matches!(f, Fact::SetInserted(_, k) if k == key))
+        })
+    }
+
+    /// Apply the membership effect of `set.insert(arg)`: every
+    /// not-contains fact about `set` dies (the inserted value may equal
+    /// any tracked key), and facts under the set path (its length term)
+    /// die with it. When the inserted argument IS a tracked key path with
+    /// a live not-contains fact, the insert is ARMED: `SetInserted(set,
+    /// key)` is assumed. Returns whether the insert armed.
+    pub fn apply_set_insert(&mut self, set: &str, key_arg: Option<&str>) -> bool {
+        let armed = key_arg.is_some_and(|k| self.set_not_contains_holds(set, k));
+        for frame in &mut self.frames {
+            frame.intervals.retain(|p, _| !path_under(p, set));
+            frame
+                .relations
+                .retain(|(a, _, b)| !path_under(a, set) && !path_under(b, set));
+            frame.ne_consts.retain(|(p, _)| !path_under(p, set));
+            frame
+                .memberships
+                .retain(|f| !matches!(f, Fact::SetNotContains(s, _) if s == set));
+        }
+        self.kill_log.push(KillEvent::Path(set.to_string()));
+        if armed {
+            let key = key_arg.expect("armed implies key_arg").to_string();
+            self.assume(Fact::SetInserted(set.to_string(), key));
+        }
+        armed
     }
 
     /// Current position in the kill log. Take a mark before checking an
@@ -1767,6 +1863,74 @@ fn construction_facts(
 mod tests {
     use super::*;
 
+    // ── Membership facts (idempotency pass, phase 5.5) ───────────────────
+
+    #[test]
+    fn set_insert_arms_only_under_not_contains() {
+        let mut f = FactEnv::new();
+        // Unarmed: no not-contains fact is live.
+        assert!(!f.apply_set_insert("self.seen", Some("k")));
+        assert!(!f.set_inserted_for_key("k"));
+        // Armed: the check's fact licenses the insert.
+        f.assume(Fact::SetNotContains("self.seen".into(), "k".into()));
+        assert!(f.set_not_contains_holds("self.seen", "k"));
+        assert!(f.apply_set_insert("self.seen", Some("k")));
+        assert!(f.set_inserted_for_key("k"));
+        // The insert consumed the not-contains fact (contains is now true).
+        assert!(!f.set_not_contains_holds("self.seen", "k"));
+    }
+
+    #[test]
+    fn any_insert_kills_not_contains_on_the_set() {
+        let mut f = FactEnv::new();
+        f.assume(Fact::SetNotContains("self.seen".into(), "k".into()));
+        // Inserting a DIFFERENT value may still insert k's value.
+        assert!(!f.apply_set_insert("self.seen", None));
+        assert!(!f.set_not_contains_holds("self.seen", "k"));
+    }
+
+    #[test]
+    fn inserted_survives_field_kills_for_local_keys_only() {
+        let mut f = FactEnv::new();
+        f.assume(Fact::SetInserted("self.seen".into(), "k".into()));
+        f.assume(Fact::SetInserted("self.seen".into(), "req.id".into()));
+        // A call that may run user code: monotone armed inserts survive on
+        // the set side, but a dotted KEY path may no longer denote the
+        // inserted value.
+        f.kill_fields();
+        assert!(f.set_inserted_for_key("k"));
+        assert!(!f.set_inserted_for_key("req.id"));
+        // Not-contains facts never survive a call.
+        f.assume(Fact::SetNotContains("self.seen".into(), "k".into()));
+        f.kill_fields();
+        assert!(!f.set_not_contains_holds("self.seen", "k"));
+        // Collections-severity calls kill not-contains too.
+        f.assume(Fact::SetNotContains("self.seen".into(), "k".into()));
+        f.kill_len_terms();
+        assert!(!f.set_not_contains_holds("self.seen", "k"));
+        // Reassigning the key root kills the armed insert.
+        f.kill_path("k");
+        assert!(!f.set_inserted_for_key("k"));
+    }
+
+    #[test]
+    fn havoc_clears_membership_facts() {
+        let mut f = FactEnv::new();
+        f.assume(Fact::SetInserted("self.seen".into(), "k".into()));
+        f.havoc_all();
+        assert!(!f.set_inserted_for_key("k"));
+    }
+
+    #[test]
+    fn membership_facts_pop_with_their_frame() {
+        let mut f = FactEnv::new();
+        f.push_frame();
+        f.assume(Fact::SetInserted("self.seen".into(), "k".into()));
+        assert!(f.set_inserted_for_key("k"));
+        f.pop_frame();
+        assert!(!f.set_inserted_for_key("k"));
+    }
+
     // ── Interval lattice ─────────────────────────────────────────────────
 
     #[test]
@@ -2357,6 +2521,11 @@ mod prop_tests {
                 }
             }
             Fact::NeConst(p, c) => val(p) != *c,
+            // Membership facts come only from the idempotency pass, never
+            // from the int-condition extraction this model checks.
+            Fact::SetNotContains(..) | Fact::SetInserted(..) => {
+                unreachable!("condition extraction never yields membership facts")
+            }
         }
     }
 

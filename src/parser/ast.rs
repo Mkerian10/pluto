@@ -220,6 +220,16 @@ pub enum PropertyAtomKind {
     /// into ordinary `ensures` contracts and discharged by the standard
     /// machinery — the PROVEN fn-level discharge path.
     Ensures { expr: Spanned<Expr> },
+    /// `dedup <expr-param>` — the dedup-guard proof shape
+    /// (docs/design/rfc-properties.md phase 5.5): every externally-visible
+    /// effect in the providing method must be preceded, on every path, by
+    /// an *armed* insert of the instantiated key into a monotone
+    /// (insert-only) Set field of the receiver — an insert itself dominated
+    /// by a check that the key was not already present. The CHECKED
+    /// fn-level discharge path: the compiler proves the guard's placement
+    /// (src/typeck/idempotency.rs); the dedup set's contents are runtime
+    /// data.
+    Dedup { key: Spanned<String> },
 }
 
 /// Provenance of a proof obligation that was injected by a property
