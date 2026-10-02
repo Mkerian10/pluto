@@ -1,0 +1,56 @@
+import std.blob
+
+test "create starts at epoch 0 with the initial payload" {
+    let b = blob.create("genesis")
+    expect(b.read()).to_equal("genesis")
+    expect(b.epoch_now()).to_equal(0)
+}
+
+test "grant advances the epoch by exactly one" {
+    let mut b = blob.create("x")
+    let g1 = b.grant_write()
+    expect(g1.token).to_equal(1)
+    expect(b.epoch_now()).to_equal(1)
+    let g2 = b.grant_write()
+    expect(g2.token).to_equal(2)
+    expect(b.epoch_now()).to_equal(2)
+}
+
+test "a current grant's write is applied" {
+    let mut b = blob.create("empty")
+    let g = b.grant_write()
+    let mut applied = true
+    b.apply(g, "hello") catch err: blob.StaleGrant {
+        applied = false
+    }
+    expect(applied).to_equal(true)
+    expect(b.read()).to_equal("hello")
+}
+
+test "the fence rejects a stale grant with a typed error" {
+    let mut b = blob.create("genesis")
+    let g1 = b.grant_write()
+    let g2 = b.grant_write()
+    let mut rejected = false
+    b.apply(g1, "stale write") catch err: blob.StaleGrant {
+        rejected = true
+        expect(err.token).to_equal(1)
+        expect(err.epoch).to_equal(2)
+    }
+    expect(rejected).to_equal(true)
+    // The rejected write landed nothing.
+    expect(b.read()).to_equal("genesis")
+}
+
+test "a newer grant writes after a stale one was fenced" {
+    let mut b = blob.create("genesis")
+    let g1 = b.grant_write()
+    let g2 = b.grant_write()
+    b.apply(g1, "A: sneaky overwrite") catch err: blob.StaleGrant {
+    }
+    b.apply(g2, "B: the good copy") catch err: blob.StaleGrant {
+    }
+    expect(b.read()).to_equal("B: the good copy")
+    // apply never moves the fence: the epoch is still the last mint's.
+    expect(b.epoch_now()).to_equal(2)
+}

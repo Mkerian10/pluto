@@ -1,0 +1,150 @@
+// std.blob — a lockless single-writer blob store with fenced atomic
+// writes. The acceptance test of docs/design/rfc-verification.md ("Blob is
+// a stdlib module"): the difficult distributed machinery is a library whose
+// correctness theorems the compiler checks, not a language feature.
+//
+// The protocol: a BlobAuthority entity owns the data and a fencing epoch.
+// A writer asks for a WriteGrant; minting a grant advances the epoch, so
+// every new grant silently invalidates all older ones. A write presents
+// its grant, and the authority compares the grant's token against the
+// current epoch AT THE POINT OF EFFECT — a stale token is rejected with a
+// typed StaleGrant before any byte lands. No locks, no client-side
+// coordination: at most one writer's grant is current, so writes are
+// single-writer by fencing.
+//
+// Each mechanism owns exactly one guarantee:
+//
+//   ATOMICITY  — the `object` construct: the authority's methods serialize,
+//                so apply() never interleaves with grant_write() or another
+//                apply(). No torn writes, by construct.
+//   SAFETY     — the fence inside apply(), judged by the authority at the
+//                point of effect, made a compile-time dominance proof by
+//                `verify.fenced`: no write to the blob escapes it.
+//   LIVENESS   — the grant: holding the newest one means your writes get
+//                through. Progress, never safety.
+//   DISCIPLINE — the typed StaleGrant plus mandatory handling at every
+//                placement boundary: losing the race to a newer writer is
+//                an inspectable outcome, not a silent no-op.
+//
+// The authority is an entity: share it with tasks, own it in a served
+// value, and call it through a handle with `at authority { ... }` — the
+// protocol is identical colocated and distributed.
+
+// Grants and payloads cross placement boundaries as wire-shaped values.
+import std.wire
+// The safety theorem is carried by std.verify's named proof bundles; the
+// property names become this type's exported facts.
+import std.verify
+
+// A write was refused by the fence: the presented grant's token no longer
+// matches the authority's epoch. A definite failure — the authority itself
+// rejected the write, so the caller KNOWS no byte landed and can react
+// freely (re-request a grant, surrender, escalate). The payload says who
+// out-granted you: your token vs the epoch that superseded it.
+pub error StaleGrant {
+    token: int
+    epoch: int
+}
+
+// The write capability, as evidence: a plain value recording "at mint
+// time, my token was current". Deliberately inert — no methods, no state
+// machine, no validity flag: whether a grant is still current is a remote
+// belief the world can falsify between any two instructions, so only the
+// authority's fence may judge it. Copyable, comparable, wire-shaped.
+pub class WriteGrant {
+    token: int
+}
+
+// The authority — one referent, everyone shares it, every interaction is a
+// serialized message. Its epoch is the fence: grants are minted FROM it
+// and judged AGAINST it.
+//
+// The safety theorem is two named properties from std.verify, discharged
+// at compile time on this body and exported by name:
+//
+//   verify.monotonic(self.epoch) — the epoch never decreases, proven at
+//       every mut-self boundary and foreign write site. A minted token can
+//       never become current again, which is what makes fencing sound.
+//   verify.fenced(self.data, self.epoch, WriteGrant) — no write to `data`
+//       escapes the fence: every write site must be dominated by a check
+//       proving some in-scope WriteGrant's token equals the current epoch,
+//       and code outside the authority may not write `data` at all.
+pub object BlobAuthority satisfies verify.monotonic(self.epoch), verify.fenced(self.data, self.epoch, WriteGrant) {
+    data: bytes
+    epoch: int
+    applied: int   // token of the last write the fence admitted
+
+    // Protocol-specific single-state facts, statically discharged at every
+    // construction and write site. The second is the interesting one: "no
+    // admitted write ever carried a token newer than the newest grant" —
+    // provable only because the fence is an exact match (token == epoch on
+    // the fall-through path), and preserved by grant_write because
+    // applied <= epoch < epoch + 1.
+    invariant self.epoch >= 0
+    invariant self.applied <= self.epoch
+
+    // Mint the write capability: advance the epoch and hand back a token
+    // equal to it. The increment IS the invalidation — every earlier
+    // grant's token is now below the epoch, so the fence will refuse it.
+    // No revocation message, no waiting on the old holder: the old write
+    // *cannot* land, so nobody needs to learn whether it was attempted.
+    //
+    // The ensures pins the exact relation at every normal exit: a mint
+    // advances the epoch by precisely one — never zero (a mint that
+    // invalidated nothing), never more (token gaps). Callers assume it at
+    // the call boundary without re-deriving it.
+    fn grant_write(mut self) WriteGrant ensures self.epoch == old(self.epoch) + 1 {
+        self.epoch = self.epoch + 1
+        return WriteGrant { token: self.epoch }
+    }
+
+    // The guarded effect. Fence and write sit in one serialized method
+    // body, so check-then-act is atomic by construct, and the compare
+    // happens at the point of effect — never at the (possibly paused,
+    // possibly partitioned) writer. A stale token raises StaleGrant before
+    // any byte lands. The check is an exact match rather than "not older":
+    // a forged future token bounces too, and the fall-through fact
+    // tok == epoch is what discharges the applied <= epoch invariant.
+    //
+    // The frame ensures pins what apply must NOT do: writing never moves
+    // the fence. Only grant_write mints epochs — an apply that advanced
+    // (or rewound) the epoch would silently invalidate or resurrect
+    // grants.
+    //
+    // (The store keeps raw bytes; the boundary carries string, the closest
+    // wire-transferable carrier today — `bytes` cannot cross a placement
+    // boundary yet.)
+    fn apply(mut self, grant: WriteGrant, d: string)
+        ensures self.epoch == old(self.epoch)
+    {
+        // The token is read into a local so the guard fact tok == epoch is
+        // a named term the prover carries to the writes below.
+        let tok = grant.token
+        if tok != self.epoch {
+            raise StaleGrant { token: tok, epoch: self.epoch }
+        }
+        self.applied = tok
+        self.data = d.to_bytes()
+    }
+
+    // The current contents. Reads are unfenced by design: a reader sees
+    // some atomically-written version (entity serialization rules out
+    // torn reads), and read-freshness is a different protocol.
+    fn read(self) string {
+        return self.data.to_string()
+    }
+
+    // The current fence value — observability only. A caller comparing a
+    // held token against this is forming a belief the world can falsify
+    // before the next write; only apply()'s own compare is load-bearing.
+    fn epoch_now(self) int {
+        return self.epoch
+    }
+}
+
+// Create an authority over an initial payload. The store starts at epoch 0
+// with no admitted writes, so every pre-existing (forged) token is stale
+// by construction — the first real grant is token 1.
+pub fn create(initial: string) BlobAuthority {
+    return BlobAuthority { data: initial.to_bytes(), epoch: 0, applied: 0 }
+}

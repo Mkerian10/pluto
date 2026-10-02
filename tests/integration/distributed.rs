@@ -1781,6 +1781,136 @@ fn main() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "fenced 1 < 2\nB\n");
 }
 
+/// Marshalers for entity-placement surface types are generated even when
+/// std.wire only arrives through a library module's own import. Module
+/// flattening names that copy `m.wire.*`, not `wire.*` — marshal generation
+/// must find it there and emit its wire calls against that prefix, or the
+/// build dies with an internal "missing generated function" error. The
+/// entry program here never names std.wire, yet the evidence value still
+/// crosses `at` in both directions.
+#[test]
+fn entity_placement_marshals_with_library_wire_import() {
+    let (_d, bin) = build_binary(&[
+        (
+            "m/m.pluto",
+            "import std.wire\n\npub class Token {\n    id: int\n}\n\npub object Vault {\n    secret: int\n\n    fn mint(mut self) Token {\n        self.secret = self.secret + 1\n        return Token { id: self.secret }\n    }\n}\n",
+        ),
+        (
+            "main.pluto",
+            "import m\n\nfn main() {\n    let mut v = m.Vault { secret: 41 }\n    let miss = m.Token { id: -1 }\n    let t = at v { mint() } catch miss\n    print(t.id)\n}\n",
+        ),
+    ]);
+    let out = Command::new(&bin).output().unwrap();
+    assert!(out.status.success(), "binary exited with non-zero status");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "42\n");
+}
+
+// ── std.blob: the verified single-writer store, served and consumed ──
+
+// The acceptance test of rfc-verification.md ("Blob is a stdlib module"),
+// distributed: a server OWNS a blob.BlobAuthority inside a served registry;
+// clients fetch the authority as an entity handle and drive the whole
+// protocol — mint, fenced write, stale rejection with the typed payload —
+// through `at`, against the entity's home process. Neither side imports
+// std.wire: the library's own import carries the boundary machinery.
+const BLOB_SHARED: &str = r#"
+import std.blob
+
+pub class BlobRegistry {
+    store: blob.BlobAuthority
+
+    fn authority(self) blob.BlobAuthority {
+        return self.store
+    }
+}
+"#;
+
+const BLOB_CLIENT_BODY: &str = r#"
+app Writer[reg: domain BlobRegistry] {
+    fn main(self) {
+        let local = blob.create("local-fallback")
+        let auth = at self.reg { authority() } catch local
+        let miss = blob.WriteGrant { token: -1 }
+
+        let grant_a = at auth { grant_write() } catch miss
+        at auth { apply(grant_a, "A: first draft") } catch err {
+            print("boundary failure")
+        }
+
+        let grant_b = at auth { grant_write() } catch miss
+        at auth { apply(grant_a, "A: sneaky overwrite") } catch err: blob.StaleGrant {
+            print(f"fenced {err.token} < {err.epoch}")
+        } catch err {
+            print("boundary failure")
+        }
+
+        at auth { apply(grant_b, "B: the good copy") } catch err {
+            print("boundary failure")
+        }
+        let v = at auth { read() } catch "?"
+        let e = at auth { epoch_now() } catch -1
+        print(f"{v} (epoch {e})")
+    }
+}
+"#;
+
+/// Two processes, one authority: the server owns the BlobAuthority, the
+/// client holds only a handle, and the fence still judges every write at
+/// the point of effect — the stale grant is rejected across the wire with
+/// its typed payload intact. The client is reaped on a deadline so a
+/// routing/serialization regression cannot hang the suite.
+///
+/// (Distributed plan only: a DI-synthesized registry zero-fills its data
+/// fields, so the colocated plan's `vault()`-style fetch yields a null
+/// entity — a pre-existing gap shared with the route tests above, which
+/// also only assert the served plan for field-carrying registries.)
+#[test]
+fn blob_authority_serves_fenced_writes_across_processes() {
+    let server_src = format!(
+        "{BLOB_SHARED}\nfn main() {{\n    let store = blob.create(\"genesis\")\n    let r = BlobRegistry {{ store: store }}\n    serve r on 0\n}}"
+    );
+    let client_src = format!("{BLOB_SHARED}\n{BLOB_CLIENT_BODY}");
+    let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
+    let (_cd, client_bin) = build_binary(&[("main.pluto", &client_src)]);
+    let expected = "fenced 1 < 2\nB: the good copy (epoch 2)\n";
+
+    // The authority lives in the server process and every call routes home
+    // over a real socket (dynamic port).
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+    assert!(!port.is_empty(), "serve did not report a port");
+
+    let mut client = Command::new(&client_bin)
+        .env("PLUTO_DOMAIN_BLOBREGISTRY", format!("127.0.0.1:{port}"))
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let status = loop {
+        match client.try_wait().unwrap() {
+            Some(status) => break status,
+            None if std::time::Instant::now() >= deadline => {
+                client.kill().ok();
+                server.kill().ok();
+                panic!("blob client timed out — possible routing or entity-lock hang");
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    };
+    let mut stdout = String::new();
+    use std::io::Read as _;
+    client.stdout.take().unwrap().read_to_string(&mut stdout).unwrap();
+    let _ = server.kill();
+    assert!(status.success(), "client exited with non-zero status");
+    assert_eq!(stdout, expected);
+}
+
 // ── Generic objects at the boundary (rfc-objects.md phase 3, slice 1) ──
 
 const GENERIC_HANDLE_SHARED: &str = r#"
