@@ -108,6 +108,20 @@ F0 01 00 00 06           // header
 FF 42 7A                 // raw bytes
 ```
 
+**Blob semantics (normative, applies to every physical encoding):** a `bytes`
+value is ONE opaque blob on the wire. It is never encoded element-wise — a
+1 MB payload is a single length-prefixed value, not 10⁶ encoded elements —
+and intermediaries carry it verbatim (no re-encoding, no interpretation).
+
+**Implemented today (JSON transport):** the current `std.wire` JSON format
+carries a bytes value as a single base64 marker object
+`{"__bytes": "<base64>"}` (so it survives the JSON round-trip distinct from
+a plain string), via `Encoder.encode_bytes` / `Decoder.decode_bytes` and the
+`WireValue.Bytes` variant. At RPC boundaries, a top-level `bytes`
+parameter/return crosses as one wire-escaped binary-safe field, exactly like
+`string`. The binary format above is the planned replacement; the blob
+semantics are identical.
+
 ### Array (0x07)
 **Wire:** Header + element type (1 byte code) + count (8 bytes, I64) + elements (recursively encoded)
 ```
