@@ -48,6 +48,18 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <math.h>
+// Kernel-assisted file→socket relay (issue #373). Linux declares
+// sendfile(2) in <sys/sendfile.h>. Darwin's declaration lives in
+// <sys/socket.h> but is hidden under `#if !defined(_POSIX_C_SOURCE)` —
+// with no _DARWIN_C_SOURCE escape on that one guard — and this runtime
+// compiles with _XOPEN_SOURCE 700, so declare it ourselves (struct
+// sf_hdtr IS visible: its guard honors _DARWIN_C_SOURCE).
+#ifdef __APPLE__
+#include <sys/uio.h>
+int sendfile(int, int, off_t, off_t *, struct sf_hdtr *, int);
+#elif defined(__linux__)
+#include <sys/sendfile.h>
+#endif
 #ifndef PLUTO_TEST_MODE
 #include <pthread.h>
 #include <stdatomic.h>
