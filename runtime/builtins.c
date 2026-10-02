@@ -2272,6 +2272,124 @@ long __pluto_fs_write(long fd, void *data_str) {
     return err != 0 ? -err : (long)total;
 }
 
+// ── Bytes-typed file I/O (issue #368) ─────────────────────────────────────────
+// Identical syscall paths and error protocol to the string variants; only the
+// handle type at the boundary changes. Reads land in a malloc scratch buffer
+// FIRST and the GC handle is allocated after — the syscall blocks in a GC safe
+// region, so no GC-visible allocation may be in flight across it.
+
+// Build a bytes handle from a scratch buffer. GC allocation — must be called
+// OUTSIDE any safe region.
+static long __pluto_fs_bytes_from_scratch(const char *buf, long n) {
+    long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
+    long cap = n > 16 ? n : 16;
+    unsigned char *data = (unsigned char *)malloc((size_t)cap);
+    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    if (n > 0) memcpy(data, buf, (size_t)n);
+    handle[0] = n;
+    handle[1] = cap;
+    handle[2] = (long)data;
+    return (long)handle;
+}
+
+// EOF/error disambiguation matches __pluto_fs_read: empty bytes with
+// last_errno == 0 is EOF; empty bytes with last_errno != 0 is a failure.
+long __pluto_fs_read_bytes(long fd, long max_bytes) {
+    __pluto_fs_saved_errno = 0;
+    if (max_bytes <= 0) return __pluto_fs_bytes_from_scratch(NULL, 0);
+    if (max_bytes > 104857600) max_bytes = 104857600; // 100MB cap
+    char *buf = (char *)malloc((size_t)max_bytes);
+    if (!buf) {
+        __pluto_fs_saved_errno = (long)ENOMEM;
+        return __pluto_fs_bytes_from_scratch(NULL, 0);
+    }
+    __pluto_gc_enter_safe_region();
+    ssize_t n = read((int)fd, buf, (size_t)max_bytes);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (n < 0) {
+        free(buf);
+        __pluto_fs_saved_errno = err;
+        return __pluto_fs_bytes_from_scratch(NULL, 0);
+    }
+    long result = __pluto_fs_bytes_from_scratch(buf, (long)n);
+    free(buf);
+    return result;
+}
+
+// Positioned read (pread): never touches the descriptor's seek offset.
+long __pluto_fs_read_at(long fd, long offset, long max_bytes) {
+    __pluto_fs_saved_errno = 0;
+    if (max_bytes <= 0) return __pluto_fs_bytes_from_scratch(NULL, 0);
+    if (max_bytes > 104857600) max_bytes = 104857600; // 100MB cap
+    char *buf = (char *)malloc((size_t)max_bytes);
+    if (!buf) {
+        __pluto_fs_saved_errno = (long)ENOMEM;
+        return __pluto_fs_bytes_from_scratch(NULL, 0);
+    }
+    __pluto_gc_enter_safe_region();
+    ssize_t n = pread((int)fd, buf, (size_t)max_bytes, (off_t)offset);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (n < 0) {
+        free(buf);
+        __pluto_fs_saved_errno = err;
+        return __pluto_fs_bytes_from_scratch(NULL, 0);
+    }
+    long result = __pluto_fs_bytes_from_scratch(buf, (long)n);
+    free(buf);
+    return result;
+}
+
+// Loops to completion like __pluto_fs_write. Returns the byte count written
+// (== len) on success, -errno on the first failing write. The data buffer is
+// malloc memory owned by the handle; the handle stays reachable from this
+// frame's stack, which the collector scans conservatively.
+long __pluto_fs_write_bytes(long fd, long bytes_handle) {
+    long *h = (long *)bytes_handle;
+    long len = h[0];
+    const unsigned char *data = (const unsigned char *)h[2];
+    __pluto_gc_enter_safe_region();
+    size_t total = 0;
+    long err = 0;
+    while (total < (size_t)len) {
+        ssize_t n = write((int)fd, data + total, (size_t)len - total);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            err = (long)errno;
+            break;
+        }
+        if (n == 0) { err = (long)EIO; break; }
+        total += (size_t)n;
+    }
+    __pluto_gc_leave_safe_region();
+    return err != 0 ? -err : (long)total;
+}
+
+// Positioned write (pwrite): never touches the descriptor's seek offset.
+// Loops on short writes, advancing the position with the progress.
+long __pluto_fs_write_at(long fd, long offset, long bytes_handle) {
+    long *h = (long *)bytes_handle;
+    long len = h[0];
+    const unsigned char *data = (const unsigned char *)h[2];
+    __pluto_gc_enter_safe_region();
+    size_t total = 0;
+    long err = 0;
+    while (total < (size_t)len) {
+        ssize_t n = pwrite((int)fd, data + total, (size_t)len - total,
+                           (off_t)offset + (off_t)total);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            err = (long)errno;
+            break;
+        }
+        if (n == 0) { err = (long)EIO; break; }
+        total += (size_t)n;
+    }
+    __pluto_gc_leave_safe_region();
+    return err != 0 ? -err : (long)total;
+}
+
 // whence_tag: 0 = Start (SEEK_SET), 1 = Current (SEEK_CUR), 2 = End (SEEK_END).
 long __pluto_fs_seek(long fd, long offset, long whence_tag) {
     int whence = whence_tag == 0 ? SEEK_SET : (whence_tag == 1 ? SEEK_CUR : SEEK_END);
@@ -2593,6 +2711,85 @@ long __pluto_fs_append_all(void *path_str, void *data_str) {
     long len;
     __pluto_string_data(data_str, &data, &len);
     return __pluto_fs_write_whole(path, data, len, O_WRONLY | O_CREAT | O_APPEND);
+}
+
+// ── Bytes-typed one-shots (issue #368) ────────────────────────────────────────
+// Same open/loop/close-surfacing discipline as the string forms; only the
+// handle type at the boundary changes.
+
+// Mirrors __pluto_fs_read_all: errors via last_errno + empty bytes; the GC
+// handle is allocated only after every syscall bracket is closed.
+long __pluto_fs_read_all_bytes(void *path_str) {
+    const char *path = __pluto_string_to_cstr(path_str);
+    __pluto_fs_saved_errno = 0;
+    __pluto_gc_enter_safe_region();
+    int fd = open(path, O_RDONLY);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (fd < 0) {
+        __pluto_fs_saved_errno = err;
+        return __pluto_fs_bytes_from_scratch(NULL, 0);
+    }
+    struct stat st;
+    __pluto_gc_enter_safe_region();
+    int src = fstat(fd, &st);
+    err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (src != 0) {
+        __pluto_gc_enter_safe_region();
+        close(fd);
+        __pluto_gc_leave_safe_region();
+        __pluto_fs_saved_errno = err;
+        return __pluto_fs_bytes_from_scratch(NULL, 0);
+    }
+    size_t size = (size_t)st.st_size;
+    char *buf = (char *)malloc(size > 0 ? size : 1);
+    if (!buf) {
+        __pluto_gc_enter_safe_region();
+        close(fd);
+        __pluto_gc_leave_safe_region();
+        __pluto_fs_saved_errno = (long)ENOMEM;
+        return __pluto_fs_bytes_from_scratch(NULL, 0);
+    }
+    __pluto_gc_enter_safe_region();
+    size_t total_read = 0;
+    err = 0;
+    while (total_read < size) {
+        ssize_t n = read(fd, buf + total_read, size - total_read);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            err = (long)errno;
+            break;
+        }
+        if (n == 0) break; // truncated under us: return what we got
+        total_read += (size_t)n;
+    }
+    int crc = close(fd);
+    long cerr = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (err == 0 && crc < 0) err = cerr;
+    if (err != 0) {
+        free(buf);
+        __pluto_fs_saved_errno = err;
+        return __pluto_fs_bytes_from_scratch(NULL, 0);
+    }
+    long result = __pluto_fs_bytes_from_scratch(buf, (long)total_read);
+    free(buf);
+    return result;
+}
+
+long __pluto_fs_write_all_bytes(void *path_str, long bytes_handle) {
+    const char *path = __pluto_string_to_cstr(path_str);
+    long *h = (long *)bytes_handle;
+    return __pluto_fs_write_whole(path, (const char *)h[2], h[0],
+                                  O_WRONLY | O_CREAT | O_TRUNC);
+}
+
+long __pluto_fs_append_all_bytes(void *path_str, long bytes_handle) {
+    const char *path = __pluto_string_to_cstr(path_str);
+    long *h = (long *)bytes_handle;
+    return __pluto_fs_write_whole(path, (const char *)h[2], h[0],
+                                  O_WRONLY | O_CREAT | O_APPEND);
 }
 
 long __pluto_fs_exists(void *path_str) {
