@@ -477,6 +477,10 @@ fn main() { }
 }
 
 // ── Foreign writes ───────────────────────────────────────────────────────────
+//
+// These two use a CLASS so the guarded-field dominance diagnostic is what
+// fires: on an object, the entity-wide external-write rejection (#427) now
+// triggers first (pinned in objects.rs) before dominance is consulted.
 
 #[test]
 fn foreign_write_rejected() {
@@ -486,7 +490,7 @@ class WriteGrant {
     token: int
 }
 
-object Store {
+class Store {
     data: bytes guarded_by (g: WriteGrant) g.token == self.epoch
     epoch: int
 }
@@ -510,7 +514,7 @@ class WriteGrant {
     token: int
 }
 
-object Store {
+class Store {
     data: bytes guarded_by (g: WriteGrant) g.token == self.epoch
     epoch: int
 
