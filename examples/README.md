@@ -16,6 +16,22 @@ Demonstrates the `std.path` module for path manipulation: `join` (path joining w
 cargo run -- run examples/paths/main.pt --stdlib stdlib
 ```
 
+## file_io
+
+Demonstrates `std.fs`: one-shot helpers (`write_all`, `read_all`, `append_all`, `copy`, `rename`), metadata (`exists`, `is_file`, `file_size`), directory operations (`mkdir`, `list_dir`), error handling with `catch`, and the typestated file handle — `open_read` mints a `File<Read, Open>` that must be closed (forgetting `close()` is a compile error), with `seek` driven by the `Seek` enum.
+
+```bash
+cargo run -- run examples/file_io/main.pt --stdlib stdlib
+```
+
+## durable_config
+
+Durability with `std.fs`: `replace_all` (atomic durable config replace — same-dir temp write, full sync, rename, parent-directory fsync) with its two-sided error contract (`FileError` ⇒ old file intact, `SyncError` ⇒ rename landed without a durability warrant), and the handle-level WAL shape — `open_append`, `write` + `sync_data` per batch, where a failed sync raises `Degraded` carrying the handle as `File<Write, Poisoned>` and `discard()` is the only exit (retrying a failed sync is a compile error).
+
+```bash
+cargo run -- run examples/durable_config/main.pt --stdlib stdlib
+```
+
 ## env_example
 
 Demonstrates the `std.env` module for environment variable access: `get` (retrieve variable or empty string), `get_or` (with default fallback), `set` (set variable), `exists` (check if set), `remove` (delete variable), and `list_names` (enumerate all variables).
