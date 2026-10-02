@@ -1,0 +1,263 @@
+# RFC: The Boundary Doctrine — Typing the Conversation
+
+**Status:** Draft — awaiting owner review
+**Author:** Design discussion
+**Date:** 2026-10-02
+**Related:** [epistemics.md](epistemics.md) (warrants — the lens), [rfc-entity-lifecycle.md](rfc-entity-lifecycle.md) (leases — accepted; the carrier this RFC builds on), [rfc-typestates.md](rfc-typestates.md), [rfc-verification.md](rfc-verification.md), [rfc-properties.md](rfc-properties.md) (the `assume` mechanism this RFC demotes), [rfc-distributed-safety.md](rfc-distributed-safety.md) (failure classification), [distributed-model.md](distributed-model.md) (the deployment-plan open question, which this RFC answers), [rfc-fs-api.md](rfc-fs-api.md) (the first typed boundary, in hindsight)
+
+## The problem
+
+The verification machinery landed, and inside a process it is honest: STRICT
+invariants, two-state ensures, typestate linearity, checked idempotency — all
+of it proof, none of it hope. Then a value crosses a wire and the story
+degrades to `assume`. The consumer stub mirrors the server's contract clauses
+and the client's compiler takes them on faith; the interface hash confirms
+both sides agree on what the contracts *say*, which is agreement on
+vocabulary, not evidence of truth. The assumption surface records all of this
+faithfully — but bookkeeping of trust is not a reduction of it.
+
+Name the failure precisely. A claim can be warranted three ways: **perception**
+(I computed it from objects in my hand — what wire-decode validation does),
+**proof** (I derived it from things already warranted — what typeck does),
+or **testimony** (the only ground is that someone else asserted it). Every
+cross-boundary behavioral claim today is testimony — and testimony is not
+deficient because peers lie. It is a different category because **warrant does
+not travel**: a proof possessed by the server is, to the client,
+indistinguishable from a rumor of one. And the claim underneath — "the
+process answering this socket is the binary that was proven" — is not even
+testimony; it is presumption.
+
+`assume` is a compile-time posture about a runtime relationship. This RFC
+replaces the posture.
+
+## First principles: closure, not trust
+
+What makes the local machinery work is not that local code is trustworthy —
+it is that the compiler has **closure**: it sees every write site, every
+path, every event that can affect the state it reasons about. STRICT is
+justified by totality of vision. Cross the wire and closure is what breaks:
+the events affecting remote state are not enumerable by any local compiler.
+That is not a weakness of our prover; it is Two Generals and Halpern–Moses
+wearing a type system. No mechanism will ever let a client *know* the
+remote's current state.
+
+So split the world by closure instead of by location:
+
+- **My conduct** — what I send, in what order, with what evidence attached,
+  and what I do with every message I might receive. Fully closed-world: my
+  compiler sees all my sends and receives. Provable, statically, today.
+- **The world's state** — what is true at the remote, now. Open-world.
+  Unprovable by theorem, forever.
+
+Every `assume` is an attempt to smuggle a claim of the second kind into
+machinery built for the first. The doctrine is to stop importing them:
+
+> **Prove where you can see. Where you cannot see, type the conversation —
+> never the other side's state.**
+
+Each party gets proofs about its own conduct; the protocol is designed so
+that jointly conformant conduct implies the global property — which is then
+known by no one, because it lives in the only honest place it can: the
+composition.
+
+## The four bins
+
+Every claim that matters at a boundary lands in exactly one:
+
+1. **Conduct** — claims about my own behavior in the conversation.
+   *Warrant: proof.* Linearity, obligation discharge, protocol conformance.
+2. **Values in hand** — claims about data I received.
+   *Warrant: perception.* Decode-time invariant validation: I run the
+   predicate on the bytes myself. Already shipped, already honest.
+3. **Sovereign facts** — claims about a resource the peer *owns*.
+   *Warrant: jurisdiction.* "The kernel wrote my bytes." "The authority's
+   epoch advanced." "The row was committed." The peer's answer does not
+   *report* the fact; it **constitutes** it — a byzantine authority does not
+   need to lie about its blob, it owns the blob. Sovereignty is irreducible
+   by definition and therefore is not epistemic debt. The language's job is
+   to mark it, not to apologize for it.
+4. **Shared protocol structure** — claims of the form "the StaleGrant branch
+   is effect-free," "commit consumes the transaction."
+   *Warrant: composition.* Each side's conformance to its projection of the
+   protocol is proven by whoever compiles that side; the protocol identity
+   (the interface hash) binds the projections together; a deployment
+   artifact can carry both proofs.
+
+Progress at the boundary means exactly one thing: **driving claims out of
+testimony and into these four bins.** The assumption surface is the
+scoreboard, and after this RFC it should list only genuine imports —
+vendored C, foreign systems — where testimony honestly belongs.
+
+## The existence proofs are already in-tree
+
+This doctrine was not invented; it was noticed.
+
+**`File<M, S>` is a typed boundary.** The kernel is a remote authority. We
+never assume the OS's ensures and never check its invariants. We typed the
+*conversation* — open → use → close, failure as a typed edge (`Degraded`),
+obligations linear — and proved our side's conformance at compile time. The
+guarantee ("no leaks, no use-after-close, no retry-after-fsyncgate") is a
+property of composing our proven conduct with the kernel's sovereign
+behavior. Zero testimony consumed. The fs API felt inevitable because this
+shape is right.
+
+**Blob is the other half.** Rewriting `std.blob`'s client in this framing
+changes *nothing*: the client holds a perceived value (the grant), presents
+it, and handles `StaleGrant` — it never consumes the authority's `ensures`.
+The fence is the authority conforming to *its* projection ("the Stale branch
+dominates the effect"), proven by its own compiler via `verify.fenced`. The
+one belief the client acts on — "StaleGrant means no byte landed" — is
+sovereign, not assumed: the authority owns the blob either way.
+
+**The projection checkers already shipped, unlabeled.** Client-side
+conformance to a protocol is "every message the peer can send you must be
+handled" — which is the inferred-error-set machinery with mandatory
+handling. Authority-side conformance is dominance + ensures + entity
+serialization. The interface hash is the protocol identity. Pluto built a
+two-party session-type system by accident, distributed across features
+shipped for other reasons. What follows is the deliberate completion.
+
+## Mechanism 1: demote cross-boundary `ensures`
+
+Behavioral clauses stop crossing boundaries as facts. At a remote call site
+(`at`, `remote`, served handles), the caller's prover does **not** receive
+the callee's `ensures`/`provides` as discharged knowledge. They remain part
+of the interface (they still hash, still version, still document), but their
+epistemic status at a remote site is *sovereign or structural, never
+proven-for-you* — and `pluto analyze` reports exactly which clauses a
+program would have consumed across a boundary, so the cost of the demotion
+is visible, not silent.
+
+Local calls are untouched: within a process the compiler sees the callee,
+and the clause is a theorem. This is a breaking change for any code that
+leaned on remote ensures; the Blob exercise suggests well-shaped protocols
+never needed them, and the ones that did were the problem.
+
+## Mechanism 2: session-typed remote handles (leased conversations)
+
+The centerpiece, and the one genuinely new construct. Today nothing types
+the *order* of calls on a remote handle: begin-before-insert,
+commit-consumes, at-most-one-outstanding. Typestates do this for local
+values; entity handles deliberately carry no state params — because an
+entity's state param would claim knowledge of the authority's truth, which
+was rightly rejected (authorities-vs-evidence).
+
+The resolution is to type a different thing. A session handle's state is not
+the remote's truth — it is **the client's knowledge state**: "as of the last
+message, the conversation stood here." That is honest exactly when every
+transition the *world* can force is an edge in the type the client must
+handle: revocation, timeout, disconnect, supersession. Which is precisely
+the lease discipline rfc-entity-lifecycle.md just ratified — a session
+handle **is** a lease, and degradation edges are its expiry.
+
+Sketch (surface illustrative — decision 2):
+
+```pluto
+// Declared against the served interface; states describe the CONVERSATION.
+pub session Txn for Ledger {
+    states Active, Done, Lost
+
+    fn insert(self, e: Entry)            where S == Active   // raises Refused
+    fn commit(self) Txn<Done>            where S == Active   // consuming
+    fn rollback(self) Txn<Done>          where S == Active   // consuming
+
+    // The world's edges: any Active-state call may yield these instead.
+    // Receiving one degrades the handle; the payload carries Txn<Lost>,
+    // whose only method is discard(). must_release covers Active and Lost.
+    degrades Disconnected { txn: Txn<Lost> }     // transport died: AMBIGUOUS
+    degrades Expired      { txn: Txn<Lost> }     // authority reaped the lease
+}
+```
+
+What the machinery buys, all with existing passes: leaking an open
+transaction is a compile error (`must_release`); using a handle after
+commit is a compile error (linearity); ignoring the possibility of
+disconnection is a compile error (error-set coverage — the projection
+check); and the ambiguous/definite classification of each degradation edge
+rides the rfc-distributed-safety taxonomy, so "commit sent, no ack" is a
+typed ambiguous outcome whose safe retry can lean on a checked idempotency
+key. Blob remains the degenerate case: a single-shot protocol is a session
+with one state, and its code compiles unchanged.
+
+The implementation reuses linearity.rs, the error-set machinery, and the
+lifecycle RFC's lease runtime; the new work is the declaration form, the
+projection of a session onto the generated client stub, and the server-side
+dual (the authority's handler set checked against the same session — its
+projection obligations are dominance-shaped and use the existing engines).
+
+## Mechanism 3: the deployment plan as composition certificate
+
+Bin 4's warrant — "both projections were proven" — currently lives nowhere.
+distributed-model.md left "the deployment-plan artifact" as an open
+question; this is its job. The deployment plan records, per boundary: the
+protocol identity (interface + session hash), which side's conformance was
+proven by which build, and the residual assumption-surface entries for any
+side the compiler never saw (a foreign peer, a non-Pluto client). A
+deployment where every boundary's two projections carry proofs has a
+composition warrant for its global properties; a deployment with a foreign
+side has, instead, an honest statement of what conformance was presumed.
+Scope here is the schema and `pluto analyze` reporting only — plan
+generation and verification tooling is its own later RFC.
+
+## What this RFC refuses
+
+- **No runtime monitors.** Checking a peer's promise after the fact keeps
+  claim-shaped thinking and fires too late; nothing here inserts dynamic
+  contract checks. (Decode validation stays — that is perception of a value,
+  not audit of a promise.)
+- **No multiparty protocols.** Two-party sessions first; choreography can
+  wait until a real system demands it.
+- **No byzantine tolerance beyond fencing.** A non-conformant peer is made
+  *ineffective* (fencing, evidence values) or *detected as protocol-illegal*
+  (a typed edge), never trusted into correctness.
+- **No re-litigation of authorities-vs-evidence.** We do not typestate the
+  authority's truth. We typestate the client's conversation. This is the
+  completion of that rejection, not its reversal.
+
+## Acceptance
+
+Two programs, two ends of the spectrum:
+
+1. **Blob unchanged** — the single-shot protocol compiles as it stands, its
+   assumption-surface entries for remote ensures vanish under mechanism 1
+   with no replacement needed, demonstrating that well-shaped existing code
+   pays nothing.
+2. **A transactional client** — the Postgres library (separate RFC) is the
+   real test: a multi-step session against a sovereign peer that will never
+   run Pluto. begin/insert/commit typed as a session; leaked transactions
+   a compile error; disconnection and expiry as degradation edges with
+   honest ambiguity on commit; constraints perceived at decode. If the
+   session machinery cannot type the Postgres protocol cleanly, mechanism 2
+   is wrong and comes back to this document.
+
+## Owner decisions
+
+1. **Demote remote ensures** (mechanism 1) — recommended yes; breaking, with
+   `pluto analyze` naming every affected site.
+2. **Session declaration surface** — a `session` form attached to interfaces
+   (sketched above) vs session clauses inline on the interface methods. The
+   separate form keeps conversation structure readable in one place and is
+   recommended.
+3. **Sessions are leases** — session handles ride the lifecycle RFC's lease
+   runtime (expiry, reaping) rather than growing a parallel mechanism.
+   Recommended yes.
+4. **Deployment-plan scope** — schema + analyze reporting now, tooling
+   later. Recommended yes.
+5. **Vocabulary** — "conduct / perceived / sovereign / structural" as the
+   diagnostic and documentation terms for the four bins. Naming is doctrine
+   here; alternatives welcome.
+
+## Phasing
+
+1. **The demotion** — mechanism 1, plus assumption-surface accounting of
+   every formerly-assumed remote clause. Small, breaking, honest; ships the
+   doctrine's teeth first.
+2. **Session handles** — the `session` form, client-stub projection,
+   linearity + error-set enforcement, degradation edges on the lease
+   runtime. The large phase; depends on the lifecycle RFC's implementation.
+3. **The certificate** — deployment-plan schema and analyze surface.
+4. **The dogfood** — the Postgres RFC and library, exercising all three
+   against a peer we do not control.
+
+Each phase is independently shippable; phase 1 alone makes the language stop
+saying things it cannot know.
