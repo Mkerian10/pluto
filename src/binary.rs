@@ -33,8 +33,7 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// phase 5): Function.provides, ExternFnDecl.assumes, TypeExpr::Fn.provides,
 /// PropertyParamKind::Expr, PropertyAtomKind::Ensures,
 /// DerivedInfo.assumptions.
-/// v16: the select 'after' timeout arm (SelectArm.after / timeout-as-choice,
-/// docs/design: runtime capabilities).
+/// v16: the select 'after' timeout arm (Stmt::Select.after, SelectAfter).
 /// v17: the dedup-guard proof shape and contract-aware interface hashing
 /// (rfc-properties.md phase 5.5): PropertyAtomKind::Dedup,
 /// DerivedInfo.checked_claims, DerivedInfo.proven_requires_sites.
