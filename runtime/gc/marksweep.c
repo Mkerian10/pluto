@@ -23,6 +23,7 @@ typedef struct { void *start; void *end; void *array_handle; } GCDataInterval;
 // Global GC state
 static GCHeader *gc_head = NULL;
 static size_t gc_bytes_allocated = 0;
+
 static size_t gc_threshold = 256 * 1024;  // 256KB initial
 static void *gc_stack_bottom = NULL;
 
@@ -104,17 +105,36 @@ static atomic_int __pluto_active_tasks = 0;
 
 // Thread registry for stop-the-world GC (dynamic, slots reused).
 // Each spawned thread registers itself so the GC can coordinate safepoints
-// and scan its stack. Mutated only under gc_mutex; the collector holds
-// gc_mutex for the whole collection, so the table is stable while scanning.
+// and scan its stack.
+//
+// Slots are individually heap-allocated and NEVER freed or moved: a parking
+// thread writes its own park record (stack_cur/park_regs, below) through the
+// thread-local gc_my_slot pointer WITHOUT holding gc_mutex, so slot addresses
+// must stay stable. The pointer table and slot (de)activation are mutated
+// only under gc_mutex; the collector holds gc_mutex for the whole collection,
+// so the table is stable while scanning.
 typedef struct {
     pthread_t thread;
     void *stack_lo;
     void *stack_hi;
+    // Park record, written by the owning thread in gc_record_park() just
+    // before it counts itself parked (safepoint stop or safe-region entry):
+    // stack_cur is (approximately) the thread's stack pointer at that moment,
+    // park_regs a setjmp snapshot of its callee-saved registers. The collector
+    // scans [stack_cur, stack_hi) plus park_regs instead of the full stack
+    // reservation — see the comment at the 3c scan for the soundness argument.
+    // NULL stack_cur means "never parked"; the collector then falls back to
+    // scanning the full reservation.
+    void *stack_cur;
+    jmp_buf park_regs;
     int active;
 } GCThreadStack;
-static GCThreadStack *gc_thread_stacks = NULL;
+static GCThreadStack **gc_thread_stacks = NULL;
 static int gc_thread_stack_count = 0;   // high-water slot count
 static int gc_thread_stack_cap = 0;
+// This thread's registry slot (NULL when unregistered). Set/cleared under
+// gc_mutex at (de)registration; read lock-free by the owning thread only.
+static __thread GCThreadStack *gc_my_slot = NULL;
 
 // Pending-task roots: a spawned task handle is only reachable from the new
 // thread's stack, and that stack isn't registered until the trampoline runs.
@@ -146,6 +166,30 @@ static atomic_int gc_safe_count = 0;
 // exactly right: it only ever blocks on gc_mutex and cannot touch the heap.
 static __thread int gc_thread_registered = 0;
 
+// Record this thread's park site in its registry slot: a setjmp snapshot of
+// the callee-saved registers and the current stack pointer. Called just
+// before the thread counts itself parked (safepoint stop or safe-region
+// entry). Ordering: these plain writes happen-before the seq_cst increment of
+// gc_stw_stopped / gc_safe_count that follows at every call site, and the
+// collector only reads the slot after observing that increment in its
+// stop-the-world closing condition — so the collector never sees a torn
+// record for a thread it is entitled to scan.
+//
+// noinline so the anchor reliably sits below every caller frame; the exact
+// depth only needs to be at-or-below the deepest frame that can hold a GC
+// reference (deeper is merely a slight over-scan).
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+static void gc_record_park(void) {
+    GCThreadStack *slot = gc_my_slot;
+    if (!slot) return;
+    setjmp(slot->park_regs);
+    volatile char anchor = 0;
+    (void)anchor;
+    slot->stack_cur = (void *)&anchor;
+}
+
 // Safepoint check - called by threads at regular intervals (loop back-edges,
 // runtime waits). If GC has requested a safepoint, park here until it's done.
 void __pluto_safepoint(void) {
@@ -153,10 +197,11 @@ void __pluto_safepoint(void) {
         return;  // Fast path - no GC pending
     }
 
-    // Flush registers to stack so the conservative scan can see them
-    jmp_buf regs;
-    setjmp(regs);
-    (void)regs;  // prevent optimization
+    // Record the park site: flushes callee-saved registers into our registry
+    // slot and publishes the live stack extent for the collector's scan.
+    // (Caller-saved registers holding GC refs were spilled to our frames —
+    // above the recorded SP — by the compiler around this very call.)
+    gc_record_park();
 
     atomic_fetch_add(&gc_stw_stopped, 1);
     while (atomic_load(&gc_safepoint_requested)) {
@@ -169,8 +214,17 @@ void __pluto_safepoint(void) {
 
 // A safe region brackets code that blocks without touching the GC heap.
 // While inside, the thread counts as stopped for stop-the-world purposes.
+//
+// The park record taken here stays valid for the whole stint, including the
+// park in __pluto_gc_leave_safe_region on the way out: between enter and a
+// successful leave the thread runs only safe-region code, which by contract
+// never touches the GC heap — so it cannot acquire a GC reference it didn't
+// already hold at entry (entry-time references are covered by park_regs plus
+// the stack above stack_cur), and deeper frames (pthread/syscall internals)
+// only ever spill those same entry-time register values.
 void __pluto_gc_enter_safe_region(void) {
     if (!gc_thread_registered) return;
+    gc_record_park();
     atomic_fetch_add(&gc_safe_count, 1);
 }
 
@@ -192,12 +246,27 @@ void __pluto_gc_leave_safe_region(void) {
     }
 }
 
+// Safe-region entry WITHOUT the park-site snapshot. The snapshot (setjmp +
+// SP) costs real time, and gc_heap_lock sits on the allocation fast path, so
+// taking it per-allocation would tax every program. Instead, clear any stale
+// park record: if the collector catches this thread mid-wait it falls back
+// to the full-reservation scan, which is what the pre-high-water-mark
+// collector always did and remains sound (callee-saved registers holding GC
+// refs are spilled into pthread_mutex_lock's own frames, which the full
+// range covers). This only happens when a collection overlaps the short
+// mutex wait, so the fallback's extra cost is rare.
+static void gc_enter_safe_region_nosnapshot(void) {
+    if (!gc_thread_registered) return;
+    if (gc_my_slot) gc_my_slot->stack_cur = NULL;
+    atomic_fetch_add(&gc_safe_count, 1);
+}
+
 // Acquire gc_mutex, counting the (possibly long) wait as a safe region: the
 // collector holds gc_mutex for the entire collection, and a thread blocked
 // here must not stall it. Holding gc_mutex implies no collection is running,
 // so the leave on the way out never parks.
 static void gc_heap_lock(void) {
-    __pluto_gc_enter_safe_region();
+    gc_enter_safe_region_nosnapshot();
     pthread_mutex_lock(&gc_mutex);
     __pluto_gc_leave_safe_region();
 }
@@ -205,15 +274,15 @@ static void gc_heap_lock(void) {
 // Thread registration API for spawned tasks
 void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi) {
     gc_heap_lock();
-    int slot = -1;
+    GCThreadStack *slot = NULL;
     for (int i = 0; i < gc_thread_stack_count; i++) {
-        if (!gc_thread_stacks[i].active) { slot = i; break; }
+        if (!gc_thread_stacks[i]->active) { slot = gc_thread_stacks[i]; break; }
     }
-    if (slot < 0) {
+    if (!slot) {
         if (gc_thread_stack_count == gc_thread_stack_cap) {
             int new_cap = gc_thread_stack_cap ? gc_thread_stack_cap * 2 : 64;
-            GCThreadStack *grown =
-                (GCThreadStack *)realloc(gc_thread_stacks, new_cap * sizeof(GCThreadStack));
+            GCThreadStack **grown =
+                (GCThreadStack **)realloc(gc_thread_stacks, new_cap * sizeof(GCThreadStack *));
             if (!grown) {
                 pthread_mutex_unlock(&gc_mutex);
                 fprintf(stderr, "pluto: out of memory registering thread\n");
@@ -222,12 +291,20 @@ void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi) {
             gc_thread_stacks = grown;
             gc_thread_stack_cap = new_cap;
         }
-        slot = gc_thread_stack_count++;
+        slot = (GCThreadStack *)calloc(1, sizeof(GCThreadStack));
+        if (!slot) {
+            pthread_mutex_unlock(&gc_mutex);
+            fprintf(stderr, "pluto: out of memory registering thread\n");
+            exit(1);
+        }
+        gc_thread_stacks[gc_thread_stack_count++] = slot;
     }
-    gc_thread_stacks[slot].thread = pthread_self();
-    gc_thread_stacks[slot].stack_lo = stack_lo;
-    gc_thread_stacks[slot].stack_hi = stack_hi;
-    gc_thread_stacks[slot].active = 1;
+    slot->thread = pthread_self();
+    slot->stack_lo = stack_lo;
+    slot->stack_hi = stack_hi;
+    slot->stack_cur = NULL;   // no park record yet: scan full range if needed
+    slot->active = 1;
+    gc_my_slot = slot;
     // Flag and slot flip together under gc_mutex: the collector (which also
     // holds gc_mutex to count) can never see one without the other
     gc_thread_registered = 1;
@@ -235,13 +312,10 @@ void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi) {
 }
 
 void __pluto_gc_deregister_thread_stack(void) {
-    pthread_t self = pthread_self();
     gc_heap_lock();
-    for (int i = 0; i < gc_thread_stack_count; i++) {
-        if (gc_thread_stacks[i].active && pthread_equal(gc_thread_stacks[i].thread, self)) {
-            gc_thread_stacks[i].active = 0;
-            break;
-        }
+    if (gc_my_slot) {
+        gc_my_slot->active = 0;
+        gc_my_slot = NULL;
     }
     gc_thread_registered = 0;
     pthread_mutex_unlock(&gc_mutex);
@@ -291,9 +365,9 @@ void __pluto_gc_after_fork(int is_child) {
         // Deactivate every registry slot except the surviving (current) thread.
         pthread_t self = pthread_self();
         for (int i = 0; i < gc_thread_stack_count; i++) {
-            if (gc_thread_stacks[i].active
-                && !pthread_equal(gc_thread_stacks[i].thread, self)) {
-                gc_thread_stacks[i].active = 0;
+            if (gc_thread_stacks[i]->active
+                && !pthread_equal(gc_thread_stacks[i]->thread, self)) {
+                gc_thread_stacks[i]->active = 0;
             }
         }
         // Ghost threads can no longer leave safe regions or ack a resume.
@@ -372,8 +446,8 @@ static int gc_stw_stop_threads(void) {
     pthread_t self = pthread_self();
     int count = 0;
     for (int i = 0; i < gc_thread_stack_count; i++) {
-        if (!gc_thread_stacks[i].active) continue;
-        if (pthread_equal(gc_thread_stacks[i].thread, self)) continue;
+        if (!gc_thread_stacks[i]->active) continue;
+        if (pthread_equal(gc_thread_stacks[i]->thread, self)) continue;
         count++;
     }
     if (count == 0) return 0;
@@ -784,17 +858,11 @@ void __pluto_gc_collect(void) {
         stack_top = (void *)&anchor;
 
 #ifndef PLUTO_TEST_MODE
-        // Find this thread's registered stack entry to get the correct stack_hi.
-        // Without this, a task thread would scan from its stack to gc_stack_bottom
+        // Use this thread's registered stack_hi as the scan bound. Without
+        // this, a task thread would scan from its stack to gc_stack_bottom
         // (the main thread's stack), crossing unmapped memory → SEGFAULT.
-        pthread_t self = pthread_self();
-        void *hi = gc_stack_bottom;  // fallback for main thread
-        for (int i = 0; i < gc_thread_stack_count; i++) {
-            if (pthread_equal(gc_thread_stacks[i].thread, self)) {
-                hi = gc_thread_stacks[i].stack_hi;
-                break;
-            }
-        }
+        void *hi = gc_my_slot ? gc_my_slot->stack_hi
+                              : gc_stack_bottom;  // fallback: unregistered/main
         void *lo = stack_top;
         // On most platforms stacks grow down, so stack_top < stack_hi.
         // Handle either direction just in case.
@@ -821,7 +889,11 @@ void __pluto_gc_collect(void) {
             char *base = gc_fiber_stacks.stacks[fi].base;
             if (!base) continue;
             size_t sz = gc_fiber_stacks.stacks[fi].size;
-            // Scan the entire fiber stack allocation
+            // Deliberately NOT high-water-mark scanned (unlike production
+            // thread stacks in 3c): a suspended fiber's SP lives inside its
+            // ucontext in a platform-specific mcontext layout, and fiber
+            // stacks are small (64 KiB), malloc'd and already committed, so
+            // the full scan is cheap, page-fault-free, and trivially sound.
             void *flo = (void *)(((size_t)base) & ~7UL);
             void *fhi = (void *)(base + sz);
             for (long *p = (long *)flo; (void *)p < fhi; p++) {
@@ -834,16 +906,50 @@ void __pluto_gc_collect(void) {
 #ifndef PLUTO_TEST_MODE
     // 3c. Scan all OTHER registered thread stacks as additional GC roots.
     // The GC-initiating thread was already scanned in section 3 above.
-    // Stopped threads (paused at safepoints) have their full register state
-    // saved on their stacks via setjmp in the safepoint handler.
+    //
+    // High-water-mark scanning: every other thread the collector is entitled
+    // to scan is parked — either stopped at a safepoint or inside a safe
+    // region — and recorded its park site (stack_cur + callee-saved register
+    // snapshot park_regs) in gc_record_park() before counting itself parked,
+    // which is what released gc_stw_stop_threads(). So instead of the full
+    // stack reservation (512 KiB per idle task; the issue #380 collapse and
+    // the #369 RSS blow-up, since the scan itself faults every page in) we
+    // scan only [stack_cur, stack_hi) plus park_regs.
+    //
+    // Soundness: every GC reference the parked thread can use after resuming
+    // is (a) in a frame at or above stack_cur — scanned; (b) in a
+    // callee-saved register at park time — captured in park_regs, and any
+    // spill of it by deeper frames (usleep / pthread / syscall internals) is
+    // only a copy of that captured value; or (c) for a safe-region thread
+    // that woke before leave parked it, a value obtained inside the region —
+    // impossible by the safe-region contract (no GC heap access), so any
+    // such reference existed at entry and is covered by (a)/(b) or is still
+    // reachable from a scanned heap object (e.g. a channel buffer, traced
+    // via GC_TAG_CHANNEL). Frames below stack_cur are dead or hold only
+    // copies of (b). A thread with no park record yet (stack_cur == NULL,
+    // registered but never parked) or an out-of-range record gets the old
+    // conservative full-reservation scan.
     {
         pthread_t gc_self = pthread_self();
         for (int ti = 0; ti < gc_thread_stack_count; ti++) {
-            if (!gc_thread_stacks[ti].active) continue;
-            if (pthread_equal(gc_thread_stacks[ti].thread, gc_self)) continue;
-            void *tlo = gc_thread_stacks[ti].stack_lo;
-            void *thi = gc_thread_stacks[ti].stack_hi;
+            GCThreadStack *t = gc_thread_stacks[ti];
+            if (!t->active) continue;
+            if (pthread_equal(t->thread, gc_self)) continue;
+            void *tlo = t->stack_lo;
+            void *thi = t->stack_hi;
             if (!tlo || !thi) continue;
+            void *cur = t->stack_cur;
+            if (cur && cur >= tlo && cur < thi) {
+                // Scan the register snapshot saved at the park site. jmp_buf
+                // SP/PC entries may be mangled on some libcs; they only add
+                // noise candidates, which the conservative scan tolerates.
+                long *r = (long *)&t->park_regs;
+                size_t rn = sizeof(t->park_regs) / (sizeof(long));
+                for (size_t ri = 0; ri < rn; ri++) {
+                    gc_mark_candidate((void *)r[ri]);
+                }
+                tlo = cur;
+            }
             tlo = (void *)(((size_t)tlo) & ~7UL);
             for (long *p = (long *)tlo; (void *)p < thi; p++) {
                 gc_mark_candidate((void *)*p);
@@ -947,6 +1053,7 @@ void __pluto_gc_collect(void) {
     }
 
     gc_bytes_allocated -= freed_bytes;
+
     size_t surviving = gc_bytes_allocated;
     gc_threshold = surviving * 2;
     if (gc_threshold < 256 * 1024) gc_threshold = 256 * 1024;
