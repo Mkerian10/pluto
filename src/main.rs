@@ -556,6 +556,20 @@ fn main() {
                             println!("  {claim}");
                         }
                     }
+                    // Checked claims (rfc-properties.md phase 5.5): the
+                    // compiler proved the guard's placement; the guard's
+                    // data lives at runtime.
+                    if !derived.checked_claims.is_empty() {
+                        println!(
+                            "checked claims: {} checked claim{}",
+                            derived.checked_claims.len(),
+                            if derived.checked_claims.len() == 1 { "" } else { "s" }
+                        );
+                        for claim in &derived.checked_claims {
+                            println!("  {claim}");
+                        }
+                    }
+                    println!("proven requires sites: {}", derived.proven_requires_sites);
                 }
                 Err(e) => {
                     eprintln!("error: {e}");

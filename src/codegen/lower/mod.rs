@@ -580,66 +580,12 @@ impl<'a> LowerContext<'a> {
     /// `<method>\n<arg1>\n<arg2>...`, responses are the formatted return value.
     /// Supports primitive int/string args and int/string/void returns — methods
     /// with other signatures are skipped (not dispatchable).
-    /// A stable hash of a service's dispatchable interface — its method names
-    /// with parameter and return signatures. Computed identically for the served
-    /// class and a remote consumer's interface class (same method filter, same
-    /// module-prefix-independent type strings), so a version-skewed pairing of
-    /// independently-compiled binaries can be caught at the boundary. The hash is
-    /// folded into the RPC method token (`method#hash`): a mismatch matches no
-    /// dispatch arm, so the server rejects the call instead of running it with
-    /// misparsed arguments.
+    /// A stable hash of a service's dispatchable interface — method
+    /// signatures plus the contract clauses of boundary-crossing types.
+    /// See [`crate::codegen::interface_hash`] for the full surface and the
+    /// evolution rule.
     fn compute_interface_hash(&self, class_name: &str) -> String {
-        fn sig(t: &PlutoType) -> String {
-            match t {
-                PlutoType::Int => "int".to_string(),
-                PlutoType::Float => "float".to_string(),
-                PlutoType::Bool => "bool".to_string(),
-                PlutoType::Byte => "byte".to_string(),
-                PlutoType::Bytes => "bytes".to_string(),
-                PlutoType::String => "string".to_string(),
-                PlutoType::Void => "void".to_string(),
-                PlutoType::Class(n) | PlutoType::Enum(n) => n.rsplit('.').next().unwrap_or(n).to_string(),
-                PlutoType::Array(e) => format!("[{}]", sig(e)),
-                PlutoType::Nullable(i) => format!("{}?", sig(i)),
-                other => format!("{other}"),
-            }
-        }
-        let env = self.env;
-        let supported = |t: &PlutoType| {
-            // Top-level entities cross as handles; entities NESTED in values
-            // are still untransferable (a copy would fork identity).
-            if let PlutoType::Class(n) = t
-                && env.object_types.contains(n)
-            {
-                return true;
-            }
-            crate::typeck::types::wire_supported(t)
-                && !crate::typeck::types::contains_object_type(t, env)
-        };
-        let mut sigs: Vec<String> = Vec::new();
-        if let Some(info) = self.env.classes.get(class_name) {
-            for mname in &info.methods {
-                let mangled = mangle_method(class_name, mname);
-                let Some(fsig) = self.env.functions.get(&mangled) else { continue };
-                let arg_types: Vec<PlutoType> = fsig.params.iter().skip(1).cloned().collect();
-                let ret = fsig.return_type.clone();
-                let ret_ok = supported(&ret) || ret == PlutoType::Void;
-                if arg_types.iter().all(supported) && ret_ok {
-                    let params = arg_types.iter().map(sig).collect::<Vec<_>>().join(",");
-                    sigs.push(format!("{mname}({params}){}", sig(&ret)));
-                }
-            }
-        }
-        sigs.sort();
-        // FNV-1a over the joined signatures — deterministic across builds (unlike
-        // DefaultHasher), so two separately-compiled binaries agree on the hash.
-        let joined = sigs.join(";");
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in joined.bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        format!("{h:016x}")
+        crate::codegen::interface_hash(self.env, class_name)
     }
 
     fn lower_serve(
