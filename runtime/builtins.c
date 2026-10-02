@@ -1001,6 +1001,52 @@ void *__pluto_error_type() {
     return __pluto_current_error_type ? __pluto_current_error_type : __pluto_string_new("", 0);
 }
 
+// ── Marshal cycle guard (#425) ────────────────────────────────────────────────
+// Generated __marshal_<T> functions recurse structurally through the value
+// being encoded. deep_copy/deep_eq are coinductive (DeepCopyVisited in
+// threading.c); marshal must be too, or a cyclic value overflows the native
+// stack before any transport. Mechanism: codegen wraps every __marshal_<T>
+// body in enter/exit calls on this thread-local ancestor stack. A pointer
+// already on the stack means the value contains itself — enter() reports the
+// cycle (and clears the stack: the whole marshal aborts via a raised
+// wire.WireError) instead of letting the recursion run away. Sharing without
+// cycles (DAGs) is fine: a sibling's pointer is popped before the next
+// subtree is entered. Unlike deep_copy's table this is an ANCESTOR stack, so
+// membership is O(depth), not O(nodes).
+//
+// After the raise, outer marshal frames still finish their field loops (the
+// generated callers don't check the error slot mid-body) — enter() therefore
+// also reports "cycle" whenever an error is already in flight, so the
+// aborted traversal stays shallow and terminates.
+static __thread void **marshal_visited = NULL;
+static __thread size_t marshal_visited_count = 0;
+static __thread size_t marshal_visited_cap = 0;
+
+long __pluto_marshal_enter(long ptr) {
+    if (__pluto_current_error) return 1;  // marshal already aborting
+    for (size_t i = 0; i < marshal_visited_count; i++) {
+        if (marshal_visited[i] == (void *)ptr) {
+            marshal_visited_count = 0;  // whole marshal aborts via raise
+            return 1;
+        }
+    }
+    if (marshal_visited_count == marshal_visited_cap) {
+        size_t cap = marshal_visited_cap ? marshal_visited_cap * 2 : 16;
+        void **grown = (void **)realloc(marshal_visited, cap * sizeof(void *));
+        if (!grown) return 1;  // OOM: report as cycle, marshal aborts
+        marshal_visited = grown;
+        marshal_visited_cap = cap;
+    }
+    marshal_visited[marshal_visited_count++] = (void *)ptr;
+    return 0;
+}
+
+void __pluto_marshal_exit(void) {
+    // Pops are skipped on the abort path (the raise clears the whole stack),
+    // so an empty stack here is normal — never underflow.
+    if (marshal_visited_count > 0) marshal_visited_count--;
+}
+
 // ── Unhandled-error exit check ────────────────────────────────────────────────
 // An error that reaches the end of main with no handler must not vanish
 // silently (a select with all channels closed, a leaked error through an

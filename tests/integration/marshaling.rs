@@ -716,3 +716,182 @@ stage Api {
 "#);
     assert_eq!(out, "2\n1\n3\n");
 }
+
+// ── Cyclic values (#425) ────────────────────────────────────────────────────────
+//
+// Generated __marshal_<T> functions recurse structurally; marshal is now
+// coinductive like deep_copy/deep_eq: a cyclic value raises a typed
+// wire.WireError instead of overflowing the native stack.
+
+/// Like run_marshal_test but without asserting success: returns
+/// (stdout, stderr, success) for programs expected to fail at runtime.
+fn run_marshal_test_raw(source: &str) -> (String, String, bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("main.pluto");
+    std::fs::write(&path, source).unwrap();
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let stdlib_src = manifest_dir.join("stdlib");
+    let stdlib_dst = dir.path().join("stdlib");
+    copy_dir_recursive(&stdlib_src, &stdlib_dst);
+
+    let bin_path = dir.path().join("test_bin");
+    pluto::compile_file_with_stdlib(&path, &bin_path, Some(&stdlib_dst))
+        .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+
+    let run_output = Command::new(&bin_path).output().unwrap();
+    (
+        String::from_utf8_lossy(&run_output.stdout).to_string(),
+        String::from_utf8_lossy(&run_output.stderr).to_string(),
+        run_output.status.success(),
+    )
+}
+
+#[test]
+fn marshal_cyclic_value_raises_typed_error() {
+    // a <-> b: the marshaler terminates (prints "after marshal") and the
+    // raised wire.WireError reaches the unhandled-error exit check instead
+    // of the pre-fix stack-overflow segfault.
+    let (stdout, stderr, success) = run_marshal_test_raw(r#"
+import std.wire
+
+class Node {
+    val: int
+    next: Node?
+}
+
+stage Api {
+    pub fn touch(self, n: Node) int {
+        return n.val
+    }
+
+    fn main(self) {
+        let mut a = Node { val: 1, next: none }
+        let mut b = Node { val: 2, next: none }
+        a.next = b
+        b.next = a
+        let enc = wire.wire_value_encoder()
+        __marshal_Node(a, enc)
+        print("after marshal")
+    }
+}
+"#);
+    assert!(stdout.contains("after marshal"), "traversal must terminate; stdout: {stdout}");
+    assert!(stderr.contains("wire.WireError"), "cycle raises the typed wire error; stderr: {stderr}");
+    assert!(!success, "the unhandled WireError fails the process");
+}
+
+#[test]
+fn marshal_self_cycle_raises_typed_error() {
+    let (stdout, stderr, success) = run_marshal_test_raw(r#"
+import std.wire
+
+class Node {
+    val: int
+    next: Node?
+}
+
+stage Api {
+    pub fn touch(self, n: Node) int {
+        return n.val
+    }
+
+    fn main(self) {
+        let mut a = Node { val: 1, next: none }
+        a.next = a
+        let enc = wire.wire_value_encoder()
+        __marshal_Node(a, enc)
+        print("after marshal")
+    }
+}
+"#);
+    assert!(stdout.contains("after marshal"), "traversal must terminate; stdout: {stdout}");
+    assert!(stderr.contains("wire.WireError"), "self-cycle raises the typed wire error; stderr: {stderr}");
+    assert!(!success);
+}
+
+#[test]
+fn marshal_deep_acyclic_nesting_round_trips() {
+    // Coinduction must not break deep ACYCLIC values: a 301-node list still
+    // marshals and unmarshals (the guard tracks ancestors, not a depth cap).
+    let out = run_marshal_test(r#"
+import std.wire
+
+class Node {
+    val: int
+    next: Node?
+}
+
+stage Api {
+    pub fn touch(self, n: Node) int {
+        return n.val
+    }
+
+    fn main(self) {
+        let mut head = Node { val: 0, next: none }
+        let mut i = 1
+        while i <= 300 {
+            head = Node { val: i, next: head }
+            i = i + 1
+        }
+        let enc = wire.wire_value_encoder()
+        __marshal_Node(head, enc)
+        let dec = wire.wire_value_decoder(enc.result())
+        let decoded = __unmarshal_Node(dec) catch err {
+            print("decode failed")
+            return
+        }
+        let mut d = 0
+        let mut cur: Node? = decoded
+        while d < 1000 {
+            if cur == none {
+                print(f"depth={d}")
+                return
+            }
+            d = d + 1
+            cur = cur.next
+        }
+        print("runaway")
+    }
+}
+"#);
+    assert!(out.contains("depth=301"), "deep acyclic list must round-trip; out: {out}");
+}
+
+#[test]
+fn marshal_shared_subtree_is_not_a_cycle() {
+    // DAG sharing (the same instance under two fields) is NOT a cycle: the
+    // ancestor stack pops a sibling before the next subtree is entered.
+    let out = run_marshal_test(r#"
+import std.wire
+
+class Leaf {
+    val: int
+}
+
+class Pair {
+    x: Leaf
+    y: Leaf
+}
+
+stage Api {
+    pub fn touch(self, p: Pair) int {
+        return p.x.val
+    }
+
+    fn main(self) {
+        let shared = Leaf { val: 7 }
+        let p = Pair { x: shared, y: shared }
+        let enc = wire.wire_value_encoder()
+        __marshal_Pair(p, enc)
+        let dec = wire.wire_value_decoder(enc.result())
+        let p2 = __unmarshal_Pair(dec) catch err {
+            print("decode failed")
+            return
+        }
+        print(f"pair={p2.x.val}{p2.y.val}")
+    }
+}
+"#);
+    assert!(out.contains("pair=77"), "shared subtrees marshal fine; out: {out}");
+}

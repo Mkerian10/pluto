@@ -93,6 +93,10 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_set_error_type", &[types::I64], &[])?;
         reg.declare(module, "__pluto_error_type", &[], &[types::I64])?;
 
+        // Marshal cycle guard (#425): ancestor stack bracketing __marshal_<T>
+        reg.declare(module, "__pluto_marshal_enter", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_marshal_exit", &[], &[])?;
+
         // Boundary-failure classification (definite vs ambiguous)
         reg.declare(module, "__pluto_boundary_failure_definite", &[], &[types::I64])?;
         reg.declare(module, "__pluto_boundary_failure_reason", &[], &[types::I64])?;

@@ -3117,3 +3117,178 @@ fn at_boundary_rejects_nested_entity_return() {
         "a value containing an object cannot leave domain 'Escrow'",
     );
 }
+
+// ── Cyclic values at the boundary (#425) ────────────────────────────────────────
+//
+// Generated marshalers recurse structurally; a cyclic value used to overflow
+// the native stack (segfault) before any transport. The marshal cycle guard
+// turns that into a typed wire.WireError raised where the encode happens.
+
+const CYCLE_SERVER_SRC: &str = "\
+import std.wire
+
+class Node {
+    val: int
+    next: Node?
+}
+
+class Svc {
+    pad: int
+    fn depth(self, n: Node) int {
+        let mut d = 0
+        let mut cur: Node? = n
+        while d < 100000 {
+            if cur == none {
+                return d
+            }
+            d = d + 1
+            cur = cur.next
+        }
+        return d
+    }
+    fn make_cycle(self) Node {
+        let mut a = Node { val: 1, next: none }
+        let mut b = Node { val: 2, next: none }
+        a.next = b
+        b.next = a
+        return a
+    }
+}
+
+fn main() {
+    let s = Svc { pad: 0 }
+    serve s on 0
+}";
+
+const CYCLE_IFACE: &str = "\
+pub class Node {
+    val: int
+    next: Node?
+}
+
+pub class Svc {
+    pad: int
+    fn depth(self, n: Node) int {
+        return 0
+    }
+    fn make_cycle(self) Node {
+        return Node { val: 0, next: none }
+    }
+}";
+
+/// A cyclic ARGUMENT aborts client-side with a typed wire.WireError before
+/// any request is sent: the acyclic call round-trips first (proving the
+/// transport works), then the cyclic call's error escapes the NetworkError
+/// catch — it is a marshal error, not a transport one. Pre-fix this
+/// segfaulted in the generated marshaler's unbounded recursion.
+#[test]
+fn cyclic_argument_raises_marshal_error_client_side() {
+    const CLIENT: &str = "\
+import std.wire
+import svc
+
+app Client[s: remote svc.Svc] {
+    fn main(self) {
+        let mut ok = svc.Node { val: 1, next: none }
+        ok.next = svc.Node { val: 2, next: none }
+        let d0 = self.s.depth(ok) catch err: NetworkError {
+            print(\"network error\")
+            return
+        }
+        print(f\"acyclic depth={d0}\")
+
+        let mut a = svc.Node { val: 1, next: none }
+        let mut b = svc.Node { val: 2, next: none }
+        a.next = b
+        b.next = a
+        let d = self.s.depth(a) catch err: NetworkError {
+            print(\"network error\")
+            return
+        }
+        print(f\"cycle-depth={d}\")
+    }
+}";
+    let (_sd, server_bin) = build_binary(&[("main.pluto", CYCLE_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("svc.pluto", CYCLE_IFACE), ("main.pluto", CLIENT)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+    assert!(!port.is_empty(), "serve did not report a port");
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_SVC", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stdout.contains("acyclic depth=2"), "transport should work; stdout: {stdout}");
+    assert!(!stdout.contains("cycle-depth"), "cyclic call must not complete; stdout: {stdout}");
+    assert!(!stdout.contains("network error"), "must be a marshal error, not transport; stdout: {stdout}");
+    assert!(stderr.contains("wire.WireError"),
+        "cycle must surface as the typed wire error; stderr: {stderr}");
+    assert!(!out.status.success(), "the unhandled WireError fails the client");
+}
+
+/// A cyclic RETURN value aborts server-side: the dispatch replies with an
+/// error marker instead of a half-encoded OK payload (the client sees its
+/// generic fallback), and the server survives to answer the next request.
+/// Pre-fix this segfaulted the server process.
+#[test]
+fn cyclic_return_value_fails_safely_server_side() {
+    const CLIENT: &str = "\
+import std.wire
+import svc
+
+app Client[s: remote svc.Svc] {
+    fn main(self) {
+        let n = self.s.make_cycle() catch err: NetworkError {
+            svc.Node { val: 0 - 1, next: none }
+        }
+        print(f\"got val={n.val}\")
+
+        let mut ok = svc.Node { val: 1, next: none }
+        ok.next = svc.Node { val: 2, next: none }
+        let d = self.s.depth(ok) catch err: NetworkError {
+            print(\"network error\")
+            return
+        }
+        print(f\"after depth={d}\")
+    }
+}";
+    let (_sd, server_bin) = build_binary(&[("main.pluto", CYCLE_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("svc.pluto", CYCLE_IFACE), ("main.pluto", CLIENT)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+    assert!(!port.is_empty(), "serve did not report a port");
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_SVC", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stdout.contains("got val=-1"),
+        "server-side marshal failure must reach the client as its fallback; stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("after depth=2"),
+        "server must survive the failed encode and answer again; stdout: {stdout}\nstderr: {stderr}");
+    assert!(out.status.success(), "client handled everything; stderr: {stderr}");
+}

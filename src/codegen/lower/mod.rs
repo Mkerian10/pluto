@@ -256,6 +256,54 @@ impl<'a> LowerContext<'a> {
         }
     }
 
+    /// Prologue for a generated `__marshal_<T>` function (#425): push the
+    /// value being encoded on the runtime's thread-local ancestor stack. If
+    /// it is already there, the value contains itself — raise a typed
+    /// wire.WireError ("cannot marshal a cyclic value") instead of recursing
+    /// until the native stack overflows. The matching __pluto_marshal_exit
+    /// is emitted before the function's implicit return (lower_function);
+    /// the raise path needs no pop because detection clears the whole stack.
+    fn emit_marshal_cycle_guard(&mut self, value_param: &str) -> Result<(), CompileError> {
+        let var = *self.variables.get(value_param).ok_or_else(|| {
+            CompileError::codegen(format!("marshal guard: missing param '{value_param}'"))
+        })?;
+        let val = self.builder.use_var(var);
+        let seen = self.call_runtime("__pluto_marshal_enter", &[val]);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let is_cycle = self.builder.ins().icmp(IntCC::NotEqual, seen, zero);
+        let cycle_bb = self.builder.create_block();
+        let body_bb = self.builder.create_block();
+        self.builder.ins().brif(is_cycle, cycle_bb, &[], body_bb, &[]);
+
+        self.builder.switch_to_block(cycle_bb);
+        self.builder.seal_block(cycle_bb);
+        // Marshalers are only generated when std.wire is linked in, so its
+        // WireError is registered under the importing module's prefix.
+        let err_name = self
+            .env
+            .errors
+            .keys()
+            .find(|k| k.as_str() == "wire.WireError" || k.ends_with(".wire.WireError"))
+            .cloned()
+            .ok_or_else(|| {
+                CompileError::codegen("marshal cycle guard: wire.WireError not registered".to_string())
+            })?;
+        let sp = crate::span::Span { start: 0, end: 0, file_id: 0 };
+        let name_sp = crate::span::Spanned { node: err_name, span: sp };
+        let fields = vec![(
+            crate::span::Spanned { node: "message".to_string(), span: sp },
+            crate::span::Spanned {
+                node: Expr::StringLit("cannot marshal a cyclic value".to_string()),
+                span: sp,
+            },
+        )];
+        self.lower_raise(&name_sp, &fields)?;
+
+        self.builder.switch_to_block(body_bb);
+        self.builder.seal_block(body_bb);
+        Ok(())
+    }
+
     /// Box a value type for T → T? coercion. Allocates 8 bytes and stores the value.
     /// Heap types (string, class, array, etc.) are no-ops since the pointer IS the value.
     fn emit_nullable_wrap(&mut self, val: Value, inner_type: &PlutoType) -> Value {
@@ -860,6 +908,25 @@ impl<'a> LowerContext<'a> {
         } else {
             self.encode_wire_value(ret, result_val)?
         };
+        // Encoding the RESULT can itself raise (marshal cycle guard, #425):
+        // reply with an error marker instead of a half-encoded OK payload.
+        // The type isn't in the method's declared error set, so send the
+        // `__unknown` marker — the client raises its generic fallback.
+        let enc_err = self.call_runtime("__pluto_has_error", &[]);
+        let enc_raised = self.builder.ins().icmp(IntCC::NotEqual, enc_err, zero2);
+        let ok_send_bb = self.builder.create_block();
+        let enc_err_bb = self.builder.create_block();
+        self.builder.ins().brif(enc_raised, enc_err_bb, &[], ok_send_bb, &[]);
+
+        self.builder.switch_to_block(enc_err_bb);
+        self.builder.seal_block(enc_err_bb);
+        let enc_err_resp = self.make_string_literal("ERR\n__unknown")?;
+        self.call_runtime_void("__pluto_clear_error", &[]);
+        self.call_runtime("__pluto_write_framed", &[conn, enc_err_resp]);
+        self.builder.ins().jump(close_bb, &[]);
+
+        self.builder.switch_to_block(ok_send_bb);
+        self.builder.seal_block(ok_send_bb);
         let ok_prefix = self.make_string_literal("OK\n")?;
         let ok_resp = self.call_runtime("__pluto_string_concat", &[ok_prefix, payload]);
         self.call_runtime("__pluto_write_framed", &[conn, ok_resp]);
@@ -2603,6 +2670,10 @@ impl<'a> LowerContext<'a> {
             payload = self.call_runtime("__pluto_string_concat", &[payload, s]);
         }
 
+        // Encoding itself can raise (marshal cycle guard, #425): don't send a
+        // half-encoded request — surface the typed error at the call site.
+        self.emit_abort_transport_on_error(ret_cl, cont_bb);
+
         // Use the unqualified class name as the service identifier so the
         // env key (PLUTO_REMOTE_<SERVICE>) is independent of the importing
         // module's prefix (e.g. `billing.BillingService` -> `BillingService`).
@@ -2636,6 +2707,33 @@ impl<'a> LowerContext<'a> {
             payload = self.call_runtime("__pluto_string_concat", &[payload, s]);
         }
         Ok(payload)
+    }
+
+    /// If wire encoding raised (TLS error set — e.g. the marshal cycle
+    /// guard, #425), skip the transport request and jump to `cont_bb` with a
+    /// default value: the caller's catch/propagate then observes the typed
+    /// error exactly as for any fallible call. No-op when no error is set.
+    fn emit_abort_transport_on_error(
+        &mut self,
+        ret_cl: cranelift_codegen::ir::Type,
+        cont_bb: cranelift_codegen::ir::Block,
+    ) {
+        let has_err = self.call_runtime("__pluto_has_error", &[]);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let raised = self.builder.ins().icmp(IntCC::NotEqual, has_err, zero);
+        let abort_bb = self.builder.create_block();
+        let send_bb = self.builder.create_block();
+        self.builder.ins().brif(raised, abort_bb, &[], send_bb, &[]);
+        self.builder.switch_to_block(abort_bb);
+        self.builder.seal_block(abort_bb);
+        let dflt = if ret_cl == types::F64 {
+            self.builder.ins().f64const(0.0)
+        } else {
+            self.builder.ins().iconst(ret_cl, 0)
+        };
+        self.builder.ins().jump(cont_bb, &[dflt]);
+        self.builder.switch_to_block(send_bb);
+        self.builder.seal_block(send_bb);
     }
 
     /// Raise a NetworkError whose fields are already-lowered values:
@@ -2864,6 +2962,9 @@ impl<'a> LowerContext<'a> {
                     );
                     let id_str = self.call_runtime("__pluto_int_to_string", &[id]);
                     let args_payload = self.emit_wire_payload(&arg_tys, &arg_vals)?;
+                    // Encoding can raise (marshal cycle guard, #425): don't
+                    // send a half-encoded request.
+                    self.emit_abort_transport_on_error(ret_cl, cont_bb);
                     let nl = self.make_string_literal("\n")?;
                     let payload = if arg_tys.is_empty() {
                         id_str
@@ -5337,6 +5438,19 @@ pub fn lower_function(
 
     }
 
+    // Marshal cycle guard (#425): generated __marshal_<T> functions recurse
+    // structurally through the value; a cyclic value would overflow the
+    // native stack before any transport. Bracket the body with the runtime's
+    // thread-local ancestor stack and raise a typed wire.WireError when the
+    // value is already an ancestor of itself.
+    let is_marshaler = class_name.is_none() && func.name.node.starts_with("__marshal_");
+    if is_marshaler {
+        let value_param = func.params.first().map(|p| p.name.node.clone()).ok_or_else(|| {
+            CompileError::codegen(format!("marshal guard: '{}' has no value param", func.name.node))
+        })?;
+        ctx.emit_marshal_cycle_guard(&value_param)?;
+    }
+
     let mut terminated = false;
     for stmt in &func.body.node.stmts {
         if terminated {
@@ -5361,6 +5475,11 @@ pub fn lower_function(
         // Void function with no return
         let ret_type = ctx.env.functions.get(&fn_lookup).map(|s| &s.return_type);
         if ret_type == Some(&PlutoType::Void) {
+            if is_marshaler {
+                // Pop this value off the cycle-guard ancestor stack. The
+                // raise path needs no pop — detection clears the whole stack.
+                ctx.call_runtime_void("__pluto_marshal_exit", &[]);
+            }
             if let Some(bb) = ctx.exit_block {
                 ctx.builder.ins().jump(bb, &[]);
             } else {
