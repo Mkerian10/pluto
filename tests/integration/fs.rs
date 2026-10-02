@@ -1334,6 +1334,408 @@ fn main() {
     );
 }
 
+// ============================================================
+// File↔socket relay (issue #373, half 1): send_to moves file bytes into a
+// socket kernel-side (sendfile(2), falling back to a runtime-C pread→write
+// loop), receive_from is the C-loop counterpart — neither round-trips the
+// GC heap. Integrity tests push ≥ 1 MiB with a non-power-of-two tail (all
+// 256 byte values repeated) through real TCP loopback and verify exact
+// reassembly on the far side.
+// ============================================================
+
+// send_to integrity + partial/looping: a 100000-byte max_bytes loop over a
+// 1 MiB + 37 file completes the transfer; a spawned drain re-assembles and
+// byte-compares; the file's seek cursor is untouched afterwards.
+const SEND_TO_INTEGRITY_SRC: &str = r#"import std.fs
+import std.socket
+
+fn drain_check(fd: int) int {
+    let mut total = 0
+    let mut idx = 0
+    let mut ok = true
+    while true {
+        let chunk = socket.read_bytes(fd, 65536)
+        if chunk.len() == 0 {
+            break
+        }
+        let mut c = 0
+        while c < chunk.len() {
+            if (chunk[c] as int) != idx % 256 {
+                ok = false
+            }
+            idx = idx + 1
+            c = c + 1
+        }
+        total = total + chunk.len()
+    }
+    if ok {
+        return total
+    }
+    return 0 - 1
+}
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/payload.bin"
+    let payload = bytes_new()
+    let mut i = 0
+    while i < 1048613 {
+        payload.push((i % 256) as byte)
+        i = i + 1
+    }
+    fs.write_all_bytes(path, payload)!
+
+    let lfd = socket.create(2, 1, 0)
+    socket.set_reuseaddr(lfd)
+    socket.bind(lfd, "127.0.0.1", 0)
+    socket.listen(lfd, 8)
+    let port = socket.get_port(lfd)
+    let cfd = socket.create(2, 1, 0)
+    socket.connect(cfd, "127.0.0.1", port)
+    let sfd = socket.accept(lfd)
+
+    let t = spawn drain_check(sfd)
+
+    let f = fs.open_read(path)!
+    let mut sent = 0
+    while true {
+        let n = f.send_to(cfd, sent, 100000)!
+        if n == 0 {
+            break
+        }
+        sent = sent + n
+    }
+    socket.close(cfd)
+    print(sent)
+    print(t.get())
+
+    // Cursor untouched by the whole relay: a sequential read starts at 0.
+    let head = f.read_bytes(2)!
+    print(head[0] as int)
+    print(head[1] as int)
+    f.close()!
+    socket.close(sfd)
+    socket.close(lfd)
+    fs.remove_dir_all(tmp)!
+}
+"#;
+
+#[test]
+fn fs_send_to_relays_1mib_exactly() {
+    let out = run_project_with_stdlib(&[("main.pluto", SEND_TO_INTEGRITY_SRC)]);
+    assert_eq!(out, "1048613\n1048613\n0\n1\n");
+}
+
+// The same integrity battery through the forced C fallback loop
+// (PLUTO_FS_RELAY_NO_SENDFILE=1 skips the kernel path): observable
+// semantics must be identical.
+#[test]
+fn fs_send_to_fallback_loop_relays_1mib_exactly() {
+    let out = run_project_with_stdlib_env(
+        &[("main.pluto", SEND_TO_INTEGRITY_SRC)],
+        &[("PLUTO_FS_RELAY_NO_SENDFILE", "1")],
+    );
+    assert_eq!(out, "1048613\n1048613\n0\n1\n");
+}
+
+// Offset semantics, single-threaded (small windows fit loopback buffers):
+// send_to from a nonzero offset sends exactly the right window, EOF before
+// max_bytes returns the short count, and the seek cursor never moves —
+// proven by interleaved sequential reads.
+#[test]
+fn fs_send_to_offset_window_and_cursor() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+import std.socket
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/window.bin"
+    fs.write_all(path, "abcdefghij")!
+
+    let lfd = socket.create(2, 1, 0)
+    socket.set_reuseaddr(lfd)
+    socket.bind(lfd, "127.0.0.1", 0)
+    socket.listen(lfd, 8)
+    let port = socket.get_port(lfd)
+    let cfd = socket.create(2, 1, 0)
+    socket.connect(cfd, "127.0.0.1", port)
+    let sfd = socket.accept(lfd)
+
+    let f = fs.open_read(path)!
+    // Advance the cursor first, so "untouched" is distinguishable from "reset".
+    print(f.read(2)!)
+
+    // Window from a nonzero offset: exactly bytes 3..7.
+    let n = f.send_to(cfd, 3, 4)!
+    print(n)
+    print(socket.read_bytes(sfd, 16).to_string())
+
+    // EOF before max_bytes: the short count comes back, not an error.
+    let short = f.send_to(cfd, 8, 100)!
+    print(short)
+    print(socket.read_bytes(sfd, 16).to_string())
+
+    // The cursor is still where the sequential read left it.
+    print(f.read(2)!)
+
+    f.close()!
+    socket.close(cfd)
+    socket.close(sfd)
+    socket.close(lfd)
+    fs.remove_dir_all(tmp)!
+}
+"#,
+    )]);
+    assert_eq!(out, "ab\n4\ndefg\n2\nij\ncd\n");
+}
+
+// receive_from integrity: a spawned task relays the payload file into the
+// socket with send_to; the main thread receive_from-loops it into a fresh
+// file; the file is re-read and byte-compared. Also pins EOF-before-data
+// returning 0 with no error.
+#[test]
+fn fs_receive_from_relays_1mib_exactly() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+import std.socket
+
+fn feed_file(path: string, total: int, sock_fd: int) int {
+    let f = fs.open_read(path) catch e: fs.NotFound {
+        return 0 - 1
+    } catch e: fs.FileError {
+        return 0 - 2
+    }
+    let mut sent = 0
+    while sent < total {
+        let n = f.send_to(sock_fd, sent, 65536) catch 0
+        if n == 0 {
+            break
+        }
+        sent = sent + n
+    }
+    f.close() catch e: fs.CloseError {
+        socket.close(sock_fd)
+        return 0 - 3
+    }
+    socket.close(sock_fd)
+    return sent
+}
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/payload.bin"
+    let payload = bytes_new()
+    let mut i = 0
+    while i < 1048613 {
+        payload.push((i % 256) as byte)
+        i = i + 1
+    }
+    fs.write_all_bytes(path, payload)!
+
+    let lfd = socket.create(2, 1, 0)
+    socket.set_reuseaddr(lfd)
+    socket.bind(lfd, "127.0.0.1", 0)
+    socket.listen(lfd, 8)
+    let port = socket.get_port(lfd)
+    let cfd = socket.create(2, 1, 0)
+    socket.connect(cfd, "127.0.0.1", port)
+    let sfd = socket.accept(lfd)
+
+    let t = spawn feed_file(path, 1048613, cfd)
+
+    let dst = tmp + "/dst.bin"
+    let w = fs.open_write(dst)!
+    let mut recd = 0
+    while true {
+        let n = w.receive_from(sfd, 70000)!
+        if n == 0 {
+            break
+        }
+        recd = recd + n
+    }
+    w.close()!
+    print(t.get())
+    print(recd)
+
+    let back = fs.read_all_bytes(dst)!
+    let mut ok = back.len() == 1048613
+    let mut j = 0
+    while j < back.len() {
+        if (back[j] as int) != j % 256 {
+            ok = false
+        }
+        j = j + 1
+    }
+    print(ok)
+
+    // EOF before any data: a pair whose writer closes immediately yields 0.
+    let c2 = socket.create(2, 1, 0)
+    socket.connect(c2, "127.0.0.1", port)
+    let s2 = socket.accept(lfd)
+    socket.close(c2)
+    let w2 = fs.open_write(tmp + "/empty.bin")!
+    print(w2.receive_from(s2, 1000)!)
+    w2.close()!
+    socket.close(s2)
+
+    socket.close(sfd)
+    socket.close(lfd)
+    fs.remove_dir_all(tmp)!
+}
+"#,
+    )]);
+    assert_eq!(out, "1048613\n1048613\ntrue\n0\n");
+}
+
+// net.TcpConnection.fd(): the bridge between the typed connection object
+// and the all-int relay primitives — a round-trip through it.
+#[test]
+fn fs_send_to_through_tcp_connection_fd() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+import std.net
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/doc.txt"
+    fs.write_all(path, "hello relay")!
+
+    let server = net.listen("127.0.0.1", 0)
+    let client = net.connect("127.0.0.1", server.port())
+    let conn = server.accept()
+
+    let f = fs.open_read(path)!
+    let n = f.send_to(client.fd(), 0, 1024)!
+    print(n)
+    f.close()!
+    print(conn.read(1024)!)
+
+    client.close()
+    conn.close()
+    server.close()
+    fs.remove_dir_all(tmp)!
+}
+"#,
+    )]);
+    assert_eq!(out, "11\nhello relay\n");
+}
+
+// ── Relay typestate pins: wrong mode, wrong state, and poison-swallowing
+// are compile errors, exactly like the #386 read/write pins. ──
+
+#[test]
+fn fs_reject_send_to_on_write_handle() {
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_write("/tmp/reject_probe.txt")!
+    let n = f.send_to(5, 0, 10)!
+    print(n)
+    f.close()!
+}
+"#,
+        "method 'send_to' does not exist on 'fs.File<fs.Write, fs.Open>'",
+    );
+}
+
+#[test]
+fn fs_reject_receive_from_on_read_handle() {
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_read("/etc/hosts")!
+    let n = f.receive_from(5, 10)!
+    print(n)
+    f.close()!
+}
+"#,
+        "method 'receive_from' does not exist on 'fs.File<fs.Read, fs.Open>'",
+    );
+}
+
+#[test]
+fn fs_reject_send_to_after_close() {
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_read("/etc/hosts")!
+    f.close()!
+    let n = f.send_to(5, 0, 10)!
+    print(n)
+}
+"#,
+        "'f' was consumed by the transition '.close()'",
+    );
+}
+
+#[test]
+fn fs_reject_receive_from_after_close() {
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_write("/tmp/reject_probe.txt")!
+    f.close()!
+    let n = f.receive_from(5, 10)!
+    print(n)
+}
+"#,
+        "'f' was consumed by the transition '.close()'",
+    );
+}
+
+#[test]
+fn fs_reject_wildcard_catch_of_receive_from_degraded() {
+    // A file-side write failure during receive_from degrades the handle
+    // exactly like write: the Poisoned payload is must_release, so a
+    // wildcard catch cannot swallow it.
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_write("/tmp/reject_probe.txt")!
+    let n = f.receive_from(5, 10) catch e {
+        print("swallowed")
+        0
+    }
+    print(n)
+    f.close()!
+}
+"#,
+        "carries fs.File<fs.Write, fs.Poisoned> in field 'file' — a must_release state",
+    );
+}
+
+#[test]
+fn fs_reject_receive_from_on_poisoned_payload() {
+    // No relay off a destroyed warrant: receive_from does not exist on
+    // the state a Degraded failure hands you.
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_write("/tmp/reject_probe.txt")!
+    f.sync() catch e: fs.Degraded {
+        let p = e.file
+        let n = p.receive_from(5, 10)!
+        print(n)
+        p.discard()
+        return
+    }
+    f.close()!
+}
+"#,
+        "method 'receive_from' does not exist on 'fs.File<fs.Write, fs.Poisoned>'",
+    );
+}
+
 #[test]
 fn fs_reject_write_bytes_on_poisoned_payload() {
     // The degradation rule as a type error: the method to retry does not

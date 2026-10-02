@@ -2390,6 +2390,222 @@ long __pluto_fs_write_at(long fd, long offset, long bytes_handle) {
     return err != 0 ? -err : (long)total;
 }
 
+// ── File↔socket relay (issue #373, half 1) ────────────────────────────────────
+//
+// File→socket moves bytes with sendfile(2) where the kernel offers it —
+// Darwin's `sendfile(fd, s, offset, *len, hdtr, flags)` (len is in-out and
+// reports partial progress) and Linux's `sendfile(out_fd, in_fd, *offset,
+// count)` — both in the offset-explicit form, so the descriptor's seek cursor
+// is neither read nor moved. On EINVAL/ENOTSUP/ENOSYS/ENOTSOCK (exotic fds,
+// fs without sendfile support) the call falls back transparently to a
+// pread→write loop over a malloc scratch buffer — ENOTSOCK is in the list
+// because Linux's sendfile accepts any seekable out_fd while Darwin's demands
+// a SOCK_STREAM socket; the fallback makes a non-socket target behave the
+// same on both. Socket→file has no Darwin primitive, so it IS that C loop
+// (read→write-all) on every platform.
+//
+// Neither direction touches the GC heap: the signatures are all-int, the
+// scratch buffer is malloc/free inside the call, and the whole blocking
+// stretch sits in one GC safe region (the buffer and locals live on this
+// frame's stack / in malloc memory, invisible to the collector). errno is
+// captured at the syscall site, EINTR retries in place.
+//
+// Partial-progress contract (mirrors kernel read/write conventions): the
+// count moved so far is returned whenever anything moved — including when a
+// hard SOCKET-side error follows progress (the caller's next call starts at
+// the new offset and reports the error with zero progress). The one
+// exception is a FILE-side write failure in the socket→file direction: that
+// always reports (-errno, __pluto_fs_relay_side() == 1) because the file's
+// prefix state is unknown — the destroyed-warrant case the stdlib surfaces
+// as Degraded. A socket-side failure leaves the file sound (side == 0).
+//
+// Testing hook (PLUTO_FS_SYNC_FAIL_AT style): PLUTO_FS_RELAY_NO_SENDFILE=1
+// skips the kernel path so CI drives the fallback loop through the same
+// integrity suite.
+
+#define PLUTO_FS_RELAY_CHUNK (256L * 1024)
+
+static __thread long __pluto_fs_relay_no_sendfile = -1; // -1 = env not read yet
+
+static int __pluto_fs_relay_sendfile_disabled(void) {
+    if (__pluto_fs_relay_no_sendfile < 0) {
+        const char *v = getenv("PLUTO_FS_RELAY_NO_SENDFILE");
+        __pluto_fs_relay_no_sendfile = (v && v[0] == '1') ? 1 : 0;
+    }
+    return (int)__pluto_fs_relay_no_sendfile;
+}
+
+// Which side failed in the last relay call on this thread: 0 = socket (the
+// file is still sound), 1 = file (the write warrant is destroyed; the stdlib
+// raises Degraded). Meaningful only after a negative return.
+static __thread long __pluto_fs_relay_failed_file_side = 0;
+
+long __pluto_fs_relay_side(void) {
+    return __pluto_fs_relay_failed_file_side;
+}
+
+// pread→write fallback: moves up to max_bytes from file_fd@offset into
+// sock_fd through the caller's scratch buffer. Returns bytes moved (stops at
+// EOF or completion), or -errno only when nothing moved. Touches no GC heap;
+// called inside the caller's safe region.
+static long __pluto_fs_relay_copy_loop(int file_fd, int sock_fd, long offset,
+                                       long max_bytes, char *buf) {
+    long total = 0;
+    while (total < max_bytes) {
+        size_t want = (size_t)(max_bytes - total);
+        if (want > (size_t)PLUTO_FS_RELAY_CHUNK) want = (size_t)PLUTO_FS_RELAY_CHUNK;
+        ssize_t n = pread(file_fd, buf, want, (off_t)(offset + total));
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return total > 0 ? total : -(long)errno;
+        }
+        if (n == 0) break; // EOF before max_bytes
+        ssize_t w = 0;
+        while (w < n) {
+            ssize_t m = write(sock_fd, buf + w, (size_t)(n - w));
+            if (m < 0) {
+                if (errno == EINTR) continue;
+                long moved = total + (long)w;
+                return moved > 0 ? moved : -(long)errno;
+            }
+            if (m == 0) {
+                long moved = total + (long)w;
+                return moved > 0 ? moved : -(long)EIO;
+            }
+            w += m;
+        }
+        total += (long)n;
+    }
+    return total;
+}
+
+// File→socket: up to max_bytes from file_fd starting at offset. Returns
+// bytes sent (< max_bytes on EOF or partial progress), or -errno when
+// nothing was sent.
+long __pluto_fs_send_to_socket(long file_fd, long sock_fd, long offset, long max_bytes) {
+    __pluto_fs_relay_failed_file_side = 0;
+    if (max_bytes <= 0) return 0;
+    if (offset < 0) return -(long)EINVAL;
+    // Allocated up front, outside the safe region (pattern: GC-invisible
+    // malloc memory; only the kernel path leaves it unused).
+    char *buf = (char *)malloc((size_t)PLUTO_FS_RELAY_CHUNK);
+    if (!buf) return -(long)ENOMEM;
+    long total = 0;
+    long err_ret = 0;
+    int fallback = __pluto_fs_relay_sendfile_disabled();
+    __pluto_gc_enter_safe_region();
+#if defined(__APPLE__) || defined(__linux__)
+    while (!fallback && total < max_bytes) {
+#ifdef __APPLE__
+        off_t len = (off_t)(max_bytes - total);
+        int rc = sendfile((int)file_fd, (int)sock_fd, (off_t)(offset + total), &len, NULL, 0);
+        int err = errno;
+        total += (long)len; // in-out: bytes sent this call, even on failure
+        if (rc == 0) {
+            if (len == 0) break; // EOF before max_bytes
+            continue;
+        }
+        if (err == EINTR) continue; // progress already accounted; retry
+        if (err == EAGAIN) break;   // partial transfer; caller loops
+        if (err == EINVAL || err == ENOTSUP || err == ENOSYS || err == ENOTSOCK) {
+            fallback = 1; // not sendfile-able: finish through the C loop
+            break;
+        }
+        err_ret = (long)err;
+        break;
+#else
+        off_t off = (off_t)(offset + total);
+        size_t want = (size_t)(max_bytes - total);
+        if (want > (size_t)0x7ffff000) want = (size_t)0x7ffff000; // Linux per-call cap
+        ssize_t n = sendfile((int)sock_fd, (int)file_fd, &off, want);
+        int err = errno;
+        if (n > 0) {
+            total += (long)n;
+            continue;
+        }
+        if (n == 0) break; // EOF before max_bytes
+        if (err == EINTR) continue;
+        if (err == EAGAIN) break; // partial transfer; caller loops
+        if (err == EINVAL || err == ENOTSUP || err == ENOSYS || err == ENOTSOCK) {
+            fallback = 1; // not sendfile-able: finish through the C loop
+            break;
+        }
+        err_ret = (long)err;
+        break;
+#endif
+    }
+#else
+    fallback = 1;
+#endif
+    if (fallback && err_ret == 0 && total < max_bytes) {
+        long r = __pluto_fs_relay_copy_loop((int)file_fd, (int)sock_fd,
+                                            offset + total, max_bytes - total, buf);
+        if (r < 0) {
+            if (total == 0) err_ret = -r;
+            // else: the kernel-path progress stands; the caller's next call
+            // reports the error with zero progress.
+        } else {
+            total += r;
+        }
+    }
+    __pluto_gc_leave_safe_region();
+    free(buf);
+    if (err_ret != 0 && total == 0) return -err_ret;
+    return total;
+}
+
+// Socket→file: reads from sock_fd, writes all of each chunk to file_fd at
+// its current cursor (sequential write — composes with O_APPEND), up to
+// max_bytes. Returns bytes written to the file; 0 means the socket was at
+// EOF before any data. See the side contract above for failures.
+long __pluto_fs_recv_from_socket(long file_fd, long sock_fd, long max_bytes) {
+    __pluto_fs_relay_failed_file_side = 0;
+    if (max_bytes <= 0) return 0;
+    char *buf = (char *)malloc((size_t)PLUTO_FS_RELAY_CHUNK);
+    if (!buf) return -(long)ENOMEM;
+    long total = 0;
+    long err_ret = 0;
+    int file_side = 0;
+    __pluto_gc_enter_safe_region();
+    while (total < max_bytes) {
+        size_t want = (size_t)(max_bytes - total);
+        if (want > (size_t)PLUTO_FS_RELAY_CHUNK) want = (size_t)PLUTO_FS_RELAY_CHUNK;
+        ssize_t n = read((int)sock_fd, buf, want);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            err_ret = (long)errno; // socket side: the file is still sound
+            break;
+        }
+        if (n == 0) break; // socket EOF
+        ssize_t w = 0;
+        while (w < n) {
+            ssize_t m = write((int)file_fd, buf + w, (size_t)(n - w));
+            if (m < 0) {
+                if (errno == EINTR) continue;
+                err_ret = (long)errno;
+                file_side = 1; // destroyed warrant: always reported
+                break;
+            }
+            if (m == 0) {
+                err_ret = (long)EIO;
+                file_side = 1;
+                break;
+            }
+            w += m;
+        }
+        total += (long)w;
+        if (file_side) break;
+    }
+    __pluto_gc_leave_safe_region();
+    free(buf);
+    if (file_side) {
+        __pluto_fs_relay_failed_file_side = 1;
+        return -err_ret;
+    }
+    if (err_ret != 0 && total == 0) return -err_ret;
+    return total;
+}
+
 // whence_tag: 0 = Start (SEEK_SET), 1 = Current (SEEK_CUR), 2 = End (SEEK_END).
 long __pluto_fs_seek(long fd, long offset, long whence_tag) {
     int whence = whence_tag == 0 ? SEEK_SET : (whence_tag == 1 ? SEEK_CUR : SEEK_END);

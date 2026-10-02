@@ -477,3 +477,18 @@ bytes API, and the same payload crossing the wire layer as a single base64 blob
 ```bash
 cargo run -- run examples/bytes_io/main.pt --stdlib stdlib
 ```
+
+## relay
+
+Kernel-assisted file↔socket relay (`std.fs`, issue #373): `File.send_to`
+moves file bytes into a TCP connection via `sendfile(2)` (offset-explicit —
+the seek cursor never moves, the handle is not consumed) and
+`File.receive_from` relays the socket straight into a file, with a file-side
+write failure degrading the handle (`Degraded` carrying
+`File<Write, Poisoned>`) exactly like `write`. Neither direction round-trips
+bytes through the GC heap. A spawned task serves a 1 MiB binary payload over
+loopback while the main task relays it into a byte-exact copy.
+
+```bash
+cargo run -- run examples/relay/main.pt --stdlib stdlib
+```

@@ -69,6 +69,15 @@ pub object TcpConnection {
         return socket.write_bytes(self.fd, data)
     }
 
+    // Raw descriptor accessor: the all-int relay primitives in std.fs
+    // (File.send_to / File.receive_from, issue #373) take the socket as a
+    // plain fd so fs stays dependency-free — this is how a TcpConnection
+    // hands its descriptor over. The fd's lifetime is still owned by this
+    // connection; close through close(), never through the raw value.
+    fn fd(self) int {
+        return self.fd
+    }
+
     fn close(self) int {
         return socket.close(self.fd)
     }
