@@ -92,6 +92,13 @@ fn run_frontend(program: &mut Program, test_mode: bool) -> Result<FrontendResult
     let (mut env, warnings) = typeck::type_check(program)?;
     reflection::generate_type_info_impls(program, &env)?;
     monomorphize::monomorphize(program, &mut env)?;
+    // Interface-hash ambiguity (issue #419): short-name folding must be
+    // injective within each boundary interface's wire surface, or contract
+    // skew between same-named types would be hash-invisible. Post-mono (the
+    // surface matches what codegen will hash), before marshal phase B so an
+    // ambiguous interface is reported as the design error it is, not as a
+    // missing wire import.
+    codegen::check_interface_name_collisions(program, &env)?;
     marshal::generate_marshalers_phase_b(program, &mut env)?;
     typeck::check_trait_conformance(program, &mut env)?;
     typeck::serializable::validate_serializable_types(program, &env)?;
