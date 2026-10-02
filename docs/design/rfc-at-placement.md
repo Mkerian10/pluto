@@ -42,7 +42,7 @@ Inside the block, bare calls resolve against the **domain's service interface** 
 At startup, the binding `PLUTO_DOMAIN_<SERVICE>` (e.g. `PLUTO_DOMAIN_PAYMENTSERVICE=127.0.0.1:9000`) determines the plan for each domain:
 
 - **bound** → the boundary crosses the socket transport (wire marshaling, interface hash check, framing — the existing machinery)
-- **unbound** → the domain is colocated: the DI-wired local instance is called directly, in process
+- **unbound** → the domain is colocated: the DI-wired local instance is called directly, in process. That instance is **zero-STATE constructed** — injected deps wired from the graph, data fields set to their type's real zero state (empty string/containers, recursively zero-constructed classes and entities), never null-filled. Fields with no zero state (channels, fn values, traits, …) are a compile error on a domain class: make them nullable. The plans may legitimately observe different *values* (the serving process seeds whatever state it likes), but both execute against valid instances.
 
 Same binary. Two plans. Zero code change. (Compile-time and deploy-time plan artifacts are future work; an env binding is the slice-1 stand-in, consistent with `PLUTO_REMOTE_*`.)
 

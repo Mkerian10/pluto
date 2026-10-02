@@ -2004,6 +2004,217 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
         }
     }
 
+    validate_startup_zero_construction(program, env)?;
+
+    Ok(())
+}
+
+/// DI-synthesized construction is ZERO-STATE construction, not zero-BIT
+/// construction: a class wired by the app/stage startup graph (including a
+/// `domain` dependency under the colocated plan) gets real zero-state values
+/// for its non-injected fields — 0 for numbers, "" for strings, empty
+/// containers, `none` for nullables, and recursively zero-constructed
+/// instances for class and entity fields. Previously heap-typed data fields
+/// were left as null pointers, so a colocated `at self.reg { vault() }`
+/// handed back a null entity and calling a method on it segfaulted.
+///
+/// This pass enforces the boundary of that semantics at compile time: a
+/// field whose type has NO zero state (fn values, traits, tasks, channels,
+/// streams, data-carrying-first enums, dep-bearing classes, recursive class
+/// shapes) cannot be invented by the compiler, so the program is rejected
+/// with a typed error instead of a null-pointer crash at runtime. It also
+/// records the transitive closure of zero-constructed classes in
+/// `env.di_zero_closure` so invariant discharge extends the zero-state
+/// obligation to them (discharge.rs::check_di_constructions).
+fn validate_startup_zero_construction(
+    program: &Program,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    use std::collections::HashSet as DSet;
+
+    // No app and no stages → no synthesized startup wiring runs, so nothing
+    // is ever zero-constructed.
+    if program.app.is_none() && program.stages.is_empty() {
+        return Ok(());
+    }
+
+    // Best-effort span for an error about `field` of `class_name`.
+    let field_span = |class_name: &str, field: &str| -> crate::span::Span {
+        program
+            .classes
+            .iter()
+            .find(|c| c.node.name.node == class_name)
+            .and_then(|c| {
+                c.node
+                    .fields
+                    .iter()
+                    .find(|f| f.name.node == field)
+                    .map(|f| f.ty.span)
+                    .or(Some(c.node.name.span))
+            })
+            .or_else(|| program.app.as_ref().map(|a| a.span))
+            .or_else(|| program.stages.first().map(|s| s.span))
+            .unwrap_or_else(crate::span::Span::dummy)
+    };
+
+    fn check_field_type(
+        root: &str,
+        owner: &str,
+        fname: &str,
+        ty: &PlutoType,
+        env: &TypeEnv,
+        stack: &mut Vec<String>,
+        closure: &mut Vec<String>,
+        seen: &mut std::collections::HashSet<String>,
+        field_span: &dyn Fn(&str, &str) -> crate::span::Span,
+    ) -> Result<(), CompileError> {
+        let reject = |what: String, hint: &str| -> Result<(), CompileError> {
+            Err(CompileError::type_err(
+                format!(
+                    "class '{root}' is constructed by dependency injection at startup, \
+                     which zero-constructs its non-injected fields, but {what}; {hint}",
+                ),
+                field_span(owner, fname),
+            ))
+        };
+        match ty {
+            // The all-zero bit pattern IS the zero state.
+            PlutoType::Int
+            | PlutoType::Float
+            | PlutoType::Bool
+            | PlutoType::Byte
+            | PlutoType::Nullable(_) => Ok(()),
+            // Zero state exists and is emitted by the startup synthesis.
+            PlutoType::String
+            | PlutoType::Bytes
+            | PlutoType::Array(_)
+            | PlutoType::Map(_, _)
+            | PlutoType::Set(_) => Ok(()),
+            PlutoType::Enum(ename) => {
+                let Some(info) = env.enums.get(ename) else {
+                    return reject(
+                        format!("field '{fname}' of '{owner}' has unknown enum type '{ename}'"),
+                        "declare the enum or make the field nullable",
+                    );
+                };
+                match info.variants.first() {
+                    Some((vname, vfields)) if vfields.is_empty() => {
+                        let _ = vname;
+                        Ok(())
+                    }
+                    Some((vname, _)) => reject(
+                        format!(
+                            "field '{fname}' of '{owner}' has enum type '{ename}' whose first \
+                             variant '{vname}' carries data, so the enum has no zero state"
+                        ),
+                        "declare a unit variant first or make the field nullable",
+                    ),
+                    None => reject(
+                        format!(
+                            "field '{fname}' of '{owner}' has enum type '{ename}' with no \
+                             variants, so no value of it exists"
+                        ),
+                        "make the field nullable",
+                    ),
+                }
+            }
+            PlutoType::Class(cname) => {
+                if stack.iter().any(|s| s == cname) {
+                    let chain = stack.join(" -> ");
+                    return reject(
+                        format!(
+                            "field '{fname}' of '{owner}' closes a construction cycle \
+                             ({chain} -> {cname}), so no finite zero state exists"
+                        ),
+                        "make the recursive field nullable",
+                    );
+                }
+                let Some(info) = env.classes.get(cname) else {
+                    return reject(
+                        format!("field '{fname}' of '{owner}' has unknown class type '{cname}'"),
+                        "declare the class or make the field nullable",
+                    );
+                };
+                if info.fields.iter().any(|(_, _, inj)| *inj) {
+                    return reject(
+                        format!(
+                            "field '{fname}' of '{owner}' holds class '{cname}', which has \
+                             injected dependencies and cannot be zero-constructed as data"
+                        ),
+                        "inject it as a bracket dependency instead, or make the field nullable",
+                    );
+                }
+                if seen.insert(cname.clone()) {
+                    closure.push(cname.clone());
+                }
+                stack.push(cname.clone());
+                let fields = info.fields.clone();
+                for (nfname, nfty, _) in &fields {
+                    check_field_type(
+                        root, cname, nfname, nfty, env, stack, closure, seen, field_span,
+                    )?;
+                }
+                stack.pop();
+                Ok(())
+            }
+            PlutoType::Trait(tname) => reject(
+                format!(
+                    "field '{fname}' of '{owner}' has trait type '{tname}', and the compiler \
+                     cannot pick an implementation out of thin air"
+                ),
+                "make the field nullable, or give the class a scoped lifecycle and seed it \
+                 in a scope block",
+            ),
+            PlutoType::Fn(..)
+            | PlutoType::Task(_)
+            | PlutoType::Sender(_)
+            | PlutoType::Receiver(_)
+            | PlutoType::Stream(_)
+            | PlutoType::Range
+            | PlutoType::Error
+            | PlutoType::Void => reject(
+                format!("field '{fname}' of '{owner}' has type '{ty}', which has no zero state"),
+                "make the field nullable, or give the class a scoped lifecycle and seed it \
+                 in a scope block",
+            ),
+            PlutoType::GenericInstance(_, gname, _) => reject(
+                format!(
+                    "field '{fname}' of '{owner}' has generic type '{gname}<..>', which has \
+                     no zero state"
+                ),
+                "make the field nullable, or give the class a scoped lifecycle and seed it \
+                 in a scope block",
+            ),
+            PlutoType::TypeParam(p) => reject(
+                format!("field '{fname}' of '{owner}' has unresolved type parameter '{p}'"),
+                "make the field nullable",
+            ),
+        }
+    }
+
+    let roots = env.di_order.clone();
+    let mut closure: Vec<String> = Vec::new();
+    let mut seen: DSet<String> = DSet::new();
+    for root in &roots {
+        let Some(info) = env.classes.get(root) else { continue };
+        // Scoped-effective roots never run through startup zero-construction:
+        // reachable-from-startup ones with data fields are already rejected
+        // as captive dependencies, and the rest are seeded in scope blocks.
+        if info.lifecycle == Lifecycle::Scoped {
+            continue;
+        }
+        let fields = info.fields.clone();
+        let mut stack = vec![root.clone()];
+        for (fname, fty, inj) in &fields {
+            if *inj {
+                continue;
+            }
+            check_field_type(
+                root, root, fname, fty, env, &mut stack, &mut closure, &mut seen, &field_span,
+            )?;
+        }
+    }
+    env.di_zero_closure = closure;
     Ok(())
 }
 

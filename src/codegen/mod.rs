@@ -82,6 +82,167 @@ fn emit_startup_transient(
     Ok(ptr)
 }
 
+/// Emit the zero-STATE value for a non-injected field of a DI-synthesized
+/// instance. Returns `None` when the allocator's all-zero bit pattern
+/// already IS the zero state (numbers, bools, bytes, nullables as `none`).
+/// Heap-typed fields get real empty values — `""`, empty bytes/array/map/
+/// set, an enum's first unit variant — and class/entity fields get a
+/// recursively zero-constructed instance, so a colocated `domain` dependency
+/// hands out live objects instead of null pointers.
+///
+/// Types with no zero state never reach here: typeck rejects them
+/// (`validate_startup_zero_construction`), so hitting one is an ICE.
+fn emit_startup_zero_value(
+    ty: &PlutoType,
+    env: &crate::typeck::env::TypeEnv,
+    builder: &mut cranelift_frontend::FunctionBuilder,
+    module: &mut ObjectModule,
+    runtime: &RuntimeRegistry,
+) -> Result<Option<Value>, CompileError> {
+    match ty {
+        PlutoType::Int
+        | PlutoType::Float
+        | PlutoType::Bool
+        | PlutoType::Byte
+        | PlutoType::Nullable(_) => Ok(None),
+        PlutoType::String => {
+            // Empty string: __pluto_string_new over a 1-byte data symbol.
+            let data_id = module
+                .declare_anonymous_data(false, false)
+                .map_err(|e| CompileError::codegen(format!("declare empty-string data: {e}")))?;
+            let mut desc = DataDescription::new();
+            desc.define(vec![0u8].into_boxed_slice());
+            module
+                .define_data(data_id, &desc)
+                .map_err(|e| CompileError::codegen(format!("define empty-string data: {e}")))?;
+            let gv = module.declare_data_in_func(data_id, builder.func);
+            let ptr = builder.ins().global_value(types::I64, gv);
+            let len = builder.ins().iconst(types::I64, 0);
+            let f = module.declare_func_in_func(runtime.get("__pluto_string_new"), builder.func);
+            let call = builder.ins().call(f, &[ptr, len]);
+            Ok(Some(builder.inst_results(call)[0]))
+        }
+        PlutoType::Bytes => {
+            let f = module.declare_func_in_func(runtime.get("__pluto_bytes_new"), builder.func);
+            let call = builder.ins().call(f, &[]);
+            Ok(Some(builder.inst_results(call)[0]))
+        }
+        PlutoType::Array(_) => {
+            let cap = builder.ins().iconst(types::I64, 0);
+            let f = module.declare_func_in_func(runtime.get("__pluto_array_new"), builder.func);
+            let call = builder.ins().call(f, &[cap]);
+            Ok(Some(builder.inst_results(call)[0]))
+        }
+        PlutoType::Map(key_ty, _) => {
+            let tag = builder.ins().iconst(types::I64, lower::key_type_tag(key_ty));
+            let f = module.declare_func_in_func(runtime.get("__pluto_map_new"), builder.func);
+            let call = builder.ins().call(f, &[tag]);
+            Ok(Some(builder.inst_results(call)[0]))
+        }
+        PlutoType::Set(elem_ty) => {
+            let tag = builder.ins().iconst(types::I64, lower::key_type_tag(elem_ty));
+            let f = module.declare_func_in_func(runtime.get("__pluto_set_new"), builder.func);
+            let call = builder.ins().call(f, &[tag]);
+            Ok(Some(builder.inst_results(call)[0]))
+        }
+        PlutoType::Enum(ename) => {
+            // First variant, which typeck guaranteed is a unit variant:
+            // [tag=0, zeroed payload slots] (the allocator zeroes memory).
+            let info = env.enums.get(ename).ok_or_else(|| {
+                CompileError::codegen(format!("DI zero-construction: unknown enum '{ename}'"))
+            })?;
+            let max_fields = info.variants.iter().map(|(_, f)| f.len()).max().unwrap_or(0);
+            let size = (1 + max_fields) as i64 * POINTER_SIZE as i64;
+            let size_val = builder.ins().iconst(types::I64, size);
+            let f = module.declare_func_in_func(runtime.get("__pluto_alloc"), builder.func);
+            let call = builder.ins().call(f, &[size_val]);
+            Ok(Some(builder.inst_results(call)[0]))
+        }
+        PlutoType::Class(cname) => Ok(Some(emit_startup_zero_instance(
+            cname, env, builder, module, runtime,
+        )?)),
+        PlutoType::Trait(_)
+        | PlutoType::Fn(..)
+        | PlutoType::Task(_)
+        | PlutoType::Sender(_)
+        | PlutoType::Receiver(_)
+        | PlutoType::Stream(_)
+        | PlutoType::Range
+        | PlutoType::Error
+        | PlutoType::Void
+        | PlutoType::TypeParam(_)
+        | PlutoType::GenericInstance(..) => Err(CompileError::codegen(format!(
+            "internal: type '{ty}' has no zero state and should have been rejected at typeck \
+             (validate_startup_zero_construction)"
+        ))),
+    }
+}
+
+/// Zero-construct an instance of `class_name` for DI startup wiring: an
+/// entity-tagged allocation for objects (identity semantics, per-instance
+/// lock slot) or a plain one for classes, with every field set to its zero
+/// state. Typeck guarantees the class has no injected dependencies and no
+/// recursive non-nullable shape.
+fn emit_startup_zero_instance(
+    class_name: &str,
+    env: &crate::typeck::env::TypeEnv,
+    builder: &mut cranelift_frontend::FunctionBuilder,
+    module: &mut ObjectModule,
+    runtime: &RuntimeRegistry,
+) -> Result<Value, CompileError> {
+    let class_info = env.classes.get(class_name).ok_or_else(|| {
+        CompileError::codegen(format!("DI zero-construction: unknown class '{class_name}'"))
+    })?;
+    let fields = class_info.fields.clone();
+    let size = fields.len() as i64 * POINTER_SIZE as i64;
+    let alloc_name = if env.object_types.contains(class_name) {
+        "__pluto_alloc_entity"
+    } else {
+        "__pluto_alloc"
+    };
+    let size_val = builder.ins().iconst(types::I64, size);
+    let alloc = module.declare_func_in_func(runtime.get(alloc_name), builder.func);
+    let call = builder.ins().call(alloc, &[size_val]);
+    let ptr = builder.inst_results(call)[0];
+    for (i, (fname, fty, inj)) in fields.iter().enumerate() {
+        if *inj {
+            return Err(CompileError::codegen(format!(
+                "internal: zero-constructing '{class_name}' with injected field '{fname}' \
+                 (typeck should have rejected this)"
+            )));
+        }
+        if let Some(v) = emit_startup_zero_value(fty, env, builder, module, runtime)? {
+            let offset = (i as i32) * POINTER_SIZE;
+            builder.ins().store(MemFlags::new(), v, ptr, Offset32::new(offset));
+        }
+    }
+    Ok(ptr)
+}
+
+/// Fill the non-injected (data) fields of a freshly allocated DI singleton
+/// with their zero-state values. Fields whose zero state is the all-zero
+/// bit pattern are left to the allocator.
+fn emit_startup_zero_data_fields(
+    class_info: &crate::typeck::env::ClassInfo,
+    instance: Value,
+    env: &crate::typeck::env::TypeEnv,
+    builder: &mut cranelift_frontend::FunctionBuilder,
+    module: &mut ObjectModule,
+    runtime: &RuntimeRegistry,
+) -> Result<(), CompileError> {
+    let fields = class_info.fields.clone();
+    for (i, (_, fty, inj)) in fields.iter().enumerate() {
+        if *inj {
+            continue;
+        }
+        if let Some(v) = emit_startup_zero_value(fty, env, builder, module, runtime)? {
+            let offset = (i as i32) * POINTER_SIZE;
+            builder.ins().store(MemFlags::new(), v, instance, Offset32::new(offset));
+        }
+    }
+    Ok(())
+}
+
 fn declare_global_data<'a>(
     names: impl Iterator<Item = &'a String>,
     prefix: &str,
@@ -961,8 +1122,13 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
                             );
                         }
                     }
-                    // Non-injected fields are zero-initialized by calloc
                 }
+
+                // Non-injected (data) fields: real zero-STATE values, not
+                // null pointers — empty string/containers, recursively
+                // zero-constructed class/entity instances. This is what a
+                // colocated `domain` dependency hands out.
+                emit_startup_zero_data_fields(class_info, ptr, env, &mut builder, &mut module, &runtime)?;
 
                 singletons.insert(class_name.clone(), ptr);
 
@@ -1121,6 +1287,10 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
                         }
                     }
                 }
+
+                // Non-injected (data) fields: real zero-STATE values, as in
+                // the app startup wiring above.
+                emit_startup_zero_data_fields(class_info, ptr, env, &mut builder, &mut module, &runtime)?;
 
                 singletons.insert(class_name.clone(), ptr);
 

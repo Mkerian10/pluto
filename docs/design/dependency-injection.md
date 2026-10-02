@@ -189,6 +189,7 @@ DI is implemented with compile-time wiring:
 - **Topological sort:** The compiler orders singletons by dependency, detects cycles at compile time
 - **Synthetic main:** Codegen generates a `main()` that allocates all singletons (including ambient types), wires dependencies, then calls the app's `main(self)`
 - **Singleton sharing:** Ambient types are singletons shared across all classes that `uses` them
+- **Zero-STATE construction:** A DI-synthesized instance's non-injected (data) fields are born in the zero state of their type — `0`, `0.0`, `false`, `""`, empty bytes/array/map/set, `none` for nullables, an enum's first (unit) variant, and recursively zero-constructed instances for class and entity fields (entities get a real identity allocation, so a colocated `domain` dependency hands out live objects). Zero state means zero *state*, never a null pointer. A field whose type has **no** zero state — fn values, traits, tasks, channels, streams, enums whose first variant carries data, classes with injected deps, recursive non-nullable class shapes — is a compile-time error on any DI-constructed class: make the field nullable or seed the class in a scope block. Invariants must hold in the zero state, for the DI roots and for every class reached through their data fields (`check_di_constructions`).
 
 ```
 class Logger {

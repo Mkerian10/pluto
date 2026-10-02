@@ -2844,5 +2844,12 @@ pub(crate) fn check_di_constructions(
         }
         check_di_construction(class_name, "at startup", env)?;
     }
+    // Classes zero-constructed transitively, as the zero-state VALUE of a
+    // non-injected field of a DI-wired class (validate_di_graph computed the
+    // closure). They are born in the zero state exactly like the DI roots,
+    // so they carry the same obligation.
+    for class_name in &env.di_zero_closure {
+        check_di_construction(class_name, "at startup (as the zero state of a data field of a DI-wired class)", env)?;
+    }
     Ok(())
 }

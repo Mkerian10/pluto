@@ -6384,7 +6384,7 @@ pub fn pluto_to_cranelift(ty: &PlutoType) -> types::Type {
 
 /// Returns the key type tag integer for the runtime hash table.
 /// 0=int, 1=float, 2=bool, 3=string, 4=enum
-fn key_type_tag(ty: &PlutoType) -> i64 {
+pub(crate) fn key_type_tag(ty: &PlutoType) -> i64 {
     match ty {
         PlutoType::Int => 0,
         PlutoType::Float => 1,

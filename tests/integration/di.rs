@@ -600,3 +600,123 @@ fn di_transient_invariant_data_field_already_rejected() {
         "transient class 'Token' has non-injected fields and cannot be auto-created",
     );
 }
+
+// ── Zero-STATE construction of DI data fields ────────────────────────────
+// DI-synthesized instances get real zero-state values for their non-injected
+// fields (empty string/containers, recursively zero-constructed classes and
+// entities), not calloc'd null pointers. Types with no zero state are
+// rejected at compile time instead of segfaulting at first use.
+
+#[test]
+fn di_data_fields_zero_state_not_null() {
+    // string/array/map data fields on a DI singleton are live empty values:
+    // calling methods on them used to dereference null pointers (exit 139).
+    let output = compile_and_run_stdout(
+        "class Registry {\n    label: string\n    items: [int]\n    index: Map<string, int>\n\n    fn report(self) {\n        print(f\"[{self.label}]\")\n        print(self.items.len())\n        print(self.index.len())\n    }\n}\n\napp MyApp[reg: Registry] {\n    fn main(self) {\n        self.reg.report()\n    }\n}",
+    );
+    assert_eq!(output.trim(), "[]\n0\n0");
+}
+
+#[test]
+fn di_entity_field_zero_constructed() {
+    // An entity-typed data field is a real zero-state entity: method calls
+    // work and mutation through it sticks (identity semantics intact).
+    let output = compile_and_run_stdout(
+        "object Vault {\n    secret: int\n\n    fn reveal(self) int {\n        return self.secret\n    }\n\n    fn rotate(mut self) {\n        self.secret = self.secret + 100\n    }\n}\n\nclass Registry {\n    v: Vault\n\n    fn vault(self) Vault {\n        return self.v\n    }\n}\n\napp MyApp[reg: Registry] {\n    fn main(self) {\n        let mut v = self.reg.vault()\n        print(v.reveal())\n        v.rotate()\n        print(self.reg.vault().reveal())\n    }\n}",
+    );
+    assert_eq!(output.trim(), "0\n100");
+}
+
+#[test]
+fn di_nested_class_field_zero_constructed() {
+    // Class fields recurse: the nested instance's own data fields are
+    // zero-state too.
+    let output = compile_and_run_stdout(
+        "class Inner {\n    name: string\n    count: int\n}\n\nclass Outer {\n    inner: Inner\n\n    fn describe(self) {\n        print(f\"[{self.inner.name}]\")\n        print(self.inner.count)\n    }\n}\n\napp MyApp[o: Outer] {\n    fn main(self) {\n        self.o.describe()\n    }\n}",
+    );
+    assert_eq!(output.trim(), "[]\n0");
+}
+
+#[test]
+fn di_unit_first_enum_field_zero_constructed() {
+    // An enum whose first variant is a unit variant has a zero state: that
+    // variant.
+    let output = compile_and_run_stdout(
+        "enum Mode {\n    Idle\n    Running\n}\n\nclass Machine {\n    mode: Mode\n\n    fn state(self) string {\n        match self.mode {\n            Mode.Idle {\n                return \"idle\"\n            }\n            Mode.Running {\n                return \"running\"\n            }\n        }\n    }\n}\n\napp MyApp[m: Machine] {\n    fn main(self) {\n        print(self.m.state())\n    }\n}",
+    );
+    assert_eq!(output.trim(), "idle");
+}
+
+#[test]
+fn di_fn_field_rejected_no_zero_state() {
+    // A fn-typed data field cannot be invented by the compiler: typed error,
+    // not a null-pointer crash on first call.
+    compile_should_fail_with(
+        "class Dispatcher {\n    handler: fn(int) int\n\n    fn run(self) int {\n        return self.handler(1)\n    }\n}\n\napp MyApp[d: Dispatcher] {\n    fn main(self) {\n        print(self.d.run())\n    }\n}",
+        "zero-constructs its non-injected fields",
+    );
+}
+
+#[test]
+fn di_trait_field_rejected_no_zero_state() {
+    compile_should_fail_with(
+        "trait Greeter {\n    fn greet(self) string\n}\n\nclass Host {\n    g: Greeter\n}\n\napp MyApp[h: Host] {\n    fn main(self) {\n    }\n}",
+        "cannot pick an implementation out of thin air",
+    );
+}
+
+#[test]
+fn di_data_first_enum_field_rejected() {
+    compile_should_fail_with(
+        "enum Shape {\n    Circle { radius: float }\n    Dot\n}\n\nclass Canvas {\n    s: Shape\n}\n\napp MyApp[c: Canvas] {\n    fn main(self) {\n    }\n}",
+        "whose first variant 'Circle' carries data",
+    );
+}
+
+#[test]
+fn di_recursive_class_field_rejected() {
+    compile_should_fail_with(
+        "class Node {\n    next: Node\n    value: int\n}\n\nclass Holder {\n    head: Node\n}\n\napp MyApp[h: Holder] {\n    fn main(self) {\n    }\n}",
+        "closes a construction cycle",
+    );
+}
+
+#[test]
+fn di_nullable_recursive_field_fine() {
+    // The escape hatch the cycle error suggests: a nullable recursive field
+    // zero-constructs to none.
+    let output = compile_and_run_stdout(
+        "class Node {\n    next: Node?\n    value: int\n}\n\nclass Holder {\n    head: Node\n\n    fn probe(self) int {\n        if self.head.next == none {\n            return self.head.value\n        }\n        return -1\n    }\n}\n\napp MyApp[h: Holder] {\n    fn main(self) {\n        print(self.h.probe())\n    }\n}",
+    );
+    assert_eq!(output.trim(), "0");
+}
+
+#[test]
+fn di_dep_bearing_class_as_data_field_rejected() {
+    // A data field holding a class with bracket deps: DI cannot zero-construct
+    // it (its wiring is not data), so the program is rejected with guidance.
+    compile_should_fail_with(
+        "class Logger {\n    fn log(self, m: string) {\n        print(m)\n    }\n}\n\nclass Handler[logger: Logger] {\n    fn run(self) {\n    }\n}\n\nclass Registry {\n    h: Handler\n}\n\napp MyApp[r: Registry] {\n    fn main(self) {\n    }\n}",
+        "which has injected dependencies and cannot be zero-constructed as data",
+    );
+}
+
+#[test]
+fn di_nested_zero_class_invariant_discharged() {
+    // The zero-state invariant obligation extends to classes reached as data
+    // fields of DI-wired classes: a nested class whose invariant the zero
+    // state violates is rejected at compile time.
+    compile_should_fail_with(
+        "class Counter {\n    count: int\n    invariant self.count >= 1\n}\n\nclass Registry {\n    c: Counter\n}\n\napp MyApp[r: Registry] {\n    fn main(self) {\n    }\n}",
+        "its invariant 'self.count >= 1' does not hold for the zero-initialized state",
+    );
+}
+
+#[test]
+fn di_nested_zero_class_invariant_satisfied_ok() {
+    // ...and one the zero state satisfies compiles and runs.
+    let output = compile_and_run_stdout(
+        "class Counter {\n    count: int\n    invariant self.count >= 0\n\n    fn get(self) int {\n        return self.count\n    }\n}\n\nclass Registry {\n    c: Counter\n\n    fn peek(self) int {\n        return self.c.get()\n    }\n}\n\napp MyApp[r: Registry] {\n    fn main(self) {\n        print(self.r.peek())\n    }\n}",
+    );
+    assert_eq!(output.trim(), "0");
+}

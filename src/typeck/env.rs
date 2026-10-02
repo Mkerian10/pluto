@@ -204,6 +204,14 @@ pub struct TypeEnv {
     pub app: Option<(String, ClassInfo)>,
     pub stages: Vec<(String, ClassInfo)>,
     pub di_order: Vec<String>,
+    /// Classes zero-constructed at startup as the VALUE of a non-injected
+    /// field of a DI-wired class (transitively), beyond `di_order` itself.
+    /// A DI-synthesized instance's data fields hold real zero-state values
+    /// (empty string, empty containers, recursively zero-constructed
+    /// classes/entities), so every class in this closure carries the same
+    /// zero-state invariant obligation as the DI roots. Deterministic
+    /// (DFS preorder from `di_order`, deduplicated).
+    pub di_zero_closure: Vec<String>,
     /// DI singletons that need rwlock synchronization (accessed concurrently from spawn + main)
     pub synchronized_singletons: HashSet<String>,
     /// Per-function error sets: maps function name to set of error type names it can raise.
@@ -505,6 +513,7 @@ impl TypeEnv {
             app: None,
             stages: Vec::new(),
             di_order: Vec::new(),
+            di_zero_closure: Vec::new(),
             synchronized_singletons: HashSet::new(),
             fn_errors: HashMap::new(),
             closure_call_sites: HashMap::new(),

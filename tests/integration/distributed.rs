@@ -1675,6 +1675,12 @@ class Registry {
 /// entity's home process. `rotate()` mutates the entity AT HOME (the
 /// thread-per-connection serve model makes the mutation stick), so a second
 /// reveal reads the changed state.
+///
+/// Both physical plans from the one client binary. Colocated (no domain
+/// binding), the DI-synthesized Registry zero-constructs its data fields:
+/// `v` is a REAL zero-state entity (secret 0), fetched directly, and
+/// `rotate()` mutates it in place — 0 then 100. This used to hand back a
+/// null entity (the field was a calloc'd null pointer) and segfault.
 #[test]
 fn entity_handle_call_routes_home() {
     let server_src = format!(
@@ -1686,6 +1692,17 @@ fn entity_handle_call_routes_home() {
     let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
     let (_ad, app_bin) = build_binary(&[("main.pluto", &app_src)]);
 
+    // Plan A: colocated — the registry is DI-constructed in-process with a
+    // live zero-state entity in its field.
+    let colocated = Command::new(&app_bin).output().unwrap();
+    assert!(
+        colocated.status.success(),
+        "colocated plan crashed (zero-filled registry field?): {:?}",
+        colocated.status
+    );
+    assert_eq!(String::from_utf8_lossy(&colocated.stdout), "0\n100\n");
+
+    // Plan B: distributed — the call routes to the entity's home process.
     let mut server = Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
@@ -1701,6 +1718,69 @@ fn entity_handle_call_routes_home() {
         .unwrap();
     let _ = server.kill();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n107\n");
+}
+
+// Shared source for the two-plan data-field test: a domain class carrying
+// plain data (string + int + array), no entities.
+const DATA_ROUTE_SHARED: &str = r#"
+import std.wire
+
+class Config {
+    label: string
+    count: int
+    tags: [string]
+
+    fn describe(self) string {
+        return self.label
+    }
+
+    fn total(self) int {
+        return self.count + self.tags.len()
+    }
+}
+"#;
+
+/// A domain dependency's PLAIN data fields in both physical plans. Served,
+/// the fields hold whatever the serving process constructed. Colocated, the
+/// DI-synthesized instance is zero-STATE constructed — empty string, 0,
+/// empty array — so the same calls run against real values instead of
+/// dereferencing the null pointers the old synthesis left behind.
+#[test]
+fn domain_data_fields_in_both_plans() {
+    let server_src = format!(
+        "{DATA_ROUTE_SHARED}\nfn main() {{\n    let c = Config {{ label: \"prod\", count: 5, tags: [\"a\", \"b\"] }}\n    serve c on 0\n}}"
+    );
+    let app_src = format!(
+        "{DATA_ROUTE_SHARED}\napp A[cfg: domain Config] {{\n    fn main(self) {{\n        let l = at self.cfg {{ describe() }} catch \"?\"\n        let t = at self.cfg {{ total() }} catch -1\n        print(f\"[{{l}}]\")\n        print(t)\n    }}\n}}"
+    );
+    let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
+    let (_ad, app_bin) = build_binary(&[("main.pluto", &app_src)]);
+
+    // Plan A: colocated — zero-state data fields ("" / 0 / []).
+    let colocated = Command::new(&app_bin).output().unwrap();
+    assert!(
+        colocated.status.success(),
+        "colocated plan crashed (zero-filled data fields?): {:?}",
+        colocated.status
+    );
+    assert_eq!(String::from_utf8_lossy(&colocated.stdout), "[]\n0\n");
+
+    // Plan B: distributed — the server's constructed state.
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&app_bin)
+        .env("PLUTO_DOMAIN_CONFIG", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "[prod]\n7\n");
 }
 
 // Shared source for the dispatch-reentrancy test: the served entity's
@@ -1939,10 +2019,13 @@ app Writer[reg: domain BlobRegistry] {
 /// its typed payload intact. The client is reaped on a deadline so a
 /// routing/serialization regression cannot hang the suite.
 ///
-/// (Distributed plan only: a DI-synthesized registry zero-fills its data
-/// fields, so the colocated plan's `vault()`-style fetch yields a null
-/// entity — a pre-existing gap shared with the route tests above, which
-/// also only assert the served plan for field-carrying registries.)
+/// Both plans from the one client binary. Colocated, the DI-synthesized
+/// registry zero-constructs a live BlobAuthority (data "", epoch 0 — its
+/// invariants hold at zero state, discharged by the DI closure check), and
+/// the whole fencing protocol runs in-process with the SAME output: the
+/// protocol depends only on epoch arithmetic, not the genesis payload.
+/// (Before the zero-state fix the colocated fetch yielded a null entity and
+/// segfaulted — the gap this suite's route tests share a fix with.)
 #[test]
 fn blob_authority_serves_fenced_writes_across_processes() {
     let server_src = format!(
@@ -1953,6 +2036,17 @@ fn blob_authority_serves_fenced_writes_across_processes() {
     let (_cd, client_bin) = build_binary(&[("main.pluto", &client_src)]);
     let expected = "fenced 1 < 2\nB: the good copy (epoch 2)\n";
 
+    // Plan A: colocated — no domain binding; the authority is the
+    // zero-constructed entity inside the DI-wired registry.
+    let colocated = Command::new(&client_bin).output().unwrap();
+    assert!(
+        colocated.status.success(),
+        "colocated blob client crashed (null authority?): {:?}",
+        colocated.status
+    );
+    assert_eq!(String::from_utf8_lossy(&colocated.stdout), expected);
+
+    // Plan B: distributed.
     // The authority lives in the server process and every call routes home
     // over a real socket (dynamic port).
     let mut server = Command::new(&server_bin)
@@ -2381,17 +2475,24 @@ object Counter {
 
 class Registry {
     c: Counter
-    go: Sender<int>
+    go: Sender<int>?
 
     fn counter(self) Counter {
         return self.c
     }
 
     fn kick(self) {
-        self.go.send(1)!
+        let g = self.go
+        if g != none {
+            g.send(1)!
+        }
     }
 }
 "#;
+// (`go` is nullable: a channel has no zero state, so a non-nullable
+// Sender field would make the client's `domain Registry` dep
+// un-zero-constructible — a compile error under colocated DI
+// construction. Only the serving process provides the channel.)
 
 /// The handle-call dispatch path takes the SAME per-instance lock as local
 /// calls: remote increments through a handle race a spawned local worker
