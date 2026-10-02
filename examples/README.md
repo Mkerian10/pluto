@@ -282,6 +282,14 @@ Demonstrates the `std.base64` module for encoding and decoding Base64: basic enc
 cargo run -- run examples/base64/main.pt --stdlib stdlib
 ```
 
+## hash
+
+Demonstrates the `std.hash` module — data-integrity hashes implemented in pure Pluto: CRC-32C (Castagnoli, the Kafka/iSCSI/ext4 checksum) used for record framing and a crash-recovery scan that finds the valid prefix of a torn log; SHA-256 (FIPS 180-4) for content addressing and artifact verification, with incremental (`new_sha256`/`update`/`finish`) and one-shot (`sha256`, `sha256_hex`) APIs; and FNV-1a 64 for partition assignment. Also shows `to_hex` for digest display.
+
+```bash
+cargo run -- run examples/hash/main.pt --stdlib stdlib
+```
+
 ## regex
 
 Demonstrates the `std.regex` module for pattern matching: literal matching (`matches`), finding patterns (`find`, `find_all`), text replacement (`replace`, `replace_all`), splitting text by pattern (`split`), wildcards (`.`), quantifiers (`*`, `+`, `?`), anchors (`^`, `$`), and character shortcuts (`\d`, `\w`, `\s`).

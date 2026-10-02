@@ -1,0 +1,125 @@
+// std.hash — data-integrity hashes in pure Pluto.
+//
+// Three hashes, three jobs:
+//   - CRC-32C: corruption detection on storage/wire frames (the Kafka /
+//     iSCSI / ext4 checksum). Here: a checksummed record frame, plus the
+//     crash-recovery scan that finds the valid prefix of a torn log.
+//   - SHA-256: content addressing and artifact verification.
+//   - FNV-1a 64: fast non-cryptographic hashing for partition assignment.
+
+import std.hash
+
+// Frame a record the way a log/broker would: [len][payload][crc32c].
+// (No fixed-width encode helpers in bytes yet, so length is one byte —
+// enough for a demo record.)
+fn frame_record(payload: bytes) bytes {
+    let mut frame = bytes_new()
+    frame.push((payload.len() & 0xFF) as byte)
+    let mut i = 0
+    while i < payload.len() {
+        frame.push(payload[i])
+        i = i + 1
+    }
+    let crc = hash.crc32c(payload)
+    frame.push(((crc >> 24) & 0xFF) as byte)
+    frame.push(((crc >> 16) & 0xFF) as byte)
+    frame.push(((crc >> 8) & 0xFF) as byte)
+    frame.push((crc & 0xFF) as byte)
+    return frame
+}
+
+// Validate one frame starting at `offset`. Returns the offset just past the
+// frame if its checksum matches, or -1 if the frame is truncated/corrupt.
+fn validate_frame(wal: bytes, offset: int) int {
+    if offset + 1 > wal.len() {
+        return -1
+    }
+    let len = wal[offset] as int
+    let end = offset + 1 + len + 4
+    if end > wal.len() {
+        return -1   // truncated mid-record (torn write)
+    }
+    let mut payload = bytes_new()
+    let mut i = offset + 1
+    while i < offset + 1 + len {
+        payload.push(wal[i])
+        i = i + 1
+    }
+    let stored = ((wal[i] as int) << 24)
+        | ((wal[i + 1] as int) << 16)
+        | ((wal[i + 2] as int) << 8)
+        | (wal[i + 3] as int)
+    if hash.crc32c(payload) != stored {
+        return -1   // bit rot / garbage tail
+    }
+    return end
+}
+
+fn main() {
+    // --- CRC-32C framing + crash recovery ---------------------------------
+    let mut wal = bytes_new()
+    let records = ["put k1=v1", "put k2=v2", "del k1"]
+    for r in records {
+        let frame = frame_record(r.to_bytes())
+        let mut i = 0
+        while i < frame.len() {
+            wal.push(frame[i])
+            i = i + 1
+        }
+    }
+    // Simulate a crash mid-append: half a record lands.
+    wal.push(7 as byte)
+    wal.push(112 as byte)
+    wal.push(117 as byte)
+    let total = wal.len()
+    print(f"log: {total} bytes (3 whole records + a torn tail)")
+
+    // Recovery scan: walk frames until a checksum fails; that is the valid
+    // prefix, everything after it is discarded.
+    let mut offset = 0
+    let mut valid = 0
+    let mut scanning = true
+    while scanning {
+        let next = validate_frame(wal, offset)
+        if next < 0 {
+            scanning = false
+        } else {
+            offset = next
+            valid = valid + 1
+        }
+    }
+    print(f"recovery: {valid} valid records, truncating log to {offset} bytes")
+
+    // --- SHA-256 content addressing ---------------------------------------
+    let artifact = "fn main() { print(42) }".to_bytes()
+    let address = hash.sha256_hex(artifact)
+    print(f"content address: sha256:{address}")
+
+    // Verification: recompute and compare.
+    let check = hash.sha256_hex(artifact)
+    if check == address {
+        print("artifact verified: digest matches")
+    }
+
+    // Incremental hashing: same digest, streamed in chunks.
+    let mut s = hash.new_sha256()
+    s.update("fn main() { ".to_bytes())
+    s.update("print(42) }".to_bytes())
+    let streamed = hash.to_hex(s.finish())
+    if streamed == address {
+        print("incremental digest matches one-shot")
+    }
+
+    // --- FNV-1a 64 partitioning -------------------------------------------
+    let keys = ["user:1001", "user:1002", "order:77", "cart:9", "user:1003"]
+    let partitions = 8
+    for key in keys {
+        let h = hash.fnv1a64(key.to_bytes())
+        // h is the digest's 64-bit pattern as a signed int; fold to [0, p)
+        let mut p = h % partitions
+        if p < 0 {
+            p = p + partitions
+        }
+        print(f"{key} -> partition {p}")
+    }
+}

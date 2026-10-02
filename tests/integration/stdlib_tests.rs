@@ -127,6 +127,15 @@ fn stdlib_base64() {
 }
 
 #[test]
+fn stdlib_hash() {
+    let (stdout, stderr, code) = run_pluto_test_file("hash");
+    if code != 0 {
+        panic!("hash tests failed (exit {code}):\nstdout: {stdout}\nstderr: {stderr}");
+    }
+    assert!(stdout.contains("tests passed"), "Expected test summary in output:\n{stdout}");
+}
+
+#[test]
 fn stdlib_path() {
     let (stdout, stderr, code) = run_pluto_test_file("path");
     if code != 0 {
