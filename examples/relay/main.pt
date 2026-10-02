@@ -1,0 +1,103 @@
+import std.fs
+import std.net
+import std.socket
+
+// File↔socket relay (issue #373): kernel-assisted bulk transfer that never
+// round-trips bytes through the GC heap.
+//
+// - File.send_to(socket_fd, offset, max_bytes) moves file bytes into a
+//   connected stream socket with sendfile(2) where the kernel offers it
+//   (a runtime-C pread→write loop otherwise). It is offset-explicit like
+//   read_at: the file's seek cursor is neither read nor moved, and the
+//   handle is NOT consumed — relay failure leaves the file sound.
+// - File.receive_from(socket_fd, max_bytes) is the socket→file direction
+//   (a C-loop: no kernel primitive exists on macOS). It writes at the
+//   file's cursor and returns bytes written; 0 means socket EOF. A
+//   FILE-side write failure raises Degraded carrying File<Write, Poisoned>
+//   exactly like write() — the durability doctrine survives the relay.
+//
+// Both methods return the count moved; partial transfers are normal, so
+// callers loop, advancing the offset (send_to) by the return value.
+//
+// Run:
+//   cargo run -- run examples/relay/main.pt --stdlib stdlib
+
+// Serve one file over a connection: loop send_to until EOF.
+fn serve_file(path: string, total: int, sock_fd: int) int {
+    let f = fs.open_read(path) catch e: fs.NotFound {
+        return 0 - 1
+    } catch e: fs.FileError {
+        return 0 - 2
+    }
+    let mut sent = 0
+    while sent < total {
+        let n = f.send_to(sock_fd, sent, 65536) catch 0
+        if n == 0 {
+            break
+        }
+        sent = sent + n
+    }
+    f.close() catch e: fs.CloseError {
+        socket.close(sock_fd)
+        return 0 - 3
+    }
+    socket.close(sock_fd)
+    return sent
+}
+
+fn main() {
+    let tmp = fs.temp_dir()
+
+    // A binary payload: every byte value, repeated past 1 MiB with a
+    // non-power-of-two tail.
+    let size = 1048613
+    let src = tmp + "/blob.bin"
+    let payload = bytes_new()
+    let mut i = 0
+    while i < size {
+        payload.push((i % 256) as byte)
+        i = i + 1
+    }
+    fs.write_all_bytes(src, payload)!
+    print(f"payload: {fs.file_size(src)!} bytes")
+
+    // A real TCP loopback pair.
+    let server = net.listen("127.0.0.1", 0)
+    let client = net.connect("127.0.0.1", server.port())
+    let conn = server.accept()
+
+    // One task serves the file into the client side of the connection...
+    let t = spawn serve_file(src, size, client.fd())
+
+    // ...while this side relays the socket straight into a new file.
+    let dst = tmp + "/copy.bin"
+    let w = fs.open_write(dst)!
+    let mut received = 0
+    while true {
+        let n = w.receive_from(conn.fd(), 65536)!
+        if n == 0 {
+            break
+        }
+        received = received + n
+    }
+    w.close()!
+
+    print(f"sent:     {t.get()} bytes")
+    print(f"received: {received} bytes")
+
+    // The copy is byte-exact.
+    let back = fs.read_all_bytes(dst)!
+    let mut ok = back.len() == size
+    let mut j = 0
+    while j < back.len() {
+        if (back[j] as int) != j % 256 {
+            ok = false
+        }
+        j = j + 1
+    }
+    print(f"byte-exact copy: {ok}")
+
+    conn.close()
+    server.close()
+    fs.remove_dir_all(tmp)!
+}
