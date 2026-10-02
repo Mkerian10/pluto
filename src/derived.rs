@@ -73,6 +73,15 @@ pub struct DerivedInfo {
     /// elided at these sites — src/typeck/requires.rs).
     #[serde(default)]
     pub proven_requires_sites: usize,
+    /// Runtime residue of #416 phase 2: int `+`/`-`/`*` sites whose
+    /// overflow check remains at runtime (the flow facts could not prove
+    /// the result fits in i64).
+    #[serde(default)]
+    pub arith_sites_checked: usize,
+    /// Int arithmetic sites whose overflow check was elided on an interval
+    /// proof (src/typeck/arith_fit.rs) — codegen emits the raw op.
+    #[serde(default)]
+    pub arith_sites_elided: usize,
 }
 
 /// One checked claim: the providing method, the property, its
@@ -645,6 +654,11 @@ impl DerivedInfo {
         checked_claims.sort_by(|a, b| (&a.owner, &a.property).cmp(&(&b.owner, &b.property)));
 
         let proven_requires_sites = env.proven_requires_sites.len();
+        let arith_sites_elided = env.proven_fit_spans.len();
+        let arith_sites_checked = env
+            .arith_fit_candidates
+            .len()
+            .saturating_sub(arith_sites_elided);
 
         DerivedInfo {
             fn_error_sets,
@@ -660,6 +674,8 @@ impl DerivedInfo {
             assumptions,
             checked_claims,
             proven_requires_sites,
+            arith_sites_checked,
+            arith_sites_elided,
         }
     }
 

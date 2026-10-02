@@ -1121,3 +1121,72 @@ fn main() {
         "condition is always true",
     );
 }
+
+// ── While guard facts (#416 phase 2) ─────────────────────────────────────────
+//
+// The loop guard holds at every body entry (it was just evaluated true), so
+// its facts are assumed inside the body — after loop havoc, and killed by
+// body reassignments as usual.
+
+#[test]
+fn while_guard_fact_decides_body_condition() {
+    assert_single_warning(
+        r#"
+fn main() {
+    let mut i = 0
+    while i < 10 {
+        if i < 20 {
+            print(i)
+        }
+        i = i + 1
+    }
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn while_guard_fact_killed_by_body_reassignment() {
+    // The reassignment kills the guard fact before the condition, so no
+    // degenerate-condition verdict is possible.
+    assert_no_warnings(
+        r#"
+fn main() {
+    let mut i = 0
+    while i < 10 {
+        i = i + 15
+        if i < 20 {
+            print(i)
+        }
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn while_guard_impure_condition_contributes_no_facts() {
+    assert_no_warnings(
+        r#"
+class Box {
+    v: int
+
+    fn below(mut self, n: int) bool {
+        self.v = self.v + 0
+        return self.v < n
+    }
+}
+
+fn main() {
+    let mut b = Box { v: 0 }
+    while b.below(10) {
+        if b.v < 20 {
+            print(b.v)
+        }
+        b.v = b.v + 1
+    }
+}
+"#,
+    );
+}

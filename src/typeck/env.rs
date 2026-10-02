@@ -245,6 +245,16 @@ pub struct TypeEnv {
     /// call to the callee's unchecked twin (`<name>$nochk`), eliding the
     /// entry-time requires check for this site only.
     pub proven_requires_sites: HashMap<(String, usize), String>,
+    /// Every checked int arithmetic site (`+`, `-`, `*` on int) the
+    /// fit-recording pass examined, keyed by (file_id, lhs span start,
+    /// rhs span end) — the same key codegen rebuilds from the operand
+    /// spans in `lower_binop`. See `arith_fit.rs`.
+    pub arith_fit_candidates: HashSet<(u32, usize, usize)>,
+    /// The subset of `arith_fit_candidates` whose result interval the flow
+    /// facts prove to fit in i64. Codegen consults this set and emits the
+    /// raw op — the overflow check is elided ONLY on a proof, never a
+    /// heuristic (issue #416 phase 2).
+    pub proven_fit_spans: HashSet<(u32, usize, usize)>,
     /// Per-node union of edge-carried (propagated) errors, computed after the
     /// inference fixed point. A variant that can arrive via propagation
     /// never shrinks (slice 1: only direct raises shrink).
@@ -531,6 +541,8 @@ impl TypeEnv {
             call_site_shrunk: HashMap::new(),
             requires_summaries: HashMap::new(),
             proven_requires_sites: HashMap::new(),
+            arith_fit_candidates: HashSet::new(),
+            proven_fit_spans: HashSet::new(),
             fn_propagated_errors: HashMap::new(),
             fn_value_boundaries: Vec::new(),
             fn_value_provenance: ScopeTracker::new(),
