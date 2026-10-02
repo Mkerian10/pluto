@@ -4,7 +4,7 @@ Every backend program contains two kinds of things, and most languages refuse to
 
 A `Point { x: 1, y: 2 }` is **data**. It is its bytes. Copy it and nothing is lost; compare it field-by-field and you have compared everything there is. If reading a field hit the network, you would be shocked.
 
-A payment service, an open file, a counter shared between threads — these are not data. Each one is an **entity**: it represents *the actual thing*, not a snapshot of it. Calling a method is a message to the thing; its state may change between calls; copying it would be semantically wrong (two payment services? two cursors into one file descriptor?). Identity is the point.
+A payment service, a live TCP connection, a counter shared between threads — these are not data. Each one is an **entity**: it represents *the actual thing*, not a snapshot of it. Calling a method is a message to the thing; its state may change between calls; copying it would be semantically wrong (two payment services? two owners of one socket?). Identity is the point.
 
 Mainstream languages give you one construct for both and leave the distinction in your head. Java makes everything an identity-bearing object and then bolts on `equals()`, records, and value-type proposals to claw data semantics back. Go and Rust give you structs and leave "is this a value or a service?" as a convention. Pluto makes the distinction a declaration:
 
@@ -215,7 +215,8 @@ Distribution stays explicit. A plain method call on a foreign handle outside `at
 
 The standard library answers this consistently and it is a good guide:
 
-- **Resource holders are objects.** `fs.File`, `net.TcpListener`, `net.TcpConnection`, `http.HttpServer`, `http.HttpConnection` — each owns an OS resource with identity (a descriptor, a bound port, a cursor). Two copies of one `File` would share an offset and double-close a descriptor; as entities they are spawn-shared and their methods serialize.
+- **Shared resources are objects.** `net.TcpListener`, `net.TcpConnection`, `http.HttpServer`, `http.HttpConnection` — each owns an OS resource with identity (a bound port, a live socket) that is genuinely *shared*: handed to spawned tasks, held across calls. Copying one would mean two owners of one descriptor; as entities they are spawn-shared and their methods serialize.
+- **Resource *obligations* are typestated values, not objects.** `fs.File<M, S>` draws the line from the other side: an open file handle is not a thing to share but **evidence you hold**. The OS is the authority over the real file state; `fs.open_read` mints a linear, must-release capability ("I opened this and have not yet closed it") that the compiler forces you to discharge — `close()`, or `discard()` after a failure poisons it. Sharing, the one thing entity semantics buy, is exactly what a file handle must not have; what it needs is a checked protocol, which is what a [typestate](typestates.md) is. The general factoring: **entities are authorities** — shared, identity-bearing, always answering with their current state — and **typestated values are the evidence authorities issue**: grants, leases, handles — linear, unsharable, honest about their staleness. See [std.fs](../stdlib/fs.md) for the worked example.
 - **Service singletons are objects.** A `PaymentService`, a served `BillingService` — one pool of funds with identity, mutations that must stick.
 - **Wire-shaped data stays classes.** `Request`, `Response`, JSON values — snapshots, copied freely, compared structurally.
 - **Transient local cursors stay classes.** Parsers and encoders in hot loops, where per-instance method serialization would cost and identity adds nothing.
