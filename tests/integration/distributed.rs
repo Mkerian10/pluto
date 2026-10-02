@@ -3292,3 +3292,76 @@ app Client[s: remote svc.Svc] {
         "server must survive the failed encode and answer again; stdout: {stdout}\nstderr: {stderr}");
     assert!(out.status.success(), "client handled everything; stderr: {stderr}");
 }
+
+/// Large binary payloads decode in linear time (#428): a 50KB bytes field
+/// nested in a marshaled class used to pin the server at 100% CPU for
+/// minutes (per-character string concats in json parse_string / base64
+/// encode were quadratic in copies and GC churn). Post-fix the round trip
+/// is tens of milliseconds; the 60s watchdog only trips if the
+/// superlinearity regresses.
+#[test]
+fn large_bytes_payload_round_trips_quickly() {
+    const CLIENT: &str = "\
+import std.wire
+import blobecho
+
+app App[e: remote blobecho.BlobEcho] {
+    fn main(self) {
+        let buf = bytes_new()
+        let mut i = 0
+        while i < 51200 {
+            buf.push((i - (i / 251) * 251) as byte)
+            i = i + 1
+        }
+        let fallback = blobecho.Frame { data: bytes_new(), tag: -1 }
+        let wrapped = self.e.wrap(blobecho.Frame { data: buf, tag: 41 }) catch fallback
+        let mut ok = wrapped.data.len() == 51200
+        let mut k = 0
+        while k < wrapped.data.len() {
+            if (wrapped.data[k] as int) != k - (k / 251) * 251 {
+                ok = false
+            }
+            k = k + 1
+        }
+        print(f\"big:{ok} tag:{wrapped.tag}\")
+    }
+}";
+    let (_sd, server_bin) = build_binary(&[("main.pluto", BYTES_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("blobecho.pluto", BYTES_IFACE), ("main.pluto", CLIENT)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+    assert!(!port.is_empty(), "serve did not report a port");
+
+    let mut client = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BLOBECHO", format!("127.0.0.1:{port}"))
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let status = loop {
+        if let Some(s) = client.try_wait().unwrap() {
+            break s;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = client.kill();
+            let _ = server.kill();
+            panic!("50KB nested-bytes round trip did not finish within 60s — decode superlinearity regressed");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let mut stdout = String::new();
+    use std::io::Read as _;
+    client.stdout.take().unwrap().read_to_string(&mut stdout).unwrap();
+    let _ = server.kill();
+
+    assert!(status.success(), "client failed; stdout: {stdout}");
+    assert_eq!(stdout.trim(), "big:true tag:42");
+}
