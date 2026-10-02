@@ -24,7 +24,53 @@ typedef struct { void *start; void *end; void *array_handle; } GCDataInterval;
 static GCHeader *gc_head = NULL;
 static size_t gc_bytes_allocated = 0;
 
-static size_t gc_threshold = 256 * 1024;  // 256KB initial
+// ── Collection threshold policy ────────────────────────────────────────────────────────────
+//
+// A collection runs when gc_bytes_allocated exceeds gc_threshold. After each
+// collection the threshold becomes
+//
+//     gc_threshold = max(2 * live_bytes, gc_adaptive_floor)
+//
+// The 2x-live term is the classic proportional-space policy: a workload
+// retaining R bytes collects after allocating about another R, bounding
+// floating garbage to O(live).
+//
+// The floor bounds collection FREQUENCY. Every cycle pays costs that have
+// nothing to do with how much it reclaims: the stop-the-world handshake and
+// a conservative scan of every registered thread's live stack. With the old
+// fixed 256 KiB floor, an allocation-steady workload with ~zero survivors
+// ran one full collection per 256 KiB allocated, so those fixed costs were
+// paid at a rate set by an arbitrary constant — the #380 collapse. The floor
+// therefore adapts:
+//
+// - Growth trigger (survivor-awareness): a cycle that reclaimed at least
+//   half its budget (freed_bytes * 2 >= threshold) is allocation-churn, not
+//   retention growth; collecting half as often would roughly halve its
+//   per-byte cost, so the floor doubles. A cycle that reclaimed less than
+//   half was driven by a growing live set, where the 2x-live term is the
+//   right driver, so the floor halves — a transient spike decays back
+//   instead of permanently inflating the budget.
+//
+// - Growth cap (what the budget must amortize): the dominant fixed cost
+//   scales with the number of thread stacks scanned, so the cap does too:
+//   GC_FLOOR_BASE_CAP + GC_FLOOR_PER_THREAD per registered thread (fibers in
+//   test mode), clamped to GC_FLOOR_MAX. A single-threaded program caps at
+//   2 MiB — small enough that sweep batches stay cache-friendly — while a
+//   1000-idle-task server caps at 64 MiB, amortizing its ~ms-scale scans
+//   over proportionally more allocation. 64 KiB of garbage budget per thread
+//   is modest next to the 512 KiB of stack each thread already reserves.
+//   The cap is recomputed every cycle from the current thread count, so the
+//   budget also decays when threads exit.
+//
+// Worst-case retained-but-dead memory between collections is
+// max(2 * live, floor) with floor <= 64 MiB — a deliberate space-for-time
+// trade for a backend-server runtime.
+#define GC_MIN_THRESHOLD    ((size_t)256 * 1024)
+#define GC_FLOOR_BASE_CAP   ((size_t)2 * 1024 * 1024)
+#define GC_FLOOR_PER_THREAD ((size_t)64 * 1024)
+#define GC_FLOOR_MAX        ((size_t)64 * 1024 * 1024)
+static size_t gc_threshold = GC_MIN_THRESHOLD;
+static size_t gc_adaptive_floor = GC_MIN_THRESHOLD;
 static void *gc_stack_bottom = NULL;
 
 // Observability: PLUTO_GC_LOG=1 prints one line per collection to stderr
@@ -132,6 +178,7 @@ typedef struct {
 static GCThreadStack **gc_thread_stacks = NULL;
 static int gc_thread_stack_count = 0;   // high-water slot count
 static int gc_thread_stack_cap = 0;
+static int gc_active_thread_count = 0;  // currently active slots (under gc_mutex)
 // This thread's registry slot (NULL when unregistered). Set/cleared under
 // gc_mutex at (de)registration; read lock-free by the owning thread only.
 static __thread GCThreadStack *gc_my_slot = NULL;
@@ -304,6 +351,7 @@ void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi) {
     slot->stack_hi = stack_hi;
     slot->stack_cur = NULL;   // no park record yet: scan full range if needed
     slot->active = 1;
+    gc_active_thread_count++;
     gc_my_slot = slot;
     // Flag and slot flip together under gc_mutex: the collector (which also
     // holds gc_mutex to count) can never see one without the other
@@ -315,6 +363,7 @@ void __pluto_gc_deregister_thread_stack(void) {
     gc_heap_lock();
     if (gc_my_slot) {
         gc_my_slot->active = 0;
+        gc_active_thread_count--;
         gc_my_slot = NULL;
     }
     gc_thread_registered = 0;
@@ -364,11 +413,13 @@ void __pluto_gc_after_fork(int is_child) {
     if (is_child) {
         // Deactivate every registry slot except the surviving (current) thread.
         pthread_t self = pthread_self();
+        gc_active_thread_count = 0;
         for (int i = 0; i < gc_thread_stack_count; i++) {
             if (gc_thread_stacks[i]->active
                 && !pthread_equal(gc_thread_stacks[i]->thread, self)) {
                 gc_thread_stacks[i]->active = 0;
             }
+            if (gc_thread_stacks[i]->active) gc_active_thread_count++;
         }
         // Ghost threads can no longer leave safe regions or ack a resume.
         atomic_store(&gc_safe_count, 0);
@@ -1054,9 +1105,35 @@ void __pluto_gc_collect(void) {
 
     gc_bytes_allocated -= freed_bytes;
 
-    size_t surviving = gc_bytes_allocated;
-    gc_threshold = surviving * 2;
-    if (gc_threshold < 256 * 1024) gc_threshold = 256 * 1024;
+    // Survivor-aware threshold update (policy comment at gc_threshold's
+    // definition): grow the adaptive floor after a high-reclaim cycle, decay
+    // it after a retention-driven one; cap it by what this process's thread
+    // count justifies amortizing; then track the live set.
+    size_t live = gc_bytes_allocated;
+    size_t floor_cap = GC_FLOOR_BASE_CAP;
+    {
+        size_t nstacks = 0;
+#ifdef PLUTO_TEST_MODE
+        if (gc_fiber_stacks.enabled) {
+            for (int fi = 0; fi < gc_fiber_stacks.count; fi++) {
+                if (gc_fiber_stacks.stacks[fi].active) nstacks++;
+            }
+        }
+#else
+        nstacks = (size_t)gc_active_thread_count;
+#endif
+        floor_cap += nstacks * GC_FLOOR_PER_THREAD;
+        if (floor_cap > GC_FLOOR_MAX) floor_cap = GC_FLOOR_MAX;
+    }
+    if (freed_bytes * 2 >= gc_threshold) {
+        gc_adaptive_floor *= 2;
+    } else {
+        gc_adaptive_floor /= 2;
+    }
+    if (gc_adaptive_floor > floor_cap) gc_adaptive_floor = floor_cap;
+    if (gc_adaptive_floor < GC_MIN_THRESHOLD) gc_adaptive_floor = GC_MIN_THRESHOLD;
+    gc_threshold = live * 2;
+    if (gc_threshold < gc_adaptive_floor) gc_threshold = gc_adaptive_floor;
 
     // Free interval tables and worklist
     free(gc_intervals);
