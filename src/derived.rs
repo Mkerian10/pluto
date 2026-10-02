@@ -62,6 +62,41 @@ pub struct DerivedInfo {
     /// nobody proved. Rendered by `pluto analyze`.
     #[serde(default)]
     pub assumptions: Vec<AssumedClaim>,
+    /// Every property claim discharged in CHECKED mode (rfc-properties.md
+    /// phase 5.5): the compiler proved the runtime guard's placement (the
+    /// dedup-guard shape); the guard's data is evaluated at runtime.
+    /// Rendered by `pluto analyze` alongside the assumption surface.
+    #[serde(default)]
+    pub checked_claims: Vec<CheckedClaim>,
+    /// Number of call sites whose callee `requires` clauses were proven
+    /// statically from the caller's flow facts (the runtime entry check is
+    /// elided at these sites — src/typeck/requires.rs).
+    #[serde(default)]
+    pub proven_requires_sites: usize,
+}
+
+/// One checked claim: the providing method, the property, its
+/// instantiation bindings, and the clause's 1-based source line.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CheckedClaim {
+    /// The providing declaration, e.g. `method PaymentLedger.apply`.
+    pub owner: String,
+    /// Resolved property name, e.g. `verify.idempotent`.
+    pub property: String,
+    /// Rendered instantiation bindings, e.g. `key = req`.
+    pub instantiation: String,
+    /// 1-based source line of the provides clause in its declaring file.
+    pub line: usize,
+}
+
+impl std::fmt::Display for CheckedClaim {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "checked {}({}) — {} (line {})",
+            self.property, self.instantiation, self.owner, self.line
+        )
+    }
 }
 
 /// One assumed claim: owner (the declaration that vouches), the property,
@@ -565,8 +600,9 @@ impl DerivedInfo {
         let source_hash = Self::compute_source_hash(source);
 
         // The assumption surface: every extern `assume` clause, attributed
-        // to its declaration. (In-unit provides are PROVEN or rejected at
-        // compile time, so externs are the only assumption source today.)
+        // to its declaration. (In-unit provides are PROVEN/CHECKED or
+        // rejected at compile time, so externs are the only assumption
+        // source today.)
         let mut assumptions: Vec<AssumedClaim> = program
             .extern_fns
             .iter()
@@ -581,6 +617,35 @@ impl DerivedInfo {
             .collect();
         assumptions.sort_by(|a, b| (&a.owner, &a.property).cmp(&(&b.owner, &b.property)));
 
+        // Checked claims (rfc-properties.md phase 5.5): every in-unit
+        // provides of a dedup-shaped property — the guard-placement proof
+        // discharged these, with the guard's data living at runtime.
+        let dedup_props: std::collections::HashSet<&str> = program
+            .properties
+            .iter()
+            .filter(|p| crate::properties::has_dedup_atoms(&p.node))
+            .map(|p| p.node.name.node.as_str())
+            .collect();
+        let mut checked_claims: Vec<CheckedClaim> = Vec::new();
+        for class in &program.classes {
+            let cname = &class.node.name.node;
+            for m in &class.node.methods {
+                for clause in &m.node.provides {
+                    if dedup_props.contains(clause.node.name.node.as_str()) {
+                        checked_claims.push(CheckedClaim {
+                            owner: format!("method {cname}.{}", m.node.name.node),
+                            property: clause.node.name.node.clone(),
+                            instantiation: crate::properties::render_provides_args(&clause.node),
+                            line: clause.node.line,
+                        });
+                    }
+                }
+            }
+        }
+        checked_claims.sort_by(|a, b| (&a.owner, &a.property).cmp(&(&b.owner, &b.property)));
+
+        let proven_requires_sites = env.proven_requires_sites.len();
+
         DerivedInfo {
             fn_error_sets,
             fn_signatures,
@@ -593,6 +658,8 @@ impl DerivedInfo {
             test_dep_hashes,
             source_hash,
             assumptions,
+            checked_claims,
+            proven_requires_sites,
         }
     }
 

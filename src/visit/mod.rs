@@ -303,6 +303,7 @@ pub fn walk_property<V: Visitor>(v: &mut V, property: &Spanned<PropertyDecl>) {
         match &atom.node.kind {
             PropertyAtomKind::Invariant { expr } => v.visit_expr(expr),
             PropertyAtomKind::Ensures { expr } => v.visit_expr(expr),
+            PropertyAtomKind::Dedup { key: _ } => {}
             PropertyAtomKind::Guarded { target: _, clause } => {
                 v.visit_type_expr(&clause.binder_ty);
                 v.visit_expr(&clause.predicate);
@@ -929,6 +930,7 @@ pub fn walk_property_mut<V: VisitMut>(v: &mut V, property: &mut Spanned<Property
         match &mut atom.node.kind {
             PropertyAtomKind::Invariant { expr } => v.visit_expr_mut(expr),
             PropertyAtomKind::Ensures { expr } => v.visit_expr_mut(expr),
+            PropertyAtomKind::Dedup { key: _ } => {}
             PropertyAtomKind::Guarded { target: _, clause } => {
                 v.visit_type_expr_mut(&mut clause.binder_ty);
                 v.visit_expr_mut(&mut clause.predicate);

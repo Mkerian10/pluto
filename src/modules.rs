@@ -1764,6 +1764,7 @@ fn resolve_qualified_access_in_program(program: &mut Program, module_names: &Has
                 PropertyAtomKind::Ensures { expr } => {
                     resolve_qualified_access_in_expr(&mut expr.node, expr.span, module_names, &enum_name_map);
                 }
+                PropertyAtomKind::Dedup { .. } => {}
                 PropertyAtomKind::Guarded { clause, .. } => {
                     resolve_qualified_access_in_expr(&mut clause.predicate.node, clause.predicate.span, module_names, &enum_name_map);
                 }

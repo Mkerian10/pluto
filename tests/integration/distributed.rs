@@ -663,6 +663,85 @@ fn remote_call_rejected_on_interface_skew() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "result:-1\n");
 }
 
+// ── Contract-aware interface hashing (rfc-properties.md, phase 5.5) ─────────────
+//
+// Type-level contract clauses of boundary-crossing types fold into the
+// interface hash: a contract change is a wire-compatibility event, exactly
+// like a signature change (downstream proofs assume the clauses). The
+// consumer must mirror the clauses in its interface declaration to pair.
+
+// The server's service now carries an invariant.
+const CONTRACT_SERVER_SRC: &str = "\
+class BillingService {
+    rate: int
+    invariant self.rate >= 0
+    fn charge(self, amount: int) int {
+        return amount * self.rate
+    }
+}
+
+fn main() {
+    let svc = BillingService { rate: 2 }
+    serve svc on 0
+}";
+
+// A consumer interface that mirrors the contract: hashes align.
+const CONTRACT_IFACE: &str = "\
+pub class BillingService {
+    rate: int
+    invariant self.rate >= 0
+    fn charge(self, amount: int) int {
+        return amount
+    }
+}";
+
+/// A client compiled against an interface WITHOUT the server's invariant is
+/// refused by the interface-hash check: the contract is part of the wire
+/// surface, and a consumer that does not assume it must not pair.
+#[test]
+fn remote_call_rejected_on_contract_skew() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", CONTRACT_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "result:-1\n");
+}
+
+/// The same pairing with the contract mirrored in the consumer's interface
+/// declaration round-trips: same contracts ⇒ same hash.
+#[test]
+fn remote_call_round_trips_with_mirrored_contract() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", CONTRACT_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("billing.pluto", CONTRACT_IFACE), ("main.pluto", CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "result:42\n");
+}
+
 // ── Failure classification: Definite vs Ambiguous (epistemics.md) ───────────────
 //
 // Every failed boundary call carries an epistemic classification in

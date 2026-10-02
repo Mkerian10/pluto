@@ -1322,6 +1322,182 @@ pub(crate) fn format_invariant_expr(expr: &Expr) -> String {
     }
 }
 
+/// A stable hash of a service's dispatchable interface: its method names
+/// with parameter and return signatures, PLUS the type-level contract
+/// clauses of every type that crosses the boundary (rfc-properties.md
+/// "Evolution and honesty"). Computed identically for the served class and
+/// a remote consumer's interface class (same method filter, same
+/// module-prefix-independent type strings), so a version-skewed pairing of
+/// independently-compiled binaries is caught at the boundary. The hash is
+/// folded into the RPC method token (`method#hash`): a mismatch matches no
+/// dispatch arm, so the server rejects the call instead of running it with
+/// misparsed arguments.
+///
+/// # What hashes (the evolution surface)
+///
+/// - Dispatchable method signatures (as before).
+/// - Type-level contract clauses of the hashed type itself and of every
+///   value class transitively reachable through the dispatchable
+///   signatures (through arrays/maps/sets/nullables/streams and value
+///   class/enum fields; recursion stops at entities — they cross as
+///   identity handles, and their own interface hash carries their own
+///   contracts): `invariant` clauses (single- and two-state), `guarded_by`
+///   clauses, and `satisfies` instantiations by resolved short name +
+///   arguments. Property *bodies* participate through the desugared
+///   invariant/guard clauses the instantiation injects, so changing a
+///   property body changes every dependent interface hash.
+/// - Canonicalization is the span-free pretty rendering
+///   ([`format_invariant_expr`]) with type names reduced to their last
+///   segment (module-prefix independence, matching the signature strings).
+///
+/// Method-level clauses (`requires` / `ensures` / fn-level `provides`) are
+/// deliberately EXCLUDED for now: a consumer's interface stub would have
+/// to carry them to keep the hashes aligned, and a stub body cannot
+/// honestly discharge an `ensures` (it would have to implement it). The
+/// evolution rule for what does hash: changing a contract clause on a
+/// boundary-crossing type is a BREAKING change, exactly like changing a
+/// signature — downstream proofs assume the clauses, so a consumer
+/// compiled against the old contract must be refused, and consumers must
+/// mirror the clauses in their interface declarations.
+pub fn interface_hash(env: &crate::typeck::env::TypeEnv, class_name: &str) -> String {
+    use std::collections::BTreeSet;
+
+    fn sig(t: &PlutoType) -> String {
+        match t {
+            PlutoType::Int => "int".to_string(),
+            PlutoType::Float => "float".to_string(),
+            PlutoType::Bool => "bool".to_string(),
+            PlutoType::Byte => "byte".to_string(),
+            PlutoType::Bytes => "bytes".to_string(),
+            PlutoType::String => "string".to_string(),
+            PlutoType::Void => "void".to_string(),
+            PlutoType::Class(n) | PlutoType::Enum(n) => short_name(n).to_string(),
+            PlutoType::Array(e) => format!("[{}]", sig(e)),
+            PlutoType::Nullable(i) => format!("{}?", sig(i)),
+            other => format!("{other}"),
+        }
+    }
+    fn short_name(n: &str) -> &str {
+        n.rsplit('.').next().unwrap_or(n)
+    }
+    /// Collect the named types a wire value of type `t` can carry,
+    /// recursing through value-class and enum-variant fields. Entities are
+    /// excluded: they cross as handles, and `interface_hash(entity)`
+    /// carries their own contracts.
+    fn collect_wire_types(
+        env: &crate::typeck::env::TypeEnv,
+        t: &PlutoType,
+        out: &mut BTreeSet<String>,
+    ) {
+        match t {
+            PlutoType::Class(n) => {
+                if env.object_types.contains(n) {
+                    return;
+                }
+                if out.insert(n.clone()) {
+                    if let Some(info) = env.classes.get(n) {
+                        for (_, fty, _) in &info.fields {
+                            collect_wire_types(env, fty, out);
+                        }
+                    }
+                }
+            }
+            PlutoType::Enum(n) => {
+                if out.insert(n.clone()) {
+                    if let Some(info) = env.enums.get(n) {
+                        for (_, fields) in &info.variants {
+                            for (_, fty) in fields {
+                                collect_wire_types(env, fty, out);
+                            }
+                        }
+                    }
+                }
+            }
+            PlutoType::Array(e)
+            | PlutoType::Nullable(e)
+            | PlutoType::Set(e)
+            | PlutoType::Stream(e) => collect_wire_types(env, e, out),
+            PlutoType::Map(k, v) => {
+                collect_wire_types(env, k, out);
+                collect_wire_types(env, v, out);
+            }
+            _ => {}
+        }
+    }
+
+    let supported = |t: &PlutoType| {
+        // Top-level entities cross as handles; entities NESTED in values
+        // are still untransferable (a copy would fork identity).
+        if let PlutoType::Class(n) = t
+            && env.object_types.contains(n)
+        {
+            return true;
+        }
+        crate::typeck::types::wire_supported(t)
+            && !crate::typeck::types::contains_object_type(t, env)
+    };
+
+    let mut sigs: Vec<String> = Vec::new();
+    // The hashed type itself always contributes its contracts (an entity's
+    // own clauses live on its own hash).
+    let mut wire_types: BTreeSet<String> = BTreeSet::new();
+    wire_types.insert(class_name.to_string());
+    if let Some(info) = env.classes.get(class_name) {
+        for mname in &info.methods {
+            let mangled = crate::typeck::env::mangle_method(class_name, mname);
+            let Some(fsig) = env.functions.get(&mangled) else { continue };
+            let arg_types: Vec<PlutoType> = fsig.params.iter().skip(1).cloned().collect();
+            let ret = fsig.return_type.clone();
+            let ret_ok = supported(&ret) || ret == PlutoType::Void;
+            if arg_types.iter().all(supported) && ret_ok {
+                let params = arg_types.iter().map(sig).collect::<Vec<_>>().join(",");
+                sigs.push(format!("{mname}({params}){}", sig(&ret)));
+                for t in arg_types.iter().chain(std::iter::once(&ret)) {
+                    collect_wire_types(env, t, &mut wire_types);
+                }
+            }
+        }
+    }
+    sigs.sort();
+
+    // Contract section: every clause of every boundary-crossing type, in a
+    // canonical, span-free, module-prefix-independent rendering.
+    let mut contracts: Vec<String> = Vec::new();
+    for tname in &wire_types {
+        let label = short_name(tname);
+        for spec in env.class_invariants.get(tname).map(Vec::as_slice).unwrap_or(&[]) {
+            contracts.push(format!("inv {label} {}", spec.desc));
+        }
+        for spec in env.guarded_fields.get(tname).map(Vec::as_slice).unwrap_or(&[]) {
+            contracts.push(format!(
+                "guard {label}.{} ({}: {}) {}",
+                spec.field_name,
+                spec.binder_name,
+                short_name(&spec.binder_class),
+                format_invariant_expr(&spec.predicate.node)
+            ));
+        }
+        for prop in env.class_properties.get(tname).map(Vec::as_slice).unwrap_or(&[]) {
+            contracts.push(format!(
+                "sat {label} {}({})",
+                short_name(&prop.name),
+                prop.args.join(", ")
+            ));
+        }
+    }
+    contracts.sort();
+
+    // FNV-1a over the joined surface — deterministic across builds (unlike
+    // DefaultHasher), so two separately-compiled binaries agree on the hash.
+    let joined = format!("{};contracts:{}", sigs.join(";"), contracts.join(";"));
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in joined.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1731,5 +1907,120 @@ mod tests {
         let result1 = host_target_triple().unwrap();
         let result2 = host_target_triple().unwrap();
         assert_eq!(result1, result2);
+    }
+
+    // ===== interface_hash tests (contract-aware hashing, phase 5.5) =====
+
+    /// Run the full frontend on a source string and return the TypeEnv the
+    /// codegen would see.
+    fn hash_env(src: &str) -> crate::typeck::env::TypeEnv {
+        let mut program = crate::parse_source(src).expect("parses");
+        crate::modules::resolve_qualified_access_single_file(&mut program)
+            .expect("qualified-access resolution succeeds");
+        let result = crate::run_frontend(&mut program, false).expect("frontend succeeds");
+        result.env
+    }
+
+    const HASH_BASE: &str = "class Receipt {\n    amount: int\n}\n\nclass Billing {\n    rate: int\n\n    fn charge(self, amount: int) Receipt {\n        return Receipt { amount: amount }\n    }\n}\n\nfn main() {}\n";
+
+    #[test]
+    fn interface_hash_is_deterministic() {
+        let e1 = hash_env(HASH_BASE);
+        let e2 = hash_env(HASH_BASE);
+        assert_eq!(interface_hash(&e1, "Billing"), interface_hash(&e2, "Billing"));
+    }
+
+    #[test]
+    fn invariant_on_served_class_changes_hash() {
+        let plain = hash_env(HASH_BASE);
+        let with_inv = hash_env(
+            "class Receipt {\n    amount: int\n}\n\nclass Billing {\n    rate: int\n    invariant self.rate >= 0\n\n    fn charge(self, amount: int) Receipt {\n        return Receipt { amount: amount }\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_ne!(
+            interface_hash(&plain, "Billing"),
+            interface_hash(&with_inv, "Billing"),
+            "an invariant on the served class is a wire-visible contract change"
+        );
+    }
+
+    #[test]
+    fn two_state_invariant_changes_hash() {
+        let plain = hash_env(HASH_BASE);
+        let with_inv = hash_env(
+            "class Receipt {\n    amount: int\n}\n\nclass Billing {\n    rate: int\n    invariant self.rate >= old(self.rate)\n\n    fn charge(self, amount: int) Receipt {\n        return Receipt { amount: amount }\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_ne!(interface_hash(&plain, "Billing"), interface_hash(&with_inv, "Billing"));
+    }
+
+    #[test]
+    fn invariant_on_nested_wire_type_changes_hash() {
+        // Receipt crosses the boundary as charge's return type: its
+        // contracts are part of the interface.
+        let plain = hash_env(HASH_BASE);
+        let with_inv = hash_env(
+            "class Receipt {\n    amount: int\n    invariant self.amount >= 0\n}\n\nclass Billing {\n    rate: int\n\n    fn charge(self, amount: int) Receipt {\n        return Receipt { amount: 1 }\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_ne!(interface_hash(&plain, "Billing"), interface_hash(&with_inv, "Billing"));
+    }
+
+    #[test]
+    fn contract_on_unrelated_type_does_not_change_hash() {
+        let plain = hash_env(HASH_BASE);
+        let with_other = hash_env(
+            "class Receipt {\n    amount: int\n}\n\nclass Elsewhere {\n    n: int\n    invariant self.n >= 0\n}\n\nclass Billing {\n    rate: int\n\n    fn charge(self, amount: int) Receipt {\n        return Receipt { amount: amount }\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_eq!(
+            interface_hash(&plain, "Billing"),
+            interface_hash(&with_other, "Billing"),
+            "a contract on a type that does not cross this boundary is not part of it"
+        );
+    }
+
+    #[test]
+    fn satisfies_instantiation_changes_hash() {
+        let plain = hash_env(HASH_BASE);
+        let with_sat = hash_env(
+            "property monotonic(f: field<int>) {\n    invariant f >= old(f)\n}\n\nclass Receipt {\n    amount: int\n}\n\nclass Billing satisfies monotonic(self.rate) {\n    rate: int\n\n    fn charge(self, amount: int) Receipt {\n        return Receipt { amount: amount }\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_ne!(interface_hash(&plain, "Billing"), interface_hash(&with_sat, "Billing"));
+    }
+
+    #[test]
+    fn guarded_by_changes_hash() {
+        let plain = hash_env(
+            "class Grant {\n    token: int\n}\n\nclass Billing {\n    rate: int\n    data: int\n\n    fn read(self) int {\n        return self.data\n    }\n}\n\nfn main() {}\n",
+        );
+        let with_guard = hash_env(
+            "class Grant {\n    token: int\n}\n\nclass Billing {\n    rate: int\n    data: int guarded_by (g: Grant) g.token == self.rate\n\n    fn read(self) int {\n        return self.data\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_ne!(interface_hash(&plain, "Billing"), interface_hash(&with_guard, "Billing"));
+    }
+
+    #[test]
+    fn method_level_clauses_do_not_change_hash() {
+        // Scope decision (documented on interface_hash): requires/ensures
+        // on methods are excluded — a consumer stub cannot honestly mirror
+        // them. Pin the exclusion so widening it is a deliberate act.
+        let plain = hash_env(HASH_BASE);
+        let with_requires = hash_env(
+            "class Receipt {\n    amount: int\n}\n\nclass Billing {\n    rate: int\n\n    fn charge(self, amount: int) Receipt\n        requires amount > 0\n    {\n        return Receipt { amount: amount }\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_eq!(
+            interface_hash(&plain, "Billing"),
+            interface_hash(&with_requires, "Billing")
+        );
+    }
+
+    #[test]
+    fn same_contracts_same_hash_across_programs() {
+        // The consumer-mirroring story: two independently-compiled programs
+        // declaring the same interface WITH the same contracts agree.
+        let server = hash_env(
+            "class Receipt {\n    amount: int\n    invariant self.amount >= 0\n}\n\nclass Billing {\n    rate: int\n    invariant self.rate >= 0\n\n    fn charge(self, amount: int) Receipt {\n        return Receipt { amount: 1 }\n    }\n}\n\nfn main() {}\n",
+        );
+        let stub = hash_env(
+            "class Receipt {\n    amount: int\n    invariant self.amount >= 0\n}\n\nclass Billing {\n    rate: int\n    invariant self.rate >= 0\n\n    fn charge(self, amount: int) Receipt {\n        return Receipt { amount: 0 }\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_eq!(interface_hash(&server, "Billing"), interface_hash(&stub, "Billing"));
     }
 }

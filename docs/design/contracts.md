@@ -677,16 +677,45 @@ fn main() {
 
 ---
 
+## Contracts and Wire Evolution
+
+Type-level contract clauses are part of a type's **wire interface**
+(rfc-properties.md phase 5.5, `codegen::interface_hash`): the invariants,
+`guarded_by` clauses, and `satisfies` instantiations of every type that
+crosses a service boundary — the served class/entity itself and every
+value class transitively reachable through its dispatchable signatures —
+fold into the RPC interface hash alongside the method signatures.
+
+The evolution rule: **changing a contract clause on a boundary-crossing
+type is a breaking change**, exactly like changing a signature. Downstream
+proofs assume the clauses (a consumer that decoded a `Receipt` under
+`invariant self.amount >= 0` may have discharged its own obligations from
+that fact), so a consumer compiled against the old contract must be
+refused — the version-skew rejection at the boundary fires before
+dispatch, classifying the failure as definite. A consumer pairs by
+mirroring the clauses in its interface declaration; type-level clauses
+are vacuously dischargeable on an interface stub (no constructions, no
+writes), so mirroring is always possible and keeps the consumer's local
+proofs honest.
+
+Method-level clauses (`requires` / `ensures` / fn-level `provides`) are
+deliberately **excluded** from the hash for now, pinned by test: a stub
+cannot honestly mirror an `ensures` — it would have to implement it. When
+a declaration-level mirroring story exists, they enter by the same rule.
+
 ## Distributed Contracts (Future)
 
-We've punted distributed contracts for now, focusing on **within-program** correctness. But the vision includes:
+We've punted the rest of distributed contracts for now, focusing on
+**within-program** correctness. Idempotency for safe retries has since
+landed through the property system (`std.verify.idempotent`, the
+dedup-guard CHECKED discharge — rfc-properties.md phase 5.5), not as a
+contract primitive. The remaining vision includes:
 
 - **Effect tracking:** `effects: FileWrite(path)`, `effects: RPC(endpoint)`
-- **Idempotency:** `@idempotent(key = order_id)` for safe retries
 - **Causality:** `causality: after payment_charged(order_id)` for ordering
 - **Protocol contracts:** State machines for channel/RPC interactions
 
-These will be addressed after the core concurrent contract system is proven and the RPC layer is implemented.
+These will be addressed after the core concurrent contract system is proven.
 
 ---
 

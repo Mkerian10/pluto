@@ -1670,15 +1670,33 @@ impl<'a> Parser<'a> {
                     atom_span,
                 ));
                 self.consume_statement_end()?;
+            } else if matches!(tok.node, Token::Ident)
+                && &self.source[tok.span.start..tok.span.end] == "dedup"
+            {
+                // `dedup <expr-param>` — the dedup-guard proof shape
+                // (docs/design/rfc-properties.md phase 5.5): the CHECKED
+                // discharge shape for fn-level `provides`.
+                let ded_tok = self.advance().expect("token should exist after peek");
+                let atom_start = ded_tok.span.start;
+                let key = self.expect_ident()?;
+                let atom_span = Span::new(atom_start, key.span.end);
+                atoms.push(Spanned::new(
+                    PropertyAtom {
+                        kind: PropertyAtomKind::Dedup { key },
+                        line: self.line_of(atom_start),
+                    },
+                    atom_span,
+                ));
+                self.consume_statement_end()?;
             } else if matches!(tok.node, Token::Ident) {
                 // `<field-param> guarded_by (b: Type) <predicate>`
                 let target = self.expect_ident()?;
                 let atom_start = target.span.start;
                 self.expect(&Token::GuardedBy).map_err(|_| {
                     CompileError::syntax(
-                        "expected 'invariant <expr>', 'ensures <expr>', or '<field-param> \
-                         guarded_by (b: Type) <predicate>' in property body: a property is \
-                         a conjunction of the shipped proof atoms",
+                        "expected 'invariant <expr>', 'ensures <expr>', 'dedup <key-param>', or \
+                         '<field-param> guarded_by (b: Type) <predicate>' in property body: \
+                         a property is a conjunction of the shipped proof atoms",
                         target.span,
                     )
                 })?;
@@ -1703,8 +1721,9 @@ impl<'a> Parser<'a> {
             } else {
                 return Err(CompileError::syntax(
                     format!(
-                        "expected 'invariant <expr>', 'ensures <expr>', or '<field-param> \
-                         guarded_by (b: Type) <predicate>' in property body, found {}",
+                        "expected 'invariant <expr>', 'ensures <expr>', 'dedup <key-param>', or \
+                         '<field-param> guarded_by (b: Type) <predicate>' in property body, \
+                         found {}",
                         tok.node
                     ),
                     tok.span,

@@ -1,6 +1,6 @@
 # RFC: Properties — Named, Checkable Claims
 
-**Status:** Draft — direction accepted (design discussion, 2026-10-01): full property system ("option A"), staged. **Phases 1–5 implemented** (`ensures` with `old()`, two-state invariants, `guarded_by` dominance — slice 1 complete; the `property` form, `satisfies`, two-sided blame, `std.verify` — phase 4; `provides`, fn-type requirements, extern `assume`, the assumption surface — phase 5, with the idempotent discharge gap held open as phase 5.5); see Phasing for deviations
+**Status:** Draft — direction accepted (design discussion, 2026-10-01): full property system ("option A"), staged. **Phases 1–5.5 implemented** (`ensures` with `old()`, two-state invariants, `guarded_by` dominance — slice 1 complete; the `property` form, `satisfies`, two-sided blame, `std.verify` — phase 4; `provides`, fn-type requirements, extern `assume`, the assumption surface — phase 5; the dedup-guard CHECKED discharge for `idempotent` and contract-aware interface hashing — phase 5.5); see Phasing for deviations
 **Author:** Design discussion
 **Date:** 2026-10-01
 **Related:** [rfc-verification.md](rfc-verification.md) (the kernel this extends), [epistemics.md](epistemics.md) (the genericity principle this implements), [contracts.md](contracts.md), [rfc-objects.md](rfc-objects.md), [rfc-distributed-safety.md](rfc-distributed-safety.md)
@@ -212,11 +212,14 @@ field of any type, usable only as a guarded_by target — `type`,
 `const int`, and (phase 5) `expr` — an expression over the providing
 function's parameters, one-level paths allowed, bound with the named form
 `key = req.id` at `provides`/`assume` sites only; `expr` parameters cannot
-appear inside atoms and are rejected by type-level `satisfies`. Atom kinds
-are `invariant`, `guarded_by`, and (phase 5) `ensures` — a method-level
-two-state postcondition over `field<int>`/`const int` parameters; a body
-may not mix type-level (invariant/guarded_by) and method-level (ensures)
-atoms, and an EMPTY body is legal as a *declared-only* property (see
+appear inside atoms — except as a `dedup` atom's key — and are rejected by
+type-level `satisfies`. Atom kinds are `invariant`, `guarded_by`,
+(phase 5) `ensures` — a method-level two-state postcondition over
+`field<int>`/`const int` parameters — and (phase 5.5) `dedup <expr-param>`
+— the dedup-guard proof shape, standing alone (one per property, unmixed
+with other atoms); a body may not mix type-level (invariant/guarded_by)
+and method-level (ensures/dedup) atoms, and an EMPTY body is legal as a
+*declared-only* property (see
 Discharge). Bodies are strictly parametric: a direct `self.x` reference is
 rejected — fields are named through `field` parameters; invariant atoms may
 use `field<int>` and `const int` parameters plus `old(...)`; guard
@@ -266,36 +269,59 @@ Every claim has exactly one warrant, per epistemics.md:
   compiler proves the guard's placement, the runtime evaluates its truth.
 - **Assumed** — declared at an extern boundary, never silently promoted.
 
-*(As implemented, phase 5 — slice-1 discharge paths for fn-level claims:*
+*(As implemented, phases 5–5.5 — the fn-level discharge paths:*
 
 - *PROVEN: a class/object method providing an `ensures`-bodied property —
   the atoms substitute into ordinary `ensures` contracts (with provenance
   for two-sided blame) and the existing symbolic prover discharges them.*
-- *ASSUMED: `extern fn ... assume <property>(<args>)` — legal only for
-  declared-only properties (an atom-carrying property has a real in-unit
-  obligation shape an invisible body cannot discharge); recorded with
+- *CHECKED (phase 5.5): a class/object method providing a `dedup`-bodied
+  property — the guard-placement proof of `src/typeck/idempotency.rs`
+  (see Phasing 5.5): every externally-visible effect must carry an ARMED
+  insert of the claim's key into a monotone receiver Set field; the
+  compiler proves the placement, the set's contents live at runtime.
+  `std.verify.idempotent`'s body is now `dedup key`, so the in-unit
+  provider exists.*
+- *ASSUMED: `extern fn ... assume <property>(<args>)` — legal for
+  declared-only (empty-body) properties and for dedup-shaped ones (an
+  external system can implement the dedup internally — an idempotent PUT
+  keyed on the request — which is exactly what the boundary vouches for);
+  still illegal for state-relating atoms (ensures/invariant/guarded_by),
+  which describe fields an invisible body cannot have. Recorded with
   owner, instantiation, and source line.*
-- *No other path exists, and in particular `idempotent`'s real proof shape
-  — dedup-check dominance over the effect — is NOT in slice 1 (phase 5.5
-  below): `std.verify.idempotent(key: expr)` ships DECLARED-ONLY, so an
-  in-unit `provides idempotent(...)` is a compile error whose diagnostic
-  explains the discharge gap and points at extern `assume`. Never silently
-  promoted; also never vacuously satisfied — `satisfies` of a
-  declared-only property is equally rejected. CHECKED is not yet a
-  fn-level mode.)*
+- *A declared-only property still has no in-unit path — the discharge-gap
+  diagnostic points at extern `assume`. Never silently promoted; never
+  vacuously satisfied — `satisfies` of a declared-only property is
+  equally rejected. `pluto analyze` reports CHECKED claims alongside the
+  assumption surface.)*
 
 ### Evolution and honesty
 
 - Property **bodies hash into interface hashes**: changing a body changes every
   downstream proof's meaning, so it is a visible API change, subject to the
   same evolution rules as wire schemas.
-  *(Phase-4 finding: today's only interface hash is the RPC dispatch hash
-  (`compute_interface_hash`, codegen) over method names and wire signatures —
-  no type-level contract clause participates: invariants, `ensures`, and
-  `guarded_by` are all absent from it. Property bodies therefore do not hash
-  yet either — consistency over ambition. When contract clauses enter the
-  schema-evolution surface (rfc-evolution-rules.md), property bodies enter
-  with them, by the rule above.)*
+  *(SHIPPED, phase 5.5 — `codegen::interface_hash`: the RPC dispatch hash
+  now folds in the type-level contract clauses of every boundary-crossing
+  type — the hashed service/entity itself plus every value class and enum
+  transitively reachable through its dispatchable signatures (recursion
+  stops at entities, which cross as identity handles and carry their own
+  hash). Clause kinds that hash: `invariant` (single- and two-state),
+  `guarded_by`, and `satisfies` instantiations by resolved short name +
+  arguments; property BODIES participate through the desugared clauses the
+  instantiation injects, so changing a body changes every dependent hash —
+  the rule above, realized. Canonicalization: the span-free pretty
+  rendering, type names reduced to their last segment (module-prefix
+  independence, matching the signature strings). The EVOLUTION RULE:
+  changing a contract clause on a wire-crossing type is a BREAKING change,
+  exactly like a signature change — downstream proofs assume the clauses —
+  and the version-skew rejection at the boundary fires for a consumer
+  compiled against the old contract; a consumer pairs by mirroring the
+  clauses in its interface declaration (type-level clauses are vacuously
+  dischargeable on a stub: no constructions, no writes). Deliberately
+  EXCLUDED, pinned by test: method-level clauses (`requires`/`ensures`,
+  fn-level `provides`) — a stub cannot honestly mirror an `ensures` (it
+  would have to implement it); when a method-level story exists
+  (declaration-level mirroring without bodies), they enter by the same
+  rule.)*
 - Names are documentation; bodies are the contract. A property named
   `idempotent` with a vacuous body is a lie the type system cannot catch —
   same risk class as a misleading function name, but trusted at a distance.
@@ -325,10 +351,16 @@ Every claim has exactly one warrant, per epistemics.md:
    ✅ **Passes** (phase 5): examples/retry — `with_retry(f: fn(string) int!
    provides verify.idempotent, req)` retries only from an AMBIGUOUS
    `NetworkError` (`definite == false`); the extern-assumed provider flows
-   in and runs, a plain function (or closure) is a compile-time boundary
-   rejection, and `pluto analyze` prints
+   in and runs, a plain function (or non-delegating closure) is a
+   compile-time boundary rejection, and `pluto analyze` prints
    `assume verify.idempotent(key = s) — extern fn __pluto_string_len
    (line N)` (tests/integration/properties.rs, analyze.rs).
+   ✅ **Extended** (phase 5.5): the example also carries an IN-UNIT
+   provider — `PaymentLedger.apply provides verify.idempotent(key = req)`,
+   discharged CHECKED by the dedup-guard proof — flowing into the same
+   combinator through a strict-eta delegation closure
+   (`(r: string) => ledger.apply(r)`); same key twice observably performs
+   no additional effect.
 
 (Conservation-of-money — the ledger's cross-entity sum — remains explicitly
 out of scope: it quantifies across entities, a future quantifier. Open
@@ -484,15 +516,43 @@ question 4.)
    slice 1 needs one); provides on methods of generic classes rejected
    (mirroring satisfies); app/stage methods cannot provide.
 
-5.5. **The idempotent discharge gap** — *open.* `idempotent`'s real proof
-   shape (a dedup check whose dominance over the effect is proven, with
-   the dedup data live at runtime — the CHECKED mode) is not yet
-   expressible in the kernel. Until it is, `std.verify.idempotent` stays
-   declared-only: in-unit `provides idempotent(...)` fails with the
-   discharge-gap diagnostic pointing at extern `assume`, which is the one
-   honest claim. Closing the gap means shipping effect-site dominance for
-   fn bodies plus the checked-residual story — at which point an in-unit
-   provider becomes possible and the property's body stops being empty.
+5.5. **The idempotent discharge gap** — ✅ **Implemented** (branch
+   `properties-phase55`): the CHECKED fn-level mode exists, and
+   `std.verify.idempotent`'s body is `dedup key` — the dedup-guard proof
+   shape, discharged by `src/typeck/idempotency.rs` on class/object
+   methods. The obligation (full argument in the module docs): every
+   externally-visible effect in the providing method (field/index writes,
+   calls that may run user code or do I/O, mutating builtin collection
+   methods — conservative; `return`/`raise` are outcomes, not effects)
+   must carry, on every path, a live ARMED-insert fact: `self.F.insert
+   (key)` executed earlier on the path, itself dominated by a membership
+   check observing `key ∉ self.F`, with the key provably denoting its
+   entry value at both. Two new membership facts ride the existing fact
+   engine (`SetNotContains`, killed like any field fact; `SetInserted`,
+   monotone-stable across calls for undotted keys); the engine's
+   assumption discipline IS the dominance proof, exactly as in
+   `guarded_by`. The side conditions that make the theorem ("at most one
+   effect execution per key, per instance") follow: the dedup field is
+   enforced insert-only WHOLE-PROGRAM (no remove/clear, no reassignment,
+   no aliasing or value use, mutation only through `self` in the owning
+   class, fresh-set-literal construction — the closed write-set stays
+   closed), and the check→insert→effect window is closed against
+   concurrency by entity serialization (value classes are per-copy:
+   values do not share). Insert-BEFORE-effect is the load-bearing
+   direction: a raise between insert and effect yields at-most-once —
+   precisely what retrying from ambiguity needs. The duplicate branch is
+   provably effect-free (it runs on every repeat call). *Deviations and
+   remainder:* the key is matched syntactically (a parameter or one-level
+   field path; no alias tracking; entity-typed roots never match); dotted
+   keys die at any user-code call, so their guard must precede calls;
+   loops drop the facts (chain per loop body or fully outside); effects
+   inside closures created in the providing method are rejected (the
+   closure may escape the window); dedup state is Set-only (a map-valued
+   cache — `key → receipt` — is the natural next shape); free functions
+   cannot provide (no receiver state) — delegation is the bridge: a
+   strict-eta closure over a providing method carries its provides. The
+   analyze surface reports every CHECKED claim alongside the assumed
+   ones.
 
 Each phase is independently shippable, and nothing in phases 1–3 is discarded
 by 4–5 — the atoms are the body language of the property form.

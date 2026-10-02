@@ -469,3 +469,41 @@ fn test_analyze_prints_empty_assumption_surface() {
         "stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn test_analyze_prints_checked_claims_and_requires_counter() {
+    // `pluto analyze` reports CHECKED claims (rfc-properties.md phase 5.5:
+    // proven guard placement, runtime guard data) alongside the assumption
+    // surface, and the count of call sites whose `requires` clauses were
+    // proven statically. Pinned output shape.
+
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("checked.pt");
+    std::fs::write(
+        &pt_file,
+        "property idempotent(key: expr) {\n    dedup key\n}\n\nobject P {\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {\n        if self.seen.contains(k) { return self.total }\n        self.seen.insert(k)\n        self.total = self.total + 1\n        return self.total\n    }\n}\n\nfn bump(n: int) int\n    requires n > 0\n{\n    return n + 1\n}\n\nfn main() {\n    print(bump(3))\n}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("checked claims: 1 checked claim"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("checked idempotent(key = k) — method P.apply (line 9)"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("proven requires sites: 1"),
+        "stdout:\n{stdout}"
+    );
+}

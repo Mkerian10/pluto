@@ -125,10 +125,59 @@ fn has_type_level_atoms(prop: &PropertyDecl) -> bool {
     })
 }
 
-/// Does this property's body contain method-level atoms (ensures —
+/// Does this property's body contain method-level atoms (ensures / dedup —
 /// instantiated on a class/object method via `provides`)?
 fn has_method_level_atoms(prop: &PropertyDecl) -> bool {
-    prop.atoms.iter().any(|a| matches!(a.node.kind, PropertyAtomKind::Ensures { .. }))
+    prop.atoms.iter().any(|a| {
+        matches!(
+            a.node.kind,
+            PropertyAtomKind::Ensures { .. } | PropertyAtomKind::Dedup { .. }
+        )
+    })
+}
+
+pub(crate) fn has_dedup_atoms(prop: &PropertyDecl) -> bool {
+    prop.atoms.iter().any(|a| matches!(a.node.kind, PropertyAtomKind::Dedup { .. }))
+}
+
+/// The dedup obligation a `provides` clause of a dedup-shaped property puts
+/// on its providing method (consumed by src/typeck/idempotency.rs): the
+/// instantiated key as a path over the method's parameters, plus the atom's
+/// source line for two-sided blame. `None` when the property carries no
+/// dedup atom. Argument shapes were validated by `validate_provides_args`.
+pub(crate) struct DedupKeySpec {
+    /// The key path's root: a parameter name of the providing method.
+    pub root: String,
+    /// One-level field of the root (`req.id` → `Some("id")`).
+    pub field: Option<String>,
+    /// 1-based line of the dedup atom in the property's defining file.
+    pub atom_line: usize,
+}
+
+pub(crate) fn dedup_key_spec(prop: &PropertyDecl, clause: &ProvidesClause) -> Option<DedupKeySpec> {
+    let (key_param, atom_line) = prop.atoms.iter().find_map(|a| match &a.node.kind {
+        PropertyAtomKind::Dedup { key } => Some((key.node.clone(), a.node.line)),
+        _ => None,
+    })?;
+    let idx = prop.params.iter().position(|p| p.name.node == key_param)?;
+    let arg = clause.args.get(idx)?;
+    match &arg.value.node {
+        Expr::Ident(name) => Some(DedupKeySpec { root: name.clone(), field: None, atom_line }),
+        Expr::FieldAccess { object, field } => match &object.node {
+            Expr::Ident(root) => Some(DedupKeySpec {
+                root: root.clone(),
+                field: Some(field.node.clone()),
+                atom_line,
+            }),
+            _ => None,
+        },
+        Expr::QualifiedAccess { segments } if segments.len() == 2 => Some(DedupKeySpec {
+            root: segments[0].node.clone(),
+            field: Some(segments[1].node.clone()),
+            atom_line,
+        }),
+        _ => None,
+    }
 }
 
 fn is_int_field_kind(kind: &PropertyParamKind) -> bool {
@@ -161,10 +210,39 @@ fn validate_property_decl(prop: &PropertyDecl) -> Result<(), CompileError> {
         return Err(CompileError::type_err(
             format!(
                 "property '{}' mixes type-level atoms (invariant / guarded_by) with \
-                 method-level atoms (ensures): a property is instantiated either on a \
-                 type ('satisfies') or on a method ('provides') — split it into two \
+                 method-level atoms (ensures / dedup): a property is instantiated either \
+                 on a type ('satisfies') or on a method ('provides') — split it into two \
                  properties",
                 prop.name.node
+            ),
+            prop.name.span,
+        ));
+    }
+    // One discharge shape per property: `ensures` atoms substitute into
+    // proven postconditions, `dedup` is the checked guard-placement proof —
+    // mixing them would give one claim two discharge modes. And one dedup
+    // atom per property: a single operation dedups on a single key.
+    let dedup_count = prop
+        .atoms
+        .iter()
+        .filter(|a| matches!(a.node.kind, PropertyAtomKind::Dedup { .. }))
+        .count();
+    if dedup_count > 0 && prop.atoms.len() != dedup_count {
+        return Err(CompileError::type_err(
+            format!(
+                "property '{}' mixes 'dedup' with other atoms: dedup is the checked \
+                 dedup-guard proof shape and stands alone — split the property",
+                prop.name.node
+            ),
+            prop.name.span,
+        ));
+    }
+    if dedup_count > 1 {
+        return Err(CompileError::type_err(
+            format!(
+                "property '{}' declares {} dedup atoms: a property carries at most one \
+                 (a deduplicated operation has a single key)",
+                prop.name.node, dedup_count
             ),
             prop.name.span,
         ));
@@ -182,6 +260,37 @@ fn validate_property_decl(prop: &PropertyDecl) -> Result<(), CompileError> {
                 // const int parameters, plus old(...) of those. `expr`
                 // parameters stay out of atoms in slice 1.
                 validate_atom_expr(expr, prop, &params, None)?;
+            }
+            PropertyAtomKind::Dedup { key } => {
+                // The one place an `expr` parameter is consumed by an atom:
+                // the dedup key names the instantiation expression the
+                // providing method's dedup guard must be keyed on.
+                match params.get(key.node.as_str()) {
+                    Some(p) if p.kind.node == PropertyParamKind::Expr => {}
+                    Some(p) => {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "dedup key '{}' in property '{}' has kind '{}': the key of \
+                                 a dedup atom must be an 'expr' parameter (it ranges over \
+                                 the providing method's parameters)",
+                                key.node,
+                                prop.name.node,
+                                param_kind_name(&p.kind.node)
+                            ),
+                            key.span,
+                        ));
+                    }
+                    None => {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "unknown name '{}' in property '{}': the dedup key must be \
+                                 one of the property's 'expr' parameters",
+                                key.node, prop.name.node
+                            ),
+                            key.span,
+                        ));
+                    }
+                }
             }
             PropertyAtomKind::Guarded { target, clause } => {
                 match params.get(target.node.as_str()) {
@@ -439,9 +548,9 @@ fn instantiate_clause(
     if has_method_level_atoms(prop) {
         return Err(CompileError::type_err(
             format!(
-                "property '{}' contains method-level 'ensures' atoms: it is provided by \
-                 a class/object method ('fn m(mut self, ...) provides {}(...)'), not \
-                 satisfied by a type",
+                "property '{}' contains method-level atoms (ensures / dedup): it is \
+                 provided by a class/object method ('fn m(mut self, ...) provides \
+                 {}(...)'), not satisfied by a type",
                 short_name(cname),
                 short_name(cname)
             ),
@@ -539,8 +648,8 @@ fn instantiate_clause(
                     clause.span,
                 ));
             }
-            PropertyAtomKind::Ensures { .. } => {
-                unreachable!("ensures-atom properties are rejected for 'satisfies' above")
+            PropertyAtomKind::Ensures { .. } | PropertyAtomKind::Dedup { .. } => {
+                unreachable!("method-level-atom properties are rejected for 'satisfies' above")
             }
             PropertyAtomKind::Guarded { target, clause: guard } => {
                 let field_name = match prop
@@ -1044,6 +1153,11 @@ fn validate_expr_arg(
 enum ProvidesShape {
     /// All atoms are ensures-shaped: provable on a class/object method.
     EnsuresOnly,
+    /// The single atom is a dedup guard (rfc-properties.md phase 5.5):
+    /// discharged CHECKED on a class/object method by the guard-placement
+    /// proof in src/typeck/idempotency.rs, or ASSUMED at an extern boundary
+    /// (an external system can implement the dedup internally).
+    DedupOnly,
     /// No atoms: declared-only — no in-unit discharge path exists.
     DeclaredOnly,
     /// Contains invariant/guarded_by atoms: a type-level property.
@@ -1053,6 +1167,8 @@ enum ProvidesShape {
 fn provides_shape(prop: &PropertyDecl) -> ProvidesShape {
     if has_type_level_atoms(prop) {
         ProvidesShape::TypeLevel
+    } else if has_dedup_atoms(prop) {
+        ProvidesShape::DedupOnly
     } else if prop.atoms.is_empty() {
         ProvidesShape::DeclaredOnly
     } else {
@@ -1099,12 +1215,29 @@ fn ensures_needs_receiver_err(cname: &str, desc: &str, span: Span) -> CompileErr
     )
 }
 
+fn dedup_needs_receiver_err(cname: &str, desc: &str, span: Span) -> CompileError {
+    CompileError::type_err(
+        format!(
+            "property '{}' carries a 'dedup' atom, whose proof needs receiver state (a \
+             monotone Set field holding the processed keys): only a class/object method \
+             can provide it in-unit, and {desc} has no receiver. If {desc} fronts an \
+             external system that dedups internally, claim it at the trust boundary \
+             instead: 'extern fn ... assume {}(...)'",
+            short_name(cname),
+            short_name(cname)
+        ),
+        span,
+    )
+}
+
 /// Process every fn-level `provides` clause: validate it, then discharge it
-/// or fail. Slice-1 discharge paths: PROVEN for class/object methods
+/// or fail. In-unit discharge paths: PROVEN for class/object methods
 /// providing ensures-bodied properties (desugared into ordinary ensures
-/// contracts, discharged by src/typeck/discharge.rs); nothing else — a
-/// declared-only property has no in-unit path (extern `assume` is the
-/// boundary mode), and type-level properties are a kind error here.
+/// contracts, discharged by src/typeck/discharge.rs); CHECKED for
+/// class/object methods providing dedup-bodied properties (the
+/// guard-placement proof, src/typeck/idempotency.rs, phase 5.5); nothing
+/// else — a declared-only property has no in-unit path (extern `assume` is
+/// the boundary mode), and type-level properties are a kind error here.
 fn process_fn_provides(
     program: &mut Program,
     table: &HashMap<String, usize>,
@@ -1130,6 +1263,9 @@ fn process_fn_provides(
                 }
                 ProvidesShape::EnsuresOnly => {
                     ensures_needs_receiver_err(&clause.node.name.node, &desc, clause.span)
+                }
+                ProvidesShape::DedupOnly => {
+                    dedup_needs_receiver_err(&clause.node.name.node, &desc, clause.span)
                 }
             });
         }
@@ -1223,6 +1359,13 @@ fn process_fn_provides(
                         result = Err(discharge_gap_err(&clause.node.name.node, &desc, clause.span));
                         break 'outer;
                     }
+                    ProvidesShape::DedupOnly => {
+                        // CHECKED path (rfc-properties.md phase 5.5): the
+                        // obligation is the dedup-guard placement proof over
+                        // this method's effect sites, discharged after body
+                        // checking by src/typeck/idempotency.rs (which
+                        // re-reads this clause — nothing to inject here).
+                    }
                     ProvidesShape::EnsuresOnly => {
                         // PROVEN path: substitute the atoms into ordinary
                         // ensures contracts; the standard discharge
@@ -1272,8 +1415,11 @@ fn process_fn_provides(
 
 /// Validate every extern `assume` clause: the ASSUMED discharge mode
 /// (epistemics.md) — explicit, attributed, reported, never promoted. Only
-/// declared-only properties are assumable: atom-carrying properties have a
-/// real in-unit obligation shape that an invisible body cannot discharge.
+/// declared-only and dedup-shaped properties are assumable: state-relating
+/// atoms (ensures/invariant/guarded_by) describe fields an invisible body
+/// cannot have, but a dedup atom describes *behavior* — an external system
+/// can implement the dedup internally (an idempotent PUT keyed on the
+/// request), which is exactly the claim the boundary vouches for.
 fn process_extern_assumes(
     program: &Program,
     table: &HashMap<String, usize>,
@@ -1293,7 +1439,7 @@ fn process_extern_assumes(
                         clause.span,
                     ));
                 }
-                ProvidesShape::DeclaredOnly => {}
+                ProvidesShape::DeclaredOnly | ProvidesShape::DedupOnly => {}
             }
             let target = ProvidesTarget {
                 class: None,

@@ -568,6 +568,10 @@ impl PrettyPrinter {
                     self.write("ensures ");
                     self.emit_expr(&expr.node, 0);
                 }
+                PropertyAtomKind::Dedup { key } => {
+                    self.write("dedup ");
+                    self.write(&key.node);
+                }
                 PropertyAtomKind::Guarded { target, clause } => {
                     self.write(&target.node);
                     self.write(" guarded_by (");

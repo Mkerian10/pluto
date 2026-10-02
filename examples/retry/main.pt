@@ -1,6 +1,7 @@
 // Ambiguous-failure retry, licensed by a property — the acceptance test of
-// docs/design/rfc-properties.md phase 5 (epistemics.md: "retry an effect ⇒
-// know it did not apply, or make the retry itself produce knowledge").
+// docs/design/rfc-properties.md phases 5 and 5.5 (epistemics.md: "retry an
+// effect ⇒ know it did not apply, or make the retry itself produce
+// knowledge").
 //
 // Every failure of an effectful boundary call is one of two kinds
 // (NetworkError.definite): DEFINITE — the effect is known not to have
@@ -12,13 +13,18 @@
 // in std.verify; the retry combinator REQUIRES it of its function-typed
 // argument (`fn(string) int! provides verify.idempotent` — the same type
 // surface that carries the fallibility contract `!`); the provider CLAIMS
-// it. Today the only legitimate claim is at a trust boundary: std.verify's
-// `idempotent` is declared-only (its proof shape — a dedup check dominating
-// the effect — is not yet expressible in the kernel, rfc-properties.md
-// phase 5.5), so an in-unit `provides idempotent(...)` is a compile error
-// pointing here, and the extern `assume` below is the one honest discharge.
-// `pluto analyze` lists every such assumption: the program's complete
-// assumption surface, with a named owner per claim.
+// it, and every claim has exactly one warrant. This example shows both
+// legitimate warrants side by side:
+//
+// - ASSUMED, at a trust boundary: the extern below fronts an external
+//   system the compiler cannot see; `pluto analyze` reports the claim on
+//   the assumption surface.
+// - CHECKED, in-unit (phase 5.5): PaymentLedger.apply carries the
+//   dedup-guard shape — membership check, armed insert, then the effect —
+//   and the compiler PROVES the guard's placement (std.verify's
+//   `idempotent` body is the `dedup key` atom). Break the shape (drop the
+//   check, effect before insert, remove from the seen-set anywhere) and
+//   compilation fails.
 import std.verify
 
 // ── The trust boundary ─────────────────────────────────────────────────
@@ -29,17 +35,39 @@ import std.verify
 // reported by `pluto analyze`, never silently promoted to proven.
 extern fn __pluto_string_len(s: string) int assume verify.idempotent(key = s)
 
+// ── The in-unit provider (phase 5.5, CHECKED) ──────────────────────────
+// An entity whose `apply` method claims idempotency and EARNS it: every
+// externally-visible effect is dominated by the dedup check and preceded
+// by the armed insert of the key. The entity's per-instance serialization
+// closes the check→insert→effect window against concurrent messages. The
+// seen-set is enforced insert-only, whole-program.
+object PaymentLedger {
+    seen: Set<string>
+    total: int
+
+    fn apply(mut self, req: string) int provides verify.idempotent(key = req) {
+        if self.seen.contains(req) {
+            // The duplicate path runs on every repeat call, so the proof
+            // requires it to be effect-free: return the cached receipt.
+            return self.total
+        }
+        self.seen.insert(req)
+        self.total = self.total + 1
+        return self.total
+    }
+}
+
 error RetryExhausted {
     message: string
 }
 
 // ── The combinator ─────────────────────────────────────────────────────
-// Only functions whose declarations provide `verify.idempotent` flow in:
+// Only values whose declarations provide `verify.idempotent` flow in:
 // passing a plain `fn(string) int` is a compile-time boundary rejection
 // ("expected fn(string) int! provides verify.idempotent, found ..."), and
-// closures provide nothing. The property is what LICENSES the blind retry
-// in the ambiguous branch — delete the requirement and the retry below is
-// exactly the classic double-apply bug.
+// an ordinary closure provides nothing. The property is what LICENSES the
+// blind retry in the ambiguous branch — delete the requirement and the
+// retry below is exactly the classic double-apply bug.
 fn with_retry(f: fn(string) int! provides verify.idempotent, req: string) int {
     return f(req) catch e: NetworkError {
         if e.definite {
@@ -61,9 +89,27 @@ fn with_retry(f: fn(string) int! provides verify.idempotent, req: string) int {
 }
 
 fn main() {
+    // The ASSUMED provider: a bare fn reference carries its declaration's
+    // provides through the eta-expanded wrapper.
     let n = with_retry(__pluto_string_len, "pluto") catch e {
         print("request failed definitively")
         0 - 1
     }
     print(f"stored (receipt {n})")
+
+    // The CHECKED provider: a strict-eta delegation closure around the
+    // entity method carries the method's provides (the closure is
+    // observationally the method with its receiver fixed — same instance
+    // every invocation, parameters passed straight through).
+    let mut ledger = PaymentLedger { seen: Set<string> {}, total: 0 }
+    let a = with_retry((r: string) => ledger.apply(r), "order-1") catch e {
+        print("ledger apply failed")
+        0 - 1
+    }
+    let b = with_retry((r: string) => ledger.apply(r), "order-1") catch e {
+        print("ledger apply failed")
+        0 - 1
+    }
+    // Same key twice: the second call performed no additional effect.
+    print(f"ledger receipts: {a} then {b}")
 }
