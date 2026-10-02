@@ -168,12 +168,28 @@ impl<'a> FitScan<'a> {
     /// i64 range (a completing int expression always evaluates to its
     /// mathematical value within i64 — trapping semantics).
     fn operand_interval(&self, e: &Expr) -> Result<(i128, i128), ()> {
-        let (lo, hi) = match to_affine(e, self.env) {
-            Some(a) => affine_bounds(&a, &self.env.facts)?,
-            None => (None, None),
+        let Some(a) = to_affine(e, self.env) else {
+            return Ok((I64_MIN, I64_MAX));
         };
-        let lo = lo.unwrap_or(I64_MIN).max(I64_MIN);
-        let hi = hi.unwrap_or(I64_MAX).min(I64_MAX);
+        let (lo, hi) = affine_bounds(&a, &self.env.facts)?;
+        let mut lo = lo.unwrap_or(I64_MIN).max(I64_MIN);
+        let mut hi = hi.unwrap_or(I64_MAX).min(I64_MAX);
+        // Strict-relation refinement for the plain `p + k` shape: a live
+        // `p < q` fact bounds p <= i64::MAX - 1 even when q has no
+        // interval, because q is itself an i64 value (dually for `q < p`).
+        // This is what proves the variable-bounded counter
+        // `while i < n { i = i + 1 }` in range.
+        if a.terms.len() == 1 {
+            let (path, &c) = a.terms.iter().next().expect("one term");
+            if c == 1 {
+                if self.env.facts.has_strict_upper(path) {
+                    hi = hi.min(I64_MAX - 1 + a.k).max(I64_MIN);
+                }
+                if self.env.facts.has_strict_lower(path) {
+                    lo = lo.max(I64_MIN + 1 + a.k).min(I64_MAX);
+                }
+            }
+        }
         if lo > hi {
             // Contradictory bounds: unreachable code — answer "no proof".
             return Err(());

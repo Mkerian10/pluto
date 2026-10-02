@@ -515,6 +515,29 @@ impl FactEnv {
     /// Current position in the kill log. Take a mark before checking an
     /// `if`'s branches; [`Self::killed_since`] then reports whether a fact's
     /// paths were invalidated while the branches ran.
+    /// Does any live relation fact give `path` a STRICT upper neighbor
+    /// (`path < q`)? Since q is itself an i64-valued path, this bounds
+    /// `path <= i64::MAX - 1` even when q has no interval — used by the
+    /// overflow-check elision pass (arith_fit.rs) to prove `path + 1` in
+    /// range under a `while path < q` guard.
+    pub(crate) fn has_strict_upper(&self, path: &str) -> bool {
+        self.frames.iter().any(|f| {
+            f.relations
+                .iter()
+                .any(|(a, op, _)| a == path && *op == RelOp::Lt)
+        })
+    }
+
+    /// Dual of [`FactEnv::has_strict_upper`]: some live `q < path` bounds
+    /// `path >= i64::MIN + 1`.
+    pub(crate) fn has_strict_lower(&self, path: &str) -> bool {
+        self.frames.iter().any(|f| {
+            f.relations
+                .iter()
+                .any(|(_, op, b)| b == path && *op == RelOp::Lt)
+        })
+    }
+
     pub fn kill_mark(&self) -> KillMark {
         KillMark(self.kill_log.len())
     }

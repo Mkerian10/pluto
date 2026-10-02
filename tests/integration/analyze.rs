@@ -566,3 +566,31 @@ fn test_analyze_arith_residue_kill_respects_facts() {
         "stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn test_analyze_arith_residue_variable_bound_counter_elides() {
+    // The strict relation `i < n` alone bounds i <= int.max - 1 (n is an
+    // i64 value itself), so the canonical variable-bounded counter elides
+    // even though n has no interval.
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("varbound.pt");
+    std::fs::write(
+        &pt_file,
+        "fn work(n: int) int {\n    let mut i = 0\n    while i < n {\n        i = i + 1\n    }\n    return i\n}\n\nfn main() {\n    print(work(1000))\n}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("arithmetic overflow checks: 1 elided, 0 checked"),
+        "stdout:\n{stdout}"
+    );
+}
