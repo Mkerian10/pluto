@@ -36,7 +36,7 @@ pub mod docs;
 
 use diagnostics::{CompileError, CompileWarning};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 /// Resolve the effective stdlib root path from an explicit argument or PLUTO_STDLIB env var.
 fn resolve_stdlib(stdlib_root: Option<&Path>) -> Option<PathBuf> {
@@ -713,8 +713,7 @@ fn runtime_cache_key(test_mode: bool, gc: GcBackend) -> String {
 
 /// Check the persistent disk cache for a pre-compiled runtime object.
 /// Returns the cached path if it exists and is non-empty, None otherwise.
-fn check_disk_cache(cache_key: &str) -> Option<PathBuf> {
-    let cache_dir = git_cache::cache_root().join("runtime");
+fn check_disk_cache(cache_dir: &Path, cache_key: &str) -> Option<PathBuf> {
     let cached_path = cache_dir.join(format!("{cache_key}.o"));
     match std::fs::metadata(&cached_path) {
         Ok(meta) if meta.len() > 0 => Some(cached_path),
@@ -724,9 +723,8 @@ fn check_disk_cache(cache_key: &str) -> Option<PathBuf> {
 
 /// Store a compiled runtime object in the persistent disk cache.
 /// Uses atomic write (write to .tmp, then rename) to avoid partial reads.
-fn store_disk_cache(cache_key: &str, object_path: &Path) -> Result<(), CompileError> {
-    let cache_dir = git_cache::cache_root().join("runtime");
-    std::fs::create_dir_all(&cache_dir)
+fn store_disk_cache(cache_dir: &Path, cache_key: &str, object_path: &Path) -> Result<(), CompileError> {
+    std::fs::create_dir_all(cache_dir)
         .map_err(|e| CompileError::link(format!("failed to create runtime cache dir: {e}")))?;
     let final_path = cache_dir.join(format!("{cache_key}.o"));
     // The tmp name must be unique PER PROCESS: on a cold cache many compiler
@@ -744,9 +742,15 @@ fn store_disk_cache(cache_key: &str, object_path: &Path) -> Result<(), CompileEr
 }
 
 /// Compile gc, threading, and builtins C sources to a single linked object file.
-/// Uses a three-tier cache: OnceLock (in-process) → disk cache → full compilation.
+/// Uses a three-tier cache: in-process memo → disk cache → full compilation.
 fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, CompileError> {
     let cache_key = runtime_cache_key(test_mode, gc);
+    // Resolve the cache directory ONCE per compile. `cache_root()` reads
+    // `PLUTO_CACHE_DIR` from the environment; resolving it at every disk-cache
+    // touch let a mid-compile env change (another thread flipping the var)
+    // split a single compile across two roots — checked in one, stored in
+    // another, returned from a third.
+    let cache_dir = git_cache::cache_root().join("runtime");
     // The cache key is a content hash of the runtime sources — but a hash with no
     // reader can't answer "did my runtime change take effect?". `PLUTO_VERBOSE`
     // surfaces the cache decision (and the key), and `PLUTO_RUNTIME_NO_CACHE`
@@ -755,7 +759,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
 
     // Tier 2: Check persistent disk cache (skipped when the cache is disabled).
     if !no_cache {
-        if let Some(cached) = check_disk_cache(&cache_key) {
+        if let Some(cached) = check_disk_cache(&cache_dir, &cache_key) {
             runtime_log(&format!("runtime: cache hit ({cache_key})"));
             return Ok(cached);
         }
@@ -881,7 +885,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
 
     // Store in persistent disk cache before cleaning up (skipped when disabled).
     if !no_cache {
-        let _ = store_disk_cache(&cache_key, &runtime_o);
+        let _ = store_disk_cache(&cache_dir, &cache_key, &runtime_o);
     }
 
     // Cleanup intermediate files
@@ -898,7 +902,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     // Return the disk-cached path if it was stored successfully, otherwise the
     // freshly built temp path. With the cache disabled, always use the fresh one.
     if !no_cache {
-        if let Some(cached) = check_disk_cache(&cache_key) {
+        if let Some(cached) = check_disk_cache(&cache_dir, &cache_key) {
             let _ = std::fs::remove_file(&runtime_o);
             let _ = std::fs::remove_dir(&dir);
             return Ok(cached);
@@ -907,47 +911,61 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     Ok(runtime_o)
 }
 
+/// In-process memoization (Tier 1) over Tier 2 (disk) and Tier 3 (full compile).
+///
+/// The memoized path is re-validated on every retrieval: the file it names
+/// lives in a cache directory another actor can delete (a user clearing
+/// `~/.pluto/cache` mid-run, or a process whose `PLUTO_CACHE_DIR` pointed at a
+/// directory that has since been removed). A `OnceLock` that pinned the path
+/// for the process lifetime turned such a deletion into a permanent "linker
+/// failed" for every subsequent link in the process — recompile instead.
+/// Holding the lock across the compile also serializes concurrent initializers,
+/// as the OnceLock did.
+fn memoized_runtime_object(
+    slot: &Mutex<Option<PathBuf>>,
+    test_mode: bool,
+    gc: GcBackend,
+) -> Result<PathBuf, CompileError> {
+    let mut guard = slot.lock().unwrap();
+    if let Some(path) = guard.as_ref() {
+        if path.exists() {
+            return Ok(path.clone());
+        }
+        runtime_log(&format!(
+            "runtime: cached object disappeared, recompiling ({})",
+            path.display()
+        ));
+        *guard = None;
+    }
+    let path = compile_runtime_object(test_mode, gc)?;
+    *guard = Some(path.clone());
+    Ok(path)
+}
+
 /// Compile the runtime once per process (per backend) and cache the resulting .o path.
-/// Tier 1 (OnceLock) wraps Tier 2 (disk) and Tier 3 (full compile).
-fn cached_runtime_object(gc: GcBackend) -> Result<&'static Path, CompileError> {
+fn cached_runtime_object(gc: GcBackend) -> Result<PathBuf, CompileError> {
     match gc {
         GcBackend::MarkSweep => {
-            static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-            let result = CACHE.get_or_init(|| compile_runtime_object(false, GcBackend::MarkSweep).map_err(|e| e.to_string()));
-            match result {
-                Ok(path) => Ok(path.as_path()),
-                Err(msg) => Err(CompileError::link(msg.clone())),
-            }
+            static CACHE: Mutex<Option<PathBuf>> = Mutex::new(None);
+            memoized_runtime_object(&CACHE, false, gc)
         }
         GcBackend::Noop => {
-            static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-            let result = CACHE.get_or_init(|| compile_runtime_object(false, GcBackend::Noop).map_err(|e| e.to_string()));
-            match result {
-                Ok(path) => Ok(path.as_path()),
-                Err(msg) => Err(CompileError::link(msg.clone())),
-            }
+            static CACHE: Mutex<Option<PathBuf>> = Mutex::new(None);
+            memoized_runtime_object(&CACHE, false, gc)
         }
     }
 }
 
 /// Compile the test runtime once per process (per backend) and cache the resulting .o path.
-fn cached_test_runtime_object(gc: GcBackend) -> Result<&'static Path, CompileError> {
+fn cached_test_runtime_object(gc: GcBackend) -> Result<PathBuf, CompileError> {
     match gc {
         GcBackend::MarkSweep => {
-            static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-            let result = CACHE.get_or_init(|| compile_runtime_object(true, GcBackend::MarkSweep).map_err(|e| e.to_string()));
-            match result {
-                Ok(path) => Ok(path.as_path()),
-                Err(msg) => Err(CompileError::link(msg.clone())),
-            }
+            static CACHE: Mutex<Option<PathBuf>> = Mutex::new(None);
+            memoized_runtime_object(&CACHE, true, gc)
         }
         GcBackend::Noop => {
-            static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-            let result = CACHE.get_or_init(|| compile_runtime_object(true, GcBackend::Noop).map_err(|e| e.to_string()));
-            match result {
-                Ok(path) => Ok(path.as_path()),
-                Err(msg) => Err(CompileError::link(msg.clone())),
-            }
+            static CACHE: Mutex<Option<PathBuf>> = Mutex::new(None);
+            memoized_runtime_object(&CACHE, true, gc)
         }
     }
 }
@@ -966,7 +984,7 @@ impl LinkConfig {
         #[cfg(target_os = "linux")]
         flags.push("-pthread".to_string());
         Ok(Self {
-            objects: vec![pluto_obj.to_path_buf(), runtime_o.to_path_buf()],
+            objects: vec![pluto_obj.to_path_buf(), runtime_o],
             static_libs: vec![],
             flags,
         })
@@ -977,7 +995,7 @@ impl LinkConfig {
         let flags = vec!["-lm".to_string()];
         // No -pthread in test mode (single-threaded)
         Ok(Self {
-            objects: vec![pluto_obj.to_path_buf(), runtime_o.to_path_buf()],
+            objects: vec![pluto_obj.to_path_buf(), runtime_o],
             static_libs: vec![],
             flags,
         })
