@@ -40,13 +40,38 @@ pub fn ensure_cached(
                 manifest_path.to_path_buf(),
             )
         })?;
-        run_git(
+        // Clone into a per-process temp directory next to the final location,
+        // then publish it with an atomic rename. Cloning straight into `dir`
+        // let a concurrent process resolving the same URL observe (and build
+        // against) a half-cloned repo — or fail its own clone outright because
+        // the destination had appeared in the meantime. If the rename loses
+        // the race, another process finished first; use its copy.
+        let tmp = dir.with_file_name(format!(
+            "{}.tmp.{}",
+            dir.file_name().unwrap().to_string_lossy(),
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let clone_result = run_git(
             None,
-            &["clone", url, &dir.to_string_lossy()],
+            &["clone", url, &tmp.to_string_lossy()],
             url,
             manifest_path,
             "clone",
-        )?;
+        );
+        if let Err(e) = clone_result {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return Err(e);
+        }
+        if let Err(rename_err) = std::fs::rename(&tmp, &dir) {
+            let _ = std::fs::remove_dir_all(&tmp);
+            if !dir.exists() {
+                return Err(CompileError::manifest(
+                    format!("failed to move git clone into cache: {rename_err}"),
+                    manifest_path.to_path_buf(),
+                ));
+            }
+        }
     }
 
     checkout_ref(&dir, url, git_ref, manifest_path)?;
