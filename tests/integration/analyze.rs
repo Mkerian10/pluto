@@ -507,3 +507,62 @@ fn test_analyze_prints_checked_claims_and_requires_counter() {
         "stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn test_analyze_reports_arith_check_residue() {
+    // #416 phase 2: `pluto analyze` reports the runtime residue of trapping
+    // arithmetic — how many int +/-/* overflow checks the interval proofs
+    // elided and how many remain. The guard-bounded loop counter elides;
+    // the unbounded accumulation stays checked; the wrapping_mul call is
+    // deliberate modular arithmetic and is neither counted nor checked.
+
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("residue.pt");
+    std::fs::write(
+        &pt_file,
+        "fn main() {\n    let mut i = 0\n    let mut sum = 0\n    while i < 256 {\n        i = i + 1\n    }\n    let big = 9223372036854775807\n    sum = sum + big\n    let h = wrapping_mul(big, 1099511628211)\n    print(i)\n    print(sum)\n    print(h)\n}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("arithmetic overflow checks: 1 elided, 1 checked"),
+        "stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_analyze_arith_residue_kill_respects_facts() {
+    // Soundness pin: elision happens on a proof only. The first increment
+    // is proven by the loop guard; the reassignment kills the guard fact,
+    // so the following multiply is unprovable and stays checked.
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("killres.pt");
+    std::fs::write(
+        &pt_file,
+        "fn main() {\n    let mut i = 0\n    while i < 256 {\n        i = i + 1\n        i = i * 2\n    }\n    print(i)\n}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("arithmetic overflow checks: 1 elided, 1 checked"),
+        "stdout:\n{stdout}"
+    );
+}

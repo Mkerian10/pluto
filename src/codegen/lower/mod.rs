@@ -127,6 +127,20 @@ impl<'a> LowerContext<'a> {
         self.builder.seal_block(ok_bb);
     }
 
+    /// Did typeck prove this int arithmetic site's result fits in i64?
+    /// Keyed exactly as arith_fit.rs records it: (file_id, lhs span start,
+    /// rhs span end). A miss (including monomorphized copies with offset
+    /// spans) means the site stays checked.
+    fn arith_fit_proven(
+        &self,
+        lhs: &crate::span::Spanned<Expr>,
+        rhs: &crate::span::Spanned<Expr>,
+    ) -> bool {
+        self.env
+            .proven_fit_spans
+            .contains(&(lhs.span.file_id, lhs.span.start, rhs.span.end))
+    }
+
     /// Materialize a string slice to an owned string at escape boundaries.
     /// No-op for non-string types.
     fn emit_string_escape(&mut self, val: Value, ty: &PlutoType) -> Value {
@@ -3586,23 +3600,37 @@ impl<'a> LowerContext<'a> {
             // wrapping codegen would falsify every discharged invariant —
             // deliberate modular arithmetic must use the wrapping_* builtins.
             BinOp::Add if is_int => {
-                let (res, of) = self.builder.ins().sadd_overflow(l, r);
-                self.emit_defect_check(of, DEFECT_ADD_OVERFLOW, l, r);
-                res
+                if self.arith_fit_proven(lhs, rhs) {
+                    // Interval-proven in-range (arith_fit.rs): the overflow
+                    // check is elided — on a proof only, never a heuristic.
+                    self.builder.ins().iadd(l, r)
+                } else {
+                    let (res, of) = self.builder.ins().sadd_overflow(l, r);
+                    self.emit_defect_check(of, DEFECT_ADD_OVERFLOW, l, r);
+                    res
+                }
             }
             BinOp::Add => self.builder.ins().iadd(l, r),
             BinOp::Sub if is_float => self.builder.ins().fsub(l, r),
             BinOp::Sub if is_int => {
-                let (res, of) = self.builder.ins().ssub_overflow(l, r);
-                self.emit_defect_check(of, DEFECT_SUB_OVERFLOW, l, r);
-                res
+                if self.arith_fit_proven(lhs, rhs) {
+                    self.builder.ins().isub(l, r)
+                } else {
+                    let (res, of) = self.builder.ins().ssub_overflow(l, r);
+                    self.emit_defect_check(of, DEFECT_SUB_OVERFLOW, l, r);
+                    res
+                }
             }
             BinOp::Sub => self.builder.ins().isub(l, r),
             BinOp::Mul if is_float => self.builder.ins().fmul(l, r),
             BinOp::Mul if is_int => {
-                let (res, of) = self.builder.ins().smul_overflow(l, r);
-                self.emit_defect_check(of, DEFECT_MUL_OVERFLOW, l, r);
-                res
+                if self.arith_fit_proven(lhs, rhs) {
+                    self.builder.ins().imul(l, r)
+                } else {
+                    let (res, of) = self.builder.ins().smul_overflow(l, r);
+                    self.emit_defect_check(of, DEFECT_MUL_OVERFLOW, l, r);
+                    res
+                }
             }
             BinOp::Mul => self.builder.ins().imul(l, r),
             BinOp::Div if is_float => self.builder.ins().fdiv(l, r),

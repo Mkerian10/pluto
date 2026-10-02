@@ -570,6 +570,13 @@ fn main() {
                         }
                     }
                     println!("proven requires sites: {}", derived.proven_requires_sites);
+                    // Runtime residue of trapping arithmetic (#416 phase 2):
+                    // how many overflow checks the interval proofs deleted,
+                    // and how many remain.
+                    println!(
+                        "arithmetic overflow checks: {} elided, {} checked",
+                        derived.arith_sites_elided, derived.arith_sites_checked
+                    );
                 }
                 Err(e) => {
                     eprintln!("error: {e}");

@@ -14,6 +14,7 @@ mod idempotency;
 mod linearity;
 pub(crate) mod shrink;
 pub(crate) mod requires;
+pub(crate) mod arith_fit;
 mod templates;
 
 // Re-exports for external use

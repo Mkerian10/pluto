@@ -200,6 +200,10 @@ fn check_stmt(
     // clauses for this statement's direct calls against the same pre-kill
     // fact state; proven sites elide the callee's entry check in codegen.
     super::requires::record_requires_discharge(stmt, env);
+    // Overflow-check elision (arith_fit.rs, #416 phase 2): record the int
+    // arithmetic sites whose results the same pre-kill facts prove to fit
+    // in i64; codegen elides their overflow checks.
+    super::arith_fit::record_arith_fit(stmt, env);
     // Flow facts (facts.rs): apply this statement's kills before checking it
     // (reassignments, field writes, calls that may mutate, loop havoc).
     super::facts::apply_stmt_kills(stmt, env);
@@ -586,6 +590,20 @@ fn check_stmt(
             let affects = super::discharge::loop_affects(env, &body.node);
             super::discharge::loop_enter(env, span, affects)?;
             env.push_scope();
+            // Flow facts: the guard holds at every body entry — it was just
+            // evaluated true. Loop havoc already ran (apply_stmt_kills at
+            // statement entry), so these facts describe the per-iteration
+            // state; a body kill (reassignment, call) removes them as
+            // usual. An impure condition contributes nothing (it could
+            // mutate state between evaluation and use). This is what makes
+            // the `while i < N { i = i + 1 }` counter provably in-range for
+            // overflow-check elision (arith_fit.rs).
+            if !super::facts::contains_impure_call(condition, env) {
+                let guard_facts = super::facts::condition_facts(&condition.node, env);
+                for f in &guard_facts.then_facts {
+                    env.facts.assume(f.clone());
+                }
+            }
             env.loop_depth += 1;
             check_block(&body.node, env, return_type)?;
             super::discharge::loop_body_end(env, body.span, affects)?;
