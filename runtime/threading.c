@@ -52,7 +52,8 @@ typedef enum {
     FIBER_READY=0, FIBER_RUNNING=1,
     FIBER_BLOCKED_TASK=2, FIBER_BLOCKED_CHAN_SEND=3,
     FIBER_BLOCKED_CHAN_RECV=4, FIBER_BLOCKED_SELECT=5,
-    FIBER_COMPLETED=6
+    FIBER_BLOCKED_SLEEP=6,
+    FIBER_COMPLETED=7
 } FiberState;
 
 typedef struct {
@@ -64,6 +65,13 @@ typedef struct {
     void *blocked_on;        // task handle or channel handle we're waiting on
     long blocked_value;      // value for pending send
     int id;
+    // Timeout-as-nondeterministic-choice (issue #370): a fiber blocked with a
+    // deadline is ENABLED — the scheduler may resume it "as timed out" at any
+    // yield point, or let the wait be satisfied first. Durations are
+    // semantically erased in test mode; exhaustive/DPOR explores both
+    // outcomes of every timeout race.
+    int has_timeout;         // 1 = this blocked wait carries a deadline
+    int timed_out;           // resume mode: 1 = the scheduler fired the timeout
     // Per-fiber saved TLS state (restored on context switch)
     void *saved_error;       // __pluto_current_error
     long *saved_current_task; // __pluto_current_task
@@ -165,6 +173,21 @@ static void wake_select_fibers_for_chan(long *ch_ptr) {
     }
 }
 
+// A fiber blocked on a deadline-carrying wait: an enabled "fire the timeout"
+// transition in the scheduler's choice set.
+static int fiber_timed_blocked(Fiber *f) {
+    return f->has_timeout &&
+           f->state >= FIBER_BLOCKED_TASK && f->state <= FIBER_BLOCKED_SLEEP;
+}
+
+// Resume a deadline-blocked fiber in "timed out" mode: the blocking op
+// observes timed_out on resume and takes its timeout exit.
+static void fiber_fire_timeout(Fiber *f) {
+    f->timed_out = 1;
+    f->state = FIBER_READY;
+    f->blocked_on = NULL;
+}
+
 static uint64_t lcg_next(uint64_t *seed) {
     *seed = (*seed) * 6364136223846793005ULL + 1442695040888963407ULL;
     return *seed;
@@ -249,16 +272,26 @@ static int pick_next_fiber(void) {
             int idx = (g_scheduler->current_fiber + off) % n;
             if (g_scheduler->fibers[idx].state == FIBER_READY) return idx;
         }
+        // Progress rule for non-exhaustive strategies: prefer real progress;
+        // fire a pending timeout only where the scheduler would otherwise
+        // report deadlock.
+        for (int off = 1; off <= n; off++) {
+            int idx = (g_scheduler->current_fiber + off) % n;
+            if (fiber_timed_blocked(&g_scheduler->fibers[idx])) return idx;
+        }
         return -1;
     } else if (g_scheduler->strategy == STRATEGY_EXHAUSTIVE && g_exhaustive) {
         // Exhaustive: DFS over schedule tree with DPOR pruning
         ExhaustiveState *es = g_exhaustive;
 
-        // Collect ready fibers
+        // Collect enabled fibers: READY, plus deadline-blocked fibers whose
+        // timeout transition is an enabled choice (timeout-as-choice model —
+        // both outcomes of every timeout race get explored).
         int ready[MAX_FIBERS];
         int ready_count = 0;
         for (int i = 0; i < n; i++) {
-            if (g_scheduler->fibers[i].state == FIBER_READY) {
+            Fiber *f = &g_scheduler->fibers[i];
+            if (f->state == FIBER_READY || fiber_timed_blocked(f)) {
                 ready[ready_count++] = i;
             }
         }
@@ -296,6 +329,15 @@ static int pick_next_fiber(void) {
         for (int i = 0; i < n; i++) {
             if (g_scheduler->fibers[i].state == FIBER_READY) {
                 ready[ready_count++] = i;
+            }
+        }
+        if (ready_count == 0) {
+            // Progress rule: fire a pending timeout only when nothing else
+            // can run (where deadlock would otherwise be reported).
+            for (int i = 0; i < n; i++) {
+                if (fiber_timed_blocked(&g_scheduler->fibers[i])) {
+                    ready[ready_count++] = i;
+                }
             }
         }
         if (ready_count == 0) return -1;
@@ -373,13 +415,14 @@ static void scheduler_run(void) {
             fprintf(stderr, "pluto: deadlock detected in test\n");
             for (int i = 0; i < g_scheduler->fiber_count; i++) {
                 Fiber *f = &g_scheduler->fibers[i];
-                if (f->state >= FIBER_BLOCKED_TASK && f->state <= FIBER_BLOCKED_SELECT) {
+                if (f->state >= FIBER_BLOCKED_TASK && f->state <= FIBER_BLOCKED_SLEEP) {
                     const char *reason = "unknown";
                     switch (f->state) {
                         case FIBER_BLOCKED_TASK:      reason = "task.get()"; break;
                         case FIBER_BLOCKED_CHAN_SEND:  reason = "chan.send()"; break;
                         case FIBER_BLOCKED_CHAN_RECV:  reason = "chan.recv()"; break;
                         case FIBER_BLOCKED_SELECT:     reason = "select"; break;
+                        case FIBER_BLOCKED_SLEEP:      reason = "sleep"; break;
                         default: break;
                     }
                     fprintf(stderr, "  Fiber %d: blocked on %s\n", i, reason);
@@ -393,6 +436,9 @@ static void scheduler_run(void) {
         g_scheduler->current_fiber = next;
         __pluto_gc_set_current_fiber(next);  // Tell GC which fiber is running
         Fiber *f = &g_scheduler->fibers[next];
+        // A deadline-blocked fiber chosen by the scheduler resumes in
+        // "timed out" mode — the enabled timeout transition fires.
+        if (f->state != FIBER_READY) fiber_fire_timeout(f);
         __pluto_current_error = f->saved_error;
         __pluto_current_task = f->saved_current_task;
         f->state = FIBER_RUNNING;
@@ -701,6 +747,29 @@ void __pluto_task_detach(long task_ptr) {
 void __pluto_task_cancel(long task_ptr) {
     long *task = (long *)task_ptr;
     task[6] = 1;
+}
+
+// ── Test mode: timed yield (std.time.sleep) ─────────────────────────────────
+//
+// Sleep is the degenerate timed wait: a yield point that resumes whenever the
+// scheduler chooses (duration erased). Under the progress rule it resumes
+// only when nothing else can run; under exhaustive it is an enabled choice at
+// every yield point. This replaces the old behavior where sleep ran a real
+// nanosleep on the only thread and stalled the whole scheduler without ever
+// yielding.
+void __pluto_test_timed_yield(void) {
+    if (!g_scheduler || g_scheduler->strategy == STRATEGY_SEQUENTIAL) {
+        // Sequential mode: no other fiber can run; the sleep elapses
+        // immediately.
+        return;
+    }
+    Fiber *cur = &g_scheduler->fibers[g_scheduler->current_fiber];
+    cur->state = FIBER_BLOCKED_SLEEP;
+    cur->blocked_on = NULL;
+    cur->has_timeout = 1;
+    fiber_yield_to_scheduler();
+    cur->has_timeout = 0;
+    cur->timed_out = 0;
 }
 
 #else
@@ -1475,6 +1544,71 @@ long __pluto_chan_recv(long handle) {
     return val;
 }
 
+// Timed receive, test mode. The duration is semantically erased: a fiber
+// blocked here with has_timeout set is ENABLED, and the scheduler may resume
+// it in "timed out" mode at any yield point (exhaustive explores both
+// outcomes of the race; non-exhaustive strategies fire the timeout only
+// where deadlock would otherwise be reported).
+long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
+    (void)timeout_ms;
+    long *ch = (long *)handle;
+
+    if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+        // Record channel access for DPOR dependency tracking: the timeout
+        // transition conflicts exactly with ops on this channel.
+        exhaustive_record_channel(g_scheduler->current_fiber, (void *)ch);
+
+        Fiber *cur = &g_scheduler->fibers[g_scheduler->current_fiber];
+        while (1) {
+            if (cur->timed_out) {
+                // The scheduler chose the timeout transition.
+                cur->timed_out = 0;
+                cur->has_timeout = 0;
+                chan_raise_error_typed("TimedOut", "timed out waiting on channel");
+                return 0;
+            }
+            if (ch[3] > 0) {
+                cur->has_timeout = 0;
+                long *buf = (long *)ch[1];
+                long val = buf[ch[4]];
+                ch[4] = (ch[4] + 1) % ch[2];
+                ch[3]--;
+                wake_fibers_blocked_on_chan(ch);
+                wake_select_fibers_for_chan(ch);
+                return val;
+            }
+            if (ch[6]) {
+                // Closed wins: the wait can never be satisfied.
+                cur->has_timeout = 0;
+                chan_raise_error_typed("ChannelClosed", "channel closed");
+                return 0;
+            }
+            // Buffer empty — block with an enabled timeout choice
+            cur->state = FIBER_BLOCKED_CHAN_RECV;
+            cur->blocked_on = (void *)ch;
+            cur->has_timeout = 1;
+            fiber_yield_to_scheduler();
+            // Resumed — retry (or observe timed_out)
+        }
+    }
+
+    // Sequential mode: progress rule — the timeout fires exactly where
+    // recv() would report deadlock.
+    if (ch[3] == 0 && ch[6]) {
+        chan_raise_error_typed("ChannelClosed", "channel closed");
+        return 0;
+    }
+    if (ch[3] == 0) {
+        chan_raise_error_typed("TimedOut", "timed out waiting on channel");
+        return 0;
+    }
+    long *buf = (long *)ch[1];
+    long val = buf[ch[4]];
+    ch[4] = (ch[4] + 1) % ch[2];
+    ch[3]--;
+    return val;
+}
+
 long __pluto_chan_try_send(long handle, long value) {
     long *ch = (long *)handle;
     if (ch[6]) {
@@ -1593,6 +1727,16 @@ static void chan_cond_wait(pthread_cond_t *cond, ChannelSync *sync) {
     __pluto_gc_leave_safe_region();
 }
 
+// Timed variant with identical safe-region bracketing. Returns ETIMEDOUT
+// when the absolute deadline passes.
+static int chan_cond_timedwait(pthread_cond_t *cond, ChannelSync *sync,
+                               const struct timespec *deadline) {
+    __pluto_gc_enter_safe_region();
+    int rc = pthread_cond_timedwait(cond, &sync->mutex, deadline);
+    __pluto_gc_leave_safe_region();
+    return rc;
+}
+
 long __pluto_chan_send(long handle, long value) {
     long *ch = (long *)handle;
     ChannelSync *sync = (ChannelSync *)ch[0];
@@ -1632,6 +1776,55 @@ long __pluto_chan_recv(long handle) {
         if (__pluto_current_task && __pluto_current_task[6]) {
             pthread_mutex_unlock(&sync->mutex);
             task_raise_cancelled();
+            return 0;
+        }
+    }
+    if (ch[3] == 0 && ch[6]) {
+        pthread_mutex_unlock(&sync->mutex);
+        chan_raise_error_typed("ChannelClosed", "channel closed");
+        return 0;
+    }
+    long *buf = (long *)ch[1];
+    long val = buf[ch[4]];
+    ch[4] = (ch[4] + 1) % ch[2];
+    ch[3]--;
+    pthread_cond_signal(&sync->not_full);
+    pthread_mutex_unlock(&sync->mutex);
+    return val;
+}
+
+// Timed receive: recv with an absolute deadline timeout_ms from now, raising
+// TimedOut when it elapses with nothing received. ChannelClosed wins over
+// the deadline (a closed-and-drained channel is a definite state, not a
+// bounded wait). Mechanics: pthread_cond_timedwait with the same safe-region
+// bracketing as chan_cond_wait.
+long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
+    long *ch = (long *)handle;
+    ChannelSync *sync = (ChannelSync *)ch[0];
+
+    if (timeout_ms < 0) timeout_ms = 0;
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += timeout_ms / 1000;
+    deadline.tv_nsec += (timeout_ms % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec += 1;
+        deadline.tv_nsec -= 1000000000L;
+    }
+
+    chan_lock(sync);
+    while (ch[3] == 0 && !ch[6]) {
+        int rc = chan_cond_timedwait(&sync->not_empty, sync, &deadline);
+        // Check for task cancellation after waking from condvar
+        if (__pluto_current_task && __pluto_current_task[6]) {
+            pthread_mutex_unlock(&sync->mutex);
+            task_raise_cancelled();
+            return 0;
+        }
+        if (rc == ETIMEDOUT && ch[3] == 0) {
+            if (ch[6]) break;  // closed while waiting — ChannelClosed below
+            pthread_mutex_unlock(&sync->mutex);
+            chan_raise_error_typed("TimedOut", "timed out waiting on channel");
             return 0;
         }
     }

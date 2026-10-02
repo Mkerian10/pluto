@@ -1018,3 +1018,118 @@ fn main() {
 "#);
     assert_eq!(out.trim(), "-8\n1");
 }
+
+// ── recv_timeout ────────────────────────────────────────────────────────────
+
+#[test]
+fn recv_timeout_delivers_buffered_value() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.send(42)!
+    let v = rx.recv_timeout(1000)!
+    print(v)
+}
+"#);
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn recv_timeout_delivers_value_from_producer() {
+    // The deadline must not fire when a producer delivers in time.
+    let out = compile_and_run_stdout(r#"
+fn produce(tx: Sender<int>) {
+    tx.send(7)!
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(0)
+    spawn produce(tx).detach()
+    let v = rx.recv_timeout(5000)!
+    print(v)
+}
+"#);
+    assert_eq!(out.trim(), "7");
+}
+
+#[test]
+fn recv_timeout_raises_timed_out_on_quiet_channel() {
+    // A quiet (open, empty) channel raises TimedOut after the deadline — and
+    // the wait really is timed: it must block for roughly the deadline, not
+    // return immediately.
+    let out = compile_and_run_stdout(r#"
+extern fn __pluto_time_ns() int
+
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let start = __pluto_time_ns()
+    let v = rx.recv_timeout(100) catch err: TimedOut { -1 }
+    let elapsed_ms = (__pluto_time_ns() - start) / 1000000
+    print(v)
+    if elapsed_ms >= 80 {
+        print("waited")
+    } else {
+        print(f"too fast: {elapsed_ms}ms")
+    }
+    tx.close()
+}
+"#);
+    assert_eq!(out.trim(), "-1\nwaited");
+}
+
+#[test]
+fn recv_timeout_channel_closed_wins() {
+    // A closed-and-drained channel is a definite state, not a bounded wait:
+    // ChannelClosed is raised, never TimedOut.
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.close()
+    let v = rx.recv_timeout(1000) catch err: TimedOut { -1 } catch err: ChannelClosed { -2 }
+    print(v)
+}
+"#);
+    assert_eq!(out.trim(), "-2");
+}
+
+#[test]
+fn recv_timeout_drains_buffer_before_closed() {
+    // Buffered values still drain from a closed channel before ChannelClosed.
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(2)
+    tx.send(1)!
+    tx.send(2)!
+    tx.close()
+    print(rx.recv_timeout(1000)!)
+    print(rx.recv_timeout(1000)!)
+    let v = rx.recv_timeout(1000) catch err: ChannelClosed { -2 }
+    print(v)
+}
+"#);
+    assert_eq!(out.trim(), "1\n2\n-2");
+}
+
+#[test]
+fn recv_timeout_requires_error_handling() {
+    // recv_timeout is fallible ({ChannelClosed, TimedOut}) — an unhandled
+    // call is a compile error like recv.
+    compile_should_fail_with(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let v = rx.recv_timeout(100)
+    print(v)
+}
+"#, "call to fallible method 'recv_timeout' must be handled");
+}
+
+#[test]
+fn recv_timeout_ms_must_be_int() {
+    compile_should_fail_with(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let v = rx.recv_timeout("soon")!
+    print(v)
+}
+"#, "recv_timeout() expects int milliseconds");
+}

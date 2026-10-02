@@ -5769,3 +5769,166 @@ tests[scheduler: Exhaustive] {
     assert_eq!(code, 0);
     assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
 }
+
+// ── Timeouts: nondeterministic-choice model (issue #370) ─────────────────
+
+#[test]
+fn exhaustive_recv_timeout_explores_both_outcomes() {
+    // A recv_timeout racing a sender is a genuine race: the exhaustive
+    // strategy must explore BOTH outcomes — timeout-fires-first and
+    // value-arrives-first — via the enabled-timeout choice in the ready set.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn sender(tx: Sender<int>) {
+    tx.send(7)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "timeout race" {
+        let (tx, rx) = chan<int>(1)
+        let t = spawn sender(tx)
+        let v = rx.recv_timeout(100) catch err: TimedOut { -1 }
+        if v == -1 {
+            print("OUTCOME timeout")
+        } else {
+            print("OUTCOME value")
+        }
+        t.detach()
+    }
+}
+"#);
+    assert_eq!(code, 0, "Expected pass; stderr: {stderr}");
+    assert!(stdout.contains("OUTCOME timeout"),
+        "exhaustive must explore the timeout-fires outcome; stdout: {stdout}");
+    assert!(stdout.contains("OUTCOME value"),
+        "exhaustive must explore the value-arrives outcome; stdout: {stdout}");
+    assert!(stderr.contains("2 schedules explored"),
+        "both outcomes of the race = 2 schedules; stderr: {stderr}");
+}
+
+#[test]
+fn exhaustive_recv_timeout_no_sender_always_times_out() {
+    // With no sender, the only enabled transition for the waiting fiber is
+    // its timeout — every schedule takes the TimedOut path; never deadlock.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+tests[scheduler: Exhaustive] {
+    test "quiet channel" {
+        let (tx, rx) = chan<int>(1)
+        let v = rx.recv_timeout(50) catch err: TimedOut { -1 }
+        expect(v).to_equal(-1)
+        tx.close()
+    }
+}
+"#);
+    assert_eq!(code, 0, "stderr: {stderr}\nstdout: {stdout}");
+    assert!(!stderr.contains("deadlock"), "a timed wait never deadlocks; stderr: {stderr}");
+}
+
+#[test]
+fn sequential_recv_timeout_fires_where_deadlock_would_be() {
+    // Progress rule: in sequential mode, recv() on an empty channel is an
+    // immediate deadlock report; recv_timeout() raises TimedOut instead.
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+test "sequential timeout" {
+    let (tx, rx) = chan<int>(1)
+    let v = rx.recv_timeout(50) catch err: TimedOut { -1 }
+    expect(v).to_equal(-1)
+    tx.close()
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "stdout: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn sequential_recv_timeout_closed_wins() {
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+test "closed beats deadline" {
+    let (tx, rx) = chan<int>(1)
+    tx.close()
+    let v = rx.recv_timeout(50) catch err: TimedOut { -1 } catch err: ChannelClosed { -2 }
+    expect(v).to_equal(-2)
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "stdout: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn random_recv_timeout_progress_rule() {
+    // Non-exhaustive strategies prefer real progress: with a sender present
+    // the value arrives; the timeout only fires when nothing else can run.
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+fn sender(tx: Sender<int>) {
+    tx.send(9)!
+}
+
+tests[scheduler: Random] {
+    test "progress preferred" {
+        let (tx, rx) = chan<int>(0)
+        let t = spawn sender(tx)
+        let v = rx.recv_timeout(100) catch err: TimedOut { -1 }
+        expect(v).to_equal(9)
+        t.get()!
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "stdout: {stdout}");
+    assert_eq!(code, 0);
+}
+
+// ── Sleep as a yield point (no more whole-scheduler nanosleep stall) ──────
+
+#[test]
+fn roundrobin_sleep_does_not_stall_scheduler() {
+    // Before the timed-wait model, std.time.sleep in test mode ran a real
+    // nanosleep on the scheduler's only thread: this test would burn 60
+    // wall-clock seconds. Now sleep is a yield point that resumes under the
+    // progress rule, so the whole run completes in milliseconds.
+    let start = std::time::Instant::now();
+    let (stdout, stderr, code) = compile_test_and_run_with_stdlib(r#"
+import std.time
+
+fn consume(rx: Receiver<int>) int {
+    return rx.recv()!
+}
+
+tests[scheduler: RoundRobin] {
+    test "sleep yields" {
+        let (tx, rx) = chan<int>(0)
+        let t = spawn consume(rx)
+        time.sleep(60000)
+        tx.send(5)!
+        expect(t.get()!).to_equal(5)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(code, 0);
+    assert!(start.elapsed() < std::time::Duration::from_secs(30),
+        "sleep must be a yield point, not a real 60s nanosleep (took {:?})", start.elapsed());
+}
+
+#[test]
+fn exhaustive_sleep_is_an_enabled_choice() {
+    // Under exhaustive exploration a sleeping fiber is enabled at every
+    // yield point — the schedule where it resumes before the send and the
+    // one where it resumes after are both explored, and none deadlocks.
+    let (stdout, stderr, code) = compile_test_and_run_with_stdlib(r#"
+import std.time
+
+fn napper() int {
+    time.sleep(10000)
+    return 1
+}
+
+tests[scheduler: Exhaustive] {
+    test "sleep explored" {
+        let t = spawn napper()
+        expect(t.get()).to_equal(1)
+    }
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(!stderr.contains("deadlock"), "sleep never deadlocks; stderr: {stderr}");
+    assert_eq!(code, 0);
+}

@@ -2594,6 +2594,28 @@ fn infer_method_call(
                 }
                 return Ok(*inner.clone());
             }
+            "recv_timeout" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("recv_timeout() expects 1 argument (ms), got {}", args.len()),
+                        span,
+                    ));
+                }
+                let arg_type = infer_expr(&args[0].node, args[0].span, env, None)?;
+                if arg_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("recv_timeout() expects int milliseconds, found {arg_type}"),
+                        args[0].span,
+                    ));
+                }
+                if let Some(ref current) = env.current_fn {
+                    env.method_resolutions.insert(
+                        (current.clone(), method.span.start),
+                        super::env::MethodResolution::ChannelRecvTimeout,
+                    );
+                }
+                return Ok(*inner.clone());
+            }
             _ => {
                 return Err(CompileError::type_err(
                     format!("Receiver has no method '{}'", method.node),

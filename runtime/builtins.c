@@ -1040,12 +1040,21 @@ long __pluto_time_wall_ns(void) {
 }
 
 void __pluto_time_sleep_ns(long ns) {
+#ifdef PLUTO_TEST_MODE
+    // Test mode: sleep is the degenerate timed wait — a yield point that
+    // resumes when the scheduler chooses (duration erased). A real nanosleep
+    // here would stall the entire single-threaded fiber scheduler without
+    // ever yielding, providing no ordering and burning wall clock.
+    (void)ns;
+    __pluto_test_timed_yield();
+#else
     struct timespec req;
     req.tv_sec = ns / 1000000000L;
     req.tv_nsec = ns % 1000000000L;
     __pluto_gc_enter_safe_region();
     nanosleep(&req, NULL);
     __pluto_gc_leave_safe_region();
+#endif
 }
 
 // Random — xorshift64*

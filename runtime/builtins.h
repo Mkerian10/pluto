@@ -153,6 +153,10 @@ void __pluto_entity_wrlock(void *entity);
 void __pluto_entity_unlock(void *entity);
 
 #ifdef PLUTO_TEST_MODE
+// Timed yield (threading.c): the degenerate timed wait backing
+// std.time.sleep in test mode — a yield point with an enabled timeout
+// choice; resumes when the scheduler picks it (duration erased).
+void __pluto_test_timed_yield(void);
 // Fiber stack API for scheduler (test mode only)
 void __pluto_gc_register_fiber_stack(char *base, size_t size);
 void __pluto_gc_mark_fiber_complete(int fiber_id);

@@ -4391,6 +4391,12 @@ impl<'a> LowerContext<'a> {
                     let raw = self.call_runtime("__pluto_chan_try_recv", &[obj_ptr]);
                     return Ok(from_array_slot(raw, inner, &mut self.builder));
                 }
+                "recv_timeout" => {
+                    let inner = inner.clone();
+                    let ms_val = self.lower_expr(&args[0].node)?;
+                    let raw = self.call_runtime("__pluto_chan_recv_timeout", &[obj_ptr, ms_val]);
+                    return Ok(from_array_slot(raw, &inner, &mut self.builder));
+                }
                 _ => return Err(CompileError::codegen(format!("Receiver has no method '{}'", method.node)))
             }
         }
@@ -6586,7 +6592,7 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
             if let PlutoType::Receiver(inner) = &obj_type {
                 return match method.node.as_str() {
-                    "recv" | "try_recv" => *inner.clone(),
+                    "recv" | "try_recv" | "recv_timeout" => *inner.clone(),
                     _ => PlutoType::Void,
                 };
             }

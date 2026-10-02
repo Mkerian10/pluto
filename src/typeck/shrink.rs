@@ -1261,6 +1261,10 @@ fn deferred_poisons(
                     named.insert("ChannelClosed".to_string());
                     named.insert("ChannelEmpty".to_string());
                 }
+                Some(MethodResolution::ChannelRecvTimeout) => {
+                    named.insert("ChannelClosed".to_string());
+                    named.insert("TimedOut".to_string());
+                }
                 Some(MethodResolution::TaskGet { spawned_fn: None }) => {
                     // Unknown task origin widens by every declared error.
                     return PoisonSet::All;

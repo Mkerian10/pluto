@@ -617,6 +617,10 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
                             ctx.raise("ChannelClosed".to_string());
                             ctx.raise("ChannelEmpty".to_string());
                         }
+                        Some(MethodResolution::ChannelRecvTimeout) => {
+                            ctx.raise("ChannelClosed".to_string());
+                            ctx.raise("TimedOut".to_string());
+                        }
                         Some(MethodResolution::TaskDetach) => {}
                         Some(MethodResolution::TaskCancel) => {}
                         Some(MethodResolution::Builtin) => {}
