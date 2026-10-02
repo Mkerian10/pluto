@@ -1200,3 +1200,256 @@ fn main() {
     );
     assert_eq!(out.trim(), "2");
 }
+
+// ── Receiver aliasing (issue #417) ──────────────────────────────────────────
+//
+// A foreign write through another binding of the receiver's own class may
+// go through an alias of `self` (classes alias freely within a task), which
+// would desync the ghost scope's symbolic field tracking from the real
+// state and certify false ensures/invariants. Such writes are rejected
+// outright inside contract-carrying methods, and the caller-side ensures
+// assumption is skipped when an argument may alias the receiver.
+
+#[test]
+fn ensures_receiver_alias_foreign_write_rejected() {
+    // `c.bump2(c)` makes `other` alias `self`: the declared relation would
+    // be false at runtime (x advances by 2, not 1).
+    compile_should_fail_with(
+        r#"
+class Cell {
+    x: int
+
+    fn bump2(mut self, mut other: Cell) ensures self.x == old(self.x) + 1 {
+        other.x = other.x + 1
+        self.x = self.x + 1
+    }
+}
+
+fn main() {
+    let mut c = Cell { x: 5 }
+    c.bump2(c)
+    print(c.x)
+}
+"#,
+        "may alias 'self'",
+    );
+}
+
+#[test]
+fn ensures_receiver_alias_via_self_link_rejected() {
+    // No parameter needed: the alias arrives through a self-referential
+    // nullable field (`c.link = c`).
+    compile_should_fail_with(
+        r#"
+class Cell {
+    x: int
+    link: Cell?
+
+    fn bump(mut self) ensures self.x == old(self.x) + 1 {
+        let mut l = self.link
+        if l != none {
+            l.x = l.x + 1
+        }
+        self.x = self.x + 1
+    }
+}
+
+fn main() {
+    let mut c = Cell { x: 5, link: none }
+    c.link = c
+    c.bump()
+    print(c.x)
+}
+"#,
+        "may alias 'self'",
+    );
+}
+
+#[test]
+fn invariant_receiver_alias_foreign_write_rejected() {
+    // The escalation from the audit: a false ensures (proven under a
+    // no-alias assumption) feeds the caller's facts, which then discharge a
+    // write that makes a STRICT single-state invariant observably false
+    // (`a.dec(a)` leaves bal at 8, not 9; `a.bal - 9` lands at -1). Both
+    // the callee body and the caller-side assumption must refuse.
+    compile_should_fail_with(
+        r#"
+class Acc {
+    bal: int
+
+    invariant self.bal >= 0
+
+    fn dec(mut self, mut other: Acc)
+        requires self.bal >= 1
+        ensures self.bal == old(self.bal) - 1
+    {
+        if other.bal >= 1 {
+            other.bal = other.bal - 1
+        }
+        self.bal = self.bal - 1
+    }
+}
+
+fn main() {
+    let mut a = Acc { bal: 10 }
+    a.dec(a)
+    a.bal = a.bal - 9
+    print(a.bal)
+}
+"#,
+        "invariant 'self.bal >= 0'",
+    );
+}
+
+#[test]
+fn receiver_alias_write_rejected_without_parameter_contracts() {
+    // The callee body alone (no caller involved) is rejected, and the
+    // diagnostic names both sides: the aliasing binding and the clauses it
+    // threatens.
+    compile_should_fail_with(
+        r#"
+class Acc {
+    bal: int
+
+    invariant self.bal >= 0
+
+    fn dec(mut self, mut other: Acc)
+        requires self.bal >= 1
+        ensures self.bal == old(self.bal) - 1
+    {
+        if other.bal >= 1 {
+            other.bal = other.bal - 1
+        }
+        self.bal = self.bal - 1
+    }
+}
+
+fn main() {
+    print(0)
+}
+"#,
+        "goes through 'other', another 'Acc' binding that may alias 'self'",
+    );
+}
+
+#[test]
+fn receiver_alias_indirect_field_flow_rejected() {
+    // The alias blind spot is not limited to fields the clauses mention:
+    // a stale symbolic value of ANY tracked int field can flow into the
+    // proof (`other.y` write, then `self.x = self.y`). Same-class foreign
+    // writes to tracked fields are rejected wholesale.
+    compile_should_fail_with(
+        r#"
+class C {
+    x: int
+    y: int
+
+    invariant self.x >= 0
+
+    fn m(mut self, mut other: C)
+        requires self.y >= 5
+    {
+        other.y = 0 - 10
+        let t = self.y
+        self.x = t
+    }
+}
+
+fn main() {
+    print(0)
+}
+"#,
+        "may alias 'self'",
+    );
+}
+
+#[test]
+fn same_class_write_without_contracts_still_allowed() {
+    // No proof scope, no ghost state to protect: a contract-free method may
+    // write other bindings of its own class.
+    let out = compile_and_run_stdout(
+        r#"
+class Cell {
+    x: int
+
+    fn poke(mut self, mut other: Cell) {
+        other.x = other.x + 1
+        self.x = self.x + 1
+    }
+}
+
+fn main() {
+    let mut a = Cell { x: 1 }
+    let mut b = Cell { x: 10 }
+    a.poke(b)
+    print(f"{a.x} {b.x}")
+}
+"#,
+    );
+    assert_eq!(out.trim(), "2 11");
+}
+
+#[test]
+fn caller_assumption_skipped_when_arg_may_alias_receiver() {
+    // The callee compiles (it never writes `other`), but the caller must
+    // not assume the ensures relation when an argument may alias the
+    // receiver: the assumption's independence from the argument is exactly
+    // what receiver aliasing broke in the audit.
+    compile_should_fail_with(
+        r#"
+class Pos {
+    v: int
+    invariant self.v >= 1
+}
+
+class Counter {
+    n: int
+
+    fn bump(mut self, other: Counter) ensures self.n == old(self.n) + 1 {
+        self.n = self.n + 1
+        print(other.n)
+    }
+}
+
+fn main() {
+    let mut c = Counter { n: 0 }
+    let mut d = Counter { n: 5 }
+    c.bump(d)
+    let p = Pos { v: c.n }
+    print(p.v)
+}
+"#,
+        "cannot prove invariant 'self.v >= 1' of class 'Pos' for this construction",
+    );
+}
+
+#[test]
+fn caller_assumption_survives_primitive_args() {
+    // Primitive arguments can never alias the receiver: the caller-side
+    // assumption still flows for them.
+    let out = compile_and_run_stdout(
+        r#"
+class Pos {
+    v: int
+    invariant self.v >= 1
+}
+
+class Counter {
+    n: int
+
+    fn add(mut self, k: int) requires k >= 1
+        ensures self.n == old(self.n) + k {
+        self.n = self.n + k
+    }
+}
+
+fn main() {
+    let mut c = Counter { n: 0 }
+    c.add(3)
+    let p = Pos { v: c.n }
+    print(p.v)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "3");
+}

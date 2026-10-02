@@ -86,12 +86,23 @@
 //!   live state, not birth (construction obligations belong to
 //!   `invariant`, which guards the same object's value shape).
 //!
-//! The slice-1 closed write-set is the set of assignment and
-//! index-assignment sites. In-place mutation of a guarded *collection*
-//! field's contents through a builtin method on an alias (`let d =
-//! self.data` then `d.push(...)`) is outside the write-set — acknowledged
-//! future work; fields of immutable value shape (ints, bytes-from-copy,
-//! strings) are fully covered.
+//! The closed write-set is the set of assignment and index-assignment
+//! sites, plus — for collection-shaped fields (arrays, maps, sets, bytes)
+//! — every mutating builtin method call on the field. Because a
+//! collection's contents can also be mutated through an alias of the
+//! field's *value* (`let d = self.data` then `d.push(...)` — issue #418),
+//! collection-shaped guarded fields additionally carry a whole-program
+//! aliasing ban, the same discipline `idempotency.rs` applies to dedup
+//! fields: no bare-value use anywhere (no binding, passing, returning,
+//! iterating, or interpolating), mutating builtins only through `self`
+//! under the dominance obligation, pure reads (len/contains/indexing/...)
+//! from anywhere, and construction/assignment only from freshly-created
+//! values (collection literals, fresh-producing builtins like
+//! `.to_bytes()`). Field types whose interior the write-set cannot close
+//! at all (classes, nested collections, traits, tasks, channels) are
+//! rejected at declaration. Fields of immutable value shape (ints,
+//! floats, bools, bytes-the-scalar, strings) need none of this — their
+//! write-set is exactly the assignment sites.
 //!
 //! # Concurrency side-condition
 //!
@@ -140,6 +151,16 @@ pub struct GuardSpec {
     pub field_name: String,
     pub binder_name: String,
     pub binder_class: String,
+    /// The guarded field's contents can be mutated through an alias of the
+    /// field's value (arrays, maps, sets, bytes — reference-shaped
+    /// collections with mutating builtin methods). Such fields carry the
+    /// whole-program aliasing ban (issue #418): no bare-value use anywhere,
+    /// mutating builtin methods only through `self` under the dominance
+    /// obligation, and construction/assignment only from freshly-created
+    /// values — otherwise `let d = self.data; d.push(...)` would mutate the
+    /// guarded contents outside the closed write-set the fencing theorem
+    /// depends on.
+    pub aliasable: bool,
     pub predicate: Spanned<Expr>,
     /// Rendered clause for diagnostics:
     /// `guarded_by (g: WriteGrant) g.token == self.epoch`.
@@ -156,6 +177,65 @@ impl GuardSpec {
     /// The property-side blame suffix ("" for hand-written clauses).
     fn blame(&self) -> String {
         crate::parser::ast::provenance_blame(&self.provenance)
+    }
+}
+
+/// Immutable value shapes: a guarded collection's elements must be these —
+/// an element alias cannot mutate them in place, so element reads through
+/// the guarded field leak nothing the write-set must track.
+fn immutable_elem(ty: &PlutoType) -> bool {
+    matches!(
+        ty,
+        PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::Byte | PlutoType::String
+    )
+}
+
+/// Classify a guarded field's type for the aliasing discipline (issue
+/// #418). `Ok(false)`: immutable value shape — assignment sites are the
+/// whole write-set. `Ok(true)`: collection shape — mutable through aliases
+/// of the field's value, so the whole-program aliasing ban applies.
+/// `Err(reason)`: interior mutability the closed write-set cannot see at
+/// all — rejected at declaration.
+fn classify_guard_field_type(ty: &PlutoType) -> Result<bool, String> {
+    match ty {
+        PlutoType::Int
+        | PlutoType::Float
+        | PlutoType::Bool
+        | PlutoType::Byte
+        | PlutoType::String
+        | PlutoType::Void
+        | PlutoType::Enum(_)
+        | PlutoType::Range
+        | PlutoType::Error => Ok(false),
+        PlutoType::Bytes => Ok(true),
+        PlutoType::Array(e) | PlutoType::Set(e) => {
+            if immutable_elem(e) {
+                Ok(true)
+            } else {
+                Err(format!(
+                    "element type {e} is not an immutable value shape (int, float, bool, \
+                     byte, string) — an element alias could mutate the guarded contents \
+                     in place, escaping the fence"
+                ))
+            }
+        }
+        PlutoType::Map(k, v) => {
+            if immutable_elem(k) && immutable_elem(v) {
+                Ok(true)
+            } else {
+                Err(format!(
+                    "key/value types ({k}, {v}) must both be immutable value shapes \
+                     (int, float, bool, byte, string) — an entry alias could mutate the \
+                     guarded contents in place, escaping the fence"
+                ))
+            }
+        }
+        other => Err(format!(
+            "a value of type {other} can be mutated through aliases by writes the \
+             guard's closed write-set cannot see (interior mutability). Guard a field \
+             of value shape (int, float, bool, byte, string, enum) or a collection of \
+             those"
+        )),
     }
 }
 
@@ -277,6 +357,30 @@ fn validate_guard_clause(
                 ));
             }
             let desc = guard_desc(&field.name.node, clause, &binder_class);
+            // Field-shape validation (issue #418): the guard theorem is "no
+            // write to the field escapes the fence", so the field's type
+            // must have a closable write-set. Nullable wrappers classify as
+            // their inner type (a none has no contents to mutate).
+            let field_ty = env
+                .classes
+                .get(&c.name.node)
+                .and_then(|ci| ci.fields.iter().find(|(n, _, _)| *n == field.name.node))
+                .map(|(_, t, _)| t.clone())
+                .unwrap_or(PlutoType::Void);
+            let unwrapped = match &field_ty {
+                PlutoType::Nullable(inner) => (**inner).clone(),
+                other => other.clone(),
+            };
+            let aliasable = classify_guard_field_type(&unwrapped).map_err(|reason| {
+                CompileError::type_err(
+                    format!(
+                        "guarded_by is not supported on field '{}' of type {field_ty}: \
+                         {reason}",
+                        field.name.node
+                    ),
+                    clause.predicate.span,
+                )
+            })?;
             validate_guard_fragment(
                 &clause.predicate,
                 &c.name.node,
@@ -290,6 +394,7 @@ fn validate_guard_clause(
                 field_name: field.name.node.clone(),
                 binder_name: clause.binder.node.clone(),
                 binder_class,
+                aliasable,
                 predicate: clause.predicate.clone(),
                 desc,
                 span: clause.predicate.span,
@@ -817,9 +922,10 @@ impl<'a> Analyzer<'a> {
 
     // ── Expression walking (nested blocks + kill application) ───────────
 
-    /// Process one evaluated expression: apply its call kills and analyze
-    /// any statement-bearing sub-structures (if/match branches, catch
-    /// handlers, closure bodies).
+    /// Process one evaluated expression: apply its call kills, analyze any
+    /// statement-bearing sub-structures (if/match branches, catch handlers,
+    /// closure bodies), and enforce the aliasing ban on collection-shaped
+    /// guarded fields (issue #418).
     fn scan_expr(&mut self, expr: &Spanned<Expr>) {
         if self.error.is_some() {
             return;
@@ -828,6 +934,7 @@ impl<'a> Analyzer<'a> {
             self.kill_fields();
         }
         self.scan_nested(&expr.node);
+        self.alias_scan(expr);
     }
 
     fn scan_nested(&mut self, expr: &Expr) {
@@ -1000,11 +1107,25 @@ impl<'a> Analyzer<'a> {
             Stmt::FieldAssign { object, field, value } => {
                 self.scan_expr(object);
                 self.scan_expr(value);
-                self.field_assign(object, field, stmt.span);
+                self.field_assign(object, field, value, stmt.span);
                 false
             }
             Stmt::IndexAssign { object, index, value } => {
-                self.scan_expr(object);
+                // The object is the write target: a guarded-field access at
+                // its top is index_assign's obligation, not a bare-value
+                // use — scan kills/nested structure and anything beneath
+                // the guarded step, but skip the top-level alias ban.
+                if self.has_unsafe_call(&object.node) {
+                    self.kill_fields();
+                }
+                self.scan_nested(&object.node);
+                if self.aliasable_guard_access(&object.node).is_some() {
+                    if let Expr::FieldAccess { object: fobj, .. } = &object.node {
+                        self.alias_scan(fobj);
+                    }
+                } else {
+                    self.alias_scan(object);
+                }
                 self.scan_expr(index);
                 self.scan_expr(value);
                 self.index_assign(object, stmt.span);
@@ -1219,7 +1340,296 @@ impl<'a> Analyzer<'a> {
             .find(|s| s.field_name == field)
     }
 
-    fn field_assign(&mut self, object: &Spanned<Expr>, field: &Spanned<String>, span: Span) {
+    // ── Collection aliasing ban (issue #418) ─────────────────────────────
+
+    /// If `expr` is a field access reaching an aliasable (collection-shaped)
+    /// guarded field, return its spec and whether the access goes through
+    /// `self`. Untypable receivers fall back to by-name matching — the
+    /// closed write-set must stay closed conservatively.
+    fn aliasable_guard_access(&self, expr: &Expr) -> Option<(&'a GuardSpec, bool)> {
+        let Expr::FieldAccess { object, field } = expr else {
+            return None;
+        };
+        if matches!(&object.node, Expr::Ident(r) if r == "self") {
+            let owner = self.owner_class.as_deref()?;
+            return self
+                .guard_specs(owner, &field.node)
+                .into_iter()
+                .find(|s| s.aliasable)
+                .map(|s| (s, true));
+        }
+        match self.type_of_expr(&object.node) {
+            Some(PlutoType::Class(c)) => self
+                .guard_specs(&c, &field.node)
+                .into_iter()
+                .find(|s| s.aliasable)
+                .map(|s| (s, false)),
+            Some(_) => None,
+            None => self
+                .env
+                .guarded_fields
+                .values()
+                .flatten()
+                .find(|s| s.field_name == field.node && s.aliasable)
+                .map(|s| (s, false)),
+        }
+    }
+
+    /// Builtin collection methods that only read their receiver — allowed
+    /// on an aliasable guarded field from anywhere. Everything else is
+    /// treated as mutation (conservative for methods this list has not
+    /// surveyed).
+    const GUARD_PURE_METHODS: &'static [&'static str] = &[
+        "len",
+        "contains",
+        "index_of",
+        "last_index_of",
+        "is_empty",
+        "get",
+        "keys",
+        "values",
+        "to_array",
+        "to_string",
+        "first",
+        "last",
+        "slice",
+        "byte_at",
+    ];
+
+    /// Does this expression produce a freshly-allocated collection no other
+    /// binding can hold? Collection literals, and fresh-producing builtin
+    /// conversions (resolved as builtins — a user method of the same name
+    /// does not qualify).
+    fn is_fresh_collection_value(&self, e: &Expr) -> bool {
+        match e {
+            Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::SetLit { .. } => true,
+            Expr::MethodCall { method, .. } => {
+                let fresh_name = matches!(
+                    method.node.as_str(),
+                    "to_bytes" | "to_array" | "keys" | "values" | "slice" | "split"
+                );
+                let key = (self.current_fn.clone(), method.span.start);
+                fresh_name
+                    && matches!(
+                        self.env.method_resolutions.get(&key),
+                        Some(MethodResolution::Builtin)
+                    )
+            }
+            _ => false,
+        }
+    }
+
+    fn bare_use_error(&mut self, spec: &GuardSpec, span: Span) {
+        if self.error.is_none() {
+            self.error = Some(CompileError::type_err(
+                format!(
+                    "guarded field '{}' of class '{}' may not be used as a value \
+                     (bound, passed, returned, iterated, or interpolated): it is \
+                     protected by {}, and an alias to its contents could be mutated \
+                     outside the fence's closed write-set (e.g. 'let d = self.{}' then \
+                     'd.push(...)'). Read it through '.len()'/'.contains(...)'/indexing, \
+                     and mutate it only through 'self.{}' inside '{}''s own methods{}",
+                    spec.field_name,
+                    spec.class_name,
+                    spec.desc,
+                    spec.field_name,
+                    spec.field_name,
+                    spec.class_name,
+                    spec.blame()
+                ),
+                span,
+            ));
+        }
+    }
+
+    fn freshness_error(&mut self, spec: &GuardSpec, span: Span) {
+        if self.error.is_none() {
+            self.error = Some(CompileError::type_err(
+                format!(
+                    "guarded field '{}' of class '{}' must be initialized and assigned \
+                     from a freshly-created collection (a collection literal, or a \
+                     fresh-producing builtin like '.to_bytes()'/'.to_array()'): sharing \
+                     a value another binding holds would alias the contents protected \
+                     by {}, and the alias could mutate them outside the fence's closed \
+                     write-set{}",
+                    spec.field_name,
+                    spec.class_name,
+                    spec.desc,
+                    spec.blame()
+                ),
+                span,
+            ));
+        }
+    }
+
+    /// Enforce the aliasing ban on collection-shaped guarded fields over an
+    /// expression tree (modeled on idempotency.rs's `misuse_scan`): pure
+    /// builtin reads from anywhere, mutating builtins only through `self`
+    /// under the dominance obligation, element reads through indexing, and
+    /// no bare-value use. Nested statement blocks (if/match branches,
+    /// closures, catch handlers) are scanned when walked.
+    fn alias_scan(&mut self, expr: &Spanned<Expr>) {
+        if self.error.is_some() {
+            return;
+        }
+        match &expr.node {
+            Expr::MethodCall { object, method, args, .. } => {
+                if let Some((spec, through_self)) = self.aliasable_guard_access(&object.node) {
+                    let spec = spec.clone();
+                    if Self::GUARD_PURE_METHODS.contains(&method.node.as_str()) {
+                        // Reads are fine from anywhere.
+                    } else if !through_self {
+                        self.foreign_write_error(&spec, expr.span);
+                        return;
+                    } else {
+                        // Mutating the field's contents through `self` is a
+                        // write to the field: the dominance obligation.
+                        self.prove_guard(&spec, expr.span);
+                        if self.error.is_some() {
+                            return;
+                        }
+                    }
+                    if let Expr::FieldAccess { object: fobj, .. } = &object.node {
+                        self.alias_scan(fobj);
+                    }
+                } else {
+                    self.alias_scan(object);
+                }
+                for a in args {
+                    self.alias_scan(a);
+                }
+            }
+            Expr::FieldAccess { .. } => {
+                if let Some((spec, _)) = self.aliasable_guard_access(&expr.node) {
+                    let spec = spec.clone();
+                    self.bare_use_error(&spec, expr.span);
+                    return;
+                }
+                if let Expr::FieldAccess { object, .. } = &expr.node {
+                    self.alias_scan(object);
+                }
+            }
+            Expr::Index { object, index } => {
+                // Element reads through the guarded field are fine: element
+                // types are immutable value shapes by declaration-time
+                // validation, so nothing mutable leaks.
+                if self.aliasable_guard_access(&object.node).is_some() {
+                    if let Expr::FieldAccess { object: fobj, .. } = &object.node {
+                        self.alias_scan(fobj);
+                    }
+                } else {
+                    self.alias_scan(object);
+                }
+                self.alias_scan(index);
+            }
+            Expr::StructLit { name, fields, .. } => {
+                let fresh_violation: Option<GuardSpec> = self
+                    .env
+                    .guarded_fields
+                    .get(&name.node)
+                    .and_then(|specs| {
+                        fields.iter().find_map(|(fname, value)| {
+                            specs
+                                .iter()
+                                .find(|s| s.field_name == fname.node && s.aliasable)
+                                .filter(|_| !self.is_fresh_collection_value(&value.node))
+                                .cloned()
+                        })
+                    });
+                if let Some(spec) = fresh_violation {
+                    let bad = fields
+                        .iter()
+                        .find(|(fname, _)| fname.node == spec.field_name)
+                        .map(|(_, v)| v.span)
+                        .unwrap_or(expr.span);
+                    self.freshness_error(&spec, bad);
+                    return;
+                }
+                for (_, v) in fields {
+                    self.alias_scan(v);
+                }
+            }
+            Expr::BinOp { lhs, rhs, .. } | Expr::NullCoalesce { lhs, rhs } => {
+                self.alias_scan(lhs);
+                self.alias_scan(rhs);
+            }
+            Expr::UnaryOp { operand, .. } => self.alias_scan(operand),
+            Expr::Call { args, .. }
+            | Expr::StaticTraitCall { args, .. }
+            | Expr::At { args, .. } => {
+                for a in args {
+                    self.alias_scan(a);
+                }
+            }
+            Expr::Spawn { call } => self.alias_scan(call),
+            Expr::EnumData { fields, .. } => {
+                for (_, v) in fields {
+                    self.alias_scan(v);
+                }
+            }
+            Expr::ArrayLit { elements, .. } | Expr::SetLit { elements, .. } => {
+                for e in elements {
+                    self.alias_scan(e);
+                }
+            }
+            Expr::MapLit { entries, .. } => {
+                for (k, v) in entries {
+                    self.alias_scan(k);
+                    self.alias_scan(v);
+                }
+            }
+            Expr::StringInterp { parts } => {
+                for p in parts {
+                    if let crate::parser::ast::StringInterpPart::Expr(e) = p {
+                        self.alias_scan(e);
+                    }
+                }
+            }
+            Expr::Propagate { expr }
+            | Expr::NullPropagate { expr }
+            | Expr::Cast { expr, .. } => self.alias_scan(expr),
+            Expr::Catch { expr, handlers } => {
+                self.alias_scan(expr);
+                for h in handlers {
+                    if let CatchHandler::Shorthand(e) = h {
+                        self.alias_scan(e);
+                    }
+                    // Block handlers are statement blocks: scanned when
+                    // walked.
+                }
+            }
+            Expr::Range { start, end, .. } => {
+                self.alias_scan(start);
+                self.alias_scan(end);
+            }
+            Expr::If { condition, .. } => self.alias_scan(condition),
+            Expr::Match { expr, arms } => {
+                self.alias_scan(expr);
+                for arm in arms {
+                    self.alias_scan(&arm.value);
+                }
+            }
+            // Closure bodies are statement blocks: scanned when walked.
+            Expr::Closure { .. }
+            | Expr::ClosureCreate { .. }
+            | Expr::IntLit(_)
+            | Expr::FloatLit(_)
+            | Expr::BoolLit(_)
+            | Expr::StringLit(_)
+            | Expr::Ident(_)
+            | Expr::EnumUnit { .. }
+            | Expr::NoneLit
+            | Expr::QualifiedAccess { .. } => {}
+        }
+    }
+
+    fn field_assign(
+        &mut self,
+        object: &Spanned<Expr>,
+        field: &Spanned<String>,
+        value: &Spanned<Expr>,
+        span: Span,
+    ) {
         // `self.<f> = v`: the receiver is authoritative — we always know
         // whose field is written, whether or not the owner is a registered
         // class (app and stage receivers are never guarded classes).
@@ -1236,6 +1646,17 @@ impl<'a> Analyzer<'a> {
                 .collect();
             for spec in &specs {
                 self.prove_guard(spec, span);
+            }
+            if self.error.is_none() {
+                // Aliasing-in (issue #418): assigning a value another
+                // binding can still reach would let that binding mutate the
+                // guarded contents outside the fence afterwards.
+                if let Some(spec) = specs.iter().find(|s| s.aliasable) {
+                    if !self.is_fresh_collection_value(&value.node) {
+                        self.freshness_error(spec, span);
+                        return;
+                    }
+                }
             }
             if self.error.is_none() {
                 self.kill_field_write("self", &owner, &field.node);
