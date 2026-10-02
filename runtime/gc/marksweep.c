@@ -25,6 +25,11 @@ static GCHeader *gc_head = NULL;
 static size_t gc_bytes_allocated = 0;
 static size_t gc_threshold = 256 * 1024;  // 256KB initial
 static void *gc_stack_bottom = NULL;
+
+// Observability: PLUTO_GC_LOG=1 prints one line per collection to stderr
+// (cycle number, live/freed bytes, next threshold, pause duration).
+static long gc_cycle_count = 0;
+static int gc_log_enabled = -1;  // -1: getenv not consulted yet
 #ifdef PLUTO_TEST_MODE
 static int gc_collecting = 0;
 #else
@@ -743,6 +748,12 @@ static void gc_mark_candidate(void *candidate) {
 
 void __pluto_gc_collect(void) {
     gc_collecting = 1;
+    if (gc_log_enabled < 0) {
+        const char *e = getenv("PLUTO_GC_LOG");
+        gc_log_enabled = (e && e[0] == '1') ? 1 : 0;
+    }
+    struct timespec gc_t0;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_t0);
 
     // Build interval tables
     gc_build_intervals();
@@ -951,6 +962,16 @@ void __pluto_gc_collect(void) {
     gc_worklist = NULL;
     gc_worklist_count = 0;
     gc_worklist_cap = 0;
+
+    gc_cycle_count++;
+    if (gc_log_enabled) {
+        struct timespec gc_t1;
+        clock_gettime(CLOCK_MONOTONIC, &gc_t1);
+        long us = (gc_t1.tv_sec - gc_t0.tv_sec) * 1000000L
+                + (gc_t1.tv_nsec - gc_t0.tv_nsec) / 1000L;
+        fprintf(stderr, "gc: #%ld live=%zu freed=%zu next_threshold=%zu pause_us=%ld\n",
+                gc_cycle_count, gc_bytes_allocated, freed_bytes, gc_threshold, us);
+    }
 
     gc_collecting = 0;
 }
