@@ -59,6 +59,16 @@ pub object TcpConnection {
         return socket.write(self.fd, data)
     }
 
+    // Binary-safe variants: a bytes buffer at the boundary instead of a
+    // string. read_bytes returns empty bytes on EOF or error.
+    fn read_bytes(self, max_bytes: int) bytes {
+        return socket.read_bytes(self.fd, max_bytes)
+    }
+
+    fn write_bytes(self, data: bytes) int {
+        return socket.write_bytes(self.fd, data)
+    }
+
     fn close(self) int {
         return socket.close(self.fd)
     }

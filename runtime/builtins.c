@@ -1194,6 +1194,42 @@ long __pluto_socket_write(long fd, void *data_str) {
     return (long)write((int)fd, data, (size_t)len);
 }
 
+// Bytes-typed socket I/O: identical syscall path to the string variants, only
+// the handle type at the boundary changes. Read lands in a scratch buffer
+// FIRST and the GC handle is allocated after — the read blocks in a GC safe
+// region, so no GC-visible allocation may be in flight across it.
+long __pluto_socket_read_bytes(long fd, long max_bytes) {
+    char *buf = NULL;
+    ssize_t n = 0;
+    if (max_bytes > 0) {
+        if (max_bytes > 1048576) max_bytes = 1048576;
+        buf = (char *)malloc((size_t)max_bytes);
+        if (buf) {
+            __pluto_gc_enter_safe_region();
+            n = read((int)fd, buf, (size_t)max_bytes);
+            __pluto_gc_leave_safe_region();
+        }
+    }
+    if (n < 0) n = 0; // EOF and error both yield empty bytes (parity with read)
+    long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
+    long cap = n > 16 ? n : 16;
+    unsigned char *data = (unsigned char *)malloc((size_t)cap);
+    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    if (n > 0) memcpy(data, buf, (size_t)n);
+    handle[0] = n;
+    handle[1] = cap;
+    handle[2] = (long)data;
+    if (buf) free(buf);
+    return (long)handle;
+}
+
+long __pluto_socket_write_bytes(long fd, long bytes_handle) {
+    long *h = (long *)bytes_handle;
+    long len = h[0];
+    unsigned char *data = (unsigned char *)h[2];
+    return (long)write((int)fd, data, (size_t)len);
+}
+
 long __pluto_socket_close(long fd) {
     return close((int)fd) == 0 ? 0 : -1;
 }

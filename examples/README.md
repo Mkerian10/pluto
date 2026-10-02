@@ -448,3 +448,16 @@ builtins (`x.abs() == abs(x)`).
 ```bash
 cargo run -- run examples/primitive-methods/main.pt
 ```
+
+## bytes_io
+
+Binary I/O with `bytes`: building a binary frame (all 256 byte values), moving
+it through a TCP connection with the bytes-typed `read_bytes`/`write_bytes` on
+`std.net` (no string laundering), a `requires frame.len() >= 4` contract on a
+bytes API, and the same payload crossing the wire layer as a single base64 blob
+(`WireValue.Bytes` via `std.wire`), plus binary-exact
+`base64.encode_bytes`/`decode_bytes`.
+
+```bash
+cargo run -- run examples/bytes_io/main.pt --stdlib stdlib
+```

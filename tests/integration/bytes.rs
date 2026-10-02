@@ -632,3 +632,111 @@ fn main() int {
 "#);
     assert_eq!(out, "true\n");
 }
+
+// ── Bytes socket/net I/O (#368 slices 1) ─────────────────────────────────────
+
+/// Compile with the repo stdlib and run, returning stdout.
+fn run_with_stdlib(source: &str) -> String {
+    use std::path::Path;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("main.pluto");
+    std::fs::write(&path, source).unwrap();
+    let stdlib = Path::new(env!("CARGO_MANIFEST_DIR")).join("stdlib");
+    let bin_path = dir.path().join("test_bin");
+    pluto::compile_file_with_stdlib(&path, &bin_path, Some(&stdlib))
+        .unwrap_or_else(|e| panic!("Compilation failed: {e}"));
+    let out = std::process::Command::new(&bin_path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "Binary exited with non-zero status. stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+/// All 256 byte values round-trip through a localhost TCP connection using the
+/// bytes-typed read/write on std.net — no string laundering.
+#[test]
+fn net_bytes_round_trip_all_256_values() {
+    let out = run_with_stdlib(r#"
+import std.net
+
+fn main() {
+    let server = net.listen("127.0.0.1", 0)
+    let port = server.port()
+
+    let payload = bytes_new()
+    let mut i = 0
+    while i < 256 {
+        payload.push(i as byte)
+        i = i + 1
+    }
+
+    let client = net.connect("127.0.0.1", port)
+    let wrote = client.write_bytes(payload)
+    print(wrote)
+
+    let conn = server.accept()
+    let got = bytes_new()
+    while got.len() < 256 {
+        let chunk = conn.read_bytes(256 - got.len())
+        if chunk.len() == 0 {
+            break
+        }
+        let mut c = 0
+        while c < chunk.len() {
+            got.push(chunk[c])
+            c = c + 1
+        }
+    }
+
+    let mut ok = got.len() == 256
+    let mut j = 0
+    while j < got.len() {
+        if (got[j] as int) != j {
+            ok = false
+        }
+        j = j + 1
+    }
+    print(ok)
+
+    conn.close()
+    client.close()
+    server.close()
+}
+"#);
+    assert_eq!(out, "256\ntrue\n");
+}
+
+/// The low-level std.socket bytes variants: empty read on EOF, write returns
+/// the byte count.
+#[test]
+fn socket_bytes_eof_yields_empty() {
+    let out = run_with_stdlib(r#"
+import std.net
+
+fn main() {
+    let server = net.listen("127.0.0.1", 0)
+    let port = server.port()
+
+    let client = net.connect("127.0.0.1", port)
+    let data = bytes_new()
+    data.push(0 as byte)
+    data.push(255 as byte)
+    print(client.write_bytes(data))
+    client.close()
+
+    let conn = server.accept()
+    let first = conn.read_bytes(16)
+    print(first.len())
+    print(first[0] as int)
+    print(first[1] as int)
+    // Peer closed: next read yields empty bytes (EOF)
+    let rest = conn.read_bytes(16)
+    print(rest.len())
+    conn.close()
+    server.close()
+}
+"#);
+    assert_eq!(out, "2\n2\n0\n255\n0\n");
+}

@@ -5,6 +5,8 @@ extern fn __pluto_socket_accept(fd: int) int
 extern fn __pluto_socket_connect(fd: int, host: string, port: int) int
 extern fn __pluto_socket_read(fd: int, max_bytes: int) string
 extern fn __pluto_socket_write(fd: int, data: string) int
+extern fn __pluto_socket_read_bytes(fd: int, max_bytes: int) bytes
+extern fn __pluto_socket_write_bytes(fd: int, data: bytes) int
 extern fn __pluto_socket_close(fd: int) int
 extern fn __pluto_socket_set_reuseaddr(fd: int) int
 extern fn __pluto_socket_get_port(fd: int) int
@@ -37,6 +39,16 @@ pub fn read(fd: int, max_bytes: int) string {
 
 pub fn write(fd: int, data: string) int {
     return __pluto_socket_write(fd, data)
+}
+
+// Binary-safe variants: the same syscalls, with a bytes buffer at the
+// boundary instead of a string. Returns empty bytes on EOF or error.
+pub fn read_bytes(fd: int, max_bytes: int) bytes {
+    return __pluto_socket_read_bytes(fd, max_bytes)
+}
+
+pub fn write_bytes(fd: int, data: bytes) int {
+    return __pluto_socket_write_bytes(fd, data)
 }
 
 pub fn close(fd: int) int {
